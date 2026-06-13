@@ -21,6 +21,7 @@ import type { Id } from './_generated/dataModel';
 // never match the stored row — SES bounce/complaint and TCPA
 // STOP/START would fail to find any supporter.
 import { computeGlobalEmailHash, computeGlobalPhoneHash } from './_orgHash';
+import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 
 type DeliveryResponseEvent = {
 	type: 'opened' | 'clicked_verify';
@@ -62,7 +63,15 @@ export const updateSupporterEmailStatus = internalMutation({
 			for (const s of supporters) {
 				// Complaints always win — once complained, never re-emailed
 				if (args.status === 'bounced' && s.emailStatus === 'complained') continue;
+				if (s.emailStatus === args.status) continue; // no transition, no delta
 				await ctx.db.patch(s._id, { emailStatus: args.status, updatedAt: Date.now() });
+				// emailStatus transition — move this supporter between email
+				// buckets in its own org's breakdown counters (the lookup is
+				// cross-org, so each row carries its own orgId).
+				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
+					...(s as CountableSupporter),
+					emailStatus: args.status
+				});
 			}
 		}
 	}
@@ -109,6 +118,15 @@ export const recordSoftBounces = internalMutation({
 					});
 				}
 				await ctx.db.patch(s._id, patch);
+				// Threshold crossing flips emailStatus subscribed→bounced — a
+				// counted transition. softBounceCount on its own is not counted,
+				// so only apply a delta when emailStatus actually changed.
+				if (patch.emailStatus !== undefined) {
+					await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
+						...(s as CountableSupporter),
+						emailStatus: patch.emailStatus as string
+					});
+				}
 			}
 		}
 	}
@@ -601,7 +619,13 @@ export const handleInboundSms = internalMutation({
 				.collect();
 
 			for (const s of supporters) {
+				if (s.smsStatus === 'stopped') continue; // no transition
 				await ctx.db.patch(s._id, { smsStatus: 'stopped', updatedAt: Date.now() });
+				// smsStatus transition — update this supporter's org breakdown.
+				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
+					...(s as CountableSupporter),
+					smsStatus: 'stopped'
+				});
 			}
 		} else if (isStart) {
 			// Re-subscribe supporters that were previously stopped
@@ -656,6 +680,11 @@ export const handleInboundSms = internalMutation({
 				// those orgs re-prompt and get their own START.
 				if (scopedOrgId !== null && String(s.orgId) !== String(scopedOrgId)) continue;
 				await ctx.db.patch(s._id, { smsStatus: 'subscribed', updatedAt: Date.now() });
+				// smsStatus transition stopped→subscribed — update breakdown.
+				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
+					...(s as CountableSupporter),
+					smsStatus: 'subscribed'
+				});
 			}
 		} else {
 			if (!replyBody) return;

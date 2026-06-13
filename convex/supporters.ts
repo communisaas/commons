@@ -31,6 +31,11 @@ import {
 } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
+import {
+	applySupporterStatsDelta,
+	applySupporterStatsDeltaBatch,
+	type CountableSupporter
+} from './_supporterStats';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
 const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
@@ -826,6 +831,20 @@ export const create = mutation({
 			updatedAt: now
 		});
 
+		// Maintain the denormalized breakdown counters for the just-created row.
+		// New rows always land subscribed/none with no identity/consent, so the
+		// only non-zero contributions are emailSubscribed + (postal/phone/source
+		// when present). Re-read the org inside the helper to fold onto the count
+		// we just wrote.
+		await applySupporterStatsDelta(ctx, org._id, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source ?? 'organic',
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
+
 		return supporterId;
 	}
 });
@@ -903,6 +922,37 @@ export const update = mutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+
+		// postalCode / phone are counted breakdown fields and can change here
+		// (e.g. a supporter gains an address or phone on edit). Apply a
+		// transition delta from the pre-patch row to the post-patch row so
+		// postalResolved / phonePresent stay exact. The merged `after` view
+		// reuses the existing value for any field this update didn't touch.
+		await applySupporterStatsDelta(
+			ctx,
+			org._id,
+			supporter as CountableSupporter,
+			{
+				emailStatus: supporter.emailStatus,
+				smsStatus: supporter.smsStatus,
+				source: supporter.source,
+				postalCode:
+					'postalCode' in patch ? (patch.postalCode as string | undefined) : supporter.postalCode,
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash,
+				identityCommitment: supporter.identityCommitment,
+				verified: supporter.verified,
+				emailConsentSource: supporter.emailConsentSource,
+				emailConsentedAt: supporter.emailConsentedAt,
+				emailConsentText: supporter.emailConsentText,
+				smsConsentSource: supporter.smsConsentSource,
+				smsConsentedAt: supporter.smsConsentedAt,
+				smsConsentText: supporter.smsConsentText
+			}
+		);
 	}
 });
 
@@ -943,6 +993,23 @@ export const patchEncryptedPii = internalMutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+
+		// encryptedPhone / phoneHash can change here (operator repair path), so
+		// keep phonePresent exact via a transition delta. All other counted
+		// fields are unchanged by this mutation.
+		await applySupporterStatsDelta(
+			ctx,
+			supporter.orgId,
+			supporter as CountableSupporter,
+			{
+				...(supporter as CountableSupporter),
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash
+			}
+		);
 	}
 });
 
@@ -985,6 +1052,9 @@ export const remove = mutation({
 			supporterCount: newCount,
 			updatedAt: Date.now()
 		});
+
+		// Decrement the breakdown counters for the deleted row.
+		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, null);
 
 		return { deleted: true };
 	}
@@ -1155,6 +1225,12 @@ export const unsubscribe = mutation({
 			emailStatus: 'unsubscribed',
 			updatedAt: Date.now()
 		});
+		// emailStatus transition — move the supporter out of its old email
+		// bucket and into 'unsubscribed' in the breakdown counters.
+		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+			...(supporter as CountableSupporter),
+			emailStatus: 'unsubscribed'
+		});
 		return { success: true };
 	}
 });
@@ -1256,6 +1332,13 @@ export const importBatch = mutation({
 		let updated = 0;
 		let skipped = 0;
 		const errors: string[] = [];
+		// Breakdown-counter deltas accumulated across the batch and folded into
+		// the org's supporterStats once after the loop (one org write, not one
+		// per row). Includes both new-row creates and existing-row transitions.
+		const statsDeltas: Array<{
+			before: CountableSupporter | null;
+			after: CountableSupporter | null;
+		}> = [];
 
 		// Pre-validate every tagId belongs to THIS org. Accepting
 		// `tagIds: v.array(v.string())` with a `tagId as any` cast at
@@ -1343,6 +1426,15 @@ export const importBatch = mutation({
 					if (Object.keys(patch).length > 0) {
 						patch.updatedAt = Date.now();
 						await ctx.db.patch(existing._id, patch);
+						// Import can fill in postal/phone/consent and apply a
+						// stricter email/sms status on an existing row — all
+						// counted. Queue a transition delta from the pre-patch row
+						// to the merged post-patch row; folded into the org once
+						// after the loop so a 5000-row import does one org write.
+						statsDeltas.push({
+							before: existing as CountableSupporter,
+							after: { ...(existing as CountableSupporter), ...(patch as Partial<CountableSupporter>) }
+						});
 					}
 
 					// Add tags (skip duplicates). tagId was pre-validated against
@@ -1403,6 +1495,24 @@ export const importBatch = mutation({
 						});
 					}
 					imported++;
+					// Queue a create delta for the new row's breakdown counters.
+					statsDeltas.push({
+						before: null,
+						after: {
+							emailStatus: s.emailStatus,
+							smsStatus: s.smsStatus,
+							source: s.source ?? 'csv',
+							postalCode: s.postalCode ?? undefined,
+							encryptedPhone: s.encryptedPhone,
+							phoneHash: s.phoneHash,
+							emailConsentSource: s.emailConsentSource,
+							emailConsentedAt: s.emailConsentedAt,
+							emailConsentText: s.emailConsentText,
+							smsConsentSource: s.smsConsentSource,
+							smsConsentedAt: s.smsConsentedAt,
+							smsConsentText: s.smsConsentText
+						}
+					});
 				}
 			} catch (err) {
 				// Log the per-row error so an operator can see what failed and
@@ -1417,6 +1527,27 @@ export const importBatch = mutation({
 				console.warn(`[importBatch] Row ${i} skipped (slug=${slug}): ${msg}`);
 			}
 		}
+
+		// Fold all breakdown-counter deltas into the org once, and advance
+		// supporterCount by the new-row count. supporterCount was previously not
+		// maintained on this import path — bringing it forward here keeps total
+		// and the breakdown coherent (stats buckets must never exceed total).
+		if (imported > 0) {
+			const onboarding = org.onboardingState ?? {
+				hasDescription: false,
+				hasIssueDomains: false,
+				hasSupporters: false,
+				hasCampaigns: false,
+				hasTeam: false,
+				hasSentEmail: false
+			};
+			await ctx.db.patch(org._id, {
+				supporterCount: (org.supporterCount ?? 0) + imported,
+				onboardingState: { ...onboarding, hasSupporters: true },
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDeltaBatch(ctx, org._id, statsDeltas);
 
 		return { imported, updated, skipped, errors };
 	}
@@ -1667,6 +1798,17 @@ export const deleteStrandedPlaceholder = internalMutation({
 			return { ok: false, reason: 'not_placeholder' } as const;
 		}
 		await ctx.db.delete(supporterId);
+		// The placeholder was counted into supporterCount + supporterStats when
+		// findOrCreateSupporter created it; decrement both so deleting a stranded
+		// row doesn't leave the counters overstated.
+		const org = await ctx.db.get(current.orgId);
+		if (org) {
+			await ctx.db.patch(current.orgId, {
+				supporterCount: Math.max((org.supporterCount ?? 1) - 1, 0),
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDelta(ctx, current.orgId, current as CountableSupporter, null);
 		return { ok: true } as const;
 	}
 });

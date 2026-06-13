@@ -19,6 +19,7 @@ import { decryptOrgPii } from './_orgKey';
 import { computeOrgScopedEmailHash } from './_orgHash';
 import { applyEmailRecipientFilter } from './_emailRecipientFilter';
 import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
+import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -711,6 +712,11 @@ export const applyUnsubscribeByBlastEmail = mutation({
 		await ctx.db.patch(supporter._id, {
 			emailStatus: 'unsubscribed',
 			updatedAt: Date.now()
+		});
+		// emailStatus transition → update the org's breakdown counters.
+		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+			...(supporter as CountableSupporter),
+			emailStatus: 'unsubscribed'
 		});
 		return { applied: true, reason: 'ok' as const };
 	}
@@ -1908,6 +1914,15 @@ export const suppressReportedBounce = internalMutation({
 				softBounceCount: Math.max(supporter.softBounceCount ?? 0, USER_BOUNCE_REPORT_THRESHOLD),
 				updatedAt: now
 			});
+			// emailStatus → bounced is a counted transition (no-op if it was
+			// already bounced, since the buckets net to zero). Cross-org lookup,
+			// so each row updates its own org's breakdown.
+			if (supporter.emailStatus !== 'bounced') {
+				await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+					...(supporter as CountableSupporter),
+					emailStatus: 'bounced'
+				});
+			}
 			supportersUpdated++;
 		}
 

@@ -21,6 +21,7 @@ import {
 } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
+import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 
 declare const process: { env: Record<string, string | undefined> };
 type ActiveCampaignForSubmission = {
@@ -1050,6 +1051,13 @@ export const findOrCreateSupporter = internalMutation({
 			if (Object.keys(patch).length > 0) {
 				patch.updatedAt = Date.now();
 				await ctx.db.patch(existing._id, patch);
+				// postalCode / phone fill-ins are counted breakdown fields —
+				// apply a transition delta so postalResolved / phonePresent stay
+				// exact when a returning supporter supplies new contact data.
+				await applySupporterStatsDelta(ctx, args.orgId, existing as CountableSupporter, {
+					...(existing as CountableSupporter),
+					...(patch as Partial<CountableSupporter>)
+				});
 			}
 			return { supporterId: existing._id, isNew: false };
 		}
@@ -1092,6 +1100,17 @@ export const findOrCreateSupporter = internalMutation({
 				updatedAt: now
 			});
 		}
+
+		// Maintain the breakdown counters for the new row. Created subscribed/none
+		// with no identity/consent; postal/phone/source contribute when present.
+		await applySupporterStatsDelta(ctx, args.orgId, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source,
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
 
 		return { supporterId, isNew: true };
 	}

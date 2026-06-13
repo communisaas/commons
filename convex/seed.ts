@@ -36,6 +36,7 @@ import type { Id } from "./_generated/dataModel";
 import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
 import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
+import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -1114,6 +1115,10 @@ export const insertSupporterBatch = internalMutation({
   },
   handler: async (ctx, { supporters, orgId, orgIdx }): Promise<Id<"supporters">[]> => {
     const ids: Id<"supporters">[] = [];
+    // Fold each seeded row into the org's breakdown counters as we go so the
+    // dev fixture's supporterStats matches the inserted rows (same source of
+    // truth getSummaryStats reads).
+    let stats = emptySupporterStats();
     for (const s of supporters) {
       // Use the validated `orgId` arg for every insert and ignore
       // `s.orgId` entirely. The supporters payload is untyped
@@ -1136,10 +1141,18 @@ export const insertSupporterBatch = internalMutation({
         updatedAt: s.updatedAt,
       });
       ids.push(id);
+      stats = computeSupporterStats(stats, null, {
+        emailStatus: s.emailStatus,
+        smsStatus: s.smsStatus,
+        source: s.source,
+        postalCode: s.postalCode,
+        verified: s.verified,
+      });
     }
 
     await ctx.db.patch(orgId, {
       supporterCount: supporters.length,
+      supporterStats: stats,
       onboardingState: {
         hasDescription: true,
         hasIssueDomains: false,

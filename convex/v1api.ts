@@ -13,6 +13,7 @@ import { campaignType } from './_validators';
 import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
 import { assertPiiTripleCreate } from './_orgHash';
+import { applySupporterStatsDelta } from './_supporterStats';
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
 // =============================================================================
@@ -399,6 +400,25 @@ export const createSupporter = mutation({
 				}
 			}
 		}
+
+		// Maintain org counters for the new row. supporterCount was previously
+		// not advanced on the v1 API create path — bring it forward so total and
+		// the breakdown stay coherent.
+		const org = await ctx.db.get(args.orgId);
+		if (org) {
+			await ctx.db.patch(args.orgId, {
+				supporterCount: (org.supporterCount ?? 0) + 1,
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDelta(ctx, args.orgId, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source,
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
 
 		const supporter = await ctx.db.get(id);
 		return { duplicate: false, supporter };
