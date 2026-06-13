@@ -1,0 +1,50 @@
+name: Brutalist Review
+
+# claude + codex + agy review on every PR, posted as inline comments.
+# Codex auth: a broker (e.g. noot-1) pushes a fresh ChatGPT-plan access_token
+# (refresh blanked) to the CODEX_AUTH secret out-of-band — no tailnet, no
+# inbound, firewall-friendly. CI just reads it; codex never refreshes. The
+# image_generation tool is disabled (codex#21952 gpt-image-2 bug).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  brutalist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+      - name: Install CLI critics
+        run: |
+          npm install -g @brutalist/mcp@1.14.7 \
+                         @anthropic-ai/claude-code@2.1.162 \
+                         @openai/codex@0.136.0
+          # NOTE: the agy installer is unpinned upstream (no published checksum) —
+          # residual supply-chain surface; it runs before any secret is present.
+          curl -fsSL https://antigravity.google/cli/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # codex: disable the broken built-in image_generation tool (gpt-image-2)
+          mkdir -p "$HOME/.codex"
+          printf '[features]\nimage_generation = false\n' > "$HOME/.codex/config.toml"
+      - name: Brutalist review
+        uses: ejmockler/brutalist-mcp/packages/github-action@15cedc8159a54662fa741395746d4aa0e161a3b4 # v1.14.7
+        env:
+          BRUTALIST_TIMEOUT: "900000"
+          BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2100000"
+        with:
+          github-token: ${{ github.token }}
+          anthropic-oauth-token: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
+          codex-auth: ${{ secrets.CODEX_AUTH }}
+          agy-oauth-token: ${{ secrets.AGY_OAUTH_TOKEN }}
+          minimum-severity: medium
