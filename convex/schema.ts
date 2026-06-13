@@ -1836,6 +1836,13 @@ export default defineSchema({
 		delegated: v.boolean(),
 		delegationGrantId: v.optional(v.string()),
 
+		// Delivery-channel discriminator for cross-channel attribution. Values:
+		// 'email' (direct email), 'congressional' (CWC / legislative delivery),
+		// 'sms', 'web' (on-site form / embed). Optional: existing rows predate
+		// the field and read as undefined (treated as unattributed). The per-
+		// channel emit is wired separately — this is the storage substrate only.
+		channel: v.optional(v.string()),
+
 		sentAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])
@@ -1848,7 +1855,9 @@ export default defineSchema({
 		// stale/missing, count THIS period's verified actions via a sentAt range
 		// (bounded to one period's volume — never the lifetime table) instead of
 		// an unbounded .collect().
-		.index('by_orgId_verified_sentAt', ['orgId', 'verified', 'sentAt']),
+		.index('by_orgId_verified_sentAt', ['orgId', 'verified', 'sentAt'])
+		// Per-channel attribution queries (bounded per campaign).
+		.index('by_campaignId_channel', ['campaignId', 'channel']),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),
