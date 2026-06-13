@@ -21,7 +21,13 @@ export const load: PageServerLoad = async ({ params }) => {
 			type: campaign.type,
 			orgName: campaign.orgName ?? '',
 			orgSlug: campaign.orgSlug ?? '',
-			verifiedActions: campaign.verifiedActionCount ?? 0
+			verifiedActions: campaign.verifiedActionCount ?? 0,
+			// D-09 branding default + D-10 white-label flag. URL ?accent= still
+			// overrides the org default (host embed control); logo + whiteLabel
+			// come only from the org's Coalition-gated settings.
+			brandingAccent: campaign.orgBrandingAccent ?? null,
+			logoUrl: campaign.orgLogoUrl ?? null,
+			whiteLabel: campaign.orgWhiteLabel ?? false
 		}
 	};
 };

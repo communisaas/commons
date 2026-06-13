@@ -1483,6 +1483,16 @@ export default defineSchema({
 		// routing (Layer c) are deferred per spec.
 		brandingAccent: v.optional(v.string()),
 
+		// Outbound white-label — Coalition-tier flag (D-10). When true, Commons
+		// "powered by" chrome is suppressed on OUTBOUND surfaces only: the
+		// report email footer, the embed widget footer, and the scorecard embed
+		// footer. The /v/[hash] verification page deliberately KEEPS its Commons
+		// attestation regardless — it is the independent third-party proof and
+		// stripping it would gut the verification value. Default (undefined) =
+		// false = current Commons branding everywhere. Gated alongside
+		// brandingAccent + logoUrl in organizations.setBranding.
+		whiteLabel: v.optional(v.boolean()),
+
 		// Org-level PII encryption (passphrase-derived, multi-admin)
 		orgKeyVerifier: v.optional(v.string()), // Sentinel encrypted with org key — verifies passphrase
 		recoveryWrappedOrgKey: v.optional(v.string()), // Org key wrapped with recovery key — emergency recovery

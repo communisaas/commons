@@ -189,6 +189,130 @@
 	let checkoutLoading = $state('');
 	let portalLoading = $state(false);
 
+	// ── Branding editor (Coalition-tier: logo upload + accent + white-label) ──
+	const isCoalition = $derived(planName === 'coalition');
+	let brandingAccent = $state(data.org.brandingAccent ?? '');
+	let brandingLogoUrl = $state<string | null>(data.org.logoUrl ?? null);
+	let whiteLabel = $state(data.org.whiteLabel ?? false);
+	let brandingSaving = $state(false);
+	let logoUploading = $state(false);
+	let brandingMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	const accentValid = $derived(
+		brandingAccent.trim() === '' || /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(brandingAccent.trim())
+	);
+	const accentPreview = $derived(
+		accentValid && brandingAccent.trim()
+			? brandingAccent.trim().startsWith('#')
+				? brandingAccent.trim()
+				: `#${brandingAccent.trim()}`
+			: '#0d9488'
+	);
+
+	async function uploadLogo(file: File) {
+		if (!isCoalition || logoUploading) return;
+		if (!file.type.startsWith('image/')) {
+			brandingMessage = { type: 'error', text: 'Logo must be an image file.' };
+			return;
+		}
+		// 2 MiB cap — logos are small; this bounds Convex storage + email weight.
+		if (file.size > 2 * 1024 * 1024) {
+			brandingMessage = { type: 'error', text: 'Logo must be 2 MB or smaller.' };
+			return;
+		}
+		logoUploading = true;
+		brandingMessage = null;
+		try {
+			const urlRes = await fetch(`/api/org/${data.org.slug}/branding`, { method: 'POST' });
+			if (!urlRes.ok) {
+				const err = await urlRes.json().catch(() => ({ message: 'Failed to start upload' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to start upload' };
+				return;
+			}
+			const { uploadUrl } = await urlRes.json();
+			const putRes = await fetch(uploadUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': file.type },
+				body: file
+			});
+			if (!putRes.ok) {
+				brandingMessage = { type: 'error', text: 'Logo upload failed. Please try again.' };
+				return;
+			}
+			const { storageId } = await putRes.json();
+			const saveRes = await fetch(`/api/org/${data.org.slug}/branding`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ logoStorageId: storageId })
+			});
+			if (!saveRes.ok) {
+				const err = await saveRes.json().catch(() => ({ message: 'Failed to save logo' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to save logo' };
+				return;
+			}
+			brandingMessage = { type: 'success', text: 'Logo uploaded.' };
+			await invalidateAll();
+			brandingLogoUrl = data.org.logoUrl ?? brandingLogoUrl;
+		} catch {
+			brandingMessage = { type: 'error', text: 'Network error during upload.' };
+		} finally {
+			logoUploading = false;
+		}
+	}
+
+	function onLogoInput(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (file) void uploadLogo(file);
+		input.value = '';
+	}
+
+	async function patchBranding(payload: Record<string, unknown>, okText: string) {
+		brandingSaving = true;
+		brandingMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/branding`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to save branding' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to save branding' };
+				return false;
+			}
+			brandingMessage = { type: 'success', text: okText };
+			await invalidateAll();
+			return true;
+		} catch {
+			brandingMessage = { type: 'error', text: 'Network error. Please try again.' };
+			return false;
+		} finally {
+			brandingSaving = false;
+		}
+	}
+
+	async function saveAccent() {
+		if (!isCoalition || brandingSaving || !accentValid) return;
+		await patchBranding({ brandingAccent: brandingAccent.trim() || null }, 'Accent color saved.');
+	}
+
+	async function removeLogo() {
+		if (!isCoalition || brandingSaving) return;
+		const ok = await patchBranding({ logoStorageId: null }, 'Logo removed.');
+		if (ok) brandingLogoUrl = null;
+	}
+
+	async function toggleWhiteLabel() {
+		if (!isCoalition || brandingSaving) return;
+		const next = !whiteLabel;
+		const ok = await patchBranding(
+			{ whiteLabel: next },
+			next ? 'White-label enabled on outbound surfaces.' : 'Commons branding restored.'
+		);
+		if (ok) whiteLabel = next;
+	}
+
 	const actionsPercent = $derived(
 		data.usage.maxVerifiedActions > 0
 			? Math.min(100, (data.usage.verifiedActions / data.usage.maxVerifiedActions) * 100)
@@ -991,6 +1115,161 @@
 						{/if}
 					</div>
 				{/each}
+			</div>
+		</section>
+	{/if}
+
+	<!-- Branding (Coalition-tier) -->
+	{#if canEdit}
+		<section id="branding-ground" class="space-y-4">
+			<div>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Branding</h2>
+				<p class="text-text-tertiary mt-1 text-xs">
+					Put your logo and accent color on the reports, embed widget, and scorecard you send to
+					decision-makers. The public verification page always keeps its Commons attestation — it's
+					the independent proof your supporters and staffers can trust.
+				</p>
+			</div>
+
+			{#if !isCoalition}
+				<div
+					class="border-surface-border bg-surface-base flex items-start justify-between gap-4 rounded-md border px-4 py-3"
+				>
+					<div>
+						<p class="text-text-primary text-sm font-medium">Coalition tier feature</p>
+						<p class="text-text-tertiary mt-1 text-xs leading-5">
+							Custom logo, accent color, and white-label outbound surfaces are part of the Coalition
+							plan. Upgrade to brand your reports and embeds.
+						</p>
+					</div>
+					{#if isOwner}
+						<button
+							onclick={() => startCheckout('coalition')}
+							disabled={!!checkoutLoading}
+							class="shrink-0 rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-50"
+						>
+							{checkoutLoading === 'coalition' ? 'Opening...' : 'Upgrade to Coalition'}
+						</button>
+					{/if}
+				</div>
+			{/if}
+
+			<div
+				class="border-surface-border bg-surface-base space-y-5 rounded-md border p-5"
+				class:opacity-60={!isCoalition}
+			>
+				{#if brandingMessage}
+					<p
+						class="text-xs {brandingMessage.type === 'success'
+							? 'text-teal-400'
+							: 'text-red-400'}"
+						role="status"
+					>
+						{brandingMessage.text}
+					</p>
+				{/if}
+
+				<!-- Logo upload -->
+				<div class="space-y-2">
+					<span class="text-text-secondary text-xs font-medium">Logo</span>
+					<div class="flex items-center gap-4">
+						<div
+							class="border-surface-border bg-surface-overlay flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border"
+						>
+							{#if brandingLogoUrl}
+								<img src={brandingLogoUrl} alt="Org logo" class="h-full w-full object-contain" />
+							{:else}
+								<span class="text-text-quaternary text-[10px] uppercase">None</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-2">
+							<label
+								class="border-surface-border bg-surface-overlay hover:border-surface-border-strong cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium text-text-secondary transition-colors {!isCoalition ||
+								logoUploading
+									? 'pointer-events-none opacity-50'
+									: ''}"
+							>
+								{logoUploading ? 'Uploading...' : brandingLogoUrl ? 'Replace logo' : 'Upload logo'}
+								<input
+									type="file"
+									accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+									class="hidden"
+									disabled={!isCoalition || logoUploading}
+									onchange={onLogoInput}
+								/>
+							</label>
+							{#if brandingLogoUrl}
+								<button
+									onclick={removeLogo}
+									disabled={!isCoalition || brandingSaving}
+									class="text-text-tertiary hover:text-text-secondary text-xs underline disabled:opacity-50"
+								>
+									Remove
+								</button>
+							{/if}
+						</div>
+					</div>
+					<p class="text-text-quaternary text-[11px]">PNG, JPEG, GIF, or WebP. Up to 2 MB.</p>
+				</div>
+
+				<!-- Accent color -->
+				<div class="space-y-2">
+					<label for="branding-accent" class="text-text-secondary text-xs font-medium"
+						>Accent color</label
+					>
+					<div class="flex items-center gap-3">
+						<span
+							class="border-surface-border h-9 w-9 shrink-0 rounded-md border"
+							style:background-color={accentPreview}
+						></span>
+						<input
+							id="branding-accent"
+							type="text"
+							bind:value={brandingAccent}
+							placeholder="#0d9488"
+							disabled={!isCoalition}
+							class="border-surface-border bg-surface-overlay text-text-primary w-32 rounded-lg border px-3 py-2 font-mono text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
+						/>
+						<button
+							onclick={saveAccent}
+							disabled={!isCoalition || brandingSaving || !accentValid}
+							class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{brandingSaving ? 'Saving...' : 'Save accent'}
+						</button>
+					</div>
+					{#if !accentValid}
+						<p class="text-xs text-red-400">Enter a valid hex color, e.g. #0d9488.</p>
+					{/if}
+				</div>
+
+				<!-- White-label toggle (outbound only) -->
+				<div class="border-surface-border flex items-start justify-between gap-4 border-t pt-4">
+					<div>
+						<p class="text-text-primary text-sm font-medium">White-label outbound surfaces</p>
+						<p class="text-text-tertiary mt-1 text-xs leading-5">
+							Removes the "powered by Commons" footer from the report email, embed widget, and
+							scorecard embed. The public verification page keeps its Commons attestation either
+							way — that's the independent third-party proof.
+						</p>
+					</div>
+					<button
+						onclick={toggleWhiteLabel}
+						disabled={!isCoalition || brandingSaving}
+						role="switch"
+						aria-label="Toggle white-label on outbound surfaces"
+						aria-checked={whiteLabel}
+						class="relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 {whiteLabel
+							? 'bg-teal-600'
+							: 'bg-surface-border-strong'}"
+					>
+						<span
+							class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform {whiteLabel
+								? 'translate-x-5'
+								: 'translate-x-0.5'}"
+						></span>
+					</button>
+				</div>
 			</div>
 		</section>
 	{/if}
