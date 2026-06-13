@@ -119,6 +119,22 @@ vi.mock('$lib/server/agent-trace', () => ({
 
 vi.mock('../../src/routes/api/agents/stream-message/$types', () => ({}));
 
+// The handler gates on runtime readiness (GEMINI/EXA/FIRECRAWL env), returning
+// 503 when unconfigured. These tests exercise the trace pipeline, not the gate,
+// and must not depend on real keys — pin readiness so the env (CI has no keys,
+// local loads them from .env) cannot change the outcome.
+vi.mock('$lib/server/agents/message-generation-readiness', () => ({
+	getMessageGenerationReadiness: () => ({
+		ready: true,
+		modelProviderConfigured: true,
+		sourceSearchConfigured: true,
+		sourceFetchConfigured: true,
+		missing: [],
+		dependency: 'test',
+		message: 'ready'
+	})
+}));
+
 const { POST } = await import('../../src/routes/api/agents/stream-message/+server');
 
 function createEvent(body: unknown) {
