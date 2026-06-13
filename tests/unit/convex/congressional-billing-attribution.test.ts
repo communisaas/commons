@@ -2,28 +2,47 @@
  * Security regression tests for the congressional attribution emit.
  *
  * The attributed-emit (submissions.emitCongressionalAction →
- * campaigns.createCampaignAction with verified:true) introduced a billing-quota
- * DoS that this test pins closed:
+ * campaigns.createCampaignAction with verified:true) introduced two HIGH issues
+ * that these tests pin closed:
  *
- *   FIX 1 — congressional deliveries are PERSON-LAYER civic actions (a
- *   constituent contacts their own rep), NOT the org's metered paid usage. The
- *   emit must ATTRIBUTE (campaign verifiedActionCount + org actionTierCounts for
- *   reach/reporting) but must NOT bump the metered billing base
- *   (org.verifiedActionsLifetime). createCampaignAction gates the lifetime bump
- *   on metersOrgQuota (default true; congressional passes false).
+ *   FIX 1 — billing-quota DoS: congressional deliveries are PERSON-LAYER civic
+ *   actions (a constituent contacts their own rep), NOT the org's metered paid
+ *   usage. The emit must ATTRIBUTE (campaign verifiedActionCount + org
+ *   actionTierCounts for reach/reporting) but must NOT bump the metered billing
+ *   base (org.verifiedActionsLifetime). createCampaignAction gates the lifetime
+ *   bump on metersOrgQuota (default true; congressional passes false).
  *
- * These invoke the registered handler directly via `_handler` with a fake ctx
+ *   FIX 2a — cross-org attribution hijack: campaigns.create/update accept a
+ *   templateId. Without an ownership check, Org B could point a campaign at Org
+ *   A's public template and siphon A's congressional actions (and leak A's
+ *   constituents' district/tier via the campaign_action.created webhook). Both
+ *   mutations now require template.orgId === caller-org._id.
+ *
+ * These invoke the registered handlers directly via `_handler` with a fake ctx
  * (convex-test isn't wired in this repo), the same pattern as
  * tests/integration/congressional-delivery.test.ts.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { createCampaignAction } from '../../../convex/campaigns';
+// requireOrgRole chains requireAuth/loadOrg/membership/role. We stub the whole
+// auth module so the tests isolate the NEW template-ownership + metering logic.
+// The stubbed requireOrgRole returns a fixed org (org_1) as the caller's org.
+const ORG = { _id: 'org_1', campaignCount: 0, countryCode: 'US' };
+vi.mock('../../../convex/_authHelpers', () => ({
+	requireOrgRole: vi.fn(async () => ({ org: ORG, membership: {}, userId: 'user_1' })),
+	loadOrg: vi.fn(),
+	requireAuth: vi.fn(async () => ({ userId: 'user_1' })),
+	requireOrgMembership: vi.fn()
+}));
+
+import { create, update, createCampaignAction } from '../../../convex/campaigns';
 
 function handlerOf(fn: unknown): (ctx: any, args: any) => Promise<any> {
 	return (fn as { _handler: (ctx: any, args: any) => Promise<any> })._handler;
 }
+const runCreate = handlerOf(create);
+const runUpdate = handlerOf(update);
 const runCreateAction = handlerOf(createCampaignAction);
 
 beforeEach(() => {
@@ -121,5 +140,97 @@ describe('FIX 1a — createCampaignAction does not meter when metersOrgQuota is 
 		});
 		const orgPatch = patches.find((p) => p.id === 'org_1')?.patch ?? {};
 		expect(orgPatch.verifiedActionsLifetime).toBe(11); // 10 + 1
+	});
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FIX 2a — template-ownership enforcement on campaigns.create / campaigns.update
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('FIX 2a — campaigns.create / update reject a foreign templateId', () => {
+	/** Fake ctx: db.get resolves templates by id; insert/patch are no-ops. */
+	function makeCtx(template: Record<string, unknown> | null) {
+		return {
+			db: {
+				get: async (id: string) => {
+					if (id === 'tmpl_foreign' || id === 'tmpl_owned') return template;
+					return null;
+				},
+				insert: async (_table: string, _doc: any) => 'camp_new',
+				patch: async (_id: string, _patch: any) => undefined
+			}
+		};
+	}
+
+	it('create: rejects a templateId owned by a DIFFERENT org', async () => {
+		const ctx = makeCtx({ _id: 'tmpl_foreign', orgId: 'org_2' });
+		await expect(
+			runCreate(ctx as any, {
+				slug: 'my-org',
+				title: 'Hijack Campaign',
+				type: 'CONGRESSIONAL',
+				templateId: 'tmpl_foreign'
+			})
+		).rejects.toThrow(/Template not found in this organization/);
+	});
+
+	it('create: accepts a templateId owned by the caller org', async () => {
+		const ctx = makeCtx({ _id: 'tmpl_owned', orgId: 'org_1' });
+		const id = await runCreate(ctx as any, {
+			slug: 'my-org',
+			title: 'Legit Campaign',
+			type: 'CONGRESSIONAL',
+			templateId: 'tmpl_owned'
+		});
+		expect(id).toBe('camp_new');
+	});
+
+	it('create: with no templateId skips the ownership check (no throw)', async () => {
+		const ctx = makeCtx(null);
+		const id = await runCreate(ctx as any, {
+			slug: 'my-org',
+			title: 'No Template',
+			type: 'LETTER'
+		});
+		expect(id).toBe('camp_new');
+	});
+
+	it('update: rejects re-pointing the campaign at a foreign templateId', async () => {
+		const ctx = {
+			db: {
+				get: async (id: string) => {
+					if (id === 'camp_1') return { _id: 'camp_1', orgId: 'org_1' };
+					if (id === 'tmpl_foreign') return { _id: 'tmpl_foreign', orgId: 'org_2' };
+					return null;
+				},
+				patch: async () => undefined
+			}
+		};
+		await expect(
+			runUpdate(ctx as any, {
+				campaignId: 'camp_1',
+				slug: 'my-org',
+				templateId: 'tmpl_foreign'
+			})
+		).rejects.toThrow(/Template not found in this organization/);
+	});
+
+	it('update: accepts an owned templateId', async () => {
+		const ctx = {
+			db: {
+				get: async (id: string) => {
+					if (id === 'camp_1') return { _id: 'camp_1', orgId: 'org_1' };
+					if (id === 'tmpl_owned') return { _id: 'tmpl_owned', orgId: 'org_1' };
+					return null;
+				},
+				patch: async () => undefined
+			}
+		};
+		const ownedId = await runUpdate(ctx as any, {
+			campaignId: 'camp_1',
+			slug: 'my-org',
+			templateId: 'tmpl_owned'
+		});
+		expect(ownedId).toBe('camp_1');
 	});
 });

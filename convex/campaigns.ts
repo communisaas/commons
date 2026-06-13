@@ -495,6 +495,19 @@ export const create = mutation({
 			throw new Error('Invalid campaign type');
 		}
 
+		// Template ownership: a campaign may only link a template owned by the
+		// caller's org. Without this, Org B could point a (congressional) campaign
+		// at Org A's public template and siphon A's attributed actions — and leak
+		// A's constituents' districtHash/districtCode/trustTier via the
+		// campaign_action.created webhook. requireOrgRole(editor) above only proves
+		// the caller can edit THIS org; it says nothing about the template's owner.
+		if (args.templateId !== undefined) {
+			const template = await ctx.db.get(args.templateId);
+			if (!template || template.orgId !== org._id) {
+				throw new Error('Template not found in this organization');
+			}
+		}
+
 		const now = Date.now();
 
 		const campaignId = await ctx.db.insert('campaigns', {
@@ -652,7 +665,18 @@ export const update = mutation({
 			}
 			updates.status = args.status;
 		}
-		if (args.templateId !== undefined) updates.templateId = args.templateId || undefined;
+		if (args.templateId !== undefined) {
+			// Template ownership: only allow linking a template owned by the
+			// caller's org (same cross-org siphon/PII-leak risk as campaigns.create).
+			// A falsy templateId means "unlink" and skips the ownership check.
+			if (args.templateId) {
+				const template = await ctx.db.get(args.templateId);
+				if (!template || template.orgId !== org._id) {
+					throw new Error('Template not found in this organization');
+				}
+			}
+			updates.templateId = args.templateId || undefined;
+		}
 		if (args.debateEnabled !== undefined) updates.debateEnabled = args.debateEnabled;
 		if (args.debateThreshold !== undefined) updates.debateThreshold = args.debateThreshold;
 		if (args.targetCountry !== undefined) updates.targetCountry = args.targetCountry;

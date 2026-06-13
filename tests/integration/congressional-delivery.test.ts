@@ -356,11 +356,26 @@ describe('deliverToCongress — chamber split, rollup, tiered floor, attribution
 });
 
 describe('emitCongressionalAction — reuses the counter-maintaining create path', () => {
-	function makeEmitCtx(opts: { campaign?: Record<string, unknown> | null; template?: Record<string, unknown> | null }) {
+	function makeEmitCtx(opts: {
+		// A single owning campaign (legacy shorthand). orgId defaults to the
+		// template's orgId so the org-scope check passes unless overridden.
+		campaign?: Record<string, unknown> | null;
+		// Full list of campaigns linked to the template via by_templateId. When
+		// provided it takes precedence over `campaign` and is returned by
+		// `.collect()` — used to exercise the cross-org filter.
+		campaigns?: Record<string, unknown>[];
+		template?: Record<string, unknown> | null;
+	}) {
 		const createCalls: any[] = [];
-		const template = opts.template === null ? null : { _id: 'tmpl_doc_1', slug: 'tmpl_1', ...(opts.template ?? {}) };
-		const campaign =
-			opts.campaign === null ? null : { _id: 'camp_1', templateId: 'tmpl_doc_1', ...(opts.campaign ?? {}) };
+		const template =
+			opts.template === null
+				? null
+				: { _id: 'tmpl_doc_1', slug: 'tmpl_1', orgId: 'org_1', ...(opts.template ?? {}) };
+		const campaignList: Record<string, unknown>[] =
+			opts.campaigns ??
+			(opts.campaign === null
+				? []
+				: [{ _id: 'camp_1', templateId: 'tmpl_doc_1', orgId: 'org_1', ...(opts.campaign ?? {}) }]);
 
 		const ctx = {
 			db: {
@@ -370,8 +385,12 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 					withIndex: (_index: string, _builder: any) => ({
 						first: async () => {
 							if (table === 'templates') return template;
-							if (table === 'campaigns') return campaign;
+							if (table === 'campaigns') return campaignList[0] ?? null;
 							return null;
+						},
+						collect: async () => {
+							if (table === 'campaigns') return campaignList;
+							return [];
 						}
 					})
 				})
@@ -411,6 +430,19 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 		expect(createCalls[0].supporterId).toBeUndefined();
 	});
 
+	it('FIX 1a: congressional attribution does NOT consume the org billing quota (metersOrgQuota:false)', async () => {
+		const { ctx, createCalls } = makeEmitCtx({});
+		await runEmit(ctx as any, {
+			submissionId: 'sub_1' as any,
+			templateId: 'tmpl_1',
+			districtCode: 'CA-11',
+			trustTier: 4
+		});
+		// The emit must explicitly opt OUT of metering — a constituent contacting
+		// their own rep is person-layer civic action, not the org's paid usage.
+		expect(createCalls[0].metersOrgQuota).toBe(false);
+	});
+
 	it('no-ops (no campaignAction) when the template is owned by no campaign', async () => {
 		const { ctx, createCalls } = makeEmitCtx({ campaign: null });
 		const result = await runEmit(ctx as any, {
@@ -421,5 +453,42 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 		});
 		expect(result).toEqual({ attributed: false, reason: 'no_campaign' });
 		expect(createCalls).toHaveLength(0);
+	});
+
+	it('FIX 2b: no-ops attribution when the only linked campaign belongs to a DIFFERENT org', async () => {
+		// Org B (org_2) points a congressional campaign at Org A's (org_1) template.
+		// The emit must NOT attribute Org A's constituent action to Org B's campaign
+		// — that would siphon A's reach + leak A's district/tier via Org B's webhook.
+		const { ctx, createCalls } = makeEmitCtx({
+			template: { orgId: 'org_1' },
+			campaigns: [{ _id: 'camp_b', templateId: 'tmpl_doc_1', orgId: 'org_2' }]
+		});
+		const result = await runEmit(ctx as any, {
+			submissionId: 'sub_1' as any,
+			templateId: 'tmpl_1',
+			districtCode: 'CA-11',
+			trustTier: 4
+		});
+		expect(result).toEqual({ attributed: false, reason: 'cross_org' });
+		expect(createCalls).toHaveLength(0);
+	});
+
+	it('FIX 2b: attributes only to the SAME-org campaign when both same-org and cross-org links exist', async () => {
+		const { ctx, createCalls } = makeEmitCtx({
+			template: { orgId: 'org_1' },
+			campaigns: [
+				{ _id: 'camp_b', templateId: 'tmpl_doc_1', orgId: 'org_2' },
+				{ _id: 'camp_a', templateId: 'tmpl_doc_1', orgId: 'org_1' }
+			]
+		});
+		const result = await runEmit(ctx as any, {
+			submissionId: 'sub_1' as any,
+			templateId: 'tmpl_1',
+			districtCode: 'CA-11',
+			trustTier: 4
+		});
+		expect(result).toEqual({ attributed: true, alreadySubmitted: false });
+		expect(createCalls).toHaveLength(1);
+		expect(createCalls[0].campaignId).toBe('camp_a');
 	});
 });

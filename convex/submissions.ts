@@ -2037,7 +2037,7 @@ export const emitCongressionalAction = internalMutation({
 		ctx,
 		args
 	): Promise<
-		| { attributed: false; reason: 'template_not_found' | 'no_campaign' }
+		| { attributed: false; reason: 'template_not_found' | 'no_campaign' | 'cross_org' }
 		| { attributed: true; alreadySubmitted: boolean }
 	> => {
 		// Resolve the delivered template to a templates._id. Submissions carry
@@ -2059,12 +2059,27 @@ export const emitCongressionalAction = internalMutation({
 		// Find the campaign that owns this template. Org-authored congressional
 		// campaigns set campaigns.templateId; person-layer sends against an
 		// unaffiliated public template have none.
-		const campaign = await ctx.db
+		//
+		// Defense-in-depth org-scope: only attribute to a campaign whose orgId
+		// matches the TEMPLATE's orgId. campaigns.create/update enforce template
+		// ownership at link time, but a stale cross-org link (or a future bypass)
+		// must not let Org B's congressional campaign siphon Org A's constituent
+		// actions — which would also leak A's districtHash/districtCode/trustTier
+		// via the campaign_action.created webhook. We verify the match rather than
+		// blindly taking .first() across orgs; if none matches, no-op the
+		// attribution (delivery + verifiedSends are unaffected upstream).
+		const linkedCampaigns = await ctx.db
 			.query('campaigns')
 			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
-			.first();
+			.collect();
+		const campaign = linkedCampaigns.find((c) => c.orgId === template.orgId) ?? null;
 		if (!campaign) {
-			return { attributed: false, reason: 'no_campaign' as const };
+			// Distinguish "no campaign at all" from "only cross-org link(s) exist"
+			// so the reason is diagnosable, but both no-op the attribution.
+			return {
+				attributed: false,
+				reason: linkedCampaigns.length > 0 ? ('cross_org' as const) : ('no_campaign' as const)
+			};
 		}
 
 		// Reuse the shared counter-maintaining create path. channel='congressional'
