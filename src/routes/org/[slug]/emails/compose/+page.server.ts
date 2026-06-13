@@ -188,9 +188,9 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 // Convex doc Id format: lowercase base32, ~32 chars in practice. Reject
 // obviously-malformed input at the boundary so a bad client posts a
 // controllable 400 instead of riding through to the Convex args validator
-// (which throws as 500). Charset/length tightened after a brutalist round
-// caught the earlier /^[a-z0-9_]{20,64}$/i admitting underscores and
-// uppercase that no real Convex Id contains.
+// (which throws as 500). Charset/length tightened to lowercase base32 only:
+// the earlier /^[a-z0-9_]{20,64}$/i admitted underscores and uppercase that
+// no real Convex Id contains.
 const CONVEX_ID_RE = /^[a-z0-9]{30,40}$/;
 const VERIFIED_VALUES = new Set(['any', 'verified', 'unverified']);
 

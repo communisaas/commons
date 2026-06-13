@@ -73,7 +73,7 @@ export const getByOrg = query({
  *
  * @deprecated Strategy: individuals are free. See docs/strategy/monetization-policy.md.
  * Retained for potential future org-sponsored individual benefits.
- * No production callers exist as of 2026-03-30.
+ * No production callers exist.
  */
 export const getByUser = query({
   args: {},

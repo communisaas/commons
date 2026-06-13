@@ -146,8 +146,8 @@ export class LocalConstituentResolver implements ConstituentResolver {
 			// retry/incident response path, not silent re-routing.
 			console.error(
 				`[LocalResolver] districts[0] hex did not decode to a substrate ID; ` +
-					`failing closed (was previously a fail-open security regression — ` +
-					`see specs/H-PHASE-SCOPE.md H4).`,
+					`failing closed. Routing on a decode failure is fail-open: a client ` +
+					`could present a mismatched witness cell and be silently re-routed.`,
 			);
 			return {
 				success: false,

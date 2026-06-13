@@ -116,8 +116,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'recipientSubdivision is required');
 		}
 
-		// ── S2: Structural proof validation (ZKP-INTEGRITY-TASK-GRAPH.md § S2) ──
-		// Blocks garbage proofs at the door. Does NOT verify ZK math.
+		// ── Structural proof validation ──
+		// Reject malformed proofs at the boundary (shape, encoding, length).
+		// Does NOT verify ZK math.
 
 		// Proof must be non-empty valid hex
 		if (typeof proof !== 'string' || !/^(0x)?[0-9a-fA-F]+$/.test(proof)) {

@@ -346,8 +346,8 @@ export const create = action({
 		});
 
 		// promoteTier removed: trust tier escalation must wait until
-		// verificationStatus === 'verified' (ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E).
-		// Re-enable once the verification status lifecycle is wired.
+		// verificationStatus === 'verified'. Re-enable once the verification
+		// status lifecycle is wired.
 
 		return {
 			success: true,
@@ -1857,9 +1857,8 @@ export const registerEngagement = internalAction({
 	}
 });
 
-// promoteTier DELETED (S1): unconditional tier escalation.
-// Re-implementby a follow-up cure (task 2E) gated on verificationStatus === 'verified'.
-// See docs/design/ZKP-INTEGRITY-TASK-GRAPH.md § S1/2E.
+// promoteTier removed: it escalated trust tier unconditionally. Any
+// re-implementation must gate on verificationStatus === 'verified'.
 
 /**
  * Internal mutation: Persist the resolved congressional district on a submission.

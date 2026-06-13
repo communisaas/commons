@@ -432,8 +432,8 @@ export const insertUsers = internalMutation({
 // =============================================================================
 // Verified users (trustTier ≥ 2) need a backing districtCredential row so
 // any join from users → credential renders honest trust-context. Without
-// this, isVerified=true users have nothing behind the claim — the H-phase
-// tier-display SSOT helper (H6) would see undefined trust-context fields
+// this, isVerified=true users have nothing behind the claim — the
+// tier-display SSOT helper would see undefined trust-context fields
 // and render "unknown" badges for every verified seed user.
 //
 // Trust-context fields (trustTier, cellStraddles, cellAnchorMode,

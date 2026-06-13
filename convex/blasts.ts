@@ -739,7 +739,7 @@ export const recordBlastReceiptsInternal = internalMutation({
  * without re-measuring under OCC retry pressure.
  *
  * `sendMode` accepts both `client-direct` (today's bulk path) and
- * `tee-sealed` (the J-phase Nitro Enclave path; see
+ * `tee-sealed` (the Nitro Enclave path; see
  * `convex/blasts.ts:sealAndScheduleBlast` and the NitroEnclaveResolver
  * stub). When TEE-sealed lands the enclave will write receipts the same way.
  */

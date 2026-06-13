@@ -11,9 +11,10 @@
     Rings  — engagement-tier distribution (depth, HOW COMMITTED). maxTier 4
              because engagement tiers run 0–4 (new → pillar).
     Datum  — "actions authored & sent this period" — verified actions in the
-             trailing week. JetBrains Mono (auditable count). Cite whisper
-             names the provenance. Spring SIGNAL: accumulated state growing
-             into view, not an event tick.
+             trailing week. JetBrains Mono (auditable count). No provenance
+             whisper here: provenance belongs on the decision-maker packet and
+             /v/[hash], not the org's own dashboard. Spring SIGNAL: accumulated
+             state growing into view, not an event tick.
     Pulse  — last-week → this-week rhythm. The temporal cadence felt as shape.
 
   No hardcoded zeros: when no stats are loaded the watermark renders an
@@ -59,7 +60,6 @@
 			value={thisWeek}
 			animate
 			spring={SPRINGS.SIGNAL}
-			cite="verified actions authored and sent, trailing 7 days"
 			class="watermark-count"
 		/>
 		<span class="watermark-label">authored &amp; sent this period</span>

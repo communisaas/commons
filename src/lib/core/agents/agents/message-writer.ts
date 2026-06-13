@@ -1,13 +1,13 @@
 /**
- * Message Writer Agent — Two-Phase Pipeline
+ * Message Writer Agent — Two-Stage Pipeline
  *
- * Phase 1 (Source Discovery): Deterministic retrieval via Exa + Firecrawl.
+ * Source discovery stage: Deterministic retrieval via Exa + Firecrawl.
  *   - Stratified Exa search (gov, news, general)
  *   - Firecrawl content fetch + provenance extraction
  *   - Gemini incentive-aware evaluation (structured JSON)
  *   - Returns evaluated source pool with credibility rationale
  *
- * Phase 2 (Message Generation): Write message using bounded source ground.
+ * Message generation stage: Write message using bounded source ground.
  *   - Cannot fabricate URLs—must cite from pool
  *   - Evaluated sources include incentive framing for context-aware citations
  *   - Search-only fallback sources are context, not evaluated evidence
@@ -124,7 +124,7 @@ export interface GenerateMessageOptions {
 		subdivision?: string;
 		locality?: string;
 	};
-	/** Cached source ground (skip Phase 1 if provided) */
+	/** Cached source ground (skip source discovery if provided) */
 	verifiedSources?: EvaluatedSource[];
 	/** Trace ID for observability — threaded to source discovery */
 	traceId?: string;
@@ -153,9 +153,9 @@ function searchOnlySourceCount(sources: EvaluatedSource[]): number {
 /**
  * Generate a research-backed message with bounded citation ground.
  *
- * Two-phase pipeline:
- * 1. Source Discovery: Find and validate source ground (unless cached sources are provided)
- * 2. Message Generation: Write using ONLY the provided source ground
+ * Two-stage pipeline:
+ * 1. Source discovery: Find and validate source ground (unless cached sources are provided)
+ * 2. Message generation: Write using ONLY the provided source ground
  */
 export async function generateMessage(
 	options: GenerateMessageOptions
@@ -163,10 +163,10 @@ export async function generateMessage(
 	const startTime = Date.now();
 	const { subjectLine, coreMessage, topics, decisionMakers, onThought, onPhase } = options;
 
-	console.debug('[message-writer] Starting two-phase message generation...');
+	console.debug('[message-writer] Starting two-stage message generation...');
 
 	// ====================================================================
-	// Phase 1: Source Discovery (skip if cached source ground is provided)
+	// Source discovery stage (skip if cached source ground is provided)
 	// ====================================================================
 
 	let verifiedSources: EvaluatedSource[] = options.verifiedSources || [];
@@ -177,7 +177,7 @@ export async function generateMessage(
 	if (verifiedSources.length === 0) {
 		onPhase?.('sources', 'Finding and checking sources…');
 
-		console.debug('[message-writer] Phase 1: Discovering sources...');
+		console.debug('[message-writer] Source discovery stage: Discovering sources...');
 
 		const sourceResult = await discoverSources({
 			coreMessage,
@@ -224,7 +224,7 @@ export async function generateMessage(
 			externalCounts.groundingSearches = sourceResult.groundingSearches;
 		}
 
-		console.debug('[message-writer] Phase 1 complete:', {
+		console.debug('[message-writer] Source discovery stage complete:', {
 			discovered: sourceResult.discovered.length,
 			evaluated: sourceResult.evaluated.length,
 			failed: sourceResult.failed.length,
@@ -262,7 +262,7 @@ export async function generateMessage(
 	}
 
 	// ====================================================================
-	// Phase 2: Message Generation with source ground
+	// Message generation stage with source ground
 	// ====================================================================
 
 	onPhase?.('message', 'Writing your message…');
@@ -322,7 +322,7 @@ Find the emotional truth in the input above. Build a message that:
 
 The stranger who shares this link should think "I need to send that too." Every sender should feel "this is exactly what I wanted to say."`;
 
-	console.debug('[message-writer] Phase 2: Generating message with source ground...');
+	console.debug('[message-writer] Message generation stage: Generating message with source ground...');
 
 	const messageWriteStart = Date.now();
 	// Generate WITHOUT grounding — the source-ground pool is already bounded
@@ -344,7 +344,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const messageTokenUsage = result.tokenUsage;
 	const messageWriteLatencyMs = Date.now() - messageWriteStart;
 
-	// Trace: Phase 2 Gemini call — FULL prompt + FULL response captured.
+	// Trace: message generation Gemini call — FULL prompt + FULL response captured.
 	// Privacy carried by TTL + `_secret` gate; replay needs the exact inputs
 	// the model saw and the exact text it returned.
 	if (options.traceId) {
@@ -430,7 +430,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 		evaluatedSources: verifiedSources
 	};
 
-	console.debug('[message-writer] Two-phase generation complete', {
+	console.debug('[message-writer] Two-stage generation complete', {
 		messageLength: data.message.length,
 		sourceGroundRows: verifiedSourcesForOutput.length,
 		latencyMs,

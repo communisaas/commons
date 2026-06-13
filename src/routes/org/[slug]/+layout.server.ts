@@ -207,8 +207,8 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 
 	// ─── OPERATING GROUND (fundraising posture, no donor PII) ──────────
 	// The deep fundraising routes own donor lists and mutations. The shell only
-	// needs aggregate fundraiser/donation posture so the capability map can name
-	// what is live without fabricating receipt or donor identity claims.
+	// loads aggregate fundraiser/donation posture for the bounded action notices,
+	// without fabricating receipt or donor identity claims.
 	const [
 		fundraiserResult,
 		donationConfirmationSummary,

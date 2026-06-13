@@ -87,7 +87,7 @@ export const PLATFORM_SYNC_PATH_SENTENCE =
 	'Action Network syncs directly — other platforms import by CSV for now.';
 
 export function textDispatchLimitSentence(batchSize: number = MAX_DECRYPTED_SMS_DISPATCH): string {
-	return `Texts send in batches of ${batchSize} for now.`;
+	return `Texts send in batches of ${batchSize} once text delivery is connected.`;
 }
 
 export function emailServerDispatchLimitSentence(
