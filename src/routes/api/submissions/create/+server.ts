@@ -122,6 +122,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (typeof recipientSubdivision !== 'string' || recipientSubdivision.length === 0) {
 			throw error(400, 'recipientSubdivision is required');
 		}
+		// Bound recipientSubdivision. It is the only client-chosen free parameter
+		// baked into the action-domain keccak preimage, so a distinct value = a
+		// distinct nullifier = a distinct accepted submission. Unbounded, an
+		// attacker could mint effectively unlimited distinct nullifiers from ONE
+		// credential by varying this string. We constrain it to the documented
+		// subdivision formats (see action-domain-builder.ts ActionDomainParams):
+		//   - "national"                       (federal/national scope; the default)
+		//   - ISO 3166-2 region                e.g. "US-CA", "DE-BY"
+		//   - district under a region          e.g. "US-CA-12", "US-CA-AL"
+		//   - local slug under a region        e.g. "US-CA-san-francisco"
+		//   - international org code           e.g. "EU", "UN"
+		// Grammar (mutually exclusive alternatives):
+		//   - the literal "national"
+		//   - a 2-letter uppercase code on its own            ("EU", "UN", "US")
+		//   - a 2-letter uppercase code + 1..4 alphanumeric, dash-separated segments
+		//     ("US-CA", "US-CA-12", "US-CA-AL", "US-CA-san-francisco")
+		// Each segment is [A-Za-z0-9]+ (no empty segments, no trailing/leading dash).
+		// The <=4 segment cap plus the 64-char hard length cap bounds the per-
+		// credential nullifier multiplier to the real civic fan-out instead of an
+		// open string space — an attacker can no longer mint unlimited distinct
+		// nullifiers from one credential by varying this field.
+		const SUBDIVISION_RE = /^(?:national|[A-Z]{2}(?:-[A-Za-z0-9]+){0,4})$/;
+		if (recipientSubdivision.length > 64 || !SUBDIVISION_RE.test(recipientSubdivision)) {
+			throw error(400, 'recipientSubdivision has an invalid format');
+		}
 
 		// ── Structural proof validation ──
 		// Reject malformed proofs at the boundary (shape, encoding, length).
