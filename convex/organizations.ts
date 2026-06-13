@@ -252,7 +252,10 @@ export const getDashboardStats = query({
 				imported: total,
 				postalResolved: stats.postalResolved,
 				identityVerified: stats.identityVerified,
-				districtVerified: district.districtVerified
+				districtVerified: district.districtVerified,
+				// Surface the cap so a consumer can render a floor (">= N") instead of
+				// presenting a truncated district count as exact past the scan cap.
+				districtVerifiedTruncated: district.truncated
 			},
 			tiers,
 			growth: {

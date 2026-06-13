@@ -10,6 +10,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
 	computeSupporterStats,
 	emptySupporterStats,
@@ -165,5 +167,60 @@ describe('computeSupporterStats — delete deltas + drift invariant', () => {
 		expect(s.sourceCounts.csv).toBe(1);
 		s = computeSupporterStats(s, row, null);
 		expect(s.sourceCounts.csv).toBeUndefined();
+	});
+
+	it('bounds the source key space: distinct sources past the cap fold into "other"', () => {
+		// `source` is a user-controlled import label — an unbounded distinct set
+		// would grow the org doc toward Convex's ~1MB cap. Build many distinct
+		// sources and assert the map stays bounded (the overflow lands in 'other').
+		let s = emptySupporterStats();
+		for (let i = 0; i < 200; i++) {
+			s = computeSupporterStats(s, null, subscribed({ source: `src-${i}` }));
+		}
+		const keyCount = Object.keys(s.sourceCounts).length;
+		expect(keyCount).toBeLessThanOrEqual(33); // MAX_SOURCE_KEYS (32) + 'other'
+		expect(s.sourceCounts.other).toBeGreaterThan(0);
+		// Every supporter is still accounted for: the buckets sum to the total.
+		const summed = Object.values(s.sourceCounts).reduce((a, b) => a + b, 0);
+		expect(summed).toBe(200);
+	});
+});
+
+describe('computeSupporterStats — SMS status transitions (updateSmsStatus path)', () => {
+	it('moves a supporter between sms buckets on a status change', () => {
+		// updateSmsStatus is a status writer like the webhook paths; the delta must
+		// shift the sms buckets or they drift on every manual edit.
+		const before = subscribed({ smsStatus: 'subscribed' });
+		const after = { ...before, smsStatus: 'unsubscribed' };
+		let s = computeSupporterStats(undefined, null, before);
+		expect(s.smsSubscribed).toBe(1);
+		expect(s.smsUnsubscribed).toBe(0);
+		s = computeSupporterStats(s, before, after);
+		expect(s.smsSubscribed).toBe(0);
+		expect(s.smsUnsubscribed).toBe(1);
+	});
+});
+
+describe('counter writers are wired (source pins for the fixed misses)', () => {
+	const supportersSrc = readFileSync(
+		path.resolve(process.cwd(), 'convex/supporters.ts'),
+		'utf8'
+	);
+	const dashboardSrc = readFileSync(
+		path.resolve(process.cwd(), 'convex/_dashboardStats.ts'),
+		'utf8'
+	);
+
+	it('updateSmsStatus applies the supporter-stats delta', () => {
+		const from = supportersSrc.indexOf('export const updateSmsStatus');
+		const next = supportersSrc.indexOf('export const', from + 20);
+		const body = supportersSrc.slice(from, next === -1 ? undefined : next);
+		expect(body).toContain('applySupporterStatsDelta');
+	});
+
+	it('computeDistrictVerified counts only verified actions', () => {
+		const from = dashboardSrc.indexOf('export async function computeDistrictVerified');
+		const body = dashboardSrc.slice(from, dashboardSrc.indexOf('\n}', from));
+		expect(body).toContain("eq('verified', true)");
 	});
 });

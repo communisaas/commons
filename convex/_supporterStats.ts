@@ -108,6 +108,16 @@ function sourceValue(s: CountableSupporter): string {
 	return typeof s.source === 'string' && s.source.trim() ? s.source.trim() : 'unknown';
 }
 
+/**
+ * `source` is a user-controlled import label, so the distinct-source set is
+ * unbounded in principle — left unchecked it grows the org document toward
+ * Convex's ~1MB cap. Bound it: once the map holds MAX_SOURCE_KEYS distinct
+ * sources, fold new ones into OTHER_SOURCE_KEY. The breakdown is display-only,
+ * so an approximate tail is acceptable; the common handful of sources stay exact.
+ */
+const MAX_SOURCE_KEYS = 32;
+const OTHER_SOURCE_KEY = 'other';
+
 function hasEmailConsent(s: CountableSupporter): boolean {
 	return Boolean(s.emailConsentSource || s.emailConsentedAt || s.emailConsentText);
 }
@@ -176,12 +186,25 @@ export function computeSupporterStats(
 	// source unchanged (sub then add the same key → net zero). Handling it
 	// generally still keeps the map correct if a writer ever changes source.
 	if (before) {
-		const key = sourceValue(before);
+		let key = sourceValue(before);
+		// If this source was folded into 'other' on the way in (key space was
+		// full), its own key isn't present — decrement 'other' to stay consistent.
+		if (next.sourceCounts[key] === undefined && next.sourceCounts[OTHER_SOURCE_KEY] !== undefined) {
+			key = OTHER_SOURCE_KEY;
+		}
 		next.sourceCounts[key] = Math.max(0, (next.sourceCounts[key] ?? 0) - 1);
 		if (next.sourceCounts[key] === 0) delete next.sourceCounts[key];
 	}
 	if (after) {
-		const key = sourceValue(after);
+		let key = sourceValue(after);
+		// Bound the key space: a new source beyond MAX_SOURCE_KEYS folds into
+		// 'other' so a messy/hostile import can't grow the org doc unbounded.
+		if (
+			next.sourceCounts[key] === undefined &&
+			Object.keys(next.sourceCounts).length >= MAX_SOURCE_KEYS
+		) {
+			key = OTHER_SOURCE_KEY;
+		}
 		next.sourceCounts[key] = (next.sourceCounts[key] ?? 0) + 1;
 	}
 

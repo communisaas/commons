@@ -1143,10 +1143,18 @@ export const updateSmsStatus = mutation({
 			);
 		}
 
+		if (supporter.smsStatus === args.smsStatus) {
+			return { updated: true };
+		}
+
+		const after = { ...supporter, smsStatus: args.smsStatus };
 		await ctx.db.patch(args.supporterId, {
 			smsStatus: args.smsStatus,
 			updatedAt: Date.now()
 		});
+		// This manual editor is a status writer like the webhook paths; without
+		// the delta the smsSubscribed/smsUnsubscribed/smsNone buckets drift.
+		await applySupporterStatsDelta(ctx, org._id, supporter, after);
 
 		return { updated: true };
 	}

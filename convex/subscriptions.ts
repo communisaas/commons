@@ -12,7 +12,7 @@ import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from 
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import type { Id, Doc } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { QueryCtx, MutationCtx } from "./_generated/server";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
 const PLANS: Record<
@@ -690,7 +690,7 @@ function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "
  * the SAME period start is a no-op. The baseline only ever moves forward.
  */
 async function snapshotVerifiedActionBaseline(
-  ctx: { db: { get: (id: Id<"organizations">) => Promise<{ verifiedActionsLifetime?: number; verifiedActionsPeriodBaselineAt?: number } | null>; patch: (id: Id<"organizations">, patch: Record<string, unknown>) => Promise<unknown> } },
+  ctx: MutationCtx,
   orgId: Id<"organizations">,
   periodStart: number,
 ): Promise<void> {

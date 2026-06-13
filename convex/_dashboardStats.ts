@@ -38,7 +38,7 @@ export async function computeDistrictVerified(
 ): Promise<DistrictVerifiedResult> {
 	const scanned = await ctx.db
 		.query('campaignActions')
-		.withIndex('by_orgId_verified', (idx) => idx.eq('orgId', orgId))
+		.withIndex('by_orgId_verified', (idx) => idx.eq('orgId', orgId).eq('verified', true))
 		.order('desc')
 		.take(DISTRICT_SCAN_CAP + 1);
 
