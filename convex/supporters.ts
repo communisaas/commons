@@ -100,6 +100,65 @@ function supporterSourceValue(supporter: { source?: string }): string {
 }
 
 /**
+ * Fields a non-editor member must NOT receive from any member-gated reader.
+ *
+ * - `emailHash` is a stable, org-scoped join key. Surfacing it to a plain
+ *   member lets them correlate a supporter across every list/search response
+ *   and use it as a membership/identity oracle — a quiet PII egress that the
+ *   org-key-encrypted blobs (`encrypted*`) do not expose.
+ * - The six consent-evidence fields carry the literal consent text/source/
+ *   timestamp the supporter agreed to. That is compliance evidence custodied
+ *   for the org's editors, not list-membership metadata for every member.
+ *
+ * Editor+ (`owner`/`editor`) callers keep the real values — they hold the org
+ * key and run export/search, both of which need `emailHash` as decryption AAD.
+ *
+ * Encrypted PII blobs (`encryptedEmail`/`encryptedName`/`encryptedPhone`/
+ * `encryptedCustomFields`) are intentionally left untouched: they are
+ * org-key-encrypted and the client decrypts them — that is the existing
+ * custody model, not a leak.
+ */
+type ProjectableSupporterFields = {
+	emailHash?: string | null;
+	emailConsentSource?: string | null;
+	emailConsentedAt?: number | null;
+	emailConsentText?: string | null;
+	smsConsentSource?: string | null;
+	smsConsentedAt?: number | null;
+	smsConsentText?: string | null;
+};
+
+/**
+ * Null the editor-only PII/consent fields for non-editor members. Editor+
+ * callers pass `isEditor: true` and the real values pass through unchanged.
+ *
+ * Applied in EVERY member-gated reader so the gate cannot drift between them.
+ * The `Record<string, unknown> &` intersection lets readers hand in their full
+ * mapped shape (with `_id`, `tags`, encrypted blobs, …) without tripping
+ * excess-property checks — only the seven projectable keys are overwritten.
+ */
+function projectSupporterFields<T extends Record<string, unknown> & ProjectableSupporterFields>(
+	doc: T,
+	isEditor: boolean
+): T {
+	if (isEditor) return doc;
+	return {
+		...doc,
+		emailHash: null,
+		emailConsentSource: null,
+		emailConsentedAt: null,
+		emailConsentText: null,
+		smsConsentSource: null,
+		smsConsentedAt: null,
+		smsConsentText: null
+	};
+}
+
+function membershipIsEditor(role: string): boolean {
+	return role === 'owner' || role === 'editor';
+}
+
+/**
  * Paginated supporter list with filters. Returns encrypted PII blobs.
  */
 export const list = query({
@@ -119,7 +178,8 @@ export const list = query({
 		)
 	},
 	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
 		const { cursor, numItems } = args.paginationOpts;
 		const filters = args.filters;
 
@@ -183,33 +243,36 @@ export const list = query({
 					})
 				);
 
-				return {
-					_id: s._id,
-					_creationTime: s._creationTime,
-					encryptedEmail: s.encryptedEmail,
-					emailHash: s.emailHash,
-					encryptedName: s.encryptedName ?? null,
-					postalCode: s.postalCode ?? null,
-					stateCode: s.stateCode ?? null,
-					congressionalDistrict: s.congressionalDistrict ?? null,
-					country: s.country ?? null,
-					encryptedPhone: s.encryptedPhone ?? null,
-					verified: s.verified,
-					identityVerified: !!(s.identityCommitment && s.verified),
-					emailStatus: s.emailStatus,
-					smsStatus: s.smsStatus,
-					source: s.source ?? null,
-					emailConsentSource: s.emailConsentSource ?? null,
-					emailConsentedAt: s.emailConsentedAt ?? null,
-					emailConsentText: s.emailConsentText ?? null,
-					smsConsentSource: s.smsConsentSource ?? null,
-					smsConsentedAt: s.smsConsentedAt ?? null,
-					smsConsentText: s.smsConsentText ?? null,
-					importedAt: s.importedAt ?? null,
-					encryptedCustomFields: s.encryptedCustomFields ?? null,
-					updatedAt: s.updatedAt,
-					tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
-				};
+				return projectSupporterFields(
+					{
+						_id: s._id,
+						_creationTime: s._creationTime,
+						encryptedEmail: s.encryptedEmail,
+						emailHash: s.emailHash as string | null,
+						encryptedName: s.encryptedName ?? null,
+						postalCode: s.postalCode ?? null,
+						stateCode: s.stateCode ?? null,
+						congressionalDistrict: s.congressionalDistrict ?? null,
+						country: s.country ?? null,
+						encryptedPhone: s.encryptedPhone ?? null,
+						verified: s.verified,
+						identityVerified: !!(s.identityCommitment && s.verified),
+						emailStatus: s.emailStatus,
+						smsStatus: s.smsStatus,
+						source: s.source ?? null,
+						emailConsentSource: s.emailConsentSource ?? null,
+						emailConsentedAt: s.emailConsentedAt ?? null,
+						emailConsentText: s.emailConsentText ?? null,
+						smsConsentSource: s.smsConsentSource ?? null,
+						smsConsentedAt: s.smsConsentedAt ?? null,
+						smsConsentText: s.smsConsentText ?? null,
+						importedAt: s.importedAt ?? null,
+						encryptedCustomFields: s.encryptedCustomFields ?? null,
+						updatedAt: s.updatedAt,
+						tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+					},
+					isEditor
+				);
 			})
 		);
 
@@ -232,7 +295,8 @@ export const get = query({
 		supporterId: v.id('supporters')
 	},
 	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
 
 		const supporter = await ctx.db.get(args.supporterId);
 		if (!supporter || supporter.orgId !== org._id) {
@@ -250,28 +314,31 @@ export const get = query({
 			})
 		);
 
-		return {
-			_id: supporter._id,
-			_creationTime: supporter._creationTime,
-			encryptedEmail: supporter.encryptedEmail,
-			emailHash: supporter.emailHash,
-			encryptedName: supporter.encryptedName ?? null,
-			postalCode: supporter.postalCode ?? null,
-			stateCode: supporter.stateCode ?? null,
-			congressionalDistrict: supporter.congressionalDistrict ?? null,
-			country: supporter.country ?? null,
-			encryptedPhone: supporter.encryptedPhone ?? null,
-			verified: supporter.verified,
-			identityVerified: !!(supporter.identityCommitment && supporter.verified),
-			identityCommitment: supporter.identityCommitment ?? null,
-			emailStatus: supporter.emailStatus,
-			smsStatus: supporter.smsStatus,
-			source: supporter.source ?? null,
-			encryptedCustomFields: supporter.encryptedCustomFields ?? null,
-			importedAt: supporter.importedAt ?? null,
-			updatedAt: supporter.updatedAt,
-			tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
-		};
+		return projectSupporterFields(
+			{
+				_id: supporter._id,
+				_creationTime: supporter._creationTime,
+				encryptedEmail: supporter.encryptedEmail,
+				emailHash: supporter.emailHash as string | null,
+				encryptedName: supporter.encryptedName ?? null,
+				postalCode: supporter.postalCode ?? null,
+				stateCode: supporter.stateCode ?? null,
+				congressionalDistrict: supporter.congressionalDistrict ?? null,
+				country: supporter.country ?? null,
+				encryptedPhone: supporter.encryptedPhone ?? null,
+				verified: supporter.verified,
+				identityVerified: !!(supporter.identityCommitment && supporter.verified),
+				identityCommitment: supporter.identityCommitment ?? null,
+				emailStatus: supporter.emailStatus,
+				smsStatus: supporter.smsStatus,
+				source: supporter.source ?? null,
+				encryptedCustomFields: supporter.encryptedCustomFields ?? null,
+				importedAt: supporter.importedAt ?? null,
+				updatedAt: supporter.updatedAt,
+				tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+			},
+			isEditor
+		);
 	}
 });
 
@@ -281,13 +348,20 @@ export const get = query({
 export const findByEmailHash = query({
 	args: { slug: v.string(), emailHash: v.string() },
 	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		return ctx.db
+		const { org, membership } = await requireOrgRole(ctx, args.slug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
+		const doc = await ctx.db
 			.query('supporters')
 			.withIndex('by_orgId_emailHash', (idx) =>
 				idx.eq('orgId', org._id).eq('emailHash', args.emailHash)
 			)
 			.first();
+		if (!doc) return null;
+		// Raw .first() returns the full document (consent text + the join-key
+		// hash). The caller already holds the hash, so a non-editor learns
+		// nothing new by getting it back — but the consent-evidence fields are
+		// editor-only, so project them out for plain members.
+		return projectSupporterFields(doc, isEditor);
 	}
 });
 
@@ -297,7 +371,8 @@ export const searchByEmail = query({
 		emailHash: v.string()
 	},
 	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
 
 		const supporter = await ctx.db
 			.query('supporters')
@@ -319,15 +394,21 @@ export const searchByEmail = query({
 			})
 		);
 
-		return {
-			_id: supporter._id,
-			_creationTime: supporter._creationTime,
-			encryptedEmail: supporter.encryptedEmail,
-			encryptedName: supporter.encryptedName ?? null,
-			verified: supporter.verified,
-			emailStatus: supporter.emailStatus,
-			tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
-		};
+		// This shape carries neither emailHash nor consent fields today; route
+		// it through the shared projection anyway so the editor gate cannot
+		// drift if either field is added back here later.
+		return projectSupporterFields(
+			{
+				_id: supporter._id,
+				_creationTime: supporter._creationTime,
+				encryptedEmail: supporter.encryptedEmail,
+				encryptedName: supporter.encryptedName ?? null,
+				verified: supporter.verified,
+				emailStatus: supporter.emailStatus,
+				tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+			},
+			isEditor
+		);
 	}
 });
 
