@@ -64,10 +64,13 @@ describe('threshold path schedules the spawn from verified actions', () => {
 		// The guard condition sits immediately above the scheduler call.
 		const idx = campaigns.indexOf('internal.debates.atomicSpawnIfEligible');
 		expect(idx).toBeGreaterThanOrEqual(0);
-		const guard = campaigns.slice(Math.max(0, idx - 400), idx);
+		const guard = campaigns.slice(Math.max(0, idx - 900), idx);
 		expect(guard).toContain('args.verified');
 		expect(guard).toContain('campaign?.debateEnabled');
 		expect(guard).toContain('!campaign?.debateId');
+		// Congressional emits must not force-spawn a debate (recipientSubdivision
+		// multiplier not yet bounded) — the guard excludes that channel.
+		expect(guard).toContain("args.channel !== 'congressional'");
 	});
 });
 

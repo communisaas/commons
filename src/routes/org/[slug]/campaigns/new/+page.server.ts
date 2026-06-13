@@ -5,6 +5,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { CongressionalDeliveryGroundData } from '$lib/components/org/os/spaces';
+import { FEATURES } from '$lib/config/features';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -46,6 +47,12 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 	requireRole(membership.role, 'editor');
 
 	const fromAlertId = url.searchParams.get('fromAlert');
+	// Type preselection from a handoff (e.g. Studio "Send to Congress"). Only
+	// honored for CONGRESSIONAL and only while the flag reveals it; anything
+	// else falls back to the default.
+	const requestedType = url.searchParams.get('type');
+	const initialType =
+		requestedType === 'CONGRESSIONAL' && FEATURES.CONGRESSIONAL ? 'CONGRESSIONAL' : 'LETTER';
 
 	const [templates, alertPrefill, congressionalDeliveryResult] = await Promise.all([
 		serverQuery(api.templates.listByOrg, { slug: params.slug }),
@@ -64,7 +71,12 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 			title: t.title
 		})),
 		alertPrefill,
-		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult)
+		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult),
+		// Whether the congressional campaign type is offered in authoring. The
+		// authoring surface exists and is correct regardless; the flag decides
+		// whether it's revealed (launch decision lives with the flag, not here).
+		congressionalAuthoringEnabled: FEATURES.CONGRESSIONAL,
+		initialType
 	};
 };
 
@@ -94,7 +106,14 @@ export const actions: Actions = {
 			return fail(400, { error: 'Title is required', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
+		// CONGRESSIONAL is accepted only while the launch flag is on — the flag
+		// is the reveal gate for the authoring surface, so the server-side
+		// allowlist mirrors it rather than letting a hand-crafted POST author a
+		// congressional campaign the UI doesn't yet offer.
+		const allowedTypes = FEATURES.CONGRESSIONAL
+			? ['LETTER', 'EVENT', 'FORM', 'CONGRESSIONAL']
+			: ['LETTER', 'EVENT', 'FORM'];
+		if (!type || !allowedTypes.includes(type)) {
 			return fail(400, { error: 'Invalid campaign type', title, type, body, targetCountry, targetJurisdiction });
 		}
 
@@ -131,9 +150,9 @@ export const actions: Actions = {
 		const campaignId = await serverMutation(api.campaigns.create, {
 			slug: params.slug,
 			title,
-			// type was validated above against the LETTER/EVENT/FORM/FUNDRAISER
-			// allowlist; cast at the boundary to match the Convex args union.
-			type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER',
+			// type was validated above against the flag-scoped allowlist; cast at
+			// the boundary to match the Convex args union.
+			type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER' | 'CONGRESSIONAL',
 			body: body ?? undefined,
 			// Form-data string cast at API boundary; Convex args validator
 			// (now v.id('templates')) rejects malformed Ids.

@@ -276,18 +276,22 @@ export const create = action({
 		if (!credentialStatus.active) {
 			throw new Error('NO_ACTIVE_DISTRICT_CREDENTIAL');
 		}
-		// Defense-in-depth tier-4 gate at the Convex action.
-		// The SvelteKit endpoint at `/api/submissions/create/+server.ts:221`
-		// enforces tier 4 (REQUIRED_CONGRESSIONAL_PROOF_TIER) via both the
-		// proof's `publicInputs.authorityLevel` AND `locals.user.trust_tier`.
-		// But this public Convex action is reachable directly via the
-		// Convex client by any authenticated user with an active credential,
-		// bypassing the SvelteKit endpoint entirely. Without this check, a
-		// tier-2 user with an active address credential could call
-		// `api.submissions.create` and reach `deliverToCongress`. Tier 4 is
-		// the documented launch-floor for congressional delivery — see
-		// `REQUIRED_CONGRESSIONAL_PROOF_TIER` in the SvelteKit handler.
-		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
+		// Defense-in-depth congressional-floor gate at the Convex action, mirroring
+		// the SvelteKit endpoint (`/api/submissions/create/+server.ts`). This public
+		// Convex action is reachable directly via the Convex client by any
+		// authenticated user, so it re-enforces the floor independently of the
+		// SvelteKit path. Tiered floor: tier 2 (address-verified — district confirmed)
+		// DELIVERS; gov-ID (tier 4) raises the assurance BADGE, it is not the bar. The
+		// active-credential / revocation / nullifier checks above are independent of
+		// this threshold and are unchanged. MUST stay in sync with
+		// REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
+		//
+		// NOTE: the canonical action-domain REBIND (recompute the domain from
+		// server-held inputs and reject mismatch) is performed by the SvelteKit
+		// resolver (`+server.ts`), NOT here — on the direct Convex path the domain
+		// in publicInputs is still self-referential. See follow-up note in the
+		// security review; closing it means moving the rebind into this action.
+		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
 		if (credentialStatus.trustTier < REQUIRED_CONGRESSIONAL_PROOF_TIER) {
 			throw new Error('INSUFFICIENT_AUTHORITY');
 		}
@@ -295,15 +299,19 @@ export const create = action({
 		// shadow_atlas credentials — would bypass delivery recheck on falsy guard).
 		const issuingCredentialId: Id<'districtCredentials'> = credentialStatus.credentialId;
 
-		// Check org verified action quota (if template belongs to an org)
-		if (template?.orgId) {
-			const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
-				orgId: template.orgId
-			});
-			if (limits && limits.current.verifiedActions >= limits.limits.maxVerifiedActions) {
-				throw new Error('VERIFIED_ACTION_QUOTA_EXCEEDED');
-			}
-		}
+		// NOTE: congressional (CWC) deliveries are PERSON-LAYER civic actions — a
+		// constituent contacting their own representative — NOT the org's metered
+		// paid usage (which meters org-INITIATED sends like email/SMS blasts). This
+		// action is reachable only for deliverable CWC templates
+		// (assertDeliverableCongressionalTemplate above), so a per-org
+		// verified-action quota CHECK here would let an external attacker exhaust a
+		// victim org's quota via its public template (billing-quota DoS). The crypto
+		// gates (active credential, revocation, nullifier uniqueness) plus the
+		// recipientSubdivision bound limit abuse. Attribution still happens at
+		// delivery time (emitCongressionalAction → createCampaignAction), but with
+		// metersOrgQuota:false so it never consumes the org's paid quota. The org
+		// verified-action quota therefore is neither counted by nor enforced on this
+		// congressional path; org-initiated sends remain gated in their own paths.
 
 		// Extract action_id from public inputs
 		const publicInputsTyped = args.publicInputs as Record<string, unknown> | undefined;
@@ -1790,8 +1798,12 @@ export const deliverToCongress = internalAction({
 				});
 			}
 
-			// On any successful delivery, persist district + increment template reach
-			// Wrapped in own try/catch: counter failures must never revert delivery status
+			// On any successful delivery, persist district + increment template reach +
+			// emit the attributed campaignAction (cross-channel ledger).
+			// Wrapped in own try/catch: counter/attribution failures must never revert
+			// delivery status. anySuccess means at least one chamber actually received
+			// the message — so partial deliveries (e.g. House ok / Senate fail) still
+			// attribute, and a fully-failed delivery emits nothing.
 			if (anySuccess) {
 				try {
 					await ctx.runMutation(internal.submissions.updateResolvedDistrict, {
@@ -1804,9 +1816,23 @@ export const deliverToCongress = internalAction({
 						verifiedAt: Date.now(),
 						trustTier: submission.trustTier
 					});
+					// Cross-channel attribution: write a campaignActions row through the
+					// shared counter-maintaining create path so congressional actions
+					// land in the same ledger as org email/form actions. No-op when the
+					// template isn't owned by a campaign (person-layer unaffiliated send).
+					await ctx.runMutation(internal.submissions.emitCongressionalAction, {
+						submissionId: args.submissionId,
+						templateId: submission.templateId,
+						districtCode,
+						trustTier: submission.trustTier,
+						// Carry the chamber-rollup so the attributed action records
+						// partial-vs-full delivery. anySuccess guards this block, so
+						// deliveryStatus is 'delivered' or 'partial' here, never 'failed'.
+						deliveryStatus: deliveryStatus === 'partial' ? 'partial' : 'delivered'
+					});
 				} catch (counterErr) {
 					console.error(
-						'[deliverToCongress] Counter update failed (delivery unaffected):',
+						'[deliverToCongress] Counter/attribution update failed (delivery unaffected):',
 						counterErr
 					);
 				}
@@ -1975,6 +2001,123 @@ export const incrementTemplateReach = internalMutation({
 					}
 				: {})
 		});
+	}
+});
+
+/**
+ * Internal mutation: emit an attributed campaignAction for a successful
+ * congressional (CWC) delivery.
+ *
+ * Closes the disjoint-ledger split: before this, a successful congressional
+ * delivery wrote ONLY templates.verifiedSends, so congressional actions and
+ * org email/form actions lived in two separate tallies. Here we ALSO write a
+ * campaignActions row with channel='congressional' carrying the action's
+ * trustTier (the assurance level — a tier-4 gov-ID action is distinguishable
+ * for higher-assurance badging from a tier-2 address-verified action) and
+ * verified=true (delivery landed). The write reuses campaigns.createCampaignAction
+ * so the SAME path that maintains campaign counters, verifiedActionsLifetime,
+ * actionTierCounts, and tier3VerifiedActionCount runs — no separate counter
+ * site to drift.
+ *
+ * Attribution requires a campaign that owns the delivered template. Person-layer
+ * congressional sends against an unaffiliated public template have no campaign
+ * to attribute to; those still bump templates.verifiedSends (unchanged) but emit
+ * no campaignAction. Only org-authored congressional campaigns (campaigns.templateId)
+ * land in the org ledger.
+ *
+ * Dedup is on (campaignId, congressionalSubmissionId) inside createCampaignAction,
+ * so an idempotent delivery retry never double-counts. Non-throwing: like the
+ * verifiedSends counter, attribution failures must never affect delivery status —
+ * the caller wraps this in the same counter try/catch.
+ */
+export const emitCongressionalAction = internalMutation({
+	args: {
+		submissionId: v.id('submissions'),
+		templateId: v.string(),
+		districtCode: v.optional(v.string()),
+		trustTier: v.optional(v.number()),
+		// Delivery rollup for this submission: 'delivered' = every targeted
+		// chamber received the message; 'partial' = at least one chamber delivered
+		// AND at least one failed. The emit only fires on any-success, so 'failed'
+		// never reaches here. Carried onto the attributed action so the org ledger
+		// distinguishes full from partial delivery instead of overclaiming.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial')))
+	},
+	handler: async (
+		ctx,
+		args
+	): Promise<
+		| { attributed: false; reason: 'template_not_found' | 'no_campaign' | 'cross_org' }
+		| { attributed: true; alreadySubmitted: boolean }
+	> => {
+		// Resolve the delivered template to a templates._id. Submissions carry
+		// either the Convex id or a slug (mirrors getTemplateForDelivery).
+		const normalizedTemplateId = (ctx.db as any).normalizeId?.(
+			'templates',
+			args.templateId
+		) as Id<'templates'> | null | undefined;
+		const template =
+			(normalizedTemplateId ? await ctx.db.get(normalizedTemplateId) : null) ??
+			(await ctx.db
+				.query('templates')
+				.withIndex('by_slug', (q) => q.eq('slug', args.templateId))
+				.first());
+		if (!template) {
+			return { attributed: false, reason: 'template_not_found' as const };
+		}
+
+		// Find the campaign that owns this template. Org-authored congressional
+		// campaigns set campaigns.templateId; person-layer sends against an
+		// unaffiliated public template have none.
+		//
+		// Defense-in-depth org-scope: only attribute to a campaign whose orgId
+		// matches the TEMPLATE's orgId. campaigns.create/update enforce template
+		// ownership at link time, but a stale cross-org link (or a future bypass)
+		// must not let Org B's congressional campaign siphon Org A's constituent
+		// actions — which would also leak A's districtHash/districtCode/trustTier
+		// via the campaign_action.created webhook. We verify the match rather than
+		// blindly taking .first() across orgs; if none matches, no-op the
+		// attribution (delivery + verifiedSends are unaffected upstream).
+		const linkedCampaigns = await ctx.db
+			.query('campaigns')
+			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+			.collect();
+		const campaign = linkedCampaigns.find((c) => c.orgId === template.orgId) ?? null;
+		if (!campaign) {
+			// Distinguish "no campaign at all" from "only cross-org link(s) exist"
+			// so the reason is diagnosable, but both no-op the attribution.
+			return {
+				attributed: false,
+				reason: linkedCampaigns.length > 0 ? ('cross_org' as const) : ('no_campaign' as const)
+			};
+		}
+
+		// Reuse the shared counter-maintaining create path. channel='congressional'
+		// + verified=true; trustTier carries the assurance level for badging. No
+		// supporterId (constituent PII is never custodied for congressional sends);
+		// dedup keys on congressionalSubmissionId instead. engagementTier defaults
+		// to 0 — congressional submissions don't carry an engagement tier, and the
+		// org actionTierCounts histogram only buckets 0-4 engagement tiers.
+		const result = await ctx.runMutation(internal.campaigns.createCampaignAction, {
+			campaignId: campaign._id,
+			verified: true,
+			engagementTier: 0,
+			districtCode: args.districtCode,
+			trustTier: args.trustTier,
+			channel: 'congressional',
+			congressionalSubmissionId: args.submissionId,
+			// Person-layer civic action — a constituent contacting their own rep.
+			// Attribute it (campaign + org tier histogram) but do NOT consume the
+			// org's metered billing quota; metering congressional sends would let an
+			// external attacker exhaust a victim org's verified-action quota via its
+			// public template. The crypto gates + recipientSubdivision bound limit abuse.
+			metersOrgQuota: false,
+			// Carry whether every targeted chamber actually delivered. A House-ok /
+			// Senate-fail rollup must not be ledgered as a full delivery.
+			deliveryStatus: args.deliveryStatus
+		});
+
+		return { attributed: true, alreadySubmitted: result.alreadySubmitted === true };
 	}
 });
 

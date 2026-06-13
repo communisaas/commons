@@ -238,7 +238,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		const publicInputsArray: string[] = new Array(31).fill('0x' + '01'.repeat(32));
 		publicInputsArray[26] = VALID_NULLIFIER;
 		publicInputsArray[27] = CANONICAL_DOMAIN;
-		publicInputsArray[28] = '3';
+		publicInputsArray[28] = '1'; // canonical authority below the tier-2 floor — must match authorityLevel
 		publicInputsArray[30] = '0'; // claimed engagement tier; matches server-derived tier 0
 
 		const response = await POST(
@@ -247,7 +247,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 					publicInputs: {
 						publicInputsArray,
 						actionDomain: CANONICAL_DOMAIN,
-						authorityLevel: 3,
+						authorityLevel: 1, // below the tier-2 congressional floor — still rejected
 						nullifier: VALID_NULLIFIER
 					}
 				})
@@ -271,7 +271,7 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 						id: 'user_abc',
 						verified_at: Date.now() - 1000,
 						district_hash: 'dh',
-						trust_tier: 2
+						trust_tier: 1
 					}
 				}
 			})
@@ -281,6 +281,84 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		const json = await response.json();
 		expect(json.code).toBe('INSUFFICIENT_AUTHORITY');
 		expect(mockServerAction).not.toHaveBeenCalled();
+	});
+
+	it('FIX 3: rejects a malformed recipientSubdivision before any credential lookup', async () => {
+		// recipientSubdivision is the only client-chosen free parameter baked into
+		// the action-domain keccak preimage, so an unbounded value lets an attacker
+		// mint unlimited distinct nullifiers from one credential. The endpoint now
+		// bounds it to the documented subdivision grammar. Each malformed value
+		// must 400 BEFORE the credential lookup (mockServerQuery untouched for it).
+		const malformed = [
+			'national-attacker', // not the bare literal
+			'us-ca', // lowercase country prefix
+			'US-', // trailing dash / empty segment
+			'US--CA', // empty internal segment
+			'US-CA-san_francisco', // underscore is not allowed
+			'US CA', // whitespace
+			'../etc', // path traversal shape
+			'US-' + 'A-'.repeat(30) + 'B', // too many segments + over length
+			'A'.repeat(70) // over the 64-char hard cap
+		];
+
+		for (const recipientSubdivision of malformed) {
+			mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
+			let caught: unknown;
+			try {
+				await POST(buildEvent(buildBody({ recipientSubdivision })));
+			} catch (e) {
+				caught = e;
+			}
+			expect((caught as { status?: number })?.status, `expected 400 for ${JSON.stringify(recipientSubdivision)}`).toBe(400);
+			expect(mockServerAction).not.toHaveBeenCalled();
+		}
+	});
+
+	it('FIX 3: accepts the documented recipientSubdivision formats', async () => {
+		const valid = ['national', 'US-CA', 'US-CA-12', 'US-CA-AL', 'US-CA-san-francisco', 'EU'];
+		for (const recipientSubdivision of valid) {
+			vi.clearAllMocks();
+			globalThis.fetch = vi.fn();
+			mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
+			mockServerQuery.mockImplementation((ref: string) => {
+				if (ref === 'users.getMyActionCount') return Promise.resolve(SERVER_ACTION_COUNT);
+				if (ref === 'users.getActiveCredentialDistrictCommitment')
+					return Promise.resolve(mockCommitment);
+				return Promise.resolve(null);
+			});
+			mockServerAction.mockResolvedValueOnce({ submissionId: 'sub-ok', status: 'accepted' });
+
+			// The canonical domain must be recomputed for this subdivision so the
+			// binding check passes; build the matching body.
+			const domain = buildActionDomain({
+				country: 'US',
+				jurisdictionType: 'federal',
+				recipientSubdivision,
+				templateId: TEMPLATE_ID,
+				sessionId: CURRENT_SESSION_ID,
+				districtCommitment: ACTIVE_COMMITMENT
+			});
+			const publicInputsArray = new Array(31).fill('0x' + '01'.repeat(32));
+			publicInputsArray[26] = VALID_NULLIFIER;
+			publicInputsArray[27] = domain;
+			publicInputsArray[28] = '5';
+			publicInputsArray[30] = '0';
+
+			const response = await POST(
+				buildEvent(
+					buildBody({
+						recipientSubdivision,
+						publicInputs: {
+							publicInputsArray,
+							actionDomain: domain,
+							authorityLevel: 5,
+							nullifier: VALID_NULLIFIER
+						}
+					})
+				)
+			);
+			expect(response.status, `expected 200 for ${recipientSubdivision}`).toBe(200);
+		}
 	});
 
 	it('queries the canonical districtCommitment endpoint with the authenticated userId', async () => {

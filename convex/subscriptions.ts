@@ -91,11 +91,17 @@ async function verifiedActionsThisPeriod(
       idx.eq("orgId", org._id).eq("verified", true).gte("sentAt", periodStart),
     )
     .take(VERIFIED_ACTION_PERIOD_SCAN_CAP + 1);
-  // If the period's own volume exceeds the cap, clamp to the cap. This is the
-  // true count below the cap; above it, the clamp is a floor that STILL trips
-  // enforcement because the cap exceeds every plan's maxVerifiedActions (see the
-  // cap INVARIANT above) — not because it "over-counts". Honor that invariant.
-  return Math.min(rows.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
+  // Exclude congressional rows: congressional deliveries are person-layer civic
+  // actions, NOT org-metered usage — the lifetime path skips them via
+  // createCampaignAction's metersOrgQuota:false, and this self-heal path (the one
+  // free-tier orgs always hit, since they have no Stripe baseline) MUST exclude
+  // them too or congressional traffic leaks back into the org's metered usage.
+  const metered = rows.filter((r) => r.channel !== "congressional");
+  // If the period's own metered volume exceeds the cap, clamp to the cap. Below
+  // the cap this is the true count; above it the clamp is a floor that STILL
+  // trips enforcement because the cap exceeds every plan's maxVerifiedActions
+  // (see the cap INVARIANT above) — not because it "over-counts".
+  return Math.min(metered.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
 }
 
 /**

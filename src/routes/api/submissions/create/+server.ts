@@ -21,7 +21,14 @@ import { FEATURES } from '$lib/config/features';
  * Rotate on each Congressional session transition.
  */
 const CURRENT_SESSION_ID = '119th-congress';
-const REQUIRED_CONGRESSIONAL_PROOF_TIER = 4;
+// Tiered congressional floor: tier 2 (address-verified — district confirmed via
+// Shadow Atlas) is the DELIVERY floor; gov-ID (tier 4) is not required to deliver,
+// it raises the packet's assurance BADGE. tier-2 already carries an active,
+// non-revoked district credential (the structural requirement deliverToCongress
+// enforces), so this is a policy threshold, not a security mechanic — every
+// fail-closed check (active credential, revocation, nullifier, domain binding,
+// witness expiry) is unchanged.
+const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
 
 /**
  * Submission Creation Endpoint
@@ -114,6 +121,31 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 		if (typeof recipientSubdivision !== 'string' || recipientSubdivision.length === 0) {
 			throw error(400, 'recipientSubdivision is required');
+		}
+		// Bound recipientSubdivision. It is the only client-chosen free parameter
+		// baked into the action-domain keccak preimage, so a distinct value = a
+		// distinct nullifier = a distinct accepted submission. Unbounded, an
+		// attacker could mint effectively unlimited distinct nullifiers from ONE
+		// credential by varying this string. We constrain it to the documented
+		// subdivision formats (see action-domain-builder.ts ActionDomainParams):
+		//   - "national"                       (federal/national scope; the default)
+		//   - ISO 3166-2 region                e.g. "US-CA", "DE-BY"
+		//   - district under a region          e.g. "US-CA-12", "US-CA-AL"
+		//   - local slug under a region        e.g. "US-CA-san-francisco"
+		//   - international org code           e.g. "EU", "UN"
+		// Grammar (mutually exclusive alternatives):
+		//   - the literal "national"
+		//   - a 2-letter uppercase code on its own            ("EU", "UN", "US")
+		//   - a 2-letter uppercase code + 1..4 alphanumeric, dash-separated segments
+		//     ("US-CA", "US-CA-12", "US-CA-AL", "US-CA-san-francisco")
+		// Each segment is [A-Za-z0-9]+ (no empty segments, no trailing/leading dash).
+		// The <=4 segment cap plus the 64-char hard length cap bounds the per-
+		// credential nullifier multiplier to the real civic fan-out instead of an
+		// open string space — an attacker can no longer mint unlimited distinct
+		// nullifiers from one credential by varying this field.
+		const SUBDIVISION_RE = /^(?:national|[A-Z]{2}(?:-[A-Za-z0-9]+){0,4})$/;
+		if (recipientSubdivision.length > 64 || !SUBDIVISION_RE.test(recipientSubdivision)) {
+			throw error(400, 'recipientSubdivision has an invalid format');
 		}
 
 		// ── Structural proof validation ──
@@ -260,7 +292,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 					error: 'insufficient_authority',
 					code: 'INSUFFICIENT_AUTHORITY',
 					message:
-						'Government-ID verification is required before submitting verified messages to Congress.',
+						'Address verification (confirming your congressional district) is required before submitting messages to Congress.',
 					requiresReverification: true
 				},
 				{ status: 403 }

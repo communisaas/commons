@@ -466,12 +466,10 @@ export const create = mutation({
 	args: {
 		slug: v.string(),
 		title: v.string(),
-		type: v.union(
-			v.literal('LETTER'),
-			v.literal('EVENT'),
-			v.literal('FORM'),
-			v.literal('FUNDRAISER')
-		),
+		// Single-sourced from the shared campaignType validator so adding a
+		// value (e.g. CONGRESSIONAL) is one edit, not a per-mutation inline
+		// union to keep in sync.
+		type: campaignType,
 		body: v.optional(v.string()),
 		templateId: v.optional(v.id('templates')),
 		debateEnabled: v.optional(v.boolean()),
@@ -488,14 +486,26 @@ export const create = mutation({
 			throw new Error('Title is required');
 		}
 
-		// Runtime allowlist must mirror the campaignType union in
-		// convex/_validators.ts. Pre-fix the two disagreed: validator
-		// accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
-		// campaigns) but this runtime check rejected it. Single source
-		// would be cleaner; for now keep them in sync explicitly.
-		const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER'];
+		// Runtime allowlist mirrors the campaignType union in
+		// convex/_validators.ts. The args validator already rejects anything
+		// outside the union; this is the redundant in-handler guard kept for
+		// defense in depth.
+		const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER', 'CONGRESSIONAL'];
 		if (!validTypes.includes(args.type)) {
 			throw new Error('Invalid campaign type');
+		}
+
+		// Template ownership: a campaign may only link a template owned by the
+		// caller's org. Without this, Org B could point a (congressional) campaign
+		// at Org A's public template and siphon A's attributed actions — and leak
+		// A's constituents' districtHash/districtCode/trustTier via the
+		// campaign_action.created webhook. requireOrgRole(editor) above only proves
+		// the caller can edit THIS org; it says nothing about the template's owner.
+		if (args.templateId !== undefined) {
+			const template = await ctx.db.get(args.templateId);
+			if (!template || template.orgId !== org._id) {
+				throw new Error('Template not found in this organization');
+			}
 		}
 
 		const now = Date.now();
@@ -638,12 +648,10 @@ export const update = mutation({
 			updates.title = args.title.trim();
 		}
 		if (args.type !== undefined) {
-			// Runtime allowlist must mirror the campaignType union in
-			// convex/_validators.ts. Pre-fix the two disagreed: validator
-			// accepted FUNDRAISER (donations.ts:622 writes it for goal-amount
-			// campaigns) but this runtime check rejected it. Single source
-			// would be cleaner; for now keep them in sync explicitly.
-			const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER'];
+			// Runtime allowlist mirrors the campaignType union in
+			// convex/_validators.ts (args validator already enforces it; this
+			// is the redundant defense-in-depth guard).
+			const validTypes = ['LETTER', 'EVENT', 'FORM', 'FUNDRAISER', 'CONGRESSIONAL'];
 			if (!validTypes.includes(args.type)) {
 				throw new Error('Invalid campaign type');
 			}
@@ -657,7 +665,18 @@ export const update = mutation({
 			}
 			updates.status = args.status;
 		}
-		if (args.templateId !== undefined) updates.templateId = args.templateId || undefined;
+		if (args.templateId !== undefined) {
+			// Template ownership: only allow linking a template owned by the
+			// caller's org (same cross-org siphon/PII-leak risk as campaigns.create).
+			// A falsy templateId means "unlink" and skips the ownership check.
+			if (args.templateId) {
+				const template = await ctx.db.get(args.templateId);
+				if (!template || template.orgId !== org._id) {
+					throw new Error('Template not found in this organization');
+				}
+			}
+			updates.templateId = args.templateId || undefined;
+		}
 		if (args.debateEnabled !== undefined) updates.debateEnabled = args.debateEnabled;
 		if (args.debateThreshold !== undefined) updates.debateThreshold = args.debateThreshold;
 		if (args.targetCountry !== undefined) updates.targetCountry = args.targetCountry;
@@ -1123,7 +1142,11 @@ export const findOrCreateSupporter = internalMutation({
 export const createCampaignAction = internalMutation({
 	args: {
 		campaignId: v.id('campaigns'),
-		supporterId: v.id('supporters'),
+		// Optional to support the congressional-delivery channel, which has no
+		// server-side supporter row (constituent PII is never custodied for
+		// person-layer CWC sends). Email/form/web actions still pass a real
+		// supporterId; the schema field is already optional.
+		supporterId: v.optional(v.id('supporters')),
 		verified: v.boolean(),
 		engagementTier: v.number(),
 		districtHash: v.optional(v.string()),
@@ -1133,22 +1156,62 @@ export const createCampaignAction = internalMutation({
 		trustTier: v.optional(v.number()),
 		compositionMode: v.optional(v.string()),
 		atlasVersion: v.optional(v.string()),
-		userId: v.optional(v.id('users'))
+		userId: v.optional(v.id('users')),
+		// Delivery-channel discriminator (closed union mirrors the schema field).
+		// Defaults to undefined (unattributed) when omitted, preserving existing
+		// email/form writers that don't set it yet.
+		channel: v.optional(
+			v.union(
+				v.literal('congressional'),
+				v.literal('email'),
+				v.literal('sms'),
+				v.literal('web')
+			)
+		),
+		// Congressional dedup key — the submission whose delivery produced this
+		// action. Used in place of supporterId when the channel has no supporter.
+		congressionalSubmissionId: v.optional(v.id('submissions')),
+		// Whether this action consumes the org's METERED billing quota. Default
+		// true preserves the org-initiated paths (email/form/web blasts). Set to
+		// false for person-layer congressional deliveries: a constituent
+		// contacting their own rep is attributed (campaign + org tier histogram)
+		// for reach/reporting, but it is NOT org-initiated paid usage, so it must
+		// not bump verifiedActionsLifetime (the metered billing base). This
+		// restores the pre-attribution-emit non-metering of congressional sends.
+		metersOrgQuota: v.optional(v.boolean()),
+		// Delivery completeness for multi-recipient channels (congressional):
+		// 'delivered' = every targeted chamber received the message; 'partial' =
+		// at least one delivered AND at least one failed. Stored on the action so
+		// the org ledger distinguishes full from partial delivery. Undefined for
+		// single-recipient channels, treated as fully delivered.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial')))
 	},
 	handler: async (ctx, args) => {
-		// Dedup via the composite index. Without `by_campaignId_supporterId`,
-		// a `withIndex("by_campaignId").collect()` would return every action
-		// for the campaign so the in-memory `.find()` could match the
-		// supporter, then re-filter the SAME list for verified count — two
-		// O(n) passes on a list that grows linearly with campaign size, and
-		// popular campaigns would hit Convex's row-scan cap. With the
-		// composite index this is a single-doc lookup.
-		const alreadySubmitted = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId_supporterId', (q) =>
-				q.eq('campaignId', args.campaignId).eq('supporterId', args.supporterId)
-			)
-			.first();
+		// Dedup via a single-doc composite-index lookup. Two keys depending on
+		// channel:
+		//   - supporter-bearing channels (email/form/web): (campaignId, supporterId)
+		//   - congressional (no supporter): (campaignId, congressionalSubmissionId)
+		// Without an index, a `withIndex("by_campaignId").collect()` would scan
+		// every action for the campaign — two O(n) passes that hit Convex's
+		// row-scan cap on popular campaigns. The composite indexes keep this a
+		// single-doc lookup on either key.
+		const alreadySubmitted = args.congressionalSubmissionId
+			? await ctx.db
+					.query('campaignActions')
+					.withIndex('by_campaignId_congressionalSubmissionId', (q) =>
+						q
+							.eq('campaignId', args.campaignId)
+							.eq('congressionalSubmissionId', args.congressionalSubmissionId)
+					)
+					.first()
+			: args.supporterId
+				? await ctx.db
+						.query('campaignActions')
+						.withIndex('by_campaignId_supporterId', (q) =>
+							q.eq('campaignId', args.campaignId).eq('supporterId', args.supporterId)
+						)
+						.first()
+				: null;
 
 		// Denormalize orgId from campaign for billing query performance.
 		// Also: returns `verifiedActionCount` from the denormalized
@@ -1185,6 +1248,9 @@ export const createCampaignAction = internalMutation({
 			trustTier: args.trustTier,
 			compositionMode: args.compositionMode,
 			atlasVersion: args.atlasVersion,
+			channel: args.channel,
+			congressionalSubmissionId: args.congressionalSubmissionId,
+			deliveryStatus: args.deliveryStatus,
 			delegated: false,
 			sentAt: Date.now()
 		});
@@ -1227,7 +1293,12 @@ export const createCampaignAction = internalMutation({
 			const org = await ctx.db.get(orgId);
 			if (org) {
 				const patch: Record<string, unknown> = {};
-				if (args.verified) {
+				// Only bump the metered billing base for actions that consume the
+				// org quota. Congressional person-layer deliveries pass
+				// metersOrgQuota:false — attributed below (actionTierCounts /
+				// campaign counters) but never charged to the org's paid usage.
+				const metersOrgQuota = args.metersOrgQuota !== false;
+				if (args.verified && metersOrgQuota) {
 					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
 				}
 				const tier = args.engagementTier;
@@ -1266,6 +1337,13 @@ export const createCampaignAction = internalMutation({
 		// simultaneous threshold-crossers don't double-spawn.
 		if (
 			args.verified &&
+			// Congressional emits are person-layer civic deliveries; their volume must
+			// not force-spawn an org's debate. The recipientSubdivision nullifier
+			// multiplier is not yet bounded (see the congressional-launch hardening
+			// gating the CONGRESSIONAL flag flip), so an attacker could otherwise push
+			// a victim's verifiedActionCount over the threshold. Debates spawn from
+			// org-initiated action volume only.
+			args.channel !== 'congressional' &&
 			campaign?.debateEnabled &&
 			!campaign?.debateId &&
 			(campaign?.verifiedActionCount ?? 0) + 1 >= (campaign?.debateThreshold ?? 0)
