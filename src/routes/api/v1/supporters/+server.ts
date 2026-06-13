@@ -115,7 +115,17 @@ export const GET: RequestHandler = async ({ request, url }) => {
 			tags: s.tags
 		}));
 
-	return apiOk(data, { cursor: result.cursor, hasMore: result.hasMore, total: result.total });
+	return apiOk(data, {
+		cursor: result.cursor,
+		hasMore: result.hasMore,
+		// `total` counts only the scanned window. When `truncated` is true the org
+		// exceeds `scanLimit` rows and the oldest fall outside this enumeration —
+		// page with `cursor` to walk what is in-window; do not treat `total` as the
+		// org's complete supporter count.
+		total: result.total,
+		truncated: result.truncated,
+		scanLimit: result.scanLimit
+	});
 };
 
 export const POST: RequestHandler = async ({ request }) => {

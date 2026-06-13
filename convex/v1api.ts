@@ -151,6 +151,11 @@ export const revokeApiKey = mutation({
 // SUPPORTERS (v1 API)
 // =============================================================================
 
+// Upper bound on rows scanned per supporter enumeration. Surfaced to integrators
+// as `scanLimit` alongside a `truncated` flag so a capped page is distinguishable
+// from a complete one.
+const SUPPORTER_SCAN_LIMIT = 10_000;
+
 export const listSupporters = query({
 	args: {
 		_secret: v.string(),
@@ -165,11 +170,19 @@ export const listSupporters = query({
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
+		// Bounded scan: an org with more than SUPPORTER_SCAN_LIMIT rows saturates
+		// the window and the oldest rows fall outside it (order desc). When that
+		// happens `total` reflects only the scanned window, not the org's true
+		// count, so the response carries an explicit `truncated` flag + the
+		// `scanLimit` that produced it — an integrator can tell a capped page
+		// from a complete enumeration instead of trusting `total` as authoritative.
+		const scanLimit = SUPPORTER_SCAN_LIMIT;
 		const allDocs = await ctx.db
 			.query('supporters')
 			.withIndex('by_orgId', (q) => q.eq('orgId', args.orgId))
 			.order('desc')
-			.take(10_000);
+			.take(scanLimit);
+		const truncated = allDocs.length >= scanLimit;
 
 		let filtered = allDocs;
 		if (args.emailHash) {
@@ -227,7 +240,7 @@ export const listSupporters = query({
 			})
 		);
 
-		return { items: supportersWithTags, cursor: nextCursor, hasMore, total };
+		return { items: supportersWithTags, cursor: nextCursor, hasMore, total, truncated, scanLimit };
 	}
 });
 

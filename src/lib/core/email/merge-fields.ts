@@ -10,7 +10,12 @@ export type EmailMergeContext = {
 	tierContext: string;
 };
 
-const MERGE_FIELD_NAMES = [
+// Canonical supported merge-field token names. This is the single source of
+// truth for the token set; the Convex mirror, the server compiler, and the
+// compose page's detection pattern must all support exactly these. A parity
+// suite imports this list and asserts set-equality so a token added at one
+// site but not another fails CI.
+export const MERGE_FIELD_NAMES = [
 	'firstName',
 	'lastName',
 	'email',

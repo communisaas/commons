@@ -7,6 +7,7 @@ import type { Id } from '$convex/_generated/dataModel';
 import {
 	compileEmail,
 	compileEmailShell,
+	compileSubjectMergeFields,
 	buildTierContext,
 	type MergeContext,
 	type VerificationBlock
@@ -291,7 +292,13 @@ export const actions: Actions = {
 			baseUrl
 		);
 
-		return { previewHtml: compiledHtml, previewSubject: subject };
+		// Resolve the subject through the same sample values as the body, in
+		// header mode (CR/LF stripped, no HTML-escape) so the preview reflects
+		// what each recipient actually receives — the UI claims the preview
+		// "fills the fields with sample values."
+		const previewSubject = compileSubjectMergeFields(subject, sampleMerge);
+
+		return { previewHtml: compiledHtml, previewSubject };
 	},
 
 	send: async ({ request, params, locals }) => {

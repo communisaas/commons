@@ -231,10 +231,12 @@ export const SUPPORTER_CSV_COLUMNS = [
 /**
  * Neutralize spreadsheet formula injection: a leading `=`, `@`, or a leading
  * `+`/`-` that is not part of a number (so `+15551234567` phone values pass
- * through untouched) gets an apostrophe prefix.
+ * through untouched) gets an apostrophe prefix. A leading tab (0x09) or CR
+ * (0x0D) is also a formula trigger per OWASP — Excel/LibreOffice strip the
+ * control character and evaluate the rest — so those prefixes are guarded too.
  */
 function guardFormula(value: string): string {
-	if (/^[=@]/.test(value) || /^[+-](?![0-9])/.test(value)) {
+	if (/^[=@\t\r]/.test(value) || /^[+-](?![0-9])/.test(value)) {
 		return `'${value}`;
 	}
 	return value;

@@ -1380,7 +1380,16 @@ export const openApiSpec = {
 						description: 'Cursor for next page, or null if no more pages'
 					},
 					hasMore: { type: 'boolean' },
-					total: { type: 'integer', description: 'Total number of matching records' }
+					total: { type: 'integer', description: 'Total number of matching records' },
+					truncated: {
+						type: 'boolean',
+						description:
+							'True when a bounded scan capped the result and `total` reflects only the scanned window rather than the complete set. Page with `cursor` to walk the in-window records.'
+					},
+					scanLimit: {
+						type: 'integer',
+						description: 'Maximum records scanned to produce this page when `truncated` is present.'
+					}
 				}
 			},
 			Supporter: {

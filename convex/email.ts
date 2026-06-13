@@ -1457,7 +1457,10 @@ export const sendBlastBatch = internalAction({
 						tierContext: buildEmailTierContext(verificationStatus)
 					};
 					const personalizedBody = applyEmailMergeFields(blast.bodyHtml, mergeContext);
-					const personalizedSubject = applyEmailMergeFields(blast.subject, mergeContext);
+					// Subject is an email header: resolve in 'header' mode so merge
+					// values have CR/LF stripped (header-injection guard) and are NOT
+					// HTML-escaped. The body stays in default 'html' mode above.
+					const personalizedSubject = applyEmailMergeFields(blast.subject, mergeContext, 'header');
 					const unsubscribeUrl = await buildConvexUnsubscribeUrl(
 						String(recipient._id),
 						String(blast.orgId)

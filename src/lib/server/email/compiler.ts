@@ -29,6 +29,13 @@ export function compileMergeFields(template: string, ctx: MergeContext): string 
 	return applyEmailMergeFields(template, ctx, 'html');
 }
 
+// Resolve merge fields in an email subject. A subject is a header, so this
+// uses 'header' mode (CR/LF stripped, no HTML-escape) — the same mode the
+// dispatch paths use for the subject — rather than the 'html' body mode.
+export function compileSubjectMergeFields(template: string, ctx: MergeContext): string {
+	return applyEmailMergeFields(template, ctx, 'header');
+}
+
 // Render the structural verification context block. Appended to every email
 // the platform compiles. Plain English; states facts, no marketing register.
 // Single sentence: counts and district breadth. Recipients add themselves to

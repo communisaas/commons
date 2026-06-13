@@ -23,6 +23,7 @@ import {
 	buildEmailTierContext,
 	countEmailMergeFields,
 	hasEmailMergeFields,
+	MERGE_FIELD_NAMES,
 	type EmailMergeContext,
 	type VerificationStatus
 } from '$lib/core/email/merge-fields';
@@ -31,15 +32,18 @@ import {
 	buildEmailTierContext as convexBuildEmailTierContext
 } from '../../../convex/_emailMergeFields';
 
-const TOKEN_NAMES = [
-	'firstName',
-	'lastName',
-	'email',
-	'postalCode',
-	'verificationStatus',
-	'tierLabel',
-	'tierContext'
-] as const;
+// Canonical token set lives in the core module; every other site mirrors it.
+const TOKEN_NAMES = MERGE_FIELD_NAMES;
+
+// Extract the literal MERGE_FIELD_NAMES array from a sibling implementation's
+// source so a token added to one site but not another is caught at the set
+// level (not just behaviorally). Returns the names in declaration order.
+function readMergeFieldNames(relPath: string): string[] {
+	const source = readFileSync(resolve(process.cwd(), relPath), 'utf8');
+	const block = source.match(/MERGE_FIELD_NAMES\s*=\s*\[([\s\S]*?)\]/);
+	if (!block) throw new Error(`MERGE_FIELD_NAMES not found in ${relPath}`);
+	return [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+}
 
 const fullCtx: MergeContext & EmailMergeContext = {
 	firstName: 'Maria',
@@ -78,6 +82,36 @@ function loadComposePagePattern(): RegExp {
 	if (!match) throw new Error('compose page mergeFieldPattern not found');
 	return new RegExp(match[1], match[2]);
 }
+
+describe('supported-token set equality (every resolution site)', () => {
+	it('convex mirror declares exactly the canonical token set', () => {
+		const convexNames = readMergeFieldNames('convex/_emailMergeFields.ts');
+		expect(new Set(convexNames)).toEqual(new Set(TOKEN_NAMES));
+		// Order matters too — the alternation regex is built from this list.
+		expect(convexNames).toEqual([...TOKEN_NAMES]);
+	});
+
+	it('compose page detection pattern matches exactly the canonical token set', () => {
+		const pattern = loadComposePagePattern();
+		// Every canonical token is detected, and an off-list token is not.
+		for (const name of TOKEN_NAMES) {
+			expect(`{{${name}}}`.match(pattern)?.length ?? 0, `token: ${name}`).toBe(1);
+		}
+		expect('{{notARealToken}}'.match(pattern)?.length ?? 0).toBe(0);
+	});
+
+	it('server compiler + core + convex resolve exactly the canonical tokens (and nothing more)', () => {
+		// A canonical token resolves to its value; an off-list token is left
+		// verbatim. Run on every HTML resolver so a token supported at one site
+		// but missing at another diverges here.
+		for (const [, run] of htmlResolvers) {
+			for (const name of TOKEN_NAMES) {
+				expect(run(`<<{{${name}}}>>`, fullCtx), `token: ${name}`).not.toBe(`<<{{${name}}}>>`);
+			}
+			expect(run('<<{{notARealToken}}>>', fullCtx)).toBe('<<{{notARealToken}}>>');
+		}
+	});
+});
 
 describe('merge-field fallback semantics (every resolution site)', () => {
 	it.each(htmlResolvers)('%s renders the fallback when the value is blank', (_site, run) => {
@@ -163,6 +197,25 @@ describe('cross-site output parity', () => {
 		expect(applyEmailMergeFields('{{firstName|Friend & co}}', blankCtx, 'header')).toBe(
 			'Friend & co'
 		);
+	});
+
+	it('strips CR/LF from a subject merge value on BOTH send paths (header injection)', () => {
+		// The subject resolves in header mode on the browser-direct path
+		// (client-blast-sender) and the Convex batch path (email.ts). A merge
+		// value with embedded CR/LF must not survive into the subject header on
+		// either, or it becomes an email-header-injection vector.
+		const injected: EmailMergeContext = {
+			...fullCtx,
+			firstName: 'Jane\r\nBcc: evil@example.com'
+		};
+		const core = applyEmailMergeFields('Hi {{firstName}}', injected, 'header');
+		const convex = convexApplyEmailMergeFields('Hi {{firstName}}', injected, 'header');
+		expect(core).toBe(convex);
+		for (const out of [core, convex]) {
+			expect(out).not.toContain('\r');
+			expect(out).not.toContain('\n');
+			expect(out).toBe('Hi JaneBcc: evil@example.com');
+		}
 	});
 
 	it('tier-context builders agree across server, core, and convex', () => {

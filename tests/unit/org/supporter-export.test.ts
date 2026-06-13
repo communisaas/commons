@@ -273,6 +273,17 @@ describe('buildSupporterCsv', () => {
 		expect(dataLine).not.toContain(`'+15551230000`);
 	});
 
+	it('neutralizes tab- and CR-prefixed formulas (OWASP control-char triggers)', () => {
+		const tabCsv = buildSupporterCsv([row({ name: '\t=1+1', tags: [], customFields: null })]);
+		const tabCell = tabCsv.split('\r\n')[1].split(',')[1];
+		expect(tabCell.startsWith("'\t=")).toBe(true);
+
+		const crCsv = buildSupporterCsv([row({ name: '\r=1+1', tags: [], customFields: null })]);
+		// A CR triggers RFC 4180 quoting; the guard prefix lands inside the quotes.
+		const crLine = crCsv.split('\r\n')[1];
+		expect(crLine).toContain("\"'\r=1+1\"");
+	});
+
 	it('leaves empty fields empty rather than inventing placeholders', () => {
 		const csv = buildSupporterCsv([
 			row({
