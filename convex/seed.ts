@@ -2013,6 +2013,11 @@ export const insertCampaignActions = internalMutation({
       { campaignIdx: 2, orgIdx: 2, supporterStart: 15, supporterCount: 4 },
     ];
 
+    // Accumulate the org-level engagement-tier histogram so dev dashboards
+    // (getDashboardStats reads org.actionTierCounts) match the seeded actions.
+    // Keyed by org index; each is a 5-slot [T0..T4] tally over ALL actions.
+    const orgTierCounts = new Map<number, number[]>();
+
     for (const lc of letterCampaigns) {
       let actionCountTotal = 0;
       let verifiedCountTotal = 0;
@@ -2020,19 +2025,23 @@ export const insertCampaignActions = internalMutation({
       for (let i = 0; i < lc.supporterCount; i++) {
         const sIdx = (lc.supporterStart + i) % supporterIds.length;
         const isVerified = i % 4 !== 3; // 75% verified
+        const tier = isVerified ? 2 : 1;
 
         const actionId = await ctx.db.insert("campaignActions", {
           campaignId: campaignIds[lc.campaignIdx],
           orgId: orgIds[lc.orgIdx],
           supporterId: supporterIds[sIdx],
           verified: isVerified,
-          engagementTier: isVerified ? 2 : 1,
+          engagementTier: tier,
           districtHash: `district-hash-${sIdx}`,
           delegated: false,
           sentAt: daysAgo(i + 1),
         });
         actionCountTotal++;
         if (isVerified) verifiedCountTotal++;
+        const counts = orgTierCounts.get(lc.orgIdx) ?? [0, 0, 0, 0, 0];
+        counts[tier] += 1;
+        orgTierCounts.set(lc.orgIdx, counts);
 
         // Create 1-2 deliveries per action
         const repCount = i % 3 === 0 ? 2 : 1;
@@ -2059,6 +2068,11 @@ export const insertCampaignActions = internalMutation({
         actionCount: actionCountTotal,
         verifiedActionCount: verifiedCountTotal,
       });
+    }
+
+    // Persist the org-level tier histograms accumulated above.
+    for (const [orgIdx, counts] of orgTierCounts) {
+      await ctx.db.patch(orgIds[orgIdx], { actionTierCounts: counts });
     }
   },
 });

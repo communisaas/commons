@@ -22,6 +22,7 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import { computeDistrictVerified } from './_dashboardStats';
 import {
 	assertPiiTripleCreate,
 	computeOrgScopedEmailHash,
@@ -539,26 +540,9 @@ export const getDistrictVerifiedCount = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-		const MAX_SCAN = 10_000;
-		const scanned = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_orgId_verified', (idx) => idx.eq('orgId', org._id))
-			.order('desc')
-			.take(MAX_SCAN + 1);
-
-		const truncated = scanned.length > MAX_SCAN;
-		const districtSupporters = new Set<string>();
-		for (const action of scanned.slice(0, MAX_SCAN)) {
-			if (action.supporterId && action.districtHash) {
-				districtSupporters.add(action.supporterId);
-			}
-		}
-
-		return {
-			districtVerified: districtSupporters.size,
-			truncated,
-			scanLimit: MAX_SCAN
-		};
+		// Shared bounded path — same scan getDashboardStats's funnel uses, so the
+		// two never drift on the cap or the cardinality math.
+		return await computeDistrictVerified(ctx, org._id);
 	}
 });
 

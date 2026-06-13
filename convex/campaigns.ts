@@ -1211,18 +1211,37 @@ export const createCampaignAction = internalMutation({
 			});
 		}
 
-		// Monotonic lifetime tally of verified actions for the org — the
-		// only-ever-increments base for scale-safe billing metering. Bumped here,
-		// next to the campaign counter, so there's exactly one new write site and
-		// it can never drift. Period usage = lifetime - period baseline (the
-		// baseline is snapshotted at billing-period rollover). Only verified
-		// actions count toward the metered quota.
-		if (args.verified && orgId) {
+		// Monotonic org-level counters bumped on insert — the only-ever-increments
+		// bases for scale-safe dashboard + billing reads. Bumped here, next to the
+		// campaign counter, so there's exactly one new write site and they can
+		// never drift.
+		//   - verifiedActionsLifetime: lifetime tally of VERIFIED actions, the base
+		//     for billing metering (period usage = lifetime - period baseline,
+		//     baseline snapshotted at billing-period rollover). Only verified
+		//     actions count toward the metered quota.
+		//   - actionTierCounts: engagement-tier histogram over ALL actions (matches
+		//     the prior getDashboardStats loop, which counted every action's tier
+		//     regardless of verified). engagementTier is immutable post-creation, so
+		//     a monotonic counter is exact. Indexed 0-4; out-of-range tiers ignored.
+		if (orgId) {
 			const org = await ctx.db.get(orgId);
 			if (org) {
-				await ctx.db.patch(orgId, {
-					verifiedActionsLifetime: (org.verifiedActionsLifetime ?? 0) + 1
-				});
+				const patch: Record<string, unknown> = {};
+				if (args.verified) {
+					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
+				}
+				const tier = args.engagementTier;
+				if (typeof tier === 'number' && tier >= 0 && tier <= 4) {
+					const counts = [...(org.actionTierCounts ?? [0, 0, 0, 0, 0])];
+					// Defensive: pad/truncate to exactly 5 slots in case a legacy doc
+					// stored a shorter array.
+					while (counts.length < 5) counts.push(0);
+					counts[tier] = (counts[tier] ?? 0) + 1;
+					patch.actionTierCounts = counts.slice(0, 5);
+				}
+				if (Object.keys(patch).length > 0) {
+					await ctx.db.patch(orgId, patch);
+				}
 			}
 		}
 

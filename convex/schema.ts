@@ -1411,6 +1411,17 @@ export default defineSchema({
 		verifiedActionsPeriodBaseline: v.optional(v.number()),
 		verifiedActionsPeriodBaselineAt: v.optional(v.number()),
 
+		// Monotonic engagement-tier histogram for the dashboard tier breakdown.
+		// 5-element array indexed by engagementTier (0-4): [New, Active,
+		// Established, Veteran, Pillar]. engagementTier is set once at action
+		// creation and never re-patched (no transition write exists anywhere on
+		// campaignActions), so a monotonic counter can't drift — it is bumped
+		// exactly once, next to verifiedActionsLifetime in createCampaignAction.
+		// Backs getDashboardStats so the tier histogram is O(1) instead of a
+		// full-table .collect() that throws past the per-query doc cap. Optional
+		// so pre-existing orgs default cleanly (all tiers read as 0).
+		actionTierCounts: v.optional(v.array(v.number())),
+
 		// Denormalized per-supporter breakdown counters. Backs the verification
 		// funnel + list-health summary without a full-table scan (the scan
 		// throws past the per-query doc cap once an org's roster is large).
