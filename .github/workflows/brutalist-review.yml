@@ -28,8 +28,8 @@ jobs:
       - name: Install CLI critics
         run: |
           npm install -g @brutalist/mcp@1.15.0 \
-                         @anthropic-ai/claude-code@2.1.162 \
-                         @openai/codex@0.136.0
+                         @anthropic-ai/claude-code@2.1.177 \
+                         @openai/codex@0.139.0
           # NOTE: the agy installer is unpinned upstream (no published checksum) —
           # residual supply-chain surface; it runs before any secret is present.
           curl -fsSL https://antigravity.google/cli/install.sh | bash
