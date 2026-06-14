@@ -94,6 +94,9 @@ export default defineConfig({
 			// Behavioral first-paint test for the Datum spring primitive —
 			// needs the components-lane browser runtime to mount.
 			'tests/unit/components/datum-first-paint.test.ts',
+			// Behavioral test for the delivery-gate conversion prompt — requires
+			// the components-lane config for @testing-library/svelte rendering.
+			'tests/unit/components/DeliveryGateNotice.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

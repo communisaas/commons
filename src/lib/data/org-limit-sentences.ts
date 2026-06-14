@@ -31,6 +31,27 @@ export function isClientDirectEmailCount(
 export const MAX_DECRYPTED_SMS_DISPATCH = 100;
 
 /**
+ * Boundary code a delivery action returns when the org has no active plan and
+ * therefore no send quota (the gated `inactive` floor zeroes maxEmails /
+ * maxSms / maxVerifiedActions). The UI keys the subscribe-to-send conversion
+ * prompt on this exact code — never on a generic send failure — so an
+ * unrelated error never offers a plan as the fix. Server actions return it as
+ * `errorCode` alongside the existing plain-language `error` string (which
+ * stays a correct fallback for any surface that hasn't adopted the prompt).
+ */
+export const DELIVERY_QUOTA_SUBSCRIBE_GATE = 'delivery_quota_subscribe_gate';
+
+/**
+ * The in-app pricing grid anchor inside org settings. The settings page renders
+ * the Starter / Organization / Coalition comparison grid (with per-plan
+ * checkout) under `id="plan-feature-boundary"`; the conversion prompt links
+ * straight to it.
+ */
+export function deliveryPlanGridHref(orgSlug: string): string {
+	return `/org/${orgSlug}/settings#plan-feature-boundary`;
+}
+
+/**
  * Every boundary code that carries a limit sentence. The first seven are
  * boundary codes returned by the org server routes; `authoring_runtime` and
  * `congressional_delivery` are keyed explicitly because their readiness

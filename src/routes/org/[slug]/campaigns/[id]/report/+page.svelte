@@ -2,9 +2,23 @@
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { Datum } from '$lib/design';
+	import DeliveryGateNotice from '$lib/components/org/DeliveryGateNotice.svelte';
+	import {
+		DELIVERY_QUOTA_SUBSCRIBE_GATE,
+		deliveryPlanGridHref
+	} from '$lib/data/org-limit-sentences';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
+
+	// The org has no active plan, so it has no send quota for delivering the
+	// report. Show the subscribe-to-send conversion prompt instead of a raw
+	// quota error. Gated on the exact code so an unrelated send failure never
+	// offers a plan as the fix.
+	const showDeliveryGate = $derived(
+		!!form && 'errorCode' in form && form.errorCode === DELIVERY_QUOTA_SUBSCRIBE_GATE
+	);
+	const planGridHref = $derived(deliveryPlanGridHref(data.org.slug));
 
 	let selectedTargets = $state<Set<string>>(new Set());
 	let logResponseDeliveryId = $state<string | null>(null);
@@ -210,7 +224,12 @@
 	</nav>
 
 	<!-- Error/success messages -->
-	{#if form?.error}
+	{#if showDeliveryGate}
+		<DeliveryGateNotice
+			planHref={planGridHref}
+			headline="Your report's ready — choose a plan to deliver it"
+		/>
+	{:else if form?.error}
 		<div class="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
 			{form.error}
 		</div>
