@@ -936,15 +936,16 @@ for supporter in client.supporters.list():
 	<section class="section">
 		<h2 class="section-title">Rate Limits</h2>
 		<p class="section-desc">
-			Rate limits are applied per API key based on your organization's plan. When rate limited,
-			you'll receive a <code>429</code> response.
+			Rate limits are applied per API key based on your organization's plan. Reads stay open
+			while you're building -- a plan lifts the write ceiling and unlocks delivery. When rate
+			limited, you'll receive a <code>429</code> response.
 		</p>
 		<table class="rate-table">
 			<thead>
 				<tr><th>Plan</th><th>Requests / min</th></tr>
 			</thead>
 			<tbody>
-				<tr><td>Free</td><td>100</td></tr>
+				<tr><td>No plan yet</td><td>Reads uncapped &middot; writes 100</td></tr>
 				<tr><td>Starter</td><td>300</td></tr>
 				<tr><td>Organization</td><td>1,000</td></tr>
 				<tr><td>Coalition</td><td>3,000</td></tr>

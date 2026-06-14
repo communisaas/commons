@@ -172,10 +172,11 @@
 				</p>
 			</div>
 			<div class="space-y-2">
-				<h3 class="text-text-primary text-sm font-semibold">Is there a free tier?</h3>
+				<h3 class="text-text-primary text-sm font-semibold">Do I pay before I migrate?</h3>
 				<p class="text-text-secondary text-sm leading-relaxed">
-					Yes. You can create an org, import supporters, and run campaigns at no cost. Usage-based
-					pricing applies only when you need proof report delivery at scale.
+					No. Create the org, import your supporters, and author and preview a campaign or two for
+					free. A plan starts at $10/mo and unlocks delivery &mdash; sending to your people and
+					verified action at scale.
 				</p>
 			</div>
 		</div>
@@ -204,7 +205,7 @@
 			href="/org/new"
 			class="inline-block rounded-lg bg-white px-6 py-3 text-sm font-semibold text-black transition-opacity hover:opacity-90"
 		>
-			Start your free org
+			Start authoring &mdash; $10/mo to send
 		</a>
 	</section>
 
