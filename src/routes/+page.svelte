@@ -30,6 +30,7 @@
 	import type { ModalComponent } from '$lib/types/component-props';
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
+	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
 	import LocationScopeBar from '$lib/components/template-browser/LocationScopeBar.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
@@ -312,6 +313,13 @@
 				t.deliveryMethod === 'direct'
 		)
 	);
+
+	// Topical-field swap. The geographic list is the default; the hue-ordered
+	// landscape is opt-in via `?spectrum=1` while it is brought up, so the list
+	// stays a working fallback and the default never moves until the landscape
+	// is ready. Reading the param off the page store keeps it reactive and
+	// SSR-safe (no window access).
+	const showSpectrum = $derived($page.url.searchParams.get('spectrum') === '1');
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
@@ -723,12 +731,22 @@
 			<div class="template-browser" id="template-browser">
 				<!-- Template List -->
 				<div class="template-list-column">
-					<TemplateList
-						groups={filteredGroups}
-						selectedId={templateStore.selectedId}
-						onSelect={handleTemplateSelect}
-						loading={isLoading}
-					/>
+					{#if showSpectrum}
+						<!-- Topical field: templates grouped into hue-ordered domain bands.
+						     Falls back to the list below until the landscape is the default. -->
+						<SpectrumLandscape
+							templates={allTemplates}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+						/>
+					{:else}
+						<TemplateList
+							groups={filteredGroups}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+							loading={isLoading}
+						/>
+					{/if}
 				</div>
 
 				<!-- Template Preview (desktop only) -->
