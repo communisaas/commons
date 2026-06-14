@@ -7,6 +7,23 @@
 
 ---
 
+> **Positioning + pricing recenter (2026-06-14).** The core is the AI-native
+> **authoring-to-delivery** spine; **verification is ambient** (a watermark, not
+> the product). Where this doc says "the verification loop is the product," read
+> it as: the verification loop is the ambient guarantee under an
+> authoring-to-delivery product whose front door is **Studio**. **Pricing:** no
+> free org tier. Entry is **Starter ($10/mo)**. Unsubscribed orgs fall to a
+> non-marketed `inactive` floor — they can author a campaign or two free, but
+> ALL delivery (email/SMS, verified-action submission) and scale (seats, volume)
+> are gated to zero until they subscribe. The motion is **author free, pay to
+> deliver** (gate-at-delivery), not "free tier wins by default." The GTM tables
+> below still describe a "$0 free tier" in places — those lines are superseded
+> by this banner; the wedge (neutrality, full uncapped API, 24 boundary types,
+> verification packets) holds, only the price entry changes. Recorded 2026-06-02
+> / 2026-06-14; merged through PR #34.
+
+---
+
 ## Roles
 
 **Person** — sends verified letters to decision-makers, participates in debates. Optionally verifies identity via mDL for ZK proofs. Builds portable reputation through engagement tiers: New (0), Active (1), Established (2), Veteran (3), Pillar (4).
@@ -94,11 +111,15 @@ This is not a spec. The core org loop works: create org → import supporters �
 
 ### Phase 0: Ship the Verification Loop (COMPLETE — 2026-03-11)
 
-The verification loop is the product. Not email. Not CRM. Not petitions. The loop:
+The product is the authoring-to-delivery spine: an org states its objective,
+Commons grounds it and composes individualized messages, and delivers them. The
+verification loop is the **ambient guarantee** riding under that spine — not the
+product itself, but what makes the delivered speech provable. The loop:
 
 ```
-Org creates campaign → supporters take verified action → verification packet assembles →
-org sends report to decision-maker → decision-maker sees proof, not volume
+Org authors campaign in Studio → constituents take individually-composed action →
+verification rides under each as a watermark → Constituent Report assembles →
+org delivers report to decision-maker → decision-maker sees constituents + authorship, proof underneath
 ```
 
 This loop already works in code. Phase 0 makes it launchable.
@@ -143,9 +164,9 @@ Phase 0 proved the loop works. Phase 1 makes it self-serve and starts building t
 | Supporter segmentation UI | Filter builder: tag + verification status + tier + district + source. The underlying query infrastructure exists — needs a UI surface. | 1 week |
 | Campaign analytics dashboard | Opens, clicks, bounces + verified action count + tier distribution over time + geographic spread + coordination integrity scores. This is the dashboard no competitor can build. | 2 weeks |
 
-**Position as:**
-- Free tier: 500 supporters, 100 verified actions/month, 1,000 emails, full API, full analytics
-- Starter ($10/mo): 1,000 verified actions, 20,000 emails, A/B testing
+**Position as (author free, pay to deliver — no free org tier):**
+- Free *experience* (`inactive` floor, non-marketed): create an org + author a campaign or two, see grounded messages + targets, preview the Constituent Report. ALL delivery + scale gated to zero until subscribed.
+- Starter ($10/mo): 1,000 verified actions, 20,000 emails, full API, full analytics, A/B testing — the entry tier.
 - Organization ($75/mo): 5,000 verified actions, 100,000 emails, custom domain, SQL mirror
 - Coalition ($200/mo): 10,000 verified actions, 250,000 emails, white-label, child orgs
 
@@ -280,11 +301,11 @@ The transcendent reframing: **civic action as cryptographic primitive, with agen
 
 **Against VoterVoice/FiscalNote (publicly traded, enterprise):** Don't compete on mobilization speed. Compete on credibility. SmartCheck uses ChatGPT to make messages sound authentic. Commons makes messages be authentic — the sender is cryptographically verified. VoterVoice only matches officials in areas >250K population; Commons resolves 24 boundary types down to water districts and school boards.
 
-**Against Action Network (12K+ orgs, progressive-only):** Compete directly. Same market (grassroots advocacy orgs), lower price ($0 vs $15/mo minimum), stronger product (verification), wider market (political neutrality), wider scope (24 district types vs ~3). Migration pipeline built and spec'd. AN's API is capped at 4 req/s on paid tiers. Commons API is free and uncapped.
+**Against Action Network (12K+ orgs, progressive-only):** Compete directly. Same market (grassroots advocacy orgs), lower price (Starter $10/mo vs AN's $15/mo minimum — and an org can author for free before paying to deliver), stronger product (verification), wider market (political neutrality), wider scope (24 district types vs ~3). Migration pipeline built and spec'd. AN's API is capped at 4 req/s on paid tiers. Commons API is uncapped and included from the Starter tier.
 
-**Against the conservative void:** Fill a vacuum. Bonterra deplatformed conservative nonprofits. AN rejects them at the front door. Quorum prices them out. The conservative advocacy market has no affordable, integrated advocacy platform. Free tier wins this entire market by default.
+**Against the conservative void:** Fill a vacuum. Bonterra deplatformed conservative nonprofits. AN rejects them at the front door. Quorum prices them out. The conservative advocacy market has no affordable, integrated advocacy platform. Author-free onboarding plus a $10 Starter entry wins this entire market — they can build a campaign before spending a dollar, then pay only to deliver.
 
-**Against the local government void:** Create a market. 90,887 local government entities, 500,396 elected officials, zero affordable advocacy tools. School parent coalitions, water district accountability groups, transit equity orgs, fire safety advocates — they use Mailchimp and Google Forms today. Commons with 24 boundary types is the only platform that can target these officials at any price, and we offer it free.
+**Against the local government void:** Create a market. 90,887 local government entities, 500,396 elected officials, zero affordable advocacy tools. School parent coalitions, water district accountability groups, transit equity orgs, fire safety advocates — they use Mailchimp and Google Forms today. Commons with 24 boundary types is the only platform that can target these officials at any price, and an org can author its first campaigns free before paying $10/mo to deliver.
 
 **Against the international void:** Extend the protocol. voter-protocol's 24-slot district model and country-code-keyed registries are designed for global expansion. No competitor operates at protocol level across borders. A UK environmental org, a Canadian healthcare coalition, an Australian transit advocacy group — same verification infrastructure, same proof guarantees.
 
@@ -302,9 +323,9 @@ The platform serves whoever has constituents and cares enough to prove it. Not "
 
 | Segment | Why First | Acquisition |
 |---|---|---|
-| **Domain-obsessed local groups** | School parent coalitions, water district accountability, transit equity, fire safety. 90,887 local government entities, 500,396 elected officials, **zero** affordable advocacy tools. These orgs use Google Forms and Mailchimp because nothing else exists. Commons with 24 boundary types is the only platform that can target their officials — at any price. Free tier wins by default. | Partner with local government transparency orgs (Sunshine Foundation, OpenGov orgs, League of Women Voters chapters). Content: "Finally, a tool for school board advocacy." |
+| **Domain-obsessed local groups** | School parent coalitions, water district accountability, transit equity, fire safety. 90,887 local government entities, 500,396 elected officials, **zero** affordable advocacy tools. These orgs use Google Forms and Mailchimp because nothing else exists. Commons with 24 boundary types is the only platform that can target their officials — at any price. Author-free onboarding + $10 Starter delivery wins by default. | Partner with local government transparency orgs (Sunshine Foundation, OpenGov orgs, League of Women Voters chapters). Content: "Finally, a tool for school board advocacy." |
 | **Science/health advocacy** | Credibility IS the product. "847 verified constituents in your district support NIH funding" changes how a committee staffer reads testimony. Disease foundations, research coalitions, scientific societies — they've been sending unverified form emails and watching them get deleted. | Direct outreach to 10–20 foundations/coalitions. Show them the verification packet. One demo closes. |
-| **Conservative/nonpartisan groups** | Deplatformed by Bonterra, rejected by AN's front door, priced out of Quorum. No affordable tooling exists. Free tier is immediately the best they've ever had. Second Amendment orgs, faith-based advocacy, fiscal policy groups, pro-life organizations — all underserved. | Content marketing: "The advocacy platform that doesn't check your politics." Outreach to Startup Caucus network, conservative think tanks, faith-based coalitions. |
+| **Conservative/nonpartisan groups** | Deplatformed by Bonterra, rejected by AN's front door, priced out of Quorum. No affordable tooling exists. A $10 Starter entry (with author-free onboarding) is immediately the best they've ever had. Second Amendment orgs, faith-based advocacy, fiscal policy groups, pro-life organizations — all underserved. | Content marketing: "The advocacy platform that doesn't check your politics." Outreach to Startup Caucus network, conservative think tanks, faith-based coalitions. |
 | **Single-issue orgs across spectrum** | Environmental justice. Immigration reform. Criminal justice reform. Homeschool advocacy. Agricultural policy. Veterans affairs. These orgs are domain-obsessed — they don't care about platform politics, they care about whether their campaign reaches the right official with proof that their supporters are real. | SEO: "[issue] advocacy tools." Product-led growth from template discovery. |
 
 ### Expansion (Phase 2, months 4–8)
@@ -313,7 +334,7 @@ The platform serves whoever has constituents and cares enough to prove it. Not "
 |---|---|---|
 | **Progressive orgs wanting proof** | Run Commons alongside AN. Compare staffer response rates. Verification packet vs. unverified email count. Migration when the data proves the point. AN's export lock-in (one action at a time, automation ladders non-portable) makes this sticky — Commons' OSDI import and parallel operation mode de-risk the switch. | Import tools + comparison landing page. Side-by-side: AN report vs. Commons verification packet. |
 | **Trade associations fleeing Quorum pricing** | Currently paying $10K–$30K+/year for legislative tracking + grassroots advocacy. Commons Organization tier at $75/mo ($900/yr) is 10-30x cheaper with verification packets Quorum can't produce. Quorum Quincy AI analyzes bills; Commons agents monitor bills AND verify the constituents who care about them. | Case studies from beachhead orgs showing staffer response rate improvement. Direct outreach to association management companies. |
-| **Small orgs (<5K contacts)** | Free tier vs. AN's $15/mo minimum. Full API, uncapped. No paywall on analytics. Every small org with a cause — tenant advocacy, animal rights, disability rights, education reform — can run verified campaigns for free. | Product-led growth. Self-serve signup. Template discovery drives adoption. |
+| **Small orgs (<5K contacts)** | Starter $10/mo vs. AN's $15/mo minimum — and they author free before paying to deliver. Full API, uncapped, from Starter. No paywall on analytics. Every small org with a cause — tenant advocacy, animal rights, disability rights, education reform — can build a verified campaign before spending a dollar. | Product-led growth. Self-serve signup. Template discovery drives adoption. |
 | **International early adopters** | UK, Canada, Australia — boundary data available, English-speaking, parliamentary systems with similar constituency models. A UK environmental org targeting MPs, a Canadian healthcare coalition targeting provincial legislators. Same verification infrastructure, first-mover advantage in markets with zero verified advocacy tools. | Partner with civic tech organizations in target countries. Boundary data ingestion as the trigger for market entry. |
 
 ### Scale (Phase 3, months 8–14)

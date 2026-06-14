@@ -1,12 +1,33 @@
 # Vision
 
-> Civic infrastructure where every action carries proof.
+> Civic infrastructure that authors, grounds, and delivers — every action carrying proof underneath.
+
+---
+
+> **Positioning + pricing recenter (2026-06-14).** The center of Commons is the
+> AI-native **authoring-to-delivery** spine: an org describes its objective and
+> Commons grounds it against decision-makers, composes individualized messages,
+> and delivers them. **Verification is ambient** — a watermark riding under
+> every artifact, not the North Star headline. The org front door is **Studio**
+> (authoring), not the proof packet. The delivered artifact is the **Constituent
+> Report**, leading with constituents, individually-composed authorship, and
+> response. There is **no free org tier**: entry is Starter ($10/mo); orgs with
+> no active subscription fall to the non-marketed `inactive` floor (author a
+> campaign or two free; all delivery + scale gated to zero). Recorded
+> 2026-06-02 / 2026-06-14; merged through PR #34. Sections below predate this
+> recenter where they still lead with verification — read them through this lens.
 
 ---
 
 ## What Commons Is
 
-Commons is civic communication infrastructure. Not a mail merge tool with a database — infrastructure that makes civic speech *verifiable*.
+Commons is AI-native civic communication infrastructure. An org states what it
+wants to change; Commons grounds that objective against the right
+decision-makers, composes individually-authored messages with each constituent,
+and delivers them — then hands back a Constituent Report. Not a mail merge tool
+with a database. The authoring-to-delivery spine is the core; verification is
+the ambient property woven underneath that makes the resulting civic speech
+*provable*.
 
 A person sends a letter through Commons. That letter carries cryptographic proof that the sender holds a government-issued credential, lives in the decision-maker's district (verified against a hierarchical Merkle tree of every public district boundary — congressional, state legislative, county, municipal, school, judicial, fire, water, transit, and more), and has an engagement history that cannot be purchased or fabricated. The decision-maker's office doesn't trust Commons. They verify the math.
 

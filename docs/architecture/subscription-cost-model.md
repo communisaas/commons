@@ -1,14 +1,27 @@
 # Subscription Cost Model
 
 > **Status:** Architecture document (February 2026, pricing updated March 2026)
-> **Scope:** Unit economics for Free / Starter / Organization / Coalition tiers. Every external API call traced from code, priced at current rates, projected against realistic usage.
+> **Scope:** Unit economics for the `inactive` floor / Starter / Organization / Coalition tiers (no free org tier — see recenter banner below). Every external API call traced from code, priced at current rates, projected against realistic usage.
 > **Companion:** `org-data-model.md` (data model), `civic-intelligence-cost-model.md` (intelligence pipeline costs)
 > **Policy:** Individual users are free. All subscription revenue comes from organizations. See [`docs/strategy/monetization-policy.md`](../strategy/monetization-policy.md).
 > **Last verified:** February 2026 (costs), March 2026 (pricing alignment), targeted audit 2026-04-23.
 
+> ⚠️ **Divergence from current `plans.ts` (pricing recenter 2026-06-14):** This
+> doc models a "Free $0" org tier. The shipped `src/lib/server/billing/plans.ts`
+> (merged through PR #34) **removes `free`**: `PLANS` is keyed `inactive` /
+> `starter` / `organization` / `coalition`, `PLAN_ORDER` excludes `inactive`,
+> and `getPlanForOrg(null)` (incl. after cancellation) returns `inactive`. There
+> is no free ORG tier — entry is Starter ($10/mo); the `inactive` floor zeroes
+> all delivery + scale (maxVerifiedActions/maxEmails/maxSms 0, maxSeats 1,
+> maxTemplatesMonth 2) so an org can only author a campaign or two until it
+> subscribes. Read the "Free $0" org tier below as the `inactive`
+> gate-at-delivery floor. NOTE: the "Free individuals," "Groq free tier," and
+> "Exa free tier" references elsewhere in this doc are the Person Layer (free
+> forever) and upstream API free tiers — those are unchanged and correct.
+
 > ⚠️ **2026-04-23 audit — mostly clean, two clarifications:**
 >
-> Plan names, prices (Free $0 / Starter $10 / Organization $75 /
+> Plan names, prices (`inactive` floor $0 / Starter $10 / Organization $75 /
 > Coalition $200), seat/template/action/email/SMS limits, period-scoped
 > query-time aggregation, 7-day grace via `pastDueSince`, and the
 > `invoice.payment_succeeded` → clears `pastDueSince` webhook flow all

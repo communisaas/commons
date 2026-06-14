@@ -4,6 +4,18 @@
 
 ---
 
+> **Positioning + pricing recenter (2026-06-14).** Commons' core is the
+> AI-native **authoring-to-delivery** spine; **verification is ambient** (a
+> watermark, not the headline). The org front door is **Studio**; the delivered
+> artifact is the **Constituent Report**. **No free org tier** — entry is
+> Starter ($10/mo); unsubscribed orgs fall to a non-marketed `inactive` floor
+> (author a campaign or two free, all delivery + scale at zero). Author free,
+> pay to deliver. Recorded 2026-06-02 / 2026-06-14; merged through PR #34. Where
+> the docs below still lead with "the verification loop is the product," read
+> them through this recenter.
+
+---
+
 ## Current Plan
 
 ### [product-roadmap.md](product-roadmap.md) — What We're Building Now
