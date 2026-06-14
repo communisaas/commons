@@ -26,7 +26,7 @@
 	 * truth for focus order and reveal timing.
 	 */
 
-	import { ChevronRight, Landmark, Building2, Mail, Users } from '@lucide/svelte';
+	import { ChevronRight, Landmark, Building2, Mail, Users, MapPin } from '@lucide/svelte';
 	import type { Template } from '$lib/types/template';
 	import MessageMetrics from '../MessageMetrics.svelte';
 	import { Pulse, Ratio, Rings } from '$lib/design';
@@ -57,6 +57,10 @@
 		 *  tile tint agrees with the band spine (one resolver, no clash). Absent in
 		 *  the list → topicHue, keeping the list pixel-equivalent. */
 		resolvedHue?: number;
+		/** In the place lens, the geographic tier this tile sits in — rendered as a
+		 *  small place chip so place stays visible while hue keeps encoding topic.
+		 *  Absent in the topic lens and the list → no chip, tile unchanged. */
+		placeLabel?: string | null;
 	}
 
 	let {
@@ -69,7 +73,8 @@
 		newlyRevealed = false,
 		justLoaded = false,
 		animationDelay = 0,
-		resolvedHue
+		resolvedHue,
+		placeLabel = null
 	}: Props = $props();
 
 	// Congressional sends carry heavier coordination weight — the card-weight
@@ -163,6 +168,16 @@
 			{template.title}
 		</h3>
 
+		{#if placeLabel}
+			<!-- Place chip: the geographic tier this tile sits in, shown only in the
+			     place lens so the organising dimension stays visible on the tile
+			     while hue keeps carrying topic. A quiet mark, not a pill. -->
+			<div class="place-chip">
+				<MapPin class="h-3 w-3 shrink-0" aria-hidden="true" />
+				<span class="font-brand">{placeLabel}</span>
+			</div>
+		{/if}
+
 		<p class="mb-2 line-clamp-2 text-xs text-gray-600 md:mb-3 md:text-sm">
 			{template.description}
 		</p>
@@ -233,6 +248,21 @@
 		letter-spacing: 0.01em;
 		line-height: 1.3;
 		margin-top: 0.375rem;
+	}
+
+	/*
+	 * Place chip — the geographic tier a tile belongs to in the place lens.
+	 * Sits just under the title as a quiet mark (icon + words), not a boxed
+	 * badge. Neutral ink so it reads as provenance, leaving the hue to topic.
+	 */
+	.place-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		margin: 0.125rem 0 0.125rem;
+		font-size: 0.6875rem;
+		font-weight: 500;
+		color: oklch(0.5 0.02 250);
 	}
 
 	/* Newly revealed templates fade in with a small upward motion (8px). */

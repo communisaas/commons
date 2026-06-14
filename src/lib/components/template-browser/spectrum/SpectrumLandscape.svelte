@@ -28,15 +28,21 @@
 	 * and the client.
 	 */
 
-	import type { Template } from '$lib/types/template';
+	import type { Template, TemplateGroup } from '$lib/types/template';
 	import { groupByDomain } from '$lib/core/topic/domain-grouping';
+	import { toPlaceBands } from '$lib/core/topic/place-bands';
 	import { resolveDomainHue } from '$lib/utils/domain-hue';
 	import DomainBand from './DomainBand.svelte';
+	import LensToggle, { type Lens } from './LensToggle.svelte';
 	import { EntityCluster } from '$lib/design';
 
 	interface Props {
 		/** The public templates to lay out as a topical field. */
 		templates: Template[];
+		/** The same templates already grouped by geographic precision (the existing
+		 *  `groupByPrecision` path, computed by the page). Drives the place lens; the
+		 *  topic lens ignores it. Absent → the place lens falls back to one band. */
+		placeGroups?: TemplateGroup[];
 		/** The currently selected (diving) template id, threaded down to the tiles. */
 		selectedId?: string | null;
 		/** Called with the template id when a tile is activated. */
@@ -49,17 +55,57 @@
 
 	let {
 		templates,
+		placeGroups = [],
 		selectedId = null,
 		onSelect,
 		onHover,
 		initialVisible = 6
 	}: Props = $props();
 
-	// Group by civic domain and order the bands along the hue spectrum. The hue
-	// resolver is injected so the grouper stays decoupled from the embedding
-	// backfill — the band order is stable today, and sharpens as `domainHue`
-	// fills in. Deterministic and pure, so this runs cleanly under SSR.
-	const bands = $derived(groupByDomain(templates, { hueOf: resolveDomainHue }));
+	// How the field is organised. Topic is the default lens (hue-ordered domain
+	// bands); place re-organises the same templates by geographic precision while
+	// hue keeps encoding topic. The choice persists across reloads in
+	// sessionStorage so a return visit re-opens the lens last chosen, without a
+	// server round-trip. SSR-safe: server renders the topic default, the client
+	// reconciles to the stored choice on mount.
+	const LENS_STORAGE_KEY = 'commons:landing-lens';
+	let lens = $state<Lens>('topic');
+
+	// `$effect` and the click handler below both run only on the client (effects
+	// never fire during SSR, and a click cannot happen on the server), so reading
+	// and writing `sessionStorage` here needs no environment guard.
+	$effect(() => {
+		const stored = sessionStorage.getItem(LENS_STORAGE_KEY);
+		if (stored === 'place' || stored === 'topic') {
+			lens = stored;
+		}
+	});
+
+	function selectLens(next: Lens) {
+		lens = next;
+		sessionStorage.setItem(LENS_STORAGE_KEY, next);
+	}
+
+	// The topic lens: group by civic domain and order the bands along the hue
+	// spectrum. The hue resolver is injected so the grouper stays decoupled from
+	// the embedding backfill — the band order is stable today, and sharpens as
+	// `domainHue` fills in. Deterministic and pure, so this runs cleanly under SSR.
+	const topicBands = $derived(groupByDomain(templates, { hueOf: resolveDomainHue }));
+
+	// The place lens: the EXISTING geographic precision grouping (computed by the
+	// page via `groupByPrecision`, reused unchanged), adapted into bands. Hue
+	// stays domain-derived — each place band's spine is its lead template's
+	// domain hue, never a colour invented to encode place.
+	const placeBands = $derived(toPlaceBands(placeGroups, { hueOf: resolveDomainHue }));
+
+	// The bands the field renders, by lens. Each carries a stable `key` (the band
+	// name) for the keyed `#each`, and the place lens stamps a `placeLabel` so the
+	// tiles surface a place chip; the topic lens leaves it null.
+	const bands = $derived(
+		lens === 'place'
+			? placeBands.map((b) => ({ ...b, key: b.domain, placeLabel: b.place }))
+			: topicBands.map((b) => ({ ...b, key: b.domain, placeLabel: null as string | null }))
+	);
 
 	// Each band starts at a flat index equal to the running tile total before it,
 	// so keyboard order reads continuously down the whole field rather than
@@ -129,14 +175,20 @@
 	}
 </script>
 
+{#if templates.length > 0}
+	<!-- The lens chooses the organiser; hue keeps encoding topic in both. -->
+	<LensToggle {lens} onChange={selectLens} />
+{/if}
+
 {#if bands.length > 0}
 	<!-- The field: bands chunked by generous void, not chrome. EntityCluster's
 	     proximity ratio lets the eye read each neighbourhood as one unit and the
 	     gaps between them as the boundaries — no borders, no cards. -->
 	<EntityCluster as="section" density="spacious" class="spectrum-landscape">
-		{#each bands as band, i (band.domain)}
+		{#each bands as band, i (band.key)}
 			<DomainBand
 				group={band}
+				placeLabel={band.placeLabel}
 				{selectedId}
 				{onSelect}
 				{onHover}

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import type { Template } from '$lib/types/template';
 import { resolveDomainHue } from '$lib/utils/domain-hue';
 
@@ -193,5 +193,133 @@ describe('SpectrumLandscape', () => {
 		expect(field).toBeTruthy();
 		expect(field.className).not.toMatch(/\bbg-white\b/);
 		expect(field.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
+	});
+});
+
+/** A lens segment by its target lens, for clicking / reading active state. */
+function lensButton(container: HTMLElement, lens: 'topic' | 'place'): HTMLButtonElement {
+	return container.querySelector(`[data-lens="${lens}"]`) as HTMLButtonElement;
+}
+
+/** Place chips rendered on the tiles (place lens only), in document order. */
+function placeChips(container: HTMLElement): string[] {
+	return Array.from(container.querySelectorAll('.place-chip')).map(
+		(el) => el.textContent?.trim() ?? ''
+	);
+}
+
+/**
+ * Build precision groups the way the page passes them: the existing
+ * `groupByPrecision` shape (title + level + ordered templates). The lens toggle
+ * organises the SAME templates by these geographic tiers instead of by topic.
+ */
+type PlaceGroup = {
+	title: string;
+	level: 'district' | 'city' | 'county' | 'state' | 'nationwide';
+	templates: Template[];
+	minScore: number;
+	coordinationCount: number;
+};
+function makePlaceGroup(title: string, level: PlaceGroup['level'], templates: Template[]): PlaceGroup {
+	return { title, level, templates, minScore: 0, coordinationCount: 0 };
+}
+
+describe('SpectrumLandscape — lens toggle (topic ↔ place)', () => {
+	const templates = [
+		makeTemplate({ id: 'a', domain: 'Healthcare' }),
+		makeTemplate({ id: 'b', domain: 'Housing' })
+	];
+	// The same templates, organised by geographic precision (place lens input).
+	const placeGroups = [
+		makePlaceGroup('In Your State', 'state', [templates[0]]),
+		makePlaceGroup('Nationwide', 'nationwide', [templates[1]])
+	];
+
+	function renderField() {
+		return render(SpectrumLandscape, {
+			props: { templates, placeGroups, onSelect: vi.fn() }
+		});
+	}
+
+	// `clearMocks`/`restoreMocks` reset the sessionStorage mock between tests, so
+	// each test starts from the default `getItem → null` (the topic default).
+
+	it('offers both lenses in plain English, defaulting to topic', () => {
+		const { container } = renderField();
+		const topic = lensButton(container, 'topic');
+		const place = lensButton(container, 'place');
+		expect(topic).toBeTruthy();
+		expect(place).toBeTruthy();
+		expect(topic.textContent?.trim()).toBe('topic');
+		expect(place.textContent?.trim()).toBe('place');
+		// Topic is the default lens.
+		expect(topic.getAttribute('aria-pressed')).toBe('true');
+		expect(place.getAttribute('aria-pressed')).toBe('false');
+	});
+
+	it('toggling place changes the group set from domains to geographic tiers', async () => {
+		const { container } = renderField();
+		// Topic lens: bands are domains.
+		expect(bandNames(container)).toEqual(
+			expect.arrayContaining(['Healthcare', 'Housing'])
+		);
+		expect(bandNames(container)).not.toContain('Nationwide');
+
+		await fireEvent.click(lensButton(container, 'place'));
+
+		// Place lens: bands are the precision tiers — a different group set.
+		const placeBands = bandNames(container);
+		expect(placeBands).toEqual(['In Your State', 'Nationwide']);
+		expect(placeBands).not.toContain('Healthcare');
+	});
+
+	it('keeps every template in the field across both lenses (none dropped)', async () => {
+		const { container } = renderField();
+		expect(tiles(container).length).toBe(2);
+		await fireEvent.click(lensButton(container, 'place'));
+		expect(tiles(container).length).toBe(2);
+	});
+
+	it('hue stays domain-derived in the place lens (spine = lead template domain hue)', async () => {
+		const { container } = renderField();
+		await fireEvent.click(lensButton(container, 'place'));
+		// Each place band's spine carries a --card-hue equal to its lead template's
+		// resolved DOMAIN hue — colour still encodes topic, never place.
+		const spines = Array.from(container.querySelectorAll('.band-spine')) as HTMLElement[];
+		const stateSpineHue = spines[0].style.getPropertyValue('--card-hue').trim();
+		// Healthcare leads the "In Your State" tier; its domain hue drives the spine.
+		expect(stateSpineHue).toBe(String(resolveDomainHue(makeTemplate({ domain: 'Healthcare' }))));
+	});
+
+	it('shows a place chip on each tile in the place lens, absent in topic', async () => {
+		const { container } = renderField();
+		// Topic lens: no place chips.
+		expect(placeChips(container)).toHaveLength(0);
+
+		await fireEvent.click(lensButton(container, 'place'));
+		// Place lens: each tile carries its tier as a chip.
+		expect(placeChips(container)).toEqual(['In Your State', 'Nationwide']);
+	});
+
+	it('writes the chosen lens to sessionStorage so it can persist across reloads', async () => {
+		const { container } = renderField();
+		await fireEvent.click(lensButton(container, 'place'));
+		// The choice is persisted under a stable key for a later visit to restore.
+		expect(sessionStorage.setItem).toHaveBeenCalledWith('commons:landing-lens', 'place');
+
+		await fireEvent.click(lensButton(container, 'topic'));
+		expect(sessionStorage.setItem).toHaveBeenLastCalledWith('commons:landing-lens', 'topic');
+	});
+
+	it('restores the persisted lens on a fresh mount (a reload)', async () => {
+		// A prior visit chose place; the store carries it across the reload.
+		vi.mocked(sessionStorage.getItem).mockReturnValue('place');
+
+		const { container } = renderField();
+		// The mount effect reads the stored choice and opens on the place lens.
+		await waitFor(() =>
+			expect(lensButton(container, 'place').getAttribute('aria-pressed')).toBe('true')
+		);
+		expect(bandNames(container)).toEqual(['In Your State', 'Nationwide']);
 	});
 });

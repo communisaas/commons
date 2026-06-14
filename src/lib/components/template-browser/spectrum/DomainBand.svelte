@@ -36,8 +36,10 @@
 	import { Pulse } from '$lib/design';
 
 	interface Props {
-		/** The hue-ordered domain group this band renders. */
-		group: DomainGroup;
+		/** The hue-ordered group this band renders. A topic band carries its
+		 *  domain; a place band carries the precision tier as its name — both share
+		 *  this shape (name, domain-derived hue, ordered templates, count). */
+		group: Pick<DomainGroup, 'domain' | 'hue' | 'templates' | 'count'>;
 		/** Currently selected template id, threaded down to the tiles. */
 		selectedId?: string | null;
 		/** Called with the template id when a tile is activated. */
@@ -50,6 +52,10 @@
 		indexOffset?: number;
 		/** How many tiles show before "more" reveals the rest. */
 		initialVisible?: number;
+		/** In the place lens, the geographic tier this band represents — shown as a
+		 *  small chip on each tile so place stays visible while topic keeps the hue.
+		 *  Absent in the topic lens (no chip → tiles render exactly as before). */
+		placeLabel?: string | null;
 	}
 
 	let {
@@ -59,7 +65,8 @@
 		onHover,
 		onKeydown,
 		indexOffset = 0,
-		initialVisible = 6
+		initialVisible = 6,
+		placeLabel = null
 	}: Props = $props();
 
 	// The spine colour and order key — already resolved by the grouper's hue
@@ -117,6 +124,7 @@
 				<TemplateTile
 					{template}
 					resolvedHue={resolveDomainHue(template)}
+					{placeLabel}
 					selected={selectedId === template.id}
 					index={indexOffset + i}
 					newlyRevealed={i >= initialVisible}

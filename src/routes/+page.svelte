@@ -732,10 +732,13 @@
 				<!-- Template List -->
 				<div class="template-list-column">
 					{#if showSpectrum}
-						<!-- Topical field: templates grouped into hue-ordered domain bands.
-						     Falls back to the list below until the landscape is the default. -->
+						<!-- Topical field: templates grouped into hue-ordered domain bands,
+						     with a lens toggle to re-organise the same templates by place
+						     (the existing geographic precision grouping). Falls back to the
+						     list below until the landscape is the default. -->
 						<SpectrumLandscape
 							templates={allTemplates}
+							placeGroups={filteredGroups}
 							selectedId={templateStore.selectedId}
 							onSelect={handleTemplateSelect}
 						/>
