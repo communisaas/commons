@@ -137,9 +137,11 @@
 	// is the one place that sees the whole field at once.
 	//
 	// reduced-motion: the jump is instant (`auto`) and NO bloom is set, so the
-	// surface never animates for a vestibular-sensitive reader. SSR-safe: the
-	// handler only runs on the client (a tap cannot happen on the server), so the
-	// `window` / `document` reads below need no environment guard.
+	// surface never animates for a vestibular-sensitive reader — but the scroll
+	// still offsets for the sticky overview, so the heading lands clear of the map
+	// in both modes, not tucked beneath it. SSR-safe: the handler only runs on the
+	// client (a tap cannot happen on the server), so the `window` / `document`
+	// reads below need no environment guard.
 
 	// Which band is blooming right now (its domain), or null at rest. Threaded down
 	// so exactly one band flares per jump.
@@ -164,17 +166,16 @@
 		const reduced = prefersReducedMotion();
 		const target = document.getElementById(bandDomId(domain));
 		if (target) {
-			if (reduced) {
-				// Instant jump, no smooth travel — and no bloom below.
-				target.scrollIntoView({ behavior: 'auto', block: 'start' });
-			} else {
-				// Offset the smooth scroll by the sticky overview's height so the
-				// band heading clears the map rather than landing beneath it.
-				const overview = document.querySelector<HTMLElement>('.spectrum-overview');
-				const offset = overview ? overview.getBoundingClientRect().height : 0;
-				const top = target.getBoundingClientRect().top + window.scrollY - offset - 8;
-				window.scrollTo({ top, behavior: 'smooth' });
-			}
+			// Both motion modes offset the scroll by the sticky overview's height so
+			// the band heading clears the map rather than landing beneath it. The only
+			// difference is the travel: smooth for a default reader, instant (`auto`)
+			// for a vestibular-sensitive one. A bare `scrollIntoView` ignores the
+			// sticky bar and would tuck the heading under it, so we compute the offset
+			// scroll position explicitly in both branches.
+			const overview = document.querySelector<HTMLElement>('.spectrum-overview');
+			const offset = overview ? overview.getBoundingClientRect().height : 0;
+			const top = target.getBoundingClientRect().top + window.scrollY - offset - 8;
+			window.scrollTo({ top, behavior: reduced ? 'auto' : 'smooth' });
 		}
 
 		// No bloom under reduced-motion — the band stays at rest weight.

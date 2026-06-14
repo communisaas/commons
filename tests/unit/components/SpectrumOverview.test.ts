@@ -68,14 +68,14 @@ function segments(container: HTMLElement): HTMLElement[] {
 	return Array.from(container.querySelectorAll('.ratio-segment'));
 }
 
-/** The plain-English legend labels, in render order. */
-function labels(container: HTMLElement): HTMLElement[] {
-	return Array.from(container.querySelectorAll('.spectrum-overview__label'));
-}
-
 /** The per-segment wayfinding controls (one per band), in render order. */
 function jumps(container: HTMLElement): HTMLButtonElement[] {
 	return Array.from(container.querySelectorAll('.spectrum-overview__jump'));
+}
+
+/** The single on-demand caption line that names the band the eye is on. */
+function caption(container: HTMLElement): HTMLElement {
+	return container.querySelector('.spectrum-overview__caption') as HTMLElement;
 }
 
 /** Parse the `width: NN%` a segment carries (the proportion the bar shows). */
@@ -93,7 +93,8 @@ describe('SpectrumOverview', () => {
 		];
 		const { container } = render(SpectrumOverview, { props: { bands } });
 		expect(segments(container).length).toBe(bands.length);
-		expect(labels(container).length).toBe(bands.length);
+		// One wayfinding control per band — the map stays 1:1 with the field.
+		expect(jumps(container).length).toBe(bands.length);
 	});
 
 	it('sizes each segment in proportion to its template count', () => {
@@ -126,51 +127,11 @@ describe('SpectrumOverview', () => {
 		// The fill cites the band hue directly, so the map and the band spine agree.
 		expect(first.getAttribute('style')).toContain('240');
 		expect(second.getAttribute('style')).toContain('55');
-		// Each label cell likewise carries its band hue as --card-hue.
-		const [firstLabel, secondLabel] = labels(container);
-		expect(firstLabel.style.getPropertyValue('--card-hue')).toBe('240');
-		expect(secondLabel.style.getPropertyValue('--card-hue')).toBe('55');
-	});
-
-	it("captions each band by its plain-English topic — the anchor name its hue belongs to", () => {
-		// Housing's anchor hue is 55, Transportation's is 35 (from domain-anchors.json).
-		// A band carrying a descriptive free-text domain ("Affordable Housing Vacancy
-		// Tax") is captioned by the plain topic its hue lands on — "Housing" — not by
-		// the long wording, so the map reads clean.
-		const bands = [
-			makeBand('Bike Lane Expansion', 35, 1),
-			makeBand('Affordable Housing Vacancy Tax', 55, 1)
-		];
-		const { container } = render(SpectrumOverview, { props: { bands } });
-		const text = labels(container).map((el) => el.textContent?.trim());
-		expect(text).toEqual(['Transportation', 'Housing']);
-	});
-
-	it('falls back to the band domain when the hue is not a canonical anchor', () => {
-		// 200 is not one of the 11 anchor hues — a backfilled projection or a hashed
-		// unknown domain. The band is then captioned by its own plain domain wording.
-		const bands = [makeBand('Open Government Data', 200, 1)];
-		const { container } = render(SpectrumOverview, { props: { bands } });
-		expect(labels(container)[0].textContent?.trim()).toBe('Open Government Data');
-	});
-
-	it('names a topic once across adjacent bands that share it (no repeated label)', () => {
-		// Two distinct housing neighbourhoods sit side by side in the spectrum (same
-		// resolved hue). The map keeps a segment per band but names the topic once,
-		// over the first, so "Housing" spans its region instead of repeating.
-		const bands = [
-			makeBand('Affordable Housing', 55, 2),
-			makeBand('Zoning Reform', 55, 1),
-			makeBand('Bike Lane Expansion', 35, 1)
-		];
-		const { container } = render(SpectrumOverview, { props: { bands } });
-		// Still one segment per band — the map stays 1:1 with the field.
-		expect(segments(container).length).toBe(3);
-		// But the visible names collapse the adjacent same-topic run.
-		const names = labels(container)
-			.map((el) => el.textContent?.trim())
-			.filter((t) => t && t.length > 0);
-		expect(names).toEqual(['Housing', 'Transportation']);
+		// Each control likewise carries its band hue as --card-hue (drives the
+		// hover lift + focus ring at the band's own colour).
+		const [firstJump, secondJump] = jumps(container);
+		expect(firstJump.style.getPropertyValue('--card-hue')).toBe('240');
+		expect(secondJump.style.getPropertyValue('--card-hue')).toBe('55');
 	});
 
 	it('reads the same weight across bands at the zero-send seed (no invented emphasis)', () => {
@@ -255,29 +216,96 @@ describe('SpectrumOverview', () => {
 		expect(onFocusBand).toHaveBeenCalledWith('Housing');
 	});
 
-	it('a collapsed same-topic segment still points at its OWN band', async () => {
-		// Two adjacent housing bands collapse to one visible name, but each segment
-		// must still jump to its own neighbourhood — every band stays reachable.
-		const onFocusBand = vi.fn();
-		const bands = [makeBand('Affordable Housing', 55, 2), makeBand('Zoning Reform', 55, 1)];
-		const { container } = render(SpectrumOverview, { props: { bands, onFocusBand } });
+	// ─── The on-demand caption: names the band the eye is on, by its OWN heading ──
+
+	it('names each segment by its OWN band heading, not a canonical anchor name', () => {
+		// The heading the field shows below is the descriptive domain wording; the
+		// map's accessible name and tooltip must cite the SAME words, so the map and
+		// the band you land on agree — not a generic anchor like "Transportation".
+		const bands = [
+			makeBand('Bike Infrastructure & Public Health', 35, 1),
+			makeBand('Affordable Housing Vacancy Tax', 55, 1)
+		];
+		const { container } = render(SpectrumOverview, { props: { bands } });
 		const [first, second] = jumps(container);
-		// The second control carries no visible label (collapsed run)…
-		expect(second.textContent?.trim()).toBe('');
-		// …yet keeps an accessible name and targets its OWN band.
-		expect(second.getAttribute('aria-label')).toContain('Housing');
-		await fireEvent.click(second);
-		expect(onFocusBand).toHaveBeenLastCalledWith('Zoning Reform');
-		await fireEvent.click(first);
-		expect(onFocusBand).toHaveBeenLastCalledWith('Affordable Housing');
+		expect(first.getAttribute('aria-label')).toBe(
+			'Jump to Bike Infrastructure & Public Health'
+		);
+		expect(first.getAttribute('title')).toBe('Bike Infrastructure & Public Health');
+		expect(second.getAttribute('aria-label')).toBe('Jump to Affordable Housing Vacancy Tax');
+		expect(second.getAttribute('title')).toBe('Affordable Housing Vacancy Tax');
 	});
 
-	it('the legend is reachable (not aria-hidden) now that segments are controls', () => {
-		const bands = [makeBand('Healthcare', 240, 1)];
+	it('gives every segment a distinct, non-empty accessible name (no collapsed labels)', () => {
+		// Two adjacent bands that share a hue used to collapse to one visible label,
+		// leaving an empty accessible name on the second. Each band has a UNIQUE
+		// domain, so every control is now distinctly and fully named.
+		const bands = [
+			makeBand('Affordable Housing', 55, 2),
+			makeBand('Zoning Reform', 55, 1),
+			makeBand('Bike Lane Expansion', 35, 1)
+		];
 		const { container } = render(SpectrumOverview, { props: { bands } });
-		const list = container.querySelector('.spectrum-overview__labels') as HTMLElement;
-		// Interactive children must not be hidden from assistive tech.
-		expect(list.getAttribute('aria-hidden')).toBeNull();
-		expect(list.getAttribute('aria-label')).toBeTruthy();
+		const names = jumps(container).map((j) => j.getAttribute('aria-label'));
+		expect(names).toEqual([
+			'Jump to Affordable Housing',
+			'Jump to Zoning Reform',
+			'Jump to Bike Lane Expansion'
+		]);
+		// No empty accessible name on any control.
+		for (const name of names) {
+			expect(name).toBeTruthy();
+			expect(name).not.toBe('Jump to ');
+		}
+		// And no segment renders empty visible text inside it (the label is the
+		// caption line, not text crammed into a narrow segment).
+		for (const jump of jumps(container)) {
+			expect(jump.textContent?.trim()).toBe('');
+		}
+	});
+
+	it('starts with a quiet neutral hint, asserting no band until the eye lands', () => {
+		const bands = [makeBand('Healthcare', 240, 1), makeBand('Housing', 55, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		const line = caption(container);
+		// The caption exists and reads as a hint at rest — it does not name a band
+		// nobody picked.
+		expect(line).toBeTruthy();
+		expect(line.classList.contains('spectrum-overview__caption--hint')).toBe(true);
+		expect(line.textContent).not.toContain('Healthcare');
+		expect(line.textContent).not.toContain('Housing');
+	});
+
+	it("captions the HOVERED band by its own heading (the band you would land on)", async () => {
+		const bands = [
+			makeBand('Veterans Healthcare Access', 240, 1),
+			makeBand('Affordable Housing Vacancy Tax', 55, 1)
+		];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await fireEvent.pointerEnter(jumps(container)[1]);
+		expect(caption(container).textContent?.trim()).toBe('Affordable Housing Vacancy Tax');
+		// Leaving returns the line to its quiet hint — no band asserted at rest.
+		await fireEvent.pointerLeave(jumps(container)[1]);
+		expect(caption(container).classList.contains('spectrum-overview__caption--hint')).toBe(true);
+	});
+
+	it('captions the FOCUSED band by its own heading (keyboard parity with hover)', async () => {
+		const bands = [
+			makeBand('Veterans Healthcare Access', 240, 1),
+			makeBand('Urban Freeway Removal', 35, 1)
+		];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await fireEvent.focus(jumps(container)[1]);
+		expect(caption(container).textContent?.trim()).toBe('Urban Freeway Removal');
+	});
+
+	it("captions the place-lens band by its precision tier, not a topic", async () => {
+		// In the place lens the band heading is the geographic tier (e.g.
+		// "Nationwide"); the caption must read that, never a topic word, so the map
+		// agrees with the place band below it.
+		const bands = [makeBand('In Your State', 240, 1), makeBand('Nationwide', 55, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await fireEvent.pointerEnter(jumps(container)[1]);
+		expect(caption(container).textContent?.trim()).toBe('Nationwide');
 	});
 });

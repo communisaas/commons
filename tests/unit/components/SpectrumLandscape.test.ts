@@ -223,6 +223,54 @@ describe('SpectrumLandscape', () => {
 		await fireEvent.click(jump[0]);
 		expect(scrollToSpy).toHaveBeenCalled();
 	});
+
+	it('offsets the jump under reduced-motion too — heading clears the sticky map', async () => {
+		// A vestibular-sensitive reader gets an instant jump (no smooth travel, no
+		// bloom), but the scroll must STILL offset for the sticky overview — a bare
+		// scrollIntoView ignores the sticky bar and tucks the heading under it. So
+		// the reduced-motion path computes an offset window.scrollTo({ behavior:
+		// 'auto' }), not a scrollIntoView.
+		const originalMatchMedia = window.matchMedia;
+		window.matchMedia = ((query: string) => ({
+			matches: query.includes('reduce'),
+			media: query,
+			onchange: null,
+			addEventListener: () => {},
+			removeEventListener: () => {},
+			addListener: () => {},
+			removeListener: () => {},
+			dispatchEvent: () => false
+		})) as unknown as typeof window.matchMedia;
+
+		const scrollToSpy = vi.fn();
+		window.scrollTo = scrollToSpy as unknown as typeof window.scrollTo;
+		const scrollIntoViewSpy = vi.fn();
+		HTMLElement.prototype.scrollIntoView = scrollIntoViewSpy;
+
+		try {
+			const templates = [
+				makeTemplate({ id: 'a', domain: 'Healthcare' }),
+				makeTemplate({ id: 'b', domain: 'Housing' })
+			];
+			const { container } = render(SpectrumLandscape, {
+				props: { templates, onSelect: vi.fn() }
+			});
+
+			const jump = container.querySelectorAll<HTMLButtonElement>('.spectrum-overview__jump');
+			await fireEvent.click(jump[0]);
+
+			// The offset scroll path is taken — window.scrollTo with an explicit top
+			// and instant ('auto') behavior — NOT a bare scrollIntoView that would
+			// land the heading under the sticky bar.
+			expect(scrollToSpy).toHaveBeenCalled();
+			expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+			const arg = scrollToSpy.mock.calls[0][0];
+			expect(arg).toMatchObject({ behavior: 'auto' });
+			expect(typeof arg.top).toBe('number');
+		} finally {
+			window.matchMedia = originalMatchMedia;
+		}
+	});
 });
 
 /** A lens segment by its target lens, for clicking / reading active state. */

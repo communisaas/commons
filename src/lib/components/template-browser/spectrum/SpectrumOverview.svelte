@@ -11,8 +11,10 @@
 	 *
 	 * Built from the Ratio idiom (the system's display-scale composition primitive):
 	 * the bar is what a number is made of, felt as proportion and colour, not read
-	 * as text. The plain-English labels sit beneath, sharing the same proportions so
-	 * a segment and its name read as one mark.
+	 * as text. At the real seed the bands are many and narrow, so an always-on
+	 * caption inside each segment would clip into noise; instead the ribbon stays
+	 * pure colour + width (the peripheral map) and a single readable caption line
+	 * names whichever band the eye is on — hovered or keyboard-focused.
 	 *
 	 * Every visual channel cites a real field — nothing is invented:
 	 * - segment width  ← the band's template count (group.count)
@@ -21,7 +23,11 @@
 	 * - segment chroma ← bandMomentum: a band with verified reach reads at fuller
 	 *                    chroma; at the zero-send seed every band reads at the same
 	 *                    base chroma (no invented emphasis — P4 alive-empty)
-	 * - label          ← the band's plain-English domain name
+	 * - caption        ← the hovered/focused band's own heading (group.domain), the
+	 *                    SAME words its DomainBand shows below, so the map label and
+	 *                    the band you land on always agree — in both lenses (the
+	 *                    topic lens shows the descriptive domain, the place lens
+	 *                    shows the precision tier, e.g. "Nationwide").
 	 *
 	 * Alive empty, alive full: with no coordination data the ribbon is still the
 	 * true composition of the field — segments sized by count, coloured by topic,
@@ -39,7 +45,6 @@
 
 	import type { DomainGroup } from '$lib/core/topic/domain-grouping';
 	import { bandMomentum } from '$lib/core/topic/band-signals';
-	import { anchorLabelForHue } from '$lib/utils/domain-hue';
 	import { Ratio } from '$lib/design';
 
 	interface Props {
@@ -67,27 +72,16 @@
 	 * segment is exactly a band. Width from the band's count, fill its resolved hue
 	 * at a chroma that lifts only when the band carries real coordination. The hue
 	 * matches the band's spine exactly (both read `group.hue`), so the map and the
-	 * field are the same colour language.
-	 *
-	 * The caption is the band's plain-English topic: the anchor name its hue belongs
-	 * to (e.g. "Housing", "Transportation"), falling back to the band's own domain
-	 * wording when the hue is not a canonical anchor (a backfilled projection or an
-	 * unknown domain). When several adjacent bands share a topic — two housing
-	 * neighbourhoods sit side by side in the spectrum — only the first labels it, so
-	 * the name spans its region instead of repeating, while the segments stay
-	 * one-per-band.
+	 * field are the same colour language. Each segment names the band by its OWN
+	 * heading (`group.domain`) — the same words its DomainBand shows — so a hover or
+	 * focus on the map names exactly the band you would land on, in either lens.
 	 */
 	const segments = $derived(
-		bands.map((band, i) => {
+		bands.map((band) => {
 			const chroma = bandMomentum(band.templates) > 0 ? ACTIVE_CHROMA : BASE_CHROMA;
-			const topic = anchorLabelForHue(band.hue) ?? band.domain;
-			const previousTopic =
-				i > 0 ? (anchorLabelForHue(bands[i - 1].hue) ?? bands[i - 1].domain) : null;
 			return {
 				key: band.domain,
-				topic,
-				// Only the first band of a contiguous same-topic run carries the name.
-				label: topic === previousTopic ? '' : topic,
+				domain: band.domain,
 				value: band.count,
 				color: `oklch(0.62 ${chroma} ${band.hue})`,
 				hue: band.hue
@@ -95,48 +89,78 @@
 		})
 	);
 
-	// Total templates across the field — the whole the segments compose. Shown as
-	// the ribbon's one-line caption so the proportion has a denominator in words.
+	// Total templates across the field — the whole the segments compose. Exposed as
+	// a data attribute so the proportion has a denominator the page/AT can read.
 	const total = $derived(bands.reduce((sum, band) => sum + band.count, 0));
+
+	// The caption names whichever band the eye is on — the segment under the pointer
+	// or the keyboard focus. Null at rest, so the line stays a quiet neutral hint
+	// rather than asserting a band nobody picked. Pointer and focus share one slot:
+	// the last one to move wins, and leaving clears it back to the hint.
+	let activeDomain = $state<string | null>(null);
+	let activeHue = $state<number | null>(null);
+
+	function show(domain: string, hue: number) {
+		activeDomain = domain;
+		activeHue = hue;
+	}
+	function clear() {
+		activeDomain = null;
+		activeHue = null;
+	}
 </script>
 
 {#if bands.length > 0}
 	<!-- The map of the whole: a display-scale composition, sticky so it stays in
 	     view while the bands scroll beneath it. No card, no border — the ribbon and
-	     its labels are the structure. -->
+	     its one caption line are the structure. -->
 	<div class="spectrum-overview" data-template-count={total}>
-		<Ratio segments={segments} height={14} class="spectrum-overview__bar" />
+		<!-- The ribbon is the Ratio primitive at display scale — pure proportion +
+		     colour, the peripheral map. The interactive segment row sits directly
+		     over it (same flex proportions), so the whole width of each band is a
+		     focusable, keyboard-activatable wayfinding control while the colour map
+		     reads underneath. -->
+		<div class="spectrum-overview__ribbon">
+			<Ratio segments={segments} height={14} class="spectrum-overview__bar" />
 
-		<!-- The plain-English legend, sharing the bar's proportions so each name
-		     sits over its segment. The map reads first as colour + width; the words
-		     name what the eye has already grasped. A topic that spans several
-		     adjacent bands is named once, over the first of them.
+			<!-- The wayfinding controls: one transparent button per band, flex-weighted
+			     to overlay its segment exactly. No inline text — at the real seed the
+			     bands are too narrow to caption without clipping, so the ribbon stays
+			     pure colour + width and the caption line below names whatever the eye
+			     is on. Each button still carries a distinct accessible name and a
+			     native tooltip, so every band is reachable and named. -->
+			<ul class="spectrum-overview__segments" aria-label="Jump to a band">
+				{#each segments as segment (segment.key)}
+					<li class="spectrum-overview__segment" style="flex-grow: {segment.value};">
+						<button
+							type="button"
+							class="spectrum-overview__jump"
+							style="--card-hue: {segment.hue};"
+							aria-label="Jump to {segment.domain}"
+							title={segment.domain}
+							onclick={() => onFocusBand?.(segment.key)}
+							onpointerenter={() => show(segment.domain, segment.hue)}
+							onpointerleave={clear}
+							onfocus={() => show(segment.domain, segment.hue)}
+							onblur={clear}
+						></button>
+					</li>
+				{/each}
+			</ul>
+		</div>
 
-		     Each segment is a wayfinding control: activating it asks the field to
-		     travel to that band. The whole segment width is the tap target (a
-		     native button, so Enter/Space and focus come for free); collapsed
-		     segments in a same-topic run still point at their OWN band and keep an
-		     accessible name so every neighbourhood is reachable by keyboard. -->
-		<ul class="spectrum-overview__labels" aria-label="Jump to a topic">
-			{#each segments as segment (segment.key)}
-				<li
-					class="spectrum-overview__label"
-					style="flex-grow: {segment.value}; --card-hue: {segment.hue};"
-				>
-					<button
-						type="button"
-						class="spectrum-overview__jump"
-						style="--card-hue: {segment.hue};"
-						aria-label="Jump to {segment.topic}"
-						onclick={() => onFocusBand?.(segment.key)}
-					>
-						{#if segment.label}
-							<span class="font-brand" aria-hidden="true">{segment.label}</span>
-						{/if}
-					</button>
-				</li>
-			{/each}
-		</ul>
+		<!-- The one caption line: plain English, room to breathe, no clipping. It
+		     names the band the eye is on (hover or focus) by its OWN heading, so the
+		     map label always matches the band below. At rest it is a quiet hint, not
+		     a band nobody picked. -->
+		<p
+			class="spectrum-overview__caption font-brand"
+			class:spectrum-overview__caption--hint={activeDomain === null}
+			style={activeHue === null ? '' : `--card-hue: ${activeHue};`}
+			aria-live="polite"
+		>
+			{activeDomain ?? 'Hover or focus a band to see its name'}
+		</p>
 	</div>
 {/if}
 
@@ -153,7 +177,7 @@
 		z-index: 2;
 		display: flex;
 		flex-direction: column;
-		gap: 0.4rem;
+		gap: 0.35rem;
 		padding: 0.5rem 0 0.6rem;
 		/* A warm-cream wash so the ribbon reads over whatever band scrolls beneath,
 		   fading at the foot rather than ending on a hard edge. */
@@ -162,6 +186,12 @@
 			var(--surface-base, oklch(0.993 0.003 60)) 70%,
 			oklch(0.993 0.003 60 / 0)
 		);
+	}
+
+	/* The ribbon stacks the interactive segment row directly over the Ratio bar,
+	   so the colour map and the tap targets share one footprint. */
+	.spectrum-overview__ribbon {
+		position: relative;
 	}
 
 	/*
@@ -175,76 +205,86 @@
 	}
 
 	/*
-	 * The legend mirrors the bar's proportions with the same flex weights, so each
-	 * name sits over its segment. Names that would crowd their segment truncate
-	 * rather than wrap, keeping the map one line tall and reflow-safe.
+	 * The interactive row overlays the bar exactly — same flex proportions, so a
+	 * button sits over its segment. Transparent: the colour lives on the Ratio bar
+	 * beneath; these are the tap/focus targets, not the paint.
 	 */
-	.spectrum-overview__labels {
+	.spectrum-overview__segments {
+		position: absolute;
+		inset: 0;
 		display: flex;
-		gap: 0.5rem;
 		margin: 0;
 		padding: 0;
 		list-style: none;
 	}
 
-	.spectrum-overview__label {
+	.spectrum-overview__segment {
 		flex-basis: 0;
 		min-width: 0;
-		overflow: hidden;
+		display: flex;
 	}
 
 	/*
-	 * The wayfinding control. It fills its segment so the whole width is the tap
-	 * target, carries no chrome of its own (the bar above is the colour), and
+	 * The wayfinding control fills its segment so the whole width is the tap
+	 * target, carries no chrome of its own (the bar beneath is the colour), and
 	 * gives an instant press response — the eye is acknowledged before the field
-	 * has finished travelling. A plain text affordance, never a pill or a box.
+	 * has finished travelling. A plain transparent target, never a pill or a box.
 	 */
 	.spectrum-overview__jump {
 		display: block;
 		width: 100%;
+		height: 100%;
 		min-width: 0;
-		/* A floor of height so even a collapsed segment (no visible name, part of a
-		   same-topic run) is a real tap/focus target — every band stays reachable. */
-		min-height: 1.1rem;
-		padding: 0.15rem 0 0;
+		padding: 0;
 		margin: 0;
-		text-align: left;
 		background: none;
 		border: none;
 		cursor: pointer;
-		/* Hover/focus lift settles on the system easing; the press itself (:active)
-		   is instant so feedback is causal. */
-		transition: opacity 150ms var(--header-easing, ease-out);
 	}
 
-	.spectrum-overview__jump span {
-		display: block;
-		font-size: 0.6875rem;
-		font-weight: 500;
-		line-height: 1;
-		/* Tinted by the segment hue so the word belongs to its colour, kept dark
-		   enough to read against the cream. */
-		color: oklch(0.46 0.07 var(--card-hue));
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	/* Hover deepens the name toward its hue — the segment lights up as "go here". */
-	.spectrum-overview__jump:hover span {
-		color: oklch(0.4 0.11 var(--card-hue));
+	/* Hover/focus lifts the band slightly out of the ribbon so the eye sees which
+	   segment it is pointing at — the same band the caption below has just named. */
+	.spectrum-overview__jump:hover,
+	.spectrum-overview__jump:focus-visible {
+		background: oklch(0.62 0.19 var(--card-hue) / 0.18);
 	}
 
 	/* Press feedback: an immediate dim on touch/click, no transition in, so the
 	   acknowledgement is causal (<100ms) before the field starts to travel. */
 	.spectrum-overview__jump:active {
-		opacity: 0.55;
-		transition: none;
+		background: oklch(0.62 0.19 var(--card-hue) / 0.32);
 	}
 
 	.spectrum-overview__jump:focus-visible {
 		outline: 2px solid oklch(0.45 0.18 var(--card-hue));
 		outline-offset: 2px;
 		border-radius: 2px;
+	}
+
+	/*
+	 * The caption: a single plain-English line with room to breathe, so it never
+	 * clips the way an in-segment label would. It names the band the eye is on by
+	 * its own heading; tinted toward that band's hue so the word belongs to its
+	 * colour, kept dark enough to read against the cream.
+	 */
+	.spectrum-overview__caption {
+		margin: 0;
+		min-height: 1rem;
+		font-size: 0.75rem;
+		font-weight: 500;
+		line-height: 1.2;
+		color: oklch(0.42 0.09 var(--card-hue, 250));
+		/* One line; if a heading is unusually long it ends in an ellipsis rather
+		   than reflowing the sticky bar — but with full width it has room. */
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		transition: color 150ms var(--header-easing, ease-out);
+	}
+
+	/* At rest the line is a quiet neutral hint, not an asserted band — calm. */
+	.spectrum-overview__caption--hint {
+		color: oklch(0.6 0.01 250);
+		font-weight: 400;
 	}
 </style>
