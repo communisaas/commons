@@ -14,10 +14,12 @@ export type SubscriptionLike = { status?: string; plan?: string } | null | undef
 /**
  * Resolve an org's effective billing plan from its subscription row. Only
  * `active`/`trialing` subscriptions count toward a paid tier; anything else
- * (canceled, past_due, none) reads as `free`.
+ * (canceled, past_due, none) reads as the gated `inactive` floor.
  */
 export function effectivePlan(sub: SubscriptionLike): string {
-	return sub?.status === 'active' || sub?.status === 'trialing' ? (sub.plan ?? 'free') : 'free';
+	return sub?.status === 'active' || sub?.status === 'trialing'
+		? (sub.plan ?? 'inactive')
+		: 'inactive';
 }
 
 /** True only when the org is on the Coalition plan. */

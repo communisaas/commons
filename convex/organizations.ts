@@ -925,8 +925,13 @@ export const create = mutation({
 			name: args.name,
 			slug: args.slug,
 			description: args.description ?? undefined,
-			maxSeats: 2,
-			maxTemplatesMonth: 10,
+			// A new org has no subscription, so it starts on the gated `inactive`
+			// floor: owner-only seat + 2 templates (author a campaign or two to
+			// experience the product). Delivery + scale unlock on subscribe; the
+			// Stripe webhook syncs these to the paid tier's limits. Mirrors
+			// PLANS.inactive at src/lib/server/billing/plans.ts.
+			maxSeats: 1,
+			maxTemplatesMonth: 2,
 			dmCacheTtlDays: 7,
 			countryCode: 'US',
 			isPublic: false,
@@ -1477,7 +1482,7 @@ export const getUserOrgPlan = query({
 		return {
 			orgId: org._id,
 			orgSlug: org.slug,
-			plan: sub?.plan ?? 'free'
+			plan: sub?.plan ?? 'inactive'
 		};
 	}
 });

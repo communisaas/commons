@@ -2475,11 +2475,11 @@ export const insertUserDmRelations = internalMutation({
 // =============================================================================
 // PHASE 19: INSERT SUBSCRIPTIONS
 // =============================================================================
-// Seed orgs default to free tier unless a subscription row exists. Without
-// realistic plan assignments, `subscriptions.checkPlanLimits` returns the
-// free-tier ceiling for every seeded org — Climate Action Now (8
-// supporters, $1.25K raised, sent blast) looking free-tier is incoherent
-// with the rest of its activity. Plans canonical at
+// There is no free org tier. An org with no subscription row falls to the
+// gated `inactive` floor (2 templates, zero delivery). Every seeded dev/demo
+// org therefore gets an explicit active subscription so none lands on the
+// floor — Climate Action Now (8 supporters, $1.25K raised, sent blast) looking
+// gated would be incoherent with the rest of its activity. Plans canonical at
 // src/lib/server/billing/plans.ts.
 
 export const insertSubscriptions = internalMutation({
@@ -2489,12 +2489,13 @@ export const insertSubscriptions = internalMutation({
   handler: async (ctx, { orgIds }) => {
     const now = Date.now();
     // Realistic posture: a heavy-activity org pays Organization tier; a
-    // mid-activity org pays Starter; a low-activity org stays on free
-    // (no subscription row needed). priceCents mirror plans.ts exactly.
+    // mid-activity org pays Starter; the third demos the top Coalition tier.
+    // Every seeded org gets a row — none falls to the gated inactive floor.
+    // priceCents mirror plans.ts exactly.
     const subscriptionDefs = [
       { orgIdx: 0, plan: "organization", priceCents: 7_500 }, // Climate Action Now
       { orgIdx: 1, plan: "starter", priceCents: 1_000 },      // Voter Rights Coalition
-      // Local First SF (orgIds[2]) intentionally omitted — defaults to free tier.
+      { orgIdx: 2, plan: "coalition", priceCents: 20_000 },   // Local First SF (top tier demo)
     ];
 
     // 30-day billing cycle anchored so the seed represents an active
@@ -2503,7 +2504,7 @@ export const insertSubscriptions = internalMutation({
     for (const s of subscriptionDefs) {
       await ctx.db.insert("subscriptions", {
         orgId: orgIds[s.orgIdx],
-        plan: s.plan as "free" | "starter" | "organization" | "coalition",
+        plan: s.plan as "inactive" | "starter" | "organization" | "coalition",
         priceCents: s.priceCents,
         status: "active",
         currentPeriodStart: now - halfMonth,
@@ -2537,6 +2538,7 @@ export const insertSubscriptions = internalMutation({
 const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }> = {
   starter: { maxSeats: 5, maxTemplatesMonth: 100 },
   organization: { maxSeats: 10, maxTemplatesMonth: 500 },
+  coalition: { maxSeats: 25, maxTemplatesMonth: 1_000 },
 };
 
 // =============================================================================

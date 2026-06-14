@@ -842,7 +842,7 @@ const CANONICAL_VALUES: Record<string, ReadonlyArray<string>> = {
   "campaigns.status": ["DRAFT", "ACTIVE", "PAUSED", "COMPLETE"],
   "events.eventType": ["IN_PERSON", "VIRTUAL", "HYBRID"],
   "events.status": ["DRAFT", "PUBLISHED", "CANCELLED", "COMPLETED"],
-  "subscriptions.plan": ["free", "starter", "organization", "coalition"],
+  "subscriptions.plan": ["inactive", "starter", "organization", "coalition"],
   "subscriptions.status": ["active", "past_due", "canceled", "trialing"],
   "subscriptions.paymentMethod": ["stripe", "crypto"],
   // C15+C16 enums — added after brutalist caught the audit coverage gap

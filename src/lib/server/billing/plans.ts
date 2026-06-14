@@ -2,7 +2,14 @@
  * Plan definitions and limit constants for Commons billing.
  *
  * Stripe Price IDs are read from environment variables (set via wrangler pages secret).
- * The free tier has no Stripe Price — it's the default for orgs without a subscription.
+ *
+ * There is NO free org tier. Entry is Starter ($10/mo). Orgs with no active
+ * subscription fall to the non-marketed `inactive` floor: they can create the
+ * org and author a campaign or two (maxTemplatesMonth: 2 — the free *experience*:
+ * author, see grounded message + targets, preview the report) but ALL DELIVERY
+ * (email/SMS, verified-action submission) and scale (seats, volume) are gated to
+ * zero until they subscribe. `inactive` is NOT in PLAN_ORDER — it never renders
+ * as a tier in the plan grid; it is only the fallback floor.
  */
 
 export interface PlanLimits {
@@ -18,16 +25,19 @@ export interface PlanLimits {
 }
 
 export const PLANS: Record<string, PlanLimits> = {
-	free: {
-		slug: 'free',
-		name: 'Free',
+	// Non-marketed gated floor for orgs with no active subscription. Lets an org
+	// author a campaign or two (2 templates) to experience the product; every
+	// delivery + scale quota is zeroed until they subscribe. Not in PLAN_ORDER.
+	inactive: {
+		slug: 'inactive',
+		name: 'Inactive',
 		priceCents: 0,
 		stripePriceId: '',
-		maxVerifiedActions: 100,
-		maxEmails: 1_000,
+		maxVerifiedActions: 0,
+		maxEmails: 0,
 		maxSms: 0,
-		maxSeats: 2,
-		maxTemplatesMonth: 10
+		maxSeats: 1,
+		maxTemplatesMonth: 2
 	},
 	starter: {
 		slug: 'starter',
@@ -70,10 +80,13 @@ export const PLANS: Record<string, PlanLimits> = {
 	}
 };
 
-/** Plan slugs ordered by tier for upgrade/downgrade comparison */
-export const PLAN_ORDER = ['free', 'starter', 'organization', 'coalition'] as const;
+/**
+ * Marketed plan slugs ordered by tier for upgrade/downgrade comparison.
+ * `inactive` is deliberately excluded — it is the gated floor, not a tier.
+ */
+export const PLAN_ORDER = ['starter', 'organization', 'coalition'] as const;
 
 export function getPlanForOrg(subscription: { plan: string } | null): PlanLimits {
-	if (!subscription) return PLANS.free;
-	return PLANS[subscription.plan] ?? PLANS.free;
+	if (!subscription) return PLANS.inactive;
+	return PLANS[subscription.plan] ?? PLANS.inactive;
 }

@@ -26,7 +26,9 @@ const PLANS: Record<
     maxSms: number;
   }
 > = {
-  free: { priceCents: 0, maxSeats: 2, maxTemplatesMonth: 10, maxVerifiedActions: 100, maxEmails: 1_000, maxSms: 0 },
+  // Gated floor for orgs with no active subscription — author a campaign or
+  // two (2 templates), zero delivery, owner-only. Not a marketed tier.
+  inactive: { priceCents: 0, maxSeats: 1, maxTemplatesMonth: 2, maxVerifiedActions: 0, maxEmails: 0, maxSms: 0 },
   starter: { priceCents: 1_000, maxSeats: 5, maxTemplatesMonth: 100, maxVerifiedActions: 1_000, maxEmails: 20_000, maxSms: 1_000 },
   organization: { priceCents: 7_500, maxSeats: 10, maxTemplatesMonth: 500, maxVerifiedActions: 5_000, maxEmails: 100_000, maxSms: 10_000 },
   coalition: { priceCents: 20_000, maxSeats: 25, maxTemplatesMonth: 1_000, maxVerifiedActions: 10_000, maxEmails: 250_000, maxSms: 50_000 },
@@ -45,8 +47,8 @@ const PLANS: Record<
  * to, so we only trust the O(1) path when it matches the period we're metering.
  *
  * Self-heal (no write — this runs in a query): if the baseline is missing or
- * belongs to a DIFFERENT period (a late/missed Stripe webhook, or a free-tier
- * calendar-month rollover that has no webhook), count THIS period's verified
+ * belongs to a DIFFERENT period (a late/missed Stripe webhook, or an inactive
+ * org's calendar-month rollover that has no webhook), count THIS period's verified
  * actions via the `by_orgId_verified_sentAt` range index — bounded to one
  * period's volume, never the lifetime table, so it can never throw the cap.
  *
@@ -94,8 +96,8 @@ async function verifiedActionsThisPeriod(
   // Exclude congressional rows: congressional deliveries are person-layer civic
   // actions, NOT org-metered usage — the lifetime path skips them via
   // createCampaignAction's metersOrgQuota:false, and this self-heal path (the one
-  // free-tier orgs always hit, since they have no Stripe baseline) MUST exclude
-  // them too or congressional traffic leaks back into the org's metered usage.
+  // inactive/unsubscribed orgs always hit, since they have no Stripe baseline)
+  // MUST exclude them too or congressional traffic leaks back into metered usage.
   const metered = rows.filter((r) => r.channel !== "congressional");
   // If the period's own metered volume exceeds the cap, clamp to the cap. Below
   // the cap this is the true count; above it the clamp is a floor that STILL
@@ -222,7 +224,7 @@ export const getByUser = query({
  *
  * Usage is computed at query time (not from denormalized counters) for
  * verifiedActions. Email/SMS use denormalized org counters.
- * Period: subscription's currentPeriodStart, or calendar month for free orgs.
+ * Period: subscription's currentPeriodStart, or calendar month for inactive orgs.
  */
 export const checkPlanLimits = query({
   args: {
@@ -247,17 +249,17 @@ export const checkPlanLimits = query({
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
 
     // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not free-tier — until Stripe transitions them to 'active' on first
-    // successful payment. Without this, an org granted a paid trial would hit
-    // free-tier quotas during the trial window.
+    // — not the inactive floor — until Stripe transitions them to 'active' on
+    // first successful payment. Without this, an org granted a paid trial would
+    // hit the gated floor during the trial window.
     const effectivelyActive =
       sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
-    const limits = PLANS[plan] ?? PLANS.free;
+    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    const limits = PLANS[plan] ?? PLANS.inactive;
 
     // Determine billing period start
     // For paid/grace orgs: subscription's currentPeriodStart
-    // For free orgs: start of current calendar month (UTC)
+    // For inactive (unsubscribed) orgs: start of current calendar month (UTC)
     let periodStart: number;
     if (effectivelyActive && sub?.currentPeriodStart) {
       periodStart = sub.currentPeriodStart;
@@ -330,13 +332,13 @@ export const checkPlanLimitsByOrgId = internalQuery({
       pastDueSince &&
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
     // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not free-tier — until Stripe transitions them to 'active' on first
-    // successful payment. Without this, an org granted a paid trial would hit
-    // free-tier quotas during the trial window.
+    // — not the inactive floor — until Stripe transitions them to 'active' on
+    // first successful payment. Without this, an org granted a paid trial would
+    // hit the gated floor during the trial window.
     const effectivelyActive =
       sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
-    const limits = PLANS[plan] ?? PLANS.free;
+    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    const limits = PLANS[plan] ?? PLANS.inactive;
 
     let periodStart: number;
     if (effectivelyActive && sub?.currentPeriodStart) {
@@ -514,16 +516,16 @@ export const cancel = mutation({
 
     await ctx.db.patch(args.subscriptionId, {
       status: "canceled",
-      plan: "free",
+      plan: "inactive",
       updatedAt: Date.now(),
     });
 
-    // Reset org limits to free tier if org-scoped
+    // Reset org limits to the gated inactive floor if org-scoped
     if (sub.orgId) {
-      const freeLimits = PLANS.free;
+      const floorLimits = PLANS.inactive;
       await ctx.db.patch(sub.orgId, {
-        maxSeats: freeLimits.maxSeats,
-        maxTemplatesMonth: freeLimits.maxTemplatesMonth,
+        maxSeats: floorLimits.maxSeats,
+        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
         updatedAt: Date.now(),
       });
     }
@@ -819,8 +821,8 @@ export const backfillOrgLimits = internalMutation({
         .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
         .first();
 
-      const plan = sub?.status === "active" ? sub.plan : "free";
-      const planDef = PLANS[plan] ?? PLANS.free;
+      const plan = sub?.status === "active" ? sub.plan : "inactive";
+      const planDef = PLANS[plan] ?? PLANS.inactive;
 
       // Only patch if limits differ from canonical values
       if (
@@ -957,12 +959,12 @@ export const updateByStripeId = internalMutation({
       }
     }
 
-    // Reset org limits to free tier on cancellation
+    // Reset org limits to the gated inactive floor on cancellation
     if (args.resetOrgLimits && sub.orgId) {
-      const freeLimits = PLANS.free;
+      const floorLimits = PLANS.inactive;
       await ctx.db.patch(sub.orgId, {
-        maxSeats: freeLimits.maxSeats,
-        maxTemplatesMonth: freeLimits.maxTemplatesMonth,
+        maxSeats: floorLimits.maxSeats,
+        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
         updatedAt: now,
       });
     }

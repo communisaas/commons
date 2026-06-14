@@ -6,7 +6,7 @@
  * that the unbounded recipientSubdivision multiplier could force-spawn a debate.
  *
  *   - Self-heal billing path: congressional rows MUST be excluded from the
- *     stale-baseline range scan too (free-tier orgs always hit this path), or
+ *     stale-baseline range scan too (inactive/unsubscribed orgs always hit this path), or
  *     congressional traffic leaks back into the org's metered usage.
  *   - Debate auto-spawn: a congressional emit MUST NOT count toward the debate
  *     threshold (until the recipientSubdivision multiplier is bounded), or an
