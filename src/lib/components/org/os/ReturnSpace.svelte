@@ -1,11 +1,14 @@
 <!--
-  ReturnSpace — Results: the org's evidence page.
+  ReturnSpace — Results: the org's evidence page, mounted at `/results`.
 
-  Answers the questions an organization actually brings here: did it deliver,
-  did anyone respond, what do we show the board. Four headline numbers
-  (verified constituents, districts reached, proof reports delivered,
-  responses logged), the Verification Packet as the proof artifact, and three
-  lists: action records, where actions landed, and response activity.
+  The org front door is Studio (authoring-to-delivery); this is where a
+  campaign lands after it ships. It answers the questions an organization
+  actually brings here: did it deliver, who composed, did anyone respond, what
+  do we show the board. The evidence band leads with constituents and
+  individually-composed authorship beside reach, delivery, and responses. The
+  delivered artifact is the "Constituent Report" — verification rides under it
+  as a quiet watermark, never the lead. Below it sit three lists: action
+  records, where actions landed, and response activity.
 
   This is a MOUNTED space: the org-OS shell holds all four spaces at once and
   toggles visibility. Its data is loaded ONCE by the layout server load

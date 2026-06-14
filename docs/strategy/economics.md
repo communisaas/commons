@@ -4,6 +4,15 @@
 
 ---
 
+> **Positioning + pricing recenter (2026-06-14).** No free ORG tier. Entry is
+> Starter ($10/mo). An org with no active subscription falls to the
+> non-marketed `inactive` floor (all delivery + scale zeroed; author 2 templates
+> to experience the product). Individuals remain free forever (Person Layer).
+> Canonical source: `src/lib/server/billing/plans.ts`. Recorded 2026-06-02 /
+> 2026-06-14; merged through PR #34.
+
+---
+
 ## The Insight
 
 Every advocacy platform sends email. It costs $0.10/1K via SES. Email is table stakes — orgs will never pay a premium for it.
@@ -30,17 +39,22 @@ The expensive parts of the system (ZK circuits, smart contracts, Shadow Atlas, A
 
 Verified actions are the primary metered unit. Email is secondary.
 
-### Free
+### Inactive — gated floor (non-marketed, not sellable)
+
+The fallback for an org with no active subscription. It is the free *experience*
+(author a campaign or two, see grounded messages + targets, preview the
+Constituent Report), not a tier — every delivery + scale quota is zeroed until
+the org subscribes. Cancellation drops an org back to it.
 
 | Feature | Limit |
 |---|---|
-| Verified actions | 100/month |
-| Emails | 1,000/month |
-| Supporters | 500 |
-| API | Full access |
-| Analytics | Full dashboard |
+| Verified actions | 0 |
+| Emails | 0 |
+| SMS | 0 |
+| Seats | 1 |
+| Templates | 2/month |
 
-### Starter — $10/month
+### Starter — $10/month (entry tier)
 
 | Feature | Detail |
 |---|---|
@@ -116,7 +130,7 @@ Verified actions are the primary metered unit. Email is secondary.
 
 The growth line is verified actions, not email volume. As orgs discover that verified constituent contacts produce 3-10x the legislative response rate of unverified email blasts, they move up tiers to unlock more verified actions — not more emails. Email overage revenue is noise. Verified action overage at $1.50-$3.00/1K against $0.01 COGS is the margin engine.
 
-Agentic layer adds ~$4,500/month (with model tiering + shared screening optimizations). Legislative monitoring is the largest agentic cost center — bill screening across all district types for every org. Included at Organization tier and above, not Free/Starter. LLM inference costs falling ~50% annually. Full cost breakdown: `specs/agentic-civic-infrastructure.md`.
+Agentic layer adds ~$4,500/month (with model tiering + shared screening optimizations). Legislative monitoring is the largest agentic cost center — bill screening across all district types for every org. Included at Organization tier and above, not Starter. LLM inference costs falling ~50% annually. Full cost breakdown: `specs/agentic-civic-infrastructure.md`.
 
 ---
 

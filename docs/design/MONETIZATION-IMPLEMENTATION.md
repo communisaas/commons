@@ -7,6 +7,17 @@
 **Status**: COMPLETE (2026-03-30)
 **Review**: 2 brutalist cycles (6 critics). Findings verified against code.
 
+> ⚠️ **Divergence from current `plans.ts` (pricing recenter 2026-06-14):** This
+> doc references a "Free / $10 / $75 / $200" tier set. The shipped
+> `src/lib/server/billing/plans.ts` (merged through PR #34) **removes the `free`
+> tier**: `PLANS` is keyed `inactive` / `starter` / `organization` /
+> `coalition`, `PLAN_ORDER` excludes `inactive`, and `getPlanForOrg(null)`
+> returns `inactive`. There is no free org tier — entry is Starter ($10/mo);
+> orgs with no active subscription (incl. after cancellation) fall to the
+> non-marketed `inactive` floor (all delivery + scale zeroed, author 2 templates
+> to experience the product). Read the "Free / $0" beats below as the `inactive`
+> gate-at-delivery floor. Individuals remain free forever (Person Layer).
+
 > ⚠️ **2026-04-23 audit — mostly accurate, three small corrections:**
 >
 > - **T5 (Billing Portal arg/field mismatch) is already fixed.** The
@@ -297,7 +308,7 @@ Every assertion referencing old quota values (5, 10, 15, 30, 50, 150) needs upda
 
 - Rename "Pro" → "Starter" throughout
 - Remove individual subscription revenue projections
-- Align pricing with canonical `economics.md` tiers (Free/$10/$75/$200)
+- Align pricing with canonical `economics.md` tiers (inactive floor / $10 / $75 / $200 — no free tier)
 - Remove dead OpenAI embedding reference
 - Add note: "Individual users are free. See `docs/strategy/monetization-policy.md`."
 

@@ -6,6 +6,17 @@
 **Created:** 2026-04-12
 **Depends on:** design-system.md, voice.md, PERCEPTUAL-BRIDGE.md, VERIFICATION-LEGIBILITY.md
 
+> ⚠️ **Divergence from current `plans.ts` (pricing recenter 2026-06-14):** The
+> "Price as Punchline → Free, $0" beat predates the pricing recenter. There is
+> **no free org tier**: shipped `src/lib/server/billing/plans.ts` (merged
+> through PR #34) removes `free`; entry is **Starter ($10/mo)**, and orgs with no
+> active subscription fall to the non-marketed `inactive` floor (all delivery +
+> scale zeroed; cancellation drops to it). The punchline is now **"author free,
+> $10/mo to send"** — the director can build a campaign and preview the
+> Constituent Report without asking the board, then pays only to deliver. The
+> beats below are rephrased accordingly; the "$10 vs Quorum's $10K+/yr"
+> arithmetic still carries the argument.
+
 ---
 
 ## The Problem
@@ -28,7 +39,7 @@ Campaign directors, executive directors of small nonprofits, policy advocates, c
 
 **Outcome-fixated.** They don't care about features. They care: did the committee respond differently? Did the school board member read the testimony? Did the water board take the public comment seriously?
 
-**Budget-traumatized.** Every dollar justifies itself to a board. $10K/yr for Quorum haunts them. $15/mo for AN feels extractive when the budget is $0. Free is the only number that doesn't require a conversation.
+**Budget-traumatized.** Every dollar justifies itself to a board. $10K/yr for Quorum haunts them. $15/mo for AN feels extractive when the budget is $0. Building a full campaign before paying anything — then $10/mo to send — is the entry that doesn't require a conversation.
 
 **Emotionally invested.** They chose this work because they care about water rights, school safety, public health, transit equity. The cause is identity, not a job. Tools that understand this earn trust. Tools that feel transactional don't.
 
@@ -73,9 +84,9 @@ Action Network covers ~3 boundary types (federal, state, county). Quorum covers 
 
 Price only lands after value is established. After the specimen, after the gap, after the boundary recognition:
 
-Free. $0. Import your supporters and send your first proof today.
+Author free. $10/mo to send. Build your campaign, see the grounded messages and targets, preview the Constituent Report today — pay only when you deliver.
 
-Then the tiers for scale. The free tier isn't generosity — it's the structural decision that makes individuals the supply side (see monetization-policy.md). But to the campaign director, it's: "I can try this right now without asking my board."
+Then the tiers for scale. Author-free onboarding isn't generosity — it's the structural decision that lets a director try this without asking the board (see monetization-policy.md). The $10 Starter is the entry; there is no free org tier. To the campaign director, it's: "I can build this right now, and it's $10 to actually send it."
 
 $75/mo vs. Quorum's $10K+/yr speaks for itself. Don't explain the savings. Show the numbers. The arithmetic IS the argument.
 
@@ -121,7 +132,7 @@ The acquisition register (defined in voice.md) applies here. The key distinction
 - "What a staffer receives from your current platform:" → the weak version
 - "What a staffer receives from Commons:" → the specimen
 - "24 boundary types." Then the list.
-- "Free." Then the tiers.
+- "Author free, $10/mo to send." Then the tiers.
 
 ### What we don't say
 
@@ -151,7 +162,7 @@ The four beachhead segments (from product-roadmap.md) have different recognition
 |---------|-------------------|
 | Domain-obsessed local groups | See their boundary type in the coverage list (water districts, school boards, transit authorities) |
 | Science/health advocacy | See "government ID verified" in the specimen — credibility IS their product |
-| Conservative/nonpartisan groups | See "Free" + no ideological gatekeeping — the pricing section implicitly includes them |
+| Conservative/nonpartisan groups | See "author free, $10/mo to send" + no ideological gatekeeping — the pricing section implicitly includes them |
 | Single-issue orgs | See the specimen framing their issue domain (the example should rotate or be parameterizable) |
 
 The current page uses one specimen example (water district). Consider whether the specimen should be parameterizable by URL parameter (e.g., `/org?domain=education` renders a school board specimen) or whether one well-chosen example serves all segments.
