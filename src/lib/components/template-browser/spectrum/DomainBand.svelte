@@ -30,10 +30,13 @@
 	 */
 
 	import type { DomainGroup } from '$lib/core/topic/domain-grouping';
+	import { bandDomId } from '$lib/core/topic/domain-grouping';
 	import { aggregateArrivals } from '$lib/core/topic/band-signals';
 	import { resolveDomainHue } from '$lib/utils/domain-hue';
 	import TemplateTile from './TemplateTile.svelte';
 	import { Pulse } from '$lib/design';
+	import { spring as svelteSpring } from 'svelte/motion';
+	import { SPRINGS } from '$lib/design/motion';
 
 	interface Props {
 		/** The hue-ordered group this band renders. A topic band carries its
@@ -56,6 +59,10 @@
 		 *  small chip on each tile so place stays visible while topic keeps the hue.
 		 *  Absent in the topic lens (no chip → tiles render exactly as before). */
 		placeLabel?: string | null;
+		/** Set true for one beat when the overview jumps the field to this band: the
+		 *  spine blooms brighter, then settles, confirming "you arrived here". The
+		 *  field flips it back to false after the bloom; reduced-motion never sets it. */
+		blooming?: boolean;
 	}
 
 	let {
@@ -66,12 +73,29 @@
 		onKeydown,
 		indexOffset = 0,
 		initialVisible = 6,
-		placeLabel = null
+		placeLabel = null,
+		blooming = false
 	}: Props = $props();
 
 	// The spine colour and order key — already resolved by the grouper's hue
 	// resolver (anchor fallback when the embedding projection is absent).
 	const hue = $derived(group.hue);
+
+	// The stable scroll target the overview map jumps to when its segment is tapped.
+	const domId = $derived(bandDomId(group.domain));
+
+	// Spine bloom: a 0→1 brightness lift that arrives on the ENTRANCE spring (firm
+	// arrival, minimal overshoot) when the field jumps here, then settles back to
+	// rest. The spring drives the spine's lightness + chroma so the neighbourhood
+	// flares to greet the eye, not flashes. SSR-safe: the store starts at rest and
+	// only moves on the client, where `blooming` can flip.
+	// svelte-ignore state_referenced_locally — initial rest value is captured once per instance
+	const bloom = svelteSpring(0, SPRINGS.ENTRANCE);
+	$effect(() => {
+		// Drive to full on the way in, settle to rest on the way out. The field
+		// holds `blooming` true only briefly, so this reads as a single flare.
+		bloom.set(blooming ? 1 : 0);
+	});
 
 	// The band's shared rhythm: summed arrivals across its templates, or null
 	// when nothing real backs it. Null → no Pulse (absence, not a dead zero).
@@ -86,11 +110,17 @@
 	const visibleTemplates = $derived(group.templates.slice(0, visibleCount));
 </script>
 
-<section class="domain-band" aria-label={group.domain}>
+<section class="domain-band" id={domId} aria-label={group.domain}>
 	<!-- The hue spine: this band's place on the spectrum, as colour. Not a
 	     border — it is the hue dimension, a saturated rule the eye reads as
-	     "this neighbourhood." -->
-	<span class="band-spine" style="--card-hue: {hue};" aria-hidden="true"></span>
+	     "this neighbourhood." When the overview jumps the field here, the bloom
+	     amount lifts its lightness and chroma for one beat to confirm arrival. -->
+	<span
+		class="band-spine"
+		class:band-spine--blooming={$bloom > 0.01}
+		style="--card-hue: {hue}; --bloom: {$bloom};"
+		aria-hidden="true"
+	></span>
 
 	<div class="band-body">
 		<header class="band-header">
@@ -164,17 +194,31 @@
 	 * top/bottom so it reads as a mark, not a frame.
 	 */
 	.band-spine {
+		/* Bloom amount (0 at rest → 1 at the flare), driven by the ENTRANCE spring.
+		   The lightness and chroma below interpolate off it so the spine lifts as
+		   one mark; at rest (--bloom: 0) it reads at its base spectrum weight. */
+		--bloom: 0;
+		--bloom-l: calc(0.62 + 0.12 * var(--bloom));
+		--bloom-c: calc(0.16 + 0.05 * var(--bloom));
 		width: 3px;
 		border-radius: 9999px;
 		/* Holds full chroma down the whole band so even a tall neighbourhood reads
 		   as one hue; a gentle taper at the foot keeps it a living mark, not a
-		   hard rule. */
+		   hard rule. The bloom lifts both stops together so the whole spine flares. */
 		background: linear-gradient(
 			to bottom,
-			oklch(0.62 0.16 var(--card-hue)),
-			oklch(0.62 0.16 var(--card-hue) / 0.72)
+			oklch(var(--bloom-l) var(--bloom-c) var(--card-hue)),
+			oklch(var(--bloom-l) var(--bloom-c) var(--card-hue) / 0.72)
 		);
 		align-self: stretch;
+	}
+
+	/* While blooming, a soft hue-glow widens the spine's presence so the flare is
+	   felt peripherally — the eye catches the arrival without reading it. The glow
+	   rides the same bloom amount, so it fades in and out with the lightness lift.
+	   Reduced-motion never sets `blooming`, so this class is simply never applied. */
+	.band-spine--blooming {
+		box-shadow: 0 0 calc(6px * var(--bloom)) oklch(0.7 0.18 var(--card-hue) / calc(0.5 * var(--bloom)));
 	}
 
 	.band-body {

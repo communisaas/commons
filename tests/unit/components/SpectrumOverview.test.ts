@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { render } from '@testing-library/svelte';
+import { describe, it, expect, vi } from 'vitest';
+import { fireEvent, render } from '@testing-library/svelte';
 import type { Template } from '$lib/types/template';
 import type { DomainGroup } from '$lib/core/topic/domain-grouping';
 
@@ -71,6 +71,11 @@ function segments(container: HTMLElement): HTMLElement[] {
 /** The plain-English legend labels, in render order. */
 function labels(container: HTMLElement): HTMLElement[] {
 	return Array.from(container.querySelectorAll('.spectrum-overview__label'));
+}
+
+/** The per-segment wayfinding controls (one per band), in render order. */
+function jumps(container: HTMLElement): HTMLButtonElement[] {
+	return Array.from(container.querySelectorAll('.spectrum-overview__jump'));
 }
 
 /** Parse the `width: NN%` a segment carries (the proportion the bar shows). */
@@ -226,5 +231,53 @@ describe('SpectrumOverview', () => {
 		expect(overview.className).not.toMatch(/\bbg-white\b/);
 		expect(overview.className).not.toMatch(/\bborder\b/);
 		expect(overview.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
+	});
+
+	it('makes each segment a focusable wayfinding control (one per band)', () => {
+		const bands = [makeBand('Healthcare', 240, 2), makeBand('Housing', 55, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		const controls = jumps(container);
+		// One control per band — the map stays 1:1 with the field.
+		expect(controls.length).toBe(bands.length);
+		// Native buttons: focusable and keyboard-activatable for free.
+		for (const control of controls) {
+			expect(control.tagName).toBe('BUTTON');
+			expect(control.getAttribute('type')).toBe('button');
+		}
+	});
+
+	it('activating a segment asks the field to travel to that band (by domain)', async () => {
+		const onFocusBand = vi.fn();
+		const bands = [makeBand('Healthcare', 240, 1), makeBand('Housing', 55, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands, onFocusBand } });
+		await fireEvent.click(jumps(container)[1]);
+		// It names the SECOND band's domain — the target the eye pointed at.
+		expect(onFocusBand).toHaveBeenCalledWith('Housing');
+	});
+
+	it('a collapsed same-topic segment still points at its OWN band', async () => {
+		// Two adjacent housing bands collapse to one visible name, but each segment
+		// must still jump to its own neighbourhood — every band stays reachable.
+		const onFocusBand = vi.fn();
+		const bands = [makeBand('Affordable Housing', 55, 2), makeBand('Zoning Reform', 55, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands, onFocusBand } });
+		const [first, second] = jumps(container);
+		// The second control carries no visible label (collapsed run)…
+		expect(second.textContent?.trim()).toBe('');
+		// …yet keeps an accessible name and targets its OWN band.
+		expect(second.getAttribute('aria-label')).toContain('Housing');
+		await fireEvent.click(second);
+		expect(onFocusBand).toHaveBeenLastCalledWith('Zoning Reform');
+		await fireEvent.click(first);
+		expect(onFocusBand).toHaveBeenLastCalledWith('Affordable Housing');
+	});
+
+	it('the legend is reachable (not aria-hidden) now that segments are controls', () => {
+		const bands = [makeBand('Healthcare', 240, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		const list = container.querySelector('.spectrum-overview__labels') as HTMLElement;
+		// Interactive children must not be hidden from assistive tech.
+		expect(list.getAttribute('aria-hidden')).toBeNull();
+		expect(list.getAttribute('aria-label')).toBeTruthy();
 	});
 });

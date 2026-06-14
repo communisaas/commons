@@ -194,6 +194,35 @@ describe('SpectrumLandscape', () => {
 		expect(field.className).not.toMatch(/\bbg-white\b/);
 		expect(field.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 	});
+
+	it('wires the overview map to the bands: a segment jumps to its neighbourhood', async () => {
+		// jsdom does not lay out, so scroll is a no-op here; the contract under test
+		// is that the overview's wayfinding control finds and acts on the matching
+		// band by id, without throwing — the integration seam I-region owns. jsdom
+		// leaves scrollTo/scrollIntoView undefined, so install no-ops to observe.
+		const scrollToSpy = vi.fn();
+		window.scrollTo = scrollToSpy as unknown as typeof window.scrollTo;
+		HTMLElement.prototype.scrollIntoView = vi.fn();
+
+		const templates = [
+			makeTemplate({ id: 'a', domain: 'Healthcare' }),
+			makeTemplate({ id: 'b', domain: 'Housing' })
+		];
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, onSelect: vi.fn() }
+		});
+
+		// Every band carries a stable scroll-target id derived from its domain.
+		const ids = Array.from(container.querySelectorAll('.domain-band')).map((el) => el.id);
+		expect(ids).toContain('band-healthcare');
+		expect(ids).toContain('band-housing');
+
+		// Activating an overview segment travels the field (smooth scroll here, since
+		// the matchMedia shim reports no reduced-motion preference).
+		const jump = container.querySelectorAll<HTMLButtonElement>('.spectrum-overview__jump');
+		await fireEvent.click(jump[0]);
+		expect(scrollToSpy).toHaveBeenCalled();
+	});
 });
 
 /** A lens segment by its target lens, for clicking / reading active state. */

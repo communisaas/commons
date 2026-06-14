@@ -29,13 +29,14 @@
 	 */
 
 	import type { Template, TemplateGroup } from '$lib/types/template';
-	import { groupByDomain } from '$lib/core/topic/domain-grouping';
+	import { groupByDomain, bandDomId } from '$lib/core/topic/domain-grouping';
 	import { toPlaceBands } from '$lib/core/topic/place-bands';
 	import { resolveDomainHue } from '$lib/utils/domain-hue';
 	import DomainBand from './DomainBand.svelte';
 	import LensToggle, { type Lens } from './LensToggle.svelte';
 	import SpectrumOverview from './SpectrumOverview.svelte';
 	import { EntityCluster } from '$lib/design';
+	import { TIMING } from '$lib/design/motion';
 
 	interface Props {
 		/** The public templates to lay out as a topical field. */
@@ -127,6 +128,68 @@
 	// with what is rendered.
 	const flatTemplates = $derived(bands.flatMap((band) => band.templates));
 
+	// ─── Tap-to-focus: the overview map jumps the field to a band ─────────────
+	//
+	// Tapping a segment in the sticky overview is a wayfinding gesture — "take me
+	// there". The field travels to the matching band (a deliberate, SLOW scroll)
+	// and the band's spine blooms for one beat to confirm arrival. The bloom lives
+	// on the band; this orchestrator only names which band is blooming, because it
+	// is the one place that sees the whole field at once.
+	//
+	// reduced-motion: the jump is instant (`auto`) and NO bloom is set, so the
+	// surface never animates for a vestibular-sensitive reader. SSR-safe: the
+	// handler only runs on the client (a tap cannot happen on the server), so the
+	// `window` / `document` reads below need no environment guard.
+
+	// Which band is blooming right now (its domain), or null at rest. Threaded down
+	// so exactly one band flares per jump.
+	let bloomingDomain = $state<string | null>(null);
+	let bloomTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function prefersReducedMotion(): boolean {
+		return (
+			typeof window !== 'undefined' &&
+			window.matchMedia('(prefers-reduced-motion: reduce)').matches
+		);
+	}
+
+	/**
+	 * Jump the field to a band and bloom its spine. Called by the overview when a
+	 * segment is activated (click or Enter/Space). The scroll lands the band below
+	 * the sticky overview by offsetting for its height, so the heading is never
+	 * tucked under the map. Press feedback is the segment's own :active styling
+	 * (instant, <100ms); this is the consequent travel + arrival flare.
+	 */
+	function focusBand(domain: string) {
+		const reduced = prefersReducedMotion();
+		const target = document.getElementById(bandDomId(domain));
+		if (target) {
+			if (reduced) {
+				// Instant jump, no smooth travel — and no bloom below.
+				target.scrollIntoView({ behavior: 'auto', block: 'start' });
+			} else {
+				// Offset the smooth scroll by the sticky overview's height so the
+				// band heading clears the map rather than landing beneath it.
+				const overview = document.querySelector<HTMLElement>('.spectrum-overview');
+				const offset = overview ? overview.getBoundingClientRect().height : 0;
+				const top = target.getBoundingClientRect().top + window.scrollY - offset - 8;
+				window.scrollTo({ top, behavior: 'smooth' });
+			}
+		}
+
+		// No bloom under reduced-motion — the band stays at rest weight.
+		if (reduced) return;
+
+		// Flare the destination band, then let it settle. Re-tapping retargets the
+		// bloom cleanly (clear the prior timer first).
+		if (bloomTimer) clearTimeout(bloomTimer);
+		bloomingDomain = domain;
+		bloomTimer = setTimeout(() => {
+			bloomingDomain = null;
+			bloomTimer = null;
+		}, TIMING.SLOW);
+	}
+
 	/**
 	 * Move keyboard focus to a tile by its flat index across the whole field.
 	 * Reads the rendered buttons in document order — the same order the bands
@@ -186,7 +249,7 @@
 	     one glance — each band a segment sized by its count and coloured by its
 	     hue, the same hue its spine carries below. It stays in view while the bands
 	     scroll, so the eye can always reorient. -->
-	<SpectrumOverview {bands} />
+	<SpectrumOverview {bands} onFocusBand={focusBand} />
 
 	<!-- The field: bands chunked by generous void, not chrome. EntityCluster's
 	     proximity ratio lets the eye read each neighbourhood as one unit and the
@@ -196,6 +259,7 @@
 			<DomainBand
 				group={band}
 				placeLabel={band.placeLabel}
+				blooming={bloomingDomain === band.domain}
 				{selectedId}
 				{onSelect}
 				{onHover}

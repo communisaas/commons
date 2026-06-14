@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import type { Template } from '$lib/types/template';
 import type { DomainGroup } from '$lib/core/topic/domain-grouping';
+import { bandDomId } from '$lib/core/topic/domain-grouping';
 import { topicHue } from '$lib/utils/topic-hue';
 
 // svelte/motion reads prefers-reduced-motion via window.matchMedia at module
@@ -177,6 +178,38 @@ describe('DomainBand', () => {
 		expect(band.className).not.toMatch(/\bborder\b/);
 		expect(band.className).not.toMatch(/\bbg-white\b/);
 		expect(band.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
+	});
+
+	it('carries a stable scroll-target id the overview map can jump to', () => {
+		const group = makeGroup([makeTemplate({ id: 'a' })], { domain: 'Affordable Housing' });
+		const { container } = render(DomainBand, { props: { group, onSelect: vi.fn() } });
+		const band = container.querySelector('.domain-band') as HTMLElement;
+		// The band's id is the same one the overview computes from its domain, so a
+		// tapped segment can find this neighbourhood.
+		expect(band.id).toBe(bandDomId('Affordable Housing'));
+	});
+
+	it('exposes a bloom channel on the spine that lifts when the field jumps here', async () => {
+		const group = makeGroup([makeTemplate({ id: 'a' })]);
+		const { container, rerender } = render(DomainBand, {
+			props: { group, onSelect: vi.fn(), blooming: false }
+		});
+		const spine = () => container.querySelector('.band-spine') as HTMLElement;
+		// At rest the spine is not blooming — base spectrum weight.
+		expect(spine().classList.contains('band-spine--blooming')).toBe(false);
+
+		// When the field jumps here, the bloom amount rises on the entrance spring
+		// and the spine flares (the blooming class engages as --bloom crosses zero).
+		await rerender({ group, onSelect: vi.fn(), blooming: true });
+		await waitFor(() => {
+			expect(spine().classList.contains('band-spine--blooming')).toBe(true);
+		});
+
+		// And settles back to rest once the field releases the bloom.
+		await rerender({ group, onSelect: vi.fn(), blooming: false });
+		await waitFor(() => {
+			expect(spine().classList.contains('band-spine--blooming')).toBe(false);
+		});
 	});
 
 	it('tints tiles with the band hue authority, so the spine and tiles never clash', () => {

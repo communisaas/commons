@@ -29,9 +29,9 @@
 	 * coordinate gain chroma and the map shows where the energy is.
 	 *
 	 * Sticky at the top of the stream column so the map stays in view while the eye
-	 * travels the bands. Tapping a segment to jump to its band lands later; until
-	 * then the segments carry no interaction and the layout reserves no space that
-	 * a later affordance would reflow.
+	 * travels the bands. Each segment is also a wayfinding control: activating it
+	 * (tap, click, or Enter/Space) asks the field to travel to that band — the
+	 * field owns the scroll and the spine bloom, the map just names the target.
 	 *
 	 * SSR-safe: pure derivations over the bands it is handed (no wall-clock, no
 	 * browser globals), so it renders identically on the server and the client.
@@ -47,9 +47,13 @@
 		 *  carries its resolved hue and its templates — the overview reads count and
 		 *  momentum straight off them so the map can never disagree with the field. */
 		bands: Pick<DomainGroup, 'domain' | 'hue' | 'count' | 'templates'>[];
+		/** Activating a segment asks the field to travel to that band (by domain).
+		 *  The field owns the scroll + spine bloom; the map just names the target.
+		 *  Absent → the segments still render, simply carrying no jump. */
+		onFocusBand?: (domain: string) => void;
 	}
 
-	let { bands }: Props = $props();
+	let { bands, onFocusBand }: Props = $props();
 
 	// A band with verified reach reads at fuller chroma; an idle band at the base.
 	// `bandMomentum` is 0 across the board at the zero-send seed, so every segment
@@ -106,16 +110,30 @@
 		<!-- The plain-English legend, sharing the bar's proportions so each name
 		     sits over its segment. The map reads first as colour + width; the words
 		     name what the eye has already grasped. A topic that spans several
-		     adjacent bands is named once, over the first of them. -->
-		<ul class="spectrum-overview__labels" aria-hidden="true">
+		     adjacent bands is named once, over the first of them.
+
+		     Each segment is a wayfinding control: activating it asks the field to
+		     travel to that band. The whole segment width is the tap target (a
+		     native button, so Enter/Space and focus come for free); collapsed
+		     segments in a same-topic run still point at their OWN band and keep an
+		     accessible name so every neighbourhood is reachable by keyboard. -->
+		<ul class="spectrum-overview__labels" aria-label="Jump to a topic">
 			{#each segments as segment (segment.key)}
 				<li
 					class="spectrum-overview__label"
 					style="flex-grow: {segment.value}; --card-hue: {segment.hue};"
 				>
-					{#if segment.label}
-						<span class="font-brand">{segment.label}</span>
-					{/if}
+					<button
+						type="button"
+						class="spectrum-overview__jump"
+						style="--card-hue: {segment.hue};"
+						aria-label="Jump to {segment.topic}"
+						onclick={() => onFocusBand?.(segment.key)}
+					>
+						{#if segment.label}
+							<span class="font-brand" aria-hidden="true">{segment.label}</span>
+						{/if}
+					</button>
 				</li>
 			{/each}
 		</ul>
@@ -175,7 +193,31 @@
 		overflow: hidden;
 	}
 
-	.spectrum-overview__label span {
+	/*
+	 * The wayfinding control. It fills its segment so the whole width is the tap
+	 * target, carries no chrome of its own (the bar above is the colour), and
+	 * gives an instant press response — the eye is acknowledged before the field
+	 * has finished travelling. A plain text affordance, never a pill or a box.
+	 */
+	.spectrum-overview__jump {
+		display: block;
+		width: 100%;
+		min-width: 0;
+		/* A floor of height so even a collapsed segment (no visible name, part of a
+		   same-topic run) is a real tap/focus target — every band stays reachable. */
+		min-height: 1.1rem;
+		padding: 0.15rem 0 0;
+		margin: 0;
+		text-align: left;
+		background: none;
+		border: none;
+		cursor: pointer;
+		/* Hover/focus lift settles on the system easing; the press itself (:active)
+		   is instant so feedback is causal. */
+		transition: opacity 150ms var(--header-easing, ease-out);
+	}
+
+	.spectrum-overview__jump span {
 		display: block;
 		font-size: 0.6875rem;
 		font-weight: 500;
@@ -186,5 +228,23 @@
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	/* Hover deepens the name toward its hue — the segment lights up as "go here". */
+	.spectrum-overview__jump:hover span {
+		color: oklch(0.4 0.11 var(--card-hue));
+	}
+
+	/* Press feedback: an immediate dim on touch/click, no transition in, so the
+	   acknowledgement is causal (<100ms) before the field starts to travel. */
+	.spectrum-overview__jump:active {
+		opacity: 0.55;
+		transition: none;
+	}
+
+	.spectrum-overview__jump:focus-visible {
+		outline: 2px solid oklch(0.45 0.18 var(--card-hue));
+		outline-offset: 2px;
+		border-radius: 2px;
 	}
 </style>

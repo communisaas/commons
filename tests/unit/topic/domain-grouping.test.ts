@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupByDomain, type DomainGroup } from '$lib/core/topic/domain-grouping';
+import { groupByDomain, bandDomId, type DomainGroup } from '$lib/core/topic/domain-grouping';
 import type { Template } from '$lib/types/template';
 
 /**
@@ -213,5 +213,27 @@ describe('groupByDomain', () => {
 		const b = groupByDomain(templates, { hueOf, now: new Date('2030-06-01T00:00:00Z') });
 		expect(a.map((g) => g.domain)).toEqual(b.map((g) => g.domain));
 		expect(a[0].hue).toBe(b[0].hue);
+	});
+});
+
+describe('bandDomId', () => {
+	it('derives a valid, slugged anchor id from a domain label', () => {
+		// Lowercased, non-alphanumerics folded to single dashes, prefixed — a clean
+		// anchor the overview map and the band can both compute to find each other.
+		expect(bandDomId('Healthcare')).toBe('band-healthcare');
+		expect(bandDomId('Affordable Housing & Zoning')).toBe('band-affordable-housing-zoning');
+		expect(bandDomId('  Open  Government  Data ')).toBe('band-open-government-data');
+	});
+
+	it('is deterministic — the same label always yields the same id', () => {
+		// The overview and the band each compute the id independently; they must
+		// land on the identical string or the jump can never find its target.
+		expect(bandDomId('Transportation')).toBe(bandDomId('Transportation'));
+	});
+
+	it('never emits a dangling prefix for an all-symbol or empty label', () => {
+		// A degenerate label still produces a usable anchor, never "band-".
+		expect(bandDomId('')).toBe('band-other');
+		expect(bandDomId('—')).toBe('band-other');
 	});
 });

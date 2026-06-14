@@ -47,6 +47,23 @@ export interface DomainGroup {
 const UNCATEGORIZED_DOMAIN = 'Other';
 
 /**
+ * Stable DOM id for a band, derived purely from its domain label.
+ *
+ * The overview map and the band agree on this id so a tapped segment can find
+ * and scroll to its neighbourhood. Slugged (lowercased, non-alphanumerics
+ * folded to single dashes) and prefixed so the id is a valid, collision-clear
+ * anchor for any domain wording. Pure — no browser globals — so it is safe to
+ * compute under SSR.
+ */
+export function bandDomId(domain: string): string {
+	const slug = domain
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-|-$/g, '');
+	return `band-${slug || 'other'}`;
+}
+
+/**
  * Resolve a per-template civic-relevance score for the within-band ordering.
  *
  * Mirrors the established enrichment used by the geographic list: newness +
