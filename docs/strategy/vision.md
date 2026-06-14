@@ -21,17 +21,18 @@
 
 ## What Commons Is
 
-Commons is AI-native civic communication infrastructure. An org states what it
-wants to change; Commons grounds that objective against the right
-decision-makers, composes individually-authored messages with each constituent,
-and delivers them — then hands back a Constituent Report. Not a mail merge tool
-with a database. The authoring-to-delivery spine is the core; verification is
-the ambient property woven underneath that makes the resulting civic speech
-*provable*.
+Commons is civic communication infrastructure. Not a mail merge tool with a
+database — an AI-native authoring-to-delivery system that turns an org's intent
+into an individually-composed, grounded message for each constituent, resolves
+the right decision-makers across every level of government, delivers, and
+aggregates the response into a Constituent Report. Every incumbent ships AI for
+the org user; Commons writes for the action. The authoring-to-delivery spine is
+the core; verification is the ambient property woven underneath that makes the
+resulting civic speech *provable*.
 
-A person sends a letter through Commons. That letter carries cryptographic proof that the sender holds a government-issued credential, lives in the decision-maker's district (verified against a hierarchical Merkle tree of every public district boundary — congressional, state legislative, county, municipal, school, judicial, fire, water, transit, and more), and has an engagement history that cannot be purchased or fabricated. The decision-maker's office doesn't trust Commons. They verify the math.
+An organization runs campaigns through Commons. Each campaign hands back a Constituent Report — not "847 people emailed" but "847 constituents in your district individually written to, with X responses — 89 at Pillar tier, coordination diversity 0.91, debate market consensus 62% AMEND." The report leads with constituents, individually-composed authorship, and response; the verification figures trail as the credibility context.
 
-An organization runs campaigns through Commons. Those campaigns produce verification packets: district-level constituent counts, engagement tier distributions, coordination integrity scores, and adversarial quality signals. A staffer opens a campaign report and sees not "847 people emailed" but "847 verified constituents in your district, 89 at Pillar tier, coordination diversity score 0.91, debate market consensus 62% AMEND."
+Every authored action carries an ambient watermark underneath. A person sends a letter through Commons, and that letter carries cryptographic proof that the sender holds a government-issued credential, lives in the decision-maker's district (verified against a hierarchical Merkle tree of every public district boundary — congressional, state legislative, county, municipal, school, judicial, fire, water, transit, and more), and has an engagement history that cannot be purchased or fabricated. The decision-maker's office doesn't trust Commons. They verify the math.
 
 commons.email is the application. voter-protocol is the open protocol beneath it.
 
@@ -42,27 +43,29 @@ The system must be indistinguishable from existing advocacy tools for someone wh
 Three constraints:
 1. **Cheaper** — 40-60% lower pricing, 80%+ gross margin
 2. **Simpler** — fewer clicks to send a verified message than competitors require for an unverified one
-3. **Unreplicable** — ZK identity, debate markets, coordination integrity, privacy architecture are structural. They cannot be bolted on after the fact.
+3. **Unreplicable** — per-recipient AI authoring + grounding, owned local-government reach (Shadow Atlas, 24 boundary types), and political neutrality with an uncapped API are structural. ZK identity, debate markets, and coordination integrity ride along as the credibility watermark — the lowest-replicability layer, but not the headline. None can be bolted on after the fact.
 
 ## What Makes It Different
 
-These are not separate features bolted onto a platform. They are properties of every surface — woven into every email, every letter, every campaign report, every agent action.
+The differentiated spine is authoring-to-delivery. The rest — verified identity, debate markets, coordination integrity, privacy — ride along as ambient credibility properties of every surface: woven into every email, every letter, every Constituent Report, every agent action.
 
-### Verified Identity
+### AI-Native Per-Recipient Authoring + Grounding
 
-Every other advocacy platform accepts whatever name and address a user types in. Commons binds actions to government-issued credentials through zero-knowledge proofs. The proof reveals nothing about the person — only that they are real, that they hold a valid credential, and that they reside in the claimed district. This is not a feature added to email campaigns. It is the foundation that makes every campaign report, every analytics dashboard, every supporter segment fundamentally different from what any other platform produces.
+This is the core. An org expresses intent; Commons grounds it in the legislative and decision-maker record, authors an individually-composed message for each constituent (not a templated mass-send), resolves the correct decision-makers across all 24 district types and every level of government, delivers, and aggregates the response into a Constituent Report. The loop: intent → ground → author per-recipient → resolve-targets → deliver → aggregate.
 
-### Adversarial Quality (Debate Markets)
+Every incumbent — Bonterra Que, Quorum Quincy, AdvocacyAI — ships AI for the org user: it drafts the staffer's email, summarizes a bill, suggests a subject line. Commons ships AI for the *action*: it writes the constituent's message, grounded and resolved to the right office, not the staffer's draft. The send-path is customer-gated per channel and platform-sync is armed per-adapter; this describes the authoring-to-delivery capability, not a claim of measured outcomes.
 
-When a campaign reaches traction, verified participants can stake on positions (SUPPORT / OPPOSE / AMEND) with structured arguments. LMSR pricing surfaces genuine conviction. A 5-model AI panel scores argument quality. Engagement-weighted: `sqrt(stake) × 2^tier` — a Pillar's $2 outweighs a newcomer's $100. The result: campaigns become quality instruments, not volume instruments.
+### Verified Agentic Delegation
 
-### Coordination Integrity (Anti-Astroturf)
+Every advocacy platform adding AI in 2026 — Bonterra Que, Quorum Quincy, AdvocacyAI — layers AI on top of unverified identity. Commons specifies something structurally different: AI agents act on behalf of cryptographically verified constituents, within delegated bounds, with privacy-preserving memory. This is a designed capability, not yet shipped (`FEATURES.DELEGATION = false`).
 
-Congressional staffers currently have no tool to distinguish authentic grassroots from manufactured campaigns. Commons provides structural observability — Geographic Diversity Score, Author Linkage Diversity, Shannon entropy, temporal velocity — computed automatically from every action, whether submitted by a person or an agent. These signals ship with every campaign report. An org can prove its campaign is authentic. A staffer can verify it.
+A constituent delegates authority to an agent: "monitor school board agendas, draft responses matching my positions, notify me before sending." The agent monitors legislation across all 24 district types — not just federal. It drafts grounding-verified messages. It pre-resolves decision-makers. Every action it takes carries the same ZK proof as a manual action.
 
-### Privacy Architecture
+As specified, delegation is gated to Trust Tier 3+ (identity-verified) constituents and bounded by per-grant scope, a max-actions-per-day cap, and a review threshold above which actions queue for human review. The on-chain nullifier system prevents an agent from exceeding its delegation. Revocation is instant.
 
-Commons cannot be subpoenaed for supporter data it does not possess. ZK proofs reveal constituency and engagement tier without revealing identity. The platform never sees the credential — only the proof derived from it. Agent memory is encrypted to the constituent's identity commitment. For organizations working on controversial issues, this is an existential requirement that no other platform can offer.
+The agent's memory — policy positions, engagement history, communication preferences — is encrypted to the constituent's identity commitment. The platform stores ciphertext. This is the intersection of agent memory and ZK privacy that the frontier research identifies as unexplored.
+
+Full specification: `specs/agentic-civic-infrastructure.md`
 
 ### Protocol Composability
 
@@ -84,17 +87,21 @@ PROTOCOL LAYER (voter-protocol)
 
 A supporter who builds reputation on one organization's campaign carries it everywhere on the protocol. Identity is not siloed per-org. Reputation is not reset per-platform. Network effects compound at the protocol layer, not the application layer.
 
-### Verified Agentic Delegation
+### Coordination Integrity (Anti-Astroturf)
 
-Every advocacy platform adding AI in 2026 — Bonterra Que, Quorum Quincy, AdvocacyAI — layers AI on top of unverified identity. Commons does something structurally different: AI agents act on behalf of cryptographically verified constituents, within delegated bounds, with privacy-preserving memory.
+Congressional staffers currently have no tool to distinguish authentic grassroots from manufactured campaigns. Commons provides structural observability — Geographic Diversity Score, Author Linkage Diversity, Shannon entropy, temporal velocity — computed automatically from every action, whether submitted by a person or an agent. These signals ship with every campaign report. An org can prove its campaign is authentic. A staffer can verify it.
 
-A constituent delegates authority to an agent: "monitor school board agendas, draft responses matching my positions, notify me before sending." The agent monitors legislation across all 24 district types — not just federal. It drafts grounding-verified messages. It pre-resolves decision-makers. Every action it takes carries the same ZK proof as a manual action.
+### Adversarial Quality (Debate Markets)
 
-The delegation is bound to the constituent's engagement tier. An Active's agent can draft but not send. A Pillar's agent can act semi-autonomously within configured bounds. The on-chain nullifier system prevents an agent from exceeding its delegation. Revocation is instant.
+When a campaign reaches traction, verified participants can stake on positions (SUPPORT / OPPOSE / AMEND) with structured arguments. LMSR pricing surfaces genuine conviction. A 5-model AI panel scores argument quality. Engagement-weighted: `sqrt(stake) × 2^tier` — a Pillar's $2 outweighs a newcomer's $100. The result: campaigns become quality instruments, not volume instruments.
 
-The agent's memory — policy positions, engagement history, communication preferences — is encrypted to the constituent's identity commitment. The platform stores ciphertext. This is the intersection of agent memory and ZK privacy that the frontier research identifies as unexplored.
+### Privacy Architecture
 
-Full specification: `specs/agentic-civic-infrastructure.md`
+Commons cannot be subpoenaed for supporter data it does not possess. ZK proofs reveal constituency and engagement tier without revealing identity. The platform never sees the credential — only the proof derived from it. Agent memory is encrypted to the constituent's identity commitment. For organizations working on controversial issues, this is an existential requirement that no other platform can offer.
+
+### Verified Identity (Ambient Credibility Watermark)
+
+Every other advocacy platform accepts whatever name and address a user types in. Commons binds actions to government-issued credentials through zero-knowledge proofs. The proof reveals nothing about the person — only that they are real, that they hold a valid credential, and that they reside in the claimed district. It rides along with every authored action as a credibility watermark and is the lowest-replicability layer of the stack. The thesis that a decision-maker's office weights a verified packet differently is plausible but UNPROVEN — Commons has not yet measured a signal — so verification is a tiebreaker for distrust-prone segments, not the headline.
 
 ## Political Neutrality
 
@@ -114,7 +121,7 @@ Commons is not a US federal advocacy tool that might expand someday. It is civic
 
 **Any country.** voter-protocol uses H3 hexagonal indexing (global), country-code-keyed district registries, and a 24-slot model that accommodates any governance hierarchy. Canada's federal ridings and provincial constituencies, the UK's Westminster constituencies and devolved assemblies, Australia's federal and state electorates — all fit within the existing architecture. Boundary data ingestion is the only work required per country. One protocol, one app, many district trees.
 
-**The business implication:** The addressable market is not $191M (US grassroots advocacy). It is every organization in every democracy that wants to prove its supporters are real. That's a market no competitor has even conceived of, because no competitor has the verification infrastructure to serve it.
+**The business implication:** The addressable market is not $191M (US grassroots advocacy). It is every organization in every democracy that wants to reach the right decision-makers with individually-composed, grounded messages across every level of government. That is a market no competitor has conceived of, because none pairs AI-native per-recipient authoring with owned local-government reach (and a neutral, uncapped API). Verification rides along as the credibility tiebreaker for the segments that demand it.
 
 ## Why "Commons"
 
