@@ -97,6 +97,7 @@ export default defineConfig({
 			// Svelte 5 mount() is unavailable under the default jsdom + MSW lane;
 			// runs in the components lane (vitest.components.config.ts).
 			'tests/unit/components/TemplateTile.test.ts',
+			'tests/unit/components/DomainBand.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
