@@ -7,6 +7,7 @@ import type { Id } from '$convex/_generated/dataModel';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { renderReport } from '$lib/server/email/report-template';
 import { computeProofWeight } from '$lib/server/legislation/receipts/proof-weight';
+import { DELIVERY_QUOTA_SUBSCRIBE_GATE } from '$lib/data/org-limit-sentences';
 
 const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
 
@@ -164,9 +165,20 @@ export const actions: Actions = {
 			return fail(400, { error: 'One or more target emails are too long' });
 		}
 
-		// Check usage limits via Convex
+		// Check usage limits via Convex. An org with no active plan sits on the
+		// gated `inactive` floor (maxEmails === 0): it authored the report for
+		// free but has never bought the ability to deliver it. That is a
+		// conversion moment, so return the subscribe-to-send gate code and let
+		// the page show the prompt. An active plan that exhausted its period
+		// quota (maxEmails > 0) keeps the plain upgrade sentence with no code.
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (limits && limits.current && limits.current.emailsSent >= limits.limits.maxEmails) {
+			if (limits.limits.maxEmails <= 0) {
+				return fail(403, {
+					error: 'Delivering this report needs a plan. Authoring stays free.',
+					errorCode: DELIVERY_QUOTA_SUBSCRIBE_GATE
+				});
+			}
 			return fail(403, {
 				error:
 					'Email send limit reached for the current billing period. Upgrade your plan to send more.'

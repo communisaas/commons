@@ -8,9 +8,12 @@
 	import { Datum } from '$lib/design';
 	import { FEATURES } from '$lib/config/features';
 	import BoundedNotice from '$lib/components/org/BoundedNotice.svelte';
+	import DeliveryGateNotice from '$lib/components/org/DeliveryGateNotice.svelte';
 	import {
 		CLIENT_DIRECT_EMAIL_THRESHOLD,
+		DELIVERY_QUOTA_SUBSCRIBE_GATE,
 		buildOrgLimitNotice,
+		deliveryPlanGridHref,
 		emailDeliveryLimitNotice,
 		isClientDirectEmailCount
 	} from '$lib/data/org-limit-sentences';
@@ -355,6 +358,11 @@
 	const errorDraftHref = $derived(
 		form && 'draftHref' in form ? (form as { draftHref: string }).draftHref : null
 	);
+	// The org has no active plan, so it has no send quota. Show the
+	// subscribe-to-send conversion prompt instead of a raw quota error. Gated
+	// on the exact code so an unrelated send failure never offers a plan.
+	const showDeliveryGate = $derived(errorCode === DELIVERY_QUOTA_SUBSCRIBE_GATE);
+	const planGridHref = $derived(deliveryPlanGridHref(data.org.slug));
 	const errorLimitNotice = $derived(
 		errorCode === 'email_server_dispatch_dependency_missing'
 			? buildOrgLimitNotice('email_server_dispatch_dependency_missing', {
@@ -714,7 +722,9 @@
 		</div>
 	</div>
 
-	{#if errorLimitNotice}
+	{#if showDeliveryGate}
+		<DeliveryGateNotice planHref={planGridHref} />
+	{:else if errorLimitNotice}
 		<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
 			<BoundedNotice notice={errorLimitNotice} />
 			{#if errorDraftHref}
