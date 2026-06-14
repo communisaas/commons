@@ -98,6 +98,7 @@ export default defineConfig({
 			// runs in the components lane (vitest.components.config.ts).
 			'tests/unit/components/TemplateTile.test.ts',
 			'tests/unit/components/DomainBand.test.ts',
+			'tests/unit/components/SpectrumLandscape.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
