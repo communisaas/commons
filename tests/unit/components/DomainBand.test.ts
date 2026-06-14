@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render } from '@testing-library/svelte';
 import type { Template } from '$lib/types/template';
 import type { DomainGroup } from '$lib/core/topic/domain-grouping';
+import { topicHue } from '$lib/utils/topic-hue';
 
 // svelte/motion reads prefers-reduced-motion via window.matchMedia at module
 // evaluation. Shim it before the component (and its TemplateTile children) load.
@@ -176,5 +177,28 @@ describe('DomainBand', () => {
 		expect(band.className).not.toMatch(/\bborder\b/);
 		expect(band.className).not.toMatch(/\bbg-white\b/);
 		expect(band.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
+	});
+
+	it('tints tiles with the band hue authority, so the spine and tiles never clash', () => {
+		// "Bike Infrastructure & Public Health" resolves to Transportation via the
+		// landscape resolver (resolveDomainHue, longest keyword "infrastruc") but to
+		// a different hue via the list resolver (topicHue). The band must tint its
+		// tiles with its OWN authority so the spine and the tiles agree (one hue
+		// for the load-bearing axis — Axis-1).
+		const domain = 'Bike Infrastructure & Public Health';
+		const bandHue = 35; // Transportation — the band's resolved hue
+		// Precondition: the two resolvers genuinely diverge here (else the test is moot).
+		expect(topicHue(domain)).not.toBe(bandHue);
+
+		const group = makeGroup([makeTemplate({ id: 'a', domain, domainHue: undefined })], {
+			domain,
+			hue: bandHue
+		});
+		const { container } = render(DomainBand, { props: { group, onSelect: vi.fn() } });
+
+		const spine = container.querySelector('.band-spine') as HTMLElement;
+		const tile = container.querySelector('[data-template-button]') as HTMLElement;
+		expect(spine.style.getPropertyValue('--card-hue')).toBe(String(bandHue));
+		expect(tile.style.getPropertyValue('--card-hue')).toBe(String(bandHue));
 	});
 });

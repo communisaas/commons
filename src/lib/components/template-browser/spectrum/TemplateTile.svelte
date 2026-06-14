@@ -8,7 +8,8 @@
 	 * districts / identity-depth), and an ambient deliberation signal.
 	 *
 	 * Every visual channel cites a real field:
-	 * - hue tint       ← the template's domain (`topicHue`) → `--card-hue`
+	 * - hue tint       ← `resolvedHue` (the band's hue authority, in the landscape)
+	 *                    or the template's domain (`topicHue`, in the list) → `--card-hue`
 	 * - target icon    ← `deriveTargetPresentation` over delivery + recipients
 	 * - weight class   ← `deliveryMethod === 'cwc'` (congressional reach is heavier)
 	 * - mini-Pulse     ← `daily_arrivals` (only when sends have arrived)
@@ -52,6 +53,10 @@
 		justLoaded?: boolean;
 		/** Per-row entrance delay in ms, applied only during the staggered entrance. */
 		animationDelay?: number;
+		/** Hue authority from the landscape: the band's resolved domain hue, so the
+		 *  tile tint agrees with the band spine (one resolver, no clash). Absent in
+		 *  the list → topicHue, keeping the list pixel-equivalent. */
+		resolvedHue?: number;
 	}
 
 	let {
@@ -63,15 +68,18 @@
 		onKeydown,
 		newlyRevealed = false,
 		justLoaded = false,
-		animationDelay = 0
+		animationDelay = 0,
+		resolvedHue
 	}: Props = $props();
 
 	// Congressional sends carry heavier coordination weight — the card-weight
 	// class cites `deliveryMethod`, the same signal the list has always used.
 	const isCongressional = $derived(template.deliveryMethod === 'cwc');
 
-	// Domain → hue angle, consumed as --card-hue at three chroma levels.
-	const hue = $derived(topicHue(template.domain, template.topics, template.domainHue));
+	// Domain → hue angle, consumed as --card-hue at three chroma levels. In the
+	// landscape the band passes its resolved hue (one authority shared with the
+	// spine); in the list the prop is absent and the tile resolves its own tint.
+	const hue = $derived(resolvedHue ?? topicHue(template.domain, template.topics, template.domainHue));
 
 	// Who the message reaches — icon + label derived from delivery + recipients.
 	const targetInfo = $derived(deriveTargetPresentation(template));

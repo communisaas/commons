@@ -22,15 +22,16 @@
 	 * generous gap between bands is the boundary. There is no card, no border, no
 	 * box around a band.
 	 *
-	 * Hue authority: the spine reads the band's resolved hue (the spectrum order
-	 * key), while each tile keeps its own domain tint. For a band's shared domain
-	 * the two land on the same anchor hue, so spine and tiles read as one
-	 * neighbourhood; once per-template hue is backfilled the tiles gain within-band
-	 * micro-variation while the spine holds the band's place on the spine.
+	 * Hue authority: ONE resolver. The spine reads the band's resolved hue (the
+	 * spectrum order key, from the lead tile) and every tile is tinted by
+	 * `resolveDomainHue` too — the same authority — so spine and tiles never clash.
+	 * Today (anchor fallback) they are identical; once per-template hue is backfilled
+	 * the tiles gain within-band micro-variation around the spine's band position.
 	 */
 
 	import type { DomainGroup } from '$lib/core/topic/domain-grouping';
 	import { aggregateArrivals } from '$lib/core/topic/band-signals';
+	import { resolveDomainHue } from '$lib/utils/domain-hue';
 	import TemplateTile from './TemplateTile.svelte';
 	import { Pulse } from '$lib/design';
 
@@ -115,6 +116,7 @@
 			{#each visibleTemplates as template, i (template.id)}
 				<TemplateTile
 					{template}
+					resolvedHue={resolveDomainHue(template)}
 					selected={selectedId === template.id}
 					index={indexOffset + i}
 					newlyRevealed={i >= initialVisible}
