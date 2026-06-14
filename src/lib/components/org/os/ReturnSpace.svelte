@@ -65,6 +65,12 @@
 	const districtReach = $derived(deriveDistrictReach(data?.packet?.geography ?? null));
 	const responseActivity = $derived(data ? describeResponseActivity(data.receipts) : null);
 
+	// Individually-composed messages — the differentiator a board reacts to
+	// (individualized messages carry far more influence than form letters), so
+	// it belongs in the impact band beside reach, not buried in the packet.
+	// Sourced from the packet's authorship signal when it carries one.
+	const individuallyComposed = $derived(data?.packet?.authorship?.individual ?? 0);
+
 	const funnel = $derived(
 		data?.funnel ?? { imported: 0, postalResolved: 0, identityVerified: 0, districtVerified: 0 }
 	);
@@ -109,7 +115,7 @@
 		<div class="return-head-copy">
 			<h1 class="return-title">Results</h1>
 			<p class="return-sub">
-				What your campaigns delivered, who responded, and the proof behind it.
+				What your campaigns delivered and who responded.
 			</p>
 		</div>
 		<div class="return-head-instrument">
@@ -119,6 +125,12 @@
 						<span class="evidence-cell">
 							<Datum value={headline.verifiedConstituents} animate spring={SPRINGS.METRIC} />
 							<span class="evidence-label">verified constituents</span>
+						</span>
+					{/if}
+					{#if individuallyComposed > 0}
+						<span class="evidence-cell">
+							<Datum value={individuallyComposed} />
+							<span class="evidence-label">individually composed</span>
 						</span>
 					{/if}
 					{#if headline.districtsReached > 0}
@@ -171,17 +183,20 @@
 			now, not zero. Reload the page to fetch them.
 		</p>
 	{:else}
-		<!-- PROOF — the centerpiece. The packet is what the org shows its board. -->
-		<section id="results-packet" class="packet-anchor" aria-label="Proof packet">
+		<!-- REPORT — the centerpiece. This is what the org delivers to its board:
+		     who it reached, who composed, who responded. Verification rides under
+		     it as a quiet watermark (the packet's collapsed audit trail), never the
+		     lead. -->
+		<section id="results-packet" class="packet-anchor" aria-label="Constituent report">
 			{#if packetCampaignTitle}
-				<p class="packet-scope">Proof packet for {packetCampaignTitle} — one campaign's evidence.</p>
+				<p class="packet-scope">Report for {packetCampaignTitle} — one campaign's constituents.</p>
 			{/if}
-			<VerificationPacket packet={data.packet}>
+			<VerificationPacket packet={data.packet} label="Constituent Report">
 				{#snippet actions()}
 					{#if data.packet && data.topCampaignId}
 						<div class="proof-cta">
-							<a href={proofDeliveryHref} class="cta cta--primary">Open proof delivery</a>
-							<a href={packetHref} class="cta cta--ghost">Preview packet</a>
+							<a href={proofDeliveryHref} class="cta cta--primary">Deliver report</a>
+							<a href={packetHref} class="cta cta--ghost">Preview report</a>
 						</div>
 					{/if}
 				{/snippet}
