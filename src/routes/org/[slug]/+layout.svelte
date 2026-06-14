@@ -9,6 +9,7 @@
 	import {
 		setOrgOS,
 		spaceForPath,
+		pathForSpace,
 		rendersSpaceForUrl,
 		fullViewHref
 	} from '$lib/components/org/os/orgOS.svelte';
@@ -91,8 +92,10 @@
 	const marks = $derived<WorkspaceMark[]>([
 		{
 			id: 'studio',
+			// STUDIO owns the bare org URL — the authoring front door. The mark's
+			// href is the canonical space path so open-in-new-tab / no-JS land here.
 			label: 'Studio',
-			href: `${base}/studio`,
+			href: pathForSpace('studio', base),
 			secondary: [
 				{
 					href: `${base}/campaigns`,
@@ -168,15 +171,16 @@
 		{
 			id: 'return',
 			label: 'Results',
-			// Results routes to the org root, where delivery metrics, responses,
-			// and the Verification Packet live as artifact.
-			href: base,
+			// Results is the destination at `/results`, where delivery metrics,
+			// responses, and the Verification Packet live as artifact — demoted from
+			// the front door so authoring leads.
+			href: pathForSpace('return', base),
 			count: data.spaces.return?.stats.activeCampaigns ?? null,
 			secondary: [
 				{
 					href: data.spaces.return?.topCampaignId
 						? `${base}/campaigns/${data.spaces.return.topCampaignId}/report#proof-preview`
-						: `${base}#results-packet`,
+						: `${pathForSpace('return', base)}#results-packet`,
 					label: 'Proof packet'
 				}
 			]

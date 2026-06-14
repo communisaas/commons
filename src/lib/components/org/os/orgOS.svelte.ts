@@ -60,20 +60,11 @@ export const SPACE_LABELS: Record<SpaceId, 'Studio' | 'People' | 'Power' | 'Resu
 };
 
 /** Map a deep-link pathname suffix to the space that owns it, for addressability
- * + SSR fallback. The org root, Results, is the default. */
+ * + SSR fallback. The org root is the AUTHORING front door — the bare base mounts
+ * STUDIO. Results lives at `/results`; the bare base no longer routes there. */
 export function spaceForPath(pathname: string, base: string): SpaceId {
 	const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
-	if (
-		rest.startsWith('/studio') ||
-		rest.startsWith('/campaigns') ||
-		rest.startsWith('/emails') ||
-		rest.startsWith('/sms') ||
-		rest.startsWith('/events') ||
-		rest.startsWith('/fundraising') ||
-		rest.startsWith('/workflows') ||
-		rest.startsWith('/calls')
-	)
-		return 'studio';
+	if (rest.startsWith('/results')) return 'return';
 	if (rest.startsWith('/supporters')) return 'base';
 	if (
 		rest.startsWith('/representatives') ||
@@ -81,30 +72,34 @@ export function spaceForPath(pathname: string, base: string): SpaceId {
 		rest.startsWith('/scorecards')
 	)
 		return 'landscape';
-	return 'return';
+	// The bare base, /studio, and every authoring deep route fall to STUDIO — the
+	// front door lands on the authoring loop, not the proof packet.
+	return 'studio';
 }
 
 /** The canonical deep-link route for a space (used to update the URL on switch
- * via shallow routing, and as the SSR fallback target). */
+ * via shallow routing, and as the SSR fallback target). STUDIO owns the bare
+ * base (the authoring front door); Results is the destination at `/results`. */
 export function pathForSpace(space: SpaceId, base: string): string {
 	switch (space) {
 		case 'studio':
-			return `${base}/studio`;
+			return base;
 		case 'base':
 			return `${base}/supporters`;
 		case 'landscape':
 			return `${base}/representatives`;
 		case 'return':
-			return base;
+			return `${base}/results`;
 	}
 }
 
-/** True when the pathname IS one of the four canonical space paths (the org
- * root, /studio, /supporters, /representatives) — i.e. a path OWNED by a mounted
- * OrgShell space. Deep routes the OS hasn't absorbed yet (/campaigns, /settings,
- * /legislation, …) are NOT space paths: those still render their own page. The
- * org root + /studio support a trailing segment-free match; deep routes under a
- * space (e.g. /supporters/import) are treated as their own pages. */
+/** True when the pathname IS one of the canonical space paths (the org root +
+ * authoring front door, /studio, /supporters, /representatives, /results) —
+ * i.e. a path OWNED by a mounted OrgShell space. Deep routes the OS hasn't
+ * absorbed yet (/campaigns, /settings, /legislation, …) are NOT space paths:
+ * those still render their own page. The org root + /studio + /results support a
+ * trailing segment-free match; deep routes under a space (e.g. /supporters/import)
+ * are treated as their own pages. */
 export function isSpacePath(pathname: string, base: string): boolean {
 	const rest = pathname.startsWith(base) ? pathname.slice(base.length) : pathname;
 	const normalized = rest.replace(/\/$/, '');
@@ -112,7 +107,8 @@ export function isSpacePath(pathname: string, base: string): boolean {
 		normalized === '' ||
 		normalized === '/studio' ||
 		normalized === '/supporters' ||
-		normalized === '/representatives'
+		normalized === '/representatives' ||
+		normalized === '/results'
 	);
 }
 

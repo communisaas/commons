@@ -88,11 +88,14 @@
 		}
 	]);
 
-	const actionRecordsHref = $derived(`${base}#action-records`);
+	// Results is mounted at `/results` (the org root is now the authoring front
+	// door). These intra-Results anchors target sections on THIS surface, so they
+	// must point at the Results path — not the bare base, which now mounts Studio.
+	const actionRecordsHref = $derived(`${base}/results#action-records`);
 	const packetHref = $derived(
 		data?.topCampaignId
 			? `${base}/campaigns/${data.topCampaignId}/report#proof-preview`
-			: `${base}#results-packet`
+			: `${base}/results#results-packet`
 	);
 	const proofDeliveryHref = $derived(
 		data?.topCampaignId

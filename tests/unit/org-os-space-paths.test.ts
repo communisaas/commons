@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	fullViewHref,
 	isSpacePath,
+	pathForSpace,
 	rendersSpaceForUrl,
 	spaceForPath
 } from '$lib/components/org/os/orgOS.svelte';
@@ -23,11 +24,12 @@ function urlFor(path: string): URL {
 }
 
 describe('isSpacePath', () => {
-	it('claims exactly the four canonical space paths', () => {
+	it('claims exactly the canonical space paths', () => {
 		expect(isSpacePath(`${BASE}`, BASE)).toBe(true);
 		expect(isSpacePath(`${BASE}/studio`, BASE)).toBe(true);
 		expect(isSpacePath(`${BASE}/supporters`, BASE)).toBe(true);
 		expect(isSpacePath(`${BASE}/representatives`, BASE)).toBe(true);
+		expect(isSpacePath(`${BASE}/results`, BASE)).toBe(true);
 	});
 
 	it('leaves deep routes to their own pages', () => {
@@ -36,6 +38,55 @@ describe('isSpacePath', () => {
 		expect(isSpacePath(`${BASE}/campaigns`, BASE)).toBe(false);
 		expect(isSpacePath(`${BASE}/legislation`, BASE)).toBe(false);
 		expect(isSpacePath(`${BASE}/settings`, BASE)).toBe(false);
+	});
+});
+
+describe('spaceForPath — the authoring front door', () => {
+	it('lands the bare org URL on Studio, not the proof packet', () => {
+		expect(spaceForPath(BASE, BASE)).toBe('studio');
+		expect(spaceForPath(`${BASE}/`, BASE)).toBe('studio');
+	});
+
+	it('keeps /studio resolving to Studio', () => {
+		expect(spaceForPath(`${BASE}/studio`, BASE)).toBe('studio');
+	});
+
+	it('routes /results to the Results (return) space', () => {
+		expect(spaceForPath(`${BASE}/results`, BASE)).toBe('return');
+		expect(spaceForPath(`${BASE}/results#results-packet`, BASE)).toBe('return');
+	});
+
+	it('keeps People and Power on their own paths', () => {
+		expect(spaceForPath(`${BASE}/supporters`, BASE)).toBe('base');
+		expect(spaceForPath(`${BASE}/representatives`, BASE)).toBe('landscape');
+		expect(spaceForPath(`${BASE}/legislation`, BASE)).toBe('landscape');
+	});
+
+	it('falls authoring deep routes through to Studio', () => {
+		expect(spaceForPath(`${BASE}/campaigns`, BASE)).toBe('studio');
+		expect(spaceForPath(`${BASE}/emails`, BASE)).toBe('studio');
+		expect(spaceForPath(`${BASE}/settings`, BASE)).toBe('studio');
+	});
+});
+
+describe('pathForSpace — Studio owns the bare URL, Results lives at /results', () => {
+	it('maps Studio to the bare base (the front door)', () => {
+		expect(pathForSpace('studio', BASE)).toBe(BASE);
+	});
+
+	it('maps Results to /results', () => {
+		expect(pathForSpace('return', BASE)).toBe(`${BASE}/results`);
+	});
+
+	it('keeps People and Power on their canonical paths', () => {
+		expect(pathForSpace('base', BASE)).toBe(`${BASE}/supporters`);
+		expect(pathForSpace('landscape', BASE)).toBe(`${BASE}/representatives`);
+	});
+
+	it('round-trips every space through spaceForPath', () => {
+		for (const space of ['studio', 'base', 'landscape', 'return'] as const) {
+			expect(spaceForPath(pathForSpace(space, BASE), BASE)).toBe(space);
+		}
 	});
 });
 
