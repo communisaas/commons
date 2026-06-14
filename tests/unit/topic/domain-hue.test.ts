@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { resolveDomainHue, ANCHOR_TABLE, HUE_BY_ANCHOR, matchAnchor } from '$lib/utils/domain-hue';
+import {
+	resolveDomainHue,
+	ANCHOR_TABLE,
+	HUE_BY_ANCHOR,
+	anchorLabelForHue,
+	matchAnchor
+} from '$lib/utils/domain-hue';
 import type { Template } from '$lib/types/template';
 
 /** Minimal template stub — the resolver only reads `domain` and `domainHue`. */
@@ -148,6 +154,22 @@ describe('resolveDomainHue', () => {
 				expect(hue).toBeGreaterThanOrEqual(0);
 				expect(hue).toBeLessThan(360);
 			}
+		});
+	});
+
+	describe('anchorLabelForHue', () => {
+		it('inverts the anchor table — every anchor hue resolves back to its label', () => {
+			for (const [label, hue] of HUE_BY_ANCHOR) {
+				expect(anchorLabelForHue(hue)).toBe(label);
+			}
+		});
+
+		it('returns null for a hue that is not a canonical anchor position', () => {
+			// 200 is not any of the 11 anchor hues — a backfilled projection or a
+			// hashed unknown domain. No anchor name to give.
+			const anchorHues = new Set(HUE_BY_ANCHOR.values());
+			expect(anchorHues.has(200)).toBe(false);
+			expect(anchorLabelForHue(200)).toBeNull();
 		});
 	});
 });

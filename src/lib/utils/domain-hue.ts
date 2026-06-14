@@ -77,6 +77,20 @@ const ANCHOR_KEYWORDS: Record<string, string[]> = {
 /** Anchor label → its hue, read once from `domain-anchors.json`. */
 const HUE_BY_ANCHOR = new Map<string, number>(ANCHORS.map((a) => [a.label, a.hue]));
 
+/** Anchor hue → its plain-English label, the inverse of `HUE_BY_ANCHOR`. */
+const ANCHOR_BY_HUE = new Map<number, string>(ANCHORS.map((a) => [a.hue, a.label]));
+
+/**
+ * The plain-English anchor name a resolved hue belongs to, or null when the hue
+ * is not one of the 11 canonical anchor positions (a backfilled per-template
+ * projection, or a hashed unknown domain). Lets a surface caption a band by its
+ * topic — "Housing", "Transportation" — instead of its free-text domain wording,
+ * single-sourced from the same anchors that fix the hue so the two never drift.
+ */
+function anchorLabelForHue(hue: number): string | null {
+	return ANCHOR_BY_HUE.get(hue) ?? null;
+}
+
 /**
  * Ordered match table: each anchor's keywords paired with its hue. Built once
  * from the anchors file so the hue is always the file's, never re-typed here.
@@ -141,4 +155,4 @@ export function resolveDomainHue(template: Pick<Template, 'domain' | 'domainHue'
 }
 
 /** Exported for testing and for components that need the anchor hues directly. */
-export { ANCHOR_TABLE, HUE_BY_ANCHOR, matchAnchor };
+export { ANCHOR_TABLE, HUE_BY_ANCHOR, anchorLabelForHue, matchAnchor };

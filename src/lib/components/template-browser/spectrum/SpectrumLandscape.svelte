@@ -34,6 +34,7 @@
 	import { resolveDomainHue } from '$lib/utils/domain-hue';
 	import DomainBand from './DomainBand.svelte';
 	import LensToggle, { type Lens } from './LensToggle.svelte';
+	import SpectrumOverview from './SpectrumOverview.svelte';
 	import { EntityCluster } from '$lib/design';
 
 	interface Props {
@@ -181,6 +182,12 @@
 {/if}
 
 {#if bands.length > 0}
+	<!-- The map of the whole: a sticky composition ribbon summing the field into
+	     one glance — each band a segment sized by its count and coloured by its
+	     hue, the same hue its spine carries below. It stays in view while the bands
+	     scroll, so the eye can always reorient. -->
+	<SpectrumOverview {bands} />
+
 	<!-- The field: bands chunked by generous void, not chrome. EntityCluster's
 	     proximity ratio lets the eye read each neighbourhood as one unit and the
 	     gaps between them as the boundaries — no borders, no cards. -->

@@ -99,6 +99,7 @@ export default defineConfig({
 			'tests/unit/components/TemplateTile.test.ts',
 			'tests/unit/components/DomainBand.test.ts',
 			'tests/unit/components/SpectrumLandscape.test.ts',
+			'tests/unit/components/SpectrumOverview.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',
