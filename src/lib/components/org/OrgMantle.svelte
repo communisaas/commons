@@ -11,8 +11,10 @@
     · Strong center: authoring command + draft-in-flight
     · Ambient WATERMARK (faint Rings + Datum "authored & sent this period" + Pulse)
     · 4-mark WorkspaceSwitcher (Studio / People / Power / Results)
-    · Substrate (authority / webhooks / coalition / RegistryMark) —
-      plain nav links, ambient, not a workspace
+    · Connections (operator-relevant reach, e.g. coalitions) — plain nav
+      links, ambient, not a workspace. Substrate controls (org authority,
+      signed webhooks, on-chain anchor) are plumbing, not rail chrome: they
+      stay reachable from Settings + the command bar, not the everyday rail.
     · Right edge: SignalWell + CommandBar (cmd-K)
 
   The authoring command targets the org-scoped STUDIO interior (`/org/[slug]/studio`) — the
@@ -38,7 +40,6 @@
 	import { PenLine } from '@lucide/svelte';
 	import { page } from '$app/stores';
 	import { templateDraftStore } from '$lib/stores/templateDraft';
-	import { RegistryMark } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
 	import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 	import WorkspaceSwitcher, { type WorkspaceMark } from './WorkspaceSwitcher.svelte';
@@ -111,6 +112,13 @@
 
 	const currentPath = $derived($page.url.pathname);
 	const base = $derived(`/org/${org.slug}`);
+
+	// Rail-visible connections — the operator sees their reach, not the
+	// substrate controls. Settings-targeted infra links (org authority, signed
+	// webhooks) are dropped from the rail; their pages stay reachable from
+	// Settings + the command bar. Everything else (e.g. coalitions) is operator
+	// work and stays in plain language.
+	const railLinks = $derived(substrateLinks.filter((link) => !link.href.includes('/settings')));
 
 	// The command opens the org-scoped STUDIO interior, the authoring loop with
 	// the agent's reasoning visible. The public citizen entry at `/?create=true`
@@ -215,30 +223,29 @@
 			<ProcessDock />
 		</div>
 
-		<!-- Substrate — plain nav links, ambient, not a workspace -->
-		<div class="mantle-substrate">
-			<span class="mantle-substrate-label">Substrate</span>
-			<nav class="mantle-substrate-links" aria-label="Substrate">
-				{#each substrateLinks as link (link.href)}
-					<a
-						href={link.href}
-						class="mantle-substrate-link"
-						class:mantle-substrate-link--active={currentPath.startsWith(link.href)}
-						aria-current={currentPath.startsWith(link.href) ? 'page' : undefined}
-					>
-						{link.label}
-					</a>
-				{/each}
-			</nav>
-			<div class="mantle-registry">
-				<RegistryMark
-					variant="tag"
-					value="Sepolia testnet"
-					copy={false}
-					class="mantle-registry-mark"
-				/>
+		<!-- Connections — operator-relevant nav links, ambient, not a workspace.
+		     The rail shows the operator their reach (coalitions), not the
+		     substrate plumbing: org-authority + signed-webhooks settings stay
+		     reachable from Settings, but they are infra controls, not everyday
+		     rail chrome. The on-chain-anchor indicator is plumbing too — removed
+		     from the rail entirely. -->
+		{#if railLinks.length > 0}
+			<div class="mantle-substrate">
+				<span class="mantle-substrate-label">Connections</span>
+				<nav class="mantle-substrate-links" aria-label="Connections">
+					{#each railLinks as link (link.href)}
+						<a
+							href={link.href}
+							class="mantle-substrate-link"
+							class:mantle-substrate-link--active={currentPath.startsWith(link.href)}
+							aria-current={currentPath.startsWith(link.href) ? 'page' : undefined}
+						>
+							{link.label}
+						</a>
+					{/each}
+				</nav>
 			</div>
-		</div>
+		{/if}
 
 		<!-- Right-edge well + cmd-K live at the rail foot on desktop -->
 		<div class="mantle-foot">
@@ -591,15 +598,6 @@
 
 	.mantle-substrate-link--active {
 		color: var(--org-sidebar-text);
-	}
-
-	.mantle-registry {
-		opacity: 0.6;
-	}
-
-	.mantle :global(.mantle-registry-mark) {
-		font-size: 0.625rem;
-		color: var(--org-sidebar-text-dim);
 	}
 
 	/* ─── Foot (rail only) ─── */

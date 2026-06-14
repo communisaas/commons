@@ -52,9 +52,9 @@
 	}
 </script>
 
-<section class="signal-well" aria-label="Recent org signal">
+<section class="signal-well" aria-label="Recent activity">
 	<header class="signal-head">
-		<span class="signal-title">Signal</span>
+		<span class="signal-title">Recent activity</span>
 		<span class="signal-count">
 			{eventCount === null ? 'unread' : eventCount}
 		</span>
@@ -62,11 +62,11 @@
 
 	{#if events === null}
 		<p class="signal-empty">
-			Unread. Recent org signal was not attached to this shell read; recent-event claims stay uncounted.
+			Activity didn't load with this page view. Reload to see what's happened recently.
 		</p>
 	{:else if events.length === 0}
 		<p class="signal-empty">
-			Quiet. No recent org events are loaded.
+			Nothing's happened here yet. New actions, people, and responses show up as they come in.
 		</p>
 	{:else}
 		<ul class="signal-list">

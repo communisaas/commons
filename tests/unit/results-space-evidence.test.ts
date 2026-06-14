@@ -228,8 +228,8 @@ describe('Results surface contract', () => {
 		expect(source).toContain('id="action-records"');
 	});
 
-	it('names the campaign the proof packet covers', () => {
-		expect(source).toContain('Proof packet for {packetCampaignTitle}');
+	it('names the campaign the report covers', () => {
+		expect(source).toContain('Report for {packetCampaignTitle}');
 	});
 
 	it('qualifies the delivered-report headline when the recent sample is full', () => {
