@@ -11,10 +11,12 @@
  * embedding) via the injected `hueOf` resolver, so the spectrum is stable even
  * before that field is backfilled.
  *
- * Pure, deterministic and SSR-safe: no wall-clock reads, no randomness, no
- * browser globals. Sort order is fully specified down to explicit tie-breaks, so
- * two runs over the same input always return the identical shape regardless of
- * input ordering.
+ * Deterministic given `now`: the within-band order is fully specified down to
+ * explicit tie-breaks, so two runs over the same input and the same clock return
+ * the identical shape regardless of input ordering. `now` defaults to the current
+ * time so recency weighting matches the geographic list (a stale fixed default
+ * would let recency swamp coordination); pass a fixed `now` for a fully
+ * reproducible result.
  */
 
 import type { Template } from '$lib/types/template';
@@ -73,8 +75,8 @@ interface GroupByDomainOptions {
 	/** Resolves a template's domain hue in [0, 360). Injected so the grouper stays
 	 *  decoupled from the hue-backfill: the resolver supplies a stable fallback. */
 	hueOf: (template: Template) => number;
-	/** Fixed clock for deterministic within-band scoring. Defaults to a stable
-	 *  reference so grouping never depends on wall-clock time. */
+	/** Clock for the within-band recency weighting. Defaults to the current time
+	 *  (matching the geographic list); pass a fixed `now` for a reproducible result. */
 	now?: Date;
 }
 
@@ -94,7 +96,7 @@ interface GroupByDomainOptions {
  */
 export function groupByDomain(
 	templates: Template[],
-	{ hueOf, now = new Date(0) }: GroupByDomainOptions
+	{ hueOf, now = new Date() }: GroupByDomainOptions
 ): DomainGroup[] {
 	// Bucket by normalised domain.
 	const buckets = new Map<string, Template[]>();

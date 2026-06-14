@@ -67,6 +67,31 @@ describe('resolveDomainHue', () => {
 			const hue = resolveDomainHue(tmpl({ domain: 'Healthcare', domainHue: undefined }));
 			expect(hue).toBe(HUE_BY_ANCHOR.get('Healthcare'));
 		});
+
+		// The real, compound, human-authored domain labels from the seed. A naive
+		// first-substring-match in file order misroutes a third of these (e.g.
+		// "Indigenous Energy Revenue Sharing" → Environment via "energy"); the
+		// most-specific-keyword rule routes each to its primary anchor.
+		const SEED_CASES: Array<{ domain: string; anchor: string }> = [
+			{ domain: 'Veterans Healthcare Access', anchor: 'Healthcare' },
+			{ domain: "Children's Digital Privacy", anchor: 'Technology' },
+			{ domain: 'Drug Treatment & Sentencing', anchor: 'Justice' },
+			{ domain: 'Housing & Zoning Reform', anchor: 'Housing' },
+			{ domain: 'Parks & Public Lands', anchor: 'Environment' },
+			{ domain: 'Library Workforce Programs', anchor: 'Education' },
+			{ domain: 'Indigenous Energy Revenue Sharing', anchor: 'Indigenous Rights' },
+			{ domain: 'Bike Infrastructure & Public Health', anchor: 'Transportation' },
+			{ domain: 'Retail Wages & Corporate Pay Disparity', anchor: 'Labor' },
+			{ domain: 'Universal Preschool', anchor: 'Education' },
+			{ domain: 'Urban Freeway Removal', anchor: 'Transportation' },
+			{ domain: 'Employment Green Card Backlog', anchor: 'Immigration' }
+		];
+
+		it('routes each real seed domain to its primary anchor, not a modifier keyword', () => {
+			for (const { domain, anchor } of SEED_CASES) {
+				expect(resolveDomainHue(tmpl({ domain }))).toBe(HUE_BY_ANCHOR.get(anchor));
+			}
+		});
 	});
 
 	describe('hash-fallback path', () => {

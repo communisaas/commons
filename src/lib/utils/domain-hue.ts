@@ -36,7 +36,7 @@ interface Anchor {
 	embedding: number[];
 }
 
-/** The 11 canonical anchor domains, ordered along the hue spectrum in the file. */
+/** The 11 canonical anchor domains, in the canonical order of `domain-anchors.json`. */
 const ANCHORS = anchorsData as Anchor[];
 
 /**
@@ -46,6 +46,8 @@ const ANCHORS = anchorsData as Anchor[];
  * the hue is read from that same file, so this table never re-asserts a hue —
  * it only says which words point at which anchor. Matching is lowercase
  * substring, so "Public Health" hits "health", "Labor Rights" hits "labor".
+ * When a compound label matches several anchors, the most-specific (longest)
+ * keyword wins (see `matchAnchor`), so modifier words do not hijack the band.
  */
 const ANCHOR_KEYWORDS: Record<string, string[]> = {
 	Healthcare: ['health', 'medical', 'telehealth', 'wellness'],
@@ -55,7 +57,7 @@ const ANCHOR_KEYWORDS: Record<string, string[]> = {
 	Labor: ['labor', 'worker', 'wage', 'employ', 'union', 'retail', 'pay dispar'],
 	Immigration: ['immigra', 'refugee', 'asylum', 'green card', 'visa'],
 	Justice: ['justice', 'criminal', 'police', 'incarcerat', 'sentenc', 'prison'],
-	Governance: ['govern', 'legislat', 'congress', 'policy', 'veteran'],
+	Governance: ['govern', 'legislat', 'congress', 'policy'],
 	Technology: ['technolog', 'digital', 'privacy', 'artificial', 'data', 'cyber'],
 	Transportation: [
 		'transport',
@@ -86,16 +88,31 @@ const ANCHOR_TABLE: Array<{ keywords: string[]; hue: number }> = ANCHORS.flatMap
 
 /**
  * Match a free-text domain string against the canonical anchors.
+ *
+ * The most-specific (longest) matching keyword wins, so a compound label like
+ * "Indigenous Energy Revenue Sharing" lands on Indigenous Rights (via the longer
+ * "revenue sharing") rather than Environment (via "energy"), and "Urban Freeway
+ * Removal" lands on Transportation (via "freeway") rather than Housing (via the
+ * modifier "urban"). File order breaks exact length ties.
+ *
  * @returns the anchor hue if any keyword matches, or null.
  */
 function matchAnchor(text: string): number | null {
 	const lower = text.toLowerCase();
+	let bestHue: number | null = null;
+	let bestLen = 0;
 	for (const { keywords, hue } of ANCHOR_TABLE) {
 		for (const keyword of keywords) {
-			if (lower.includes(keyword)) return hue;
+			// Only a strictly longer match displaces the incumbent, so when two
+			// anchors match keywords of equal length the earlier (file-order) one
+			// holds — fully deterministic.
+			if (lower.includes(keyword) && keyword.length > bestLen) {
+				bestHue = hue;
+				bestLen = keyword.length;
+			}
 		}
 	}
-	return null;
+	return bestHue;
 }
 
 /**

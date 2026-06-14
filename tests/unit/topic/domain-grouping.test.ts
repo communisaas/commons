@@ -178,6 +178,35 @@ describe('groupByDomain', () => {
 		expect(groupByDomain([], { hueOf })).toEqual([]);
 	});
 
+	it('defaults to the real clock so coordination is not swamped by recency', () => {
+		// No explicit `now`: a stale epoch default would invert the math — recency
+		// boost becomes enormous and a fresh low-send template buries a popular
+		// older one. createdAt is recent (relative to the run) so the default clock
+		// actually participates in the score.
+		const day = 86400000;
+		const daysAgo = (n: number) => new Date(Date.now() - n * day);
+		const templates = [
+			makeTemplate({
+				domain: 'Healthcare',
+				slug: 'popular-older',
+				send_count: 500,
+				createdAt: daysAgo(13),
+				updatedAt: daysAgo(13)
+			}),
+			makeTemplate({
+				domain: 'Healthcare',
+				slug: 'fresh-quiet',
+				send_count: 1,
+				createdAt: daysAgo(1),
+				updatedAt: daysAgo(1)
+			})
+		];
+
+		const [band] = groupByDomain(templates, { hueOf });
+		// A 500-send template past the recency window still leads a 1-send fresh one.
+		expect(band.templates[0].slug).toBe('popular-older');
+	});
+
 	it('is pure — no wall-clock dependency in the grouping shape', () => {
 		const templates = [makeTemplate({ domain: 'Healthcare', slug: 'h1', send_count: 5 })];
 		const a = groupByDomain(templates, { hueOf, now: new Date('2020-06-01T00:00:00Z') });
