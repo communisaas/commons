@@ -5,11 +5,11 @@
  * using the sliding-window rate limiter, keyed by API key ID.
  *
  * Test groups:
- * 1. Free plan — 100 req/min
+ * 1. Inactive floor — 100 req/min
  * 2. Starter plan — 300 req/min
  * 3. Organization plan — 1000 req/min
  * 4. Coalition plan — 3000 req/min
- * 5. Unknown plan defaults to free limits
+ * 5. Unknown plan defaults to inactive-floor limits
  * 6. 429 response envelope format
  * 7. Rate limit key uses keyId for isolation
  */
@@ -55,7 +55,7 @@ function makeCtx(overrides: Partial<ApiKeyContext> = {}): ApiKeyContext {
 		orgId: 'org-1' as Id<'organizations'>,
 		keyId: 'key-1' as Id<'apiKeys'>,
 		scopes: ['read', 'write'],
-		planSlug: 'free',
+		planSlug: 'inactive',
 		...overrides
 	};
 }
@@ -74,13 +74,13 @@ describe('checkApiPlanRateLimit', () => {
 	});
 
 	// =========================================================================
-	// Group 1: Free plan — 100 req/min
+	// Group 1: Inactive floor — 100 req/min
 	// =========================================================================
-	describe('free plan', () => {
+	describe('inactive floor', () => {
 		it('allows requests within the 100 req/min limit', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: true, remaining: 50, limit: 100, reset: Date.now() / 1000 + 60 });
 
-			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'free' }));
+			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'inactive' }));
 			expect(result).toBeNull();
 			expect(mockCheck).toHaveBeenCalledWith(
 				'ratelimit:api-v1:plan:key-1',
@@ -91,7 +91,7 @@ describe('checkApiPlanRateLimit', () => {
 		it('blocks the 101st request', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: false, remaining: 0, limit: 100, reset: Date.now() / 1000 + 30, retryAfter: 30 });
 
-			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'free' }));
+			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'inactive' }));
 			expect(result).toBeInstanceOf(Response);
 			expect(result!.status).toBe(429);
 		});
@@ -149,7 +149,7 @@ describe('checkApiPlanRateLimit', () => {
 	// Group 5: Unknown plan defaults to free limits
 	// =========================================================================
 	describe('unknown plan slug', () => {
-		it('falls back to free limits (100 req/min)', async () => {
+		it('falls back to inactive-floor limits (100 req/min)', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: true, remaining: 50, limit: 100, reset: Date.now() / 1000 + 60 });
 
 			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'nonexistent-plan' }));
@@ -168,14 +168,14 @@ describe('checkApiPlanRateLimit', () => {
 		it('returns proper error envelope with RATE_LIMITED code', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: false, remaining: 0, limit: 100, reset: Date.now() / 1000 + 45, retryAfter: 45 });
 
-			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'free' }));
+			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'inactive' }));
 			expect(result).not.toBeNull();
 			expect(result!.status).toBe(429);
 
 			const body = await result!.json();
 			expect(body.data).toBeNull();
 			expect(body.error.code).toBe('RATE_LIMITED');
-			expect(body.error.message).toContain('free');
+			expect(body.error.message).toContain('inactive');
 			expect(body.error.message).toContain('100');
 			expect(body.error.message).toContain('45');
 		});
@@ -192,7 +192,7 @@ describe('checkApiPlanRateLimit', () => {
 		it('has Content-Type application/json', async () => {
 			mockCheck.mockResolvedValueOnce({ allowed: false, remaining: 0, limit: 100, reset: Date.now() / 1000 + 30, retryAfter: 30 });
 
-			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'free' }));
+			const result = await checkApiPlanRateLimit(makeCtx({ planSlug: 'inactive' }));
 			expect(result!.headers.get('Content-Type')).toBe('application/json');
 		});
 	});

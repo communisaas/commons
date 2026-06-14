@@ -7,7 +7,7 @@ function makeContext(scopes: string[]): ApiKeyContext {
 		orgId: 'org_test123' as Id<'organizations'>,
 		keyId: 'key_test123' as Id<'apiKeys'>,
 		scopes,
-		planSlug: 'free'
+		planSlug: 'inactive'
 	};
 }
 

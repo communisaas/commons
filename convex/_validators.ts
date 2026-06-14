@@ -99,7 +99,10 @@ export const eventStatus = v.union(
 );
 
 export const subscriptionPlan = v.union(
-	v.literal('free'),
+	// `inactive` is the gated floor for unsubscribed/canceled orgs — not a
+	// marketed tier (absent from PLAN_ORDER), but a persisted plan value the
+	// cancellation path writes, so it must validate.
+	v.literal('inactive'),
 	v.literal('starter'),
 	v.literal('organization'),
 	v.literal('coalition')

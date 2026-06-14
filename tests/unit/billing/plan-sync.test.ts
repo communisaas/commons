@@ -17,12 +17,12 @@ import { PLANS } from '$lib/server/billing/plans';
  * If you change plans.ts, update both this test AND convex/subscriptions.ts.
  */
 const EXPECTED_CONVEX_MIRROR = {
-	free: {
+	inactive: {
 		priceCents: 0,
-		maxSeats: 2,
-		maxTemplatesMonth: 10,
-		maxVerifiedActions: 100,
-		maxEmails: 1_000,
+		maxSeats: 1,
+		maxTemplatesMonth: 2,
+		maxVerifiedActions: 0,
+		maxEmails: 0,
 		maxSms: 0
 	},
 	starter: {

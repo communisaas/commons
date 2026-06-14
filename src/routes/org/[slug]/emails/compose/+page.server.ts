@@ -151,8 +151,10 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			: Promise.resolve(null)
 	]);
 
-	// A/B testing allowed if org has starter+ plan
-	const abTestingAllowed = FEATURES.AB_TESTING && sub?.plan !== 'free';
+	// A/B testing allowed if org has an active marketed plan (Starter+).
+	// An org with no subscription falls to the gated `inactive` floor (sub is
+	// null here), so require a present, non-inactive plan.
+	const abTestingAllowed = FEATURES.AB_TESTING && sub != null && sub.plan !== 'inactive';
 	const serverDispatchReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
 		orgKeyConfigured: Boolean(orgKeyResult?.orgKeyVerifier)
 	});
@@ -455,7 +457,7 @@ export const actions: Actions = {
 
 		// Check plan via Convex
 		const sub = await serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug });
-		if (!FEATURES.AB_TESTING || sub?.plan === 'free') {
+		if (!FEATURES.AB_TESTING || sub == null || sub.plan === 'inactive') {
 			return fail(403, { error: 'A/B testing requires a Starter plan or above.' });
 		}
 
