@@ -313,14 +313,13 @@ export function generateMailtoUrl(
 					trustTier,
 				});
 				footer += `\n${proofLine}`;
+				// Only emit the verify URL when it resolves: the active credential
+				// hash is the record /v/[hash] looks up. A truncated user id 404s.
 				if (user?.credentialHash) {
 					footer += `\ncommons.email/v/${user.credentialHash}`;
-				} else if (user?.id) {
-					footer += `\ncommons.email/v/${user.id.slice(0, 8)}`;
 				}
 			} else if (trustTier >= 1) {
 				footer += '\nVerified sender';
-				if (user?.id) footer += `\ncommons.email/v/${user.id.slice(0, 8)}`;
 			}
 
 			const enhancedBody =

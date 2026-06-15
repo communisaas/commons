@@ -20,6 +20,7 @@ import type * as _downgradeGuard from "../_downgradeGuard.js";
 import type * as _emailMergeFields from "../_emailMergeFields.js";
 import type * as _emailRecipientFilter from "../_emailRecipientFilter.js";
 import type * as _externalIds from "../_externalIds.js";
+import type * as _individualAuthoringCap from "../_individualAuthoringCap.js";
 import type * as _internalAuth from "../_internalAuth.js";
 import type * as _orgHash from "../_orgHash.js";
 import type * as _orgKey from "../_orgKey.js";
@@ -96,6 +97,7 @@ declare const fullApi: ApiFromModules<{
   _emailMergeFields: typeof _emailMergeFields;
   _emailRecipientFilter: typeof _emailRecipientFilter;
   _externalIds: typeof _externalIds;
+  _individualAuthoringCap: typeof _individualAuthoringCap;
   _internalAuth: typeof _internalAuth;
   _orgHash: typeof _orgHash;
   _orgKey: typeof _orgKey;

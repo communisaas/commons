@@ -24,7 +24,7 @@ if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONM
 
 export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
-	DEBATE: true,
+	DEBATE: false,
 
 	/**
 	 * CWC delivery, district officials, congressional template routing.

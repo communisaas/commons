@@ -49,7 +49,7 @@
 		template: Template;
 		inModal: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user: { id: string; name: string | null; trust_tier?: number; district_code?: string } | null;
+		user: { id: string; name: string | null; trust_tier?: number; district_code?: string; credentialHash?: string | null } | null;
 		onScroll: (isAtBottom: boolean, scrollProgress?: number) => void;
 		personalConnectionValue: string;
 		onScrollStateChange?: (scrollState: unknown) => void;
@@ -70,7 +70,19 @@
 		return null;
 	});
 	const hasGovId = $derived(trustTier >= 3);
-	const proofHash = $derived(user?.id ? user.id.slice(0, 8) : null);
+	// The verify URL must point at a resolvable record. Only the user's active
+	// district credentialHash resolves at /v/[hash]; a truncated user id 404s.
+	// Null when unverified → no link is rendered (see {#if proofHash}).
+	const proofHash = $derived(user?.credentialHash ?? null);
+
+	// Suppress the footer entirely when there's nothing to attest — otherwise an
+	// unverified user (no label, no resolvable hash, no gov-ID upgrade CTA) gets
+	// an orphan divider over empty space.
+	const showProofFooter = $derived(
+		context === 'page' &&
+			!!user &&
+			(!!proofLabel || !!proofHash || (trustTier >= 2 && trustTier < 3 && !!onVerifyIdentity))
+	);
 
 	const recipients = $derived(extractRecipientEmails(template?.recipient_config));
 	const recipientConfig = $derived(parseRecipientConfig(template?.recipient_config));
@@ -411,7 +423,7 @@
 	{/if}
 
 	<!-- Proof footer: attestation carried by the message -->
-	{#if context === 'page' && user}
+	{#if showProofFooter}
 		<div class="proof-footer mt-8">
 			<div class="h-px bg-slate-300/50 mb-4"></div>
 			<div class="flex items-baseline gap-1.5 text-[13px]">
@@ -428,11 +440,13 @@
 				{/if}
 			</div>
 			{#if proofHash}
+				<!-- href carries the full hash (must match to resolve); the display is
+				     elided so the 64-char hash doesn't sprawl the proof footer. -->
 				<a
 					href="/v/{proofHash}"
 					class="mt-0.5 block font-mono text-xs text-slate-400 hover:text-slate-600 transition-colors"
 				>
-					commons.email/v/{proofHash}
+					commons.email/v/{proofHash.slice(0, 8)}&hellip;
 				</a>
 			{/if}
 

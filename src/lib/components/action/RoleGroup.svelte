@@ -16,7 +16,11 @@
 		departingRecipients = new Set(),
 		onWriteTo,
 		isDistrictGroup = false,
-		showRoleBadge = false
+		showRoleBadge = false,
+		canReportBounce = false,
+		reportedBounces = new Set(),
+		reportingBounce = null,
+		onReportBounce
 	}: {
 		group: RoleGroupData | { label: string; members: LandscapeMember[] };
 		contactedRecipients: Set<string>;
@@ -24,6 +28,10 @@
 		onWriteTo: (member: LandscapeMember) => void;
 		isDistrictGroup?: boolean;
 		showRoleBadge?: boolean;
+		canReportBounce?: boolean;
+		reportedBounces?: Set<string>;
+		reportingBounce?: string | null;
+		onReportBounce?: (email: string) => void;
 	} = $props();
 
 	const headerMargin = $derived(group.members.length === 1 ? 'mb-2' : 'mb-3');
@@ -44,6 +52,10 @@
 					departing={departingRecipients.has(member.id)}
 					{onWriteTo}
 					{showRoleBadge}
+					{canReportBounce}
+					reported={!!member.email && reportedBounces.has(member.email)}
+					reporting={!!member.email && reportingBounce === member.email}
+					{onReportBounce}
 				/>
 			{:else}
 				<DecisionMakerLandscapeCard
@@ -52,6 +64,10 @@
 					departing={departingRecipients.has(member.id)}
 					{onWriteTo}
 					{showRoleBadge}
+					{canReportBounce}
+					reported={!!member.email && reportedBounces.has(member.email)}
+					reporting={!!member.email && reportingBounce === member.email}
+					{onReportBounce}
 				/>
 			{/if}
 		{/each}

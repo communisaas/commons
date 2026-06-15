@@ -25,13 +25,21 @@
 		contacted = false,
 		departing = false,
 		onWriteTo,
-		showRoleBadge = false
+		showRoleBadge = false,
+		canReportBounce = false,
+		reported = false,
+		reporting = false,
+		onReportBounce
 	}: {
 		member: LandscapeMember;
 		contacted: boolean;
 		departing: boolean;
 		onWriteTo: (member: LandscapeMember) => void;
 		showRoleBadge?: boolean;
+		canReportBounce?: boolean;
+		reported?: boolean;
+		reporting?: boolean;
+		onReportBounce?: (email: string) => void;
 	} = $props();
 
 	function extractDomain(url: string): string {
@@ -45,10 +53,21 @@
 	const canAct = $derived(member.deliveryRoute !== 'recorded' && member.deliveryRoute !== 'phone_only');
 	const isActive = $derived(canAct && !contacted && !departing);
 
+	// A bounce only means something for a direct email route; CWC/form delivery
+	// has no email to bounce. Tier gate is enforced by the parent (server too).
+	const canFlagBounce = $derived(
+		canReportBounce && member.deliveryRoute === 'email' && !!member.email
+	);
+
 	function handleClick() {
 		if (isActive) {
 			onWriteTo(member);
 		}
+	}
+
+	function reportBounce(e: MouseEvent) {
+		e.stopPropagation();
+		if (member.email) onReportBounce?.(member.email);
 	}
 </script>
 
@@ -88,6 +107,20 @@
 					<Mail class="h-3 w-3" />
 					Email started
 				</span>
+				{#if canFlagBounce}
+					{#if reported}
+						<span class="text-xs text-[var(--coord-verified)]">Reported</span>
+					{:else}
+						<button
+							type="button"
+							class="bounce-flag text-xs text-slate-400 underline decoration-dotted underline-offset-2 py-2 -my-2 hover:text-slate-600"
+							disabled={reporting}
+							onclick={reportBounce}
+						>
+							didn't arrive?
+						</button>
+					{/if}
+				{/if}
 			{:else if member.deliveryRoute === 'cwc'}
 				<span class="action-link flex items-center gap-0.5 text-xs text-slate-400 transition-colors duration-150">
 					Send via {labels.legislativeBody}
@@ -138,7 +171,7 @@
 	</button>
 {:else}
 	<div
-		class="entity min-h-[44px]
+		class="entity group min-h-[44px]
 			{departing ? 'departing-entity' : contacted ? 'entity--contacted' : ''}"
 	>
 		{@render entityContent()}
@@ -164,6 +197,28 @@
 	}
 	.entity--contacted :global(h4) { color: var(--color-slate-400); }
 	.entity--contacted :global(p) { color: var(--color-slate-300); }
+
+	/* Bounce flag — subsidiary inquiry affordance (dotted underline = inquiry,
+	   not a primary action). Recedes until the entity is hovered/focused on
+	   pointer devices; stays quietly visible on touch where there is no hover. */
+	.bounce-flag {
+		transition: opacity 150ms ease-out;
+	}
+	@media (hover: hover) and (pointer: fine) {
+		.bounce-flag {
+			opacity: 0;
+		}
+		:global(.group:hover) .bounce-flag,
+		.bounce-flag:focus-visible {
+			opacity: 1;
+		}
+	}
+	/* Submitting cue — scoped (unlayered) so it wins over the reveal rules above
+	   on pointer devices, where a Tailwind disabled: utility would not. */
+	.bounce-flag:disabled {
+		opacity: 0.5;
+	}
+
 	.departing-entity { position: relative; }
 	.departing-pulse {
 		animation: breathe 1.5s ease-in-out infinite;

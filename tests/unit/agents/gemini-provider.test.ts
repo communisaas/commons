@@ -151,13 +151,13 @@ describe('Gemini Client — Singleton & Configuration', () => {
 	});
 
 	it('GEMINI_CONFIG exposes expected model name', () => {
-		expect(GEMINI_CONFIG.model).toBe('gemini-3-flash-preview');
+		expect(GEMINI_CONFIG.model).toBe('gemini-3.5-flash');
 	});
 
 	it('GEMINI_CONFIG has sensible defaults', () => {
 		expect(GEMINI_CONFIG.defaults.temperature).toBe(0.3);
 		expect(GEMINI_CONFIG.defaults.maxOutputTokens).toBe(65536);
-		expect(GEMINI_CONFIG.defaults.thinkingLevel).toBe('medium');
+		expect(GEMINI_CONFIG.defaults.thinkingLevel).toBe('low');
 	});
 
 	it('getGeminiClient returns a client when API key is set', () => {

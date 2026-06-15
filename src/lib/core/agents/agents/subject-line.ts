@@ -217,7 +217,7 @@ ${options.description}`;
 		systemInstruction: systemPrompt,
 		responseSchema: SUBJECT_LINE_SCHEMA,
 		temperature: 0.7, // Creative latitude for sharp, resonant lines
-		thinkingLevel: 'medium', // Context extraction + copywriting — 'high' causes circular self-validation loops
+		thinkingLevel: 'low', // Issue extraction + a short subject line — low reasoning is sufficient and avoids over-elaboration
 		previousInteractionId: options.previousInteractionId
 	});
 
@@ -263,7 +263,7 @@ Generate the output with subject_line, core_message, topics, url_slug, and voice
 				systemInstruction: systemPrompt,
 				responseSchema: SUBJECT_LINE_SCHEMA,
 				temperature: 0.8, // Higher on retry for creative range
-				thinkingLevel: 'medium',
+				thinkingLevel: 'low',
 				previousInteractionId: currentInteractionId
 			}
 		);
