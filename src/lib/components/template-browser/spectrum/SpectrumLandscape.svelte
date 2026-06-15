@@ -38,7 +38,7 @@
 	import LensToggle, { type Lens } from './LensToggle.svelte';
 	import SpectrumOverview from './SpectrumOverview.svelte';
 	import { Artifact, EntityCluster } from '$lib/design';
-	import { TIMING } from '$lib/design/motion';
+	import { TIMING, EASING } from '$lib/design/motion';
 
 	interface Props {
 		/** The public templates to lay out as a topical field. */
@@ -256,10 +256,13 @@
 
 	// ─── The dive: a descent into the chosen template ─────────────────────────
 	//
-	// Selecting a tile is falling into it. The field recedes (blur + dim) and the
-	// chosen template ascends into an Artifact — the one white bounded surface for
-	// a floated object — wrapping the page's own preview. Back / esc / a tap on the
-	// receded field reverses the fall: the Artifact settles away, the field returns
+	// Selecting a tile is falling into it. The WHOLE page recedes behind a single
+	// full-viewport backdrop scrim (blur + a faint warm dim) and the chosen template
+	// ascends into an Artifact — the one white bounded surface for a floated object —
+	// wrapping the page's own preview. Because the scrim is one fixed plane over
+	// everything, the hero beside the field and the header above it recede with the
+	// field, as one — no half-sharp seam, one composited blur layer. Back / esc / a
+	// tap on the scrim reverses the fall: the Artifact settles away, the page returns
 	// to the EXACT state it left (scroll position, lens, selection cleared), and
 	// focus lands back on the tile it rose from. Reversible, no hidden state.
 	//
@@ -328,6 +331,24 @@
 		onClose?.();
 	}
 
+	// Portal the descent layer to <body>. The field sits inside the page's
+	// `.template-list-column`, which is a `position: relative; z-index: 1` stacking
+	// context, and the hero beside it sits in a sticky `z-index: 10` column — so a
+	// scrim left in place would be capped at z-index 1 and the hero (z-index 10)
+	// would paint OVER it, leaving the left half sharp. Moving the layer to <body>
+	// lifts it to the document root, where its z-index clears every page context and
+	// its backdrop-filter blurs the WHOLE page beneath it as one. Mirrors the
+	// existing body-portal pattern (AnimatedPopover). Client-only (actions never run
+	// under SSR), so the document reads need no guard.
+	function portalToBody(node: HTMLElement) {
+		document.body.appendChild(node);
+		return {
+			destroy() {
+				node.remove();
+			}
+		};
+	}
+
 	// Esc reverses the dive. A keydown on the descent layer is enough — focus is
 	// trapped inside it while diving, so the handler always sees the key.
 	function handleDiveKeydown(event: KeyboardEvent) {
@@ -356,11 +377,12 @@
 	}
 </script>
 
-<!-- The whole topical field recedes as one when a dive is open — blur + dim
-     behind the risen Artifact, so the descent reads as a fall into one template
-     and a return to the same place. The recede is a class on this wrapper; the
-     descent layer below is its sibling, so it is never blurred by its own field. -->
-<div class="spectrum-field" class:field-receding={diving}>
+<!-- The field stays inert (no clicks, no focus) while a dive is open, but it is
+     NOT itself blurred: the whole page — this field, the hero beside it, the
+     header above it — recedes as one behind a single full-viewport backdrop scrim
+     in the descent layer below, so there is no half-sharp seam and one composited
+     layer does the blur rather than a deep subtree. -->
+<div class="spectrum-field" class:field-inert={diving}>
 	{#if templates.length > 0}
 		<!-- The lens chooses the organiser; hue keeps encoding topic in both. -->
 		<LensToggle {lens} onChange={selectLens} />
@@ -382,7 +404,6 @@
 					group={band}
 					placeLabel={band.placeLabel}
 					blooming={bloomingDomain === band.domain}
-					divingId={diving ? selectedId : null}
 					{selectedId}
 					{onSelect}
 					{onHover}
@@ -403,20 +424,24 @@
 </div>
 
 {#if diving}
-	<!-- The descent: the chosen template, risen as an Artifact over the receded
-	     field. A tap on the backdrop, esc, or back reverses it. Focus is trapped
+	<!-- The descent: the chosen template, risen as an Artifact over the whole
+	     receded page. A tap on the scrim, esc, or back reverses it. Focus is trapped
 	     inside the Artifact while it is up and restored to the originating tile on
 	     close. The preview inside is the page's own — mounted here, never forked. -->
 	<div
 		class="dive-layer"
 		role="presentation"
 		onkeydown={handleDiveKeydown}
+		use:portalToBody
 	>
-		<!-- The receded field is the way back: a click anywhere on it closes the
-		     dive. A button (not a div) so the keyboard reaches it natively. -->
+		<!-- The scrim recedes the whole page as one: a fixed full-viewport plane that
+		     blurs and faintly dims everything painted behind it — this field, the hero
+		     beside it, the header above it — so the dive reads as a fall away from the
+		     entire page, not just one column. It is also the way back: a click anywhere
+		     on it closes the dive. A button (not a div) so the keyboard reaches it. -->
 		<button
 			type="button"
-			class="dive-backdrop"
+			class="dive-scrim"
 			aria-label="Back to the field"
 			onclick={closeDive}
 		></button>
@@ -428,6 +453,7 @@
 			aria-modal="true"
 			aria-label="Template preview"
 			tabindex="-1"
+			style="--dive-ascent-ms: {TIMING.SLOW}ms; --dive-ascent-ease: {EASING};"
 		>
 			<Artifact padding="compact" class="dive-artifact">
 				{@render dive?.()}
@@ -478,28 +504,19 @@
 	}
 
 	/*
-	 * The recede. While a dive is open the whole field steps back — softened and
-	 * dimmed so the eye reads it as the place left behind, not a second focus. The
-	 * blur is the expensive channel, so it rides only the not-reduced-motion path
-	 * (below); the dim is cheap and applies in both. NORMAL (220ms) — the field
-	 * settles back as the Artifact rises.
+	 * While a dive is open the field is inert — it must not catch clicks or focus,
+	 * because the whole page is being read through the scrim. The recede itself is
+	 * NOT applied here: the field is blurred/dimmed (along with the hero beside it
+	 * and the header above it) by the single full-viewport scrim in the descent
+	 * layer below. No per-column filter, so there is no half-sharp seam.
 	 */
-	.spectrum-field {
-		transition:
-			filter 220ms cubic-bezier(0.4, 0, 0.2, 1),
-			opacity 220ms cubic-bezier(0.4, 0, 0.2, 1);
-	}
-
-	.spectrum-field.field-receding {
-		opacity: 0.55;
-		filter: blur(4px);
-		/* The field is behind the dive — it must not catch clicks or focus. */
+	.spectrum-field.field-inert {
 		pointer-events: none;
 	}
 
 	/*
 	 * The descent layer — a full-viewport plane the risen Artifact floats in. It
-	 * sits over the receded field; its backdrop is the way back.
+	 * sits over the whole page; its scrim is the recede AND the way back.
 	 */
 	.dive-layer {
 		position: fixed;
@@ -512,17 +529,27 @@
 	}
 
 	/*
-	 * The backdrop is the receded field made reachable — a faint warm scrim over
-	 * the cream ground, never a hard black overlay. Clicking it reverses the dive.
+	 * The scrim recedes the whole page as one. A fixed full-viewport plane that
+	 * blurs everything painted behind it (one composited backdrop-filter layer, not
+	 * a blurred 300-node subtree) and lays a faint warm dim over it — the modal
+	 * surface token (warm cream) at half alpha, never a hard black overlay. So the
+	 * field, the hero beside it, and the header above it recede together, with no
+	 * half-sharp seam. Clicking it reverses the dive. The blur is the expensive
+	 * channel, so it is dropped under reduced motion (below); the dim stays.
 	 */
-	.dive-backdrop {
+	.dive-scrim {
 		position: absolute;
 		inset: 0;
 		border: none;
 		margin: 0;
 		padding: 0;
 		cursor: pointer;
-		background: oklch(0.96 0.01 85 / 0.55);
+		/* Fallback for engines without color-mix: the modal surface token at full
+		   weight; the color-mix below takes it to half alpha where supported. */
+		background: var(--surface-overlay, oklch(0.975 0.005 55));
+		background: color-mix(in oklch, var(--surface-overlay, oklch(0.975 0.005 55)) 50%, transparent);
+		backdrop-filter: blur(4px);
+		-webkit-backdrop-filter: blur(4px);
 	}
 
 	/*
@@ -539,9 +566,11 @@
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
-		/* The ascent: the Artifact arrives with the firm, no-bounce ENTRANCE feel
-		   (stiffness 0.25 / damping 0.85 → ~280ms settle, minimal overshoot). */
-		animation: dive-ascend 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+		/* The ascent: the Artifact rises on system motion — SLOW (320ms) for the
+		   weight of a surfacing object, with the standard EASING. Both come from
+		   motion.ts via the inline custom properties above (TIMING.SLOW / EASING),
+		   so this transition carries no off-token literal. */
+		animation: dive-ascend var(--dive-ascent-ms) var(--dive-ascent-ease) both;
 	}
 
 	.dive-surface :global(.dive-artifact) {
@@ -561,16 +590,14 @@
 	}
 
 	/*
-	 * Reduced motion: no blur, no rise. The field dims (cheap, non-vestibular) and
-	 * the Artifact appears at once — the descent is instant, not animated.
+	 * Reduced motion: no blur, no rise. The scrim keeps only its faint warm dim
+	 * (cheap, non-vestibular) so the dive is still legibly set apart, and the
+	 * Artifact appears at once — the descent is instant, not animated.
 	 */
 	@media (prefers-reduced-motion: reduce) {
-		.spectrum-field {
-			transition: none;
-		}
-
-		.spectrum-field.field-receding {
-			filter: none;
+		.dive-scrim {
+			backdrop-filter: none;
+			-webkit-backdrop-filter: none;
 		}
 
 		.dive-surface {

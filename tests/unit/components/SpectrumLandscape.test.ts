@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { createRawSnippet } from 'svelte';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Template } from '$lib/types/template';
 import { resolveDomainHue } from '$lib/utils/domain-hue';
 
@@ -410,14 +412,23 @@ function diveSnippet(label = 'Send this message') {
 	}));
 }
 
-/** The risen dialog (the Artifact-wrapped preview floating over the field). */
+/** The risen dialog (the Artifact-wrapped preview floating over the field).
+ *  The descent layer portals to document.body (so the full-viewport scrim escapes
+ *  any ancestor stacking/overflow context), so look there, not in the container. */
 function diveDialog(container: HTMLElement): HTMLElement | null {
-	return container.querySelector('[role="dialog"]');
+	return container.ownerDocument.body.querySelector('[role="dialog"]');
 }
 
-/** The field wrapper — receded (blurred/dimmed) while a dive is open. */
+/** The field wrapper — made inert (no clicks/focus) while a dive is open. The
+ *  recede itself is NOT on the field: the scrim below blurs the whole page. */
 function field(container: HTMLElement): HTMLElement {
 	return container.querySelector('.spectrum-field') as HTMLElement;
+}
+
+/** The full-viewport backdrop scrim — the single plane that recedes the WHOLE
+ *  page (field + hero + header) behind the dive, and the way back. */
+function scrim(container: HTMLElement): HTMLElement | null {
+	return container.ownerDocument.body.querySelector('.dive-scrim');
 }
 
 describe('SpectrumLandscape — the dive (descent into a template)', () => {
@@ -431,20 +442,23 @@ describe('SpectrumLandscape — the dive (descent into a template)', () => {
 			props: { templates, onSelect: vi.fn(), dive: diveSnippet() }
 		});
 		expect(diveDialog(container)).toBeNull();
-		expect(field(container).classList.contains('field-receding')).toBe(false);
+		// No scrim and the field is not inert when nothing is diving.
+		expect(scrim(container)).toBeNull();
+		expect(field(container).classList.contains('field-inert')).toBe(false);
 	});
 
 	it('keeps the split view when no dive snippet is supplied (list-era behaviour)', () => {
-		// A selection with no preview snippet must NOT recede the field — the preview
+		// A selection with no preview snippet must NOT recede the page — the preview
 		// lives in its own column in that mode, and the descent stays disengaged.
 		const { container } = render(SpectrumLandscape, {
 			props: { templates, selectedId: 'a', onSelect: vi.fn() }
 		});
 		expect(diveDialog(container)).toBeNull();
-		expect(field(container).classList.contains('field-receding')).toBe(false);
+		expect(scrim(container)).toBeNull();
+		expect(field(container).classList.contains('field-inert')).toBe(false);
 	});
 
-	it('opens: the preview rises in a modal dialog over the receded field', () => {
+	it('opens: the preview rises in a modal dialog over a full-viewport scrim', () => {
 		const { container, getByTestId } = render(SpectrumLandscape, {
 			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
 		});
@@ -453,19 +467,13 @@ describe('SpectrumLandscape — the dive (descent into a template)', () => {
 		expect(dialog?.getAttribute('aria-modal')).toBe('true');
 		// The page's own preview is mounted inside the risen surface, not forked.
 		expect(getByTestId('dive-cta')).toBeTruthy();
-		// The field behind it recedes.
-		expect(field(container).classList.contains('field-receding')).toBe(true);
-	});
-
-	it('marks the originating tile as the ascent origin while diving', () => {
-		const { container } = render(SpectrumLandscape, {
-			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
-		});
-		const origin = container.querySelector('[data-template-id="a"]');
-		expect(origin?.classList.contains('card-ascending')).toBe(true);
-		// Only the chosen tile lifts.
-		const other = container.querySelector('[data-template-id="b"]');
-		expect(other?.classList.contains('card-ascending')).toBe(false);
+		// The recede is now a SINGLE full-viewport scrim plane (which blurs the whole
+		// page — field, hero, header — as one), not a per-column filter on the field.
+		// Exactly one scrim exists; the field itself only goes inert (no clicks/focus)
+		// and carries no recede/blur class of its own.
+		expect(container.ownerDocument.body.querySelectorAll('.dive-scrim').length).toBe(1);
+		expect(field(container).classList.contains('field-inert')).toBe(true);
+		expect(field(container).classList.contains('field-receding')).toBe(false);
 	});
 
 	it('moves focus into the risen preview on open', async () => {
@@ -486,34 +494,64 @@ describe('SpectrumLandscape — the dive (descent into a template)', () => {
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
-	it('reverses when the receded field (backdrop) is tapped', async () => {
+	it('reverses when the scrim is tapped', async () => {
 		const onClose = vi.fn();
 		const { container } = render(SpectrumLandscape, {
 			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet(), onClose }
 		});
-		const backdrop = container.querySelector('.dive-backdrop') as HTMLButtonElement;
-		expect(backdrop).toBeTruthy();
-		await fireEvent.click(backdrop);
+		const back = scrim(container) as HTMLButtonElement;
+		expect(back).toBeTruthy();
+		await fireEvent.click(back);
 		expect(onClose).toHaveBeenCalledTimes(1);
 	});
 
-	it('round-trips: clearing the selection settles the field back to rest', async () => {
+	it('round-trips: clearing the selection settles the page back to rest', async () => {
 		// The descent is reversible with no hidden state — re-render with the
-		// selection cleared (what the page does on close) and the dialog is gone,
-		// the field un-receded, exactly as before the dive.
+		// selection cleared (what the page does on close) and the dialog and scrim
+		// are gone, the field no longer inert, exactly as before the dive.
 		const { container, rerender } = render(SpectrumLandscape, {
 			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
 		});
 		expect(diveDialog(container)).toBeTruthy();
-		expect(field(container).classList.contains('field-receding')).toBe(true);
+		expect(scrim(container)).toBeTruthy();
+		expect(field(container).classList.contains('field-inert')).toBe(true);
 
 		await rerender({ templates, selectedId: null, onSelect: vi.fn(), dive: diveSnippet() });
 
 		expect(diveDialog(container)).toBeNull();
-		expect(field(container).classList.contains('field-receding')).toBe(false);
+		expect(scrim(container)).toBeNull();
+		expect(field(container).classList.contains('field-inert')).toBe(false);
 		// The full field is still laid out beneath — nothing was torn down.
 		expect(tiles(container).length).toBe(2);
 		expect(bandNames(container)).toEqual(expect.arrayContaining(['Healthcare', 'Housing']));
+	});
+
+	it('disables the scrim blur under reduced motion — only the warm dim remains', () => {
+		// The blur is the expensive, vestibular channel, so under
+		// prefers-reduced-motion the scrim must drop its backdrop-filter while the
+		// (cheap, non-vestibular) warm dim stays. This component's scoped CSS is not
+		// injected into the jsdom document (so getComputedStyle/styleSheets cannot
+		// see it); the contract is structural, so assert it against the component
+		// source: the scrim declares the blur at rest, and a reduced-motion block
+		// zeroes that blur for the scrim.
+		// Resolved from the vitest root (process.cwd() = the repo), so it does not
+		// depend on import.meta.url being available under the test transform.
+		const src = readFileSync(
+			resolve(
+				process.cwd(),
+				'src/lib/components/template-browser/spectrum/SpectrumLandscape.svelte'
+			),
+			'utf8'
+		);
+
+		// At rest the scrim blurs the page behind the dive.
+		const scrimRule = src.match(/\.dive-scrim\s*\{[^}]*\}/s)?.[0] ?? '';
+		expect(scrimRule).toMatch(/backdrop-filter:\s*blur/);
+
+		// The reduced-motion media block turns the scrim's backdrop blur off.
+		const reducedBlock = src.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{.*\}/s)?.[0] ?? '';
+		const reducedScrim = reducedBlock.match(/\.dive-scrim\s*\{[^}]*\}/s)?.[0] ?? '';
+		expect(reducedScrim).toMatch(/backdrop-filter:\s*none/);
 	});
 
 	it('floats the preview in an Artifact (the only bounded white surface), no foreign chrome', () => {
@@ -524,7 +562,7 @@ describe('SpectrumLandscape — the dive (descent into a template)', () => {
 		const dialog = diveDialog(container);
 		expect(dialog?.querySelector('.artifact')).toBeTruthy();
 		// No oversized radius or pill chrome on the descent layer.
-		const layer = container.querySelector('.dive-layer') as HTMLElement;
+		const layer = container.ownerDocument.body.querySelector('.dive-layer') as HTMLElement;
 		expect(layer.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 	});
 });

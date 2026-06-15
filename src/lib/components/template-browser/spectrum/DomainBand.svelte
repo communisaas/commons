@@ -63,10 +63,6 @@
 		 *  spine blooms brighter, then settles, confirming "you arrived here". The
 		 *  field flips it back to false after the bloom; reduced-motion never sets it. */
 		blooming?: boolean;
-		/** The template id a dive has currently risen from, while the dive is open.
-		 *  The tile matching it lifts off the receding field as the ascent origin.
-		 *  Null at rest → no tile lifts. */
-		divingId?: string | null;
 	}
 
 	let {
@@ -78,8 +74,7 @@
 		indexOffset = 0,
 		initialVisible = 6,
 		placeLabel = null,
-		blooming = false,
-		divingId = null
+		blooming = false
 	}: Props = $props();
 
 	// The spine colour and order key — already resolved by the grouper's hue
@@ -161,7 +156,6 @@
 					resolvedHue={resolveDomainHue(template)}
 					{placeLabel}
 					selected={selectedId === template.id}
-					ascending={divingId === template.id}
 					index={indexOffset + i}
 					newlyRevealed={i >= initialVisible}
 					onSelect={onSelect}
