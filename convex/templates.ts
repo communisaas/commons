@@ -4,6 +4,10 @@ import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
+import {
+  startOfMonthUTC,
+  decideIndividualAuthoring,
+} from "./_individualAuthoringCap";
 import anchorsData from "./domain-anchors.json";
 
 declare const process: { env: Record<string, string | undefined> };
@@ -998,6 +1002,27 @@ export const createTemplate = mutation({
         if (templates.length >= org.maxTemplatesMonth) {
           throw new Error("TEMPLATE_QUOTA_EXCEEDED");
         }
+      }
+    } else {
+      // L1 individual AI-authoring cap. Individuals are free forever to ACT on
+      // existing messages; the bound is on AI-AUTHORING NEW templates (the
+      // expensive person-layer TemplateCreator generation path). Org members
+      // are governed by their plan's maxTemplatesMonth above, so this only
+      // applies to the un-orged individual path.
+      //
+      // Query-time aggregation from timestamped rows (templates.by_userId +
+      // _creationTime >= start-of-month), mirroring the billing pattern — NOT a
+      // denormalized counter that needs resetting.
+      const now = Date.now();
+      const monthStart = startOfMonthUTC(now);
+      const monthToDate = await ctx.db
+        .query("templates")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .filter((q) => q.gte(q.field("_creationTime"), monthStart))
+        .collect();
+      const decision = decideIndividualAuthoring(monthToDate.length, now);
+      if (!decision.ok) {
+        throw new Error(decision.message);
       }
     }
 

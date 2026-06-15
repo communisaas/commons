@@ -61,7 +61,7 @@ export interface CellWeight {
 	identity?: { govId: number; address: number; email: number };
 	/** Per-cell hourly bins aligned to the packet's temporal field (same startMs/binWidthMs) */
 	temporalBins?: number[];
-	/** Per-cell authorship: individually composed vs shared */
+	/** Per-cell authorship: personalized (edited away from verbatim) vs shared */
 	authorship?: { individual: number; shared: number };
 }
 
@@ -97,7 +97,7 @@ export interface VerificationPacket {
 	/** Unique district hashes (geographic breadth) */
 	districtCount: number;
 
-	/** Authorship: individually composed vs shared template vs unknown */
+	/** Authorship: personalized (edited vs verbatim) vs shared template vs unknown */
 	authorship: AuthorshipBreakdown;
 	/** Submission date range */
 	dateRange: DateRange;

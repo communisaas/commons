@@ -168,7 +168,7 @@
 						<div class="specimen__evidence-row">
 							<span class="specimen__evidence-label">Authorship</span>
 							<span class="specimen__evidence-detail">
-								<strong>967</strong> individually composed
+								<strong>967</strong> personalized
 								<span class="specimen__sep">&middot;</span>
 								<strong>237</strong> shared statements
 							</span>
