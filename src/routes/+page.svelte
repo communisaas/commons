@@ -339,12 +339,11 @@
 		)
 	);
 
-	// Topical-field swap. The geographic list is the default; the hue-ordered
-	// landscape is opt-in via `?spectrum=1` while it is brought up, so the list
-	// stays a working fallback and the default never moves until the landscape
-	// is ready. Reading the param off the page store keeps it reactive and
-	// SSR-safe (no window access).
-	const showSpectrum = $derived($page.url.searchParams.get('spectrum') === '1');
+	// Topical-field swap. The hue-ordered landscape is the default surface; the
+	// flat geographic list stays a working fallback, reachable with `?spectrum=0`
+	// so it can be re-enabled without code changes. Reading the param off the page
+	// store keeps it reactive and SSR-safe (no window access).
+	const showSpectrum = $derived($page.url.searchParams.get('spectrum') !== '0');
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
