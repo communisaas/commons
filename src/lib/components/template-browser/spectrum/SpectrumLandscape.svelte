@@ -446,6 +446,19 @@
 		padding-top: 0.25rem;
 	}
 
+	/*
+	 * Below the mobile breakpoint the bands read as full-width stacked sections:
+	 * the hue spine stays (it is the topic dimension, not chrome), but the gap to
+	 * the body tightens so each band uses the whole narrow column. The generous
+	 * void between bands still does the chunking — no borders, no boxes — and the
+	 * sticky scrubber above keeps the map in reach while these scroll.
+	 */
+	@media (max-width: 767px) {
+		:global(.spectrum-landscape .domain-band) {
+			gap: 0.6rem;
+		}
+	}
+
 	.spectrum-empty {
 		padding: 3rem 1.5rem;
 		text-align: center;

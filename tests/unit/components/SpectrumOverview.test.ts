@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fireEvent, render } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import type { Template } from '$lib/types/template';
 import type { DomainGroup } from '$lib/core/topic/domain-grouping';
 
@@ -307,5 +308,136 @@ describe('SpectrumOverview', () => {
 		const { container } = render(SpectrumOverview, { props: { bands } });
 		await fireEvent.pointerEnter(jumps(container)[1]);
 		expect(caption(container).textContent?.trim()).toBe('Nationwide');
+	});
+});
+
+// ─── The mobile scrubber: a thumb-swipeable rail of named chips ──────────────
+//
+// Below 768px there is no pointer, so the map sheds the thin ribbon + hover
+// caption for a rail of named chips — every band reachable by swipe, every band
+// named at rest, each chip a full touch target that jumps the field. These tests
+// drive `matchMedia('(max-width: 767px)')` to match so the narrow branch mounts.
+
+/** Force the narrow-breakpoint media query on (or off) for the scrubber branch. */
+function setNarrow(isNarrow: boolean) {
+	Object.defineProperty(window, 'matchMedia', {
+		value: (query: string) => ({
+			matches: query.includes('max-width: 767px') ? isNarrow : false,
+			media: query,
+			onchange: null,
+			addEventListener: () => {},
+			removeEventListener: () => {},
+			addListener: () => {},
+			removeListener: () => {},
+			dispatchEvent: () => false
+		}),
+		writable: true,
+		configurable: true
+	});
+}
+
+/** The scrubber chips (one per band), in render order. */
+function chips(container: HTMLElement): HTMLButtonElement[] {
+	return Array.from(container.querySelectorAll('.spectrum-overview__chip'));
+}
+
+describe('SpectrumOverview — mobile scrubber (<768px)', () => {
+	afterEach(() => setNarrow(false));
+
+	it('swaps the ribbon for a named-chip rail below the mobile breakpoint', async () => {
+		setNarrow(true);
+		const bands = [makeBand('Healthcare', 240, 3), makeBand('Housing', 60, 2)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		// The narrow branch mounts on the client effect — flush it.
+		await tick();
+		await tick();
+		// The scrubber rail is present; the desktop ribbon + hover caption are not.
+		expect(container.querySelector('.spectrum-overview__rail')).toBeTruthy();
+		expect(container.querySelector('.spectrum-overview__ribbon')).toBeNull();
+		expect(container.querySelector('.spectrum-overview__caption')).toBeNull();
+		expect(container.querySelector('.spectrum-overview')?.classList.contains('spectrum-overview--scrubber')).toBe(true);
+	});
+
+	it('renders one chip per band, each naming its band and showing its count', async () => {
+		setNarrow(true);
+		const bands = [makeBand('Veterans Healthcare Access', 240, 3), makeBand('Affordable Housing', 60, 2)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		const rail = chips(container);
+		expect(rail.length).toBe(bands.length);
+		// Each chip names its own band (the words the section below shows) and cites
+		// its real template count.
+		expect(rail[0].textContent).toContain('Veterans Healthcare Access');
+		expect(rail[0].textContent).toContain('3');
+		expect(rail[1].textContent).toContain('Affordable Housing');
+		expect(rail[1].textContent).toContain('2');
+		// Every chip carries a distinct, non-empty accessible name.
+		expect(rail[0].getAttribute('aria-label')).toBe('Jump to Veterans Healthcare Access');
+		expect(rail[1].getAttribute('aria-label')).toBe('Jump to Affordable Housing');
+	});
+
+	it('renders each chip as a native button (keyboard + pointer reachable)', async () => {
+		setNarrow(true);
+		const bands = [makeBand('Healthcare', 240, 1), makeBand('Housing', 60, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		// The chip is the touch target; its ≥44px floor is a CSS contract verified at
+		// the live 375px viewport. Here we pin the reachability contract: each chip is
+		// a native button, so it is keyboard-focusable and pointer-activatable.
+		const rail = chips(container);
+		expect(rail.length).toBe(bands.length);
+		for (const chip of rail) {
+			expect(chip.tagName).toBe('BUTTON');
+			expect(chip.getAttribute('type')).toBe('button');
+		}
+	});
+
+	it('jumps the field to the tapped band by its domain', async () => {
+		setNarrow(true);
+		const onFocusBand = vi.fn();
+		const bands = [makeBand('Healthcare', 240, 1), makeBand('Housing', 60, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands, onFocusBand } });
+		await tick();
+		await tick();
+		await fireEvent.click(chips(container)[1]);
+		expect(onFocusBand).toHaveBeenCalledWith('Housing');
+	});
+
+	it('tints each chip swatch with its band hue + momentum chroma (real channels only)', async () => {
+		setNarrow(true);
+		// Healthcare carries real reach, Housing is idle: the swatch fill cites the
+		// same bandMomentum-driven chroma the ribbon uses, so the map stays honest.
+		const bands = [
+			makeBand('Healthcare', 240, 1, { send_count: 12, coordinationScale: 3 }),
+			makeBand('Housing', 60, 1, { send_count: 0 })
+		];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		const rail = chips(container);
+		// Each chip carries its band hue as --card-hue and a fill citing that hue.
+		expect(rail[0].style.getPropertyValue('--card-hue')).toBe('240');
+		expect(rail[1].style.getPropertyValue('--card-hue')).toBe('60');
+		const fillChroma = (chip: HTMLButtonElement) => {
+			const match = /--chip-fill:\s*oklch\(0\.62\s+([\d.]+)/.exec(chip.getAttribute('style') ?? '');
+			return match ? Number(match[1]) : NaN;
+		};
+		// The band with real coordination reads at fuller chroma — no invented emphasis.
+		expect(fillChroma(rail[0])).toBeGreaterThan(fillChroma(rail[1]));
+	});
+
+	it('carries no pill, white box, or oversized radius in the scrubber', async () => {
+		setNarrow(true);
+		const bands = [makeBand('Healthcare', 240, 1)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		const rail = container.querySelector('.spectrum-overview__rail') as HTMLElement;
+		expect(rail.className).not.toMatch(/\bbg-white\b/);
+		for (const chip of chips(container)) {
+			expect(chip.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
+		}
 	});
 });
