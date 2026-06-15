@@ -241,11 +241,21 @@
 		gap: 0.75rem;
 	}
 
+	/*
+	 * Name and count read as one left-anchored label, not a justified row. A
+	 * `space-between` header pins the count to the band body's far-right edge —
+	 * but a band's tiles sit on the LEFT (a lone tile is capped, not full-bleed),
+	 * so the count would float alone over the empty ground to its right, an
+	 * L-shaped hole inside the neighbourhood. Keeping the count beside the name
+	 * makes the heading one block the eye reads as the band's title; the void then
+	 * sits cleanly to the right of the whole neighbourhood (composed ground between
+	 * bands), never punched under a stranded number. When a band fills multi-up the
+	 * label still leads at the left and the tiles spread beneath it.
+	 */
 	.band-header {
 		display: flex;
 		align-items: baseline;
-		justify-content: space-between;
-		gap: 1rem;
+		gap: 0.75rem;
 		flex-wrap: wrap;
 	}
 
