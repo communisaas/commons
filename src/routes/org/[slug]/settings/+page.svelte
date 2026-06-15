@@ -11,7 +11,7 @@
 	const isOwner = $derived(data.membership.role === 'owner');
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
-	const planName = $derived(data.usage.plan ?? data.subscription?.plan ?? 'free');
+	const planName = $derived(data.usage.plan ?? data.subscription?.plan ?? 'inactive');
 
 	// Invite form state
 	let inviteEmail = $state('');
@@ -1070,10 +1070,10 @@
 					transparency and aren't available yet.
 				</p>
 			</div>
-			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				{#each plans as plan}
 					{@const isCurrent = planName === plan.slug}
-					{@const isUpgrade = !isCurrent && plan.slug !== 'free'}
+					{@const isUpgrade = !isCurrent}
 					<div
 						class="space-y-4 rounded-md border p-5 {isCurrent
 							? 'border-teal-500/40 bg-teal-500/5'

@@ -2,6 +2,7 @@
 import type { Template } from '$lib/types/template';
 import { formatErrorMessage } from '$lib/utils/error-formatting';
 import { api, type ApiResponse } from '$lib/core/api';
+import { AppError, ERROR_CODES, type ApiError } from '$lib/types/errors';
 
 // Templates API wrapper (domain-specific response unwrapping)
 const templatesApi = {
@@ -316,6 +317,17 @@ function createTemplateStore() {
 				const result = await templatesApi.create(template);
 
 				if (!result.success) {
+					// Preserve the typed individual AI-authoring quota code so the
+					// at-cap upgrade card (Voice/Advocate) can be surfaced. The
+					// server stamps AUTHORING_QUOTA_EXCEEDED into errors[]; throw an
+					// AppError carrying it so the caller can branch on the code, not
+					// brittle message text.
+					const authoringQuota = (result.errors as ApiError[] | undefined)?.find(
+						(e) => e.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+					);
+					if (authoringQuota) {
+						throw new AppError(authoringQuota);
+					}
 					throw new Error(result.error || 'Failed to create template');
 				}
 

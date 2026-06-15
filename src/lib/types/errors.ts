@@ -45,6 +45,9 @@ export const ERROR_CODES = {
 
 	// Billing errors
 	TEMPLATE_QUOTA_EXCEEDED: 'TEMPLATE_QUOTA_EXCEEDED',
+	// Individual (person-layer) AI-authoring cap — distinct from the org
+	// TEMPLATE_QUOTA so the client can surface the Voice/Advocate upgrade card.
+	AUTHORING_QUOTA_EXCEEDED: 'AUTHORING_QUOTA_EXCEEDED',
 
 	// Auth errors
 	AUTH_REQUIRED: 'AUTH_REQUIRED',
@@ -74,6 +77,8 @@ export const ERROR_MESSAGES = {
 	[ERROR_CODES.MODERATION_FAILED]: 'Content moderation failed',
 
 	[ERROR_CODES.TEMPLATE_QUOTA_EXCEEDED]: 'Monthly template quota exceeded. Please upgrade your plan.',
+	[ERROR_CODES.AUTHORING_QUOTA_EXCEEDED]:
+		"You've reached your monthly AI-authoring limit. Upgrade to Voice or Advocate for higher-volume authoring.",
 
 	[ERROR_CODES.AUTH_REQUIRED]: 'Please sign in to continue',
 	[ERROR_CODES.AUTH_INVALID_TOKEN]: 'Your session has expired. Please sign in again.',

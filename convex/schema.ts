@@ -140,7 +140,13 @@ export default defineSchema({
 		location: v.optional(v.string()),
 		connection: v.optional(v.string()),
 		profileCompletedAt: v.optional(v.number()),
-		profileVisibility: v.string() // 'private' | 'public'
+		profileVisibility: v.string(), // 'private' | 'public'
+
+		// Stripe customer for individual (person-layer) paid authoring tiers.
+		// Mirrors organizations.stripeCustomerId so the individual checkout can
+		// find-or-create one Stripe customer per user and the webhook can resolve
+		// the user from the customer. Org subs use organizations.stripeCustomerId.
+		stripeCustomerId: v.optional(v.string())
 	})
 		.index('by_tokenIdentifier', ['tokenIdentifier'])
 		.index('by_email', ['email'])
@@ -150,7 +156,8 @@ export default defineSchema({
 		.index('by_passkeyCredentialId', ['passkeyCredentialId'])
 		.index('by_didKey', ['didKey'])
 		.index('by_walletAddress', ['walletAddress'])
-		.index('by_nearAccountId', ['nearAccountId']),
+		.index('by_nearAccountId', ['nearAccountId'])
+		.index('by_stripeCustomerId', ['stripeCustomerId']),
 
 	sessions: defineTable({
 		userId: v.id('users'),
@@ -2127,17 +2134,24 @@ export default defineSchema({
 
 		// Plan slug — canonical values at src/lib/server/billing/plans.ts.
 		// Tightened from v.string() to a closed union 2026-05-26 to catch
-		// silent free-tier downgrade at write time (the read-side fallback
-		// `PLANS[plan] ?? PLANS.free` at convex/subscriptions.ts:134
+		// silent downgrades at write time (the read-side fallback
+		// `PLANS[plan] ?? PLANS.inactive` at convex/subscriptions.ts
 		// degrades gracefully but observability is poor — a writer that
 		// silently passes 'Organization' (capitalized) would never be
 		// noticed by ops). Adding a new tier requires editing this union
-		// + plans.ts in lockstep; that's the right friction.
+		// + plans.ts in lockstep; that's the right friction. `inactive` is
+		// the gated floor (unsubscribed/canceled), not a marketed tier.
 		plan: v.union(
-			v.literal('free'),
+			v.literal('inactive'),
+			// Org (org-layer) plans — keyed on orgId.
 			v.literal('starter'),
 			v.literal('organization'),
-			v.literal('coalition')
+			v.literal('coalition'),
+			// Individual (person-layer) paid authoring tiers — keyed on userId.
+			// They buy ONLY authoring volume; the org-quota fields above are never
+			// synced for these. See src/lib/server/billing/plans.ts INDIVIDUAL_PLANS.
+			v.literal('voice'),
+			v.literal('advocate')
 		),
 		planDescription: v.optional(v.string()),
 		priceCents: v.number(),

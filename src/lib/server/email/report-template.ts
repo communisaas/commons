@@ -184,7 +184,7 @@ function renderHtml(ctx: ReportContext, attestationHash: string): string {
 	if (authorTotal > 0) {
 		const parts: string[] = [];
 		if (authorship.individual > 0) {
-			parts.push(`${authorship.individual} ${authorship.explicit ? 'individually composed' : 'distinct messages'}`);
+			parts.push(`${authorship.individual} ${authorship.explicit ? 'personalized' : 'distinct messages'}`);
 		}
 		if (authorship.shared > 0) {
 			parts.push(`${authorship.shared} shared ${authorship.shared === 1 ? 'statement' : 'statements'}`);
@@ -334,7 +334,7 @@ function renderHtml(ctx: ReportContext, attestationHash: string): string {
               ${
 								authorship.individual > 0
 									? `<p style="margin:8px 0 0 0;font-size:15px;font-weight:600;color:#171717;">
-                ${authorship.individual.toLocaleString()} individually composed ${authorship.individual === 1 ? 'message' : 'messages'}
+                ${authorship.individual.toLocaleString()} personalized ${authorship.individual === 1 ? 'message' : 'messages'}
               </p>`
 									: ''
 							}
@@ -412,7 +412,7 @@ function renderText(ctx: ReportContext, attestationHash: string): string {
 	);
 	if (authorship.individual > 0) {
 		lines.push(
-			`${authorship.individual.toLocaleString()} individually composed ${authorship.individual === 1 ? 'message' : 'messages'}`
+			`${authorship.individual.toLocaleString()} personalized ${authorship.individual === 1 ? 'message' : 'messages'}`
 		);
 	}
 	lines.push(rule);
@@ -436,7 +436,7 @@ function renderText(ctx: ReportContext, attestationHash: string): string {
 		lines.push('Authorship:');
 		if (authorship.individual > 0) {
 			lines.push(
-				`  - ${authorship.individual} ${authorship.explicit ? 'individually composed' : 'distinct messages'}`
+				`  - ${authorship.individual} ${authorship.explicit ? 'personalized' : 'distinct messages'}`
 			);
 		}
 		if (authorship.shared > 0) {

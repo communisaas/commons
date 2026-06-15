@@ -26,10 +26,25 @@ const PLANS: Record<
     maxSms: number;
   }
 > = {
-  free: { priceCents: 0, maxSeats: 2, maxTemplatesMonth: 10, maxVerifiedActions: 100, maxEmails: 1_000, maxSms: 0 },
+  // Gated floor for orgs with no active subscription — author a campaign or
+  // two (2 templates), zero delivery, owner-only. Not a marketed tier.
+  inactive: { priceCents: 0, maxSeats: 1, maxTemplatesMonth: 2, maxVerifiedActions: 0, maxEmails: 0, maxSms: 0 },
   starter: { priceCents: 1_000, maxSeats: 5, maxTemplatesMonth: 100, maxVerifiedActions: 1_000, maxEmails: 20_000, maxSms: 1_000 },
   organization: { priceCents: 7_500, maxSeats: 10, maxTemplatesMonth: 500, maxVerifiedActions: 5_000, maxEmails: 100_000, maxSms: 10_000 },
   coalition: { priceCents: 20_000, maxSeats: 25, maxTemplatesMonth: 1_000, maxVerifiedActions: 10_000, maxEmails: 250_000, maxSms: 50_000 },
+};
+
+// Individual (person-layer) paid authoring tiers — mirrored from
+// src/lib/server/billing/plans.ts INDIVIDUAL_PLANS (MUST stay in sync).
+// DELIBERATELY SEPARATE from org PLANS above: individual plans carry ONLY
+// `priceCents` + `authoredPerMonth`. They have NO org quotas (no maxEmails /
+// maxSms / maxSeats / maxTemplatesMonth) — an individual sub never syncs org
+// limits. The org `checkPlanLimits` path reads PLANS (keyed on orgId); the
+// individual authoring cap (templates.ts) reads the per-plan authored limit. The
+// two maps never overlap, so neither scope can read the other's plans.
+const INDIVIDUAL_PLANS: Record<string, { priceCents: number; authoredPerMonth: number }> = {
+  voice: { priceCents: 700, authoredPerMonth: 20 },
+  advocate: { priceCents: 2_000, authoredPerMonth: 75 },
 };
 
 /**
@@ -45,8 +60,8 @@ const PLANS: Record<
  * to, so we only trust the O(1) path when it matches the period we're metering.
  *
  * Self-heal (no write — this runs in a query): if the baseline is missing or
- * belongs to a DIFFERENT period (a late/missed Stripe webhook, or a free-tier
- * calendar-month rollover that has no webhook), count THIS period's verified
+ * belongs to a DIFFERENT period (a late/missed Stripe webhook, or an inactive
+ * org's calendar-month rollover that has no webhook), count THIS period's verified
  * actions via the `by_orgId_verified_sentAt` range index — bounded to one
  * period's volume, never the lifetime table, so it can never throw the cap.
  *
@@ -94,8 +109,8 @@ async function verifiedActionsThisPeriod(
   // Exclude congressional rows: congressional deliveries are person-layer civic
   // actions, NOT org-metered usage — the lifetime path skips them via
   // createCampaignAction's metersOrgQuota:false, and this self-heal path (the one
-  // free-tier orgs always hit, since they have no Stripe baseline) MUST exclude
-  // them too or congressional traffic leaks back into the org's metered usage.
+  // inactive/unsubscribed orgs always hit, since they have no Stripe baseline)
+  // MUST exclude them too or congressional traffic leaks back into metered usage.
   const metered = rows.filter((r) => r.channel !== "congressional");
   // If the period's own metered volume exceeds the cap, clamp to the cap. Below
   // the cap this is the true count; above it the clamp is a floor that STILL
@@ -218,11 +233,81 @@ export const getByUser = query({
 });
 
 /**
+ * Billing context for an individual (person-layer) paid authoring sub.
+ *
+ * Returns the caller's userId, their Stripe customer id (if any), and their
+ * current individual subscription summary. Used by the individual checkout
+ * route to find-or-create the Stripe customer and to guard against duplicate /
+ * downgrade checkout. User-scoped only — never touches org state.
+ */
+export const getMyBillingContext = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    const user = await ctx.db.get(userId);
+
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
+      .first();
+
+    return {
+      userId,
+      email: user?.email ?? null,
+      stripeCustomerId: user?.stripeCustomerId ?? null,
+      subscription: sub
+        ? { plan: sub.plan, status: sub.status, stripeSubscriptionId: sub.stripeSubscriptionId ?? null }
+        : null,
+    };
+  },
+});
+
+/**
+ * Whether the authed user holds an effectively-active PAID individual
+ * (person-layer) subscription — Voice or Advocate, status active/trialing, or
+ * past_due within the 7-day grace. Used to raise the daily-global LLM
+ * circuit-breaker ceiling for paying authors (see llm-cost-protection.ts).
+ * Returns false for org plans / no sub.
+ */
+export const hasActivePaidIndividual = query({
+  args: {},
+  handler: async (ctx) => {
+    const { userId } = await requireAuth(ctx);
+    const sub = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
+      .first();
+    if (!sub) return false;
+    if (!INDIVIDUAL_PLANS[sub.plan]) return false; // org plan / unknown → not paid individual
+
+    const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
+    const isWithinGrace =
+      sub.status === "past_due" &&
+      sub.pastDueSince !== undefined &&
+      Date.now() - sub.pastDueSince < GRACE_PERIOD_MS;
+    return sub.status === "active" || sub.status === "trialing" || isWithinGrace;
+  },
+});
+
+/**
+ * Persist the Stripe customer id on the user after the individual checkout
+ * route creates it. Auth-gated to the caller's own row.
+ */
+export const updateMyStripeCustomerId = mutation({
+  args: { stripeCustomerId: v.string() },
+  handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
+    await ctx.db.patch(userId, { stripeCustomerId: args.stripeCustomerId });
+    return { success: true };
+  },
+});
+
+/**
  * Check org's plan limits and current usage within the billing period.
  *
  * Usage is computed at query time (not from denormalized counters) for
  * verifiedActions. Email/SMS use denormalized org counters.
- * Period: subscription's currentPeriodStart, or calendar month for free orgs.
+ * Period: subscription's currentPeriodStart, or calendar month for inactive orgs.
  */
 export const checkPlanLimits = query({
   args: {
@@ -247,17 +332,17 @@ export const checkPlanLimits = query({
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
 
     // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not free-tier — until Stripe transitions them to 'active' on first
-    // successful payment. Without this, an org granted a paid trial would hit
-    // free-tier quotas during the trial window.
+    // — not the inactive floor — until Stripe transitions them to 'active' on
+    // first successful payment. Without this, an org granted a paid trial would
+    // hit the gated floor during the trial window.
     const effectivelyActive =
       sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
-    const limits = PLANS[plan] ?? PLANS.free;
+    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    const limits = PLANS[plan] ?? PLANS.inactive;
 
     // Determine billing period start
     // For paid/grace orgs: subscription's currentPeriodStart
-    // For free orgs: start of current calendar month (UTC)
+    // For inactive (unsubscribed) orgs: start of current calendar month (UTC)
     let periodStart: number;
     if (effectivelyActive && sub?.currentPeriodStart) {
       periodStart = sub.currentPeriodStart;
@@ -330,13 +415,13 @@ export const checkPlanLimitsByOrgId = internalQuery({
       pastDueSince &&
       Date.now() - pastDueSince < GRACE_PERIOD_MS;
     // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not free-tier — until Stripe transitions them to 'active' on first
-    // successful payment. Without this, an org granted a paid trial would hit
-    // free-tier quotas during the trial window.
+    // — not the inactive floor — until Stripe transitions them to 'active' on
+    // first successful payment. Without this, an org granted a paid trial would
+    // hit the gated floor during the trial window.
     const effectivelyActive =
       sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "free") : "free";
-    const limits = PLANS[plan] ?? PLANS.free;
+    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    const limits = PLANS[plan] ?? PLANS.inactive;
 
     let periodStart: number;
     if (effectivelyActive && sub?.currentPeriodStart) {
@@ -512,18 +597,30 @@ export const cancel = mutation({
       );
     }
 
-    await ctx.db.patch(args.subscriptionId, {
-      status: "canceled",
-      plan: "free",
-      updatedAt: Date.now(),
-    });
-
-    // Reset org limits to free tier if org-scoped
     if (sub.orgId) {
-      const freeLimits = PLANS.free;
+      // ORG sub: drop to the org gated floor ('inactive' is org-shaped —
+      // delivery 0, maxTemplatesMonth 2) and reset org limits.
+      await ctx.db.patch(args.subscriptionId, {
+        status: "canceled",
+        plan: "inactive",
+        updatedAt: Date.now(),
+      });
+      const floorLimits = PLANS.inactive;
       await ctx.db.patch(sub.orgId, {
-        maxSeats: freeLimits.maxSeats,
-        maxTemplatesMonth: freeLimits.maxTemplatesMonth,
+        maxSeats: floorLimits.maxSeats,
+        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
+        updatedAt: Date.now(),
+      });
+    } else {
+      // INDIVIDUAL sub: 'inactive' is the ORG floor (delivery 0 / no authored
+      // limit) — it would be a semantic mismatch on a user row. The individual
+      // free floor is "no active sub → 3 authored/mo", which the authoring cap
+      // derives from a non-active status. So we mark the sub canceled and LEAVE
+      // the individual plan slug intact: the cap reads the plan only when the
+      // status is effectively active, so a canceled individual sub resolves to
+      // the free floor (3) without writing the org-shaped 'inactive' value.
+      await ctx.db.patch(args.subscriptionId, {
+        status: "canceled",
         updatedAt: Date.now(),
       });
     }
@@ -553,23 +650,41 @@ export const processStripeWebhook = internalAction({
         const session = data;
         if (session.mode !== "subscription" || !session.subscription) break;
 
-        const orgId = session.metadata?.orgId;
         const plan = session.metadata?.plan;
-        if (!orgId || !plan || !PLANS[plan]) break;
+        const orgId = session.metadata?.orgId;
+        const userId = session.metadata?.userId;
 
         // Use session.created (Stripe timestamp in seconds) for period start.
         // The subsequent subscription.updated event will correct to exact Stripe periods.
         const periodStartMs = (session.created ?? Math.floor(Date.now() / 1000)) * 1000;
 
-        await ctx.runMutation(internal.subscriptions.upsertFromStripe, {
-          orgId,
-          plan,
-          priceCents: PLANS[plan].priceCents,
-          status: "active",
-          stripeSubscriptionId: session.subscription,
-          currentPeriodStart: periodStartMs,
-          currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000,
-        });
+        // INDIVIDUAL (person-layer) checkout: metadata.userId + an individual
+        // plan. User-scoped upsert, NO org-limit sync.
+        if (userId && plan && INDIVIDUAL_PLANS[plan]) {
+          await ctx.runMutation(internal.subscriptions.upsertIndividualFromStripe, {
+            userId,
+            plan,
+            priceCents: INDIVIDUAL_PLANS[plan].priceCents,
+            status: "active",
+            stripeSubscriptionId: session.subscription,
+            currentPeriodStart: periodStartMs,
+            currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000,
+          });
+          break;
+        }
+
+        // ORG checkout: metadata.orgId + a marketed org plan. Syncs org limits.
+        if (orgId && plan && PLANS[plan]) {
+          await ctx.runMutation(internal.subscriptions.upsertFromStripe, {
+            orgId,
+            plan,
+            priceCents: PLANS[plan].priceCents,
+            status: "active",
+            stripeSubscriptionId: session.subscription,
+            currentPeriodStart: periodStartMs,
+            currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000,
+          });
+        }
         break;
       }
 
@@ -592,14 +707,23 @@ export const processStripeWebhook = internalAction({
           ? sub.current_period_end * 1000
           : undefined;
 
+        // Accept BOTH org and individual plan slugs as valid plan changes (e.g.
+        // a Stripe-portal voice→advocate switch). Only request org-limit sync
+        // for ORG plans; individual plans never sync org limits — and
+        // updateByStripeId additionally gates the sync on `sub.orgId`, so even
+        // if requested it cannot touch a user-scoped sub.
+        const isOrgPlan = !!(plan && PLANS[plan]);
+        const isIndividualPlan = !!(plan && INDIVIDUAL_PLANS[plan]);
+        const validPlan = isOrgPlan || isIndividualPlan;
+
         await ctx.runMutation(internal.subscriptions.updateByStripeId, {
           stripeSubscriptionId: sub.id,
           status: effectiveStatus,
-          plan: plan && PLANS[plan] ? plan : undefined,
+          plan: validPlan ? plan : undefined,
           priceCents,
           currentPeriodStart: periodStart,
           currentPeriodEnd: periodEnd,
-          syncOrgLimits: plan && PLANS[plan] ? true : undefined,
+          syncOrgLimits: isOrgPlan ? true : undefined,
         });
         break;
       }
@@ -801,6 +925,74 @@ export const upsertFromStripe = internalMutation({
 });
 
 /**
+ * Upsert an INDIVIDUAL (person-layer) subscription from Stripe checkout
+ * completion. User-scoped: keyed on userId, writes the individual plan
+ * (voice/advocate) onto a by_userId subscription row, and does NOT run any
+ * org-limit sync or verified-action baseline snapshot (those are org-only). The
+ * individual authoring cap reads this sub's plan to size the authored-per-month
+ * allowance; nothing else is unlocked.
+ */
+export const upsertIndividualFromStripe = internalMutation({
+  args: {
+    userId: v.string(),
+    plan: subscriptionPlan,
+    priceCents: v.number(),
+    status: subscriptionStatus,
+    stripeSubscriptionId: v.string(),
+    currentPeriodStart: v.number(),
+    currentPeriodEnd: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const userId = args.userId as Id<"users">;
+    const user = await ctx.db.get(userId);
+    if (!user) {
+      console.warn(`[subscriptions] User not found for Stripe webhook: ${args.userId}`);
+      return;
+    }
+    // Guard: only individual plans may be written to a user-scoped sub. An org
+    // plan slug arriving on a userId checkout is a metadata mismatch — refuse it
+    // rather than silently granting org-shaped state to an individual row.
+    if (!INDIVIDUAL_PLANS[args.plan]) {
+      console.warn(`[subscriptions] Non-individual plan "${args.plan}" on user checkout — ignoring`);
+      return;
+    }
+
+    const existing = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
+      .first();
+
+    const now = Date.now();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        plan: args.plan,
+        priceCents: args.priceCents,
+        status: args.status,
+        stripeSubscriptionId: args.stripeSubscriptionId,
+        currentPeriodStart: args.currentPeriodStart,
+        currentPeriodEnd: args.currentPeriodEnd,
+        updatedAt: now,
+      });
+    } else {
+      await ctx.db.insert("subscriptions", {
+        userId,
+        plan: args.plan,
+        priceCents: args.priceCents,
+        status: args.status,
+        paymentMethod: "stripe",
+        stripeSubscriptionId: args.stripeSubscriptionId,
+        currentPeriodStart: args.currentPeriodStart,
+        currentPeriodEnd: args.currentPeriodEnd,
+        updatedAt: now,
+      });
+    }
+    // NOTE: no org-limit sync, no verified-action baseline. Individual subs buy
+    // ONLY authoring volume (read off this row by the templates.ts cap).
+  },
+});
+
+/**
  * One-time backfill: re-sync all org limits from their current subscription plan.
  * Fixes orgs created with wrong defaults (maxSeats:10, maxTemplatesMonth:50)
  * or provisioned via drifted Convex PLANS mirror.
@@ -819,8 +1011,8 @@ export const backfillOrgLimits = internalMutation({
         .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
         .first();
 
-      const plan = sub?.status === "active" ? sub.plan : "free";
-      const planDef = PLANS[plan] ?? PLANS.free;
+      const plan = sub?.status === "active" ? sub.plan : "inactive";
+      const planDef = PLANS[plan] ?? PLANS.inactive;
 
       // Only patch if limits differ from canonical values
       if (
@@ -957,12 +1149,12 @@ export const updateByStripeId = internalMutation({
       }
     }
 
-    // Reset org limits to free tier on cancellation
+    // Reset org limits to the gated inactive floor on cancellation
     if (args.resetOrgLimits && sub.orgId) {
-      const freeLimits = PLANS.free;
+      const floorLimits = PLANS.inactive;
       await ctx.db.patch(sub.orgId, {
-        maxSeats: freeLimits.maxSeats,
-        maxTemplatesMonth: freeLimits.maxTemplatesMonth,
+        maxSeats: floorLimits.maxSeats,
+        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
         updatedAt: now,
       });
     }

@@ -9,7 +9,26 @@ import { query, mutation } from './_generated/server';
 import { v } from 'convex/values';
 import { requireOrgRole, loadOrg, requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import { effectivePlan, isCoalitionPlan } from './_brandingGate';
 import type { Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
+
+/**
+ * Resolve an org's effective billing plan from its subscription row. Only
+ * `active`/`trialing` subscriptions count toward a paid tier (the shared
+ * `effectivePlan` rule). Mirrors `organizations.ts:resolveOrgPlan` so the
+ * coalition-create gate reads plans the same way every other paid gate does.
+ */
+async function resolveOrgPlan(
+	ctx: MutationCtx | QueryCtx,
+	orgId: Id<'organizations'>
+): Promise<string> {
+	const sub = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+		.first();
+	return effectivePlan(sub);
+}
 
 // =============================================================================
 // QUERIES
@@ -295,6 +314,18 @@ export const create = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org, userId } = await requireOrgRole(ctx, args.orgSlug, 'owner');
+
+		// Coalition-tier gate — THE FENCE. The SvelteKit endpoint also checks the
+		// plan, but a public Convex mutation is callable directly, so the paywall
+		// must be enforced here or it is bypassable. Creating a coalition network
+		// requires an active/trialing Coalition plan; everything below (inactive
+		// floor, starter, organization) is rejected with a clear upgrade message.
+		const plan = await resolveOrgPlan(ctx, org._id);
+		if (!isCoalitionPlan(plan)) {
+			throw new Error(
+				'Coalition networks require an active Coalition plan. Upgrade your organization to create one.'
+			);
+		}
 
 		if (args.name.length < 3 || args.name.length > 100) {
 			throw new Error('Name must be 3-100 characters');

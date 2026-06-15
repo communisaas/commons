@@ -85,6 +85,20 @@ const QUOTAS: Record<string, Record<LLMTrustTier, [number, number]>> = {
 	}
 };
 
+/**
+ * Daily-global circuit-breaker ceiling for a PAID individual (Voice/Advocate).
+ *
+ * The free daily ceilings above are an ABUSE breaker calibrated for free usage
+ * (~15/day verified). A paying Advocate (75 authored/mo) can legitimately burst
+ * on a heavy day and would otherwise be hard-blocked by the 15/day breaker. The
+ * real bound for paid individuals is their MONTHLY authored cap (enforced in
+ * convex/templates.ts), so the daily breaker is raised to the full top monthly
+ * allowance — high enough that a paying user is never blocked by the abuse
+ * breaker, while the monthly cap still bounds total COGS. Per-op limits
+ * (decision-makers/message-generation) still apply.
+ */
+const PAID_INDIVIDUAL_DAILY_GLOBAL: [number, number] = [75, 86400000];
+
 // ============================================
 // Trust Tier Resolution
 // ============================================
@@ -95,6 +109,15 @@ interface UserContext {
 	isVerified: boolean;
 	tier: LLMTrustTier;
 	identifier: string; // For rate limit key (userId or IP)
+	/**
+	 * True when the user holds an active paid individual authoring sub
+	 * (Voice/Advocate). Raises the daily-global circuit-breaker ceiling so a
+	 * paying user isn't hard-blocked by the free abuse breaker — their monthly
+	 * authored cap (convex/templates.ts) is the real bound. Optional: absent /
+	 * false means the free abuse ceiling applies. The caller sets it after
+	 * resolving the user's subscription.
+	 */
+	paidIndividual?: boolean;
 }
 
 /**
@@ -145,7 +168,8 @@ export function getUserContext(event: RequestEvent): UserContext {
 		isAuthenticated,
 		isVerified,
 		tier,
-		identifier: userId || `ip:${ip}`
+		identifier: userId || `ip:${ip}`,
+		paidIndividual: false
 	};
 }
 
@@ -219,8 +243,12 @@ export async function checkRateLimit(
 		};
 	}
 
-	// Also check daily global limit (circuit breaker)
-	const dailyQuota = QUOTAS['daily-global'][context.tier];
+	// Also check daily global limit (circuit breaker). Paid individuals get a
+	// raised ceiling so the free abuse breaker doesn't hard-block a paying user;
+	// their monthly authored cap (convex/templates.ts) is the real bound.
+	const dailyQuota = context.paidIndividual
+		? PAID_INDIVIDUAL_DAILY_GLOBAL
+		: QUOTAS['daily-global'][context.tier];
 	const dailyKey = `llm:daily:${context.identifier}`;
 	const dailyResult = await rateLimiter.limit(dailyKey, dailyQuota[0], dailyQuota[1]);
 
@@ -314,9 +342,11 @@ function getRateLimitReason(
  */
 export async function enforceLLMRateLimit(
 	event: RequestEvent,
-	operation: string
+	operation: string,
+	options?: { paidIndividual?: boolean }
 ): Promise<RateLimitCheck> {
 	const context = getUserContext(event);
+	if (options?.paidIndividual) context.paidIndividual = true;
 	const check = await checkRateLimit(operation, context);
 
 	if (!check.allowed) {

@@ -9,7 +9,7 @@
  * The fix meters via a monotonic lifetime tally minus a per-period baseline
  * snapshotted at rollover: period_count = lifetime - baseline. The baseline only
  * ever moves forward (no never-reset bug). A stale/missing baseline (late Stripe
- * webhook, or a free-tier calendar-month rollover with no webhook) self-heals via
+ * webhook, or an inactive org's calendar-month rollover with no webhook) self-heals via
  * a bounded sentAt-range count for THIS period only — never an unbounded scan.
  *
  * convex-test isn't wired in this repo, so these mirror the handler's pure

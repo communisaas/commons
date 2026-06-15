@@ -34,6 +34,7 @@ import {
 	generateDomainContext,
 } from '../prompts/decision-maker';
 import { getCachedContacts, upsertResolvedContacts, normalizeOrgKey } from '../utils/contact-cache';
+import { capFanout, MAX_DECISION_MAKER_FANOUT } from '../cogs-fanout';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
 import { searchWeb, readPage, prunePageContent, type ExaPageContent } from '../exa-search';
 import {
@@ -1070,10 +1071,22 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				throw new Error('Finding decision-makers hit a snag. Please try again.');
 			}
 
-			const roles: DiscoveredRole[] = extraction.data?.roles || [];
+			const discoveredRoles: DiscoveredRole[] = extraction.data?.roles || [];
+
+			// COGS-fanout guard: cap the role count before the Exa/Firecrawl/Gemini
+			// fanout so per-message COGS can't exceed the budgeted ~$0.22 ceiling.
+			// Phase 1 is an unbounded enumeration; the entire downstream cost scales
+			// with this count, so bounding it here bounds the whole resolution.
+			const roles = capFanout(discoveredRoles, MAX_DECISION_MAKER_FANOUT);
+			if (roles.length < discoveredRoles.length) {
+				console.debug(
+					`[gemini-provider] COGS-fanout guard: capped ${discoveredRoles.length} roles → ${roles.length} (max ${MAX_DECISION_MAKER_FANOUT})`
+				);
+			}
 
 			console.debug('[gemini-provider] Phase 1 complete:', {
 				rolesFound: roles.length,
+				rolesDiscovered: discoveredRoles.length,
 				positions: roles.map((r) => `${r.position} at ${r.organization}`)
 			});
 

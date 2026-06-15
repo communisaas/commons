@@ -34,6 +34,14 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const { name, slug, description } = parsed.data;
 
+	// Coalition-tier gate (aligned with the mutation fence in convex/networks.ts).
+	// The mutation re-checks the plan and is the real enforcement layer; this
+	// pre-check turns the paywall into a clean 403 instead of a 500-shaped throw.
+	const planLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+	if (planLimits.plan !== 'coalition') {
+		throw error(403, 'Coalition networks require an active Coalition plan.');
+	}
+
 	const networkId = await serverMutation(api.networks.create, {
 		orgSlug: params.slug,
 		name,

@@ -100,14 +100,13 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 					detail: 'Quota reserved for when bulk texting is fully available.'
 				});
 			}
-			if (slug !== 'free') {
-				features.push({
-					label: 'A/B test setup',
-					state: 'draft-only',
-					detail:
-						'Set up A/B tests with exact test groups and send the winner to the rest; automatic winner send-out is coming.'
-				});
-			}
+			// A/B test setup is available on every marketed tier (Starter+).
+			features.push({
+				label: 'A/B test setup',
+				state: 'draft-only',
+				detail:
+					'Set up A/B tests with exact test groups and send the winner to the rest; automatic winner send-out is coming.'
+			});
 			if (slug === 'organization' || slug === 'coalition') {
 				features.push(
 					{

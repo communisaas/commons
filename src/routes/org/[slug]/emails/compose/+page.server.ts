@@ -14,7 +14,7 @@ import {
 } from '$lib/server/email/compiler';
 import { sanitizeEmailBody } from '$lib/server/email/sanitize';
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
-import { orgLimitSentence } from '$lib/data/org-limit-sentences';
+import { orgLimitSentence, DELIVERY_QUOTA_SUBSCRIBE_GATE } from '$lib/data/org-limit-sentences';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad, Actions } from './$types';
@@ -79,6 +79,28 @@ function requireRole(role: string, required: string): void {
 
 function canEdit(role: string): boolean {
 	return role === 'owner' || role === 'editor';
+}
+
+/**
+ * Build the 403 payload for an email-send block. An org with no active plan
+ * sits on the gated `inactive` floor where `maxEmails === 0` — authoring is
+ * free but it has never bought the ability to send. That is a conversion
+ * moment, not a failure: the payload carries `errorCode` so the UI shows a
+ * subscribe-to-send prompt. An active plan that genuinely exhausted its
+ * period quota (`maxEmails > 0`) gets the existing upgrade sentence with no
+ * gate code, so the prompt never fires for that distinct case.
+ */
+function emailQuotaFailBody(maxEmails: number): { error: string; errorCode?: string } {
+	if (maxEmails <= 0) {
+		return {
+			error: 'Sending to your people needs a plan. Authoring stays free.',
+			errorCode: DELIVERY_QUOTA_SUBSCRIBE_GATE
+		};
+	}
+	return {
+		error:
+			'Email send limit reached for the current billing period. Upgrade your plan to send more.'
+	};
 }
 
 async function countRecipientsByFilter(
@@ -151,8 +173,10 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			: Promise.resolve(null)
 	]);
 
-	// A/B testing allowed if org has starter+ plan
-	const abTestingAllowed = FEATURES.AB_TESTING && sub?.plan !== 'free';
+	// A/B testing allowed if org has an active marketed plan (Starter+).
+	// An org with no subscription falls to the gated `inactive` floor (sub is
+	// null here), so require a present, non-inactive plan.
+	const abTestingAllowed = FEATURES.AB_TESTING && sub != null && sub.plan !== 'inactive';
 	const serverDispatchReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
 		orgKeyConfigured: Boolean(orgKeyResult?.orgKeyVerifier)
 	});
@@ -319,10 +343,7 @@ export const actions: Actions = {
 		// Billing usage check via Convex
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
-			return fail(403, {
-				error:
-					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
-			});
+			return fail(403, emailQuotaFailBody(limits.limits.maxEmails));
 		}
 
 		const formData = await request.formData();
@@ -455,7 +476,7 @@ export const actions: Actions = {
 
 		// Check plan via Convex
 		const sub = await serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug });
-		if (!FEATURES.AB_TESTING || sub?.plan === 'free') {
+		if (!FEATURES.AB_TESTING || sub == null || sub.plan === 'inactive') {
 			return fail(403, { error: 'A/B testing requires a Starter plan or above.' });
 		}
 
@@ -470,10 +491,7 @@ export const actions: Actions = {
 		// Billing usage check via Convex
 		const abLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (abLimits?.current && abLimits.current.emailsSent >= abLimits.limits.maxEmails) {
-			return fail(403, {
-				error:
-					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
-			});
+			return fail(403, emailQuotaFailBody(abLimits.limits.maxEmails));
 		}
 
 		const formData = await request.formData();
@@ -620,10 +638,7 @@ export const actions: Actions = {
 
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
-			return fail(403, {
-				error:
-					'Email send limit reached for the current billing period. Upgrade your plan to send more.'
-			});
+			return fail(403, emailQuotaFailBody(limits.limits.maxEmails));
 		}
 
 		const formData = await request.formData();

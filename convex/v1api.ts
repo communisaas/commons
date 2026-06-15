@@ -51,7 +51,7 @@ export const authenticateApiKey = query({
 			keyId: apiKey._id,
 			orgId: apiKey.orgId,
 			scopes: apiKey.scopes,
-			planSlug: sub?.plan ?? 'free'
+			planSlug: sub?.plan ?? 'inactive'
 		};
 	}
 });

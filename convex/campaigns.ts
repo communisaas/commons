@@ -2611,7 +2611,7 @@ export const getDeliveryMetrics = query({
  * Peer implementations override via the Convex dashboard so report links
  * resolve to their own deployment instead of the reference one.
  */
-function buildReportEmailHtml(campaign: {
+export function buildReportEmailHtml(campaign: {
 	title: string;
 	orgName: string;
 	verifiedActionCount: number;
@@ -2632,7 +2632,7 @@ function buildReportEmailHtml(campaign: {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#fafaf9;">
 <tr><td align="center" style="padding:40px 20px;">
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
-<tr><td style="padding:0 0 32px 0;"><p style="margin:0;font-size:12px;font-weight:600;color:#a3a3a3;text-transform:uppercase;letter-spacing:.08em;">Verification Report</p></td></tr>
+<tr><td style="padding:0 0 32px 0;"><p style="margin:0;font-size:12px;font-weight:600;color:#a3a3a3;text-transform:uppercase;letter-spacing:.08em;">Constituent Report</p></td></tr>
 <tr><td style="padding:0 0 8px 0;"><p style="margin:0;font-size:18px;font-weight:600;color:#171717;line-height:1.4;">${esc(campaign.title)}</p></td></tr>
 <tr><td style="padding:0 0 28px 0;"><p style="margin:0;font-size:13px;color:#737373;">from ${esc(campaign.orgName)}</p></td></tr>
 <tr><td style="padding:24px 0;border-top:1px solid #e5e5e5;border-bottom:1px solid #e5e5e5;">

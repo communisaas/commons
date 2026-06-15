@@ -99,10 +99,20 @@ export const eventStatus = v.union(
 );
 
 export const subscriptionPlan = v.union(
-	v.literal('free'),
+	// `inactive` is the gated floor for unsubscribed/canceled orgs — not a
+	// marketed tier (absent from PLAN_ORDER), but a persisted plan value the
+	// cancellation path writes, so it must validate.
+	v.literal('inactive'),
+	// Org (org-layer) plans — keyed on orgId.
 	v.literal('starter'),
 	v.literal('organization'),
-	v.literal('coalition')
+	v.literal('coalition'),
+	// Individual (person-layer) paid authoring tiers — keyed on userId. These buy
+	// ONLY authoring volume; they never carry org quotas. The polymorphic
+	// subscriptions.plan field stores these for user-scoped rows, so they must
+	// validate here. See src/lib/server/billing/plans.ts INDIVIDUAL_PLANS.
+	v.literal('voice'),
+	v.literal('advocate')
 );
 
 export const subscriptionStatus = v.union(

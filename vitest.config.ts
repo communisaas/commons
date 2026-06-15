@@ -100,6 +100,9 @@ export default defineConfig({
 			'tests/unit/components/DomainBand.test.ts',
 			'tests/unit/components/SpectrumLandscape.test.ts',
 			'tests/unit/components/SpectrumOverview.test.ts',
+			// Behavioral test for the delivery-gate conversion prompt — requires
+			// the components-lane config for @testing-library/svelte rendering.
+			'tests/unit/components/DeliveryGateNotice.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

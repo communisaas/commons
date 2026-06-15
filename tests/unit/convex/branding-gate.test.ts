@@ -33,12 +33,12 @@ describe('effectivePlan', () => {
 		expect(effectivePlan({ status: 'active', plan: 'organization' })).toBe('organization');
 	});
 
-	it('treats canceled/past_due/missing as free', () => {
-		expect(effectivePlan({ status: 'canceled', plan: 'coalition' })).toBe('free');
-		expect(effectivePlan({ status: 'past_due', plan: 'coalition' })).toBe('free');
-		expect(effectivePlan(null)).toBe('free');
-		expect(effectivePlan(undefined)).toBe('free');
-		expect(effectivePlan({ status: 'active' })).toBe('free');
+	it('treats canceled/past_due/missing as the gated inactive floor', () => {
+		expect(effectivePlan({ status: 'canceled', plan: 'coalition' })).toBe('inactive');
+		expect(effectivePlan({ status: 'past_due', plan: 'coalition' })).toBe('inactive');
+		expect(effectivePlan(null)).toBe('inactive');
+		expect(effectivePlan(undefined)).toBe('inactive');
+		expect(effectivePlan({ status: 'active' })).toBe('inactive');
 	});
 });
 
@@ -47,7 +47,7 @@ describe('isCoalitionPlan', () => {
 		expect(isCoalitionPlan('coalition')).toBe(true);
 		expect(isCoalitionPlan('organization')).toBe(false);
 		expect(isCoalitionPlan('starter')).toBe(false);
-		expect(isCoalitionPlan('free')).toBe(false);
+		expect(isCoalitionPlan('inactive')).toBe(false);
 	});
 });
 
@@ -67,8 +67,8 @@ describe('isValidAccentHex', () => {
 });
 
 describe('decideAccentWrite — Coalition gate', () => {
-	it('REJECTS a non-empty accent below Coalition tier (free)', () => {
-		const d = decideAccentWrite('free', '#0d9488');
+	it('REJECTS a non-empty accent below Coalition tier (inactive floor)', () => {
+		const d = decideAccentWrite('inactive', '#0d9488');
 		expect(d.ok).toBe(false);
 		if (!d.ok) expect(d.reason).toBe('tier');
 	});
@@ -92,7 +92,7 @@ describe('decideAccentWrite — Coalition gate', () => {
 	});
 
 	it('ALLOWS clearing (empty/null/undefined) at ANY tier', () => {
-		for (const plan of ['free', 'organization', 'coalition']) {
+		for (const plan of ['inactive', 'organization', 'coalition']) {
 			expect(decideAccentWrite(plan, '')).toEqual({ ok: true, cleared: true });
 			expect(decideAccentWrite(plan, null)).toEqual({ ok: true, cleared: true });
 			expect(decideAccentWrite(plan, undefined)).toEqual({ ok: true, cleared: true });
@@ -102,14 +102,14 @@ describe('decideAccentWrite — Coalition gate', () => {
 
 describe('logoWriteAllowed — Coalition gate', () => {
 	it('REJECTS setting a logo below Coalition tier', () => {
-		expect(logoWriteAllowed('free', false)).toBe(false);
+		expect(logoWriteAllowed('inactive', false)).toBe(false);
 		expect(logoWriteAllowed('organization', false)).toBe(false);
 	});
 	it('ALLOWS setting a logo at Coalition tier', () => {
 		expect(logoWriteAllowed('coalition', false)).toBe(true);
 	});
 	it('ALLOWS clearing a logo at ANY tier', () => {
-		expect(logoWriteAllowed('free', true)).toBe(true);
+		expect(logoWriteAllowed('inactive', true)).toBe(true);
 		expect(logoWriteAllowed('organization', true)).toBe(true);
 		expect(logoWriteAllowed('coalition', true)).toBe(true);
 	});
@@ -117,14 +117,14 @@ describe('logoWriteAllowed — Coalition gate', () => {
 
 describe('whiteLabelWriteAllowed — Coalition gate', () => {
 	it('REJECTS enabling white-label below Coalition tier', () => {
-		expect(whiteLabelWriteAllowed('free', true)).toBe(false);
+		expect(whiteLabelWriteAllowed('inactive', true)).toBe(false);
 		expect(whiteLabelWriteAllowed('organization', true)).toBe(false);
 	});
 	it('ALLOWS enabling white-label at Coalition tier', () => {
 		expect(whiteLabelWriteAllowed('coalition', true)).toBe(true);
 	});
 	it('ALLOWS disabling white-label at ANY tier (re-attach Commons branding)', () => {
-		expect(whiteLabelWriteAllowed('free', false)).toBe(true);
+		expect(whiteLabelWriteAllowed('inactive', false)).toBe(true);
 		expect(whiteLabelWriteAllowed('organization', false)).toBe(true);
 		expect(whiteLabelWriteAllowed('coalition', false)).toBe(true);
 	});
