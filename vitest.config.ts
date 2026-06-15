@@ -94,6 +94,12 @@ export default defineConfig({
 			// Behavioral first-paint test for the Datum spring primitive —
 			// needs the components-lane browser runtime to mount.
 			'tests/unit/components/datum-first-paint.test.ts',
+			// Svelte 5 mount() is unavailable under the default jsdom + MSW lane;
+			// runs in the components lane (vitest.components.config.ts).
+			'tests/unit/components/TemplateTile.test.ts',
+			'tests/unit/components/DomainBand.test.ts',
+			'tests/unit/components/SpectrumLandscape.test.ts',
+			'tests/unit/components/SpectrumOverview.test.ts',
 			// Behavioral test for the delivery-gate conversion prompt — requires
 			// the components-lane config for @testing-library/svelte rendering.
 			'tests/unit/components/DeliveryGateNotice.test.ts',

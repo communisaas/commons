@@ -242,6 +242,12 @@ function createTemplateStore() {
 			}
 		},
 
+		/** Clear the current selection (no template selected). Used when a dive
+		 *  closes so the surface returns to a no-selection state. */
+		clearSelection(): void {
+			state.selectedId = null;
+		},
+
 		// Auto-select first template when templates change
 		autoSelectFirst(): void {
 			if (state.templates.length > 0 && !state.selectedId) {

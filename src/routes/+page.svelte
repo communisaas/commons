@@ -30,6 +30,7 @@
 	import type { ModalComponent } from '$lib/types/component-props';
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
+	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
 	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
 	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
@@ -48,6 +49,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
+	import { shouldShowSpectrum } from '$lib/core/topic/landing-surface';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -83,6 +85,13 @@
 	// At-cap individual AI-authoring upgrade card (Voice/Advocate).
 	let showAuthoringUpgrade = $state(false);
 	let authoringCapMessage = $state<string | null>(null);
+
+	// Whether the viewport is desktop-width (≥768px, the same breakpoint the layout
+	// uses to show the preview column vs the mobile TouchModal). The spectrum dive is
+	// the desktop descent; on mobile the existing TouchModal owns the preview, so the
+	// dive only engages here. Desktop-first default keeps SSR + first paint stable;
+	// the resize effect reconciles to the real width on the client.
+	let isDesktopView = $state(true);
 
 	// Location scope state (user-selected geographic filter for templates)
 	const SCOPE_KEY = 'commons_location_scope';
@@ -233,6 +242,15 @@
 		}
 	});
 
+	// Track desktop vs mobile width so the dive engages only on desktop (mobile keeps
+	// the TouchModal). Effects never run under SSR, so the window read is client-only.
+	$effect(() => {
+		const update = () => (isDesktopView = !isMobile());
+		update();
+		window.addEventListener('resize', update);
+		return () => window.removeEventListener('resize', update);
+	});
+
 	// Enable smooth page transitions (browser only)
 	if (browser) {
 		onNavigate((navigation) => {
@@ -253,14 +271,23 @@
 
 		if (isMobile()) {
 			showMobilePreview = true;
-		} else {
-			// Scroll the template preview into view on desktop
+		} else if (!showSpectrum) {
+			// List fallback: the preview lives in its own column — scroll it into view.
+			// In the spectrum the dive owns its own entrance (the field recedes and the
+			// preview rises as an Artifact), so no scroll-into-view is needed.
 			tick().then(() => {
 				document
 					.querySelector('.template-preview-column')
 					?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 			});
 		}
+	}
+
+	// Close the spectrum dive: clear the selection so the field returns to its exact
+	// prior state (no template selected). The selection was user-initiated, so the
+	// auto-select-first effect does not re-fire — the field stays at rest.
+	function closeDive() {
+		templateStore.clearSelection();
 	}
 
 	function handleSparkActivate(data: { initialText: string; draftId?: string }) {
@@ -339,6 +366,13 @@
 				t.deliveryMethod === 'direct'
 		)
 	);
+
+	// Topical-field swap. The hue-ordered landscape is the default surface; the
+	// flat geographic list stays a working fallback, reachable with `?spectrum=0`
+	// so it can be re-enabled without code changes. The rule lives in a pure util so
+	// the page and its tests share one source of truth. Reading the param off the
+	// page store keeps it reactive and SSR-safe (no window access).
+	const showSpectrum = $derived(shouldShowSpectrum($page.url));
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
@@ -746,61 +780,105 @@
 				/>
 			</div>
 
-			<!-- Template Browser: List + Preview Grid -->
-			<div class="template-browser" id="template-browser">
+			<!-- Template Browser: List + Preview Grid.
+			     In the spectrum the preview is the dive (it rises over the field, not in
+			     a side column), so the two-column split collapses to one full-width track
+			     and the field spreads across the whole stream column — multi-up on a wide
+			     screen — instead of being penned into the narrow list column with the
+			     hidden preview track left as dead space beside it. -->
+			<div
+				class="template-browser"
+				class:template-browser--spectrum={showSpectrum}
+				id="template-browser"
+			>
 				<!-- Template List -->
 				<div class="template-list-column">
-					<TemplateList
-						groups={filteredGroups}
-						selectedId={templateStore.selectedId}
-						onSelect={handleTemplateSelect}
-						loading={isLoading}
-					/>
-				</div>
-
-				<!-- Template Preview (desktop only) -->
-				<div class="template-preview-column">
-					{#if hasError}
-						<div class="border-y border-slate-200 px-6 py-8 text-center">
-							<p class="font-brand text-base font-semibold text-slate-800">
-								Templates aren't loading right now.
-							</p>
-							<p class="mt-2 font-brand text-sm text-slate-500">
-								The list will return when the server responds.
-							</p>
-							<button
-								type="button"
-								onclick={() => templateStore.fetchTemplates()}
-								data-testid="retry-templates-button"
-								class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
-							>
-								Try again
-							</button>
-						</div>
-					{:else if isLoading && !selectedTemplate}
-						<SkeletonTemplate variant="preview" animate={true} />
-					{:else if selectedTemplate}
-						<TemplatePreview
-							template={selectedTemplate}
-							user={data.user as { id: string; name: string | null; trust_tier?: number } | null}
-							bind:personalConnectionValue
-							onSendMessage={async () => handleSendMessage(selectedTemplate)}
+					{#if showSpectrum}
+						<!-- Topical field: templates grouped into hue-ordered domain bands,
+						     with a lens toggle to re-organise the same templates by place
+						     (the existing geographic precision grouping). Selecting a tile
+						     dives into it — the field recedes and the template rises as an
+						     Artifact wrapping the same preview below. Falls back to the list
+						     until the landscape is the default. -->
+						<SpectrumLandscape
+							templates={allTemplates}
+							placeGroups={filteredGroups}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+							dive={selectedTemplate && userInitiatedSelection && isDesktopView
+								? templateDive
+								: undefined}
+							onClose={closeDive}
 						/>
 					{:else}
-						<div class="px-6 py-12 text-center">
-							<p class="font-brand text-base font-semibold text-slate-800">
-								No templates yet.
-							</p>
-							<p class="mt-2 font-brand text-sm text-slate-500">
-								You can write the first one.
-							</p>
-						</div>
+						<TemplateList
+							groups={filteredGroups}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+							loading={isLoading}
+						/>
 					{/if}
 				</div>
+
+				<!-- Template Preview. In the list (fallback) it lives in its own column
+				     beside the list. In the spectrum, the preview is the dive: it rises as
+				     an Artifact over the receded field (rendered by SpectrumLandscape via
+				     the snippet below), so the side column is not shown. The preview itself
+				     is identical in both — the snippet wraps the SAME component. -->
+				{#if !showSpectrum}
+					<div class="template-preview-column">
+						{#if hasError}
+							<div class="border-y border-slate-200 px-6 py-8 text-center">
+								<p class="font-brand text-base font-semibold text-slate-800">
+									Templates aren't loading right now.
+								</p>
+								<p class="mt-2 font-brand text-sm text-slate-500">
+									The list will return when the server responds.
+								</p>
+								<button
+									type="button"
+									onclick={() => templateStore.fetchTemplates()}
+									data-testid="retry-templates-button"
+									class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
+								>
+									Try again
+								</button>
+							</div>
+						{:else if isLoading && !selectedTemplate}
+							<SkeletonTemplate variant="preview" animate={true} />
+						{:else if selectedTemplate}
+							{@render templateDive()}
+						{:else}
+							<div class="px-6 py-12 text-center">
+								<p class="font-brand text-base font-semibold text-slate-800">
+									No templates yet.
+								</p>
+								<p class="mt-2 font-brand text-sm text-slate-500">
+									You can write the first one.
+								</p>
+							</div>
+						{/if}
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>
 </section>
+
+<!-- The template preview, defined once and rendered in two places: in its own
+     column in the list fallback, and as the spectrum dive (risen in an Artifact
+     over the receded field). The SAME component with the SAME wiring in both —
+     send flow, personalization persistence, and proof footer are not forked. -->
+{#snippet templateDive()}
+	{#if selectedTemplate}
+		<TemplatePreview
+			template={selectedTemplate}
+			user={data.user as { id: string; name: string | null; trust_tier?: number } | null}
+			bind:personalConnectionValue
+			onSendMessage={async () => handleSendMessage(selectedTemplate)}
+		/>
+	{/if}
+{/snippet}
 
 <!-- Mobile Preview Modal -->
 {#if showMobilePreview && selectedTemplate}
@@ -1205,6 +1283,29 @@
 	@media (min-width: 1024px) {
 		.template-browser {
 			grid-template-columns: minmax(280px, 340px) 1fr;
+		}
+	}
+
+	/*
+	 * Spectrum mode: the preview is the dive (it rises over the receded field, not
+	 * in a side column), so the list/preview split collapses to one full-width
+	 * track at every breakpoint. The field then uses the whole stream column and
+	 * lays its tiles out multi-up on a wide screen, rather than being confined to
+	 * the narrow list column with the hidden preview track left as empty space.
+	 */
+	.template-browser--spectrum {
+		grid-template-columns: 1fr;
+	}
+
+	@media (min-width: 768px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	@media (min-width: 1024px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
 		}
 	}
 
