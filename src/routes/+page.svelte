@@ -47,6 +47,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
+	import { shouldShowSpectrum } from '$lib/core/topic/landing-surface';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -341,9 +342,10 @@
 
 	// Topical-field swap. The hue-ordered landscape is the default surface; the
 	// flat geographic list stays a working fallback, reachable with `?spectrum=0`
-	// so it can be re-enabled without code changes. Reading the param off the page
-	// store keeps it reactive and SSR-safe (no window access).
-	const showSpectrum = $derived($page.url.searchParams.get('spectrum') !== '0');
+	// so it can be re-enabled without code changes. The rule lives in a pure util so
+	// the page and its tests share one source of truth. Reading the param off the
+	// page store keeps it reactive and SSR-safe (no window access).
+	const showSpectrum = $derived(shouldShowSpectrum($page.url));
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders

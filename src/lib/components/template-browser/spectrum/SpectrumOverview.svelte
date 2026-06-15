@@ -109,16 +109,23 @@
 		activeHue = null;
 	}
 
-	// Below the layout's mobile breakpoint (768px) there is no pointer to hover, so
-	// the thin colour ribbon + hover-caption idiom goes silent. The map becomes a
-	// SCRUBBER instead: a thumb-swipeable rail of named chips, each a full touch
-	// target that names its band and jumps the field to it. Same data, same hues,
-	// same single resolver — only the body of the map changes so the thumb can
-	// reach it. Desktop renders the server default (the ribbon); the client
-	// reconciles to the real width on mount, so SSR stays stable and identical.
+	// The thin colour ribbon + hover-caption idiom needs a fine pointer to hover and
+	// a band-width segment to land on. On any touch surface there is no hover, and
+	// the ~14px ribbon segments fall far under the 44px the thumb can reliably reach
+	// — so the map becomes a SCRUBBER instead: a thumb-swipeable rail of named chips,
+	// each a full touch target that names its band and jumps the field to it. Same
+	// data, same hues, same single resolver — only the body of the map changes so the
+	// thumb can reach it. The split is POINTER-AWARE, not width-only: a coarse pointer
+	// gets the scrubber at any width (an iPad in portrait is 768–1024px wide but still
+	// all thumb), and only a fine pointer at ≥768px keeps the ribbon. Desktop with a
+	// mouse renders the server default (the ribbon); the client reconciles to the real
+	// pointer + width on mount, so SSR stays stable and identical.
 	let narrow = $state(false);
 	$effect(() => {
-		const mq = window.matchMedia('(max-width: 767px)');
+		// Scrubber when the viewport is narrow OR the pointer is coarse (touch); the
+		// ribbon only for a fine pointer on a wide-enough screen. Two queries so a
+		// change to either channel re-routes the map reactively.
+		const mq = window.matchMedia('(max-width: 767px), (pointer: coarse)');
 		const sync = () => (narrow = mq.matches);
 		sync();
 		mq.addEventListener('change', sync);
@@ -129,8 +136,9 @@
 {#if bands.length > 0}
 	<!-- The map of the whole: a display-scale composition, sticky so it stays in
 	     view while the bands scroll beneath it. No card, no border — the ribbon and
-	     its one caption line are the structure. Below 768px it becomes a swipeable
-	     scrubber of named chips instead, so the thumb can reach the same map. -->
+	     its one caption line are the structure. On a narrow viewport or any touch
+	     pointer it becomes a swipeable scrubber of named chips instead, so the thumb
+	     can reach the same map. -->
 	<div
 		class="spectrum-overview"
 		class:spectrum-overview--scrubber={narrow}
@@ -346,11 +354,12 @@
 	}
 
 	/*
-	 * The scrubber (below 768px). On a touch surface there is no hover, so the map
-	 * trades the thin ribbon + hover caption for a thumb-swipeable rail of named
-	 * chips — every band reachable by swipe, every band named at rest. The sticky
-	 * shell is shared with the ribbon; only the body changes. A touch of extra foot
-	 * room so the rail clears the first band it sits above.
+	 * The scrubber (narrow viewport or any touch pointer). On a touch surface there
+	 * is no hover, so the map trades the thin ribbon + hover caption for a
+	 * thumb-swipeable rail of named chips — every band reachable by swipe, every band
+	 * named at rest. The sticky shell is shared with the ribbon; only the body
+	 * changes. A touch of extra foot room so the rail clears the first band it sits
+	 * above.
 	 */
 	.spectrum-overview--scrubber {
 		gap: 0;

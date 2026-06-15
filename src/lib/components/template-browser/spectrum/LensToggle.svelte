@@ -67,7 +67,7 @@
 	 */
 	.lens-toggle {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
 		gap: 0.5rem;
 		margin-bottom: 0.75rem;
 	}
@@ -79,7 +79,7 @@
 
 	.lens-toggle__group {
 		display: inline-flex;
-		align-items: baseline;
+		align-items: center;
 		gap: 0.125rem;
 	}
 
@@ -92,7 +92,15 @@
 		appearance: none;
 		background: none;
 		border: none;
-		padding: 0.125rem 0.25rem;
+		/* The word stays compact; the hit area comes from the 44px floor (the app's
+		   standard touch target — see `.participation-btn` in src/app.css) plus the
+		   horizontal padding. Centering the label lets the min-height grow the tap
+		   target around the word without bloating the visual chrome into a pill. */
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-height: 44px;
+		padding: 0.125rem 0.5rem;
 		font-size: 0.8125rem;
 		font-weight: 500;
 		color: oklch(0.5 0.02 250);

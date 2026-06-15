@@ -315,16 +315,23 @@ describe('SpectrumOverview', () => {
 
 // ─── The mobile scrubber: a thumb-swipeable rail of named chips ──────────────
 //
-// Below 768px there is no pointer, so the map sheds the thin ribbon + hover
-// caption for a rail of named chips — every band reachable by swipe, every band
-// named at rest, each chip a full touch target that jumps the field. These tests
-// drive `matchMedia('(max-width: 767px)')` to match so the narrow branch mounts.
+// On a narrow viewport OR any touch (coarse) pointer there is no usable hover and
+// the ~14px ribbon segments fall under the thumb's 44px floor, so the map sheds
+// the thin ribbon + hover caption for a rail of named chips — every band reachable
+// by swipe, every band named at rest, each chip a full touch target that jumps the
+// field. The page wires the split as a single combined media query
+// `(max-width: 767px), (pointer: coarse)`; these tests drive that query to match
+// (via either channel) so the narrow branch mounts.
 
-/** Force the narrow-breakpoint media query on (or off) for the scrubber branch. */
+/** Force the scrubber media query on (or off) — narrow viewport OR coarse pointer. */
 function setNarrow(isNarrow: boolean) {
 	Object.defineProperty(window, 'matchMedia', {
 		value: (query: string) => ({
-			matches: query.includes('max-width: 767px') ? isNarrow : false,
+			// The page's query is a comma list (max-width OR pointer:coarse); matching
+			// either token is enough to mount the scrubber, mirroring how the OS
+			// resolves the real query.
+			matches:
+				query.includes('max-width: 767px') || query.includes('pointer: coarse') ? isNarrow : false,
 			media: query,
 			onchange: null,
 			addEventListener: () => {},
@@ -333,6 +340,35 @@ function setNarrow(isNarrow: boolean) {
 			removeListener: () => {},
 			dispatchEvent: () => false
 		}),
+		writable: true,
+		configurable: true
+	});
+}
+
+/**
+ * Simulate a wide viewport with a COARSE pointer (iPad portrait, Android tablet):
+ * the width query alone is false, but the combined scrubber query still matches
+ * because the pointer is coarse — so the touch user must get the 44px scrubber,
+ * not the 14px ribbon. A fine pointer at the same width keeps the ribbon.
+ */
+function setCoarsePointerAtWideWidth(isCoarse: boolean) {
+	Object.defineProperty(window, 'matchMedia', {
+		value: (query: string) => {
+			// Wide viewport: the bare width query is always false here.
+			const widthMatches = false;
+			// The combined scrubber query matches purely on the coarse-pointer channel.
+			const pointerMatches = query.includes('pointer: coarse') && isCoarse;
+			return {
+				matches: widthMatches || pointerMatches,
+				media: query,
+				onchange: null,
+				addEventListener: () => {},
+				removeEventListener: () => {},
+				addListener: () => {},
+				removeListener: () => {},
+				dispatchEvent: () => false
+			};
+		},
 		writable: true,
 		configurable: true
 	});
@@ -441,6 +477,39 @@ describe('SpectrumOverview — mobile scrubber (<768px)', () => {
 		for (const chip of chips(container)) {
 			expect(chip.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 		}
+	});
+
+	it('routes a COARSE pointer to the scrubber even on a wide viewport (tablet portrait)', async () => {
+		// An iPad in portrait is 768–1024px wide — wide enough to fail a width-only
+		// gate — but it is all thumb. The 14px ribbon segments fall far under the 44px
+		// the thumb can land, so the touch user must get the scrubber regardless of
+		// width. The mode split is pointer-aware, so a coarse pointer mounts the rail.
+		setCoarsePointerAtWideWidth(true);
+		const bands = [makeBand('Healthcare', 240, 3), makeBand('Housing', 60, 2)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		expect(container.querySelector('.spectrum-overview__rail')).toBeTruthy();
+		expect(container.querySelector('.spectrum-overview__ribbon')).toBeNull();
+		expect(
+			container.querySelector('.spectrum-overview')?.classList.contains('spectrum-overview--scrubber')
+		).toBe(true);
+	});
+
+	it('keeps the ribbon for a FINE pointer on a wide viewport (mouse on desktop)', async () => {
+		// A fine pointer (mouse) at a wide width is the one case that stays on the
+		// ribbon — hover works and the segments are big enough for a cursor. Neither
+		// the width nor the pointer channel matches, so the scrubber never mounts.
+		setCoarsePointerAtWideWidth(false);
+		const bands = [makeBand('Healthcare', 240, 3), makeBand('Housing', 60, 2)];
+		const { container } = render(SpectrumOverview, { props: { bands } });
+		await tick();
+		await tick();
+		expect(container.querySelector('.spectrum-overview__ribbon')).toBeTruthy();
+		expect(container.querySelector('.spectrum-overview__rail')).toBeNull();
+		expect(
+			container.querySelector('.spectrum-overview')?.classList.contains('spectrum-overview--scrubber')
+		).toBe(false);
 	});
 });
 
