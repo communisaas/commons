@@ -25,7 +25,6 @@
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
 		mergeLandscape,
-		slugify,
 		type LandscapeMember,
 		type DistrictOfficialInput
 	} from '$lib/utils/landscapeMerge';
@@ -67,7 +66,9 @@
 		if (trustTier >= 2 && districtCode) parts.push(`Verified resident · ${districtCode}`);
 		else if (trustTier >= 1) parts.push('Verified sender');
 		if (trustTier >= 3) parts[0] += ' · Gov ID';
-		if (data.user?.id) parts.push(`commons.email/v/${data.user.id.slice(0, 8)}`);
+		// Only emit the verify URL when it resolves: the active credential hash is
+		// the record /v/[hash] looks up. A truncated user id always 404s.
+		if (data.user?.credentialHash) parts.push(`commons.email/v/${data.user.credentialHash}`);
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
 	// Simplified - no query parameters needed, default to direct-link
@@ -331,7 +332,6 @@
 	interface PowerLandscapeData {
 		positionCounts?: { support: number; oppose: number; districts: number };
 		existingPosition?: { stance: string; registrationId: string } | null;
-		deliveredRecipients?: string[];
 		districtOfficials?: DistrictOfficialInput[];
 		recipientConfig?: {
 			decisionMakers?: ProcessedDecisionMaker[];
@@ -439,10 +439,6 @@
 		} else {
 			positionState.init(tmplId, counts);
 		}
-
-		// Restore sent recipients from delivery records
-		// Server stores raw recipient_name; client keys by slugify(name)
-		contactedRecipients = new Set((pl.deliveredRecipients ?? []).map(slugify));
 	});
 
 	// Auto-scroll to PowerLandscape on creator arrival (separate effect for reactivity isolation)
@@ -624,19 +620,11 @@
 		batchRegistrationState = 'idle';
 	}
 
-	// Resolve contacted members with emails for bounce reporting
-	const contactedMembers = $derived(
-		(() => {
-			if (contactedRecipients.size === 0) return [];
-			const allMembers = [
-				...landscape.roleGroups.flatMap((g) => g.members),
-				...(landscape.districtGroup?.members ?? [])
-			];
-			return allMembers.filter(
-				(m) => contactedRecipients.has(m.id) && m.email && !reportedBounces.has(m.email)
-			);
-		})()
-	);
+	// Bounce reporting requires address-verified identity (tier 2+); the server
+	// rejects lower tiers. Gate the per-recipient affordance so it only surfaces
+	// for users who can actually file a report — the action lives on the
+	// recipient entity (PowerLandscape → RoleGroup → card), not as an aggregate list.
+	const canReportBounce = $derived((data.user?.trust_tier ?? 0) >= 2);
 
 	async function handleReportBounce(email: string) {
 		if (reportingBounce || reportedBounces.has(email)) return;
@@ -1124,6 +1112,10 @@
 							}
 						: undefined}
 					registrationState={batchRegistrationState}
+					{canReportBounce}
+					{reportedBounces}
+					{reportingBounce}
+					onReportBounce={handleReportBounce}
 				/>
 
 				<!-- Coordination weight — stance tallies are category-error theater without
@@ -1160,27 +1152,11 @@
 					</div>
 				{/if}
 
-				{#if contactedMembers.length > 0}
-					<div class="mt-3 text-xs text-slate-400">
-						<span>Did an email bounce?</span>
-						{#each contactedMembers as member}
-							<button
-								class="ml-2 underline hover:text-slate-600 disabled:no-underline disabled:opacity-50"
-								disabled={reportingBounce === member.email}
-								onclick={() => member.email && handleReportBounce(member.email)}
-							>
-								{member.name}
-							</button>
-						{/each}
-					</div>
-				{/if}
+				<!-- Bounce reporting now lives on each contacted recipient entity
+				     (DecisionMakerLandscapeCard / DistrictOfficialCard) as a
+				     hover-revealed "didn't arrive?" flag — recognition in context,
+				     not an aggregate wall of names. -->
 
-				{#if reportedBounces.size > 0}
-					<p class="mt-1 text-xs text-green-600">
-						Noted — {reportedBounces.size === 1 ? 'this address' : 'these addresses'} won't appear in
-						future results.
-					</p>
-				{/if}
 			</div>
 
 			<!-- Debate surface -->

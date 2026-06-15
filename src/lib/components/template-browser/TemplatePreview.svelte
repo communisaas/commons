@@ -34,7 +34,7 @@
 		template: Template;
 		inModal?: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user?: { id: string; name: string | null; trust_tier?: number; district_code?: string } | null;
+		user?: { id: string; name: string | null; trust_tier?: number; district_code?: string; credentialHash?: string | null } | null;
 		onScroll?: (isAtBottom: boolean, scrollProgress?: number) => void;
 		onOpenModal?: (() => void) | null;
 		onSendMessage?: (() => void) | null;

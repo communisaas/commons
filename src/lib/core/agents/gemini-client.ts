@@ -78,11 +78,16 @@ export function getGeminiClient(): GoogleGenAI {
 // ============================================================================
 
 export const GEMINI_CONFIG = {
-	model: 'gemini-3-flash-preview',
+	// Latest stable flash. The prior `gemini-3-flash-preview` ran away under the
+	// real agent prompts — generating to the 65k output cap (~64k tokens, ~200s,
+	// MAX_TOKENS truncation) on every subject-line call. 3.5-flash returns the
+	// same task cleanly in ~5s. Pinned (not `gemini-flash-latest`) so a future
+	// Google rollout can't silently reintroduce the regression.
+	model: 'gemini-3.5-flash',
 	defaults: {
 		temperature: 0.3,
 		maxOutputTokens: 65536,
-		thinkingLevel: 'medium' as const
+		thinkingLevel: 'low' as const
 	}
 } as const;
 
