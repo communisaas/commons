@@ -25,6 +25,8 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
+import { serverQuery } from 'convex-sveltekit';
+import { api } from '$lib/convex';
 
 interface RequestBody {
 	subject_line: string;
@@ -43,7 +45,20 @@ interface RequestBody {
 }
 
 export const POST: RequestHandler = async (event) => {
-	const rateLimitCheck = await enforceLLMRateLimit(event, 'decision-makers');
+	// Paid individuals (Voice/Advocate) are not hard-blocked by the free
+	// daily-global abuse breaker — their monthly authored cap is the real bound.
+	// Resolve the paid signal before the rate-limit check (best-effort; a lookup
+	// failure falls back to the free ceiling, never elevates).
+	let paidIndividual = false;
+	if (event.locals.session?.userId) {
+		try {
+			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
+		} catch (err) {
+			console.warn('[stream-decision-makers] paid-individual lookup failed, using free ceiling:', err);
+		}
+	}
+
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'decision-makers', { paidIndividual });
 	if (!rateLimitCheck.allowed) {
 		return rateLimitResponse(rateLimitCheck);
 	}

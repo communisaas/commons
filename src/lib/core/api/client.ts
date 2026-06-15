@@ -157,6 +157,29 @@ class UnifiedApiClient {
 				clearTimeout(timeoutId);
 				lastError = error instanceof Error ? error : new Error(String(error));
 
+				// Client errors (4xx) are not transient — fail fast WITHOUT retrying
+				// and surface the structured error (code via `errors[]`) to the
+				// caller. Retrying a 403 quota response is wasteful and would
+				// otherwise swallow the typed code (e.g. AUTHORING_QUOTA_EXCEEDED)
+				// the at-cap upgrade UX keys on. 429 still retries (rate-limit
+				// backoff is the intended behavior there).
+				if (
+					error instanceof ApiClientError &&
+					typeof error.status === 'number' &&
+					error.status >= 400 &&
+					error.status < 500 &&
+					error.status !== 429
+				) {
+					onLoadingChange?.(false);
+					if (showToast) toast.error(error.message);
+					return {
+						success: false,
+						error: error.message,
+						errors: error.errors,
+						status: error.status
+					};
+				}
+
 				// Don't retry on abort errors — for mutating requests the server
 				// may have already processed it (template publish, etc.)
 				if (error instanceof Error && error.name === 'AbortError') {
