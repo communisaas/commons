@@ -101,13 +101,26 @@
 	// when nothing real backs it. Null → no Pulse (absence, not a dead zero).
 	const arrivals = $derived(aggregateArrivals(group.templates));
 
-	// "more" reveal: start with the lead tiles, expand to the full band inline.
-	let expanded = $state(false);
-	const visibleCount = $derived(
-		expanded ? group.templates.length : Math.min(initialVisible, group.templates.length)
-	);
+	// "more" reveal: start with the lead tiles, then grow the band inline — but
+	// in BOUNDED steps, so one click never mounts an unbounded run of DOM nodes.
+	// A normal-sized band (the whole seed, and any band shy of one full step) is
+	// revealed in a single click exactly as before; the cap only engages when a
+	// band runs past ~a hundred tiles, where revealing the rest at once would
+	// stall the frame. That is the progressive reveal — present only where the
+	// data is large enough to need it, never speculative virtualization before.
+	const REVEAL_STEP = 100;
+	let revealedCount = $state(initialVisible);
+	const visibleCount = $derived(Math.min(revealedCount, group.templates.length));
 	const remaining = $derived(group.templates.length - visibleCount);
+	// The next click reveals at most one bounded step, so the label promises only
+	// what it will actually mount: the whole remainder for an ordinary band, a
+	// capped batch for an outsized one.
+	const nextStep = $derived(Math.min(REVEAL_STEP, remaining));
 	const visibleTemplates = $derived(group.templates.slice(0, visibleCount));
+
+	function revealMore() {
+		revealedCount = Math.min(revealedCount + REVEAL_STEP, group.templates.length);
+	}
 </script>
 
 <section class="domain-band" id={domId} aria-label={group.domain}>
@@ -166,8 +179,8 @@
 		</div>
 
 		{#if remaining > 0}
-			<button type="button" class="band-more font-brand" onclick={() => (expanded = true)}>
-				Show <span class="font-mono tabular-nums">{remaining}</span> more
+			<button type="button" class="band-more font-brand" onclick={revealMore}>
+				Show <span class="font-mono tabular-nums">{nextStep}</span> more
 			</button>
 		{/if}
 	</div>

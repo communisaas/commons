@@ -103,11 +103,28 @@
 		sessionStorage.setItem(LENS_STORAGE_KEY, next);
 	}
 
+	// The clock the within-band recency weighting reads, captured ONCE per mount
+	// rather than re-read on every regrouping. Pinning it makes the grouping a
+	// pure function of the template array: the same templates always produce the
+	// identical field, so a re-render triggered by unrelated state never reshuffles
+	// the bands under the eye, and the work below is genuinely memoizable on the
+	// array identity. `Date.now()` is not a browser global, so reading it here is
+	// SSR-safe (server and client capture their own mount clock; the band ORDER is
+	// hue-driven and clock-independent — only the within-band tie order can shift,
+	// and it is stable within a session).
+	const groupingClock = new Date();
+
 	// The topic lens: group by civic domain and order the bands along the hue
 	// spectrum. The hue resolver is injected so the grouper stays decoupled from
 	// the embedding backfill — the band order is stable today, and sharpens as
-	// `domainHue` fills in. Deterministic and pure, so this runs cleanly under SSR.
-	const topicBands = $derived(groupByDomain(templates, { hueOf: resolveDomainHue }));
+	// `domainHue` fills in. This `$derived` IS the memoization: it recomputes only
+	// when its tracked input — the `templates` array reference — changes, never on
+	// an unrelated state change (a bloom, a lens flip, a band expanding). With the
+	// clock pinned above, regrouping the same array is wasted only if the array
+	// identity churns; the grouper itself is O(n log n) and measured well under the
+	// frame budget even at a synthetic 200-template field. Deterministic and pure,
+	// so it runs cleanly under SSR.
+	const topicBands = $derived(groupByDomain(templates, { hueOf: resolveDomainHue, now: groupingClock }));
 
 	// The place lens: the EXISTING geographic precision grouping (computed by the
 	// page via `groupByPrecision`, reused unchanged), adapted into bands. Hue

@@ -229,6 +229,13 @@
 		flex-direction: column;
 		gap: 0.35rem;
 		padding: 0.5rem 0 0.6rem;
+		/* Reserve the ribbon's height up front (bar + caption line + the vertical
+		   padding) so the map occupies the same vertical space from the very first
+		   paint as it does once the bands resolve — the field below never jumps as
+		   data arrives. The desktop ribbon is the server-rendered default; the
+		   scrubber's reserve is set at the narrow breakpoint below so the SSR→client
+		   ribbon→scrubber reconcile shifts nothing either. */
+		min-height: 3rem;
 		/* A warm-cream wash so the ribbon reads over whatever band scrolls beneath,
 		   fading at the foot rather than ending on a hard edge. */
 		background: linear-gradient(
@@ -348,6 +355,11 @@
 	.spectrum-overview--scrubber {
 		gap: 0;
 		padding-bottom: 0.7rem;
+		/* The scrubber's chips are a full 44px touch target plus its foot room, so
+		   it reserves more height than the desktop ribbon. Pinning that reserve here
+		   means the SSR-default ribbon and the client-reconciled scrubber both hold
+		   the same band offset across the mount swap — no shift on a touch surface. */
+		min-height: 3.75rem;
 	}
 
 	/*

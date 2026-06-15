@@ -177,6 +177,26 @@ describe('SpectrumLandscape', () => {
 		expect(bandPulses(container).length).toBe(1);
 	});
 
+	it('holds the band order stable across an unrelated re-render (grouping is memoized on the templates, not the clock)', async () => {
+		// Grouping is keyed on the template array, with the recency clock pinned once
+		// per mount — so a re-render driven by unrelated state (a selection change, a
+		// different reveal budget) must not reshuffle the field under the eye. Same
+		// templates → identical band order, every render.
+		const templates = ['Technology', 'Healthcare', 'Environment', 'Housing'].map((domain, i) =>
+			makeTemplate({ id: `t${i}`, domain })
+		);
+		const { container, rerender } = render(SpectrumLandscape, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const before = bandNames(container);
+
+		// Re-render with the SAME templates but unrelated props changed.
+		await rerender({ templates, selectedId: 't1', initialVisible: 3, onSelect: vi.fn() });
+		const after = bandNames(container);
+
+		expect(after).toEqual(before);
+	});
+
 	it('renders an honest empty state when there are no templates', () => {
 		const { container, getByText } = render(SpectrumLandscape, {
 			props: { templates: [], onSelect: vi.fn() }

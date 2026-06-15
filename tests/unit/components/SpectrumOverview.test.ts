@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Template } from '$lib/types/template';
 import type { DomainGroup } from '$lib/core/topic/domain-grouping';
 
@@ -439,5 +441,28 @@ describe('SpectrumOverview — mobile scrubber (<768px)', () => {
 		for (const chip of chips(container)) {
 			expect(chip.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 		}
+	});
+});
+
+describe('SpectrumOverview — reserved space (no layout shift on the mode swap)', () => {
+	// The server renders the desktop ribbon by default; on a narrow viewport the
+	// client reconciles to the scrubber on mount. If the two modes occupied
+	// different heights, that swap would jump the bands below it. Both modes pin a
+	// reserved min-height so the map holds the same vertical footprint across the
+	// SSR→client reconcile — the field never shifts. jsdom does not apply scoped
+	// <style> as layout, so the reserve is asserted against the component source.
+	const src = readFileSync(
+		resolve(process.cwd(), 'src/lib/components/template-browser/spectrum/SpectrumOverview.svelte'),
+		'utf8'
+	);
+
+	it('reserves a min-height on the ribbon shell so the map does not collapse before data resolves', () => {
+		const shell = src.match(/\.spectrum-overview\s*\{[^}]*\}/s)?.[0] ?? '';
+		expect(shell).toMatch(/min-height:/);
+	});
+
+	it('reserves a min-height on the scrubber variant so the ribbon→scrubber swap shifts nothing', () => {
+		const scrubber = src.match(/\.spectrum-overview--scrubber\s*\{[^}]*\}/s)?.[0] ?? '';
+		expect(scrubber).toMatch(/min-height:/);
 	});
 });

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render } from '@testing-library/svelte';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { Template } from '$lib/types/template';
 
 // svelte/motion reads prefers-reduced-motion via window.matchMedia at module
@@ -231,5 +233,28 @@ describe('TemplateTile', () => {
 		// governs whether it sheds.
 		expect(button.querySelector('.template-dimension--districts')).toBeTruthy();
 		expect(button.querySelector('.template-dimension--depth')).toBeTruthy();
+	});
+
+	it('neutralizes its entrance motion under reduced motion (the band-expand reveal is calm)', () => {
+		// When a band reveals more tiles, the newcomers carry an entrance (fade +
+		// rise). A vestibular-sensitive reader must see them simply appear — no
+		// movement. The neutralization lives in the tile's scoped CSS, which jsdom
+		// does not apply as layout, so the contract is asserted against the source:
+		// the reduced-motion block must zero the entrance animations and pin the
+		// tiles fully opaque (no stuck-at-0 invisible reveal).
+		const src = readFileSync(
+			resolve(process.cwd(), 'src/lib/components/template-browser/spectrum/TemplateTile.svelte'),
+			'utf8'
+		);
+		const reduced =
+			src.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\n\t\}/)?.[0] ?? '';
+		expect(reduced).not.toBe('');
+		// Both reveal entrances (the staggered initial reveal and the "more" reveal)
+		// are named in the reduced-motion block and turned off.
+		expect(reduced).toMatch(/newly-revealed/);
+		expect(reduced).toMatch(/initial-reveal/);
+		expect(reduced).toMatch(/animation:\s*none/);
+		// The tiles still end visible (not stuck at the entrance's opacity 0).
+		expect(reduced).toMatch(/opacity:\s*1/);
 	});
 });

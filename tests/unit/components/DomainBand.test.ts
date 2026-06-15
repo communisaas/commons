@@ -154,6 +154,74 @@ describe('DomainBand', () => {
 		expect(container.querySelector('.band-more')).toBeNull();
 	});
 
+	it('reveals an oversized band in bounded steps — one click never mounts the whole tail', async () => {
+		// A pathologically large band (well past a hundred tiles) must not dump its
+		// entire remainder into the DOM on a single click — that would stall the
+		// frame. The reveal grows in bounded steps, so each click mounts a capped
+		// batch and the affordance promises only what it will actually reveal.
+		const templates = Array.from({ length: 260 }, (_, i) => makeTemplate({ id: `t${i}` }));
+		const group = makeGroup(templates);
+		const { container } = render(DomainBand, {
+			props: { group, onSelect: vi.fn(), initialVisible: 6 }
+		});
+
+		// Lead set only, and the affordance offers a bounded batch, not all 254 left.
+		expect(tiles(container).length).toBe(6);
+		const more = () => container.querySelector('.band-more') as HTMLButtonElement | null;
+		expect(more()?.textContent).toContain('100');
+		expect(more()?.textContent).not.toContain('254');
+
+		// First click reveals one bounded step on top of the lead set.
+		await fireEvent.click(more()!);
+		expect(tiles(container).length).toBe(106);
+		// Still more to reveal, still bounded.
+		expect(more()).not.toBeNull();
+		expect(more()?.textContent).toContain('100');
+
+		// Subsequent clicks walk the rest in, never exceeding a step per click.
+		await fireEvent.click(more()!);
+		expect(tiles(container).length).toBe(206);
+		await fireEvent.click(more()!);
+		// The final partial step reveals the remainder and retires the affordance.
+		expect(tiles(container).length).toBe(260);
+		expect(more()).toBeNull();
+	});
+
+	it('reveals an ordinary band fully in one click (no needless stepping below the cap)', async () => {
+		// A band comfortably under one reveal step shows its whole remainder on the
+		// first click — the bounded reveal engages only where the data is large,
+		// never adding clicks to a normal-sized neighbourhood.
+		const templates = Array.from({ length: 40 }, (_, i) => makeTemplate({ id: `t${i}` }));
+		const group = makeGroup(templates);
+		const { container } = render(DomainBand, {
+			props: { group, onSelect: vi.fn(), initialVisible: 6 }
+		});
+		const more = container.querySelector('.band-more') as HTMLButtonElement;
+		// The affordance promises the full remainder (34), not a capped batch.
+		expect(more.textContent).toContain('34');
+		await fireEvent.click(more);
+		expect(tiles(container).length).toBe(40);
+		expect(container.querySelector('.band-more')).toBeNull();
+	});
+
+	it('tags tiles revealed past the lead set so their entrance respects reduced motion', async () => {
+		// Tiles brought in by "more" carry the reveal entrance (a fade + small rise).
+		// That entrance is neutralized under prefers-reduced-motion in the tile's own
+		// CSS, so a vestibular-sensitive reader sees the band grow without motion. The
+		// band's job is to TAG the freshly revealed tiles; jsdom does not apply scoped
+		// <style> layout, so this pins that the tag is set (the reduced-motion
+		// neutralization of the tagged class is asserted at the tile level).
+		const templates = Array.from({ length: 9 }, (_, i) => makeTemplate({ id: `t${i}` }));
+		const group = makeGroup(templates);
+		const { container } = render(DomainBand, {
+			props: { group, onSelect: vi.fn(), initialVisible: 6 }
+		});
+		await fireEvent.click(container.querySelector('.band-more') as HTMLButtonElement);
+		const revealed = Array.from(container.querySelectorAll('[data-template-button].newly-revealed'));
+		// The three tiles past the initial six are tagged for the reveal entrance.
+		expect(revealed.length).toBe(3);
+	});
+
 	it('threads selection and activation down to its tiles', async () => {
 		const onSelect = vi.fn();
 		const group = makeGroup([makeTemplate({ id: 'a' }), makeTemplate({ id: 'b' })]);
