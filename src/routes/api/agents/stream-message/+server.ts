@@ -96,7 +96,22 @@ function isRecoveryPublicKeyJwk(value: unknown): value is JsonWebKey {
 }
 
 export const POST: RequestHandler = async (event) => {
-	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation');
+	// Paid individuals (Voice/Advocate) are not hard-blocked by the free
+	// daily-global abuse breaker on the message-generation step — their monthly
+	// authored cap is the real bound. The daily-global key is shared across every
+	// LLM op, so an authoring run (decision-makers + message-generation) must
+	// elevate the ceiling on BOTH steps or the paying user is still blocked here.
+	// Best-effort: a lookup failure falls back to the free ceiling, never elevates.
+	let paidIndividual = false;
+	if (event.locals.session?.userId) {
+		try {
+			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
+		} catch (err) {
+			console.warn('[stream-message] paid-individual lookup failed, using free ceiling:', err);
+		}
+	}
+
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation', { paidIndividual });
 	if (!rateLimitCheck.allowed) {
 		return rateLimitResponse(rateLimitCheck);
 	}

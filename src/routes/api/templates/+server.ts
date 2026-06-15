@@ -583,6 +583,25 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response, { status: 403 });
 				}
 
+				// Individual AI-authoring cap. The coded prefix lets the client
+				// distinguish this from the org quota and surface the at-cap upgrade
+				// card (Voice/Advocate). The human message after the colon is the
+				// plan-aware copy from decideIndividualAuthoring.
+				if (error instanceof Error && error.message.startsWith('AUTHORING_QUOTA_EXCEEDED:')) {
+					const message = error.message.slice('AUTHORING_QUOTA_EXCEEDED:'.length);
+					const apiError = createApiError('authorization', 'AUTHORING_QUOTA_EXCEEDED', message);
+					// Surface the code in BOTH `error` and `errors[]` so the api client
+					// (which forwards `errors` onto ApiClientError) preserves the
+					// AUTHORING_QUOTA_EXCEEDED code for the at-cap upgrade card; the
+					// `error` message is the plan-aware copy shown inline.
+					const response: StructuredApiResponse = {
+						success: false,
+						error: apiError,
+						errors: [apiError]
+					};
+					return json(response, { status: 403 });
+				}
+
 				console.error('Database error creating template:', error);
 
 				const response: StructuredApiResponse = {

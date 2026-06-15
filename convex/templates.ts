@@ -7,6 +7,8 @@ import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import {
   startOfMonthUTC,
   decideIndividualAuthoring,
+  authoredLimitForPlan,
+  AUTHORING_QUOTA_EXCEEDED,
 } from "./_individualAuthoringCap";
 import anchorsData from "./domain-anchors.json";
 
@@ -1004,25 +1006,52 @@ export const createTemplate = mutation({
         }
       }
     } else {
-      // L1 individual AI-authoring cap. Individuals are free forever to ACT on
-      // existing messages; the bound is on AI-AUTHORING NEW templates (the
-      // expensive person-layer TemplateCreator generation path). Org members
-      // are governed by their plan's maxTemplatesMonth above, so this only
-      // applies to the un-orged individual path.
+      // Individual AI-authoring cap (the L2 metered surface). Individuals are
+      // free forever to ACT on existing messages; the bound is on AI-AUTHORING
+      // NEW templates (the expensive person-layer TemplateCreator generation
+      // path). Org members are governed by their plan's maxTemplatesMonth above,
+      // so this only applies to the un-orged individual path.
       //
-      // Query-time aggregation from timestamped rows (templates.by_userId +
-      // _creationTime >= start-of-month), mirroring the billing pattern — NOT a
-      // denormalized counter that needs resetting.
+      // The limit is DYNAMIC: read the user's individual subscription plan and
+      // resolve its authored-per-month allowance (free floor 3, Voice 20,
+      // Advocate 75). The template-creation count IS the meter — query-time
+      // aggregation from timestamped rows (templates.by_userId + _creationTime
+      // >= start-of-month), mirroring the billing pattern, NOT a denormalized
+      // counter that needs resetting.
       const now = Date.now();
+
+      // Resolve the user's effective individual authored limit. Only honor the
+      // plan when the sub is effectively active (active/trialing, or past_due
+      // within a 7-day grace) — otherwise fall to the free floor. The sub is
+      // user-scoped (by_userId); org-scoped subs never reach this branch (those
+      // users have an orgMembership and take the maxTemplatesMonth path above).
+      const sub = await ctx.db
+        .query("subscriptions")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .first();
+      const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
+      const isWithinGrace =
+        sub?.status === "past_due" &&
+        sub.pastDueSince !== undefined &&
+        now - sub.pastDueSince < GRACE_PERIOD_MS;
+      const effectivelyActive =
+        sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
+      // authoredLimitForPlan resolves org slugs + unknowns to the free floor,
+      // so an individual sub can NEVER unlock an org plan's volume here.
+      const limit = effectivelyActive
+        ? authoredLimitForPlan(sub?.plan)
+        : authoredLimitForPlan(null);
+
       const monthStart = startOfMonthUTC(now);
       const monthToDate = await ctx.db
         .query("templates")
         .withIndex("by_userId", (q) => q.eq("userId", args.userId))
         .filter((q) => q.gte(q.field("_creationTime"), monthStart))
         .collect();
-      const decision = decideIndividualAuthoring(monthToDate.length, now);
+      const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
       if (!decision.ok) {
-        throw new Error(decision.message);
+        // Coded throw so the SvelteKit route surfaces the at-cap upgrade card.
+        throw new Error(`${AUTHORING_QUOTA_EXCEEDED}:${decision.message}`);
       }
     }
 

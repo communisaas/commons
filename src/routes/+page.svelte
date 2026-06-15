@@ -30,6 +30,8 @@
 	import type { ModalComponent } from '$lib/types/component-props';
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
+	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
+	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
 	import LocationScopeBar from '$lib/components/template-browser/LocationScopeBar.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
@@ -78,6 +80,9 @@
 	let templatePublishError = $state<string | null>(null);
 	let pendingPublishData = $state<Omit<Template, 'id'> | null>(null);
 	let userInitiatedSelection = $state(false);
+	// At-cap individual AI-authoring upgrade card (Voice/Advocate).
+	let showAuthoringUpgrade = $state(false);
+	let authoringCapMessage = $state<string | null>(null);
 
 	// Location scope state (user-selected geographic filter for templates)
 	const SCOPE_KEY = 'commons_location_scope';
@@ -131,8 +136,19 @@
 							.then(() => {
 								sessionStorage.removeItem('pending_template_save');
 							})
-							.catch((_error) => {
-								// Template save failed - user can retry later
+							.catch((error) => {
+								// Post-auth resume: if the user is at their individual
+								// authoring cap, surface the Voice/Advocate upgrade card
+								// rather than silently dropping the publish.
+								if (
+									error instanceof AppError &&
+									error.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+								) {
+									sessionStorage.removeItem('pending_template_save');
+									authoringCapMessage = error.apiError.message;
+									showAuthoringUpgrade = true;
+								}
+								// Other failures: user can retry later.
 							});
 					} else {
 						console.warn('[HomePage] Invalid pending template data:', result.error.flatten());
@@ -274,7 +290,18 @@
 			const newTemplate = await templateStore.addTemplate(pendingPublishData);
 			savedTemplate = newTemplate;
 		} catch (err) {
-			templatePublishError = err instanceof Error ? err.message : 'Failed to publish template';
+			// At-cap individual authoring quota → upgrade card, not a dead-end.
+			if (
+				err instanceof AppError &&
+				err.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+			) {
+				showTemplateSuccess = false;
+				savedTemplate = null;
+				authoringCapMessage = err.apiError.message;
+				showAuthoringUpgrade = true;
+			} else {
+				templatePublishError = err instanceof Error ? err.message : 'Failed to publish template';
+			}
 		} finally {
 			templatePublishing = false;
 		}
@@ -954,9 +981,23 @@
 						const newTemplate = await templateStore.addTemplate(templateData);
 						savedTemplate = newTemplate;
 					} catch (error) {
-						templatePublishError =
-							error instanceof Error ? error.message : 'Failed to publish template';
-						console.error('Template save failed:', error);
+						// At-cap individual AI-authoring quota → surface the
+						// Voice/Advocate upgrade card instead of a dead-end error.
+						// The store throws an AppError carrying the typed code so we
+						// branch on the code, not brittle message text.
+						if (
+							error instanceof AppError &&
+							error.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+						) {
+							showTemplateSuccess = false;
+							savedTemplate = null;
+							authoringCapMessage = error.apiError.message;
+							showAuthoringUpgrade = true;
+						} else {
+							templatePublishError =
+								error instanceof Error ? error.message : 'Failed to publish template';
+							console.error('Template save failed:', error);
+						}
 					} finally {
 						templatePublishing = false;
 						isSubmitting = false;
@@ -992,6 +1033,25 @@
 			pendingPublishData = null;
 		}}
 	/>
+{/if}
+
+<!-- At-cap individual AI-authoring upgrade (Voice/Advocate) -->
+{#if showAuthoringUpgrade}
+	<SimpleModal
+		maxWidth="max-w-md"
+		onclose={() => {
+			showAuthoringUpgrade = false;
+			authoringCapMessage = null;
+		}}
+	>
+		<AuthoringUpgradeCard
+			message={authoringCapMessage}
+			onclose={() => {
+				showAuthoringUpgrade = false;
+				authoringCapMessage = null;
+			}}
+		/>
+	</SimpleModal>
 {/if}
 
 <style>
