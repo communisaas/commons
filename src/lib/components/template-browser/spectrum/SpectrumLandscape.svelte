@@ -28,6 +28,8 @@
 	 * and the client.
 	 */
 
+	import type { Snippet } from 'svelte';
+	import { tick } from 'svelte';
 	import type { Template, TemplateGroup } from '$lib/types/template';
 	import { groupByDomain, bandDomId } from '$lib/core/topic/domain-grouping';
 	import { toPlaceBands } from '$lib/core/topic/place-bands';
@@ -35,7 +37,7 @@
 	import DomainBand from './DomainBand.svelte';
 	import LensToggle, { type Lens } from './LensToggle.svelte';
 	import SpectrumOverview from './SpectrumOverview.svelte';
-	import { EntityCluster } from '$lib/design';
+	import { Artifact, EntityCluster } from '$lib/design';
 	import { TIMING } from '$lib/design/motion';
 
 	interface Props {
@@ -53,6 +55,17 @@
 		onHover?: (id: string, isHovering: boolean) => void;
 		/** How many tiles a band shows before "more" reveals the rest. */
 		initialVisible?: number;
+		/** The dive: the chosen template's preview, supplied by the page already wired
+		 *  to its send flow / personalization / proof footer. When present together with
+		 *  a `selectedId`, the field recedes and this ascends into an Artifact over it.
+		 *  The page passes `TemplatePreview` unchanged — the descent is a mount and a
+		 *  transition around it, never a fork. Absent → no dive (the list-era split
+		 *  view, where the preview lives in its own column). */
+		dive?: Snippet;
+		/** Called when the dive closes (esc, back, or the receded field behind it).
+		 *  The page clears its selection here so the field returns to its exact prior
+		 *  state. Required for the descent to be reversible. */
+		onClose?: () => void;
 	}
 
 	let {
@@ -61,7 +74,9 @@
 		selectedId = null,
 		onSelect,
 		onHover,
-		initialVisible = 6
+		initialVisible = 6,
+		dive,
+		onClose
 	}: Props = $props();
 
 	// How the field is organised. Topic is the default lens (hue-ordered domain
@@ -238,44 +253,186 @@
 			focusTileAt(index - 1);
 		}
 	}
+
+	// ─── The dive: a descent into the chosen template ─────────────────────────
+	//
+	// Selecting a tile is falling into it. The field recedes (blur + dim) and the
+	// chosen template ascends into an Artifact — the one white bounded surface for
+	// a floated object — wrapping the page's own preview. Back / esc / a tap on the
+	// receded field reverses the fall: the Artifact settles away, the field returns
+	// to the EXACT state it left (scroll position, lens, selection cleared), and
+	// focus lands back on the tile it rose from. Reversible, no hidden state.
+	//
+	// The dive is on only when the page supplies the preview snippet AND a tile is
+	// selected; without the snippet the surface keeps the split-view behaviour (the
+	// preview lives in its own column) and nothing here engages.
+	const diving = $derived(!!dive && !!selectedId);
+
+	// The body scroll position captured as the dive opens, restored as it closes,
+	// so the field comes back exactly where it was — the reversibility the descent
+	// promises. The element focus was on (the originating tile) is restored too.
+	let lockedScrollY = 0;
+	let diveSurface = $state<HTMLElement | null>(null);
+	let restoreFocusId: string | null = null;
+
+	function lockFieldScroll() {
+		lockedScrollY = window.scrollY;
+		document.body.style.position = 'fixed';
+		document.body.style.top = `-${lockedScrollY}px`;
+		document.body.style.left = '0';
+		document.body.style.right = '0';
+	}
+
+	function unlockFieldScroll() {
+		document.body.style.position = '';
+		document.body.style.top = '';
+		document.body.style.left = '';
+		document.body.style.right = '';
+		window.scrollTo(0, lockedScrollY);
+	}
+
+	// Open / close is driven by `diving`. On open: remember the originating tile,
+	// lock the field's scroll, move focus into the Artifact. On close: restore the
+	// scroll and return focus to the tile. Effects never run under SSR and the dive
+	// only exists on the client, so the window/document reads need no guard.
+	$effect(() => {
+		if (!diving) return;
+		restoreFocusId = selectedId;
+		lockFieldScroll();
+		// Focus the first focusable inside the risen Artifact once it has mounted.
+		// `preventScroll` so moving focus never nudges the (fixed) body underneath.
+		tick().then(() => {
+			const first = diveSurface?.querySelector<HTMLElement>(
+				'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+			);
+			(first ?? diveSurface)?.focus({ preventScroll: true });
+		});
+		return () => {
+			unlockFieldScroll();
+			// Return focus to the tile the dive rose from, so the body knows where it
+			// came back to. `preventScroll` is essential: a bare focus() scrolls the
+			// tile into view and would override the exact scroll position we just
+			// restored — the field must come back where it left, not jump to the tile.
+			const id = restoreFocusId;
+			restoreFocusId = null;
+			tick().then(() => {
+				if (!id) return;
+				document
+					.querySelector<HTMLElement>(`[data-template-button][data-template-id="${id}"]`)
+					?.focus({ preventScroll: true });
+			});
+		};
+	});
+
+	function closeDive() {
+		onClose?.();
+	}
+
+	// Esc reverses the dive. A keydown on the descent layer is enough — focus is
+	// trapped inside it while diving, so the handler always sees the key.
+	function handleDiveKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			closeDive();
+			return;
+		}
+		if (event.key !== 'Tab') return;
+		// Trap focus inside the Artifact: wrap from last → first and first → last so
+		// tab never leaves the risen object for the receded field beneath it.
+		const focusables = diveSurface?.querySelectorAll<HTMLElement>(
+			'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+		);
+		if (!focusables || focusables.length === 0) return;
+		const first = focusables[0];
+		const last = focusables[focusables.length - 1];
+		const active = document.activeElement;
+		if (event.shiftKey && active === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && active === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
 </script>
 
-{#if templates.length > 0}
-	<!-- The lens chooses the organiser; hue keeps encoding topic in both. -->
-	<LensToggle {lens} onChange={selectLens} />
-{/if}
+<!-- The whole topical field recedes as one when a dive is open — blur + dim
+     behind the risen Artifact, so the descent reads as a fall into one template
+     and a return to the same place. The recede is a class on this wrapper; the
+     descent layer below is its sibling, so it is never blurred by its own field. -->
+<div class="spectrum-field" class:field-receding={diving}>
+	{#if templates.length > 0}
+		<!-- The lens chooses the organiser; hue keeps encoding topic in both. -->
+		<LensToggle {lens} onChange={selectLens} />
+	{/if}
 
-{#if bands.length > 0}
-	<!-- The map of the whole: a sticky composition ribbon summing the field into
-	     one glance — each band a segment sized by its count and coloured by its
-	     hue, the same hue its spine carries below. It stays in view while the bands
-	     scroll, so the eye can always reorient. -->
-	<SpectrumOverview {bands} onFocusBand={focusBand} />
+	{#if bands.length > 0}
+		<!-- The map of the whole: a sticky composition ribbon summing the field into
+		     one glance — each band a segment sized by its count and coloured by its
+		     hue, the same hue its spine carries below. It stays in view while the bands
+		     scroll, so the eye can always reorient. -->
+		<SpectrumOverview {bands} onFocusBand={focusBand} />
 
-	<!-- The field: bands chunked by generous void, not chrome. EntityCluster's
-	     proximity ratio lets the eye read each neighbourhood as one unit and the
-	     gaps between them as the boundaries — no borders, no cards. -->
-	<EntityCluster as="section" density="spacious" class="spectrum-landscape">
-		{#each bands as band, i (band.key)}
-			<DomainBand
-				group={band}
-				placeLabel={band.placeLabel}
-				blooming={bloomingDomain === band.domain}
-				{selectedId}
-				{onSelect}
-				{onHover}
-				onKeydown={handleKeydown}
-				indexOffset={indexOffsets[i]}
-				{initialVisible}
-			/>
-		{/each}
-	</EntityCluster>
-{:else}
-	<!-- Honest empty state: no field to lay out yet. Plain English, no dead
-	     counters or invented activity. -->
-	<div class="spectrum-empty">
-		<p class="font-brand spectrum-empty__head">No templates yet.</p>
-		<p class="font-brand spectrum-empty__sub">You can write the first one.</p>
+		<!-- The field: bands chunked by generous void, not chrome. EntityCluster's
+		     proximity ratio lets the eye read each neighbourhood as one unit and the
+		     gaps between them as the boundaries — no borders, no cards. -->
+		<EntityCluster as="section" density="spacious" class="spectrum-landscape">
+			{#each bands as band, i (band.key)}
+				<DomainBand
+					group={band}
+					placeLabel={band.placeLabel}
+					blooming={bloomingDomain === band.domain}
+					divingId={diving ? selectedId : null}
+					{selectedId}
+					{onSelect}
+					{onHover}
+					onKeydown={handleKeydown}
+					indexOffset={indexOffsets[i]}
+					{initialVisible}
+				/>
+			{/each}
+		</EntityCluster>
+	{:else}
+		<!-- Honest empty state: no field to lay out yet. Plain English, no dead
+		     counters or invented activity. -->
+		<div class="spectrum-empty">
+			<p class="font-brand spectrum-empty__head">No templates yet.</p>
+			<p class="font-brand spectrum-empty__sub">You can write the first one.</p>
+		</div>
+	{/if}
+</div>
+
+{#if diving}
+	<!-- The descent: the chosen template, risen as an Artifact over the receded
+	     field. A tap on the backdrop, esc, or back reverses it. Focus is trapped
+	     inside the Artifact while it is up and restored to the originating tile on
+	     close. The preview inside is the page's own — mounted here, never forked. -->
+	<div
+		class="dive-layer"
+		role="presentation"
+		onkeydown={handleDiveKeydown}
+	>
+		<!-- The receded field is the way back: a click anywhere on it closes the
+		     dive. A button (not a div) so the keyboard reaches it natively. -->
+		<button
+			type="button"
+			class="dive-backdrop"
+			aria-label="Back to the field"
+			onclick={closeDive}
+		></button>
+
+		<div
+			bind:this={diveSurface}
+			class="dive-surface"
+			role="dialog"
+			aria-modal="true"
+			aria-label="Template preview"
+			tabindex="-1"
+		>
+			<Artifact padding="compact" class="dive-artifact">
+				{@render dive?.()}
+			</Artifact>
+		</div>
 	</div>
 {/if}
 
@@ -305,5 +462,106 @@
 		margin-top: 0.5rem;
 		font-size: 0.875rem;
 		color: oklch(0.5 0.02 250);
+	}
+
+	/*
+	 * The recede. While a dive is open the whole field steps back — softened and
+	 * dimmed so the eye reads it as the place left behind, not a second focus. The
+	 * blur is the expensive channel, so it rides only the not-reduced-motion path
+	 * (below); the dim is cheap and applies in both. NORMAL (220ms) — the field
+	 * settles back as the Artifact rises.
+	 */
+	.spectrum-field {
+		transition:
+			filter 220ms cubic-bezier(0.4, 0, 0.2, 1),
+			opacity 220ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
+	.spectrum-field.field-receding {
+		opacity: 0.55;
+		filter: blur(4px);
+		/* The field is behind the dive — it must not catch clicks or focus. */
+		pointer-events: none;
+	}
+
+	/*
+	 * The descent layer — a full-viewport plane the risen Artifact floats in. It
+	 * sits over the receded field; its backdrop is the way back.
+	 */
+	.dive-layer {
+		position: fixed;
+		inset: 0;
+		z-index: 1000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 1.5rem;
+	}
+
+	/*
+	 * The backdrop is the receded field made reachable — a faint warm scrim over
+	 * the cream ground, never a hard black overlay. Clicking it reverses the dive.
+	 */
+	.dive-backdrop {
+		position: absolute;
+		inset: 0;
+		border: none;
+		margin: 0;
+		padding: 0;
+		cursor: pointer;
+		background: oklch(0.96 0.01 85 / 0.55);
+	}
+
+	/*
+	 * The risen object. Bounded so the preview keeps its column rhythm, scrollable
+	 * within when the preview is taller than the viewport, and raised above the
+	 * backdrop. The white surface and border belong to the Artifact inside it.
+	 */
+	.dive-surface {
+		position: relative;
+		z-index: 1;
+		width: 100%;
+		max-width: 40rem;
+		max-height: calc(100vh - 3rem);
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		/* The ascent: the Artifact arrives with the firm, no-bounce ENTRANCE feel
+		   (stiffness 0.25 / damping 0.85 → ~280ms settle, minimal overshoot). */
+		animation: dive-ascend 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+	}
+
+	.dive-surface :global(.dive-artifact) {
+		max-height: 100%;
+		overflow-y: auto;
+	}
+
+	@keyframes dive-ascend {
+		from {
+			opacity: 0;
+			transform: translateY(16px) scale(0.985);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+	}
+
+	/*
+	 * Reduced motion: no blur, no rise. The field dims (cheap, non-vestibular) and
+	 * the Artifact appears at once — the descent is instant, not animated.
+	 */
+	@media (prefers-reduced-motion: reduce) {
+		.spectrum-field {
+			transition: none;
+		}
+
+		.spectrum-field.field-receding {
+			filter: none;
+		}
+
+		.dive-surface {
+			animation: none;
+		}
 	}
 </style>

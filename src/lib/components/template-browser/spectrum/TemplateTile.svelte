@@ -61,6 +61,10 @@
 		 *  small place chip so place stays visible while hue keeps encoding topic.
 		 *  Absent in the topic lens and the list → no chip, tile unchanged. */
 		placeLabel?: string | null;
+		/** True for the one tile a dive rose from while the dive is open: it lifts off
+		 *  the receding field, the kinesthetic origin of the ascent. The field clears
+		 *  it on close (so the tile settles back), and reduced-motion shows no lift. */
+		ascending?: boolean;
 	}
 
 	let {
@@ -74,7 +78,8 @@
 		justLoaded = false,
 		animationDelay = 0,
 		resolvedHue,
-		placeLabel = null
+		placeLabel = null,
+		ascending = false
 	}: Props = $props();
 
 	// Congressional sends carry heavier coordination weight — the card-weight
@@ -112,6 +117,7 @@
 	class:newly-revealed={newlyRevealed}
 	class:initial-reveal={justLoaded}
 	class:card-selected={selected}
+	class:card-ascending={ascending}
 	style="--card-hue: {hue}; will-change: transform; backface-visibility: hidden;{justLoaded
 		? ` animation-delay: ${animationDelay}ms;`
 		: ''}"
@@ -265,6 +271,21 @@
 		color: oklch(0.5 0.02 250);
 	}
 
+	/*
+	 * The ascent origin. While a dive is open the chosen tile lifts off the
+	 * receding field — a small rise plus a raised shadow — so the eye reads it as
+	 * the thing that rose into the Artifact, the kinesthetic start of the descent.
+	 * The lift settles in (NORMAL 220ms) and the field clears `ascending` on close
+	 * so it returns to rest. Reduced-motion drops the transition (handled below).
+	 */
+	.template-card.card-ascending {
+		transform: translateY(-4px);
+		box-shadow: 0 6px 16px oklch(0.45 0.06 var(--card-hue) / 0.18);
+		transition:
+			transform 220ms cubic-bezier(0.4, 0, 0.2, 1),
+			box-shadow 220ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+
 	/* Newly revealed templates fade in with a small upward motion (8px). */
 	.template-card.newly-revealed {
 		animation: reveal 200ms ease-out forwards;
@@ -338,6 +359,14 @@
 		.template-card.initial-reveal {
 			animation: none;
 			opacity: 1;
+		}
+
+		/* No rise for the ascent origin — the dive is instant under reduced motion.
+		   The raised shadow stays (it is static, not vestibular) so the chosen tile
+		   is still legible as the origin. */
+		.template-card.card-ascending {
+			transform: none;
+			transition: none;
 		}
 
 		.debate-pulse {

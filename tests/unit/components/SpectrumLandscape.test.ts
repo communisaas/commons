@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, waitFor } from '@testing-library/svelte';
+import { createRawSnippet } from 'svelte';
 import type { Template } from '$lib/types/template';
 import { resolveDomainHue } from '$lib/utils/domain-hue';
 
@@ -398,5 +399,132 @@ describe('SpectrumLandscape — lens toggle (topic ↔ place)', () => {
 			expect(lensButton(container, 'place').getAttribute('aria-pressed')).toBe('true')
 		);
 		expect(bandNames(container)).toEqual(['In Your State', 'Nationwide']);
+	});
+});
+
+/** A `dive` snippet standing in for the page's preview: a labelled button so the
+ *  focus-into-dive and focus-trap behaviour have a real focusable to land on. */
+function diveSnippet(label = 'Send this message') {
+	return createRawSnippet(() => ({
+		render: () => `<button type="button" data-testid="dive-cta">${label}</button>`
+	}));
+}
+
+/** The risen dialog (the Artifact-wrapped preview floating over the field). */
+function diveDialog(container: HTMLElement): HTMLElement | null {
+	return container.querySelector('[role="dialog"]');
+}
+
+/** The field wrapper — receded (blurred/dimmed) while a dive is open. */
+function field(container: HTMLElement): HTMLElement {
+	return container.querySelector('.spectrum-field') as HTMLElement;
+}
+
+describe('SpectrumLandscape — the dive (descent into a template)', () => {
+	const templates = [
+		makeTemplate({ id: 'a', domain: 'Healthcare' }),
+		makeTemplate({ id: 'b', domain: 'Housing' })
+	];
+
+	it('does not dive without a selection — the field is at rest', () => {
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		expect(diveDialog(container)).toBeNull();
+		expect(field(container).classList.contains('field-receding')).toBe(false);
+	});
+
+	it('keeps the split view when no dive snippet is supplied (list-era behaviour)', () => {
+		// A selection with no preview snippet must NOT recede the field — the preview
+		// lives in its own column in that mode, and the descent stays disengaged.
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn() }
+		});
+		expect(diveDialog(container)).toBeNull();
+		expect(field(container).classList.contains('field-receding')).toBe(false);
+	});
+
+	it('opens: the preview rises in a modal dialog over the receded field', () => {
+		const { container, getByTestId } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		const dialog = diveDialog(container);
+		expect(dialog).toBeTruthy();
+		expect(dialog?.getAttribute('aria-modal')).toBe('true');
+		// The page's own preview is mounted inside the risen surface, not forked.
+		expect(getByTestId('dive-cta')).toBeTruthy();
+		// The field behind it recedes.
+		expect(field(container).classList.contains('field-receding')).toBe(true);
+	});
+
+	it('marks the originating tile as the ascent origin while diving', () => {
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		const origin = container.querySelector('[data-template-id="a"]');
+		expect(origin?.classList.contains('card-ascending')).toBe(true);
+		// Only the chosen tile lifts.
+		const other = container.querySelector('[data-template-id="b"]');
+		expect(other?.classList.contains('card-ascending')).toBe(false);
+	});
+
+	it('moves focus into the risen preview on open', async () => {
+		const { container, getByTestId } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		// The open effect focuses the first focusable inside the dialog after mount.
+		await waitFor(() => expect(document.activeElement).toBe(getByTestId('dive-cta')));
+		expect(diveDialog(container)?.contains(document.activeElement)).toBe(true);
+	});
+
+	it('reverses on escape — reporting the close up so the field can restore', async () => {
+		const onClose = vi.fn();
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet(), onClose }
+		});
+		await fireEvent.keyDown(diveDialog(container)!.parentElement!, { key: 'Escape' });
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('reverses when the receded field (backdrop) is tapped', async () => {
+		const onClose = vi.fn();
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet(), onClose }
+		});
+		const backdrop = container.querySelector('.dive-backdrop') as HTMLButtonElement;
+		expect(backdrop).toBeTruthy();
+		await fireEvent.click(backdrop);
+		expect(onClose).toHaveBeenCalledTimes(1);
+	});
+
+	it('round-trips: clearing the selection settles the field back to rest', async () => {
+		// The descent is reversible with no hidden state — re-render with the
+		// selection cleared (what the page does on close) and the dialog is gone,
+		// the field un-receded, exactly as before the dive.
+		const { container, rerender } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		expect(diveDialog(container)).toBeTruthy();
+		expect(field(container).classList.contains('field-receding')).toBe(true);
+
+		await rerender({ templates, selectedId: null, onSelect: vi.fn(), dive: diveSnippet() });
+
+		expect(diveDialog(container)).toBeNull();
+		expect(field(container).classList.contains('field-receding')).toBe(false);
+		// The full field is still laid out beneath — nothing was torn down.
+		expect(tiles(container).length).toBe(2);
+		expect(bandNames(container)).toEqual(expect.arrayContaining(['Healthcare', 'Housing']));
+	});
+
+	it('floats the preview in an Artifact (the only bounded white surface), no foreign chrome', () => {
+		const { container } = render(SpectrumLandscape, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn(), dive: diveSnippet() }
+		});
+		// The risen surface wraps its content in an Artifact, not a hand-rolled box.
+		const dialog = diveDialog(container);
+		expect(dialog?.querySelector('.artifact')).toBeTruthy();
+		// No oversized radius or pill chrome on the descent layer.
+		const layer = container.querySelector('.dive-layer') as HTMLElement;
+		expect(layer.className).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 	});
 });
