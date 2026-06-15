@@ -5,7 +5,8 @@
   campaign lands after it ships. It answers the questions an organization
   actually brings here: did it deliver, who composed, did anyone respond, what
   do we show the board. The evidence band leads with constituents and
-  individually-composed authorship beside reach, delivery, and responses. The
+  personalized authorship (edited-vs-verbatim) beside reach, delivery, and
+  responses. The
   delivered artifact is the "Constituent Report" — verification rides under it
   as a quiet watermark, never the lead. Below it sit three lists: action
   records, where actions landed, and response activity.
@@ -68,11 +69,12 @@
 	const districtReach = $derived(deriveDistrictReach(data?.packet?.geography ?? null));
 	const responseActivity = $derived(data ? describeResponseActivity(data.receipts) : null);
 
-	// Individually-composed messages — the differentiator a board reacts to
-	// (individualized messages carry far more influence than form letters), so
-	// it belongs in the impact band beside reach, not buried in the packet.
-	// Sourced from the packet's authorship signal when it carries one.
-	const individuallyComposed = $derived(data?.packet?.authorship?.individual ?? 0);
+	// Personalized messages — the differentiator a board reacts to (a supporter
+	// who edited the org's template away from verbatim carries far more influence
+	// than a form letter), so it belongs in the impact band beside reach, not
+	// buried in the packet. This is an edited-vs-verbatim signal (the packet's
+	// authorship.individual count), NOT a claim of AI authoring.
+	const personalized = $derived(data?.packet?.authorship?.individual ?? 0);
 
 	const funnel = $derived(
 		data?.funnel ?? { imported: 0, postalResolved: 0, identityVerified: 0, districtVerified: 0 }
@@ -130,10 +132,10 @@
 							<span class="evidence-label">verified constituents</span>
 						</span>
 					{/if}
-					{#if individuallyComposed > 0}
+					{#if personalized > 0}
 						<span class="evidence-cell">
-							<Datum value={individuallyComposed} />
-							<span class="evidence-label">individually composed</span>
+							<Datum value={personalized} />
+							<span class="evidence-label">personalized</span>
 						</span>
 					{/if}
 					{#if headline.districtsReached > 0}

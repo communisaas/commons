@@ -182,7 +182,7 @@
 						<div class="specimen__evidence-row">
 							<span class="specimen__evidence-label">Authorship</span>
 							<span class="specimen__evidence-detail">
-								<strong>2,612</strong> individually composed
+								<strong>2,612</strong> personalized
 								<span class="specimen__sep">&middot;</span>
 								<strong>816</strong> shared templates (disclosed)
 							</span>

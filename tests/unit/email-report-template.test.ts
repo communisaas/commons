@@ -141,12 +141,17 @@ describe('renderReport', () => {
 		expect(r.text).not.toContain('VERIFICATION REPORT');
 	});
 
-	it('elevates the individually-composed signal as a headline-adjacent line', async () => {
+	it('elevates the personalized signal as a headline-adjacent line', async () => {
 		const r = await renderReport(baseCtx);
 		// authorship.individual = 800 → surfaced near the big number, not only
-		// in the breakdown rows.
-		expect(r.html).toContain('800 individually composed messages');
-		expect(r.text).toContain('800 individually composed messages');
+		// in the breakdown rows. Labeled "personalized" (edited-vs-verbatim CMF
+		// signal), NOT "individually composed" — the metric does not measure AI
+		// authoring, so the label must not imply it.
+		expect(r.html).toContain('800 personalized messages');
+		expect(r.text).toContain('800 personalized messages');
+		// Guard against regression to the misleading AI-authoring framing.
+		expect(r.html).not.toContain('individually composed');
+		expect(r.text).not.toContain('individually composed');
 	});
 
 	it('softens the attestation footer to a watermark (text version)', async () => {
