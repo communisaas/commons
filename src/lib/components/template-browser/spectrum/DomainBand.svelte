@@ -270,11 +270,35 @@
 	/*
 	 * Tiles within a band sit closer together than bands sit apart — the
 	 * proximity ratio that lets the eye chunk a band as one unit without a box.
+	 *
+	 * They flow as a fluid grid: one tile per row when the band is narrow (a
+	 * phone, or a constrained column), two-up as it widens, more as the field
+	 * opens out on a large screen. `auto-fit` with a comfortable minimum lets the
+	 * count follow the band's real width rather than a hardcoded breakpoint — a
+	 * tile never drops below the width it reads cleanly at, so the field reflows
+	 * without ever cramping. The `min(100%, …)` keeps a track from overflowing a
+	 * band narrower than the minimum (a sub-300px column stays one-up, no scroll).
+	 * A tile is capped at its natural card width (below) so a lone template stays
+	 * a card, not a stretched banner. The gap stays tight (proximity) so the eye
+	 * chunks the band as one neighbourhood whether one or many up.
 	 */
 	.band-tiles {
-		display: flex;
-		flex-direction: column;
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 18.75rem), 1fr));
+		justify-items: start;
 		gap: 0.75rem;
+		align-items: start;
+	}
+
+	/*
+	 * A tile holds its natural card width even when its grid track is wider (a
+	 * lone template in a wide band): capped and left-aligned in the track so it
+	 * reads as a card, not a full-bleed banner. When the band fills and the grid
+	 * goes multi-up, each track is already under this cap, so the rule is inert
+	 * there — it only reins in the single-tile, wide-band case.
+	 */
+	.band-tiles :global(.template-card) {
+		max-width: 28rem;
 	}
 
 	/*

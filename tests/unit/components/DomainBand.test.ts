@@ -212,6 +212,27 @@ describe('DomainBand', () => {
 		});
 	});
 
+	it('lays all its tiles as direct siblings in one tile container so they can reflow multi-up', () => {
+		// The reflow (one-up → two-up → more) is a grid rule on `.band-tiles`; for it
+		// to flow the tiles side by side they must be direct children of that one
+		// container, not nested in per-row wrappers. This pins that structure (the
+		// grid track behaviour itself is exercised at real widths in the responsive
+		// pass, not in jsdom which does not resolve scoped <style> layout).
+		const group = makeGroup([
+			makeTemplate({ id: 'a' }),
+			makeTemplate({ id: 'b' }),
+			makeTemplate({ id: 'c' })
+		]);
+		const { container } = render(DomainBand, {
+			props: { group, onSelect: vi.fn(), initialVisible: 12 }
+		});
+		const tilesWrap = container.querySelector('.band-tiles') as HTMLElement;
+		const directTiles = Array.from(tilesWrap.children).filter((el) =>
+			el.matches('[data-template-button]')
+		);
+		expect(directTiles.length).toBe(group.count);
+	});
+
 	it('tints tiles with the band hue authority, so the spine and tiles never clash', () => {
 		// "Bike Infrastructure & Public Health" resolves to Transportation via the
 		// landscape resolver (resolveDomainHue, longest keyword "infrastruc") but to

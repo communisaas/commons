@@ -176,4 +176,60 @@ describe('TemplateTile', () => {
 		rerender({ template: makeTemplate({ hasActiveDebate: true }), onSelect: vi.fn() });
 		expect(queryByText('Deliberating')).toBeTruthy();
 	});
+
+	it('tags each dimension mark by role so a narrow tile can shed the right ones', () => {
+		// With sends behind all three marks, the tile carries the rhythm (Pulse),
+		// districts (Ratio) and depth (Rings). The marks the narrow-tile rule sheds
+		// (districts + depth) carry their own role classes, and the rhythm — the one
+		// that stays — is tagged distinctly. The shedding itself is a container-width
+		// rule; this pins the structure that rule targets.
+		const { container } = render(TemplateTile, {
+			props: {
+				template: makeTemplate({
+					send_count: 30,
+					daily_arrivals: [2, 4, 3, 6, 5],
+					district_counts: [
+						{ code: 'CA-12', count: 9 },
+						{ code: 'NY-08', count: 7 }
+					],
+					tier_counts: [0, 0, 4, 6, 0, 0]
+				}),
+				onSelect: vi.fn()
+			}
+		});
+		// The mark that stays on a narrow tile.
+		expect(container.querySelector('.template-dimension--rhythm')).toBeTruthy();
+		// The marks that step aside when the tile narrows.
+		expect(container.querySelector('.template-dimension--districts')).toBeTruthy();
+		expect(container.querySelector('.template-dimension--depth')).toBeTruthy();
+	});
+
+	it('keeps the dimension marks inside the tile card so shedding tracks the tile width', () => {
+		// The narrow-tile shedding reads the TILE's width (a container-query on the
+		// card), so the dimension row must live inside the tile button — not in some
+		// outer wrapper whose width the tile cannot see. This pins that containment;
+		// the width threshold itself is exercised at real tile widths in the
+		// responsive pass (jsdom does not resolve scoped container-query layout).
+		const { container } = render(TemplateTile, {
+			props: {
+				template: makeTemplate({
+					send_count: 30,
+					daily_arrivals: [2, 4, 3, 6, 5],
+					district_counts: [
+						{ code: 'CA-12', count: 9 },
+						{ code: 'NY-08', count: 7 }
+					],
+					tier_counts: [0, 0, 4, 6, 0, 0]
+				}),
+				onSelect: vi.fn()
+			}
+		});
+		const button = container.querySelector('[data-template-button]') as HTMLElement;
+		const dims = button.querySelector('.template-dimensions');
+		expect(dims).toBeTruthy();
+		// Each sheddable mark sits within the tile card, so the card's own width
+		// governs whether it sheds.
+		expect(button.querySelector('.template-dimension--districts')).toBeTruthy();
+		expect(button.querySelector('.template-dimension--depth')).toBeTruthy();
+	});
 });

@@ -20,6 +20,12 @@
 	 * Pre-launch, with zero sends, the momentum primitives are ABSENT — never a
 	 * dead `0` or flat line. They appear as the substrate fills.
 	 *
+	 * Narrow-tile shedding: the tile is its own size container, so the dimension
+	 * row reads the TILE's width, not the viewport. When a tile is squeezed below
+	 * the width three primitives can sit on (a narrow column, a small phone), the
+	 * Ratio and Rings step aside and the mini-Pulse — the single most legible
+	 * rhythm mark — stays. The row never wraps into a cramped overflow; it sheds.
+	 *
 	 * Selection, hover, keyboard navigation, and the staggered entrance are owned
 	 * by the list (which knows the row's place in the whole) and threaded in as
 	 * props, so the tile stays a pure instrument and the list keeps one source of
@@ -187,12 +193,14 @@
 		{#if hasSends}
 			<dl class="template-dimensions" aria-hidden="true">
 				{#if arrivals.length > 0}
-					<div class="template-dimension">
+					<!-- Rhythm: the mini-Pulse. The mark that stays when the tile narrows. -->
+					<div class="template-dimension template-dimension--rhythm">
 						<Pulse values={arrivals} width={64} height={14} color="oklch(0.45 0.02 250)" />
 					</div>
 				{/if}
 				{#if districts.length >= 2}
-					<div class="template-dimension">
+					<!-- Districts: sheds first on a narrow tile (the mini-Pulse carries on). -->
+					<div class="template-dimension template-dimension--districts">
 						<Ratio
 							height={4}
 							segments={districts.map((d) => ({
@@ -204,7 +212,8 @@
 					</div>
 				{/if}
 				{#if tiers.some((t) => t.count > 0)}
-					<div class="template-dimension">
+					<!-- Identity depth: sheds with the districts on a narrow tile. -->
+					<div class="template-dimension template-dimension--depth">
 						<Rings {tiers} maxTier={5} size={16} />
 					</div>
 				{/if}
@@ -298,6 +307,18 @@
 		}
 	}
 
+	/*
+	 * The tile is its own size container: the dimension row below reads the
+	 * TILE's width, not the viewport, so primitive shedding tracks how wide the
+	 * card actually sits — a narrow desktop column and a small phone shed the
+	 * same way. `inline-size` constrains only the inline axis, so the card's
+	 * height stays content-driven.
+	 */
+	.template-card {
+		container-type: inline-size;
+		container-name: tile;
+	}
+
 	/* Per-template dimensional row — citation-scale Pulse / Ratio / Rings
 	   citing the substrate (rhythm / districts / identity-depth) of this
 	   template's verified sends. K-anon floor (<5) applied at render time so
@@ -315,6 +336,22 @@
 		display: flex;
 		align-items: center;
 		margin: 0;
+	}
+
+	/*
+	 * Narrow-tile shedding. Three primitives need room to read as distinct
+	 * marks; below the width they can share, the row would cramp and overflow.
+	 * So when the tile narrows past that point, the Ratio (districts) and Rings
+	 * (identity depth) step aside and the mini-Pulse (rhythm) — the single most
+	 * legible verified-send mark — stays. The row sheds rather than wraps into a
+	 * squeeze. The threshold is read off the TILE container (not the viewport),
+	 * so it holds in a narrow desktop column exactly as on a small phone.
+	 */
+	@container tile (max-width: 252px) {
+		.template-dimension--districts,
+		.template-dimension--depth {
+			display: none;
+		}
 	}
 
 	/* Debate Deliberation Indicator (Ambient Status Signal) */

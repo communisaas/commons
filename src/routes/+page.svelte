@@ -752,8 +752,17 @@
 				/>
 			</div>
 
-			<!-- Template Browser: List + Preview Grid -->
-			<div class="template-browser" id="template-browser">
+			<!-- Template Browser: List + Preview Grid.
+			     In the spectrum the preview is the dive (it rises over the field, not in
+			     a side column), so the two-column split collapses to one full-width track
+			     and the field spreads across the whole stream column — multi-up on a wide
+			     screen — instead of being penned into the narrow list column with the
+			     hidden preview track left as dead space beside it. -->
+			<div
+				class="template-browser"
+				class:template-browser--spectrum={showSpectrum}
+				id="template-browser"
+			>
 				<!-- Template List -->
 				<div class="template-list-column">
 					{#if showSpectrum}
@@ -1213,6 +1222,29 @@
 	@media (min-width: 1024px) {
 		.template-browser {
 			grid-template-columns: minmax(280px, 340px) 1fr;
+		}
+	}
+
+	/*
+	 * Spectrum mode: the preview is the dive (it rises over the receded field, not
+	 * in a side column), so the list/preview split collapses to one full-width
+	 * track at every breakpoint. The field then uses the whole stream column and
+	 * lays its tiles out multi-up on a wide screen, rather than being confined to
+	 * the narrow list column with the hidden preview track left as empty space.
+	 */
+	.template-browser--spectrum {
+		grid-template-columns: 1fr;
+	}
+
+	@media (min-width: 768px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	@media (min-width: 1024px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
 		}
 	}
 
