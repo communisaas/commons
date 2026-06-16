@@ -12,6 +12,7 @@ import {
 } from "./_individualAuthoringCap";
 import anchorsData from "./domain-anchors.json";
 import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
+import { clusterTagConcepts, conceptEdges, tagConceptMap } from "./lib/tag_concepts";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -20,6 +21,8 @@ const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unkn
 const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
 const listMissingEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingEmbeddings") as unknown as FunctionReference<"query", "internal">;
 const patchEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
+const listMissingTagEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingTagEmbeddings") as unknown as FunctionReference<"query", "internal">;
+const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchTagEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
 const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
 const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
 
@@ -69,6 +72,23 @@ function resolveDomain(doc: any): string {
   const cat = doc.category;
   if (cat && cat !== 'General') return cat;
   return '';
+}
+
+/**
+ * Normalize a template's `topics` (stored as untyped JSON) into clean tag
+ * strings: non-empty trimmed strings only, de-duplicated, stably ordered. Used
+ * by the tag-embedding backfill and the concept query so both see the same tag
+ * vocabulary regardless of how the raw field was authored.
+ */
+function normalizeTags(topics: unknown): string[] {
+  if (!Array.isArray(topics)) return [];
+  const seen = new Set<string>();
+  for (const t of topics) {
+    if (typeof t !== 'string') continue;
+    const tag = t.trim();
+    if (tag.length > 0) seen.add(tag);
+  }
+  return Array.from(seen).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -452,6 +472,77 @@ export const recomputeRelatednessCalibration = internalMutation({
     }
 
     return { updated: true, count: calibration.count, dim: calibration.dim };
+  },
+});
+
+/**
+ * Public: tag-concept relations over the public template set.
+ *
+ * Raw tag strings barely overlap and read as register noise, so they carry no
+ * relation on their own. This query pools every public template's per-tag
+ * embeddings (server-only 768-dim vectors), mean-centers them, and clusters the
+ * tag vocabulary into CONCEPTS in centered space — folding synonyms together
+ * while genre-only proximity falls below the tightness bar. From those tight
+ * concepts it returns:
+ *
+ *   - `conceptMap`: raw tag -> canonical concept label, for consistent display
+ *     (so "libraries" and "library card" show as one topic, not two).
+ *   - `edges`: `kind:'concept'` edges between templates that share a tight
+ *     concept — the additive, honest edge source (subordinate to `twin`,
+ *     comparable to `family`).
+ *
+ * Honest by construction: the same tightness gate that folds tags for display
+ * grounds the edges, so a concept formed by raw-string match or register-level
+ * proximity yields neither a fold nor an edge. If the corpus is too sparse to
+ * form any tight cross-template concept — the honest state at the seed — the
+ * `edges` array is empty. The vectors are consumed here and NEVER leave; only
+ * the concept labels and `{a,b,concept,kind}` tuples cross the boundary.
+ */
+export const conceptRelations = query({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{
+    edges: Array<{ a: string; b: string; concept: string; kind: "concept" }>;
+    conceptMap: Record<string, string>;
+  }> => {
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_status", (q) => q.eq("status", "published"))
+      .collect();
+
+    const publicTemplates = templates.filter((t) => t.isPublic);
+
+    // Pool the tag vocabulary across the corpus: one embedding per distinct tag
+    // (the clusterer de-dupes, but pooling here keeps the centroid honest — a
+    // concept is a property of the whole tag space, not of one template).
+    const tagVectors: Array<{ tag: string; embedding: number[] }> = [];
+    const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
+    const seenTag = new Set<string>();
+
+    for (const t of publicTemplates) {
+      const tags = normalizeTags(t.topics);
+      taggedTemplates.push({ id: t._id as string, tags });
+      const tagEmbeddings = Array.isArray(t.tagEmbeddings) ? t.tagEmbeddings : [];
+      for (const te of tagEmbeddings) {
+        if (
+          te &&
+          typeof te.tag === "string" &&
+          Array.isArray(te.embedding) &&
+          te.embedding.length > 0 &&
+          !seenTag.has(te.tag)
+        ) {
+          seenTag.add(te.tag);
+          tagVectors.push({ tag: te.tag, embedding: te.embedding });
+        }
+      }
+    }
+
+    const concepts = clusterTagConcepts(tagVectors);
+    return {
+      edges: conceptEdges(taggedTemplates, concepts),
+      conceptMap: tagConceptMap(concepts),
+    };
   },
 });
 
@@ -1386,6 +1477,134 @@ export const patchEmbeddings = internalMutation({
       embeddingVersion: "gemini-001-768",
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
+    });
+  },
+});
+
+// =============================================================================
+// BACKFILL: Embed per-tag concepts (denoise the tag space for concept edges)
+// =============================================================================
+
+/**
+ * Internal: public published templates whose tags are not yet embedded.
+ *
+ * A template needs a tag-embedding pass when it carries tags but its stored
+ * `tagEmbeddings` don't cover the current tag set (newly authored, or tags
+ * edited since the last pass). Embedding ~a dozen tags per template is a trivial
+ * one-time Gemini cost, run alongside the topic-embedding backfill.
+ */
+export const listMissingTagEmbeddings = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const templates = await ctx.db
+      .query("templates")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("isPublic"), true),
+          q.eq(q.field("status"), "published"),
+        ),
+      )
+      .collect();
+
+    return templates
+      .map((t) => ({ doc: t, tags: normalizeTags(t.topics) }))
+      .filter(({ doc, tags }) => {
+        if (tags.length === 0) return false; // nothing to embed
+        const covered = new Set(
+          (Array.isArray(doc.tagEmbeddings) ? doc.tagEmbeddings : [])
+            .filter((te) => te && Array.isArray(te.embedding) && te.embedding.length > 0)
+            .map((te) => te.tag),
+        );
+        // Re-embed only when some current tag has no embedding yet.
+        return tags.some((tag) => !covered.has(tag));
+      })
+      .sort((a, b) => b.doc._creationTime - a.doc._creationTime)
+      .map(({ doc, tags }) => ({ _id: doc._id, tags }));
+  },
+});
+
+/**
+ * Backfill per-tag embeddings via Gemini, mirroring the topicEmbedding path
+ * (same model, RETRIEVAL_DOCUMENT task type, 768 dimensions). Each tag is
+ * embedded once; the vectors are stored on the template (server-only) so the
+ * concept query can cluster the tag vocabulary into concepts. No auth — internal.
+ */
+export const backfillTagEmbeddings = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const missing: Array<{ _id: Id<"templates">; tags: string[] }> =
+      await ctx.runQuery(listMissingTagEmbeddingsRef);
+
+    if (missing.length === 0) {
+      console.log("[backfill-tags] All template tags are embedded.");
+      return { processed: 0 };
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("[backfill-tags] GEMINI_API_KEY not configured in Convex env vars.");
+      return { processed: 0, error: "GEMINI_API_KEY missing" };
+    }
+
+    async function embed(text: string): Promise<number[] | null> {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            content: { parts: [{ text }] },
+            taskType: "RETRIEVAL_DOCUMENT",
+            outputDimensionality: 768,
+          }),
+        },
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.embedding?.values ?? null;
+    }
+
+    let processed = 0;
+    for (const t of missing) {
+      try {
+        const embedded = await Promise.all(
+          t.tags.map(async (tag) => ({ tag, embedding: await embed(tag) })),
+        );
+        const tagEmbeddings = embedded
+          .filter((e): e is { tag: string; embedding: number[] } => Array.isArray(e.embedding))
+          .map((e) => ({ tag: e.tag, embedding: e.embedding }));
+
+        if (tagEmbeddings.length === 0) {
+          console.error(`[backfill-tags] Gemini returned no tag embeddings for ${t._id}`);
+          continue;
+        }
+
+        await ctx.runMutation(patchTagEmbeddingsRef, {
+          templateId: t._id,
+          tagEmbeddings,
+        });
+        processed++;
+        console.log(`[backfill-tags] Embedded ${tagEmbeddings.length} tags for ${t._id}`);
+      } catch (err) {
+        console.error(`[backfill-tags] Failed for ${t._id}:`, err);
+      }
+    }
+
+    console.log(`[backfill-tags] Done: ${processed}/${missing.length} templates.`);
+    return { processed, total: missing.length };
+  },
+});
+
+/** Internal mutation: store per-tag embeddings (server-only) on a template. */
+export const patchTagEmbeddings = internalMutation({
+  args: {
+    templateId: v.id("templates"),
+    tagEmbeddings: v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) })),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, {
+      tagEmbeddings: args.tagEmbeddings,
+      embeddingsUpdatedAt: Date.now(),
     });
   },
 });

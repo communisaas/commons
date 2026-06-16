@@ -266,6 +266,14 @@ export default defineSchema({
 		// Semantic embeddings (768-dim Gemini vectors)
 		locationEmbedding: v.optional(v.array(v.float64())),
 		topicEmbedding: v.optional(v.array(v.float64())),
+		// Per-tag embeddings, generated the same way as topicEmbedding (one Gemini
+		// vector per raw tag). Server-only: consumed to cluster tags into concepts
+		// and derive concept edges; never returned to the client (only concept
+		// labels and edge tuples cross out). Co-located with the template like
+		// topicEmbedding so the concept query reads them without a join.
+		tagEmbeddings: v.optional(
+			v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) }))
+		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding

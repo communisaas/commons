@@ -54,6 +54,7 @@ import type * as intelligence from "../intelligence.js";
 import type * as invites from "../invites.js";
 import type * as legislation from "../legislation.js";
 import type * as lib_relatedness from "../lib/relatedness.js";
+import type * as lib_tag_concepts from "../lib/tag_concepts.js";
 import type * as messageJobs from "../messageJobs.js";
 import type * as networks from "../networks.js";
 import type * as observability from "../observability.js";
@@ -132,6 +133,7 @@ declare const fullApi: ApiFromModules<{
   invites: typeof invites;
   legislation: typeof legislation;
   "lib/relatedness": typeof lib_relatedness;
+  "lib/tag_concepts": typeof lib_tag_concepts;
   messageJobs: typeof messageJobs;
   networks: typeof networks;
   observability: typeof observability;

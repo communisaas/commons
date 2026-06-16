@@ -352,4 +352,18 @@ crons.daily(
   {},
 );
 
+// ---------------------------------------------------------------------------
+// 28. Tag-concept embedding backfill — embed any newly authored / edited tags
+//     so the tag-concept clustering (which folds synonyms and grounds the
+//     concept edges) tracks the corpus as it grows. Embeds only the tags that
+//     lack a vector, so the Gemini cost is a trivial one-time-per-tag charge.
+//     03:41 UTC to stagger off the calibration recompute and the midnight crons.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "tag-concept-embedding-backfill",
+  { hourUTC: 3, minuteUTC: 41 },
+  internal.templates.backfillTagEmbeddings,
+  {},
+);
+
 export default crons;
