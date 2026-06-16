@@ -68,7 +68,7 @@ export default defineConfig({
 	},
 	test: {
 		// File patterns
-		include: ['tests/**/*.{test,spec}.{js,ts}'],
+		include: ['tests/**/*.{test,spec}.{js,ts}', 'convex/**/*.{test,spec}.{js,ts}'],
 		exclude: [
 			// Exclude Playwright E2E tests (UI-based)
 			'tests/e2e/basic-functionality.spec.ts',

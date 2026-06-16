@@ -11,6 +11,7 @@ import {
   AUTHORING_QUOTA_EXCEEDED,
 } from "./_individualAuthoringCap";
 import anchorsData from "./domain-anchors.json";
+import { computeTwinEdges } from "./lib/relatedness";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -336,6 +337,39 @@ export const listPublic = query({
         createdAt: new Date(creationTime).toISOString(),
       };
     });
+  },
+});
+
+/**
+ * Public: measured-twin relatedness edges over the public template set.
+ *
+ * Loads only the published public templates that carry a topic embedding,
+ * computes mean-centered (common-mode-removed) pairwise cosine, and returns the
+ * pairs that clear the calibrated threshold and survive the leave-one-out
+ * robustness check. The embeddings stay on the server — the payload is ONLY
+ * edge tuples ({a, b, score, kind}) keyed by template id, never any vector.
+ *
+ * Templates without an embedding simply contribute no twin edges (not an
+ * error), so the surface stays honest about a sparse, partly-isolated corpus.
+ */
+export const relatednessEdges = query({
+  args: {},
+  handler: async (ctx): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_status", (q) => q.eq("status", "published"))
+      .collect();
+
+    // Public templates that actually have a topic embedding. Missing embeddings
+    // contribute nothing (they are not an error). The 768-dim vectors are read
+    // here and consumed only inside the pure helper — they never leave.
+    const items = templates
+      .filter((t) => t.isPublic && Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+      .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
+
+    // The corpus centroid is computed inline (cheap at this N). A persisted,
+    // nightly-refreshed centroid can be threaded in here once it exists.
+    return computeTwinEdges(items);
   },
 });
 
