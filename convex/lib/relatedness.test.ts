@@ -117,6 +117,53 @@ describe("computeCalibration — persisted normalization", () => {
   });
 });
 
+/**
+ * Calibration pin: the chosen TWIN_THRESHOLD against the MEASURED centered-cosine
+ * structure of the live public corpus. These are the actual full-corpus centered
+ * cosines (and worst leave-one-out views) measured over the published public
+ * templates that carry a topic embedding — the genuine topical-kinship head and
+ * the register-noise floor it must be separated from. The threshold has to sit in
+ * the gap: every genuine twin clears it on both its full and worst-LOO view, and
+ * the highest noise pair stays below it. If the threshold is ever retuned, these
+ * are the numbers it must keep classifying correctly.
+ */
+describe("TWIN_THRESHOLD — calibration against measured corpus pairs", () => {
+  // Genuine cross-template topical twins: { full-corpus centered cosine, worst
+  // leave-one-out centered cosine } as measured over the real corpus.
+  const GENUINE_TWINS = [
+    { pair: "parks-lands ~ land-and-energy-revenue", full: 0.1981, worstLoo: 0.173 },
+    { pair: "library ~ library", full: 0.1558, worstLoo: 0.1375 },
+  ];
+  // Register-noise pairs: topic drift, not kinship. Highest noise pair first.
+  const NOISE_PAIRS = [
+    { pair: "bike-share ~ parks-lands", full: 0.1169 },
+    { pair: "treatment-not-prison ~ affordable-homes", full: 0.1062 },
+    { pair: "children-privacy ~ preschool", full: 0.1119 },
+  ];
+
+  it("sits in the gap between genuine twins and the register-noise floor", () => {
+    const lowestGenuine = Math.min(...GENUINE_TWINS.map((t) => t.full));
+    const highestNoise = Math.max(...NOISE_PAIRS.map((p) => p.full));
+    // The threshold lives strictly between the two regimes.
+    expect(highestNoise).toBeLessThan(TWIN_THRESHOLD);
+    expect(TWIN_THRESHOLD).toBeLessThan(lowestGenuine);
+  });
+
+  it("clears every genuine twin on BOTH its full and worst-LOO view", () => {
+    for (const t of GENUINE_TWINS) {
+      // Gate 1 (full centroid) and Gate 2 (every LOO centroid, worst shown) both pass.
+      expect(t.full).toBeGreaterThanOrEqual(TWIN_THRESHOLD);
+      expect(t.worstLoo).toBeGreaterThanOrEqual(TWIN_THRESHOLD);
+    }
+  });
+
+  it("rejects every register-noise pair at Gate 1", () => {
+    for (const p of NOISE_PAIRS) {
+      expect(p.full).toBeLessThan(TWIN_THRESHOLD);
+    }
+  });
+});
+
 describe("computeTwinEdges — honesty invariants", () => {
   it("links the aligned-residual pair but NOT the genre-only pair (centered, not raw)", () => {
     const items = fixture();
@@ -143,12 +190,12 @@ describe("computeTwinEdges — honesty invariants", () => {
     // the relation is an artifact of that third item's presence, not a real
     // topical twin. The leave-one-out gate must reject it.
     const items: EmbeddedItem[] = [
-      { id: "p1", embedding: [-4, -3, 1] },
-      { id: "p2", embedding: [-1, -1, -2] },
-      { id: "n1", embedding: [3, 1, -4] },
-      { id: "n2", embedding: [3, 3, -1] },
-      { id: "n3", embedding: [-4, 3, -2] },
-      { id: "n4", embedding: [-1, 3, 5] },
+      { id: "p1", embedding: [2, -2, 3] },
+      { id: "p2", embedding: [4, 0, 3] },
+      { id: "n1", embedding: [3, 1, 2] },
+      { id: "n2", embedding: [-5, -3, -2] },
+      { id: "n3", embedding: [2, -5, 3] },
+      { id: "n4", embedding: [3, -3, 3] },
     ];
 
     // Confirm the trap: the pair clears under the full centroid...

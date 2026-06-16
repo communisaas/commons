@@ -23,14 +23,18 @@
  * Everything here is pure: no clock, no randomness, no I/O. The same inputs
  * always yield the same edges, so the surface is SSR-safe and deterministic.
  *
- * Threshold provenance: TWIN_THRESHOLD is calibrated against the measured
- * structure of the live public corpus — the centered-cosine value that
- * reproduces exactly the leave-one-out-stable cross-topic pairs (drug-treatment
- * with housing/zoning, parks/lands with indigenous-energy, the two libraries
- * templates, the bike-infra/freeway-removal transport pair) while excluding the
- * genre-only adjacencies just below them. It is a residual-cosine cutoff, not
- * an absolute raw-cosine guess; re-derive it from the centered-cosine
- * distribution if the corpus shifts materially.
+ * Threshold provenance: TWIN_THRESHOLD is a residual (centered) cosine cutoff
+ * derived from the measured pairwise distribution of the live public corpus, not
+ * an absolute raw-cosine guess. Over that corpus the centered cosines separate
+ * into two regimes with a clear gap: a short head of genuine cross-template
+ * topical kinship — parks/public-lands stewardship with land-and-energy revenue
+ * (~0.198) and the two public-library templates (~0.156) — and a noise floor at
+ * and below ~0.117 (e.g. a bike-share template incidentally adjacent to the
+ * parks template, a treatment-vs-prison template adjacent to an affordable-homes
+ * one) that reads as topic drift, not kinship. The cutoff sits in that gap so
+ * the head is emitted and the floor is not. Re-derive it from the centered-cosine
+ * distribution if the corpus shifts materially: find the gap, put the cutoff in
+ * it, and re-confirm the leave-one-out gate still drops fragility-dependent pairs.
  */
 
 /** A single embedded item entering the relatedness computation. */
@@ -54,11 +58,12 @@ export interface RelationEdge {
 
 /**
  * Calibrated centered-cosine cutoff for a measured twin. See the module header
- * for provenance. A pair must clear this on the full-corpus centroid AND on
- * every leave-one-out centroid (each computed with one other item removed) to
- * be emitted.
+ * for provenance: it sits in the gap between the corpus's genuine topical-kinship
+ * head (lowest genuine pair ~0.156) and its register-noise floor (~0.117). A pair
+ * must clear this on the full-corpus centroid AND on every leave-one-out centroid
+ * (each computed with one other item removed) to be emitted.
  */
-export const TWIN_THRESHOLD = 0.5;
+export const TWIN_THRESHOLD = 0.13;
 
 /**
  * The persisted relatedness normalization: the corpus centroid (the genre
