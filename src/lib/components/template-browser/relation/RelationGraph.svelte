@@ -225,12 +225,18 @@
 		})
 	);
 
-	// The focused node lights its neighbourhood (this node + everything an edge
-	// reaches). On the bare surface (before the focus interaction layer mounts) the
-	// selection IS the focus, so a dived template stays lit beneath the descent.
-	// The hover focus is local, transient state; pointer leave clears it.
+	// What lights its neighbourhood and dims the rest is FOCUS — and focus is the
+	// reader's own, transient act, never the store's auto-selection. The landing's
+	// template store auto-selects the first template on hydration, so `selectedId`
+	// is essentially always set; if it drove the dim, the map would paint in the
+	// dimmed-to-one-node focus state at rest and never read as a full, navigable
+	// relation map. So the at-rest state is decoupled from `selectedId`: focus
+	// engages ONLY on hover (and an explicit graph-local focus). With neither, the
+	// whole field paints at full presence. `selectedId` is kept solely as a quiet
+	// "this one is the dive owner" marker on its single node — it dims nothing.
 	let hoverId = $state<string | null>(null);
-	const focusId = $derived(hoverId ?? selectedId);
+	let focusedId = $state<string | null>(null);
+	const focusId = $derived(hoverId ?? focusedId);
 
 	// The lit set: the focused node + every node an admissible edge connects to it.
 	// Empty when nothing is focused → the whole field reads at full presence (no
@@ -257,6 +263,18 @@
 	}
 	function handleLeave(id: string) {
 		if (hoverId === id) hoverId = null;
+		onHover?.(id, false);
+	}
+	// Keyboard focus engages the same neighbourhood read as hover, but through a
+	// distinct graph-local channel so tabbing through the field lights one node's
+	// ties at a time. Like hover, it is transient — blur clears it — and it never
+	// touches the store's `selectedId`, so the at-rest map stays at full presence.
+	function handleFocus(id: string) {
+		focusedId = id;
+		onHover?.(id, true);
+	}
+	function handleBlur(id: string) {
+		if (focusedId === id) focusedId = null;
 		onHover?.(id, false);
 	}
 
@@ -326,8 +344,8 @@
 						}}
 						onmouseenter={() => handleEnter(node.id)}
 						onmouseleave={() => handleLeave(node.id)}
-						onfocus={() => handleEnter(node.id)}
-						onblur={() => handleLeave(node.id)}
+						onfocus={() => handleFocus(node.id)}
+						onblur={() => handleBlur(node.id)}
 					>
 						<!-- A generous transparent hit-target so a node is easy to reach with a
 						     pointer or thumb without enlarging the glyph itself. -->
@@ -484,9 +502,16 @@
 	}
 
 	.relation-node:hover .relation-node__glyph,
-	.relation-node:focus-visible .relation-node__glyph,
-	.relation-node--selected .relation-node__glyph {
+	.relation-node:focus-visible .relation-node__glyph {
 		transform: scale(1.25);
+	}
+
+	/* The selected (dive-owner) node carries a quiet marker, not the hover lift —
+	 * a slightly heavier glyph stroke so it reads as "this one is open" without
+	 * scaling up into a competing strong center or dimming any of its neighbours.
+	 * At rest the map is still a full, even field; this only annotates one node. */
+	.relation-node--selected .relation-node__glyph {
+		stroke-width: 2.6px;
 	}
 
 	/* The focused neighbourhood stays at presence; the rest of the field dims to a
@@ -536,7 +561,7 @@
 		outline: none;
 	}
 	.relation-node:focus-visible .relation-node__glyph {
-		stroke: oklch(0.42 0.14 250);
+		stroke: var(--indigo-share);
 		stroke-width: 2.4px;
 	}
 

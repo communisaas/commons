@@ -253,6 +253,47 @@ describe('RelationGraph — the relatedness map', () => {
 		expect(isolatedNodes(container).length).toBe(2);
 	});
 
+	it('paints the whole map at full presence at rest, even with a node selected', async () => {
+		// The live condition the component lane never exercised: the landing's
+		// template store auto-selects the first template on hydration, so the graph
+		// is mounted with a non-null `selectedId`. The at-rest map must still paint
+		// at FULL presence — `selectedId` marks one node but must NOT engage the
+		// global dim. (Before the fix, any truthy `selectedId` lit a focus set and
+		// the whole field rendered dimmed-to-one-node at rest.)
+		const templates = [
+			makeTemplate({ id: 'a', domain: 'Transportation', title: 'Bike lanes' }),
+			makeTemplate({ id: 'b', domain: 'Transportation', title: 'Freeway removal' }),
+			makeTemplate({ id: 'c', domain: 'Healthcare', title: 'Clinic hours' })
+		];
+		const { container } = render(RelationGraph, {
+			props: { templates, selectedId: 'a', onSelect: vi.fn() }
+		});
+
+		// No hover, no graph focus → the field is not globally dimmed.
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		expect(svg).toBeTruthy();
+		expect(svg.classList.contains('has-focus')).toBe(false);
+
+		// No node carries the dimmed class at rest — every node reads at presence.
+		expect(container.querySelectorAll('.relation-node--dimmed').length).toBe(0);
+		// And every node IS lit (the at-rest full-presence state).
+		expect(container.querySelectorAll('.relation-node--lit').length).toBe(nodes(container).length);
+
+		// The selected node is still marked (a quiet "this one is open" annotation),
+		// but the marker is on exactly one node and dims nothing.
+		expect(container.querySelectorAll('.relation-node--selected').length).toBe(1);
+		const selected = container.querySelector('.relation-node--selected');
+		expect(selected?.getAttribute('data-template-id')).toBe('a');
+
+		// Hover still engages the focus state — the dim is hover-driven, not store-driven.
+		const hovered = container.querySelector('[data-template-id="c"]') as HTMLElement;
+		await fireEvent.mouseEnter(hovered);
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		// On leave, the field returns to full presence.
+		await fireEvent.mouseLeave(hovered);
+		expect(svg.classList.contains('has-focus')).toBe(false);
+	});
+
 	it('renders an honest empty state when there are no templates', () => {
 		const { container, getByText } = render(RelationGraph, {
 			props: { templates: [], onSelect: vi.fn() }
