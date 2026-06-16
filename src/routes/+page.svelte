@@ -22,7 +22,12 @@
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
-	import type { Template, TemplateCreationContext, TemplateGroup } from '$lib/types/template';
+	import type {
+		Template,
+		TemplateCreationContext,
+		TemplateGroup,
+		RelationEdge
+	} from '$lib/types/template';
 	import type { PageData } from './$types';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import { analyzeEmailFlow } from '$lib/services/emailService';
@@ -379,9 +384,18 @@
 	const showGraph = $derived(surface === 'graph');
 	const showSpectrum = $derived(surface === 'spectrum');
 
-	// The measured-twin edge tuples from the server (embeddings never cross the
-	// wire). Family kinship is derived inside the graph from the templates' domains.
-	const relationEdges = $derived(data.relationEdges ?? []);
+	// The relation edges the graph draws beyond the family kinship it derives
+	// itself: the measured-twin tuples and the shared-concept tuples, both resolved
+	// server-side (embeddings and tag vectors never cross the wire — only the
+	// {a,b,kind[,score]} tuples do). Concept edges are usually empty at this corpus
+	// (tag embeddings unbackfilled), so this normally reduces to the twin set; the
+	// graph's concept legend item stays hidden while there are none. Both sources
+	// are independently guarded in the loader, so a transient failure of either
+	// degrades to its empty default rather than dropping the whole edge set.
+	const relationEdges = $derived<RelationEdge[]>([
+		...(data.relationEdges ?? []),
+		...(data.conceptRelations?.edges ?? [])
+	]);
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
