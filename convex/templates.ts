@@ -92,8 +92,23 @@ function normalizeTags(topics: unknown): string[] {
 }
 
 /**
+ * Strip the server-only embedding vectors from a template document before it
+ * crosses the client boundary. The 768-dim `topicEmbedding` / `locationEmbedding`
+ * and the per-tag `tagEmbeddings` are consumed only server-side (relatedness +
+ * concept edges, vector search); they are never part of a client-returned
+ * template. Every other field is preserved.
+ */
+function stripEmbeddings<T extends Record<string, unknown>>(
+  doc: T,
+): Omit<T, "topicEmbedding" | "locationEmbedding" | "tagEmbeddings"> {
+  const { topicEmbedding, locationEmbedding, tagEmbeddings, ...rest } = doc;
+  return rest;
+}
+
+/**
  * Public: List published templates, ordered by creation time (newest first).
- * Paginated via Convex's built-in pagination.
+ * Paginated via Convex's built-in pagination. Embedding vectors are stripped —
+ * they are server-only and must not reach the client.
  */
 export const list = query({
   args: {
@@ -103,7 +118,7 @@ export const list = query({
     }),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const result = await ctx.db
       .query("templates")
       .withIndex("by_status", (q) => q.eq("status", "published"))
       .order("desc")
@@ -111,6 +126,7 @@ export const list = query({
         numItems: Math.min(args.paginationOpts.numItems, 50),
         cursor: args.paginationOpts.cursor ?? null,
       });
+    return { ...result, page: result.page.map(stripEmbeddings) };
   },
 });
 
@@ -132,7 +148,8 @@ export const getBySlug = query({
       return null;
     }
 
-    return template;
+    // Strip the server-only embedding vectors before returning to the client.
+    return stripEmbeddings(template);
   },
 });
 
