@@ -50,7 +50,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
-	import { shouldShowSpectrum } from '$lib/core/topic/landing-surface';
+	import { selectLandingSurface } from '$lib/core/topic/landing-surface';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -368,18 +368,16 @@
 		)
 	);
 
-	// Topical-field swap. The hue-ordered landscape is the default surface; the
-	// flat geographic list stays a working fallback, reachable with `?spectrum=0`
-	// so it can be re-enabled without code changes. The rule lives in a pure util so
-	// the page and its tests share one source of truth. Reading the param off the
-	// page store keeps it reactive and SSR-safe (no window access).
-	const showSpectrum = $derived(shouldShowSpectrum($page.url));
-
-	// The relatedness graph mounts behind `?view=graph` — a preliminary surface
-	// swap so the map is reachable while it is built out; the spectrum stays the
-	// default and the list (`?spectrum=0`) stays a working fallback. The full
-	// gating + fallback wiring lands with the surface that promotes the graph.
-	const showGraph = $derived($page.url.searchParams.get('view') === 'graph');
+	// Discovery-surface swap. Three worlds over the same templates: the relatedness
+	// GRAPH (reachable at `?view=graph`), the hue-ordered topical SPECTRUM (the
+	// current default), and the flat geographic LIST (a working fallback reachable
+	// with `?spectrum=0`). The selection rule lives in one pure util so the page and
+	// its tests share a single source of truth and the worlds cannot drift apart.
+	// Reading the param off the page store keeps it reactive and SSR-safe (no
+	// window access).
+	const surface = $derived(selectLandingSurface($page.url));
+	const showGraph = $derived(surface === 'graph');
+	const showSpectrum = $derived(surface === 'spectrum');
 
 	// The measured-twin edge tuples from the server (embeddings never cross the
 	// wire). Family kinship is derived inside the graph from the templates' domains.
