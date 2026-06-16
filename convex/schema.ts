@@ -3044,5 +3044,22 @@ export default defineSchema({
 		event: v.string(),
 		payload: v.string(), // JSON-serialized event payload (same shape as webhook payload)
 		emittedAt: v.number()
-	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt'])
+	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt']),
+
+	// Persisted relatedness normalization (singleton, keyed like smtRoots/treeId).
+	// Holds the public-corpus centroid — the genre common-mode that mean-centering
+	// removes before scoring template twins — plus the calibrated centered-cosine
+	// threshold that was in force when the centroid was fit. The template
+	// relatedness query reads this instead of recomputing the centroid on every
+	// call; a daily cron refits it so the normalization tracks the corpus as it
+	// grows. One canonical row under `key: 'public'`. Recompute is pure Convex
+	// compute — no external/recurring cost.
+	relatednessCalibration: defineTable({
+		key: v.string(), // singleton selector — always 'public'
+		centroid: v.array(v.float64()),
+		threshold: v.float64(),
+		count: v.number(), // usable (embedded) templates the centroid was fit over
+		dim: v.number(), // embedding dimensionality
+		updatedAt: v.number()
+	}).index('by_key', ['key'])
 });

@@ -337,4 +337,19 @@ crons.daily(
   {},
 );
 
+// ---------------------------------------------------------------------------
+// 27. Relatedness calibration recompute — nightly refit of the public-corpus
+//     centroid + threshold the template relatedness query normalizes against,
+//     so the measured-twin edges track the corpus as it grows rather than
+//     freezing today's common-mode. Pure Convex compute, no external cost.
+//     03:23 UTC to stagger off reputation-recompute (03:11) and the other
+//     UTC-day-boundary crons clustered near midnight.
+// ---------------------------------------------------------------------------
+crons.daily(
+  "relatedness-calibration-recompute",
+  { hourUTC: 3, minuteUTC: 23 },
+  internal.templates.recomputeRelatednessCalibration,
+  {},
+);
+
 export default crons;

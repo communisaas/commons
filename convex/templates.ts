@@ -11,7 +11,7 @@ import {
   AUTHORING_QUOTA_EXCEEDED,
 } from "./_individualAuthoringCap";
 import anchorsData from "./domain-anchors.json";
-import { computeTwinEdges } from "./lib/relatedness";
+import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -367,9 +367,91 @@ export const relatednessEdges = query({
       .filter((t) => t.isPublic && Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
       .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
-    // The corpus centroid is computed inline (cheap at this N). A persisted,
-    // nightly-refreshed centroid can be threaded in here once it exists.
-    return computeTwinEdges(items);
+    // Prefer the persisted, daily-refreshed normalization (centroid + the
+    // threshold calibrated against it). Falling back to inline compute when no
+    // calibration row exists yet — the cold-start path before the first cron
+    // run, and the only path needed if the schedule is ever paused. Stale
+    // calibration is harmless: it only shifts the common-mode subtracted before
+    // scoring, and the daily refit keeps it tracking the corpus.
+    const calibration = await ctx.db
+      .query("relatednessCalibration")
+      .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
+      .unique();
+
+    // The stored centroid only applies if it was fit in the same dimensionality
+    // as today's embeddings; otherwise let the helper recompute it inline.
+    const dim = items[0]?.embedding.length;
+    const centroid =
+      calibration && calibration.dim === dim ? calibration.centroid : undefined;
+
+    return computeTwinEdges(items, {
+      centroid,
+      threshold: calibration?.threshold,
+    });
+  },
+});
+
+/**
+ * Singleton selector for the persisted relatedness normalization. One canonical
+ * row keyed by this string (the smtRoots/treeId singleton idiom).
+ */
+const RELATEDNESS_CALIBRATION_KEY = "public";
+
+/**
+ * Refit the persisted relatedness normalization over the live public corpus.
+ *
+ * Recomputes the corpus centroid (the genre common-mode removed before scoring
+ * template twins) + the calibrated threshold via the same pure helper the edge
+ * query uses, and upserts the singleton row. Run daily by cron so the
+ * normalization tracks the corpus as templates accumulate or churn.
+ *
+ * Idempotent and side-effect-free beyond the single singleton write: same
+ * corpus → same centroid → same row. Guards the tiny-corpus floor — fewer than
+ * two embedded public templates leaves nothing to fit a common-mode against, so
+ * the write is skipped and any prior calibration is preserved rather than
+ * overwritten with nonsense. Pure Convex compute, no external cost.
+ */
+export const recomputeRelatednessCalibration = internalMutation({
+  args: {},
+  handler: async (
+    ctx,
+  ): Promise<{ updated: boolean; count: number; dim: number }> => {
+    const templates = await ctx.db
+      .query("templates")
+      .withIndex("by_status", (q) => q.eq("status", "published"))
+      .collect();
+
+    const items = templates
+      .filter((t) => t.isPublic && Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+      .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
+
+    const calibration = computeCalibration(items);
+    // Too thin to normalize — keep the prior calibration (if any) untouched.
+    if (!calibration) {
+      return { updated: false, count: items.length, dim: 0 };
+    }
+
+    const existing = await ctx.db
+      .query("relatednessCalibration")
+      .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
+      .unique();
+
+    const row = {
+      key: RELATEDNESS_CALIBRATION_KEY,
+      centroid: calibration.centroid,
+      threshold: calibration.threshold,
+      count: calibration.count,
+      dim: calibration.dim,
+      updatedAt: Date.now(),
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, row);
+    } else {
+      await ctx.db.insert("relatednessCalibration", row);
+    }
+
+    return { updated: true, count: calibration.count, dim: calibration.dim };
   },
 });
 

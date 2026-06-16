@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeCentroid,
+  computeCalibration,
   cosine,
   computeTwinEdges,
   TWIN_THRESHOLD,
@@ -47,6 +48,72 @@ describe("computeCentroid", () => {
 
   it("returns an empty vector for empty input (no throw, no NaN)", () => {
     expect(computeCentroid([])).toEqual([]);
+  });
+});
+
+describe("computeCalibration — persisted normalization", () => {
+  it("fits the corpus centroid + carries the threshold, count, and dim", () => {
+    const cal = computeCalibration(fixture());
+    expect(cal).not.toBeNull();
+    expect(cal!.threshold).toBe(TWIN_THRESHOLD);
+    expect(cal!.count).toBe(4);
+    expect(cal!.dim).toBe(4);
+    // The stored centroid IS the centroid computeTwinEdges would compute inline
+    // over the same corpus — the calibration and the edge gate are a matched set.
+    expect(cal!.centroid).toEqual(
+      computeCentroid(fixture().map((i) => i.embedding)),
+    );
+  });
+
+  it("carries an explicitly supplied threshold (re-derivable cutoff)", () => {
+    const cal = computeCalibration(fixture(), { threshold: 0.42 });
+    expect(cal!.threshold).toBe(0.42);
+  });
+
+  it("returns null below two usable embeddings (tiny-N floor — skip the write)", () => {
+    expect(computeCalibration([])).toBeNull();
+    expect(computeCalibration([{ id: "only", embedding: [1, 2, 3] }])).toBeNull();
+    // One usable + unusable items: still no common-mode to fit.
+    expect(
+      computeCalibration([
+        { id: "only", embedding: [1, 2, 3] },
+        { id: "empty", embedding: [] },
+        { id: "missing", embedding: undefined as unknown as number[] },
+      ]),
+    ).toBeNull();
+  });
+
+  it("ignores unusable / wrong-dimension items, mirroring the edge filter", () => {
+    const cal = computeCalibration([
+      ...fixture(),
+      { id: "empty", embedding: [] },
+      { id: "wrongdim", embedding: [1, 2] },
+    ]);
+    expect(cal).not.toBeNull();
+    // Only the 4 valid same-dimension items count.
+    expect(cal!.count).toBe(4);
+    expect(cal!.dim).toBe(4);
+    expect(cal!.centroid).toEqual(
+      computeCentroid(fixture().map((i) => i.embedding)),
+    );
+  });
+
+  it("is deterministic and order-independent (no clock/random)", () => {
+    const items = fixture();
+    const a = computeCalibration(items);
+    const b = computeCalibration([...items].reverse());
+    expect(a).toEqual(b);
+  });
+
+  it("feeding the calibration back into the edge gate reproduces the inline edges", () => {
+    const items = fixture();
+    const cal = computeCalibration(items)!;
+    const inline = computeTwinEdges(items);
+    const persisted = computeTwinEdges(items, {
+      centroid: cal.centroid,
+      threshold: cal.threshold,
+    });
+    expect(persisted).toEqual(inline);
   });
 });
 

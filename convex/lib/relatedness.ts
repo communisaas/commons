@@ -60,6 +60,63 @@ export interface RelationEdge {
  */
 export const TWIN_THRESHOLD = 0.5;
 
+/**
+ * The persisted relatedness normalization: the corpus centroid (the genre
+ * common-mode that mean-centering removes) plus the calibrated twin threshold
+ * that travels with it. A scheduled job recomputes this from the live public
+ * corpus so the normalization tracks the corpus as it grows, and the edge query
+ * reads it instead of recomputing the centroid on every call.
+ *
+ * `threshold` is carried alongside the centroid so the two stay a matched set:
+ * the edge gate that ran when this centroid was fit can be reproduced exactly,
+ * and a future re-derivation of the cutoff from the centered-cosine
+ * distribution can overwrite both together.
+ */
+export interface RelatednessCalibration {
+  /** Corpus centroid — the common-mode subtracted before scoring. */
+  centroid: number[];
+  /** Calibrated centered-cosine cutoff in force when this centroid was fit. */
+  threshold: number;
+  /** Number of usable (embedded) templates the centroid was fit over. */
+  count: number;
+  /** Embedding dimensionality the centroid was fit in. */
+  dim: number;
+}
+
+/**
+ * Fit the relatedness normalization over a set of embedded items.
+ *
+ * Returns the corpus centroid + the calibrated threshold (a matched set the
+ * edge query consumes), or `null` when the corpus is too thin to normalize
+ * against. Mean-centering is meaningless below two usable embeddings — there is
+ * no spread to remove a common-mode from — so the caller (the recompute job)
+ * skips the write and keeps whatever prior calibration exists rather than
+ * overwriting it with nonsense at empty/one-template N.
+ *
+ * Pure: no clock, no randomness, no I/O. Mirrors the same usable-item filter as
+ * `computeTwinEdges`, so the centroid this fits is exactly the centroid that
+ * function would compute inline over the same corpus.
+ */
+export function computeCalibration(
+  items: EmbeddedItem[],
+  options: { threshold?: number } = {},
+): RelatednessCalibration | null {
+  const usable = items.filter(
+    (it) => Array.isArray(it.embedding) && it.embedding.length > 0,
+  );
+  if (usable.length < 2) return null;
+  const dim = usable[0].embedding.length;
+  const valid = usable.filter((it) => it.embedding.length === dim);
+  if (valid.length < 2) return null;
+
+  return {
+    centroid: computeCentroid(valid.map((it) => it.embedding)),
+    threshold: options.threshold ?? TWIN_THRESHOLD,
+    count: valid.length,
+    dim,
+  };
+}
+
 /** Mean of a set of equal-length vectors. Empty input → empty vector. */
 export function computeCentroid(vectors: number[][]): number[] {
   if (vectors.length === 0) return [];
