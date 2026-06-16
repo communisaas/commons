@@ -163,6 +163,38 @@ describe('layoutRelationGraph — isolated nodes fall to the periphery (R4)', ()
 		}
 	});
 
+	it('seats every isolate in the rim band, past the connected mean — not intermixed', () => {
+		// Stronger than the cohort-mean comparison: EACH loner must sit out in the
+		// rim band (≥78% of the way to the canvas edge on its own axis) AND further
+		// from centre than the connected mean. This is the property the rim push
+		// guarantees and the live defect (loners landing among the connected core)
+		// violated. The elliptical band fraction is axis-normalized, so a wide
+		// canvas pushing a loner to the left/right edge counts the same as one
+		// pushed top/bottom. (Note: a connected twin-pair can be declump-clamped
+		// against an edge too, so we don't claim every isolate beats every
+		// connected node — only that no isolate reads as nestled in the core.)
+		const RIM_BAND_FLOOR = 0.78;
+		for (const seed of [0, 1, 7, 42, 1337]) {
+			const pos = layoutRelationGraph(NODES, EDGES, { ...SIZE, seed });
+			const ellipseFraction = (id: string) => {
+				const p = pos.get(id)!;
+				return Math.hypot(
+					(p.x - SIZE.width / 2) / (SIZE.width / 2),
+					(p.y - SIZE.height / 2) / (SIZE.height / 2)
+				);
+			};
+			const connectedMeanRadius = mean(
+				CONNECTED_IDS.map((id) => radius(pos.get(id)!, SIZE.width, SIZE.height))
+			);
+			for (const id of ISOLATED_IDS) {
+				expect(ellipseFraction(id)).toBeGreaterThanOrEqual(RIM_BAND_FLOOR);
+				expect(radius(pos.get(id)!, SIZE.width, SIZE.height)).toBeGreaterThan(
+					connectedMeanRadius
+				);
+			}
+		}
+	});
+
 	it('draws no edge-derived attraction for an isolated node (it has no edge)', () => {
 		// A graph of ONLY isolated nodes still lays them out — spread, not stacked.
 		const lone = ['a', 'b', 'c', 'd'].map(node);

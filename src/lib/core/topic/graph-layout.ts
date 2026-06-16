@@ -312,6 +312,91 @@ export function layoutRelationGraph(
 		if (!moved) break;
 	}
 
+	// --- Seat edge-free nodes on the rim ----------------------------------
+	// The outer-ring seed gives isolates a head start, but FR repulsion from the
+	// dense connected core, the scale-to-bounds normalization, and the declump
+	// above can all pull a loner back in among the connected nodes — so live, the
+	// no-kin templates read as intermixed, not "at the edges". This deterministic
+	// final step seats each edge-free node out on the rim, after declump (so the
+	// declump's tighter interior band can't cap it) and before the on-canvas clamp
+	// below (which keeps it in bounds).
+	//
+	// The loners are handed EVENLY-SPREAD rim bearings rather than pushed along
+	// wherever FR left them: sort by id (order-independent, deterministic), fan
+	// them around the circle, and fold a per-id-set hash into the fan's phase so
+	// the bearing is data-driven, not a fixed compass rose. With three loners that
+	// is ≥120° apart at the rim — hundreds of px — so they never collide with each
+	// other, and the connected core sits well inside the rim, so they clear it
+	// too. The connected nodes are left exactly where declump settled them.
+	const cx = width / 2;
+	const cy = height / 2;
+	const halfW = width / 2;
+	const halfH = height / 2;
+	// The rim, in AXIS-NORMALIZED (elliptical) space so a bearing toward the short
+	// axis seats just as peripherally as one toward the long axis — on a wide
+	// canvas a loner fanned to the top still reads as "at the edge", not stranded
+	// mid-field. A small inset under 1.0 keeps the glyph + its label on-canvas
+	// rather than clipped at the very edge by the hard clamp.
+	const RIM_FRACTION = 0.9;
+	const ellipseFraction = (x: number, y: number) =>
+		Math.hypot((x - cx) / halfW, (y - cy) / halfH);
+	const isolateIds = ids.filter((_, i) => !connected[i]).sort((x, y) => x.localeCompare(y));
+	const isolateCount = isolateIds.length;
+	if (isolateCount > 0) {
+		const phase = unit(hashString(`${isolateIds.join('|')}@rim#${seed}`)) * Math.PI * 2;
+		for (let k = 0; k < isolateCount; k++) {
+			const i = index.get(isolateIds[k]);
+			if (i === undefined) continue;
+			const angle = phase + (k / isolateCount) * Math.PI * 2;
+			const targetX = cx + Math.cos(angle) * RIM_FRACTION * halfW;
+			const targetY = cy + Math.sin(angle) * RIM_FRACTION * halfH;
+			// Only ever seat a loner FURTHER out (in ellipse space) than it already
+			// sits — never drag one the force pass already expelled past the rim
+			// back inward.
+			if (ellipseFraction(targetX, targetY) > ellipseFraction(screen[i][0], screen[i][1])) {
+				screen[i][0] = targetX;
+				screen[i][1] = targetY;
+			}
+		}
+
+		// A rim seat can land a loner within the minimum separation of a node the
+		// first declump already settled (e.g. one clamped against an edge). Run the
+		// SAME separation relaxation once more so the no-overlap invariant still
+		// holds after seating. The seat gave every loner a strong outward start, so
+		// at the default spacing this only nudges, leaving the rim read intact; a
+		// caller that asks for a separation too large for the rim to hold sees the
+		// loners relax inward just enough to honour it — overlap-freedom wins.
+		for (let pass = 0; pass < DECLUMP_ITERATIONS; pass++) {
+			let moved = false;
+			for (let i = 0; i < n; i++) {
+				for (let j = i + 1; j < n; j++) {
+					const dx = screen[i][0] - screen[j][0];
+					const dy = screen[i][1] - screen[j][1];
+					const d = Math.hypot(dx, dy) || EPSILON;
+					if (d < minSeparation) {
+						const push = (minSeparation - d) / 2;
+						const ux = dx / d;
+						const uy = dy / d;
+						screen[i][0] += ux * push;
+						screen[i][1] += uy * push;
+						screen[j][0] -= ux * push;
+						screen[j][1] -= uy * push;
+						moved = true;
+					}
+				}
+			}
+			// Clamp into the FULL canvas (not the tighter interior band the first
+			// declump used) so the rim seating is preserved — a loner fanned toward
+			// the short axis stays out near the true edge instead of being re-capped
+			// into the interior. The final hard clamp below is into these same bounds.
+			for (let i = 0; i < n; i++) {
+				screen[i][0] = Math.min(width, Math.max(0, screen[i][0]));
+				screen[i][1] = Math.min(height, Math.max(0, screen[i][1]));
+			}
+			if (!moved) break;
+		}
+	}
+
 	// Final hard clamp into the real bounds [0, width] × [0, height] so a caller
 	// can trust every position is on-canvas regardless of declump residue.
 	for (let i = 0; i < n; i++) {
