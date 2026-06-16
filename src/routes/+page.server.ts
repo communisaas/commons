@@ -22,5 +22,18 @@ export const load: PageServerLoad = async ({ depends }) => {
 		return [];
 	});
 
-	return { templates };
+	// The measured-twin relatedness edges over the public set. The server-only
+	// embeddings stay server-only — this returns ONLY {a, b, score, kind} tuples
+	// keyed by template id, never a vector. Guarded the same way as the templates
+	// load so a transient Convex timeout degrades to a no-edge map (every template
+	// honestly alone), never a hard 500.
+	const relationEdges = await serverQuery(api.templates.relatednessEdges, {}).catch((err) => {
+		console.error(
+			'[Page] templates.relatednessEdges failed (transient):',
+			err instanceof Error ? err.message : String(err)
+		);
+		return [];
+	});
+
+	return { templates, relationEdges };
 };

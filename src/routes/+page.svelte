@@ -31,6 +31,7 @@
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
 	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
+	import RelationGraph from '$lib/components/template-browser/relation/RelationGraph.svelte';
 	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
 	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
@@ -373,6 +374,16 @@
 	// the page and its tests share one source of truth. Reading the param off the
 	// page store keeps it reactive and SSR-safe (no window access).
 	const showSpectrum = $derived(shouldShowSpectrum($page.url));
+
+	// The relatedness graph mounts behind `?view=graph` — a preliminary surface
+	// swap so the map is reachable while it is built out; the spectrum stays the
+	// default and the list (`?spectrum=0`) stays a working fallback. The full
+	// gating + fallback wiring lands with the surface that promotes the graph.
+	const showGraph = $derived($page.url.searchParams.get('view') === 'graph');
+
+	// The measured-twin edge tuples from the server (embeddings never cross the
+	// wire). Family kinship is derived inside the graph from the templates' domains.
+	const relationEdges = $derived(data.relationEdges ?? []);
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
@@ -788,12 +799,24 @@
 			     hidden preview track left as dead space beside it. -->
 			<div
 				class="template-browser"
-				class:template-browser--spectrum={showSpectrum}
+				class:template-browser--spectrum={showSpectrum || showGraph}
 				id="template-browser"
 			>
 				<!-- Template List -->
 				<div class="template-list-column">
-					{#if showSpectrum}
+					{#if showGraph}
+						<!-- Relatedness graph: each template a hue-coloured node, linked by
+						     measured semantic twins (solid) and civic-family kinship (dashed),
+						     with the topically-isolated falling honestly to the periphery.
+						     Reachable at `?view=graph` while it is built out; the spectrum
+						     stays the default surface. -->
+						<RelationGraph
+							templates={allTemplates}
+							edges={relationEdges}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+						/>
+					{:else if showSpectrum}
 						<!-- Topical field: templates grouped into hue-ordered domain bands,
 						     with a lens toggle to re-organise the same templates by place
 						     (the existing geographic precision grouping). Selecting a tile
@@ -821,11 +844,11 @@
 				</div>
 
 				<!-- Template Preview. In the list (fallback) it lives in its own column
-				     beside the list. In the spectrum, the preview is the dive: it rises as
-				     an Artifact over the receded field (rendered by SpectrumLandscape via
-				     the snippet below), so the side column is not shown. The preview itself
-				     is identical in both — the snippet wraps the SAME component. -->
-				{#if !showSpectrum}
+				     beside the list. In the spectrum and the relation graph, the preview is
+				     the dive: it rises as an Artifact over the receded field, so the side
+				     column is not shown. The preview itself is identical in both — the
+				     snippet wraps the SAME component. -->
+				{#if !showSpectrum && !showGraph}
 					<div class="template-preview-column">
 						{#if hasError}
 							<div class="border-y border-slate-200 px-6 py-8 text-center">

@@ -492,6 +492,10 @@ export interface NextTierPreview {
  *   Drawn solid. `score` is the (conservative) centered-cosine similarity.
  * - `family`: civic-family kinship — the two templates share a domain anchor.
  *   Drawn dashed. Taxonomic, so `score` is absent.
+ * - `concept`: a shared tag-concept — the two templates carry tags that cluster
+ *   tightly in mean-centered space (synonymous facets folded into one concept).
+ *   Additive and subordinate, drawn in a third quiet style. Emitted only for
+ *   tight clusters; absent at a corpus too thin to form any.
  */
 export interface RelationEdge {
 	/** One endpoint template id (the lexically-smaller of the pair). */
@@ -499,7 +503,7 @@ export interface RelationEdge {
 	/** The other endpoint template id. */
 	b: string;
 	/** The kind of relation this edge asserts. */
-	kind: 'twin' | 'family';
-	/** Centered-cosine similarity for measured twins; omitted for family kin. */
+	kind: 'twin' | 'family' | 'concept';
+	/** Centered-cosine similarity for measured twins; omitted for taxonomic kin. */
 	score?: number;
 }
