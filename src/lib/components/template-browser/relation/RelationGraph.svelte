@@ -380,6 +380,105 @@
 	function nodeStroke(hue: number): string {
 		return `oklch(0.42 0.12 ${hue})`;
 	}
+
+	// ─── Mobile: a focus-centered relation view ───────────────────────────────
+	//
+	// A force-laid field of a dozen sub-tap dots is wrong on a phone — the thumb
+	// can't land on a 14px glyph and the labels collide. So below the breakpoint the
+	// SAME relation data takes a focus-centered form: one chosen concern is brought to
+	// the centre, its kin pulled close as full-size tappable cards (each NAMING the tie
+	// that binds it — a measured twin or a shared civic family), and the rest of the
+	// field reachable as a list, with the honestly-isolated held apart so their
+	// aloneness still reads. It expresses RELATION (the edges, who is near whom), not a
+	// flat list — picking a kin re-centres the view on it, so you navigate the graph by
+	// following ties, one neighbourhood at a time. Tapping the focus concern itself
+	// falls into the template through the same touch dive the rest of the surface uses.
+	//
+	// The split is pointer-aware, not width-only (the same probe the spectrum overview
+	// uses): a coarse pointer gets the focus-centered form at any width (a tablet in
+	// portrait is wide but all thumb), a fine pointer on a wide screen keeps the
+	// pannable SVG. Server-side it is false (no window), so SSR renders the desktop
+	// graph and the client reconciles to the real pointer/width on mount — no layout
+	// the server can't reproduce.
+	let narrow = $state(false);
+	$effect(() => {
+		const mq = window.matchMedia('(max-width: 767px), (pointer: coarse)');
+		const sync = () => (narrow = mq.matches);
+		sync();
+		mq.addEventListener('change', sync);
+		return () => mq.removeEventListener('change', sync);
+	});
+
+	// The concern at the centre of the mobile view. Null until the viewer picks one —
+	// then it derives to a stable default: the first CONNECTED node in stable order (a
+	// node with kin, so the centred view opens already showing a relation), falling
+	// back to the very first node when nothing is connected. Deterministic: the same
+	// corpus always opens on the same concern.
+	let mobileFocusPick = $state<string | null>(null);
+	const mobileFocusId = $derived.by<string | null>(() => {
+		if (mobileFocusPick && nodes.some((n) => n.id === mobileFocusPick)) return mobileFocusPick;
+		const firstConnected = nodes.find((n) => connected.has(n.id));
+		return firstConnected?.id ?? nodes[0]?.id ?? null;
+	});
+	const mobileFocusNode = $derived<DrawNode | null>(
+		drawNodes.find((n) => n.id === mobileFocusId) ?? null
+	);
+
+	/** A kin of the focused concern in the mobile view: the neighbour node plus the
+	 *  edge kind (and score) that ties it to the focus, so the card can name the tie. */
+	interface MobileKin {
+		node: DrawNode;
+		kind: RelationEdge['kind'];
+		score?: number;
+	}
+
+	// The kin of the mobile focus: every node an admissible edge connects to it, each
+	// carrying the kind of tie. Strongest relation first (a measured twin outranks
+	// taxonomic kin), then by score, so the closest concern sits at the top.
+	const mobileKin = $derived.by<MobileKin[]>(() => {
+		const id = mobileFocusId;
+		if (!id) return [];
+		const byId = new Map(drawNodes.map((n) => [n.id, n]));
+		const out: MobileKin[] = [];
+		for (const edge of allEdges) {
+			const otherId = edge.a === id ? edge.b : edge.b === id ? edge.a : null;
+			if (!otherId) continue;
+			const node = byId.get(otherId);
+			if (!node) continue;
+			out.push({ node, kind: edge.kind, score: edge.score });
+		}
+		out.sort((p, q) => {
+			const r = RANK[q.kind] - RANK[p.kind];
+			if (r !== 0) return r;
+			return (q.score ?? 0) - (p.score ?? 0);
+		});
+		return out;
+	});
+
+	// The rest of the field, reachable but not in the focus's neighbourhood: every node
+	// that is neither the focus nor one of its kin. Held in stable order, and split so
+	// the honestly-isolated read as a separate, intentionally-alone set rather than
+	// being folded in with the merely-not-adjacent.
+	const mobileRest = $derived.by<DrawNode[]>(() => {
+		const near = new Set<string>([mobileFocusId ?? '', ...mobileKin.map((k) => k.node.id)]);
+		return drawNodes.filter((n) => !near.has(n.id));
+	});
+	const mobileRestConnected = $derived(mobileRest.filter((n) => !n.isolated));
+	const mobileRestIsolated = $derived(mobileRest.filter((n) => n.isolated));
+
+	// Re-centre the mobile view on a concern (follow a tie to its neighbourhood) — a
+	// transform of which node is focal, never a relayout. Picking a kin walks the graph
+	// one neighbourhood at a time.
+	function centreMobile(id: string) {
+		mobileFocusPick = id;
+	}
+
+	// Plain-English name for the tie a kin card carries.
+	function kinTieLabel(kind: RelationEdge['kind']): string {
+		if (kind === 'twin') return 'measured semantic twin';
+		if (kind === 'concept') return 'shared tag concept';
+		return 'shared civic family';
+	}
 </script>
 
 <figure class="relation-graph" aria-label="Templates related by measured semantic kinship and civic family">
@@ -391,6 +490,7 @@
 	</figcaption>
 
 	{#if drawNodes.length > 0}
+		{#if !narrow}
 		<!-- Recognition navigation: name a fragment you remember and the map brings the
 		     matching node to the centre, lit, the rest receding. Reuses the template
 		     search vocabulary (the same search glyph + type=search field), but the copy
@@ -564,6 +664,167 @@
 				</li>
 			{/if}
 		</ul>
+		{:else}
+			<!-- ─── Mobile: the focus-centered relation view ───────────────────────────
+			     The same relation data as the SVG, re-shaped for the thumb. One concern is
+			     held at the centre; its kin are pulled close as full-size tappable cards,
+			     each naming the tie that binds it; the rest of the field is a reachable
+			     list, with the honestly-isolated held apart so their aloneness still reads.
+			     Following a tie re-centres the view on that concern — you navigate the graph
+			     a neighbourhood at a time, not a free-pan cloud of sub-tap dots. -->
+			{#if mobileFocusNode}
+				<div class="relation-focus" data-testid="relation-focus-view">
+					<!-- The concern at the centre: a full-width card, the hue its glyph, the
+					     civic family named under the title. Tapping it falls into the template
+					     through the same touch dive the rest of the surface uses. -->
+					<button
+						type="button"
+						class="relation-focus__centre font-brand"
+						style="--card-hue: {mobileFocusNode.hue};"
+						data-template-id={mobileFocusNode.id}
+						data-testid="relation-focus-centre"
+						aria-label="Open “{mobileFocusNode.label}”{mobileFocusNode.family
+							? `, ${mobileFocusNode.family}`
+							: ''}"
+						onclick={() => onSelect(mobileFocusNode!.id)}
+					>
+						<span
+							class="relation-focus__glyph"
+							style="background: {nodeFill(mobileFocusNode.hue)}; border-color: {nodeStroke(
+								mobileFocusNode.hue
+							)};"
+							aria-hidden="true"
+						></span>
+						<span class="relation-focus__centre-text">
+							<span class="relation-focus__centre-label">{mobileFocusNode.label}</span>
+							{#if mobileFocusNode.family}
+								<span class="relation-focus__centre-family">{mobileFocusNode.family}</span>
+							{/if}
+						</span>
+						<span class="relation-focus__open" aria-hidden="true">Open</span>
+					</button>
+
+					{#if mobileKin.length > 0}
+						<!-- Kin brought close: each names the tie (a measured twin, or a shared
+						     civic family) so the RELATION is the structure, not a flat list. The
+						     card centres the view on that concern (follow the tie); a separate
+						     control opens it. -->
+						<p class="relation-focus__heading font-brand">Closest to this</p>
+						<ul class="relation-focus__kin" aria-label="Concerns related to this one">
+							{#each mobileKin as kin (kin.node.id)}
+								<li class="relation-focus__kin-item">
+									<button
+										type="button"
+										class="relation-kin font-brand relation-kin--{kin.kind}"
+										style="--card-hue: {kin.node.hue};"
+										data-template-id={kin.node.id}
+										data-kin-kind={kin.kind}
+										data-testid="relation-kin-{kin.node.id}"
+										aria-label="Centre on “{kin.node.label}” — {kinTieLabel(kin.kind)}"
+										onclick={() => centreMobile(kin.node.id)}
+									>
+										<span class="relation-kin__tie" aria-hidden="true">
+											<span class="relation-kin__tie-line"></span>
+										</span>
+										<span
+											class="relation-kin__glyph"
+											style="background: {nodeFill(kin.node.hue)}; border-color: {nodeStroke(
+												kin.node.hue
+											)};"
+											aria-hidden="true"
+										></span>
+										<span class="relation-kin__text">
+											<span class="relation-kin__label">{kin.node.label}</span>
+											<span class="relation-kin__tie-name">{kinTieLabel(kin.kind)}</span>
+										</span>
+									</button>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<!-- Honest: the focused concern stands alone — no admissible tie. Say so. -->
+						<p class="relation-focus__alone font-brand">
+							Stands alone — no close kin in the field yet.
+						</p>
+					{/if}
+
+					{#if mobileRestConnected.length > 0 || mobileRestIsolated.length > 0}
+						<!-- The rest of the field, reachable. Centring on any of them follows the
+						     graph to its neighbourhood. The isolated are held in their own group so
+						     their aloneness reads as intentional, not lost in the list. -->
+						{#if mobileRestConnected.length > 0}
+							<p class="relation-focus__heading font-brand">Elsewhere in the field</p>
+							<ul class="relation-focus__rest" aria-label="Other related concerns">
+								{#each mobileRestConnected as other (other.id)}
+									<li>
+										<button
+											type="button"
+											class="relation-other font-brand"
+											style="--card-hue: {other.hue};"
+											data-template-id={other.id}
+											data-testid="relation-other-{other.id}"
+											aria-label="Centre on “{other.label}”{other.family
+												? `, ${other.family}`
+												: ''}"
+											onclick={() => centreMobile(other.id)}
+										>
+											<span
+												class="relation-other__glyph"
+												style="background: {nodeFill(other.hue)}; border-color: {nodeStroke(
+													other.hue
+												)};"
+												aria-hidden="true"
+											></span>
+											<span class="relation-other__text">
+												<span class="relation-other__label">{other.label}</span>
+												{#if other.family}
+													<span class="relation-other__family">{other.family}</span>
+												{/if}
+											</span>
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+						{#if mobileRestIsolated.length > 0}
+							<p class="relation-focus__heading font-brand">Standing alone</p>
+							<ul class="relation-focus__rest" aria-label="Concerns with no close kin">
+								{#each mobileRestIsolated as other (other.id)}
+									<li>
+										<button
+											type="button"
+											class="relation-other relation-other--isolated font-brand"
+											style="--card-hue: {other.hue};"
+											data-template-id={other.id}
+											data-isolated="true"
+											data-testid="relation-other-{other.id}"
+											aria-label="Centre on “{other.label}”{other.family
+												? `, ${other.family}`
+												: ''}, standing alone"
+											onclick={() => centreMobile(other.id)}
+										>
+											<span
+												class="relation-other__glyph"
+												style="background: {nodeFill(other.hue)}; border-color: {nodeStroke(
+													other.hue
+												)};"
+												aria-hidden="true"
+											></span>
+											<span class="relation-other__text">
+												<span class="relation-other__label">{other.label}</span>
+												{#if other.family}
+													<span class="relation-other__family">{other.family}</span>
+												{/if}
+											</span>
+										</button>
+									</li>
+								{/each}
+							</ul>
+						{/if}
+					{/if}
+				</div>
+			{/if}
+		{/if}
 	{:else}
 		<!-- Honest empty state: no field to relate yet. Plain English, no dead map. -->
 		<div class="relation-graph__empty">
@@ -867,6 +1128,221 @@
 		font-size: 0.875rem;
 		color: oklch(0.5 0.02 250);
 		margin: 0.5rem 0 0;
+	}
+
+	/* ─── Mobile: the focus-centered relation view ─────────────────────────────
+	 * Below the breakpoint the SVG field gives way to this. It carries the same
+	 * vocabulary — the warm-cream ground shows through, the hue is each concern's
+	 * glyph, the tie kinds keep the solid/dashed encoding the edges use — re-shaped
+	 * into thumb-sized cards. No white box, no pill, max rounded-lg, every control
+	 * at least 44px tall so the thumb lands cleanly. */
+	.relation-focus {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 0 1rem 0.5rem;
+		width: 100%;
+		box-sizing: border-box;
+	}
+
+	/* The concern at the centre — the strong center of the view. A full-width card on
+	 * the cream ground, its hue carried as a left edge + glyph. Tapping it dives. */
+	.relation-focus__centre {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		width: 100%;
+		min-height: 56px;
+		box-sizing: border-box;
+		text-align: left;
+		padding: 0.75rem 0.875rem;
+		border: 1px solid oklch(0.8 0.03 var(--card-hue, 60));
+		border-left: 4px solid oklch(0.6 0.14 var(--card-hue, 60));
+		border-radius: 0.5rem;
+		background: oklch(0.99 0.008 var(--card-hue, 60));
+		cursor: pointer;
+		transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.relation-focus__centre:active {
+		border-color: oklch(0.6 0.12 var(--card-hue, 60));
+	}
+
+	.relation-focus__glyph {
+		flex-shrink: 0;
+		width: 22px;
+		height: 22px;
+		border-radius: 50%;
+		border: 1.6px solid;
+	}
+
+	.relation-focus__centre-text {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.0625rem;
+	}
+	.relation-focus__centre-label {
+		font-size: 0.9375rem;
+		font-weight: 650;
+		color: oklch(0.3 0.03 60);
+		line-height: 1.25;
+	}
+	.relation-focus__centre-family {
+		font-size: 0.75rem;
+		color: oklch(0.55 0.02 60);
+	}
+	.relation-focus__open {
+		flex-shrink: 0;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		color: var(--coord-share-solid);
+	}
+
+	/* Section headings — quiet, plain English, naming the relation each group carries. */
+	.relation-focus__heading {
+		margin: 0.5rem 0 0;
+		font-size: 0.6875rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: oklch(0.55 0.02 60);
+	}
+
+	.relation-focus__alone {
+		margin: 0.25rem 0 0;
+		font-size: 0.8125rem;
+		color: oklch(0.5 0.02 60);
+	}
+
+	.relation-focus__kin,
+	.relation-focus__rest {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	/* A kin card: the tie sample (echoing the edge encoding — solid twin, dashed
+	 * family) at the lead, then the hue glyph, the concern's name, and the plain tie
+	 * name. Tapping it re-centres the view on this concern. */
+	.relation-kin {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		width: 100%;
+		min-height: 48px;
+		box-sizing: border-box;
+		text-align: left;
+		padding: 0.5rem 0.75rem;
+		border: 1px solid oklch(0.84 0.02 70);
+		border-radius: 0.5rem;
+		background: oklch(0.985 0.006 70);
+		cursor: pointer;
+		transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.relation-kin:active {
+		border-color: oklch(0.7 0.03 70);
+	}
+
+	/* The tie sample mirrors the SVG edge encoding so the eye reads the same language
+	 * in both forms: a solid heavier line for a measured twin, a dashed lighter line
+	 * for shared family / concept. */
+	.relation-kin__tie {
+		flex-shrink: 0;
+		width: 26px;
+		display: flex;
+		align-items: center;
+	}
+	.relation-kin__tie-line {
+		width: 100%;
+		height: 0;
+	}
+	.relation-kin--twin .relation-kin__tie-line {
+		border-top: 2.4px solid oklch(0.5 0.06 60);
+	}
+	.relation-kin--family .relation-kin__tie-line {
+		border-top: 1.6px dashed oklch(0.6 0.03 60);
+	}
+	.relation-kin--concept .relation-kin__tie-line {
+		border-top: 1.4px dotted oklch(0.62 0.04 60);
+	}
+
+	.relation-kin__glyph {
+		flex-shrink: 0;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		border: 1.4px solid;
+	}
+	.relation-kin__text {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.0625rem;
+	}
+	.relation-kin__label {
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: oklch(0.3 0.03 60);
+		line-height: 1.25;
+	}
+	.relation-kin__tie-name {
+		font-size: 0.6875rem;
+		color: oklch(0.55 0.02 60);
+	}
+
+	/* A reachable-but-not-adjacent concern. Lighter than a kin card (no tie sample),
+	 * still a full 44px+ target. Centring on it follows the graph to its neighbourhood. */
+	.relation-other {
+		display: flex;
+		align-items: center;
+		gap: 0.625rem;
+		width: 100%;
+		min-height: 44px;
+		box-sizing: border-box;
+		text-align: left;
+		padding: 0.5rem 0.75rem;
+		border: 1px solid transparent;
+		border-radius: 0.5rem;
+		background: transparent;
+		cursor: pointer;
+		transition: background-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.relation-other:active {
+		background: oklch(0.97 0.008 var(--card-hue, 60));
+	}
+	/* An isolated concern is held visibly apart — a dotted edge marks its aloneness,
+	 * the same honesty the periphery loners carry in the SVG. */
+	.relation-other--isolated {
+		border: 1px dashed oklch(0.84 0.02 70);
+	}
+	.relation-other__glyph {
+		flex-shrink: 0;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		border: 1.4px solid;
+	}
+	.relation-other__text {
+		flex: 1;
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.0625rem;
+	}
+	.relation-other__label {
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: oklch(0.32 0.03 60);
+		line-height: 1.25;
+	}
+	.relation-other__family {
+		font-size: 0.6875rem;
+		color: oklch(0.56 0.02 60);
 	}
 
 	/* Respect vestibular preferences: no glyph scaling transition. The focus dim is

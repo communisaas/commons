@@ -605,4 +605,194 @@ describe('RelationGraph — the relatedness map', () => {
 		await fireEvent.mouseLeave(c);
 		expect(dimmedIds(container)).toEqual(['c']);
 	});
+
+	// ─── Mobile: the focus-centered relation view (below the breakpoint) ───────
+	//
+	// On a phone the pannable SVG dot-cloud is wrong — sub-tap glyphs, colliding
+	// labels. Below the breakpoint (or on a coarse pointer) the SAME relation data
+	// takes a focus-centered form: one concern at the centre, its kin pulled close as
+	// full-size tappable cards that NAME the tie binding them, the rest reachable as a
+	// list with the isolated held apart. The view must express RELATION (the edges),
+	// give 44px targets, and dive through the existing path — not regress to a flat list
+	// or a shrunk graph.
+
+	/** Make the component's media probe report the narrow/coarse-pointer query as a
+	 *  match, so it mounts the mobile focus-centered form. Returns a restore fn. */
+	function withNarrowViewport(): () => void {
+		const original = window.matchMedia;
+		Object.defineProperty(window, 'matchMedia', {
+			value: (query: string) => ({
+				// The component asks for `(max-width: 767px), (pointer: coarse)`; report a
+				// match for that, and no match for the reduced-motion probe.
+				matches: /max-width|pointer/.test(query),
+				media: query,
+				onchange: null,
+				addEventListener: () => {},
+				removeEventListener: () => {},
+				addListener: () => {},
+				removeListener: () => {},
+				dispatchEvent: () => false
+			}),
+			writable: true,
+			configurable: true
+		});
+		return () => {
+			Object.defineProperty(window, 'matchMedia', {
+				value: original,
+				writable: true,
+				configurable: true
+			});
+		};
+	}
+
+	it('renders the focus-centered relation view below the breakpoint, not the pannable SVG field', async () => {
+		const restore = withNarrowViewport();
+		try {
+			const templates = neighbourhoodFixture(); // a,b transportation pair + c loner
+			const { container } = render(RelationGraph, {
+				props: { templates, onSelect: vi.fn() }
+			});
+
+			// The mobile effect runs after mount; wait for the focus-centered view to appear.
+			await waitFor(() => {
+				expect(
+					container.querySelector('[data-testid="relation-focus-view"]')
+				).toBeTruthy();
+			});
+
+			// It is the focus-centered form, NOT the pannable SVG field (no field edges or
+			// panning group below the breakpoint — that is the desktop graph).
+			expect(container.querySelector('.relation-graph__svg')).toBeNull();
+			expect(container.querySelector('.relation-graph__pan')).toBeNull();
+			expect(fieldEdges(container).length).toBe(0);
+
+			// A single concern is at the centre, readable and tappable.
+			const centre = container.querySelector(
+				'[data-testid="relation-focus-centre"]'
+			) as HTMLElement;
+			expect(centre).toBeTruthy();
+			// It opens to a stable default: the first CONNECTED node in order (`a`), which
+			// has kin — so the view opens already showing a relation, not a lone node.
+			expect(centre.getAttribute('data-template-id')).toBe('a');
+		} finally {
+			restore();
+		}
+	});
+
+	it('brings the focus concern’s kin close, each NAMING the tie (relation, not a flat list)', async () => {
+		const restore = withNarrowViewport();
+		try {
+			// A measured-twin pair (c,d cross-domain) so a named tie kind shows.
+			const templates = [
+				makeTemplate({ id: 'a', domain: 'Transportation', title: 'Bike lanes' }),
+				makeTemplate({ id: 'b', domain: 'Transportation', title: 'Freeway removal' })
+			];
+			const { container } = render(RelationGraph, {
+				props: { templates, onSelect: vi.fn() }
+			});
+
+			await waitFor(() => {
+				expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeTruthy();
+			});
+
+			// The focus opens on `a`; its same-family kin `b` is brought close as a kin card
+			// that names the tie — this is RELATION, not a flat list of all templates.
+			const kin = container.querySelector('[data-testid="relation-kin-b"]') as HTMLElement;
+			expect(kin).toBeTruthy();
+			expect(kin.getAttribute('data-kin-kind')).toBe('family');
+			// The tie is named in plain English (the edge kind, surfaced as words).
+			expect(kin.textContent).toMatch(/shared civic family/i);
+		} finally {
+			restore();
+		}
+	});
+
+	it('following a kin re-centres the view on it (navigates the graph, no flat-list jump-to)', async () => {
+		const restore = withNarrowViewport();
+		try {
+			const templates = neighbourhoodFixture();
+			const { container } = render(RelationGraph, {
+				props: { templates, onSelect: vi.fn() }
+			});
+			await waitFor(() => {
+				expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeTruthy();
+			});
+
+			// Opens on `a`. The loner `c` is reachable in the "elsewhere" list.
+			const other = container.querySelector('[data-testid="relation-other-c"]') as HTMLElement;
+			expect(other).toBeTruthy();
+
+			// Centring on `c` makes IT the focus — the view follows the graph to its
+			// neighbourhood rather than diving straight in.
+			await fireEvent.click(other);
+			await waitFor(() => {
+				const centre = container.querySelector(
+					'[data-testid="relation-focus-centre"]'
+				) as HTMLElement;
+				expect(centre.getAttribute('data-template-id')).toBe('c');
+			});
+		} finally {
+			restore();
+		}
+	});
+
+	it('tapping the centred concern dives via the shared select path (touch dive)', async () => {
+		const restore = withNarrowViewport();
+		try {
+			const onSelect = vi.fn();
+			const templates = neighbourhoodFixture();
+			const { container } = render(RelationGraph, {
+				props: { templates, onSelect }
+			});
+			await waitFor(() => {
+				expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeTruthy();
+			});
+			const centre = container.querySelector(
+				'[data-testid="relation-focus-centre"]'
+			) as HTMLElement;
+			// Tapping the centre reports the selection up — the same onSelect the page wires
+			// to its touch dive. (Kin/other cards re-centre; only the centre dives.)
+			await fireEvent.click(centre);
+			expect(onSelect).toHaveBeenCalledWith('a');
+		} finally {
+			restore();
+		}
+	});
+
+	it('holds the honestly-isolated apart in their own group (aloneness still reads on mobile)', async () => {
+		const restore = withNarrowViewport();
+		try {
+			const templates = [
+				makeTemplate({ id: 'a', domain: 'Transportation', title: 'Bike lanes' }),
+				makeTemplate({ id: 'b', domain: 'Transportation', title: 'Freeway removal' }),
+				// A lone family: no twin, no same-family kin → honestly isolated.
+				makeTemplate({ id: 'z', domain: 'Labor', title: 'Retail wages' })
+			];
+			const { container } = render(RelationGraph, {
+				props: { templates, onSelect: vi.fn() }
+			});
+			await waitFor(() => {
+				expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeTruthy();
+			});
+			// The isolated concern is reachable AND marked as standing alone — not folded
+			// silently into the adjacent kin.
+			const lone = container.querySelector('[data-testid="relation-other-z"]') as HTMLElement;
+			expect(lone).toBeTruthy();
+			expect(lone.getAttribute('data-isolated')).toBe('true');
+		} finally {
+			restore();
+		}
+	});
+
+	it('keeps the desktop pannable SVG graph at/above the breakpoint (no mobile form on a fine pointer)', () => {
+		// The default matchMedia shim reports no match → the desktop graph renders.
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		// The SVG field + its panning group are present; no focus-centered view.
+		expect(container.querySelector('.relation-graph__svg')).toBeTruthy();
+		expect(container.querySelector('.relation-graph__pan')).toBeTruthy();
+		expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeNull();
+	});
 });
