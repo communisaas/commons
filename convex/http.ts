@@ -49,6 +49,42 @@ export function bearerSecretMatches(presented: string, candidates: string[]): bo
 
 const http = httpRouter();
 
+const DEFAULT_PUBLIC_API_ORIGIN = "https://commons.email";
+
+function canonicalPublicApiOrigin(): string {
+  const configured = process.env.PUBLIC_BASE_URL ?? process.env.PUBLIC_ORIGIN;
+  if (!configured) return DEFAULT_PUBLIC_API_ORIGIN;
+  try {
+    const url = new URL(configured);
+    return url.origin;
+  } catch {
+    console.warn("[api/v1] Invalid PUBLIC_BASE_URL/PUBLIC_ORIGIN; falling back to commons.email");
+    return DEFAULT_PUBLIC_API_ORIGIN;
+  }
+}
+
+function redirectToCanonicalPublicApi(request: Request, path: string): Response {
+  const requestUrl = new URL(request.url);
+  const target = new URL(path, canonicalPublicApiOrigin());
+  target.search = requestUrl.search;
+
+  return new Response(
+    JSON.stringify({
+      error: "canonical_api_origin_required",
+      message:
+        "The public API is served from the canonical Commons application origin, where API-key auth, feature gating, and plan limits are enforced.",
+      canonicalUrl: target.toString(),
+    }),
+    {
+      status: 308,
+      headers: {
+        "Content-Type": "application/json",
+        Location: target.toString(),
+      },
+    },
+  );
+}
+
 // Manual reference for the SNS signature verifier — tracked under
 // `convex/_snsVerify.ts` (node runtime). Replace with `internal._snsVerify`
 // once `npx convex dev` regenerates `_generated/api.d.ts`.
@@ -82,13 +118,7 @@ http.route({
   path: "/api/v1/supporters",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    return new Response(
-      JSON.stringify({
-        error: "Public API v1 is being migrated to Convex. Use the SvelteKit API for now.",
-        migration: "in_progress",
-      }),
-      { status: 501, headers: { "Content-Type": "application/json" } },
-    );
+    return redirectToCanonicalPublicApi(request, "/api/v1/supporters");
   }),
 });
 
@@ -96,13 +126,7 @@ http.route({
   path: "/api/v1/supporters",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    return new Response(
-      JSON.stringify({
-        error: "Public API v1 is being migrated to Convex. Use the SvelteKit API for now.",
-        migration: "in_progress",
-      }),
-      { status: 501, headers: { "Content-Type": "application/json" } },
-    );
+    return redirectToCanonicalPublicApi(request, "/api/v1/supporters");
   }),
 });
 
@@ -114,13 +138,7 @@ http.route({
   path: "/api/v1/campaigns",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    return new Response(
-      JSON.stringify({
-        error: "Public API v1 is being migrated to Convex. Use the SvelteKit API for now.",
-        migration: "in_progress",
-      }),
-      { status: 501, headers: { "Content-Type": "application/json" } },
-    );
+    return redirectToCanonicalPublicApi(request, "/api/v1/campaigns");
   }),
 });
 
@@ -605,6 +623,7 @@ http.route({
     const from = params.From;
     const to = params.To;
     const body = (params.Body || "").trim();
+    const messageSid = params.MessageSid;
 
     if (!from) {
       return new Response(
@@ -624,6 +643,7 @@ http.route({
         // populated `To` and we want the handler to remain defensible
         // without it.
         to: typeof to === "string" && to.length > 0 ? to : undefined,
+        messageSid: typeof messageSid === "string" && messageSid.length > 0 ? messageSid : undefined,
         body,
       });
     } catch (err) {

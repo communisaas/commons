@@ -11,6 +11,10 @@ export interface ApiEnvelope<T = unknown> {
 		hasMore?: boolean;
 		total?: number;
 		decryptionFailures?: number;
+		// True when the result was capped by a bounded scan and `total` reflects
+		// only the scanned window rather than the complete set of matching records.
+		truncated?: boolean;
+		scanLimit?: number;
 	};
 	error?: undefined;
 }

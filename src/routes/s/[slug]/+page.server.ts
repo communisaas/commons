@@ -5,7 +5,6 @@ import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
-import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import type { Id } from '$convex/_generated/dataModel';
 
 type DebateArgumentRow = {
@@ -48,11 +47,6 @@ type DebateRow = {
 	appealDeadline: number | null;
 	governanceJustification: string | null;
 	arguments: DebateArgumentRow[];
-};
-
-type UserDeliveryDTO = {
-	recipientKey?: string | null;
-	recipientName?: string | null;
 };
 
 const onchainId = (value: string | number | null | undefined): string =>
@@ -222,34 +216,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		};
 	}
 
-	// Batch 2: Queries depending on Batch 1 results
-	const [deliveredRecipients, districtOfficials, engagementByDistrict] = await Promise.all([
-		// Deliveries persist across both paths: stance-agnostic (keyed on
-		// pseudonymousId) and stance-linked (tier-3+, via identityCommitment).
-		// pseudonymousId is available at tier 1+ — every authenticated user.
-		// computePseudonymousId throws if salt is missing — degrade gracefully
-		// rather than crashing the page load.
-		((): Promise<string[]> => {
-			if (!templateId || !userId) return Promise.resolve([]);
-			try {
-				const pseudoId = computePseudonymousId(userId);
-				return serverQuery(api.positions.getUserDeliveries, {
-							templateId,
-							pseudonymousId: pseudoId,
-							identityCommitment: identityCommitment ?? undefined,
-							deliveryMethod: 'email'
-						})
-						.then((deliveries: UserDeliveryDTO[]) =>
-							deliveries
-								.map((delivery) => delivery.recipientKey ?? delivery.recipientName)
-								.filter((recipient): recipient is string => Boolean(recipient))
-						)
-						.catch(() => []);
-			} catch {
-				return Promise.resolve([]);
-			}
-		})(),
-
+	// Batch 2: Queries depending on Batch 1 results.
+	// Delivery records are intentionally NOT loaded here: a mailto handoff is not
+	// a confirmed send, so prior "started" state must never persist across a
+	// reload or revisit to lock a user out of writing again.
+	const [districtOfficials, engagementByDistrict, credentialHash] = await Promise.all([
 		userDistrictCode
 			? getOfficials(userDistrictCode)
 					.then((data) =>
@@ -277,6 +248,16 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 						templateId,
 						userDistrictCode: userDistrictCode ?? undefined
 					}).catch(() => null)
+			: Promise.resolve(null),
+
+		// Active credential hash → the public /v/[hash] verify URL in proof footers.
+		// Auth-scoped (serverQuery carries the user's Convex token); resolves to the
+		// same row resolveCredentialHash validates, so the link never 404s. Null when
+		// the user has no active credential — callers then render no link.
+		userId
+			? serverQuery(api.users.getActiveCredentialHash, { userId: userId as Id<'users'> })
+					.then((r) => r?.credentialHash ?? null)
+					.catch(() => null)
 			: Promise.resolve(null)
 	]);
 
@@ -292,7 +273,8 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 			email: locals.user.email,
 			avatar: locals.user.avatar,
 			trust_tier: locals.user.trust_tier,
-			is_verified: locals.user.is_verified
+			is_verified: locals.user.is_verified,
+			credentialHash
 		} : null,
 		template: parentData.template,
 		channel: parentData.channel,
@@ -304,7 +286,6 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		// Power Landscape data
 		positionCounts,
 		existingPosition,
-		deliveredRecipients,
 		districtOfficials: districtOfficials as DistrictOfficialInput[],
 		recipientConfig,
 		engagementByDistrict

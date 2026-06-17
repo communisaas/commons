@@ -11,7 +11,7 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { encryptWithOrgKey } from "./_orgKey";
+import { encryptWithOrgKey, decryptOrgPii } from "./_orgKey";
 import { getOrgKeyForAction } from "./_orgKeyUnseal";
 import {
   computeOrgScopedEmailHash,
@@ -391,8 +391,6 @@ export const backfillSupporterGlobalHashes = internalAction({
     force: v.optional(v.boolean()),
   },
   handler: async (ctx, { orgId, force }) => {
-    const { decryptOrgPii } = await import("./_orgKey");
-
     const orgKey = await getOrgKeyForAction(ctx, orgId);
     if (!orgKey) throw new Error("Org encryption not configured");
 
@@ -543,8 +541,6 @@ export const backfillSupporterGlobalHashes = internalAction({
 export const migrateEmailHashes = internalAction({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, { orgId }) => {
-    const { decryptOrgPii } = await import("./_orgKey");
-
     const orgKey = await getOrgKeyForAction(ctx, orgId);
     if (!orgKey) throw new Error("Org encryption not configured");
 
@@ -763,8 +759,9 @@ export const clearCampaignTemplateId = internalMutation({
 // SMS RECIPIENT FILTER NORMALIZATION (F34)
 // =============================================================================
 // Closes the v.any() → smsRecipientFilterValidator migration on
-// smsBlasts.recipientFilter. SMS dispatch isn't wired yet (memory: 'SMS
-// recipient filtering TODO'), but any pre-2026-05-26 fixture rows with
+// smsBlasts.recipientFilter. The bounded SMS proxy runner now accepts an
+// explicit client-decrypted batch, but the org UI cohort/decrypt sender still
+// needs conforming saved filters. Any pre-2026-05-26 fixture rows with
 // non-Id strings in `tags`/`segments`/`excludeTags` will block the
 // schema push. Run BEFORE pushing the closed-shape schema:
 //   npx convex run backfill:normalizeSmsRecipientFilters
@@ -845,7 +842,7 @@ const CANONICAL_VALUES: Record<string, ReadonlyArray<string>> = {
   "campaigns.status": ["DRAFT", "ACTIVE", "PAUSED", "COMPLETE"],
   "events.eventType": ["IN_PERSON", "VIRTUAL", "HYBRID"],
   "events.status": ["DRAFT", "PUBLISHED", "CANCELLED", "COMPLETED"],
-  "subscriptions.plan": ["free", "starter", "organization", "coalition"],
+  "subscriptions.plan": ["inactive", "starter", "organization", "coalition"],
   "subscriptions.status": ["active", "past_due", "canceled", "trialing"],
   "subscriptions.paymentMethod": ["stripe", "crypto"],
   // C15+C16 enums — added after brutalist caught the audit coverage gap

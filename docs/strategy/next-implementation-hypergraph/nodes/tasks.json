@@ -822,28 +822,27 @@
     },
     {
       "id": "NEW-T2-4",
-      "slug": "list-unsubscribe-headers",
-      "name": "List-Unsubscribe headers on Convex server-side path",
+      "slug": "list-unsubscribe-provider-rendering",
+      "name": "List-Unsubscribe provider rendering verification",
       "track": "TR-B",
       "clusters": [
+        "C-reader-side",
         "C-reach"
       ],
       "wave": "W-2",
       "effort": {
-        "tier": "M",
-        "days": 2
+        "tier": "S",
+        "days": 0.5
       },
       "chokepoint": false,
-      "carryover_from": "T2-4",
-      "description": "sendViaSes Content.Simple \u2192 Content.Raw with base64-MIME + List-Unsubscribe + List-Unsubscribe-Post per-recipient HMAC-signed tokens. Re-evaluate after T2-2 whether Convex path still needs MIME builder vs routing through Lambda.",
-      "acceptance_criteria": "Emails from Convex path include List-Unsubscribe headers; Gmail/Yahoo unsubscribe button appears.",
-      "depends_on": [
-        "NEW-T2-2"
-      ],
+      "carryover_from": "T2-4b",
+      "description": "Run production seed sends through the Convex server path and confirm Gmail/Yahoo expose the mailbox-visible one-click unsubscribe affordance. The Convex header substrate is already implemented through SES v2 Simple.Headers.",
+      "acceptance_criteria": "Seed sends from the Convex path show List-Unsubscribe headers in raw source and a visible one-click unsubscribe affordance in at least Gmail and Yahoo, with screenshots or provider-source evidence linked from the capability docs.",
+      "depends_on": [],
       "status": "deferred",
-      "deferred_at": "2026-05-27T23:22:09Z",
-      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
-      "revisit_when": "NEW-T2-2 lands"
+      "deferred_at": "2026-06-04T17:05:15Z",
+      "deferred_reason": "Header substrate is wired in code, but mailbox/provider rendering needs production seed sends with configured unsubscribe runtime and sender-domain posture.",
+      "revisit_when": "Production SES runtime and sender-domain seed-send environment are available"
     },
     {
       "id": "NEW-T2-10",
@@ -863,8 +862,7 @@
       "description": "Handle forwarded mail + image-proxy stripping. Better attribution for SES events.",
       "acceptance_criteria": "Open rate measurement matches blast-recipient cohort within 5% deviation.",
       "depends_on": [
-        "NEW-T2-2",
-        "NEW-T2-4"
+        "NEW-T2-2"
       ],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:22:09Z",
@@ -889,7 +887,7 @@
       "description": "UI library of pre-built email blast templates. Low launch leverage; orgs can paste-from-doc until templating becomes bottleneck.",
       "acceptance_criteria": "Org picks template; renders with merge fields; sends successfully.",
       "depends_on": [
-        "NEW-T2-4"
+        "NEW-T2-2"
       ],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:22:09Z",
@@ -963,13 +961,13 @@
       },
       "chokepoint": false,
       "carryover_from": "T2-1",
-      "description": "Browser holds org key, decrypts encryptedPhone, calls SvelteKit proxy that holds Twilio creds. STOP-opted supporters excluded.",
-      "acceptance_criteria": "PATCH /api/org/[slug]/sms/[id] with action=send transitions blast draft\u2192sending\u2192sent.",
+      "description": "Twilio proxy route and sms.recordDispatchBatch can already send and record an explicit client-decrypted E.164 batch. Remaining work: browser holds org key, resolves recipientFilter, decrypts encryptedPhone for subscribed/non-stopped supporters, and calls the SvelteKit proxy with the exact cohort.",
+      "acceptance_criteria": "Org UI client sender decrypts the selected SMS cohort, excludes STOP/unsubscribed supporters, calls PATCH /api/org/[slug]/sms/[id] with action=send and decryptedRecipients, and transitions blast draft\u2192sent with message rows.",
       "depends_on": [],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:22:09Z",
-      "deferred_reason": "ses-proxy Lambda chokepoint (CP-2 deferred) \u2014 downstream of NEW-T2-2 deploy.",
-      "revisit_when": "NEW-T2-2 lands"
+      "deferred_reason": "Browser phone decryptor/cohort sender remains deferred; proxy runner substrate is present for supplied decrypted batches.",
+      "revisit_when": "post-launch SMS sender UI sprint scheduled"
     },
     {
       "id": "NEW-T2-8",
@@ -1223,8 +1221,8 @@
     },
     {
       "id": "NEW-T1-3",
-      "slug": "an-osdi-sync",
-      "name": "AN OSDI sync actually shipped",
+      "slug": "platform-api-osdi-adapter",
+      "name": "Platform API / OSDI adapter actually shipped",
       "track": "TR-F",
       "clusters": [
         "C-composability"
@@ -1236,13 +1234,13 @@
       },
       "chokepoint": false,
       "carryover_from": "T1-3",
-      "description": "Replace HTTP 501 with real OSDI client. Convex internalAction with paginated /people fetch at 4 req/s, tag sync via /taggings, chunked scheduler continuation for >5K supporters.",
-      "acceptance_criteria": "Full sync imports within 1% of AN total_records. Incremental sync only fetches since lastSyncAt.",
+      "description": "Replace the platform API boundary with the first real platform adapter. Prefer OSDI when the selected partner/dialect supports it; otherwise implement the chosen vendor client with paginated people fetch, tag/list sync, rate limiting, and chunked scheduler continuation for >5K supporters.",
+      "acceptance_criteria": "Full sync imports within 1% of the selected platform's reported total_records or equivalent count. Incremental sync only fetches records changed since lastSyncAt.",
       "depends_on": [],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:23:56Z",
-      "deferred_reason": "AN OSDI sync \u2014 L tier 7d. Requires Action Network partnership coordination + paginated /people fetch + chunked scheduler continuation. Memory/competitive_landscape notes NGP VAN/AN in active RFP turnover.",
-      "revisit_when": "AN partnership / RFP outcome resolved"
+      "deferred_reason": "Platform API / OSDI adapter \u2014 L tier 7d. Requires first-adapter selection or partnership coordination, paginated people fetch, encrypted token custody, and chunked scheduler continuation. Memory/competitive_landscape notes multiple incumbent vendors in active RFP turnover.",
+      "revisit_when": "First platform adapter / RFP outcome resolved"
     },
     {
       "id": "NEW-T9-4",
@@ -1260,13 +1258,13 @@
       "chokepoint": false,
       "carryover_from": "T9-4",
       "description": "OSDI REST adapter mapping our v1 endpoints to OSDI's people/events/donations/tags/lists shape.",
-      "acceptance_criteria": "OSDI conformance tests pass; partner platforms (Action Network, EveryAction) can read.",
+      "acceptance_criteria": "OSDI conformance tests pass; OSDI-capable partner platforms can read.",
       "depends_on": [
         "NEW-T1-3"
       ],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:23:56Z",
-      "deferred_reason": "OSDI compliance namespace /api/osdi/v1/ \u2014 depends on NEW-T1-3 to clarify which OSDI version + entities to target.",
+      "deferred_reason": "OSDI compliance namespace /api/osdi/v1/ \u2014 depends on NEW-T1-3 to clarify which OSDI version, partner dialect, and entities to target.",
       "revisit_when": "NEW-T1-3 lands"
     },
     {

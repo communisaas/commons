@@ -5,7 +5,9 @@
   The font itself is a truth claim: "this number could be audited."
 
   Optionally spring-animates when the value changes, using
-  canonical springs from the motion system.
+  canonical springs from the motion system. The spring initializes
+  at the incoming value, so server-rendered HTML and first paint
+  show the real number; animation plays on subsequent changes.
 
   When `cite` is provided, auto-wraps in a Cite whisper — the
   number confides its provenance on hover. For other citation
@@ -57,8 +59,11 @@
 
 	const shouldAnimate = $derived(animate && !prefersReducedMotion);
 
-	// svelte-ignore state_referenced_locally — spring config is static per instance
-	const display = svelteSpring(0, springConfig);
+	// The spring starts at the incoming value so server-rendered HTML and
+	// first paint carry the real number — never a transient 0. Animation
+	// applies to subsequent value changes only.
+	// svelte-ignore state_referenced_locally — initial value + spring config are intentionally captured once per instance
+	const display = svelteSpring(value ?? 0, springConfig);
 
 	$effect(() => {
 		if (value === null) return;

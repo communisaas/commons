@@ -8,6 +8,7 @@ import {
 	readChainResolution
 } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 
 /**
  * POST /api/debates/[debateId]/resolve
@@ -15,8 +16,8 @@ import { FEATURES } from '$lib/config/features';
  * Resolve a debate after its deadline has passed.
  * Determines the winning argument by highest weightedScore.
  *
- * NOTE: In production, calls DebateMarket.resolveDebate() on-chain.
- * Currently resolves off-chain only for frontend development.
+ * NOTE: Production requires DebateMarket resolution unless explicitly opted
+ * into off-chain-only operation; local development can resolve off-chain.
  */
 export const POST: RequestHandler = async ({ params, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -64,6 +65,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	let resolvedFromChain = false;
 	let winningIndex = dbWinner.argumentIndex;
 	let winningStance = dbWinner.stance;
+	let resolutionBoundary: string | null = null;
 
 	if (debate.debateIdOnchain) {
 		const onchainResult = await resolveDebateOnChain(debate.debateIdOnchain);
@@ -92,10 +94,17 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 				console.warn('[debates/resolve] Chain read failed, using DB winner:', chainState.error);
 			}
 		} else if (onchainResult.error?.includes('not configured')) {
+			allowChainMisconfig({ op: 'debates/resolve' });
+			resolutionBoundary =
+				'Blockchain runtime is not configured; resolution was computed from off-chain argument records.';
 			console.warn('[debates/resolve] Blockchain not configured, resolving off-chain only');
 		} else {
 			throw error(502, `On-chain debate resolution failed: ${onchainResult.error}`);
 		}
+	} else {
+		allowChainMisconfig({ op: 'debates/resolve' });
+		resolutionBoundary =
+			'Debate has no on-chain registration; resolution was computed from off-chain argument records.';
 	}
 
 	try {
@@ -114,6 +123,8 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 			winningStance,
 			resolvedAt: new Date().toISOString(),
 			resolvedFromChain,
+			chainStatus: resolvedFromChain ? 'onchain_resolved' : 'offchain_resolved',
+			...(resolutionBoundary ? { resolutionBoundary } : {}),
 			...(txHash && { txHash })
 		});
 	} catch (err: unknown) {

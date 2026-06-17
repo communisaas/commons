@@ -19,12 +19,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const [convexResult, convexOrg] = await Promise.all([
+	const [convexResult, convexOrg, confirmationSummary] = await Promise.all([
 		serverQuery(api.campaigns.list, {
 			slug: params.slug,
 			paginationOpts: { numItems: 100, cursor: null }
 		}),
-		serverQuery(api.organizations.getBySlug, { slug: params.slug })
+		serverQuery(api.organizations.getBySlug, { slug: params.slug }),
+		serverQuery(api.donations.getConfirmationSummary, { orgSlug: params.slug })
 	]);
 
 	// Filter to FUNDRAISER type campaigns (Convex campaigns.list returns all types)
@@ -34,17 +35,20 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
 	return {
 		org: { name: convexOrg?.name ?? params.slug, slug: params.slug },
+		confirmationSummary,
 		campaigns: fundraisers.map((c: Record<string, unknown>) => ({
 			id: asString(c._id),
 			title: asString(c.title, 'Untitled fundraiser'),
-			status: asString(c.status, 'draft'),
+			status: asString(c.status, 'DRAFT'),
 			goalAmountCents: typeof c.goalAmountCents === 'number' ? c.goalAmountCents : null,
 			raisedAmountCents: asNumber(c.raisedAmountCents),
 			donorCount: asNumber(c.donorCount),
 			donationCurrency: asString(c.donationCurrency, 'usd'),
-			createdAt: typeof c._creationTime === 'number'
-				? new Date(c._creationTime).toISOString()
-				: new Date().toISOString()
+			receiptPolicyConfigured: Boolean(c.donationReceiptPolicy),
+			createdAt:
+				typeof c._creationTime === 'number'
+					? new Date(c._creationTime).toISOString()
+					: new Date().toISOString()
 		}))
 	};
 };

@@ -9,14 +9,11 @@
     {"source": "NEW-A-5", "target": "NEW-A-7", "reason": "CONGRESSIONAL flag flip requires staging confirmation"},
 
     {"source": "NEW-T2-2", "target": "NEW-T1-9", "reason": "send_email step routes through Lambda"},
-    {"source": "NEW-T2-2", "target": "NEW-T2-4", "reason": "List-Unsubscribe headers re-evaluated after Lambda lands"},
     {"source": "NEW-T2-2", "target": "NEW-T2-10", "reason": "Open/click attribution depends on Lambda + List-Unsubscribe baseline"},
     {"source": "NEW-T2-2", "target": "NEW-T2-7", "reason": "Template library needs Lambda send path"},
     {"source": "NEW-T2-2", "target": "NEW-T8-9", "reason": "Weekly digest emails go through Lambda"},
     {"source": "NEW-T2-2", "target": "NEW-T6-9", "reason": "Inbound SES Lambda handles reply parsing"},
     {"source": "NEW-T2-2", "target": "NEW-T2-6", "reason": "Custom-domain per org needs Lambda DKIM"},
-    {"source": "NEW-T2-4", "target": "NEW-T2-10", "reason": "Attribution refinement depends on header substrate"},
-    {"source": "NEW-T2-4", "target": "NEW-T2-7", "reason": "Template library needs unsubscribe headers"},
     {"source": "NEW-T2-1", "target": "NEW-T2-8", "reason": "10DLC compliance follows SMS dispatch"},
     {"source": "NEW-T2-1", "target": "NEW-T2-9", "reason": "MMS extends SMS"},
     {"source": "NEW-T2-8", "target": "NEW-T2-9", "reason": "MMS gated on 10DLC vetting"},
@@ -58,7 +55,7 @@
     {"source": "NEW-E-2", "target": "NEW-T7-3", "reason": "Cross-org reputation surface includes atlasVersion-aware data"},
     {"source": "NEW-T7-3", "target": "NEW-T7-2", "reason": "Shared supporter pools build on reputation portability"},
 
-    {"source": "NEW-T1-3", "target": "NEW-T9-4", "reason": "OSDI namespace mapping informed by AN sync outcome"},
+    {"source": "NEW-T1-3", "target": "NEW-T9-4", "reason": "OSDI namespace mapping informed by first platform adapter outcome"},
     {"source": "NEW-T9-4", "target": "NEW-T9-8", "reason": "Developer portal references OSDI"},
     {"source": "NEW-T9-1", "target": "NEW-T9-8", "reason": "Portal documents TS SDK installation"},
     {"source": "NEW-T9-2", "target": "NEW-T9-8", "reason": "Portal documents Python SDK installation"},

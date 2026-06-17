@@ -16,8 +16,30 @@
 		joinedAt: string;
 	};
 
+	type RawNetworkView = Omit<
+		NetworkView,
+		'role' | 'membershipStatus' | 'memberCount' | 'ownerOrg'
+	> & {
+		role?: string | null;
+		membershipStatus?: 'active' | 'pending' | string | null;
+		memberCount?: number | null;
+		ownerOrg?: Partial<NetworkView['ownerOrg']> | null;
+	};
+
 	let { data }: { data: PageData } = $props();
-	const networks = $derived((data.networks ?? []) as NetworkView[]);
+	const networks = $derived(
+		((data.networks ?? []) as RawNetworkView[]).map((network) => ({
+			...network,
+			role: network.role ?? 'member',
+			membershipStatus: network.membershipStatus ?? '',
+			memberCount: network.memberCount ?? 0,
+			ownerOrg: {
+				id: network.ownerOrg?.id ?? '',
+				name: network.ownerOrg?.name ?? 'network owner',
+				slug: network.ownerOrg?.slug ?? ''
+			}
+		}))
+	);
 
 	let accepting = $state<string | null>(null);
 	let declining = $state<string | null>(null);
@@ -25,6 +47,10 @@
 
 	const activeNetworks = $derived(networks.filter((n) => n.membershipStatus === 'active'));
 	const pendingNetworks = $derived(networks.filter((n) => n.membershipStatus === 'pending'));
+
+	function memberLabel(count: number): string {
+		return count === 1 ? 'member' : 'members';
+	}
 
 	async function respondToInvite(networkId: string, action: 'accept' | 'decline') {
 		if (action === 'accept') accepting = networkId;
@@ -55,62 +81,80 @@
 	<title>Networks | {data.org.name}</title>
 </svelte:head>
 
-<div class="min-h-screen bg-surface-raised text-text-primary">
-	<div class="mx-auto max-w-4xl px-4 py-8">
+<div class="bg-surface-raised text-text-primary min-h-screen">
+	<div class="mx-auto max-w-4xl space-y-6 px-4 py-8">
 		<!-- Header -->
-		<div class="mb-8 flex items-center justify-between">
-			<h1 class="text-2xl font-bold text-text-primary">Networks</h1>
+		<div class="flex flex-wrap items-start justify-between gap-4">
+			<div>
+				<nav class="text-text-tertiary mb-3 flex items-center gap-2 text-sm">
+					<a href="/org/{data.org.slug}/studio" class="hover:text-text-secondary transition-colors">
+						Studio
+					</a>
+					<span aria-hidden="true">/</span>
+					<span>Networks</span>
+				</nav>
+				<h1 class="text-text-primary text-xl font-semibold">Networks</h1>
+				<p class="text-text-tertiary mt-1 max-w-2xl text-sm">
+					Coordinate with other organizations: join coalition networks, respond to invitations, and
+					create your own.
+				</p>
+			</div>
 			{#if data.canCreate}
 				<a
 					href="/org/{data.org.slug}/networks/new"
-					class="rounded-lg bg-surface-overlay px-4 py-2 text-sm font-semibold text-text-primary hover:bg-surface-raised"
+					class="bg-surface-overlay text-text-primary hover:bg-surface-base rounded-md px-4 py-2 text-sm font-semibold transition-colors"
 				>
-					Create Network
+					Create coalition network
 				</a>
 			{/if}
 		</div>
 
 		<!-- Error -->
 		{#if errorMsg}
-			<div class="mb-6 rounded-lg border border-red-800/60 bg-red-950/30 px-4 py-3 text-sm text-red-400">
+			<div class="rounded-lg border border-red-800/60 bg-red-950/30 px-4 py-3 text-sm text-red-400">
 				{errorMsg}
 			</div>
 		{/if}
 
 		<!-- Pending Invitations -->
 		{#if pendingNetworks.length > 0}
-			<div class="mb-8">
-				<h2 class="mb-3 text-sm font-medium text-text-tertiary">Pending Invitations</h2>
+			<div id="network-invites">
+				<h2 class="text-text-tertiary mb-3 text-sm font-medium">Pending invitations</h2>
 				<div class="space-y-3">
 					{#each pendingNetworks as network (network.id)}
 						<div class="rounded-lg border border-amber-800/40 bg-amber-950/10 p-4">
 							<div class="flex items-start justify-between gap-4">
 								<div class="min-w-0 flex-1">
 									<div class="mb-1 flex items-center gap-2">
-										<h3 class="truncate text-base font-semibold text-text-primary">{network.name}</h3>
-										<span class="shrink-0 rounded-full bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-400">
+										<h3 class="text-text-primary truncate text-base font-semibold">
+											{network.name}
+										</h3>
+										<span
+											class="shrink-0 rounded-full bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-400"
+										>
 											Pending
 										</span>
 									</div>
 									{#if network.description}
-										<p class="text-sm text-text-tertiary">{network.description}</p>
+										<p class="text-text-tertiary text-sm">{network.description}</p>
 									{/if}
-									<p class="mt-1 text-xs text-text-tertiary">
-										Invited by {network.ownerOrg.name} &middot; {network.memberCount} member{network.memberCount !== 1 ? 's' : ''}
+									<p class="text-text-tertiary mt-1 text-xs">
+										Invited by {network.ownerOrg.name} &middot; {network.memberCount}
+										{memberLabel(network.memberCount)}
 									</p>
 								</div>
 								<div class="flex shrink-0 gap-2">
 									<button
 										onclick={() => respondToInvite(network.id, 'accept')}
 										disabled={accepting === network.id}
-										class="rounded-lg bg-teal-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
+										class="rounded-md bg-teal-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-teal-500 disabled:opacity-50"
 									>
 										{accepting === network.id ? 'Accepting...' : 'Accept'}
 									</button>
 									<button
 										onclick={() => respondToInvite(network.id, 'decline')}
 										disabled={declining === network.id}
-										class="rounded-lg border border-surface-border-strong px-3 py-1.5 text-sm text-text-secondary hover:border-text-tertiary hover:text-text-primary disabled:opacity-50"
+										class="border-surface-border-strong text-text-secondary hover:border-text-tertiary hover:text-text-primary rounded-md border px-3 py-1.5 text-sm disabled:opacity-50"
 									>
 										{declining === network.id ? 'Declining...' : 'Decline'}
 									</button>
@@ -124,8 +168,8 @@
 
 		<!-- Active Networks -->
 		{#if activeNetworks.length > 0}
-			<div>
-				<h2 class="mb-3 text-sm font-medium text-text-tertiary">Your Networks</h2>
+			<div id="network-memberships">
+				<h2 class="text-text-tertiary mb-3 text-sm font-medium">Active memberships</h2>
 				<div class="space-y-3">
 					{#each activeNetworks as network (network.id)}
 						<a href="/org/{data.org.slug}/networks/{network.id}" class="block">
@@ -135,17 +179,20 @@
 				</div>
 			</div>
 		{:else if pendingNetworks.length === 0}
-			<div class="rounded-lg border border-surface-border py-16 text-center">
-				<p class="text-lg text-text-tertiary">No networks yet.</p>
-				<p class="mt-1 text-sm text-text-tertiary">
+			<div
+				id="network-memberships"
+				class="border-surface-border bg-surface-base rounded-md border py-14 text-center"
+			>
+				<p class="text-text-tertiary text-lg">No networks yet.</p>
+				<p class="text-text-tertiary mt-1 text-sm">
 					Create a coalition network to coordinate with other organizations.
 				</p>
 				{#if data.canCreate}
 					<a
 						href="/org/{data.org.slug}/networks/new"
-						class="mt-4 inline-block rounded-lg bg-surface-overlay px-4 py-2 text-sm font-semibold text-text-primary hover:bg-surface-raised"
+						class="bg-surface-overlay text-text-primary hover:bg-surface-raised mt-4 inline-block rounded-md px-4 py-2 text-sm font-semibold"
 					>
-						Create Network
+						Create coalition network
 					</a>
 				{/if}
 			</div>

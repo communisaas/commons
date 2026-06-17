@@ -25,7 +25,6 @@
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
 		mergeLandscape,
-		slugify,
 		type LandscapeMember,
 		type DistrictOfficialInput
 	} from '$lib/utils/landscapeMerge';
@@ -67,7 +66,9 @@
 		if (trustTier >= 2 && districtCode) parts.push(`Verified resident · ${districtCode}`);
 		else if (trustTier >= 1) parts.push('Verified sender');
 		if (trustTier >= 3) parts[0] += ' · Gov ID';
-		if (data.user?.id) parts.push(`commons.email/v/${data.user.id.slice(0, 8)}`);
+		// Only emit the verify URL when it resolves: the active credential hash is
+		// the record /v/[hash] looks up. A truncated user id always 404s.
+		if (data.user?.credentialHash) parts.push(`commons.email/v/${data.user.credentialHash}`);
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
 	// Simplified - no query parameters needed, default to direct-link
@@ -82,14 +83,14 @@
 		})()
 	);
 
-	// Enhanced description with social proof for Open Graph
+	// Description with route-confirmation proof for Open Graph.
 	const socialProofDescription = $derived(
 		(() => {
-			const sent = template.send_count || 0;
-			if (sent > 1000) {
-				return `Join ${sent.toLocaleString()}+ constituents who took action. ${template.description}`;
-			} else if (sent > 100) {
-				return `${sent.toLocaleString()} people have taken action. ${template.description}`;
+			const confirmed = template.send_count || 0;
+			if (confirmed > 1000) {
+				return `Join ${confirmed.toLocaleString()}+ readers confirming routes. ${template.description}`;
+			} else if (confirmed > 100) {
+				return `${confirmed.toLocaleString()} readers have confirmed routes. ${template.description}`;
 			}
 			return template.description;
 		})()
@@ -331,7 +332,6 @@
 	interface PowerLandscapeData {
 		positionCounts?: { support: number; oppose: number; districts: number };
 		existingPosition?: { stance: string; registrationId: string } | null;
-		deliveredRecipients?: string[];
 		districtOfficials?: DistrictOfficialInput[];
 		recipientConfig?: {
 			decisionMakers?: ProcessedDecisionMaker[];
@@ -357,7 +357,7 @@
 	let reportedBounces = $state(new Set<string>());
 	let reportingBounce = $state<string | null>(null);
 
-	// Contextual share message — shifts from recruiting to movement-building after email handoff
+	// Contextual share message shifts from action-page invitation to route-handoff evidence.
 	const shareMessage = $derived(
 		generateShareMessage(
 			{
@@ -439,10 +439,6 @@
 		} else {
 			positionState.init(tmplId, counts);
 		}
-
-		// Restore sent recipients from delivery records
-		// Server stores raw recipient_name; client keys by slugify(name)
-		contactedRecipients = new Set((pl.deliveredRecipients ?? []).map(slugify));
 	});
 
 	// Auto-scroll to PowerLandscape on creator arrival (separate effect for reactivity isolation)
@@ -624,19 +620,11 @@
 		batchRegistrationState = 'idle';
 	}
 
-	// Resolve contacted members with emails for bounce reporting
-	const contactedMembers = $derived(
-		(() => {
-			if (contactedRecipients.size === 0) return [];
-			const allMembers = [
-				...landscape.roleGroups.flatMap((g) => g.members),
-				...(landscape.districtGroup?.members ?? [])
-			];
-			return allMembers.filter(
-				(m) => contactedRecipients.has(m.id) && m.email && !reportedBounces.has(m.email)
-			);
-		})()
-	);
+	// Bounce reporting requires address-verified identity (tier 2+); the server
+	// rejects lower tiers. Gate the per-recipient affordance so it only surfaces
+	// for users who can actually file a report — the action lives on the
+	// recipient entity (PowerLandscape → RoleGroup → card), not as an aggregate list.
+	const canReportBounce = $derived((data.user?.trust_tier ?? 0) >= 2);
 
 	async function handleReportBounce(email: string) {
 		if (reportingBounce || reportedBounces.has(email)) return;
@@ -800,7 +788,7 @@
 	<meta property="og:image" content="{shareUrl.split('?')[0]}/og-image" />
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
-	<meta property="og:image:alt" content="{template.title} - Join the movement on Commons" />
+	<meta property="og:image:alt" content="{template.title} - Confirm your route on Commons" />
 
 	<!-- Twitter -->
 	<meta property="twitter:card" content="summary_large_image" />
@@ -808,7 +796,7 @@
 	<meta property="twitter:title" content={template.title} />
 	<meta property="twitter:description" content={socialProofDescription} />
 	<meta property="twitter:image" content="{shareUrl.split('?')[0]}/og-image" />
-	<meta property="twitter:image:alt" content="{template.title} - Join the movement on Commons" />
+	<meta property="twitter:image:alt" content="{template.title} - Confirm your route on Commons" />
 </svelte:head>
 
 <!-- Template content with zoned layout: Orient → Commit → Act -->
@@ -856,7 +844,7 @@
 			{#if FEATURES.ENGAGEMENT_METRICS && (template.send_count || 0) >= 5}
 				<span class="flex items-center gap-1.5 text-slate-400">
 					<Users class="h-3.5 w-3.5" />
-					{template.send_count.toLocaleString()} acted on this
+					{template.send_count.toLocaleString()} routes confirmed
 				</span>
 			{/if}
 			<!-- Views: pending DP analytics pipeline (tasks #31-32) -->
@@ -1124,6 +1112,10 @@
 							}
 						: undefined}
 					registrationState={batchRegistrationState}
+					{canReportBounce}
+					{reportedBounces}
+					{reportingBounce}
+					onReportBounce={handleReportBounce}
 				/>
 
 				<!-- Coordination weight — stance tallies are category-error theater without
@@ -1160,27 +1152,11 @@
 					</div>
 				{/if}
 
-				{#if contactedMembers.length > 0}
-					<div class="mt-3 text-xs text-slate-400">
-						<span>Did an email bounce?</span>
-						{#each contactedMembers as member}
-							<button
-								class="ml-2 underline hover:text-slate-600 disabled:no-underline disabled:opacity-50"
-								disabled={reportingBounce === member.email}
-								onclick={() => member.email && handleReportBounce(member.email)}
-							>
-								{member.name}
-							</button>
-						{/each}
-					</div>
-				{/if}
+				<!-- Bounce reporting now lives on each contacted recipient entity
+				     (DecisionMakerLandscapeCard / DistrictOfficialCard) as a
+				     hover-revealed "didn't arrive?" flag — recognition in context,
+				     not an aggregate wall of names. -->
 
-				{#if reportedBounces.size > 0}
-					<p class="mt-1 text-xs text-green-600">
-						Noted — {reportedBounces.size === 1 ? 'this address' : 'these addresses'} won't appear in
-						future results.
-					</p>
-				{/if}
 			</div>
 
 			<!-- Debate surface -->

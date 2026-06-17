@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { spring } from 'svelte/motion';
+	import { SPRINGS } from '$lib/design/motion';
 
 	let {
 		total,
@@ -17,14 +18,15 @@
 		class?: string;
 	} = $props();
 
-	const springOpts = { stiffness: 0.15, damping: 0.8 };
-	const animTotal = spring(0, springOpts);
-	const animPostal = spring(0, springOpts);
-	const animVerified = spring(0, springOpts);
+	const animTotal = spring(0, SPRINGS.METRIC);
+	const animPostal = spring(0, SPRINGS.METRIC);
+	const animDistrict = spring(0, SPRINGS.METRIC);
+	const animVerified = spring(0, SPRINGS.METRIC);
 
 	$effect(() => {
 		animTotal.set(total);
 		animPostal.set(postalResolved);
+		animDistrict.set(districtVerified);
 		animVerified.set(identityVerified);
 	});
 
@@ -33,61 +35,80 @@
 	}
 </script>
 
-<div class="rounded-md bg-surface-base border border-surface-border p-6 {className}">
-	<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary mb-4">Verification Pipeline</p>
+<div class="bg-surface-base border-surface-border rounded-md border p-6 {className}">
+	<p class="text-text-quaternary mb-4 font-mono text-[10px] tracking-wider uppercase">
+		Verification Pipeline
+	</p>
 
 	{#if total === 0}
-		<p class="text-sm text-text-quaternary text-center py-4">
+		<p class="text-text-quaternary py-4 text-center text-sm">
 			No supporters yet. Import supporters to see your verification pipeline.
 		</p>
 	{:else}
-		<!-- Stage 1: Imported -->
+		<!-- Stage 1: Supporters on the list -->
 		<div class="flex items-center gap-3">
-			<span class="text-lg text-text-tertiary w-6 text-center">○</span>
-			<p class="font-mono tabular-nums text-2xl font-bold text-text-tertiary">{fmt($animTotal)}</p>
+			<span class="text-text-tertiary w-6 text-center text-lg">○</span>
+			<p class="text-text-tertiary font-mono text-2xl font-bold tabular-nums">{fmt($animTotal)}</p>
 			<div>
-				<p class="text-sm text-text-secondary">imported</p>
+				<p class="text-text-secondary text-sm">supporters on your list</p>
 			</div>
 		</div>
 
 		<!-- Connector -->
-		<div class="ml-[11px] h-4 border-l-2 border-dashed border-text-quaternary"></div>
+		<div class="border-text-quaternary ml-[11px] h-4 border-l-2 border-dashed"></div>
 
-		<!-- Stage 2: District-resolved -->
+		<!-- Stage 2: Address-resolved -->
 		<div class="flex items-center gap-3">
-			<span class="text-lg text-teal-400 w-6 text-center">◐</span>
-			<p class="font-mono tabular-nums text-2xl font-bold text-teal-400">{fmt($animPostal)}</p>
+			<span class="w-6 text-center text-lg text-teal-400">◐</span>
+			<p class="font-mono text-2xl font-bold text-teal-400 tabular-nums">{fmt($animPostal)}</p>
 			<div>
-				<p class="text-sm text-text-secondary">district-resolved</p>
-				<p class="text-xs text-text-quaternary">postal code → district</p>
+				<p class="text-text-secondary text-sm">address-resolved</p>
+				<p class="text-text-quaternary text-xs">postal code present</p>
 			</div>
 		</div>
 
 		<!-- Connector -->
-		<div class="ml-[11px] h-4 border-l-2 border-dashed border-text-quaternary"></div>
+		<div class="border-text-quaternary ml-[11px] h-4 border-l-2 border-dashed"></div>
 
-		<!-- Stage 3: Identity-verified -->
+		<!-- Stage 3: District-verified -->
 		<div class="flex items-center gap-3">
-			<span class="text-lg text-emerald-400 w-6 text-center">●</span>
-			<p class="font-mono tabular-nums text-2xl font-bold text-emerald-400">{fmt($animVerified)}</p>
+			<span class="w-6 text-center text-lg text-teal-500">◑</span>
+			<p class="font-mono text-2xl font-bold text-teal-500 tabular-nums">{fmt($animDistrict)}</p>
 			<div>
-				<p class="text-sm text-text-secondary">identity-verified</p>
-				<p class="text-xs text-text-quaternary">ZK proof of residency</p>
+				<p class="text-text-secondary text-sm">district-verified</p>
+				<p class="text-text-quaternary text-xs">their actions carry proof of their district</p>
+			</div>
+		</div>
+
+		<!-- Connector -->
+		<div class="border-text-quaternary ml-[11px] h-4 border-l-2 border-dashed"></div>
+
+		<!-- Stage 4: Identity-verified -->
+		<div class="flex items-center gap-3">
+			<span class="w-6 text-center text-lg text-emerald-400">●</span>
+			<p class="font-mono text-2xl font-bold text-emerald-400 tabular-nums">{fmt($animVerified)}</p>
+			<div>
+				<p class="text-text-secondary text-sm">identity-verified</p>
+				<p class="text-text-quaternary text-xs">can appear in verified constituent reports</p>
 			</div>
 		</div>
 
 		<!-- Growth rate -->
 		{#if growth && growth.lastWeek > 0}
 			{@const rate = Math.round(((growth.thisWeek - growth.lastWeek) / growth.lastWeek) * 100)}
-			<p class="text-sm text-text-tertiary mt-4 pt-4 border-t border-surface-border">
-				<span class="font-mono tabular-nums text-emerald-400">{growth.thisWeek}</span> verifications this week
-				<span class="font-mono tabular-nums {rate >= 0 ? 'text-emerald-400' : 'text-amber-400'} ml-1">
+			<p class="text-text-tertiary border-surface-border mt-4 border-t pt-4 text-sm">
+				<span class="font-mono text-emerald-400 tabular-nums">{growth.thisWeek}</span> verifications
+				this week
+				<span
+					class="font-mono tabular-nums {rate >= 0 ? 'text-emerald-400' : 'text-amber-400'} ml-1"
+				>
 					({rate >= 0 ? '+' : ''}{rate}% from last week)
 				</span>
 			</p>
 		{:else if growth}
-			<p class="text-sm text-text-tertiary mt-4 pt-4 border-t border-surface-border">
-				<span class="font-mono tabular-nums text-emerald-400">{growth.thisWeek}</span> verifications this week
+			<p class="text-text-tertiary border-surface-border mt-4 border-t pt-4 text-sm">
+				<span class="font-mono text-emerald-400 tabular-nums">{growth.thisWeek}</span> verifications this
+				week
 			</p>
 		{/if}
 	{/if}

@@ -54,6 +54,33 @@ const IMPLEMENTATION_PATTERNS = [
 ];
 
 /**
+ * Output-format / schema patterns — the narrow set that is ALWAYS noise,
+ * regardless of how transparent the surface wants to be. These leak the
+ * model's serialization mechanics ("the JSON should…", "needs_clarification
+ * field…") and carry no problem-solving signal. The light filter removes
+ * only these; the strict filter removes these plus self-referential planning.
+ */
+const OUTPUT_FORMAT_PATTERNS = [
+	/\bjson\b/i,
+	/\bschema\b/i,
+	/\boutput format/i,
+	/\bresponse format/i,
+	/\brequired field/i,
+	/\bneeds_clarification\b/i,
+	/\bsubject_line\b/i,
+	/\bcore_message\b/i,
+	/\burl_slug\b/i,
+	/\bvoice_sample\b/i,
+	/\binferred_context\b/i,
+	/\bclarification_questions\b/i,
+	/\bgeographic_scope\b/i,
+	/\bresearch_log\b/i,
+	/\bsources\b.*\barray\b/i,
+	/\baccording to (the|my) (schema|format|structure)\b/i,
+	/\blet me (structure|format)\b/i
+];
+
+/**
  * Check if a thought is primarily about implementation details
  */
 function isImplementationThought(thought: string): boolean {
@@ -123,4 +150,61 @@ export function cleanThoughtForDisplay(
 
 	// No truncation - show full thought traces
 	return cleaned;
+}
+
+/**
+ * Light filter for transparent reasoning surfaces (the STUDIO interior).
+ *
+ * The strict `cleanThoughtForDisplay` suppresses ~60-70% of raw model
+ * reasoning — including legitimate planning steps like "Now I need to
+ * evaluate these candidates' email deliverability" — because it treats any
+ * short self-referential thought as noise. For STUDIO, making the agent's
+ * real thinking VISIBLE is the whole point (the HONESTY RULE), so we keep
+ * problem-solving talk and remove ONLY output-format/schema mechanics.
+ *
+ * It never fabricates: it returns '' for a thought that is pure
+ * serialization chatter, and the cleaned, full thought otherwise.
+ *
+ * @param thought - Raw thought content from the model
+ * @param options - Configuration options
+ * @returns Cleaned thought string, or empty string if it is format-only.
+ */
+export function lightThoughtFilter(
+	thought: string,
+	options: {
+		minLength?: number;
+	} = {}
+): string {
+	// Lower floor than strict: short-but-substantive planning lines are kept.
+	const { minLength = 12 } = options;
+
+	if (!thought?.trim()) return '';
+
+	// Remove ONLY output-format / schema mechanics. Keep planning talk.
+	for (const pattern of OUTPUT_FORMAT_PATTERNS) {
+		if (pattern.test(thought)) return '';
+	}
+
+	// Format cleanup (same as strict path).
+	let cleaned = thought.replace(/^\*\*([^*]+)\*\*\s*[-–—]?\s*/i, '');
+	cleaned = cleaned.replace(/^\n+/, '').trim();
+
+	if (cleaned.length < minLength) return '';
+
+	return cleaned;
+}
+
+/**
+ * Filter a thought for display at a given transparency level.
+ *
+ *   'strict'  — public citizen flow. Suppresses planning chatter for a
+ *               calm, immersive trace. (`cleanThoughtForDisplay`.)
+ *   'verbose' — STUDIO interior. Surfaces real reasoning; removes only
+ *               output-format mechanics. (`lightThoughtFilter`.)
+ */
+export function filterThoughtForDisplay(
+	thought: string,
+	mode: 'strict' | 'verbose'
+): string {
+	return mode === 'verbose' ? lightThoughtFilter(thought) : cleanThoughtForDisplay(thought);
 }

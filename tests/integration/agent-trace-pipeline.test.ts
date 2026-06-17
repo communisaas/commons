@@ -119,6 +119,22 @@ vi.mock('$lib/server/agent-trace', () => ({
 
 vi.mock('../../src/routes/api/agents/stream-message/$types', () => ({}));
 
+// The handler gates on runtime readiness (GEMINI/EXA/FIRECRAWL env), returning
+// 503 when unconfigured. These tests exercise the trace pipeline, not the gate,
+// and must not depend on real keys — pin readiness so the env (CI has no keys,
+// local loads them from .env) cannot change the outcome.
+vi.mock('$lib/server/agents/message-generation-readiness', () => ({
+	getMessageGenerationReadiness: () => ({
+		ready: true,
+		modelProviderConfigured: true,
+		sourceSearchConfigured: true,
+		sourceFetchConfigured: true,
+		missing: [],
+		dependency: 'test',
+		message: 'ready'
+	})
+}));
+
 const { POST } = await import('../../src/routes/api/agents/stream-message/+server');
 
 function createEvent(body: unknown) {
@@ -244,6 +260,35 @@ describe('agent-trace pipeline — happy path', () => {
 			threshold: 0.8,
 			safe: true
 		});
+	});
+
+	it('forwards evaluated source evidence as typed SSE and trace evidence', async () => {
+		const event = createEvent(baseBody());
+		await POST(event);
+		await event.waitUntilPromise;
+
+		const [traceId] = mockTraceStart.mock.calls[0];
+		const options = mockGenerateMessage.mock.calls[0][0];
+		const evidence = {
+			sourceCount: 3,
+			mode: 'discovery',
+			evaluatedSourceCount: 2,
+			searchOnlySourceCount: 1,
+			evaluationFallback: true,
+			candidateCount: 9,
+			failedCount: 1,
+			searchQueryCount: 3
+		};
+
+		options.onSourceEvidence(evidence);
+
+		expect(mockEmitter.send).toHaveBeenCalledWith('source-evidence', evidence);
+		expect(mockTraceEvent).toHaveBeenCalledWith(
+			traceId,
+			'message-generation',
+			'source-evidence',
+			evidence
+		);
 	});
 });
 

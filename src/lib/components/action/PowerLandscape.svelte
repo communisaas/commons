@@ -18,7 +18,11 @@
 		onBatchRegister,
 		onVerifyAddress,
 		registrationState = 'idle',
-		isCongressional = false
+		isCongressional = false,
+		canReportBounce = false,
+		reportedBounces = new Set(),
+		reportingBounce = null,
+		onReportBounce
 	}: {
 		template: Template;
 		decisionMakers?: ProcessedDecisionMaker[];
@@ -30,6 +34,10 @@
 		onVerifyAddress?: () => void;
 		registrationState?: 'idle' | 'registering' | 'complete';
 		isCongressional?: boolean;
+		canReportBounce?: boolean;
+		reportedBounces?: Set<string>;
+		reportingBounce?: string | null;
+		onReportBounce?: (email: string) => void;
 	} = $props();
 
 	const landscape = $derived(mergeLandscape(decisionMakers, districtOfficials));
@@ -174,6 +182,10 @@
 						{contactedRecipients}
 						{departingRecipients}
 						{onWriteTo}
+						{canReportBounce}
+						{reportedBounces}
+						{reportingBounce}
+						{onReportBounce}
 						showRoleBadge={true}
 					/>
 				</div>
@@ -192,6 +204,10 @@
 					{contactedRecipients}
 					{departingRecipients}
 					{onWriteTo}
+					{canReportBounce}
+					{reportedBounces}
+					{reportingBounce}
+					{onReportBounce}
 					isDistrictGroup={true}
 				/>
 			</div>

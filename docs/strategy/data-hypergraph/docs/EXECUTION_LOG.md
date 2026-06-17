@@ -60,3 +60,24 @@ Append-only record of do→review cycles.
 **Promoted:** `$TMPDIR/commons-data-hypergraph → docs/strategy/data-hypergraph/`.
 
 **Net achievement:** Substrate-honesty discipline now extends across three sweeps (v1, v2, v3). Every v1+v2 substrate claim was audited against code; 3 fixes shipped, 1 deferred with documented scope expansion. Drift inventories landed for future cleanup. The capability-transcendence claim is now grounded in verified substrate plus documented gaps — not in unaudited prose.
+
+---
+
+## 2026-06-05T19:10:11Z — FIX-V2 district-evidence bridge
+
+**Status:** closed for district-evidence submissions; bounded caveat remains for postal-only rows.
+
+**Closed:**
+- Public `/c/[slug]` verified-address submissions and embed `/embed/campaign/[slug]` district-evidence submissions can now carry `districtCode`, `h3Cell`, and `atlasVersion` after resolver success.
+- `computePacket` can surface non-null atlas drift only from action rows that carry atlas evidence.
+- Capability and design copy now frame packet drift as row-backed evidence, not a universal claim across every action.
+
+**Still intentionally outside claim:**
+- Postal-only embed submissions.
+- Skipped district-evidence flows.
+- Anonymous/non-ZK embed identity assertions.
+
+**Validation:**
+- `npx vitest --run tests/unit/capability-launch-pressure.test.ts tests/unit/server/verification-packet-integrity.test.ts --config=vitest.config.ts` — 33 tests passed.
+- `npx svelte-check --tsconfig ./tsconfig.json` — 0 errors, 148 warnings (warning baseline pre-existing).
+- `git diff --check` — no diagnostics.

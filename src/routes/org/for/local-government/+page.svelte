@@ -3,12 +3,14 @@
 	import { goto } from '$app/navigation';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 
 	let { data }: { data: PageData } = $props();
 
 	const labels = getJurisdictionLabels();
 
 	const user = $derived(data.user);
+	const platformProfileCount = PLATFORM_EXPORT_PROFILES.length;
 
 	function handleSignIn(): void {
 		modalActions.openModal('sign-in-modal', 'sign-in');
@@ -190,7 +192,7 @@
 						<div class="specimen__evidence-row">
 							<span class="specimen__evidence-label">Authorship</span>
 							<span class="specimen__evidence-detail">
-								<strong>701</strong> individually composed
+								<strong>701</strong> personalized
 								<span class="specimen__sep">&middot;</span>
 								<strong>173</strong> shared statements
 							</span>
@@ -282,7 +284,7 @@
 		<!-- ═══ INCUMBENT WINDOW ═══ -->
 		<div class="window">
 			<h2 class="window__pull-quote">
-				A small district clerk's filing experience is four hundred Action Network blasts against <code>board@district.gov</code>, with no triage tool.
+				A small district clerk's filing experience is four hundred undifferentiated campaign-platform blasts against <code>board@district.gov</code>, with no triage tool.
 			</h2>
 
 			<p class="window__body">
@@ -308,13 +310,11 @@
 					<span class="pricing__anchor-text">Not <span class="pricing__anchor-num">$40,000</span>/yr with a year-long implementation.</span>
 				</div>
 				<div class="pricing__anchor-line pricing__anchor-line--punchline">
-					<span class="pricing__free">$0.</span>
+					<span class="pricing__free">$0 to author.</span>
 					<span class="pricing__free-scope">
-						<span class="pricing__free-scope-num">100</span> verified actions
+						Ground a campaign or two, draft them, see the targets &mdash; free.
 						<span class="pricing__free-scope-sep">&middot;</span>
-						<span class="pricing__free-scope-num">2</span> seats
-						<span class="pricing__free-scope-sep">&middot;</span>
-						no time limit
+						<span class="pricing__free-scope-num">$10</span>/mo to send to your board.
 					</span>
 				</div>
 			</div>
@@ -329,9 +329,9 @@
 
 			<div class="pricing-grid">
 				<div class="pricing-row">
-					<span class="pricing-name">Free</span>
+					<span class="pricing-name">Author</span>
 					<span class="pricing-price">$0</span>
-					<span class="pricing-limits"><span class="pricing-num">100</span> verified actions &middot; <span class="pricing-num">1,000</span> emails &middot; <span class="pricing-num">2</span> seats</span>
+					<span class="pricing-limits">Build a campaign or two, ground them, preview the targets &mdash; free. Sending starts at Starter.</span>
 				</div>
 				<div class="pricing-row">
 					<span class="pricing-name">Starter</span>
@@ -351,7 +351,7 @@
 			</div>
 
 			<p class="pricing__friction">
-				No demo required. No procurement review. Import your list from Action Network, EveryAction, NationBuilder, or any CSV export &mdash; a packet page produced before Friday's distribution deadline, not a year from now.
+				No demo required. No procurement review. Import from {platformProfileCount} recognized platform CSV exports or generic CSV &mdash; a packet page produced before Friday's distribution deadline, not a year from now.
 			</p>
 		</div>
 

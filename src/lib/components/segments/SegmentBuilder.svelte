@@ -13,6 +13,7 @@
 		SOURCE_OPTIONS,
 		EMAIL_STATUS_OPTIONS
 	} from '$lib/types/segment';
+	import { Datum } from '$lib/design';
 
 	interface Props {
 		orgSlug: string;
@@ -20,14 +21,16 @@
 		campaigns?: Array<{ id: string; title: string }>;
 		/** Called when filters change with the current filter state */
 		onFilterChange?: (filter: SegmentFilter) => void;
-		/** Called when a segment is applied (e.g. for email compose integration) */
-		onApply?: (filter: SegmentFilter, count: number) => void;
+		/** Called when a segment is applied; partial means count is a lower bound */
+		onApply?: (filter: SegmentFilter, count: number, partial?: boolean) => void;
 		/** Show save/load segment controls */
 		showSaveControls?: boolean;
 		/** Show bulk action controls (apply/remove tag, export CSV) */
 		showBulkActions?: boolean;
 		/** Initial filter to load */
 		initialFilter?: SegmentFilter;
+		/** Route-local boundary copy for civic geography labels */
+		civicGeographyBoundary?: string;
 	}
 
 	let {
@@ -38,13 +41,15 @@
 		onApply,
 		showSaveControls = true,
 		showBulkActions = false,
-		initialFilter
+		initialFilter,
+		civicGeographyBoundary = 'Geography filters use imported state and congressional districts, plus districts recorded when people take action.'
 	}: Props = $props();
 
 	// --- State ---
 	let logic = $state<'AND' | 'OR'>(initialFilter?.logic ?? 'AND');
 	let conditions = $state<SegmentCondition[]>(initialFilter?.conditions ?? []);
 	let matchCount = $state<number | null>(null);
+	let matchCountPartial = $state(false);
 	let countLoading = $state(false);
 	let countTimeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -58,6 +63,22 @@
 
 	// --- Derived ---
 	const currentFilter = $derived<SegmentFilter>({ logic, conditions });
+	const importedReadableGeographyConditionCount = $derived(
+		conditions.filter((condition) =>
+			['stateCode', 'congressionalDistrict'].includes(condition.field)
+		).length
+	);
+	const actionReadableGeographyConditionCount = $derived(
+		conditions.filter((condition) => condition.field === 'actionDistrictLabel').length
+	);
+	const actionDistrictHashConditionCount = $derived(
+		conditions.filter((condition) => condition.field === 'actionDistrict').length
+	);
+	const civicGeographyConditionCount = $derived(
+		importedReadableGeographyConditionCount +
+			actionReadableGeographyConditionCount +
+			actionDistrictHashConditionCount
+	);
 
 	// --- Effects ---
 
@@ -115,6 +136,7 @@
 	async function fetchCount() {
 		if (conditions.length === 0) {
 			matchCount = null;
+			matchCountPartial = false;
 			return;
 		}
 		countLoading = true;
@@ -127,6 +149,7 @@
 			if (res.ok) {
 				const data = await res.json();
 				matchCount = data.count;
+				matchCountPartial = Boolean(data.partial);
 			}
 		} catch {
 			// Silently fail count
@@ -181,9 +204,7 @@
 			if (res.ok) {
 				const data = await res.json();
 				if (editingSegmentId) {
-					savedSegments = savedSegments.map((s) =>
-						s.id === editingSegmentId ? data.segment : s
-					);
+					savedSegments = savedSegments.map((s) => (s.id === editingSegmentId ? data.segment : s));
 				} else {
 					savedSegments = [data.segment, ...savedSegments];
 					editingSegmentId = data.segment.id;
@@ -215,10 +236,11 @@
 		editingSegmentId = null;
 		segmentName = '';
 		matchCount = null;
+		matchCountPartial = false;
 	}
 
 	function handleApply() {
-		onApply?.(currentFilter, matchCount ?? 0);
+		onApply?.(currentFilter, matchCount ?? 0, matchCountPartial);
 	}
 
 	// --- Value renderers for each field type ---
@@ -229,7 +251,11 @@
 	// --- Bulk actions ---
 	let bulkActionLoading = $state(false);
 	let bulkTagId = $state('');
-	let bulkConfirm = $state<{ action: 'apply_tag' | 'remove_tag'; tagId: string; tagName: string } | null>(null);
+	let bulkConfirm = $state<{
+		action: 'apply_tag' | 'remove_tag';
+		tagId: string;
+		tagName: string;
+	} | null>(null);
 	let bulkResult = $state<{ message: string; type: 'success' | 'error' } | null>(null);
 
 	const bulkDisabled = $derived(matchCount === null || matchCount === 0 || countLoading);
@@ -258,7 +284,10 @@
 			if (res.ok) {
 				const data = await res.json();
 				const verb = bulkConfirm.action === 'apply_tag' ? 'Applied tag to' : 'Removed tag from';
-				bulkResult = { message: `${verb} ${data.affected} supporter${data.affected === 1 ? '' : 's'}`, type: 'success' };
+				bulkResult = {
+					message: `${verb} ${data.partial ? 'at least ' : ''}${data.affected} supporter${data.affected === 1 ? '' : 's'}${data.partial ? '; action hit the page cap and can be rerun for the remaining matching rows' : ''}`,
+					type: 'success'
+				};
 			} else {
 				const data = await res.json().catch(() => ({ message: 'Request failed' }));
 				bulkResult = { message: data.message ?? 'Request failed', type: 'error' };
@@ -309,7 +338,7 @@
 			{#if conditions.length > 0}
 				<button
 					type="button"
-					class="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+					class="text-xs text-zinc-500 transition-colors hover:text-zinc-300"
 					onclick={clearAll}
 				>
 					Clear all
@@ -318,7 +347,7 @@
 			{#if showSaveControls}
 				<button
 					type="button"
-					class="text-xs text-teal-400 hover:text-teal-300 transition-colors"
+					class="text-xs text-teal-400 transition-colors hover:text-teal-300"
 					onclick={loadSegments}
 				>
 					{showSavedList ? 'Hide saved' : 'Saved segments'}
@@ -327,28 +356,82 @@
 		</div>
 	</div>
 
+	<div
+		class="border-surface-border bg-surface-overlay grid gap-3 rounded-md border px-3 py-3 md:grid-cols-[minmax(0,1fr)_auto]"
+		aria-label="Segment civic geography boundary"
+	>
+		<div class="min-w-0 space-y-1">
+			<p class="text-text-secondary text-xs font-medium">Geography coverage</p>
+			<p class="text-text-quaternary text-xs leading-relaxed">
+				{civicGeographyBoundary}
+			</p>
+		</div>
+		<div class="grid min-w-0 grid-cols-3 gap-2 md:min-w-72">
+			<div class="bg-surface-base flex min-w-0 flex-col gap-1 rounded px-2 py-2">
+				<span class="text-text-primary text-sm leading-none">
+					<Datum
+						value={importedReadableGeographyConditionCount}
+						cite="SegmentBuilder currentFilter"
+					/>
+				</span>
+				<span class="text-text-quaternary truncate text-[0.65rem] uppercase">imported labels</span>
+			</div>
+			<div class="bg-surface-base flex min-w-0 flex-col gap-1 rounded px-2 py-2">
+				<span class="text-text-primary text-sm leading-none">
+					<Datum
+						value={actionReadableGeographyConditionCount}
+						cite="SegmentBuilder currentFilter"
+					/>
+				</span>
+				<span class="text-text-quaternary truncate text-[0.65rem] uppercase">action labels</span>
+			</div>
+			<div class="bg-surface-base flex min-w-0 flex-col gap-1 rounded px-2 py-2">
+				<span class="text-text-primary text-sm leading-none">
+					<Datum value={actionDistrictHashConditionCount} cite="SegmentBuilder currentFilter" />
+				</span>
+				<span class="text-text-quaternary truncate text-[0.65rem] uppercase">hash evidence</span>
+			</div>
+		</div>
+		{#if civicGeographyConditionCount > 0}
+			<p class="text-text-tertiary text-xs leading-relaxed md:col-span-2">
+				Action-district hashes remain evidence filters; imported and action-time labels do not prove
+				materialized local or special-district membership.
+			</p>
+		{/if}
+	</div>
+
 	<!-- Saved segments list -->
 	{#if showSavedList}
-		<div class="rounded-lg border border-zinc-800/60 bg-zinc-900/50 p-3 space-y-2">
+		<div class="space-y-2 rounded-lg border border-zinc-800/60 bg-zinc-900/50 p-3">
 			{#if savedSegments.length === 0}
-				<p class="text-xs text-zinc-500 text-center py-2">No saved segments yet</p>
+				<p class="py-2 text-center text-xs text-zinc-500">No saved segments yet</p>
 			{:else}
 				{#each savedSegments as segment (segment.id)}
 					<div class="flex items-center justify-between gap-2 rounded-md bg-zinc-800/50 px-3 py-2">
 						<button
 							type="button"
-							class="flex-1 text-left text-sm text-zinc-200 hover:text-teal-400 transition-colors truncate"
+							class="flex-1 truncate text-left text-sm text-zinc-200 transition-colors hover:text-teal-400"
 							onclick={() => loadSegment(segment)}
 						>
 							{segment.name}
 						</button>
 						<button
 							type="button"
-							class="text-xs text-zinc-600 hover:text-red-400 transition-colors flex-shrink-0"
+							class="flex-shrink-0 text-xs text-zinc-600 transition-colors hover:text-red-400"
 							onclick={() => deleteSegment(segment.id)}
 						>
-							<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+							<svg
+								class="h-3.5 w-3.5"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								stroke-width="2"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+								/>
 							</svg>
 						</button>
 					</div>
@@ -364,7 +447,7 @@
 			<div class="flex items-center gap-0.5 rounded-lg border border-zinc-800/60 p-0.5">
 				<button
 					type="button"
-					class="px-3 py-1 text-xs rounded-md transition-colors {logic === 'AND'
+					class="rounded-md px-3 py-1 text-xs transition-colors {logic === 'AND'
 						? 'bg-zinc-700 text-zinc-100'
 						: 'text-zinc-500 hover:text-zinc-300'}"
 					onclick={() => (logic = 'AND')}
@@ -373,7 +456,7 @@
 				</button>
 				<button
 					type="button"
-					class="px-3 py-1 text-xs rounded-md transition-colors {logic === 'OR'
+					class="rounded-md px-3 py-1 text-xs transition-colors {logic === 'OR'
 						? 'bg-zinc-700 text-zinc-100'
 						: 'text-zinc-500 hover:text-zinc-300'}"
 					onclick={() => (logic = 'OR')}
@@ -394,9 +477,9 @@
 					<!-- Condition number + logic label -->
 					<div class="flex-shrink-0 pt-1.5">
 						{#if i === 0}
-							<span class="text-xs font-mono text-zinc-600">WHERE</span>
+							<span class="font-mono text-xs text-zinc-600">WHERE</span>
 						{:else}
-							<span class="text-xs font-mono text-zinc-600">{logic}</span>
+							<span class="font-mono text-xs text-zinc-600">{logic}</span>
 						{/if}
 					</div>
 
@@ -405,9 +488,13 @@
 						<div class="flex flex-wrap items-center gap-2">
 							<!-- Field selector -->
 							<select
-								class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+								class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 								value={condition.field}
-								onchange={(e) => changeField(condition.id, (e.target as HTMLSelectElement).value as ConditionField)}
+								onchange={(e) =>
+									changeField(
+										condition.id,
+										(e.target as HTMLSelectElement).value as ConditionField
+									)}
 							>
 								{#each FIELD_OPTIONS as opt}
 									<option value={opt.value}>{opt.label}</option>
@@ -416,9 +503,12 @@
 
 							<!-- Operator selector -->
 							<select
-								class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+								class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 								value={condition.operator}
-								onchange={(e) => updateCondition(condition.id, { operator: (e.target as HTMLSelectElement).value as ConditionOperator })}
+								onchange={(e) =>
+									updateCondition(condition.id, {
+										operator: (e.target as HTMLSelectElement).value as ConditionOperator
+									})}
 							>
 								{#each getOperatorsForField(condition.field) as op}
 									<option value={op.value}>{op.label}</option>
@@ -435,12 +525,13 @@
 								{:else}
 									<div class="flex flex-wrap gap-1.5">
 										{#each tags as tag (tag.id)}
-											{@const selected = Array.isArray(condition.value) && condition.value.includes(tag.id)}
+											{@const selected =
+												Array.isArray(condition.value) && condition.value.includes(tag.id)}
 											<button
 												type="button"
 												class="rounded-md border px-2 py-1 text-xs transition-colors {selected
-													? 'bg-teal-500/20 text-teal-400 border-teal-500/30'
-													: 'bg-zinc-800/50 text-zinc-400 border-zinc-700 hover:border-zinc-600'}"
+													? 'border-teal-500/30 bg-teal-500/20 text-teal-400'
+													: 'border-zinc-700 bg-zinc-800/50 text-zinc-400 hover:border-zinc-600'}"
 												onclick={() => {
 													const current = Array.isArray(condition.value) ? condition.value : [];
 													const next = selected
@@ -454,91 +545,106 @@
 										{/each}
 									</div>
 								{/if}
-
 							{:else if condition.field === 'verification'}
 								<select
-									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 									value={String(condition.value)}
-									onchange={(e) => updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
+									onchange={(e) =>
+										updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
 								>
 									<option value="">Select...</option>
 									{#each VERIFICATION_OPTIONS as opt}
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
-
 							{:else if condition.field === 'engagementTier'}
 								<select
-									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 									value={String(condition.value)}
-									onchange={(e) => updateCondition(condition.id, { value: Number((e.target as HTMLSelectElement).value) })}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: Number((e.target as HTMLSelectElement).value)
+										})}
 								>
 									{#each TIER_OPTIONS as opt}
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
-
 							{:else if condition.field === 'source'}
 								<select
-									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 									value={String(condition.value)}
-									onchange={(e) => updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
+									onchange={(e) =>
+										updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
 								>
 									<option value="">Select...</option>
 									{#each SOURCE_OPTIONS as opt}
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
-
 							{:else if condition.field === 'emailStatus'}
 								<select
-									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 									value={String(condition.value)}
-									onchange={(e) => updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
+									onchange={(e) =>
+										updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
 								>
 									<option value="">Select...</option>
 									{#each EMAIL_STATUS_OPTIONS as opt}
 										<option value={opt.value}>{opt.label}</option>
 									{/each}
 								</select>
-
 							{:else if condition.field === 'dateRange'}
-								{@const rangeVal = (typeof condition.value === 'object' && condition.value !== null && !Array.isArray(condition.value))
-									? condition.value as { from?: string; to?: string }
-									: { from: '', to: '' }}
+								{@const rangeVal =
+									typeof condition.value === 'object' &&
+									condition.value !== null &&
+									!Array.isArray(condition.value)
+										? (condition.value as { from?: string; to?: string })
+										: { from: '', to: '' }}
 								<div class="flex items-center gap-2">
 									{#if condition.operator === 'between'}
 										<input
 											type="date"
-											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 											value={rangeVal.from ?? ''}
-											onchange={(e) => updateCondition(condition.id, { value: { ...rangeVal, from: (e.target as HTMLInputElement).value } })}
+											onchange={(e) =>
+												updateCondition(condition.id, {
+													value: { ...rangeVal, from: (e.target as HTMLInputElement).value }
+												})}
 										/>
 										<span class="text-xs text-zinc-500">to</span>
 										<input
 											type="date"
-											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 											value={rangeVal.to ?? ''}
-											onchange={(e) => updateCondition(condition.id, { value: { ...rangeVal, to: (e.target as HTMLInputElement).value } })}
+											onchange={(e) =>
+												updateCondition(condition.id, {
+													value: { ...rangeVal, to: (e.target as HTMLInputElement).value }
+												})}
 										/>
 									{:else}
 										<input
 											type="date"
-											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+											class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 											value={String(condition.value || '')}
-											onchange={(e) => updateCondition(condition.id, { value: (e.target as HTMLInputElement).value })}
+											onchange={(e) =>
+												updateCondition(condition.id, {
+													value: (e.target as HTMLInputElement).value
+												})}
 										/>
 									{/if}
 								</div>
-
 							{:else if condition.field === 'campaignParticipation'}
 								{#if campaigns.length === 0}
 									<p class="text-xs text-zinc-600 italic">No campaigns available</p>
 								{:else}
 									<select
-										class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+										class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 										value={String(condition.value)}
-										onchange={(e) => updateCondition(condition.id, { value: (e.target as HTMLSelectElement).value })}
+										onchange={(e) =>
+											updateCondition(condition.id, {
+												value: (e.target as HTMLSelectElement).value
+											})}
 									>
 										<option value="">Select campaign...</option>
 										{#each campaigns as campaign}
@@ -546,6 +652,82 @@
 										{/each}
 									</select>
 								{/if}
+							{:else if condition.field === 'actionDistrict'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder="district hash"
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value.trim().toLowerCase()
+										})}
+								/>
+							{:else if condition.field === 'actionDistrictLabel'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 uppercase placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder="CA-11"
+									maxlength="32"
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value
+												.trim()
+												.replace(/\s+/g, ' ')
+												.toUpperCase()
+										})}
+								/>
+							{:else if condition.field === 'postalCode'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder={condition.operator === 'startsWith' ? '941' : '94110'}
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value.trim().toUpperCase()
+										})}
+								/>
+							{:else if condition.field === 'stateCode'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 uppercase placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder="CA"
+									maxlength="8"
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value.trim().toUpperCase()
+										})}
+								/>
+							{:else if condition.field === 'congressionalDistrict'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 uppercase placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder="CA-11"
+									maxlength="32"
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value
+												.trim()
+												.replace(/\s+/g, ' ')
+												.toUpperCase()
+										})}
+								/>
+							{:else if condition.field === 'country'}
+								<input
+									type="text"
+									class="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 font-mono text-xs text-zinc-200 uppercase placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+									placeholder="US"
+									maxlength="2"
+									value={String(condition.value || '')}
+									onchange={(e) =>
+										updateCondition(condition.id, {
+											value: (e.target as HTMLInputElement).value.trim().toUpperCase()
+										})}
+								/>
 							{/if}
 						</div>
 					</div>
@@ -553,11 +735,17 @@
 					<!-- Remove button -->
 					<button
 						type="button"
-						class="flex-shrink-0 rounded p-1 text-zinc-600 hover:text-red-400 hover:bg-zinc-800 transition-colors"
+						class="flex-shrink-0 rounded p-1 text-zinc-600 transition-colors hover:bg-zinc-800 hover:text-red-400"
 						onclick={() => removeCondition(condition.id)}
 						aria-label="Remove condition"
 					>
-						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<svg
+							class="h-4 w-4"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+						>
 							<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
 						</svg>
 					</button>
@@ -569,10 +757,10 @@
 	<!-- Add condition button -->
 	<button
 		type="button"
-		class="flex items-center gap-1.5 rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-300 transition-colors w-full justify-center"
+		class="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-xs text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-300"
 		onclick={addCondition}
 	>
-		<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+		<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 			<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 		</svg>
 		Add condition
@@ -583,15 +771,27 @@
 		<div class="rounded-lg bg-zinc-800/50 px-4 py-3 text-center">
 			{#if countLoading}
 				<div class="flex items-center justify-center gap-2">
-					<svg class="w-4 h-4 animate-spin text-zinc-500" fill="none" viewBox="0 0 24 24">
-						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+					<svg class="h-4 w-4 animate-spin text-zinc-500" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"
+						></circle>
+						<path
+							class="opacity-75"
+							fill="currentColor"
+							d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+						></path>
 					</svg>
 					<span class="text-sm text-zinc-500">Counting...</span>
 				</div>
 			{:else if matchCount !== null}
-				<p class="text-2xl font-mono tabular-nums text-zinc-100">{matchCount.toLocaleString()}</p>
-				<p class="text-xs text-zinc-500 mt-0.5">supporter{matchCount === 1 ? '' : 's'} match</p>
+				<p class="font-mono text-2xl text-zinc-100 tabular-nums">
+					{matchCountPartial ? '\u2265 ' : ''}{matchCount.toLocaleString()}
+				</p>
+				<p class="mt-0.5 text-xs text-zinc-500">supporter{matchCount === 1 ? '' : 's'} match</p>
+				{#if matchCountPartial}
+					<p class="mt-1 text-xs text-amber-300">
+						Count hit the page cap; this is a lower bound, not a full cohort total.
+					</p>
+				{/if}
 			{/if}
 		</div>
 	{/if}
@@ -603,12 +803,12 @@
 				type="text"
 				placeholder="Segment name..."
 				bind:value={segmentName}
-				class="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+				class="flex-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder-zinc-600 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 				maxlength={100}
 			/>
 			<button
 				type="button"
-				class="rounded-lg bg-zinc-800 border border-zinc-700 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-700 transition-colors disabled:opacity-50"
+				class="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-700 disabled:opacity-50"
 				disabled={!segmentName.trim() || saveLoading}
 				onclick={saveSegment}
 			>
@@ -619,14 +819,14 @@
 
 	<!-- Bulk actions -->
 	{#if showBulkActions && conditions.length > 0}
-		<div class="rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-3 space-y-3">
+		<div class="space-y-3 rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-3">
 			<h4 class="text-xs font-medium text-zinc-400">Bulk Actions</h4>
 
 			<!-- Tag selector for apply/remove -->
 			{#if tags.length > 0}
 				<div class="flex items-center gap-2">
 					<select
-						class="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
+						class="flex-1 rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-200 focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 						bind:value={bulkTagId}
 					>
 						<option value="">Select tag...</option>
@@ -636,7 +836,7 @@
 					</select>
 					<button
 						type="button"
-						class="rounded-md bg-teal-600/20 border border-teal-500/30 px-3 py-1.5 text-xs text-teal-400 hover:bg-teal-600/30 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						class="rounded-md border border-teal-500/30 bg-teal-600/20 px-3 py-1.5 text-xs text-teal-400 transition-colors hover:bg-teal-600/30 disabled:cursor-not-allowed disabled:opacity-40"
 						disabled={bulkDisabled || !bulkTagId || bulkActionLoading}
 						onclick={() => promptBulkTag('apply_tag')}
 					>
@@ -644,7 +844,7 @@
 					</button>
 					<button
 						type="button"
-						class="rounded-md bg-red-600/10 border border-red-500/20 px-3 py-1.5 text-xs text-red-400 hover:bg-red-600/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+						class="rounded-md border border-red-500/20 bg-red-600/10 px-3 py-1.5 text-xs text-red-400 transition-colors hover:bg-red-600/20 disabled:cursor-not-allowed disabled:opacity-40"
 						disabled={bulkDisabled || !bulkTagId || bulkActionLoading}
 						onclick={() => promptBulkTag('remove_tag')}
 					>
@@ -656,12 +856,22 @@
 			<!-- Export CSV -->
 			<button
 				type="button"
-				class="flex items-center gap-1.5 rounded-md bg-zinc-800 border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+				class="flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-800 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
 				disabled={bulkDisabled || bulkActionLoading}
 				onclick={exportCsv}
 			>
-				<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+				<svg
+					class="h-3.5 w-3.5"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"
+					/>
 				</svg>
 				Export CSV
 			</button>
@@ -670,12 +880,25 @@
 			{#if bulkConfirm}
 				<div class="rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
 					<p class="text-xs text-amber-200">
-						{bulkConfirm.action === 'apply_tag' ? 'Apply' : 'Remove'} tag "{bulkConfirm.tagName}" {bulkConfirm.action === 'apply_tag' ? 'to' : 'from'} {matchCount?.toLocaleString()} supporter{matchCount === 1 ? '' : 's'}?
+						{bulkConfirm.action === 'apply_tag' ? 'Apply' : 'Remove'} tag "{bulkConfirm.tagName}" {bulkConfirm.action ===
+						'apply_tag'
+							? 'to'
+							: 'from'}
+						{matchCountPartial ? 'at least ' : ''}{matchCount?.toLocaleString()} supporter{matchCount ===
+						1
+							? ''
+							: 's'}?
 					</p>
-					<div class="flex items-center gap-2 mt-2">
+					{#if matchCountPartial}
+						<p class="mt-1 text-xs text-amber-300">
+							This action may stop at the page cap; rerun it to continue through the remaining
+							matching rows.
+						</p>
+					{/if}
+					<div class="mt-2 flex items-center gap-2">
 						<button
 							type="button"
-							class="rounded-md bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-500 transition-colors disabled:opacity-50"
+							class="rounded-md bg-amber-600 px-3 py-1 text-xs text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
 							disabled={bulkActionLoading}
 							onclick={executeBulkTag}
 						>
@@ -683,7 +906,7 @@
 						</button>
 						<button
 							type="button"
-							class="rounded-md px-3 py-1 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+							class="rounded-md px-3 py-1 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
 							onclick={() => (bulkConfirm = null)}
 						>
 							Cancel
@@ -705,10 +928,13 @@
 	{#if onApply && conditions.length > 0 && matchCount !== null && matchCount > 0}
 		<button
 			type="button"
-			class="w-full rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
+			class="w-full rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-500"
 			onclick={handleApply}
 		>
-			Apply segment ({matchCount.toLocaleString()} supporter{matchCount === 1 ? '' : 's'})
+			Apply segment ({matchCountPartial ? 'at least ' : ''}{matchCount.toLocaleString()} supporter{matchCount ===
+			1
+				? ''
+				: 's'})
 		</button>
 	{/if}
 </div>

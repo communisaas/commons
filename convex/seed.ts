@@ -33,6 +33,10 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
+import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
+import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
+import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -429,8 +433,8 @@ export const insertUsers = internalMutation({
 // =============================================================================
 // Verified users (trustTier ≥ 2) need a backing districtCredential row so
 // any join from users → credential renders honest trust-context. Without
-// this, isVerified=true users have nothing behind the claim — the H-phase
-// tier-display SSOT helper (H6) would see undefined trust-context fields
+// this, isVerified=true users have nothing behind the claim — the
+// tier-display SSOT helper would see undefined trust-context fields
 // and render "unknown" badges for every verified seed user.
 //
 // Trust-context fields (trustTier, cellStraddles, cellAnchorMode,
@@ -629,8 +633,6 @@ export const insertOrgs = internalMutation({
 export const configureOrgEncryption = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { sealOrgKey } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey, importOrgKey } = await import("./_orgKey");
 
     for (const orgId of orgIds) {
       // Generate random 32-byte org key
@@ -1013,9 +1015,6 @@ export const insertSupporters = internalAction({
     orgIds: v.array(v.id("organizations")),
   },
   handler: async (ctx, { orgIds }): Promise<Id<"supporters">[]> => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash, computeGlobalEmailHash } = await import("./_orgHash");
 
     const ids: Id<"supporters">[] = [];
     const distribution = [8, 7, 5];
@@ -1116,6 +1115,10 @@ export const insertSupporterBatch = internalMutation({
   },
   handler: async (ctx, { supporters, orgId, orgIdx }): Promise<Id<"supporters">[]> => {
     const ids: Id<"supporters">[] = [];
+    // Fold each seeded row into the org's breakdown counters as we go so the
+    // dev fixture's supporterStats matches the inserted rows (same source of
+    // truth getSummaryStats reads).
+    let stats = emptySupporterStats();
     for (const s of supporters) {
       // Use the validated `orgId` arg for every insert and ignore
       // `s.orgId` entirely. The supporters payload is untyped
@@ -1138,10 +1141,18 @@ export const insertSupporterBatch = internalMutation({
         updatedAt: s.updatedAt,
       });
       ids.push(id);
+      stats = computeSupporterStats(stats, null, {
+        emailStatus: s.emailStatus,
+        smsStatus: s.smsStatus,
+        source: s.source,
+        postalCode: s.postalCode,
+        verified: s.verified,
+      });
     }
 
     await ctx.db.patch(orgId, {
       supporterCount: supporters.length,
+      supporterStats: stats,
       onboardingState: {
         hasDescription: true,
         hasIssueDomains: false,
@@ -2002,6 +2013,11 @@ export const insertCampaignActions = internalMutation({
       { campaignIdx: 2, orgIdx: 2, supporterStart: 15, supporterCount: 4 },
     ];
 
+    // Accumulate the org-level engagement-tier histogram so dev dashboards
+    // (getDashboardStats reads org.actionTierCounts) match the seeded actions.
+    // Keyed by org index; each is a 5-slot [T0..T4] tally over ALL actions.
+    const orgTierCounts = new Map<number, number[]>();
+
     for (const lc of letterCampaigns) {
       let actionCountTotal = 0;
       let verifiedCountTotal = 0;
@@ -2009,19 +2025,23 @@ export const insertCampaignActions = internalMutation({
       for (let i = 0; i < lc.supporterCount; i++) {
         const sIdx = (lc.supporterStart + i) % supporterIds.length;
         const isVerified = i % 4 !== 3; // 75% verified
+        const tier = isVerified ? 2 : 1;
 
         const actionId = await ctx.db.insert("campaignActions", {
           campaignId: campaignIds[lc.campaignIdx],
           orgId: orgIds[lc.orgIdx],
           supporterId: supporterIds[sIdx],
           verified: isVerified,
-          engagementTier: isVerified ? 2 : 1,
+          engagementTier: tier,
           districtHash: `district-hash-${sIdx}`,
           delegated: false,
           sentAt: daysAgo(i + 1),
         });
         actionCountTotal++;
         if (isVerified) verifiedCountTotal++;
+        const counts = orgTierCounts.get(lc.orgIdx) ?? [0, 0, 0, 0, 0];
+        counts[tier] += 1;
+        orgTierCounts.set(lc.orgIdx, counts);
 
         // Create 1-2 deliveries per action
         const repCount = i % 3 === 0 ? 2 : 1;
@@ -2048,6 +2068,11 @@ export const insertCampaignActions = internalMutation({
         actionCount: actionCountTotal,
         verifiedActionCount: verifiedCountTotal,
       });
+    }
+
+    // Persist the org-level tier histograms accumulated above.
+    for (const [orgIdx, counts] of orgTierCounts) {
+      await ctx.db.patch(orgIds[orgIdx], { actionTierCounts: counts });
     }
   },
 });
@@ -2242,23 +2267,29 @@ export const insertDebates = internalMutation({
 // PHASE 16: GRANT DEV ACCOUNT ACCESS
 // =============================================================================
 
+const DEV_ACCOUNT_EMAIL = "mock7ee@gmail.com";
+
 export const grantDevAccount = internalMutation({
   args: {
     orgIds: v.array(v.id("organizations")),
+    // Optional override so a dev signing in with a different Google account
+    // can grant themselves owner. Defaults to DEV_ACCOUNT_EMAIL.
+    email: v.optional(v.string()),
   },
-  handler: async (ctx, { orgIds }) => {
+  handler: async (ctx, { orgIds, email }) => {
+    const devEmail = email ?? DEV_ACCOUNT_EMAIL;
     // Check if dev account exists
     const devUser = await ctx.db
       .query("users")
-      .withIndex("by_email", (q) => q.eq("email", "mock7ee@gmail.com"))
+      .withIndex("by_email", (q) => q.eq("email", devEmail))
       .first();
 
     if (!devUser) {
-      console.log("[seed] Dev account mock7ee@gmail.com not found — skipping dev grants.");
+      console.log(`[seed] Dev account ${devEmail} not found — skipping dev grants.`);
       return;
     }
 
-    console.log("[seed] Found dev account — granting owner on all seeded orgs.");
+    console.log(`[seed] Found dev account ${devEmail} — granting owner on ${orgIds.length} seeded org(s).`);
     const now = Date.now();
 
     for (const orgId of orgIds) {
@@ -2279,6 +2310,31 @@ export const grantDevAccount = internalMutation({
         await ctx.db.patch(existing._id, { role: "owner" });
       }
     }
+  },
+});
+
+// =============================================================================
+// STANDALONE DEV GRANT
+// =============================================================================
+// Resolves org IDs itself, so it works any time — independent of seedAll's
+// idempotency guard. Use when the dev Google account was created AFTER the
+// initial seed (the common case): the Phase-16 grant inside seedAll skipped
+// because the account didn't exist yet, and re-running `npm run seed` no-ops
+// on an already-seeded DB, so the grant never lands.
+//   npx convex run seed:grantDev
+//   npx convex run seed:grantDev '{"email":"you@example.com"}'
+// (prefix with the IPv4-first NODE_OPTIONS on this dev machine — see CLAUDE memory)
+export const grantDev = internalAction({
+  args: {
+    email: v.optional(v.string()),
+  },
+  handler: async (ctx, { email }) => {
+    const orgIds = await ctx.runQuery(internal.seed.getSeedOrgIds);
+    if (orgIds.length === 0) {
+      console.log("[seed] No organizations found — nothing to grant. Run `npm run seed` first.");
+      return;
+    }
+    await ctx.runMutation(internal.seed.grantDevAccount, { orgIds, email });
   },
 });
 
@@ -2419,11 +2475,11 @@ export const insertUserDmRelations = internalMutation({
 // =============================================================================
 // PHASE 19: INSERT SUBSCRIPTIONS
 // =============================================================================
-// Seed orgs default to free tier unless a subscription row exists. Without
-// realistic plan assignments, `subscriptions.checkPlanLimits` returns the
-// free-tier ceiling for every seeded org — Climate Action Now (8
-// supporters, $1.25K raised, sent blast) looking free-tier is incoherent
-// with the rest of its activity. Plans canonical at
+// There is no free org tier. An org with no subscription row falls to the
+// gated `inactive` floor (2 templates, zero delivery). Every seeded dev/demo
+// org therefore gets an explicit active subscription so none lands on the
+// floor — Climate Action Now (8 supporters, $1.25K raised, sent blast) looking
+// gated would be incoherent with the rest of its activity. Plans canonical at
 // src/lib/server/billing/plans.ts.
 
 export const insertSubscriptions = internalMutation({
@@ -2433,12 +2489,13 @@ export const insertSubscriptions = internalMutation({
   handler: async (ctx, { orgIds }) => {
     const now = Date.now();
     // Realistic posture: a heavy-activity org pays Organization tier; a
-    // mid-activity org pays Starter; a low-activity org stays on free
-    // (no subscription row needed). priceCents mirror plans.ts exactly.
+    // mid-activity org pays Starter; the third demos the top Coalition tier.
+    // Every seeded org gets a row — none falls to the gated inactive floor.
+    // priceCents mirror plans.ts exactly.
     const subscriptionDefs = [
       { orgIdx: 0, plan: "organization", priceCents: 7_500 }, // Climate Action Now
       { orgIdx: 1, plan: "starter", priceCents: 1_000 },      // Voter Rights Coalition
-      // Local First SF (orgIds[2]) intentionally omitted — defaults to free tier.
+      { orgIdx: 2, plan: "coalition", priceCents: 20_000 },   // Local First SF (top tier demo)
     ];
 
     // 30-day billing cycle anchored so the seed represents an active
@@ -2447,7 +2504,7 @@ export const insertSubscriptions = internalMutation({
     for (const s of subscriptionDefs) {
       await ctx.db.insert("subscriptions", {
         orgId: orgIds[s.orgIdx],
-        plan: s.plan as "free" | "starter" | "organization" | "coalition",
+        plan: s.plan as "inactive" | "starter" | "organization" | "coalition",
         priceCents: s.priceCents,
         status: "active",
         currentPeriodStart: now - halfMonth,
@@ -2481,6 +2538,7 @@ export const insertSubscriptions = internalMutation({
 const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }> = {
   starter: { maxSeats: 5, maxTemplatesMonth: 100 },
   organization: { maxSeats: 10, maxTemplatesMonth: 500 },
+  coalition: { maxSeats: 25, maxTemplatesMonth: 1_000 },
 };
 
 // =============================================================================
@@ -2490,9 +2548,6 @@ const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }
 export const encryptSeedPii = internalAction({
   args: { orgIds: v.array(v.id("organizations")) },
   handler: async (ctx, { orgIds }) => {
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptWithOrgKey } = await import("./_orgKey");
-    const { computeOrgScopedEmailHash } = await import("./_orgHash");
 
     for (const orgId of orgIds) {
       const orgKey = await getOrgKeyForAction(ctx, orgId);

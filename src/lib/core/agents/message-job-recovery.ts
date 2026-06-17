@@ -8,6 +8,8 @@ export interface ActiveMessageJob {
 	status: 'pending' | 'running' | 'completed' | 'failed' | 'expired';
 	startedAt: number;
 	recoveryKeyRef: string;
+	/** Server-side message-generation trace handle, when the stream has emitted it. */
+	traceId?: string;
 }
 
 export interface EncryptedMessageJobResult {

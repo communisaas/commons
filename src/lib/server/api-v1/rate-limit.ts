@@ -11,7 +11,10 @@ import type { ApiKeyContext } from './auth';
 
 /** Per-plan API rate limits (requests per minute). */
 const API_PLAN_LIMITS: Record<string, { maxRequests: number; windowMs: number }> = {
-	free: { maxRequests: 100, windowMs: 60_000 },
+	// `inactive` is the gated floor for orgs with no active subscription — it
+	// gets the lowest ceiling (an org without a paid plan has no metered send
+	// volume anyway; this only governs read/introspection traffic).
+	inactive: { maxRequests: 100, windowMs: 60_000 },
 	starter: { maxRequests: 300, windowMs: 60_000 },
 	organization: { maxRequests: 1000, windowMs: 60_000 },
 	coalition: { maxRequests: 3000, windowMs: 60_000 }
@@ -22,7 +25,7 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 /**
  * Check plan-tiered rate limit for an API v1 request.
  *
- * Reads on the free plan are intentionally uncapped — aligns the "no rate
+ * Reads on the inactive floor are intentionally uncapped — aligns the "no rate
  * cap" marketing claim with code behavior. Writes (POST/PATCH/PUT/DELETE)
  * remain capped at the plan's request-per-minute limit. Higher plans keep
  * their flat ceilings across all methods. Pass the request method so the
@@ -34,11 +37,11 @@ export async function checkApiPlanRateLimit(
 ): Promise<Response | null> {
 	const method = opts?.method?.toUpperCase();
 	const isRead = method !== undefined && READ_METHODS.has(method);
-	if (ctx.planSlug === 'free' && isRead) {
+	if (ctx.planSlug === 'inactive' && isRead) {
 		return null;
 	}
 
-	const limits = API_PLAN_LIMITS[ctx.planSlug] ?? API_PLAN_LIMITS.free;
+	const limits = API_PLAN_LIMITS[ctx.planSlug] ?? API_PLAN_LIMITS.inactive;
 	const limiter = getRateLimiter();
 	const result = await limiter.check(`ratelimit:api-v1:plan:${ctx.keyId}`, limits);
 

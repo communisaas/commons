@@ -2,6 +2,8 @@
 	import { page } from '$app/stores';
 	import { invalidateAll } from '$app/navigation';
 	import { computeOrgScopedEmailHash } from '$lib/core/crypto/org-scoped-hash';
+	import { FEATURES } from '$lib/config/features';
+	import { Datum } from '$lib/design';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
@@ -9,7 +11,7 @@
 	const isOwner = $derived(data.membership.role === 'owner');
 	const canEdit = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
-	const planName = $derived(data.subscription?.plan ?? 'free');
+	const planName = $derived(data.usage.plan ?? data.subscription?.plan ?? 'inactive');
 
 	// Invite form state
 	let inviteEmail = $state('');
@@ -123,8 +125,11 @@
 	const seatsUsed = $derived(data.members.length + data.invites.length);
 	const maxSeats = $derived(data.org.max_seats);
 	const atSeatLimit = $derived(seatsUsed >= maxSeats);
+	const ownerCount = $derived(data.members.filter((member) => member.role === 'owner').length);
 
-	const isValidEmail = $derived(inviteEmail.trim().length > 0 && inviteEmail.includes('@') && inviteEmail.includes('.'));
+	const isValidEmail = $derived(
+		inviteEmail.trim().length > 0 && inviteEmail.includes('@') && inviteEmail.includes('.')
+	);
 
 	async function sendInvite() {
 		if (!isValidEmail || inviteSending || atSeatLimit) return;
@@ -184,6 +189,130 @@
 	let checkoutLoading = $state('');
 	let portalLoading = $state(false);
 
+	// ── Branding editor (Coalition-tier: logo upload + accent + white-label) ──
+	const isCoalition = $derived(planName === 'coalition');
+	let brandingAccent = $state(data.org.brandingAccent ?? '');
+	let brandingLogoUrl = $state<string | null>(data.org.logoUrl ?? null);
+	let whiteLabel = $state(data.org.whiteLabel ?? false);
+	let brandingSaving = $state(false);
+	let logoUploading = $state(false);
+	let brandingMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	const accentValid = $derived(
+		brandingAccent.trim() === '' || /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(brandingAccent.trim())
+	);
+	const accentPreview = $derived(
+		accentValid && brandingAccent.trim()
+			? brandingAccent.trim().startsWith('#')
+				? brandingAccent.trim()
+				: `#${brandingAccent.trim()}`
+			: '#0d9488'
+	);
+
+	async function uploadLogo(file: File) {
+		if (!isCoalition || logoUploading) return;
+		if (!file.type.startsWith('image/')) {
+			brandingMessage = { type: 'error', text: 'Logo must be an image file.' };
+			return;
+		}
+		// 2 MiB cap — logos are small; this bounds Convex storage + email weight.
+		if (file.size > 2 * 1024 * 1024) {
+			brandingMessage = { type: 'error', text: 'Logo must be 2 MB or smaller.' };
+			return;
+		}
+		logoUploading = true;
+		brandingMessage = null;
+		try {
+			const urlRes = await fetch(`/api/org/${data.org.slug}/branding`, { method: 'POST' });
+			if (!urlRes.ok) {
+				const err = await urlRes.json().catch(() => ({ message: 'Failed to start upload' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to start upload' };
+				return;
+			}
+			const { uploadUrl } = await urlRes.json();
+			const putRes = await fetch(uploadUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': file.type },
+				body: file
+			});
+			if (!putRes.ok) {
+				brandingMessage = { type: 'error', text: 'Logo upload failed. Please try again.' };
+				return;
+			}
+			const { storageId } = await putRes.json();
+			const saveRes = await fetch(`/api/org/${data.org.slug}/branding`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ logoStorageId: storageId })
+			});
+			if (!saveRes.ok) {
+				const err = await saveRes.json().catch(() => ({ message: 'Failed to save logo' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to save logo' };
+				return;
+			}
+			brandingMessage = { type: 'success', text: 'Logo uploaded.' };
+			await invalidateAll();
+			brandingLogoUrl = data.org.logoUrl ?? brandingLogoUrl;
+		} catch {
+			brandingMessage = { type: 'error', text: 'Network error during upload.' };
+		} finally {
+			logoUploading = false;
+		}
+	}
+
+	function onLogoInput(event: Event) {
+		const input = event.target as HTMLInputElement;
+		const file = input.files?.[0];
+		if (file) void uploadLogo(file);
+		input.value = '';
+	}
+
+	async function patchBranding(payload: Record<string, unknown>, okText: string) {
+		brandingSaving = true;
+		brandingMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/branding`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload)
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to save branding' }));
+				brandingMessage = { type: 'error', text: err.message ?? 'Failed to save branding' };
+				return false;
+			}
+			brandingMessage = { type: 'success', text: okText };
+			await invalidateAll();
+			return true;
+		} catch {
+			brandingMessage = { type: 'error', text: 'Network error. Please try again.' };
+			return false;
+		} finally {
+			brandingSaving = false;
+		}
+	}
+
+	async function saveAccent() {
+		if (!isCoalition || brandingSaving || !accentValid) return;
+		await patchBranding({ brandingAccent: brandingAccent.trim() || null }, 'Accent color saved.');
+	}
+
+	async function removeLogo() {
+		if (!isCoalition || brandingSaving) return;
+		const ok = await patchBranding({ logoStorageId: null }, 'Logo removed.');
+		if (ok) brandingLogoUrl = null;
+	}
+
+	async function toggleWhiteLabel() {
+		if (!isCoalition || brandingSaving) return;
+		const next = !whiteLabel;
+		const ok = await patchBranding(
+			{ whiteLabel: next },
+			next ? 'White-label enabled on outbound surfaces.' : 'Commons branding restored.'
+		);
+		if (ok) whiteLabel = next;
+	}
+
 	const actionsPercent = $derived(
 		data.usage.maxVerifiedActions > 0
 			? Math.min(100, (data.usage.verifiedActions / data.usage.maxVerifiedActions) * 100)
@@ -193,6 +322,9 @@
 		data.usage.maxEmails > 0
 			? Math.min(100, (data.usage.emailsSent / data.usage.maxEmails) * 100)
 			: 0
+	);
+	const smsPercent = $derived(
+		data.usage.maxSms > 0 ? Math.min(100, (data.usage.smsSent / data.usage.maxSms) * 100) : 0
 	);
 
 	function statusBadgeClass(status: string): string {
@@ -216,12 +348,48 @@
 		return 'bg-teal-500';
 	}
 
-	const plans = [
-		{ slug: 'free', name: 'Free', price: '$0', features: ['100 verified actions/mo', '1,000 emails/mo', '2 seats'] },
-		{ slug: 'starter', name: 'Starter', price: '$10', features: ['1,000 verified actions/mo', '20,000 emails/mo', '5 seats', 'A/B testing'] },
-		{ slug: 'organization', name: 'Organization', price: '$75', features: ['5,000 verified actions/mo', '100,000 emails/mo', '10 seats', 'Custom domain', 'SQL mirror'] },
-		{ slug: 'coalition', name: 'Coalition', price: '$200', features: ['10,000 verified actions/mo', '250,000 emails/mo', '25 seats', 'White-label', 'Child orgs'] }
-	];
+	function canRemoveMember(member: { role: string }): boolean {
+		if (!isOwner) return false;
+		if (member.role === 'owner' && ownerCount <= 1) return false;
+		return true;
+	}
+
+	function roleOptionDisabled(
+		member: { role: string },
+		role: 'owner' | 'editor' | 'member'
+	): boolean {
+		if (!isOwner) return true;
+		if (member.role === 'owner' && ownerCount <= 1 && role !== 'owner') return true;
+		return false;
+	}
+
+	const plans = $derived(data.planCatalog);
+
+	type PlanFeatureState = 'live' | 'partial' | 'draft-only' | 'gated';
+
+	function featureStateClass(state: PlanFeatureState): string {
+		switch (state) {
+			case 'live':
+				return 'border-teal-500/30 bg-teal-500/10 text-teal-300';
+			case 'partial':
+				return 'border-blue-500/30 bg-blue-500/10 text-blue-300';
+			case 'draft-only':
+			case 'gated':
+				return 'border-surface-border-strong bg-surface-overlay text-text-quaternary';
+		}
+	}
+
+	function featureStateLabel(state: PlanFeatureState): string {
+		switch (state) {
+			case 'live':
+				return 'included';
+			case 'partial':
+				return 'limited';
+			case 'draft-only':
+			case 'gated':
+				return 'coming';
+		}
+	}
 
 	async function startCheckout(plan: string) {
 		checkoutLoading = plan;
@@ -368,13 +536,15 @@
 	}
 
 	async function finalizeRotation() {
-		if (!rotationRecoveryAck || !rotationRecoveryKeyBytes || !cachedOrgKey || rotationLoading) return;
+		if (!rotationRecoveryAck || !rotationRecoveryKeyBytes || !cachedOrgKey || rotationLoading)
+			return;
 		rotationLoading = true;
 		rotationError = '';
 		rotationStep = 'saving';
 
 		try {
-			const { createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { createKeyVerifier, wrapOrgKeyForRecovery } =
+				await import('$lib/core/crypto/org-pii-encryption');
 			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
 			const { useConvexClient } = await import('convex-sveltekit');
 			const { api: convexApi } = await import('$lib/convex');
@@ -434,7 +604,8 @@
 		recoveryError = '';
 
 		try {
-			const { mnemonicToRecoveryKey, unwrapOrgKeyFromRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { mnemonicToRecoveryKey, unwrapOrgKeyFromRecovery } =
+				await import('$lib/core/crypto/org-pii-encryption');
 			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
 
 			const wrappedKey = data.encryption.recoveryWrappedOrgKey;
@@ -474,10 +645,7 @@
 		decryptInviteEmails(invites, orgKey);
 	});
 
-	async function decryptInviteEmails(
-		invites: typeof data.invites,
-		orgKey: CryptoKey | null
-	) {
+	async function decryptInviteEmails(invites: typeof data.invites, orgKey: CryptoKey | null) {
 		const results: Record<string, string> = {};
 		for (const invite of invites) {
 			if (!invite.encryptedEmail) {
@@ -556,10 +724,7 @@
 		}
 	}
 
-	const passphraseValid = $derived(
-		passphrase.length >= 12 &&
-		passphrase === passphraseConfirm
-	);
+	const passphraseValid = $derived(passphrase.length >= 12 && passphrase === passphraseConfirm);
 	const passphraseMismatch = $derived(
 		passphraseConfirm.length > 0 && passphrase !== passphraseConfirm
 	);
@@ -604,7 +769,8 @@
 		setupStep = 'saving';
 
 		try {
-			const { deriveOrgKey, createKeyVerifier, wrapOrgKeyForRecovery } = await import('$lib/core/crypto/org-pii-encryption');
+			const { deriveOrgKey, createKeyVerifier, wrapOrgKeyForRecovery } =
+				await import('$lib/core/crypto/org-pii-encryption');
 			const { cacheOrgKey } = await import('$lib/services/org-key-manager');
 			const { useConvexClient } = await import('convex-sveltekit');
 			const { api: convexApi } = await import('$lib/convex');
@@ -637,7 +803,10 @@
 			} catch (sealErr) {
 				// Server seal is non-fatal during initial setup — can be retried later
 				// when ORG_KEY_WRAPPING_KEY is configured on the server
-				console.warn('[Encryption] Server seal failed (wrapping key may not be configured):', sealErr);
+				console.warn(
+					'[Encryption] Server seal failed (wrapping key may not be configured):',
+					sealErr
+				);
 			}
 
 			// 5. Cache key on this device (uses already-derived key, no re-derivation)
@@ -672,7 +841,7 @@
 		}
 	}
 
-	function startEditDomain(domain: typeof data.issueDomains[0]) {
+	function startEditDomain(domain: (typeof data.issueDomains)[0]) {
 		editingDomainId = domain.id;
 		domainLabel = domain.label;
 		domainDescription = domain.description ?? '';
@@ -709,11 +878,19 @@
 				body: JSON.stringify(body)
 			});
 			if (!res.ok) {
-				const err = await res.json().catch(() => ({ message: `Failed to ${isEdit ? 'update' : 'create'} issue domain` }));
-				domainMessage = { type: 'error', text: err.message ?? `Failed to ${isEdit ? 'update' : 'create'} issue domain` };
+				const err = await res
+					.json()
+					.catch(() => ({ message: `Failed to ${isEdit ? 'update' : 'create'} issue domain` }));
+				domainMessage = {
+					type: 'error',
+					text: err.message ?? `Failed to ${isEdit ? 'update' : 'create'} issue domain`
+				};
 				return;
 			}
-			domainMessage = { type: 'success', text: isEdit ? 'Issue domain updated' : 'Issue domain created' };
+			domainMessage = {
+				type: 'success',
+				text: isEdit ? 'Issue domain updated' : 'Issue domain created'
+			};
 			domainLabel = '';
 			domainDescription = '';
 			domainWeight = 1.0;
@@ -754,63 +931,87 @@
 
 <div class="space-y-8">
 	<!-- Header -->
-	<div>
-		<h1 class="text-xl font-semibold text-text-primary">Settings</h1>
-		<p class="text-sm text-text-tertiary mt-1">Manage your organization's billing and team.</p>
+	<div id="org-authority">
+		<h1 class="text-text-primary text-xl font-semibold">Settings</h1>
+		<p class="text-text-tertiary mt-1 text-sm">
+			Plan and billing, team roles, data custody, and integrations.
+		</p>
 	</div>
 
 	<!-- Billing status banner -->
 	{#if billingSuccess}
-		<div class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">
+		<div
+			class="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300"
+		>
 			Subscription activated successfully. Your plan limits are now in effect.
 		</div>
 	{/if}
 	{#if billingCanceled}
-		<div class="rounded-lg border border-surface-border-strong bg-surface-overlay px-4 py-3 text-sm text-text-tertiary">
+		<div
+			class="border-surface-border-strong bg-surface-overlay text-text-tertiary rounded-lg border px-4 py-3 text-sm"
+		>
 			Checkout was canceled. Your plan has not changed.
 		</div>
 	{/if}
 
-	<!-- Current Plan + Usage -->
-	<section class="rounded-md bg-surface-base border border-surface-border p-6 space-y-5">
+	<!-- Plan limit ground -->
+	<section
+		id="plan-limits"
+		class="bg-surface-base border-surface-border space-y-5 rounded-md border p-6"
+	>
 		<div class="flex items-center justify-between">
 			<div>
-				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Current Plan</h2>
-				<div class="flex items-center gap-3 mt-2">
-					<span class="text-2xl font-semibold text-text-primary capitalize">{planName}</span>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
+					Plan limit ground
+				</h2>
+				<div class="mt-2 flex items-center gap-3">
+					<span class="text-text-primary text-2xl font-semibold capitalize">{planName}</span>
 					{#if data.subscription}
-						<span class="inline-flex items-center px-2 py-0.5 rounded text-xs border {statusBadgeClass(data.subscription.status)}">
+						<span
+							class="inline-flex items-center rounded border px-2 py-0.5 text-xs {statusBadgeClass(
+								data.subscription.status
+							)}"
+						>
 							{data.subscription.status}
 						</span>
 					{/if}
 				</div>
 				{#if data.subscription?.currentPeriodEnd}
-					<p class="text-xs text-text-tertiary mt-1">
-						{data.subscription.status === 'canceled' ? 'Access until' : 'Renews'} {formatDate(data.subscription.currentPeriodEnd)}
+					<p class="text-text-tertiary mt-1 text-xs">
+						{data.subscription.status === 'canceled' ? 'Access until' : 'Renews'}
+						{formatDate(data.subscription.currentPeriodEnd)}
 					</p>
 				{/if}
+				<p class="text-text-quaternary mt-1 text-xs">
+					Usage period starts {formatDate(data.usage.periodStart)}. Limits come from the enforced
+					billing query.
+				</p>
 			</div>
 			{#if isOwner && data.subscription && data.subscription.status !== 'canceled'}
 				<button
 					onclick={openPortal}
 					disabled={portalLoading}
-					class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors disabled:opacity-50"
+					class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors disabled:opacity-50"
 				>
-					{portalLoading ? 'Opening...' : 'Manage Billing'}
+					{portalLoading ? 'Opening...' : 'Open billing portal'}
 				</button>
 			{/if}
 		</div>
 
 		<!-- Usage meters -->
-		<div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+		<div class="grid grid-cols-1 gap-4 pt-2 sm:grid-cols-3">
 			<div class="space-y-2">
 				<div class="flex justify-between text-xs">
 					<span class="text-text-tertiary">Verified Actions</span>
 					<span class="text-text-secondary font-mono tabular-nums">
-						{data.usage.verifiedActions.toLocaleString()} / {data.usage.maxVerifiedActions.toLocaleString()}
+						<Datum
+							value={data.usage.verifiedActions}
+						/> / <Datum
+							value={data.usage.maxVerifiedActions}
+						/>
 					</span>
 				</div>
-				<div class="h-2 rounded-full bg-surface-overlay overflow-hidden">
+				<div class="bg-surface-overlay h-2 overflow-hidden rounded-full">
 					<div
 						class="h-full rounded-full transition-all {usageBarClass(actionsPercent)}"
 						style="width: {actionsPercent}%"
@@ -821,57 +1022,95 @@
 				<div class="flex justify-between text-xs">
 					<span class="text-text-tertiary">Emails Sent</span>
 					<span class="text-text-secondary font-mono tabular-nums">
-						{data.usage.emailsSent.toLocaleString()} / {data.usage.maxEmails.toLocaleString()}
+						<Datum
+							value={data.usage.emailsSent}
+						/> / <Datum
+							value={data.usage.maxEmails}
+						/>
 					</span>
 				</div>
-				<div class="h-2 rounded-full bg-surface-overlay overflow-hidden">
+				<div class="bg-surface-overlay h-2 overflow-hidden rounded-full">
 					<div
 						class="h-full rounded-full transition-all {usageBarClass(emailsPercent)}"
 						style="width: {emailsPercent}%"
 					></div>
 				</div>
 			</div>
+			<div class="space-y-2">
+				<div class="flex justify-between text-xs">
+					<span class="text-text-tertiary">SMS Reserved</span>
+					<span class="text-text-secondary font-mono tabular-nums">
+						<Datum
+							value={data.usage.smsSent}
+						/> / <Datum
+							value={data.usage.maxSms}
+						/>
+					</span>
+				</div>
+				<div class="bg-surface-overlay h-2 overflow-hidden rounded-full">
+					<div
+						class="h-full rounded-full transition-all {usageBarClass(smsPercent)}"
+						style="width: {smsPercent}%"
+					></div>
+				</div>
+				<p class="text-text-quaternary text-[11px]">
+					Your plan reserves this text quota for when bulk texting is fully available.
+				</p>
+			</div>
 		</div>
 	</section>
 
-	<!-- Plan Selection -->
+	<!-- Plans -->
 	{#if isOwner}
-		<section class="space-y-4">
-			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Plans</h2>
-			<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+		<section id="plan-feature-boundary" class="space-y-4">
+			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Plans</h2>
+			<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
+				<p class="text-text-tertiary text-sm">
+					Quotas and seats are enforced today. Features marked "coming" are listed for
+					transparency and aren't available yet.
+				</p>
+			</div>
+			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 				{#each plans as plan}
 					{@const isCurrent = planName === plan.slug}
-					{@const isUpgrade = !isCurrent && plan.slug !== 'free'}
+					{@const isUpgrade = !isCurrent}
 					<div
-						class="rounded-md border p-5 space-y-4 {isCurrent
+						class="space-y-4 rounded-md border p-5 {isCurrent
 							? 'border-teal-500/40 bg-teal-500/5'
 							: 'border-surface-border bg-surface-base'}"
 					>
 						<div>
-							<h3 class="text-base font-semibold text-text-primary">{plan.name}</h3>
-							<p class="text-xl font-bold text-text-primary mt-1">
-								{plan.price}<span class="text-xs font-normal text-text-tertiary">/mo</span>
+							<h3 class="text-text-primary text-base font-semibold">{plan.name}</h3>
+							<p class="text-text-primary mt-1 text-xl font-bold">
+								{plan.price}<span class="text-text-tertiary text-xs font-normal">/mo</span>
 							</p>
 						</div>
 						<ul class="space-y-1.5">
 							{#each plan.features as feature}
-								<li class="text-xs text-text-tertiary flex items-start gap-1.5">
-									<svg class="w-3.5 h-3.5 text-teal-500 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-										<path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
-									</svg>
-									{feature}
+								<li class="text-text-tertiary space-y-1 text-xs">
+									<div class="flex items-start justify-between gap-2">
+										<span>{feature.label}</span>
+										<span
+											class="shrink-0 rounded-md border px-1.5 py-0.5 font-mono text-[10px] uppercase {featureStateClass(
+												feature.state
+											)}"
+										>
+											{featureStateLabel(feature.state)}
+										</span>
+									</div>
+									<p class="text-text-quaternary text-[11px] leading-4">{feature.detail}</p>
 								</li>
 							{/each}
 						</ul>
 						{#if isCurrent}
-							<div class="text-xs text-teal-400 font-medium pt-1">Current plan</div>
+							<div class="pt-1 text-xs font-medium text-teal-400">Current tier</div>
 						{:else if isUpgrade}
 							<button
 								onclick={() => startCheckout(plan.slug)}
 								disabled={!!checkoutLoading}
-								class="w-full px-3 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50"
+								class="w-full rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-50"
 							>
-								{checkoutLoading === plan.slug ? 'Redirecting...' : 'Upgrade'}
+								{checkoutLoading === plan.slug ? 'Opening checkout...' : 'Open checkout'}
 							</button>
 						{/if}
 					</div>
@@ -880,26 +1119,228 @@
 		</section>
 	{/if}
 
-	<!-- Team Members -->
-	<section class="space-y-4">
-		<div class="flex items-center justify-between">
-			<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Team</h2>
-			<span class="text-xs text-text-tertiary font-mono tabular-nums">{seatsUsed} of {maxSeats} seats used</span>
+	<!-- Branding (Coalition-tier) -->
+	{#if canEdit}
+		<section id="branding-ground" class="space-y-4">
+			<div>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Branding</h2>
+				<p class="text-text-tertiary mt-1 text-xs">
+					Put your logo and accent color on the reports, embed widget, and scorecard you send to
+					decision-makers. The public verification page always keeps its Commons attestation — it's
+					the independent proof your supporters and staffers can trust.
+				</p>
+			</div>
+
+			{#if !isCoalition}
+				<div
+					class="border-surface-border bg-surface-base flex items-start justify-between gap-4 rounded-md border px-4 py-3"
+				>
+					<div>
+						<p class="text-text-primary text-sm font-medium">Coalition tier feature</p>
+						<p class="text-text-tertiary mt-1 text-xs leading-5">
+							Custom logo, accent color, and white-label outbound surfaces are part of the Coalition
+							plan. Upgrade to brand your reports and embeds.
+						</p>
+					</div>
+					{#if isOwner}
+						<button
+							onclick={() => startCheckout('coalition')}
+							disabled={!!checkoutLoading}
+							class="shrink-0 rounded-lg bg-teal-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:opacity-50"
+						>
+							{checkoutLoading === 'coalition' ? 'Opening...' : 'Upgrade to Coalition'}
+						</button>
+					{/if}
+				</div>
+			{/if}
+
+			<div
+				class="border-surface-border bg-surface-base space-y-5 rounded-md border p-5"
+				class:opacity-60={!isCoalition}
+			>
+				{#if brandingMessage}
+					<p
+						class="text-xs {brandingMessage.type === 'success'
+							? 'text-teal-400'
+							: 'text-red-400'}"
+						role="status"
+					>
+						{brandingMessage.text}
+					</p>
+				{/if}
+
+				<!-- Logo upload -->
+				<div class="space-y-2">
+					<span class="text-text-secondary text-xs font-medium">Logo</span>
+					<div class="flex items-center gap-4">
+						<div
+							class="border-surface-border bg-surface-overlay flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border"
+						>
+							{#if brandingLogoUrl}
+								<img src={brandingLogoUrl} alt="Org logo" class="h-full w-full object-contain" />
+							{:else}
+								<span class="text-text-quaternary text-[10px] uppercase">None</span>
+							{/if}
+						</div>
+						<div class="flex items-center gap-2">
+							<label
+								class="border-surface-border bg-surface-overlay hover:border-surface-border-strong cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium text-text-secondary transition-colors {!isCoalition ||
+								logoUploading
+									? 'pointer-events-none opacity-50'
+									: ''}"
+							>
+								{logoUploading ? 'Uploading...' : brandingLogoUrl ? 'Replace logo' : 'Upload logo'}
+								<input
+									type="file"
+									accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+									class="hidden"
+									disabled={!isCoalition || logoUploading}
+									onchange={onLogoInput}
+								/>
+							</label>
+							{#if brandingLogoUrl}
+								<button
+									onclick={removeLogo}
+									disabled={!isCoalition || brandingSaving}
+									class="text-text-tertiary hover:text-text-secondary text-xs underline disabled:opacity-50"
+								>
+									Remove
+								</button>
+							{/if}
+						</div>
+					</div>
+					<p class="text-text-quaternary text-[11px]">PNG, JPEG, GIF, or WebP. Up to 2 MB.</p>
+				</div>
+
+				<!-- Accent color -->
+				<div class="space-y-2">
+					<label for="branding-accent" class="text-text-secondary text-xs font-medium"
+						>Accent color</label
+					>
+					<div class="flex items-center gap-3">
+						<span
+							class="border-surface-border h-9 w-9 shrink-0 rounded-md border"
+							style:background-color={accentPreview}
+						></span>
+						<input
+							id="branding-accent"
+							type="text"
+							bind:value={brandingAccent}
+							placeholder="#0d9488"
+							disabled={!isCoalition}
+							class="border-surface-border bg-surface-overlay text-text-primary w-32 rounded-lg border px-3 py-2 font-mono text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
+						/>
+						<button
+							onclick={saveAccent}
+							disabled={!isCoalition || brandingSaving || !accentValid}
+							class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+						>
+							{brandingSaving ? 'Saving...' : 'Save accent'}
+						</button>
+					</div>
+					{#if !accentValid}
+						<p class="text-xs text-red-400">Enter a valid hex color, e.g. #0d9488.</p>
+					{/if}
+				</div>
+
+				<!-- White-label toggle (outbound only) -->
+				<div class="border-surface-border flex items-start justify-between gap-4 border-t pt-4">
+					<div>
+						<p class="text-text-primary text-sm font-medium">White-label outbound surfaces</p>
+						<p class="text-text-tertiary mt-1 text-xs leading-5">
+							Removes the "powered by Commons" footer from the report email, embed widget, and
+							scorecard embed. The public verification page keeps its Commons attestation either
+							way — that's the independent third-party proof.
+						</p>
+					</div>
+					<button
+						onclick={toggleWhiteLabel}
+						disabled={!isCoalition || brandingSaving}
+						role="switch"
+						aria-label="Toggle white-label on outbound surfaces"
+						aria-checked={whiteLabel}
+						class="relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 {whiteLabel
+							? 'bg-teal-600'
+							: 'bg-surface-border-strong'}"
+					>
+						<span
+							class="inline-block h-5 w-5 transform rounded-full bg-white transition-transform {whiteLabel
+								? 'translate-x-5'
+								: 'translate-x-0.5'}"
+						></span>
+					</button>
+				</div>
+			</div>
+		</section>
+	{/if}
+
+	<section id="developer-ground" class="space-y-4">
+		<div>
+			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Developers</h2>
+			<p class="text-text-tertiary mt-1 text-xs">API access and event webhooks.</p>
 		</div>
-		<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
+		<div class="grid gap-3 sm:grid-cols-2">
+			<a
+				href="/api/v1/docs"
+				target="_blank"
+				rel="noopener"
+				class="border-surface-border bg-surface-base hover:border-surface-border-strong rounded-md border p-4 transition-colors"
+			>
+				<p class="text-text-primary text-sm font-medium">API documentation</p>
+				<p class="text-text-tertiary mt-1 text-xs leading-5">
+					OpenAPI reference for the public read API.
+				</p>
+			</a>
+			<a
+				href="/org/{data.org.slug}/settings/webhooks"
+				class="border-surface-border bg-surface-base hover:border-surface-border-strong rounded-md border p-4 transition-colors"
+			>
+				<p class="text-text-primary text-sm font-medium">Signed webhooks</p>
+				<p class="text-text-tertiary mt-1 text-xs leading-5">
+					Subscribe endpoints to org events with HMAC signatures, retries, and secret rotation.
+				</p>
+			</a>
+		</div>
+	</section>
+
+	<!-- Team -->
+	<section id="team-authority" class="space-y-4">
+		<div class="flex items-center justify-between">
+			<div>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Team</h2>
+				<p class="text-text-quaternary mt-1 text-xs">
+					Only owners can change roles or remove members; the last owner can't be removed.
+				</p>
+			</div>
+			<div class="text-right">
+				<span class="text-text-tertiary font-mono text-xs tabular-nums"
+					>{seatsUsed} of {maxSeats} seats used</span
+				>
+				<p class="text-text-quaternary mt-1 font-mono text-[0.65rem] uppercase">
+					<Datum value={ownerCount} /> owner{ownerCount === 1 ? '' : 's'}
+				</p>
+			</div>
+		</div>
+		<div
+			class="border-surface-border bg-surface-base divide-surface-border divide-y rounded-md border"
+		>
 			{#each data.members as member}
 				<div class="flex items-center gap-3 px-5 py-3">
 					{#if member.avatar}
-						<img src={member.avatar} alt="" class="w-8 h-8 rounded-full" />
+						<img src={member.avatar} alt="" class="h-8 w-8 rounded-full" />
 					{:else}
-						<div class="w-8 h-8 rounded-full bg-surface-border-strong flex items-center justify-center text-text-secondary text-xs font-medium">
+						<div
+							class="bg-surface-border-strong text-text-secondary flex h-8 w-8 items-center justify-center rounded-full text-xs font-medium"
+						>
 							{(member.name ?? member.email ?? '?').charAt(0).toUpperCase()}
 						</div>
 					{/if}
 					<div class="min-w-0 flex-1">
-						<p class="text-sm text-text-primary truncate">{member.name ?? member.email ?? 'Unknown member'}</p>
+						<p class="text-text-primary truncate text-sm">
+							{member.name ?? member.email ?? 'Unknown member'}
+						</p>
 						{#if member.name}
-							<p class="text-xs text-text-tertiary truncate">{member.email}</p>
+							<p class="text-text-tertiary truncate text-xs">{member.email}</p>
 						{/if}
 					</div>
 					{#if isOwner}
@@ -910,22 +1351,31 @@
 								const next = (e.target as HTMLSelectElement).value as 'owner' | 'editor' | 'member';
 								if (next !== member.role) changeMemberRole(String(member.id), next);
 							}}
-							class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-secondary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+							class="bg-surface-overlay border-surface-border-strong text-text-secondary rounded border px-2 py-0.5 text-xs focus:border-teal-500 focus:outline-none disabled:opacity-50"
+							title={member.role === 'owner' && ownerCount <= 1
+								? 'Last owner cannot be demoted'
+								: 'Change member role'}
 						>
-							<option value="member">Member</option>
-							<option value="editor">Editor</option>
-							<option value="owner">Owner</option>
+							<option value="member" disabled={roleOptionDisabled(member, 'member')}>Member</option>
+							<option value="editor" disabled={roleOptionDisabled(member, 'editor')}>Editor</option>
+							<option value="owner" disabled={roleOptionDisabled(member, 'owner')}>Owner</option>
 						</select>
 						<button
 							type="button"
-							onclick={() => removeMember(String(member.id), member.name ?? member.email ?? 'this member')}
-							disabled={memberMutatingId === member.id}
-							class="text-xs px-2 py-0.5 rounded border border-surface-border-strong text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+							onclick={() =>
+								removeMember(String(member.id), member.name ?? member.email ?? 'this member')}
+							disabled={memberMutatingId === member.id || !canRemoveMember(member)}
+							title={member.role === 'owner' && ownerCount <= 1
+								? 'Last owner cannot be removed'
+								: 'Remove member'}
+							class="border-surface-border-strong disabled:text-text-quaternary rounded border px-2 py-0.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50"
 						>
 							Remove
 						</button>
 					{:else}
-						<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">
+						<span
+							class="bg-surface-overlay border-surface-border-strong text-text-tertiary rounded border px-2 py-0.5 text-xs capitalize"
+						>
 							{member.role}
 						</span>
 					{/if}
@@ -933,7 +1383,9 @@
 			{/each}
 			{#if memberMessage}
 				<div class="px-5 py-2">
-					<p class="text-xs {memberMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+					<p
+						class="text-xs {memberMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}"
+					>
 						{memberMessage.text}
 					</p>
 				</div>
@@ -942,26 +1394,31 @@
 
 		<!-- Invite Form (editor+ only) -->
 		{#if canInvite}
-			<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
-				<h3 class="text-sm font-medium text-text-primary">Invite a team member</h3>
+			<div class="border-surface-border bg-surface-base space-y-3 rounded-md border p-5">
+				<h3 class="text-text-primary text-sm font-medium">Invite role holder</h3>
 				{#if atSeatLimit}
-					<p class="text-xs text-amber-400">All {maxSeats} seats are in use. Upgrade your plan to invite more members.</p>
+					<p class="text-xs text-amber-400">
+						All {maxSeats} seats are in use. Increase the plan limit to invite more role holders.
+					</p>
 				{/if}
 				<form
-					onsubmit={(e) => { e.preventDefault(); sendInvite(); }}
-					class="flex flex-col sm:flex-row gap-3"
+					onsubmit={(e) => {
+						e.preventDefault();
+						sendInvite();
+					}}
+					class="flex flex-col gap-3 sm:flex-row"
 				>
 					<input
 						type="email"
 						bind:value={inviteEmail}
 						placeholder="colleague@example.com"
 						disabled={inviteSending || atSeatLimit}
-						class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+						class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
 					/>
 					<select
 						bind:value={inviteRole}
 						disabled={inviteSending || atSeatLimit}
-						class="px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-secondary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+						class="border-surface-border-strong bg-surface-overlay text-text-secondary rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
 					>
 						<option value="member">Member</option>
 						<option value="editor">Editor</option>
@@ -969,42 +1426,53 @@
 					<button
 						type="submit"
 						disabled={!isValidEmail || inviteSending || atSeatLimit}
-						class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+						class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 					>
-						{inviteSending ? 'Sending...' : 'Send Invite'}
+						{inviteSending ? 'Sending...' : 'Send role invite'}
 					</button>
 				</form>
 				{#if inviteMessage}
-					<p class="text-xs {inviteMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+					<p
+						class="text-xs {inviteMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}"
+					>
 						{inviteMessage.text}
 					</p>
 				{/if}
 			</div>
 		{/if}
 
-		<!-- Pending Invites -->
+		<!-- Pending role invites -->
 		{#if data.invites.length > 0}
 			<div class="space-y-2">
-				<h3 class="text-xs text-text-tertiary font-medium">Pending Invites</h3>
-				<div class="rounded-lg border border-surface-border bg-surface-base divide-y divide-surface-border">
+				<h3 class="text-text-tertiary text-xs font-medium">Pending role invites</h3>
+				<div
+					class="border-surface-border bg-surface-base divide-surface-border divide-y rounded-lg border"
+				>
 					{#each data.invites as invite}
 						<div class="flex items-center justify-between px-4 py-2.5 text-sm">
-							<span class="text-text-tertiary">{decryptedInviteEmails[invite.id] ?? '[decrypting...]'}</span>
+							<span class="text-text-tertiary"
+								>{decryptedInviteEmails[invite.id] ?? '[decrypting...]'}</span
+							>
 							<div class="flex items-center gap-3">
-								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary capitalize">{invite.role}</span>
-								<span class="text-xs text-text-quaternary">expires {formatDate(invite.expiresAt)}</span>
+								<span
+									class="bg-surface-overlay border-surface-border-strong text-text-tertiary rounded border px-2 py-0.5 text-xs capitalize"
+									>{invite.role}</span
+								>
+								<span class="text-text-quaternary text-xs"
+									>expires {formatDate(invite.expiresAt)}</span
+								>
 								{#if canInvite}
 									<button
 										onclick={() => resendInvite(invite.id)}
 										disabled={resendingId === invite.id || !!revokingId}
-										class="text-xs px-2 py-1 rounded border border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										class="border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay rounded border px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{resendingId === invite.id ? 'Resending...' : 'Resend'}
 									</button>
 									<button
 										onclick={() => revokeInvite(invite.id)}
 										disabled={revokingId === invite.id || !!resendingId}
-										class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										class="rounded px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{revokingId === invite.id ? 'Revoking...' : 'Revoke'}
 									</button>
@@ -1017,44 +1485,52 @@
 		{/if}
 	</section>
 
-	<!-- Issue Domains -->
+	<!-- Legislative domain basis -->
 	<section class="space-y-4">
 		<div class="flex items-center justify-between">
 			<div>
-				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Issue Domains</h2>
-				<p class="text-xs text-text-tertiary mt-1">Define your organization's focus areas for legislative tracking.</p>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
+					Legislative domain basis
+				</h2>
+				<p class="text-text-tertiary mt-1 text-xs">
+					Define the focus basis used by legislative monitoring, matching, and cohort reasoning.
+				</p>
 			</div>
-			<span class="text-xs text-text-tertiary font-mono tabular-nums">{domainCount} of 20</span>
+			<span class="text-text-tertiary font-mono text-xs tabular-nums">{domainCount} of 20</span>
 		</div>
 
 		<!-- Existing domains list -->
 		{#if data.issueDomains.length > 0}
-			<div class="rounded-md border border-surface-border bg-surface-base divide-y divide-surface-border">
+			<div
+				class="border-surface-border bg-surface-base divide-surface-border divide-y rounded-md border"
+			>
 				{#each data.issueDomains as domain}
 					<div class="px-5 py-3">
 						<div class="flex items-center justify-between">
 							<div class="min-w-0 flex-1">
-								<p class="text-sm text-text-primary font-medium">{domain.label}</p>
+								<p class="text-text-primary text-sm font-medium">{domain.label}</p>
 								{#if domain.description}
-									<p class="text-xs text-text-tertiary mt-0.5 truncate">{domain.description}</p>
+									<p class="text-text-tertiary mt-0.5 truncate text-xs">{domain.description}</p>
 								{/if}
 							</div>
-							<div class="flex items-center gap-3 ml-3 shrink-0">
-								<span class="text-xs px-2 py-0.5 rounded border bg-surface-overlay border-surface-border-strong text-text-tertiary font-mono tabular-nums">
+							<div class="ml-3 flex shrink-0 items-center gap-3">
+								<span
+									class="bg-surface-overlay border-surface-border-strong text-text-tertiary rounded border px-2 py-0.5 font-mono text-xs tabular-nums"
+								>
 									{domain.weight.toFixed(1)}x
 								</span>
 								{#if canEdit}
 									<button
 										onclick={() => startEditDomain(domain)}
 										disabled={!!deletingDomainId}
-										class="text-xs px-2 py-1 rounded border border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										class="border-surface-border-strong text-text-secondary hover:text-text-primary hover:bg-surface-overlay rounded border px-2 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										Edit
 									</button>
 									<button
 										onclick={() => deleteDomain(domain.id)}
 										disabled={deletingDomainId === domain.id}
-										class="text-xs px-2 py-1 rounded text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+										class="rounded px-2 py-1 text-xs text-red-400 transition-colors hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{deletingDomainId === domain.id ? 'Removing...' : 'Remove'}
 									</button>
@@ -1068,25 +1544,28 @@
 
 		<!-- Add/Edit domain form (editor+ only) -->
 		{#if canEdit}
-			<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
-				<h3 class="text-sm font-medium text-text-primary">
-					{editingDomainId ? 'Edit issue domain' : 'Add an issue domain'}
+			<div class="border-surface-border bg-surface-base space-y-3 rounded-md border p-5">
+				<h3 class="text-text-primary text-sm font-medium">
+					{editingDomainId ? 'Edit domain basis' : 'Add domain basis'}
 				</h3>
 				{#if atDomainLimit && !editingDomainId}
 					<p class="text-xs text-amber-400">Maximum of 20 issue domains reached.</p>
 				{/if}
 				<form
-					onsubmit={(e) => { e.preventDefault(); saveDomain(); }}
+					onsubmit={(e) => {
+						e.preventDefault();
+						saveDomain();
+					}}
 					class="space-y-3"
 				>
-					<div class="flex flex-col sm:flex-row gap-3">
+					<div class="flex flex-col gap-3 sm:flex-row">
 						<input
 							type="text"
 							bind:value={domainLabel}
 							placeholder="e.g. water rights, school safety, transit equity"
 							maxlength={100}
 							disabled={domainSaving || (atDomainLimit && !editingDomainId)}
-							class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50"
+							class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
 						/>
 					</div>
 					<textarea
@@ -1095,11 +1574,13 @@
 						maxlength={500}
 						rows={2}
 						disabled={domainSaving || (atDomainLimit && !editingDomainId)}
-						class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 disabled:opacity-50 resize-none"
+						class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary w-full resize-none rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:outline-none disabled:opacity-50"
 					></textarea>
-					<div class="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+					<div class="flex flex-col items-start gap-3 sm:flex-row sm:items-center">
 						<div class="flex items-center gap-2">
-							<label for="domain-weight" class="text-xs text-text-tertiary whitespace-nowrap">Priority weight</label>
+							<label for="domain-weight" class="text-text-tertiary text-xs whitespace-nowrap"
+								>Priority weight</label
+							>
 							<input
 								id="domain-weight"
 								type="range"
@@ -1110,30 +1591,36 @@
 								disabled={domainSaving || (atDomainLimit && !editingDomainId)}
 								class="w-24 accent-teal-500"
 							/>
-							<span class="text-xs text-text-secondary font-mono tabular-nums w-8">{domainWeight.toFixed(1)}</span>
+							<span class="text-text-secondary w-8 font-mono text-xs tabular-nums"
+								>{domainWeight.toFixed(1)}</span
+							>
 						</div>
 						<div class="flex gap-2 sm:ml-auto">
 							{#if editingDomainId}
 								<button
 									type="button"
 									onclick={cancelEditDomain}
-									class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+									class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
 								>
 									Cancel
 								</button>
 							{/if}
 							<button
 								type="submit"
-								disabled={!domainLabel.trim() || domainSaving || (atDomainLimit && !editingDomainId)}
-								class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+								disabled={!domainLabel.trim() ||
+									domainSaving ||
+									(atDomainLimit && !editingDomainId)}
+								class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 							>
-								{domainSaving ? 'Saving...' : editingDomainId ? 'Update Domain' : 'Add Domain'}
+								{domainSaving ? 'Saving...' : editingDomainId ? 'Update basis' : 'Add basis'}
 							</button>
 						</div>
 					</div>
 				</form>
 				{#if domainMessage}
-					<p class="text-xs {domainMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}">
+					<p
+						class="text-xs {domainMessage.type === 'success' ? 'text-emerald-400' : 'text-red-400'}"
+					>
 						{domainMessage.text}
 					</p>
 				{/if}
@@ -1141,68 +1628,96 @@
 		{/if}
 	</section>
 
-	<!-- Supporter Encryption -->
+	<!-- PII encryption authority -->
 	{#if isOwner}
-		<section class="space-y-4">
+		<section id="encryption-authority" class="space-y-4">
 			<div>
-				<h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider">Supporter Encryption</h2>
-				<p class="text-xs text-text-tertiary mt-1">Protect supporter PII with an organization-held encryption key.</p>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
+					PII encryption authority
+				</h2>
+				<p class="text-text-tertiary mt-1 text-xs">
+					Hold person-row PII behind an organization-held encryption key.
+				</p>
 			</div>
 
 			{#if encryptionConfigured && setupStep !== 'done'}
 				<!-- Configured state -->
-				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-3">
+				<div class="border-surface-border bg-surface-base space-y-3 rounded-md border p-5">
 					<div class="flex items-center gap-3">
 						<div class="flex items-center gap-2">
-							<svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-								<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+							<svg
+								class="h-4 w-4 text-emerald-500"
+								fill="none"
+								viewBox="0 0 24 24"
+								stroke="currentColor"
+								stroke-width="2"
+							>
+								<path
+									stroke-linecap="round"
+									stroke-linejoin="round"
+									d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+								/>
 							</svg>
-							<span class="text-sm text-text-primary font-medium">Encryption active</span>
+							<span class="text-text-primary text-sm font-medium">Encryption active</span>
 						</div>
 						{#if deviceCheckDone}
-							<span class="text-xs font-mono {deviceUnlocked ? 'text-emerald-500' : 'text-amber-400'}">
+							<span
+								class="font-mono text-xs {deviceUnlocked ? 'text-emerald-500' : 'text-amber-400'}"
+							>
 								{deviceUnlocked ? 'unlocked on this device' : 'locked on this device'}
 							</span>
 						{/if}
 					</div>
-					<p class="text-xs text-text-tertiary leading-relaxed">
-						Your encryption key is configured. Once data migration completes, supporter names, emails,
-						and phone numbers will be encrypted with your organization's key — accessible only to team members with the passphrase.
+					<p class="text-text-tertiary text-xs leading-relaxed">
+						Your encryption key is configured. Once data migration completes, person names, emails,
+						and phone numbers will be encrypted with your organization's key, accessible only to
+						authorized role holders with the passphrase.
 					</p>
 
 					<!-- Unlock prompt for devices without cached key -->
 					{#if deviceCheckDone && !deviceUnlocked}
-						<div class="border-t border-surface-border pt-3 space-y-3">
-							<p class="text-xs text-text-secondary">
+						<div class="border-surface-border space-y-3 border-t pt-3">
+							<p class="text-text-secondary text-xs">
 								Enter the organization passphrase to unlock encryption on this device.
 							</p>
 							{#if unlockError}
-								<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+								<div
+									class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+								>
 									{unlockError}
 								</div>
 							{/if}
 							{#if !showRecoveryFlow}
-								<form onsubmit={(e) => { e.preventDefault(); unlockWithPassphrase(); }} class="flex flex-col sm:flex-row gap-3">
+								<form
+									onsubmit={(e) => {
+										e.preventDefault();
+										unlockWithPassphrase();
+									}}
+									class="flex flex-col gap-3 sm:flex-row"
+								>
 									<input
 										type="password"
 										bind:value={unlockPassphrase}
 										placeholder="Organization passphrase"
 										autocomplete="current-password"
 										disabled={unlockLoading}
-										class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:opacity-50"
+										class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none disabled:opacity-50"
 									/>
 									<button
 										type="submit"
 										disabled={!unlockPassphrase.trim() || unlockLoading}
-										class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+										class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 									>
 										{unlockLoading ? 'Unlocking...' : 'Unlock'}
 									</button>
 								</form>
 								{#if isOwner && data.encryption.recoveryWrappedOrgKey}
 									<button
-										onclick={() => { showRecoveryFlow = true; unlockError = ''; }}
-										class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+										onclick={() => {
+											showRecoveryFlow = true;
+											unlockError = '';
+										}}
+										class="text-text-tertiary hover:text-text-secondary text-xs transition-colors"
 									>
 										Forgot passphrase? Use recovery words
 									</button>
@@ -1210,11 +1725,13 @@
 							{:else}
 								<!-- Recovery flow -->
 								<div class="space-y-3">
-									<p class="text-xs text-text-secondary">
+									<p class="text-text-secondary text-xs">
 										Enter your 24-word recovery phrase, separated by spaces.
 									</p>
 									{#if recoveryError}
-										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+										<div
+											class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+										>
 											{recoveryError}
 										</div>
 									{/if}
@@ -1223,19 +1740,23 @@
 										placeholder="word1 word2 word3 ... word24"
 										rows={3}
 										disabled={recoveryLoading}
-										class="w-full px-3 py-2 text-sm font-mono rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500 disabled:opacity-50 resize-none"
+										class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary w-full resize-none rounded-lg border px-3 py-2 font-mono text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none disabled:opacity-50"
 									></textarea>
 									<div class="flex gap-3">
 										<button
-											onclick={() => { showRecoveryFlow = false; recoveryInput = ''; recoveryError = ''; }}
-											class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+											onclick={() => {
+												showRecoveryFlow = false;
+												recoveryInput = '';
+												recoveryError = '';
+											}}
+											class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
 										>
 											Back
 										</button>
 										<button
 											onclick={recoverWithMnemonic}
 											disabled={!recoveryInput.trim() || recoveryLoading}
-											class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+											class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 										>
 											{recoveryLoading ? 'Recovering...' : 'Recover Key'}
 										</button>
@@ -1247,122 +1768,191 @@
 
 					<!-- Change passphrase (owner, device unlocked) -->
 					{#if deviceCheckDone && deviceUnlocked && isOwner}
-						<div class="border-t border-surface-border pt-3">
+						<div class="border-surface-border border-t pt-3">
 							{#if !showRotation}
 								<button
 									onclick={startRotation}
-									class="text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+									class="text-text-tertiary hover:text-text-secondary text-xs transition-colors"
 								>
 									Reset recovery key
 								</button>
 							{:else if rotationStep === 'verify'}
 								<div class="space-y-3">
-									<p class="text-xs text-text-secondary">Verify your passphrase to generate a new recovery key.</p>
+									<p class="text-text-secondary text-xs">
+										Verify your passphrase to generate a new recovery key.
+									</p>
 									{#if rotationError}
-										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{rotationError}</div>
+										<div
+											class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+										>
+											{rotationError}
+										</div>
 									{/if}
-									<form onsubmit={(e) => { e.preventDefault(); verifyCurrentPassphrase(); }} class="flex flex-col sm:flex-row gap-3">
-										<input type="password" bind:value={rotationCurrentPassphrase} placeholder="Current passphrase" autocomplete="current-password" class="flex-1 min-w-0 px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500" />
-										<button type="submit" disabled={!rotationCurrentPassphrase.trim()} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap">Verify</button>
-										<button type="button" onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
+									<form
+										onsubmit={(e) => {
+											e.preventDefault();
+											verifyCurrentPassphrase();
+										}}
+										class="flex flex-col gap-3 sm:flex-row"
+									>
+										<input
+											type="password"
+											bind:value={rotationCurrentPassphrase}
+											placeholder="Current passphrase"
+											autocomplete="current-password"
+											class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+										/>
+										<button
+											type="submit"
+											disabled={!rotationCurrentPassphrase.trim()}
+											class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium whitespace-nowrap text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+											>Verify</button
+										>
+										<button
+											type="button"
+											onclick={cancelRotation}
+											class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
+											>Cancel</button
+										>
 									</form>
 								</div>
 							{:else if rotationStep === 'recovery'}
 								<div class="space-y-3">
-									<p class="text-xs text-text-secondary">Write down your new 24-word recovery key. The old recovery key will no longer work.</p>
+									<p class="text-text-secondary text-xs">
+										Write down your new 24-word recovery key. The old recovery key will no longer
+										work.
+									</p>
 									{#if rotationError}
-										<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">{rotationError}</div>
+										<div
+											class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+										>
+											{rotationError}
+										</div>
 									{/if}
-									<div class="grid grid-cols-3 sm:grid-cols-4 gap-x-4 gap-y-2 py-3 px-2 rounded border border-surface-border bg-surface-overlay">
+									<div
+										class="border-surface-border bg-surface-overlay grid grid-cols-3 gap-x-4 gap-y-2 rounded border px-2 py-3 sm:grid-cols-4"
+									>
 										{#each rotationRecoveryWords as word, i}
 											<div class="flex items-baseline gap-1.5">
-												<span class="text-[10px] text-text-quaternary font-mono tabular-nums w-5 text-right shrink-0">{i + 1}.</span>
-												<span class="text-sm text-text-primary font-mono font-medium">{word}</span>
+												<span
+													class="text-text-quaternary w-5 shrink-0 text-right font-mono text-[10px] tabular-nums"
+													>{i + 1}.</span
+												>
+												<span class="text-text-primary font-mono text-sm font-medium">{word}</span>
 											</div>
 										{/each}
 									</div>
-									<label class="flex items-start gap-2.5 cursor-pointer select-none">
-										<input type="checkbox" bind:checked={rotationRecoveryAck} class="mt-0.5 rounded border-surface-border-strong accent-teal-500" />
-										<span class="text-xs text-text-secondary leading-relaxed">I have written down these new recovery words.</span>
+									<label class="flex cursor-pointer items-start gap-2.5 select-none">
+										<input
+											type="checkbox"
+											bind:checked={rotationRecoveryAck}
+											class="border-surface-border-strong mt-0.5 rounded accent-teal-500"
+										/>
+										<span class="text-text-secondary text-xs leading-relaxed"
+											>I have written down these new recovery words.</span
+										>
 									</label>
 									<div class="flex gap-3">
-										<button onclick={cancelRotation} class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors">Cancel</button>
-										<button onclick={finalizeRotation} disabled={!rotationRecoveryAck || rotationLoading} class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">{rotationLoading ? 'Saving...' : 'Save New Recovery Key'}</button>
+										<button
+											onclick={cancelRotation}
+											class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
+											>Cancel</button
+										>
+										<button
+											onclick={finalizeRotation}
+											disabled={!rotationRecoveryAck || rotationLoading}
+											class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
+											>{rotationLoading ? 'Saving...' : 'Save New Recovery Key'}</button
+										>
 									</div>
 								</div>
 							{:else if rotationStep === 'saving'}
 								<div class="flex items-center gap-3">
-									<div class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"></div>
-									<span class="text-sm text-text-secondary">Saving recovery key...</span>
+									<div
+										class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"
+									></div>
+									<span class="text-text-secondary text-sm">Saving recovery key...</span>
 								</div>
 							{/if}
 						</div>
 					{/if}
 				</div>
-
 			{:else if setupStep === 'idle'}
 				<!-- Not configured — setup CTA -->
-				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-4">
+				<div class="border-surface-border bg-surface-base space-y-4 rounded-md border p-5">
 					<div class="space-y-2">
-						<p class="text-sm text-text-primary leading-relaxed">
-							Encryption protects your supporters' personal information with a passphrase that only your organization holds.
-							Once enabled, Commons cannot read supporter names, emails, or phone numbers — only your team can.
+						<p class="text-text-primary text-sm leading-relaxed">
+							Encryption protects your supporters' personal information with a passphrase that only
+							your organization holds. Once enabled, Commons cannot read supporter names, emails, or
+							phone numbers — only your team can.
 						</p>
-						<p class="text-xs text-text-tertiary leading-relaxed">
-							You will create a passphrase and receive a 24-word recovery key. If all team members forget the passphrase,
-							the recovery key is the only way to regain access. Store it securely offline.
+						<p class="text-text-tertiary text-xs leading-relaxed">
+							You will create a passphrase and receive a 24-word recovery key. If all team members
+							forget the passphrase, the recovery key is the only way to regain access. Store it
+							securely offline.
 						</p>
 					</div>
 					<button
 						onclick={startEncryptionSetup}
-						class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors"
+						class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500"
 					>
 						Set Up Encryption
 					</button>
 				</div>
-
 			{:else if setupStep === 'passphrase'}
 				<!-- Step 1: Create passphrase -->
-				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-5">
+				<div class="border-surface-border bg-surface-base space-y-5 rounded-md border p-5">
 					<div>
-						<h3 class="text-sm font-semibold text-text-primary">Create a passphrase</h3>
-						<p class="text-xs text-text-tertiary mt-1 leading-relaxed">
-							This passphrase derives the encryption key for all supporter data in your organization.
-							Every team member who needs to view supporter information will need this passphrase.
-							Minimum 12 characters.
+						<h3 class="text-text-primary text-sm font-semibold">Create a passphrase</h3>
+						<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
+							This passphrase derives the encryption key for all supporter data in your
+							organization. Every team member who needs to view supporter information will need this
+							passphrase. Minimum 12 characters.
 						</p>
 					</div>
 
 					{#if encryptionError}
-						<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+						<div
+							class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+						>
 							{encryptionError}
 						</div>
 					{/if}
 
-					<form onsubmit={(e) => { e.preventDefault(); proceedToRecovery(); }} class="space-y-3">
+					<form
+						onsubmit={(e) => {
+							e.preventDefault();
+							proceedToRecovery();
+						}}
+						class="space-y-3"
+					>
 						<div class="space-y-1">
-							<label for="enc-passphrase" class="text-xs text-text-tertiary">Passphrase</label>
+							<label for="enc-passphrase" class="text-text-tertiary text-xs">Passphrase</label>
 							<input
 								id="enc-passphrase"
 								type="password"
 								bind:value={passphrase}
 								placeholder="At least 12 characters"
 								autocomplete="new-password"
-								class="w-full px-3 py-2 text-sm rounded-lg border border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+								class="border-surface-border-strong bg-surface-overlay text-text-primary placeholder:text-text-quaternary w-full rounded-lg border px-3 py-2 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 							/>
 							{#if passphrase.length > 0 && passphrase.length < 12}
-								<p class="text-xs text-amber-400">{12 - passphrase.length} more characters needed</p>
+								<p class="text-xs text-amber-400">
+									{12 - passphrase.length} more characters needed
+								</p>
 							{/if}
 						</div>
 						<div class="space-y-1">
-							<label for="enc-confirm" class="text-xs text-text-tertiary">Confirm passphrase</label>
+							<label for="enc-confirm" class="text-text-tertiary text-xs">Confirm passphrase</label>
 							<input
 								id="enc-confirm"
 								type="password"
 								bind:value={passphraseConfirm}
 								placeholder="Re-enter passphrase"
 								autocomplete="new-password"
-								class="w-full px-3 py-2 text-sm rounded-lg border {passphraseMismatch ? 'border-red-500/50' : 'border-surface-border-strong'} bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+								class="w-full rounded-lg border px-3 py-2 text-sm {passphraseMismatch
+									? 'border-red-500/50'
+									: 'border-surface-border-strong'} bg-surface-overlay text-text-primary placeholder:text-text-quaternary focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 							/>
 							{#if passphraseMismatch}
 								<p class="text-xs text-red-400">Passphrases do not match</p>
@@ -1372,100 +1962,122 @@
 							<button
 								type="button"
 								onclick={cancelEncryptionSetup}
-								class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+								class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
 							>
 								Cancel
 							</button>
 							<button
 								type="submit"
 								disabled={!passphraseValid}
-								class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+								class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 							>
 								Generate Recovery Key
 							</button>
 						</div>
 					</form>
 				</div>
-
 			{:else if setupStep === 'recovery'}
 				<!-- Step 2: Recovery words -->
-				<div class="rounded-md border border-surface-border bg-surface-base p-5 space-y-5">
+				<div class="border-surface-border bg-surface-base space-y-5 rounded-md border p-5">
 					<div>
-						<h3 class="text-sm font-semibold text-text-primary">Recovery key</h3>
-						<p class="text-xs text-text-tertiary mt-1 leading-relaxed">
-							Write these 24 words down on paper and store them somewhere safe.
-							If every team member forgets the passphrase, these words are the only way to recover access to encrypted supporter data.
+						<h3 class="text-text-primary text-sm font-semibold">Recovery key</h3>
+						<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
+							Write these 24 words down on paper and store them somewhere safe. If every team member
+							forgets the passphrase, these words are the only way to recover access to encrypted
+							supporter data.
 						</p>
 					</div>
 
 					{#if encryptionError}
-						<div class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400">
+						<div
+							class="rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400"
+						>
 							{encryptionError}
 						</div>
 					{/if}
 
 					<!-- Recovery word grid -->
-					<div class="grid grid-cols-3 sm:grid-cols-4 gap-x-4 gap-y-2 py-3 px-2 rounded border border-surface-border bg-surface-overlay">
+					<div
+						class="border-surface-border bg-surface-overlay grid grid-cols-3 gap-x-4 gap-y-2 rounded border px-2 py-3 sm:grid-cols-4"
+					>
 						{#each recoveryWords as word, i}
 							<div class="flex items-baseline gap-1.5">
-								<span class="text-[10px] text-text-quaternary font-mono tabular-nums w-5 text-right shrink-0">{i + 1}.</span>
-								<span class="text-sm text-text-primary font-mono font-medium">{word}</span>
+								<span
+									class="text-text-quaternary w-5 shrink-0 text-right font-mono text-[10px] tabular-nums"
+									>{i + 1}.</span
+								>
+								<span class="text-text-primary font-mono text-sm font-medium">{word}</span>
 							</div>
 						{/each}
 					</div>
 
-					<label class="flex items-start gap-2.5 cursor-pointer select-none">
+					<label class="flex cursor-pointer items-start gap-2.5 select-none">
 						<input
 							type="checkbox"
 							bind:checked={recoveryAcknowledged}
-							class="mt-0.5 rounded border-surface-border-strong accent-teal-500"
+							class="border-surface-border-strong mt-0.5 rounded accent-teal-500"
 						/>
-						<span class="text-xs text-text-secondary leading-relaxed">
-							I have written down these 24 words and stored them securely.
-							I understand that if I lose both the passphrase and these words,
-							encrypted supporter data cannot be recovered.
+						<span class="text-text-secondary text-xs leading-relaxed">
+							I have written down these 24 words and stored them securely. I understand that if I
+							lose both the passphrase and these words, encrypted supporter data cannot be
+							recovered.
 						</span>
 					</label>
 
 					<div class="flex gap-3">
 						<button
 							type="button"
-							onclick={() => { setupStep = 'passphrase'; encryptionError = ''; }}
-							class="px-4 py-2 text-sm border border-surface-border-strong text-text-secondary rounded-lg hover:bg-surface-raised transition-colors"
+							onclick={() => {
+								setupStep = 'passphrase';
+								encryptionError = '';
+							}}
+							class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-4 py-2 text-sm transition-colors"
 						>
 							Back
 						</button>
 						<button
 							onclick={finalizeEncryptionSetup}
 							disabled={!recoveryAcknowledged || encryptionSaving}
-							class="px-4 py-2 text-sm font-medium bg-teal-600 hover:bg-teal-500 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+							class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500 disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{encryptionSaving ? 'Configuring...' : 'Enable Encryption'}
 						</button>
 					</div>
 				</div>
-
 			{:else if setupStep === 'saving'}
 				<!-- Saving state -->
-				<div class="rounded-md border border-surface-border bg-surface-base p-5">
+				<div class="border-surface-border bg-surface-base rounded-md border p-5">
 					<div class="flex items-center gap-3">
-						<div class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"></div>
-						<span class="text-sm text-text-secondary">Deriving encryption key and configuring...</span>
+						<div
+							class="h-4 w-4 animate-spin rounded-full border-2 border-teal-500 border-t-transparent"
+						></div>
+						<span class="text-text-secondary text-sm"
+							>Deriving encryption key and configuring...</span
+						>
 					</div>
 				</div>
-
 			{:else if setupStep === 'done'}
 				<!-- Just completed setup -->
-				<div class="rounded-md border border-emerald-500/20 bg-surface-base p-5 space-y-3">
+				<div class="bg-surface-base space-y-3 rounded-md border border-emerald-500/20 p-5">
 					<div class="flex items-center gap-2">
-						<svg class="w-4 h-4 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+						<svg
+							class="h-4 w-4 text-emerald-500"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+							/>
 						</svg>
-						<span class="text-sm text-text-primary font-medium">Encryption configured</span>
+						<span class="text-text-primary text-sm font-medium">Encryption configured</span>
 					</div>
-					<p class="text-xs text-text-tertiary leading-relaxed">
-						Your organization's encryption key has been derived and cached on this device.
-						Share the passphrase securely with team members who need to view supporter data.
+					<p class="text-text-tertiary text-xs leading-relaxed">
+						Your organization's encryption key has been derived and cached on this device. Share the
+						passphrase securely with team members who need to view supporter data.
 					</p>
 				</div>
 			{/if}

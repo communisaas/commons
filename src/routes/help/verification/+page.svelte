@@ -67,7 +67,7 @@
 	<p class="mt-3 text-base text-slate-600 leading-relaxed">
 		Commons verifies your identity using your state-issued mobile driver's license (mDL).
 		This confirms you're a real constituent in your district while keeping plaintext address
-		custody bounded to verification and official delivery.
+		custody limited to verification and official delivery.
 	</p>
 
 	<!-- How it works -->

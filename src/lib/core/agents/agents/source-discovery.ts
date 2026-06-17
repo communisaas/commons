@@ -67,6 +67,10 @@ export interface SourceDiscoveryResult {
 		firecrawlReads: number;
 		groundingSearches: number;
 	};
+	/** True when Gemini source evaluation failed and candidates were retained as search-only ground. */
+	evaluationFallback: boolean;
+	/** Diagnostic reason for fallback; not shown as proof. */
+	evaluationFallbackError?: string;
 }
 
 export interface SourceDiscoveryOptions {
@@ -212,7 +216,8 @@ export async function discoverSources(
 	options: SourceDiscoveryOptions
 ): Promise<SourceDiscoveryResult> {
 	const startTime = Date.now();
-	const { coreMessage, subjectLine, topics, geographicScope, onThought, onPhase, traceId } = options;
+	const { coreMessage, subjectLine, topics, geographicScope, onThought, onPhase, traceId } =
+		options;
 
 	console.debug('[source-discovery] Starting Exa stratified search pipeline...');
 
@@ -324,11 +329,14 @@ export async function discoverSources(
 			searchQueries,
 			latencyMs: Date.now() - startTime,
 			groundingSearches: 0,
-			externalCounts: { exaSearches, firecrawlReads: 0, groundingSearches: 0 }
+			externalCounts: { exaSearches, firecrawlReads: 0, groundingSearches: 0 },
+			evaluationFallback: false
 		};
 	}
 
-	onThought?.(`Found ${deduplicated.length} unique candidates across ${exaSearches} searches. Fetching top sources...`);
+	onThought?.(
+		`Found ${deduplicated.length} unique candidates across ${exaSearches} searches. Fetching top sources...`
+	);
 
 	// ====================================================================
 	// Phase 1b: Firecrawl Content Fetch (top 6 candidates)
@@ -392,9 +400,8 @@ export async function discoverSources(
 			discoveredSource.title = page.title || candidate.title;
 			discoveredSource.publisher = provenance.publisher;
 		} else {
-			const error = pageResult.status === 'rejected'
-				? String(pageResult.reason)
-				: 'No content returned';
+			const error =
+				pageResult.status === 'rejected' ? String(pageResult.reason) : 'No content returned';
 			failed.push({ source: discoveredSource, error });
 			console.warn(`[source-discovery] Page fetch failed: ${candidate.url} - ${error}`);
 		}
@@ -429,11 +436,14 @@ export async function discoverSources(
 			searchQueries,
 			latencyMs: Date.now() - startTime,
 			groundingSearches: 0,
-			externalCounts: { exaSearches, firecrawlReads, groundingSearches: 0 }
+			externalCounts: { exaSearches, firecrawlReads, groundingSearches: 0 },
+			evaluationFallback: false
 		};
 	}
 
-	onThought?.(`Fetched ${candidates.length} pages. Evaluating source credibility and incentive alignment...`);
+	onThought?.(
+		`Fetched ${candidates.length} pages. Evaluating source credibility and incentive alignment...`
+	);
 
 	// ====================================================================
 	// Phase 1c: Gemini Source Evaluation
@@ -443,12 +453,14 @@ export async function discoverSources(
 		subjectLine,
 		coreMessage,
 		topics,
-		geographicScope: geographicScope ? {
-			type: geographicScope.type,
-			country: geographicScope.country,
-			subdivision: geographicScope.subdivision,
-			locality: geographicScope.locality
-		} : undefined,
+		geographicScope: geographicScope
+			? {
+					type: geographicScope.type,
+					country: geographicScope.country,
+					subdivision: geographicScope.subdivision,
+					locality: geographicScope.locality
+				}
+			: undefined,
 		decisionMakers: options.decisionMakers
 	};
 
@@ -458,15 +470,14 @@ export async function discoverSources(
 	let evaluationFallbackError: string | undefined;
 
 	try {
-		const evalResult = await evaluateSources(
-			candidates,
-			evaluationContext,
-			onThought
-		);
+		const evalResult = await evaluateSources(candidates, evaluationContext, onThought);
 		evaluated = evalResult.sources;
 		evaluationTokenUsage = evalResult.tokenUsage;
 	} catch (error) {
-		console.error('[source-discovery] Source evaluation failed, using candidates as fallback:', error);
+		console.error(
+			'[source-discovery] Source evaluation failed, using candidates as fallback:',
+			error
+		);
 		evaluationFallback = true;
 		evaluationFallbackError = error instanceof Error ? error.message : String(error);
 		// Fallback: convert candidates to basic EvaluatedSource without Gemini evaluation
@@ -482,7 +493,12 @@ export async function discoverSources(
 			excerpt: c.excerpt,
 			credibility_rationale: 'Evaluation unavailable — source included based on search relevance.',
 			incentive_position: 'neutral' as const,
-			source_order: c.provenance.sourceOrder === 'unknown' ? 'secondary' as const : c.provenance.sourceOrder === 'opinion' ? 'opinion' as const : c.provenance.sourceOrder as 'primary' | 'secondary'
+			source_order:
+				c.provenance.sourceOrder === 'unknown'
+					? ('secondary' as const)
+					: c.provenance.sourceOrder === 'opinion'
+						? ('opinion' as const)
+						: (c.provenance.sourceOrder as 'primary' | 'secondary')
 		}));
 	}
 
@@ -497,18 +513,18 @@ export async function discoverSources(
 	// cannot tell those apart from the incentiveBreakdown alone.
 	if (traceId) {
 		const incentiveBreakdown = {
-			adversarial: evaluated.filter(s => s.incentive_position === 'adversarial').length,
-			neutral: evaluated.filter(s => s.incentive_position === 'neutral').length,
-			aligned: evaluated.filter(s => s.incentive_position === 'aligned').length
+			adversarial: evaluated.filter((s) => s.incentive_position === 'adversarial').length,
+			neutral: evaluated.filter((s) => s.incentive_position === 'neutral').length,
+			aligned: evaluated.filter((s) => s.incentive_position === 'aligned').length
 		};
 		traceEvent(traceId, 'message-generation', 'source-evaluation', {
 			candidatesIn: candidates.length,
 			sourcesOut: evaluated.length,
 			incentiveBreakdown,
 			sourceOrders: {
-				primary: evaluated.filter(s => s.source_order === 'primary').length,
-				secondary: evaluated.filter(s => s.source_order === 'secondary').length,
-				opinion: evaluated.filter(s => s.source_order === 'opinion').length
+				primary: evaluated.filter((s) => s.source_order === 'primary').length,
+				secondary: evaluated.filter((s) => s.source_order === 'secondary').length,
+				opinion: evaluated.filter((s) => s.source_order === 'opinion').length
 			},
 			firecrawlReads,
 			evaluationTokens: evaluationTokenUsage?.totalTokens ?? null,
@@ -528,7 +544,10 @@ export async function discoverSources(
 		latencyMs
 	});
 
-	onPhase?.('complete', `Evaluated ${evaluated.length} sources from ${discovered.length} candidates`);
+	onPhase?.(
+		'complete',
+		`Evaluated ${evaluated.length} sources from ${discovered.length} candidates`
+	);
 
 	return {
 		discovered,
@@ -538,7 +557,9 @@ export async function discoverSources(
 		latencyMs,
 		tokenUsage: evaluationTokenUsage,
 		groundingSearches: 0,
-		externalCounts: { exaSearches, firecrawlReads, groundingSearches: 0 }
+		externalCounts: { exaSearches, firecrawlReads, groundingSearches: 0 },
+		evaluationFallback,
+		evaluationFallbackError
 	};
 }
 
@@ -554,10 +575,21 @@ function inferSourceType(url: string): string {
 		const hostname = new URL(url).hostname.toLowerCase();
 		if (hostname.endsWith('.gov') || hostname.includes('.gov.')) return 'government';
 		if (hostname.endsWith('.edu') || hostname.includes('.edu.')) return 'research';
-		if (hostname.includes('court') || hostname.includes('law') || hostname.includes('legal')) return 'legal';
+		if (hostname.includes('court') || hostname.includes('law') || hostname.includes('legal'))
+			return 'legal';
 		// Common news domains
-		const newsDomains = ['nytimes', 'washingtonpost', 'reuters', 'apnews', 'bbc', 'cnn', 'npr', 'politico', 'thehill'];
-		if (newsDomains.some(d => hostname.includes(d))) return 'journalism';
+		const newsDomains = [
+			'nytimes',
+			'washingtonpost',
+			'reuters',
+			'apnews',
+			'bbc',
+			'cnn',
+			'npr',
+			'politico',
+			'thehill'
+		];
+		if (newsDomains.some((d) => hostname.includes(d))) return 'journalism';
 		return 'other';
 	} catch {
 		return 'other';
@@ -586,8 +618,17 @@ function daysSince(dateStr: string | undefined): number | null {
  */
 export function formatSourcesForPrompt(sources: EvaluatedSource[]): string {
 	if (sources.length === 0) {
-		return 'No verified sources available. Write the message without citations.';
+		return 'No source ground available. Write the message without citations.';
 	}
+
+	const searchOnlyCount = sources.filter((s) =>
+		s.credibility_rationale.startsWith('Evaluation unavailable')
+	).length;
+	const evaluatedCount = sources.length - searchOnlyCount;
+	const evaluationNote =
+		searchOnlyCount > 0
+			? `Evaluation note: ${evaluatedCount} evaluated source${evaluatedCount === 1 ? '' : 's'}; ${searchOnlyCount} search-only fallback source${searchOnlyCount === 1 ? '' : 's'}. Search-only fallback sources may be cited for context but must not be described as evaluated or verified.`
+			: `Evaluation note: ${evaluatedCount} source${evaluatedCount === 1 ? '' : 's'} passed incentive-aware credibility and source-order evaluation.`;
 
 	// Calculate freshness for each source
 	const withAge = sources.map((s) => ({ source: s, age: daysSince(s.date) }));
@@ -615,9 +656,12 @@ export function formatSourcesForPrompt(sources: EvaluatedSource[]): string {
 			const ageAnnotation = age !== null ? ` (${age} days ago)` : '';
 
 			const incentiveTag = {
-				adversarial: 'ADVERSARIAL \u2014 this source\'s creator would prefer a different conclusion, yet the data supports your argument. Frame as: "Even [entity] acknowledges..." or "The [entity]\'s own data shows..."',
-				neutral: 'NEUTRAL \u2014 this source has no stake in the outcome. Cite its findings directly.',
-				aligned: 'ALIGNED \u2014 this source shares the citizen\'s position. Use for constituency signals, not as neutral authority.'
+				adversarial:
+					'ADVERSARIAL \u2014 this source\'s creator would prefer a different conclusion, yet the data supports your argument. Frame as: "Even [entity] acknowledges..." or "The [entity]\'s own data shows..."',
+				neutral:
+					'NEUTRAL \u2014 this source has no stake in the outcome. Cite its findings directly.',
+				aligned:
+					"ALIGNED \u2014 this source shares the citizen's position. Use for constituency signals, not as neutral authority."
 			}[s.incentive_position];
 
 			return `[${s.num}] ${s.title}
@@ -632,8 +676,9 @@ export function formatSourcesForPrompt(sources: EvaluatedSource[]): string {
 		})
 		.join('\n\n---\n\n');
 
-	return `## Verified Sources (cite using [1], [2], etc.)
-${freshnessSummary ? `\n${freshnessSummary}\n` : ''}
+	return `## Source Ground (cite using [1], [2], etc.)
+${evaluationNote}
+${freshnessSummary ? `\n${freshnessSummary}\n` : '\n'}
 ${formatted}
 
 CITATION PRINCIPLES:

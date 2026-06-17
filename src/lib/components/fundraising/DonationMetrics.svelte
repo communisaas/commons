@@ -1,5 +1,10 @@
 <script lang="ts">
-	let { campaign }: {
+	import { Datum } from '$lib/design';
+	import { SPRINGS } from '$lib/design/motion';
+
+	let {
+		campaign
+	}: {
 		campaign: {
 			raisedAmountCents: number;
 			goalAmountCents: number | null;
@@ -21,49 +26,48 @@
 			: null
 	);
 
-	// Average is per-donation (raisedAmountCents / donationCount), not per-donor.
-	// Matches the relabeled "Donations" tile above. (cure shipped).
 	const averageCents = $derived(
-		campaign.donorCount > 0
-			? Math.round(campaign.raisedAmountCents / campaign.donorCount)
-			: 0
+		campaign.donorCount > 0 ? Math.round(campaign.raisedAmountCents / campaign.donorCount) : 0
 	);
 </script>
 
-<div class="grid grid-cols-3 gap-3">
-	<!-- Amount Raised -->
-	<div class="rounded-lg border border-zinc-800/60 p-4">
-		<p class="text-xs font-medium text-zinc-500">Raised</p>
-		<p class="mt-1 text-2xl font-bold text-zinc-100">
+<div class="grid gap-3 md:grid-cols-3">
+	<div class="border-surface-border bg-surface-base rounded-md border p-4">
+		<p class="text-text-tertiary text-xs font-medium">Raised</p>
+		<p class="text-text-primary mt-1 text-2xl font-bold">
 			{formatCents(campaign.raisedAmountCents)}
 			{#if campaign.goalAmountCents}
-				<span class="text-sm font-normal text-zinc-500">/ {formatCents(campaign.goalAmountCents)}</span>
+				<span class="text-text-tertiary text-sm font-normal">
+					/ {formatCents(campaign.goalAmountCents)}</span
+				>
 			{/if}
 		</p>
 		{#if goalPercent !== null}
-			<div class="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+			<div class="bg-surface-overlay mt-2 h-1.5 w-full overflow-hidden rounded-full">
 				<div
-					class="h-full rounded-full bg-zinc-400 transition-all"
+					class="bg-text-tertiary h-full rounded-full transition-all"
 					style="width: {goalPercent}%"
 				></div>
 			</div>
 		{/if}
 	</div>
 
-	<!-- Donation Count.
-	     Field is `donorCount` for legacy reasons (schema rename is a migration);
-	     value is donations completed, NOT unique donors. UI label and average
-	     calculation below treat the value as donations consistently. True
-	     unique-donor tracking would need a composite index + refund-aware
-	     decrement and is a separate refactor. -->
-	<div class="rounded-lg border border-zinc-800/60 p-4">
-		<p class="text-xs font-medium text-zinc-500">Donations</p>
-		<p class="mt-1 text-2xl font-bold text-zinc-100">{campaign.donorCount}</p>
+	<div class="border-surface-border bg-surface-base rounded-md border p-4">
+		<p class="text-text-tertiary text-xs font-medium">Donations</p>
+		<p class="text-text-primary mt-1 text-2xl font-bold">
+			<Datum
+				value={campaign.donorCount}
+				animate
+				spring={SPRINGS.METRIC}
+				cite="campaigns.donorCount"
+			/>
+		</p>
+		<p class="text-text-quaternary mt-1 text-xs">Completed webhook rows</p>
 	</div>
 
-	<!-- Average Donation -->
-	<div class="rounded-lg border border-zinc-800/60 p-4">
-		<p class="text-xs font-medium text-zinc-500">Average</p>
-		<p class="mt-1 text-2xl font-bold text-green-400">{formatCents(averageCents)}</p>
+	<div class="border-surface-border bg-surface-base rounded-md border p-4">
+		<p class="text-text-tertiary text-xs font-medium">Average</p>
+		<p class="mt-1 text-2xl font-bold text-teal-300">{formatCents(averageCents)}</p>
+		<p class="text-text-quaternary mt-1 text-xs">Raised / completed donations</p>
 	</div>
 </div>

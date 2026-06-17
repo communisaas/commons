@@ -9,7 +9,7 @@ import {
 	smsMessageStatus,
 	debateStatus,
 	accountabilityCausalityClass,
-	accountabilityResponseType,
+	accountabilityResponseType
 } from './_validators';
 
 // =============================================================================
@@ -140,7 +140,13 @@ export default defineSchema({
 		location: v.optional(v.string()),
 		connection: v.optional(v.string()),
 		profileCompletedAt: v.optional(v.number()),
-		profileVisibility: v.string() // 'private' | 'public'
+		profileVisibility: v.string(), // 'private' | 'public'
+
+		// Stripe customer for individual (person-layer) paid authoring tiers.
+		// Mirrors organizations.stripeCustomerId so the individual checkout can
+		// find-or-create one Stripe customer per user and the webhook can resolve
+		// the user from the customer. Org subs use organizations.stripeCustomerId.
+		stripeCustomerId: v.optional(v.string())
 	})
 		.index('by_tokenIdentifier', ['tokenIdentifier'])
 		.index('by_email', ['email'])
@@ -150,7 +156,8 @@ export default defineSchema({
 		.index('by_passkeyCredentialId', ['passkeyCredentialId'])
 		.index('by_didKey', ['didKey'])
 		.index('by_walletAddress', ['walletAddress'])
-		.index('by_nearAccountId', ['nearAccountId']),
+		.index('by_nearAccountId', ['nearAccountId'])
+		.index('by_stripeCustomerId', ['stripeCustomerId']),
 
 	sessions: defineTable({
 		userId: v.id('users'),
@@ -256,9 +263,23 @@ export default defineSchema({
 		districtCounts: v.optional(v.array(v.object({ code: v.string(), count: v.number() }))),
 		tierCounts: v.optional(v.array(v.number())),
 
-		// Semantic embeddings (768-dim Gemini vectors)
+		// Semantic embeddings (768-dim Gemini vectors). All three are SERVER-ONLY:
+		// consumed for vector search, relatedness twins, concept edges, and hue
+		// projection. The public template queries that return raw documents
+		// (`getBySlug`, `list`) run them through `stripEmbeddings` so these fields
+		// never cross the client boundary; the enriched queries (`listPublic`,
+		// `getBySlugPublic`) project explicit field sets that omit them.
 		locationEmbedding: v.optional(v.array(v.float64())),
 		topicEmbedding: v.optional(v.array(v.float64())),
+		// Per-tag embeddings, generated the same way as topicEmbedding (one Gemini
+		// vector per raw tag). Consumed to cluster tags into concepts and derive
+		// concept edges; only concept labels and edge tuples cross out, never the
+		// vectors (stripped by the same projection as the other embeddings).
+		// Co-located with the template like topicEmbedding so the concept query
+		// reads them without a join.
+		tagEmbeddings: v.optional(
+			v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) }))
+		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
@@ -493,12 +514,12 @@ export default defineSchema({
 		.index('by_userId_metric', ['userId', 'metric'])
 		.index('by_windowStart_metric', ['windowStart', 'metric']),
 
-		// ===========================================================================
-		// ENCRYPTED DELIVERY DATA — legacy tombstone
-		// ===========================================================================
-		// Retired by Ground Vault PRF. Kept temporarily so historical rows can be
-		// migrated or purged without deleting the table out from under deployments.
-		// No active mutation should write or read this table.
+	// ===========================================================================
+	// ENCRYPTED DELIVERY DATA — legacy tombstone
+	// ===========================================================================
+	// Retired by Ground Vault PRF. Kept temporarily so historical rows can be
+	// migrated or purged without deleting the table out from under deployments.
+	// No active mutation should write or read this table.
 
 	encryptedDeliveryData: defineTable({
 		userId: v.id('users'),
@@ -1102,6 +1123,7 @@ export default defineSchema({
 		resolved: v.boolean()
 	})
 		.index('by_emailHash_resolved', ['emailHash', 'resolved'])
+		.index('by_resolved', ['resolved'])
 		.index('by_reportedBy', ['reportedBy']),
 
 	// ===========================================================================
@@ -1396,6 +1418,68 @@ export default defineSchema({
 		memberCount: v.optional(v.number()),
 		sentEmailCount: v.optional(v.number()),
 		smsSentCount: v.optional(v.number()),
+
+		// Scale-safe verified-action metering. The billing read counts verified
+		// actions WITHIN the current period; the prior implementation collected
+		// every verified action and filtered by sentAt in memory, which throws
+		// past the per-query document cap and hard-locks the org on every submit
+		// once it has >16K verified actions. This is a monotonic lifetime total
+		// (only ever increments, never resets — so no never-reset bug) minus a
+		// per-period baseline snapshotted at rollover: period_count = lifetime -
+		// baseline. baselineAt records WHICH period the baseline belongs to so a
+		// late/missed rollover can be detected and self-healed at read time.
+		verifiedActionsLifetime: v.optional(v.number()),
+		verifiedActionsPeriodBaseline: v.optional(v.number()),
+		verifiedActionsPeriodBaselineAt: v.optional(v.number()),
+
+		// Monotonic engagement-tier histogram for the dashboard tier breakdown.
+		// 5-element array indexed by engagementTier (0-4): [New, Active,
+		// Established, Veteran, Pillar]. engagementTier is set once at action
+		// creation and never re-patched (no transition write exists anywhere on
+		// campaignActions), so a monotonic counter can't drift — it is bumped
+		// exactly once, next to verifiedActionsLifetime in createCampaignAction.
+		// Backs getDashboardStats so the tier histogram is O(1) instead of a
+		// full-table .collect() that throws past the per-query doc cap. Optional
+		// so pre-existing orgs default cleanly (all tiers read as 0).
+		actionTierCounts: v.optional(v.array(v.number())),
+
+		// Denormalized per-supporter breakdown counters. Backs the verification
+		// funnel + list-health summary without a full-table scan (the scan
+		// throws past the per-query doc cap once an org's roster is large).
+		// Every count is a per-supporter scalar tally — maintained on insert,
+		// status transition, and delete via applySupporterStatsDelta. Excluded:
+		// district-of-record cardinality (a set, not a per-row tally — a scalar
+		// counter would double-count a supporter active in two districts). That
+		// signal is served by a separate bounded query. Optional so pre-existing
+		// orgs default cleanly (all counts read as 0 until first maintained write).
+		supporterStats: v.optional(
+			v.object({
+				// Supporters with a backed identity commitment AND verified flag.
+				identityVerified: v.number(),
+				// Supporters carrying a postal code (address-resolution signal).
+				postalResolved: v.number(),
+				// Supporters carrying a phone (encryptedPhone or phoneHash present).
+				phonePresent: v.number(),
+				// emailStatus histogram.
+				emailSubscribed: v.number(),
+				emailUnsubscribed: v.number(),
+				emailBounced: v.number(),
+				emailComplained: v.number(),
+				// smsStatus histogram.
+				smsSubscribed: v.number(),
+				smsUnsubscribed: v.number(),
+				smsStopped: v.number(),
+				smsNone: v.number(),
+				// Consent-evidence tallies (compliance posture).
+				emailConsentEvidence: v.number(),
+				emailSubscribedConsentEvidence: v.number(),
+				smsConsentEvidence: v.number(),
+				smsSubscribedConsentEvidence: v.number(),
+				// Per-source acquisition tally. source is set at create and never
+				// patched, so this map only grows on insert / shrinks on delete.
+				sourceCounts: v.record(v.string(), v.number())
+			})
+		),
 		onboardingState: v.optional(
 			v.object({
 				hasDescription: v.boolean(),
@@ -1420,6 +1504,16 @@ export default defineSchema({
 		// routing (Layer c) are deferred per spec.
 		brandingAccent: v.optional(v.string()),
 
+		// Outbound white-label — Coalition-tier flag (D-10). When true, Commons
+		// "powered by" chrome is suppressed on OUTBOUND surfaces only: the
+		// report email footer, the embed widget footer, and the scorecard embed
+		// footer. The /v/[hash] verification page deliberately KEEPS its Commons
+		// attestation regardless — it is the independent third-party proof and
+		// stripping it would gut the verification value. Default (undefined) =
+		// false = current Commons branding everywhere. Gated alongside
+		// brandingAccent + logoUrl in organizations.setBranding.
+		whiteLabel: v.optional(v.boolean()),
+
 		// Org-level PII encryption (passphrase-derived, multi-admin)
 		orgKeyVerifier: v.optional(v.string()), // Sentinel encrypted with org key — verifies passphrase
 		recoveryWrappedOrgKey: v.optional(v.string()), // Org key wrapped with recovery key — emergency recovery
@@ -1433,11 +1527,17 @@ export default defineSchema({
 		anSync: v.optional(
 			v.object({
 				apiKey: v.string(),
-				status: v.string(), // 'idle' | 'running' | 'completed' | 'failed'
-				syncType: v.string(), // 'full' | 'incremental'
+				adapterSource: v.optional(v.string()),
+				credentialStoredAt: v.optional(v.number()),
+				credentialVersion: v.optional(v.string()),
+				credentialProbeCompletedAt: v.optional(v.number()),
+				credentialProbeVersion: v.optional(v.string()),
+				status: v.string(), // 'credential_stored' | 'idle' | 'running' | 'completed' | 'failed'
+				syncType: v.string(), // 'credential-only' | 'credential-probe' | 'full' | 'incremental'
 				totalResources: v.number(),
 				processedResources: v.number(),
 				currentResource: v.optional(v.string()),
+				checkpoint: v.optional(v.string()), // adapter continuation cursor between bounded slices
 				imported: v.number(),
 				updated: v.number(),
 				skipped: v.number(),
@@ -1564,6 +1664,8 @@ export default defineSchema({
 	supporters: defineTable({
 		orgId: v.id('organizations'),
 		postalCode: v.optional(v.string()),
+		stateCode: v.optional(v.string()),
+		congressionalDistrict: v.optional(v.string()),
 		country: v.optional(v.string()),
 
 		// PII encryption at rest
@@ -1588,6 +1690,12 @@ export default defineSchema({
 		verified: v.boolean(),
 		emailStatus: v.string(), // 'subscribed' | 'unsubscribed' | 'bounced' | 'complained'
 		smsStatus: v.string(), // 'none' | 'subscribed' | 'unsubscribed' | 'stopped'
+		emailConsentSource: v.optional(v.string()),
+		emailConsentedAt: v.optional(v.number()),
+		emailConsentText: v.optional(v.string()),
+		smsConsentSource: v.optional(v.string()),
+		smsConsentedAt: v.optional(v.number()),
+		smsConsentText: v.optional(v.string()),
 
 		// Soft-bounce tally. Transient/Undetermined SES bounces increment this;
 		// a successful Delivery resets it. Crosses threshold (=3) → emailStatus
@@ -1597,7 +1705,7 @@ export default defineSchema({
 		softBounceCount: v.optional(v.number()),
 
 		// Import tracking
-		source: v.optional(v.string()), // 'csv' | 'action_network' | 'organic' | 'widget'
+		source: v.optional(v.string()), // 'csv' | platform profile id | 'organic' | 'widget'
 		importedAt: v.optional(v.number()),
 
 		updatedAt: v.number()
@@ -1658,11 +1766,14 @@ export default defineSchema({
 		// campaign that holds a goalAmountCents + receives stripe
 		// payments). Brutalist sweep caught FUNDRAISER missing from the
 		// initial union — donations.ts:622 inserts it directly.
+		// CONGRESSIONAL is dispatched through the CWC delivery spine; its
+		// authoring surface is gated by FEATURES.CONGRESSIONAL.
 		type: v.union(
 			v.literal('LETTER'),
 			v.literal('EVENT'),
 			v.literal('FORM'),
-			v.literal('FUNDRAISER')
+			v.literal('FUNDRAISER'),
+			v.literal('CONGRESSIONAL')
 		),
 		title: v.string(),
 		body: v.optional(v.string()),
@@ -1701,6 +1812,15 @@ export default defineSchema({
 		// composite index plus refund-aware decrement logic. (cure shipped).
 		donorCount: v.number(),
 		donationCurrency: v.optional(v.string()),
+		donationReceiptPolicy: v.optional(
+			v.object({
+				mode: v.union(v.literal('confirmation_only'), v.literal('tax_acknowledgment_policy')),
+				legalName: v.optional(v.string()),
+				acknowledgmentText: v.optional(v.string()),
+				configuredAt: v.number(),
+				configuredBy: v.optional(v.id('users'))
+			})
+		),
 
 		// Geographic targeting
 		targetJurisdiction: v.optional(v.string()),
@@ -1727,7 +1847,11 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_status', ['status'])
-		.index('by_debateId', ['debateId']),
+		.index('by_debateId', ['debateId'])
+		// Resolve the campaign that owns a given template — used by the
+		// congressional delivery path to attribute a successful CWC send back to
+		// the org campaign whose templateId matches the delivered submission.
+		.index('by_templateId', ['templateId']),
 
 	campaignActions: defineTable({
 		campaignId: v.id('campaigns'),
@@ -1737,6 +1861,7 @@ export default defineSchema({
 		verified: v.boolean(),
 		engagementTier: v.number(), // 0-4
 		districtHash: v.optional(v.string()),
+		districtCode: v.optional(v.string()),
 		// H3 res-7 cell index (~5.16 km², neighborhood scale). Resolved during
 		// district verification via latLngToCell(lat, lng, 7). Stored for
 		// intra-district geographic visualization in verification packets.
@@ -1760,17 +1885,67 @@ export default defineSchema({
 		delegated: v.boolean(),
 		delegationGrantId: v.optional(v.string()),
 
+		// Delivery-channel discriminator for cross-channel attribution. Now that
+		// the channel taxonomy is fixed, the field is a closed union rather than a
+		// bare string: 'congressional' (CWC / legislative delivery, written by
+		// submissions.emitCongressionalAction), 'email' (direct email), 'sms', and
+		// 'web' (on-site form / embed) are forward values for the remaining writers.
+		// Optional: existing rows predate the field and read as undefined (treated
+		// as unattributed). Adding a value requires a schema deploy + a matching
+		// read-side branch — the right friction for a cross-channel discriminator.
+		channel: v.optional(
+			v.union(
+				v.literal('congressional'),
+				v.literal('email'),
+				v.literal('sms'),
+				v.literal('web')
+			)
+		),
+
+		// Set only on congressional-channel rows: the submissions row whose
+		// successful CWC delivery produced this attributed action. Lets
+		// createCampaignAction dedup the congressional path (which has no
+		// supporterId) on the submission instead of (campaignId, supporterId),
+		// so an idempotent delivery retry never double-counts a campaign.
+		congressionalSubmissionId: v.optional(v.id('submissions')),
+
+		// Delivery completeness for multi-recipient channels (currently
+		// congressional, where a send may target both House + Senate):
+		// 'delivered' = every targeted recipient received the message;
+		// 'partial' = at least one delivered AND at least one failed. Optional /
+		// undefined for single-recipient channels and pre-field rows, which are
+		// treated as fully delivered. Keeps the org ledger honest: a House-ok /
+		// Senate-fail rollup is recorded as 'partial', not silently counted as a
+		// full delivery.
+		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial'))),
+
 		sentAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])
 		.index('by_campaignId_verified', ['campaignId', 'verified'])
 		.index('by_campaignId_districtHash', ['campaignId', 'districtHash'])
 		.index('by_campaignId_supporterId', ['campaignId', 'supporterId'])
-		.index('by_orgId_verified', ['orgId', 'verified']),
+		.index('by_orgId_supporterId', ['orgId', 'supporterId'])
+		.index('by_orgId_verified', ['orgId', 'verified'])
+		// Range index for the billing self-heal: when the period baseline is
+		// stale/missing, count THIS period's verified actions via a sentAt range
+		// (bounded to one period's volume — never the lifetime table) instead of
+		// an unbounded .collect().
+		.index('by_orgId_verified_sentAt', ['orgId', 'verified', 'sentAt'])
+		// Per-channel attribution queries (bounded per campaign).
+		.index('by_campaignId_channel', ['campaignId', 'channel'])
+		// Congressional-path dedup: a single-doc lookup for the action a given
+		// submission already produced, so retries are idempotent.
+		.index('by_campaignId_congressionalSubmissionId', [
+			'campaignId',
+			'congressionalSubmissionId'
+		]),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),
 		actionId: v.optional(v.id('campaignActions')),
+		decisionMakerId: v.optional(v.id('decisionMakers')),
+		billId: v.optional(v.id('bills')),
 		targetEmail: v.string(),
 		targetName: v.string(),
 		encryptedTargetEmail: v.optional(v.string()),
@@ -1793,6 +1968,32 @@ export default defineSchema({
 		packetSnapshot: v.optional(v.any()),
 		packetDigest: v.optional(v.string()),
 		proofWeight: v.optional(v.number()),
+		// Sender-side delivery rows become receipt-eligible only when they
+		// are bound to both a Power target and a bill. This is readiness,
+		// not a Merkle-anchored accountability receipt.
+		receiptEligibility: v.optional(
+			v.union(
+				v.literal('eligible'),
+				v.literal('missing_bill'),
+				v.literal('unresolved_target'),
+				v.literal('missing_bill_and_target')
+			)
+		),
+		receiptBlockers: v.optional(v.array(v.string())),
+		// Delivery-local response history for campaign report sends that do
+		// not yet have a full accountabilityReceipt. When a receipt exists,
+		// readers should prefer accountabilityReceipts.responses because it
+		// carries the stronger proof packet context.
+		responses: v.optional(
+			v.array(
+				v.object({
+					type: accountabilityResponseType,
+					detail: v.optional(v.string()),
+					confidence: v.string(),
+					occurredAt: v.number()
+				})
+			)
+		),
 		createdAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])
@@ -1849,7 +2050,7 @@ export default defineSchema({
 		// Scheduled / TEE-sealed sends
 		scheduledAt: v.optional(v.number()), // Future send time (epoch ms)
 		sealedOrgKey: v.optional(v.string()), // Org key sealed to TEE public key, deleted after send
-		sendMode: v.optional(v.string()), // 'client-direct' | 'tee-sealed'
+		sendMode: v.optional(v.string()), // 'client-direct' | 'tee-sealed' | 'server'
 
 		// A/B testing
 		isAbTest: v.boolean(),
@@ -1875,7 +2076,29 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_status', ['status'])
+		// Range index for the billing period read: checkPlanLimits ranges
+		// sentAt >= periodStart so it touches only this period's blasts, not the
+		// org's entire blast history (one row per blast — same unbounded-collect
+		// cliff the verified-action read already fixed via by_orgId_verified_sentAt).
+		.index('by_orgId_sentAt', ['orgId', 'sentAt'])
 		.index('by_abParentId', ['abParentId']),
+
+	emailAbTestCohorts: defineTable({
+		orgId: v.id('organizations'),
+		abParentId: v.string(),
+		baseFilter: recipientFilterValidator,
+		variantAEmailHashes: v.array(v.string()),
+		variantBEmailHashes: v.array(v.string()),
+		remainderEmailHashes: v.array(v.string()),
+		totalCount: v.number(),
+		testCount: v.number(),
+		remainderCount: v.number(),
+		remainderBlastId: v.optional(v.id('emailBlasts')),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_org_abParentId', ['orgId', 'abParentId'])
+		.index('by_remainderBlastId', ['remainderBlastId']),
 
 	emailEvents: defineTable({
 		blastId: v.id('emailBlasts'),
@@ -1925,17 +2148,24 @@ export default defineSchema({
 
 		// Plan slug — canonical values at src/lib/server/billing/plans.ts.
 		// Tightened from v.string() to a closed union 2026-05-26 to catch
-		// silent free-tier downgrade at write time (the read-side fallback
-		// `PLANS[plan] ?? PLANS.free` at convex/subscriptions.ts:134
+		// silent downgrades at write time (the read-side fallback
+		// `PLANS[plan] ?? PLANS.inactive` at convex/subscriptions.ts
 		// degrades gracefully but observability is poor — a writer that
 		// silently passes 'Organization' (capitalized) would never be
 		// noticed by ops). Adding a new tier requires editing this union
-		// + plans.ts in lockstep; that's the right friction.
+		// + plans.ts in lockstep; that's the right friction. `inactive` is
+		// the gated floor (unsubscribed/canceled), not a marketed tier.
 		plan: v.union(
-			v.literal('free'),
+			v.literal('inactive'),
+			// Org (org-layer) plans — keyed on orgId.
 			v.literal('starter'),
 			v.literal('organization'),
-			v.literal('coalition')
+			v.literal('coalition'),
+			// Individual (person-layer) paid authoring tiers — keyed on userId.
+			// They buy ONLY authoring volume; the org-quota fields above are never
+			// synced for these. See src/lib/server/billing/plans.ts INDIVIDUAL_PLANS.
+			v.literal('voice'),
+			v.literal('advocate')
 		),
 		planDescription: v.optional(v.string()),
 		priceCents: v.number(),
@@ -1953,10 +2183,7 @@ export default defineSchema({
 		currentPeriodStart: v.number(),
 		currentPeriodEnd: v.number(),
 
-		paymentMethod: v.union(
-			v.literal('stripe'),
-			v.literal('crypto')
-		),
+		paymentMethod: v.union(v.literal('stripe'), v.literal('crypto')),
 
 		// Stripe
 		stripeSubscriptionId: v.optional(v.string()),
@@ -2010,11 +2237,7 @@ export default defineSchema({
 
 		title: v.string(),
 		description: v.optional(v.string()),
-		eventType: v.union(
-			v.literal('IN_PERSON'),
-			v.literal('VIRTUAL'),
-			v.literal('HYBRID')
-		),
+		eventType: v.union(v.literal('IN_PERSON'), v.literal('VIRTUAL'), v.literal('HYBRID')),
 
 		// When
 		startAt: v.number(),
@@ -2133,6 +2356,17 @@ export default defineSchema({
 			v.literal('refunded')
 		),
 
+		// Baseline donor confirmation email outcome. This is deliberately
+		// separate from accountabilityReceipts and tax acknowledgments.
+		confirmationEmailStatus: v.optional(
+			v.union(v.literal('sending'), v.literal('sent'), v.literal('skipped'), v.literal('failed'))
+		),
+		confirmationEmailAttemptedAt: v.optional(v.number()),
+		confirmationEmailSentAt: v.optional(v.number()),
+		confirmationEmailFailureReason: v.optional(v.string()),
+		confirmationEmailProvider: v.optional(v.string()),
+		confirmationEmailProviderMessageId: v.optional(v.string()),
+
 		districtHash: v.optional(v.string()),
 		engagementTier: v.number(),
 
@@ -2180,7 +2414,7 @@ export default defineSchema({
 			v.literal('paused'),
 			v.literal('completed'),
 			v.literal('partial_no_op'),
-			v.literal('failed'),
+			v.literal('failed')
 		),
 		currentStep: v.number(),
 		nextRunAt: v.optional(v.number()),
@@ -2228,7 +2462,11 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_orgId', ['orgId'])
-		.index('by_status', ['status']),
+		.index('by_status', ['status'])
+		// Range index for the billing period read — same rationale as
+		// emailBlasts.by_orgId_sentAt: bound the sms-quota sum to the period's
+		// blasts instead of collecting the org's whole blast history.
+		.index('by_orgId_sentAt', ['orgId', 'sentAt']),
 
 	smsMessages: defineTable({
 		blastId: v.id('smsBlasts'),
@@ -2240,6 +2478,21 @@ export default defineSchema({
 		status: smsMessageStatus,
 		errorCode: v.optional(v.string())
 	})
+		.index('by_blastId', ['blastId'])
+		.index('by_supporterId', ['supporterId'])
+		.index('by_twilioSid', ['twilioSid']),
+
+	smsReplies: defineTable({
+		orgId: v.id('organizations'),
+		supporterId: v.optional(v.id('supporters')),
+		blastId: v.optional(v.id('smsBlasts')),
+		fromHash: v.optional(v.string()),
+		toNumber: v.optional(v.string()),
+		body: v.string(),
+		twilioSid: v.optional(v.string()),
+		receivedAt: v.number()
+	})
+		.index('by_orgId', ['orgId'])
 		.index('by_blastId', ['blastId'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_twilioSid', ['twilioSid']),
@@ -2530,6 +2783,7 @@ export default defineSchema({
 		)
 	})
 		.index('by_type', ['type'])
+		.index('by_email', ['email'])
 		.index('by_jurisdiction_jurisdictionLevel', ['jurisdiction', 'jurisdictionLevel'])
 		.index('by_party', ['party'])
 		.index('by_lastName', ['lastName'])
@@ -2804,5 +3058,22 @@ export default defineSchema({
 		event: v.string(),
 		payload: v.string(), // JSON-serialized event payload (same shape as webhook payload)
 		emittedAt: v.number()
-	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt'])
+	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt']),
+
+	// Persisted relatedness normalization (singleton, keyed like smtRoots/treeId).
+	// Holds the public-corpus centroid — the genre common-mode that mean-centering
+	// removes before scoring template twins — plus the calibrated centered-cosine
+	// threshold that was in force when the centroid was fit. The template
+	// relatedness query reads this instead of recomputing the centroid on every
+	// call; a daily cron refits it so the normalization tracks the corpus as it
+	// grows. One canonical row under `key: 'public'`. Recompute is pure Convex
+	// compute — no external/recurring cost.
+	relatednessCalibration: defineTable({
+		key: v.string(), // singleton selector — always 'public'
+		centroid: v.array(v.float64()),
+		threshold: v.float64(),
+		count: v.number(), // usable (embedded) templates the centroid was fit over
+		dim: v.number(), // embedding dimensionality
+		updatedAt: v.number()
+	}).index('by_key', ['key'])
 });

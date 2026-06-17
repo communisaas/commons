@@ -7,6 +7,7 @@ import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
+import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
 // Convex equivalent: debates.spawnDebate (off-chain fallback only). Blockchain path must stay here.
 
 /**
@@ -18,7 +19,8 @@ import { FEATURES } from '$lib/config/features';
  * Returns: { debateId, debateIdOnchain, actionDomain }
  *
  * Calls DebateMarket.proposeDebate() on-chain, then stores in Convex.
- * If blockchain is not configured (local dev), falls back to off-chain-only mode.
+ * If blockchain is not configured, production fails closed unless explicitly
+ * opted into off-chain-only operation; local development can proceed off-chain.
  */
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -90,6 +92,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			actionDomain = computeActionDomainLocally(debateIdOnchain!, propositionHash);
 		}
 	} else if (onchainResult.error?.includes('not configured')) {
+		allowChainMisconfig({ op: 'debates/create' });
 		console.warn('[debates/create] Blockchain not configured, creating off-chain only');
 		offchainOnly = true;
 	} else {
@@ -120,7 +123,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		jurisdictionSize: jurisdictionHint,
 		proposerAddress: '0x0000000000000000000000000000000000000000',
 		proposerBond: Number(bond),
-		txHash: txHash ?? undefined});
+		txHash: txHash ?? undefined
+	});
 
 	return json({
 		debateId,
@@ -128,7 +132,14 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		actionDomain,
 		propositionHash,
 		deadline: new Date(deadlineMs).toISOString(),
-		txHash: txHash ?? null
+		txHash: txHash ?? null,
+		chainStatus: offchainOnly ? 'offchain_only' : 'onchain_proposed',
+		...(offchainOnly
+			? {
+					claimBoundary:
+						'Debate was recorded off-chain only; no on-chain proposal transaction was executed.'
+				}
+			: {})
 	});
 };
 

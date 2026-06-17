@@ -15,33 +15,14 @@
 	 */
 	import type { PageData } from './$types';
 	import AttestationVerifier from '$lib/components/verify/AttestationVerifier.svelte';
-	import type { AttestationPreimage } from '$lib/core/crypto/attestation-verify';
 
 	let { data }: { data: PageData } = $props();
 
-	// NEW-E-5: build AttestationPreimage shape from campaignContext when
-	// the v/[hash] page is rendering a campaign-mode verification. The
-	// component recomputes SHA-256 client-side and compares — staffers
-	// distrustful of Commons can verify the platform's claim without
-	// trusting the platform.
-	const preimage = $derived.by<AttestationPreimage | null>(() => {
-		const ctx = data.mode === 'campaign' ? data.campaignContext : null;
-		if (!ctx || !ctx.attestationHash || !ctx.dateRange) return null;
-		// Synthesize the campaignTitle/orgName placeholders since they aren't
-		// surfaced on this anonymous endpoint (privacy). Verifier surfaces
-		// these as opaque — the staffer who received the email knows them.
-		return {
-			campaignId: data.hash,
-			campaignTitle: '(redacted on public surface)',
-			orgName: '(redacted on public surface)',
-			verified: ctx.verified ?? 0,
-			districtCount: ctx.districtCount ?? 0,
-			authorship: { individual: 0, shared: 0, explicit: false },
-			dateRange: ctx.dateRange,
-			identityBreakdown: null,
-			geography: (ctx.topDistricts ?? []).map((d) => ({ hash: d.hash, count: d.count }))
-		};
-	});
+	// Campaign mode is a K-anonymized COHORT report — the public surface cannot
+	// supply the exact preimage, so the recipient recomputes the attestation from
+	// the "Verify offline" block in their email (the recipient is the oracle). The
+	// page passes only the hash to compare against; the verifier owns the
+	// recipient-entered preimage.
 	const attestationHash = $derived(
 		data.mode === 'campaign' ? data.campaignContext?.attestationHash ?? null : null
 	);
@@ -55,6 +36,8 @@
 	);
 
 	const headline = $derived.by(() => {
+		// Campaign mode is a cohort report — NO per-sender tier claim.
+		if (data.mode === 'campaign') return 'Constituent report';
 		if (data.trustTier >= 3) return 'Government-Verified Identity';
 		if (data.trustTier >= 2) return 'Verified Resident';
 		if (data.trustTier >= 1) return 'Authenticated Sender';
@@ -62,6 +45,16 @@
 	});
 
 	const lead = $derived.by(() => {
+		if (data.mode === 'campaign') {
+			// Cohort language from the K-gated qualitative phrase, or a count
+			// sentence. No "verified their address" — that is a per-sender claim.
+			const ctx = data.campaignContext;
+			if (ctx?.identityPhrase) return ctx.identityPhrase;
+			const n = ctx?.verified ?? 0;
+			return n > 0
+				? `This report aggregates ${n} verified constituent action${n === 1 ? '' : 's'}. Recompute its cryptographic attestation below.`
+				: 'This report carries a cryptographic attestation you can recompute below.';
+		}
 		const state = data.location.state;
 		if (data.trustTier >= 3) {
 			return `The person who sent you this message proved their identity and residency${state ? ` in ${state}` : ''} with a government credential.`;
@@ -76,14 +69,29 @@
 	});
 
 	const authRow = $derived.by(() => {
+		if (data.mode === 'campaign') {
+			// Only promise "recompute below" when an attestation actually exists (the
+			// verifier block gates on attestationHash); otherwise say so plainly.
+			return attestationHash
+				? { label: 'Attestation', value: 'SHA-256 (recompute below)', verified: true }
+				: { label: 'Attestation', value: 'No attestation issued yet', verified: false };
+		}
 		if (data.identity.method === 'gov-id') {
 			return { label: 'Identity', value: 'Government credential (mDL)', verified: true };
 		}
 		return { label: 'Authentication', value: 'Email', verified: data.identity.verified };
 	});
 
-	const compositionValue = $derived(
-		data.composition === 'individual' ? 'Individually composed' : 'Template-adapted'
+	// Campaign mode has no single composition; omit the row (null).
+	const compositionValue = $derived.by(() => {
+		if (data.mode === 'campaign') return null;
+		return data.composition === 'individual' ? 'Individually composed' : 'Template-adapted';
+	});
+
+	// The shield: in campaign mode it marks a real cryptographic attestation (not a
+	// per-sender tier); in individual mode it marks tier-1+ verification.
+	const showShield = $derived(
+		data.mode === 'campaign' ? attestationHash !== null : data.trustTier >= 1
 	);
 </script>
 
@@ -102,7 +110,7 @@
 			<div class="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
 				style="background: oklch(0.95 0.03 160 / 0.5); border: 1px solid oklch(0.88 0.04 160 / 0.4);"
 			>
-				{#if data.trustTier >= 1}
+				{#if showShield}
 					<svg class="w-5 h-5" style="color: oklch(0.45 0.12 160)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 						<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 						<path d="m9 12 2 2 4-4" />
@@ -171,10 +179,17 @@
 					{authRow.value}
 				</span>
 
-				<span class="text-text-quaternary">Composition</span>
-				<span class="text-text-secondary text-right">{compositionValue}</span>
+				{#if compositionValue}
+					<span class="text-text-quaternary">Composition</span>
+					<span class="text-text-secondary text-right">{compositionValue}</span>
+				{/if}
 
-				<span class="text-text-quaternary">Attestation</span>
+				<!-- `data.hash` is the route param: the real SHA-256 attestation in
+				     individual mode, but the campaign ROUTE ID in campaign mode (the
+				     real attestation is the verifier block below). Label honestly. -->
+				<span class="text-text-quaternary"
+					>{data.mode === 'campaign' ? 'Report ID' : 'Attestation'}</span
+				>
 				<span class="font-mono text-text-tertiary text-right">{data.hash}</span>
 
 				<span class="text-text-quaternary">Verified</span>
@@ -183,13 +198,14 @@
 		</div>
 	</div>
 
-	<!-- T8-3 / NEW-E-5: browser-side attestation recomputation -->
-	{#if preimage && attestationHash}
+	<!-- Browser-side attestation recomputation (recipient pastes their report's
+	     offline-verify block; nothing private is published on this surface). -->
+	{#if data.mode === 'campaign' && attestationHash}
 		<div class="w-full max-w-lg mx-auto verify-stagger" style="--stagger: 5">
 			<AttestationVerifier
-				{preimage}
 				expectedHash={attestationHash}
-				titleRedacted={true}
+				campaignId={data.hash}
+				blockPaste={true}
 			/>
 		</div>
 	{/if}

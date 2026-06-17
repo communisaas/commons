@@ -25,7 +25,7 @@
 >   webhook config (ops prerequisite, not code gap).
 > - **4. Email A/B Testing:** schema + compose UI + results view live.
 >   `emailBlasts.{isAbTest, abTestConfig, abVariant, abParentId,
->   abWinnerPickedAt}` present. Winner-selection cron
+abWinnerPickedAt}` present. Winner-selection cron
 >   (`/api/cron/ab-winner`) — verify deployment; if absent, winner
 >   picking is manual.
 > - **5. AN Migration Promotion:** not shipped. No
@@ -70,24 +70,24 @@ Add to `convex/schema.ts`:
 
 ```typescript
 apiKeys: defineTable({
-  orgId: v.id('organizations'),
+	orgId: v.id('organizations'),
 
-  name: v.string(),                             // Human label ("Production key", "Staging")
-  prefix: v.string(),                           // First 8 chars of key, for display ("ck_live_abc1...")
-  hash: v.string(),                             // SHA-256(full_key) -- never store plaintext
+	name: v.string(), // Human label ("Production key", "Staging")
+	prefix: v.string(), // First 8 chars of key, for display ("ck_live_abc1...")
+	hash: v.string(), // SHA-256(full_key) -- never store plaintext
 
-  scopes: v.array(v.string()),                  // ["read"] | ["read", "write"] | ["read", "write", "admin"]
+	scopes: v.array(v.string()), // ["read"] | ["read", "write"] | ["read", "write", "admin"]
 
-  lastUsedAt: v.optional(v.number()),
-  expiresAt: v.optional(v.number()),            // undefined = no expiry
-  revokedAt: v.optional(v.number()),            // soft delete
+	lastUsedAt: v.optional(v.number()),
+	expiresAt: v.optional(v.number()), // undefined = no expiry
+	revokedAt: v.optional(v.number()), // soft delete
 
-  createdAt: v.number(),
-  createdBy: v.id('users'),                     // userId who created it
+	createdAt: v.number(),
+	createdBy: v.id('users') // userId who created it
 })
-  .index('by_org', ['orgId'])
-  .index('by_hash', ['hash'])
-  .index('by_prefix', ['prefix']);
+	.index('by_org', ['orgId'])
+	.index('by_hash', ['hash'])
+	.index('by_prefix', ['prefix']);
 ```
 
 No back-reference is needed on `organizations`; relations in Convex are
@@ -106,33 +106,31 @@ import { serverQuery, serverMutation } from '$lib/server/convex';
 import { api } from '$convex/api';
 
 export interface ApiKeyContext {
-  orgId: string;
-  keyId: string;
-  scopes: string[];
+	orgId: string;
+	keyId: string;
+	scopes: string[];
 }
 
-export async function authenticateApiKey(
-  request: Request
-): Promise<ApiKeyContext | null> {
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader?.startsWith('Bearer ck_')) return null;
+export async function authenticateApiKey(request: Request): Promise<ApiKeyContext | null> {
+	const authHeader = request.headers.get('authorization');
+	if (!authHeader?.startsWith('Bearer ck_')) return null;
 
-  const token = authHeader.slice(7); // Remove "Bearer "
-  const hash = createHash('sha256').update(token).digest('hex');
+	const token = authHeader.slice(7); // Remove "Bearer "
+	const hash = createHash('sha256').update(token).digest('hex');
 
-  const key = await serverQuery(api.apiKeys.lookupByHash, { hash });
-  if (!key) return null;
-  if (key.revokedAt) return null;
-  if (key.expiresAt && key.expiresAt < Date.now()) return null;
+	const key = await serverQuery(api.apiKeys.lookupByHash, { hash });
+	if (!key) return null;
+	if (key.revokedAt) return null;
+	if (key.expiresAt && key.expiresAt < Date.now()) return null;
 
-  // Fire-and-forget lastUsedAt update
-  serverMutation(api.apiKeys.touchLastUsed, { keyId: key._id }).catch(() => {});
+	// Fire-and-forget lastUsedAt update
+	serverMutation(api.apiKeys.touchLastUsed, { keyId: key._id }).catch(() => {});
 
-  return {
-    orgId: key.orgId,
-    keyId: key._id,
-    scopes: key.scopes,
-  };
+	return {
+		orgId: key.orgId,
+		keyId: key._id,
+		scopes: key.scopes
+	};
 }
 ```
 
@@ -141,16 +139,19 @@ The corresponding Convex query/mutation:
 ```typescript
 // convex/apiKeys.ts
 export const lookupByHash = query({
-  args: { hash: v.string() },
-  handler: (ctx, { hash }) =>
-    ctx.db.query('apiKeys').withIndex('by_hash', q => q.eq('hash', hash)).unique(),
+	args: { hash: v.string() },
+	handler: (ctx, { hash }) =>
+		ctx.db
+			.query('apiKeys')
+			.withIndex('by_hash', (q) => q.eq('hash', hash))
+			.unique()
 });
 
 export const touchLastUsed = mutation({
-  args: { keyId: v.id('apiKeys') },
-  handler: async (ctx, { keyId }) => {
-    await ctx.db.patch(keyId, { lastUsedAt: Date.now() });
-  },
+	args: { keyId: v.id('apiKeys') },
+	handler: async (ctx, { keyId }) => {
+		await ctx.db.patch(keyId, { lastUsedAt: Date.now() });
+	}
 });
 ```
 
@@ -185,22 +186,27 @@ New file: `src/lib/server/api/v1/envelope.ts`
 import { json } from '@sveltejs/kit';
 
 export function apiSuccess<T>(data: T, meta?: Record<string, unknown>, status = 200) {
-  return json({ data, ...(meta ? { meta } : {}) }, { status });
+	return json({ data, ...(meta ? { meta } : {}) }, { status });
 }
 
 export function apiList<T>(items: T[], opts: { cursor?: string | null; total?: number }) {
-  return json({
-    data: items,
-    meta: {
-      total: opts.total,
-      cursor: opts.cursor ?? null,
-      hasMore: opts.cursor !== null
-    }
-  });
+	return json({
+		data: items,
+		meta: {
+			total: opts.total,
+			cursor: opts.cursor ?? null,
+			hasMore: opts.cursor !== null
+		}
+	});
 }
 
-export function apiError(code: string, message: string, status: number, details?: Record<string, unknown>) {
-  return json({ error: { code, message, ...(details ? { details } : {}) } }, { status });
+export function apiError(
+	code: string,
+	message: string,
+	status: number,
+	details?: Record<string, unknown>
+) {
+	return json({ error: { code, message, ...(details ? { details } : {}) } }, { status });
 }
 ```
 
@@ -258,6 +264,7 @@ src/routes/api/v1/
 ### 1.7 Cursor Pagination
 
 Matches existing pattern from `supporters/+page.server.ts`:
+
 - Default page size: 50, max 100
 - Cursor = last item ID
 - Use Convex `paginate()` with a page size, or query `take(limit + 1)` and check the extra entry for `hasMore`
@@ -274,30 +281,30 @@ import { authenticateApiKey } from '$lib/server/api/v1/auth';
 import { apiList, apiError } from '$lib/server/api/v1/envelope';
 
 export const GET: RequestHandler = async ({ request, url }) => {
-  const ctx = await authenticateApiKey(request);
-  if (!ctx) return apiError('INVALID_API_KEY', 'Invalid or missing API key', 401);
-  if (!ctx.scopes.includes('read')) {
-    return apiError('INSUFFICIENT_SCOPE', 'Key requires "read" scope', 403);
-  }
+	const ctx = await authenticateApiKey(request);
+	if (!ctx) return apiError('INVALID_API_KEY', 'Invalid or missing API key', 401);
+	if (!ctx.scopes.includes('read')) {
+		return apiError('INSUFFICIENT_SCOPE', 'Key requires "read" scope', 403);
+	}
 
-  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
-  const cursor = url.searchParams.get('cursor') || undefined;
+	const limit = Math.min(parseInt(url.searchParams.get('limit') || '50'), 100);
+	const cursor = url.searchParams.get('cursor') || undefined;
 
-  const { items, nextCursor, total } = await serverQuery(api.supporters.listForApi, {
-    orgId: ctx.orgId,
-    limit,
-    cursor,
-    status: url.searchParams.get('status') ?? undefined,
-    verified:
-      url.searchParams.get('verified') === 'true'
-        ? true
-        : url.searchParams.get('verified') === 'false'
-          ? false
-          : undefined,
-    tag: url.searchParams.get('tag') ?? undefined,
-  });
+	const { items, nextCursor, total } = await serverQuery(api.supporters.listForApi, {
+		orgId: ctx.orgId,
+		limit,
+		cursor,
+		status: url.searchParams.get('status') ?? undefined,
+		verified:
+			url.searchParams.get('verified') === 'true'
+				? true
+				: url.searchParams.get('verified') === 'false'
+					? false
+					: undefined,
+		tag: url.searchParams.get('tag') ?? undefined
+	});
 
-  return apiList(items, { cursor: nextCursor ?? null, total });
+	return apiList(items, { cursor: nextCursor ?? null, total });
 };
 ```
 
@@ -319,6 +326,7 @@ Add to org settings page (`src/routes/org/[slug]/settings/+page.svelte`):
 ### 1.10 OpenAPI Spec
 
 Generate `docs/openapi/v1.yaml` (OpenAPI 3.1):
+
 - SecurityScheme: `bearerAuth` with format `ck_live_*`
 - All endpoints documented with request/response schemas
 - Error schema standardized
@@ -342,6 +350,7 @@ Generate `docs/openapi/v1.yaml` (OpenAPI 3.1):
 ### 2.1 Current State (from codebase)
 
 The supporters page (`src/routes/org/[slug]/supporters/+page.svelte`) already has:
+
 - Search (name/email)
 - Email status filter (subscribed/unsubscribed/bounced/complained)
 - Verification toggle (verified/unverified)
@@ -356,24 +365,24 @@ Add to `convex/schema.ts`:
 
 ```typescript
 segments: defineTable({
-  orgId: v.id('organizations'),
+	orgId: v.id('organizations'),
 
-  name: v.string(),
-  description: v.optional(v.string()),
+	name: v.string(),
+	description: v.optional(v.string()),
 
-  // Serialized filter tree (see FilterNode type below)
-  filters: v.any(),
+	// Serialized filter tree (see FilterNode type below)
+	filters: v.any(),
 
-  // Cached count (refreshed on access if stale > 5 min)
-  cachedCount: v.optional(v.number()),
-  countedAt: v.optional(v.number()),
+	// Cached count (refreshed on access if stale > 5 min)
+	cachedCount: v.optional(v.number()),
+	countedAt: v.optional(v.number()),
 
-  createdBy: v.id('users'),
-  createdAt: v.number(),
-  updatedAt: v.number(),
+	createdBy: v.id('users'),
+	createdAt: v.number(),
+	updatedAt: v.number()
 })
-  .index('by_org', ['orgId'])
-  .index('by_org_name', ['orgId', 'name']); // uniqueness enforced in mutation
+	.index('by_org', ['orgId'])
+	.index('by_org_name', ['orgId', 'name']); // uniqueness enforced in mutation
 ```
 
 Uniqueness on `(orgId, name)` is checked inside the create/rename
@@ -387,36 +396,36 @@ writes on the same index row.
 
 /** Leaf filter: one condition on one field */
 export interface FilterCondition {
-  type: 'condition';
-  field:
-    | 'emailStatus'        // subscribed | unsubscribed | bounced | complained
-    | 'verified'            // true | false
-    | 'source'              // csv | action_network | organic | widget
-    | 'tag'                 // tag name
-    | 'createdAfter'        // ISO date
-    | 'createdBefore'       // ISO date
-    | 'postalCode'          // exact match or prefix
-    | 'engagementTier'      // 0-4 (from CampaignAction)
-    | 'campaignParticipation' // campaignId
-    | 'identityCommitment'; // has identity (not null)
-  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'exists';
-  value: string | number | boolean;
+	type: 'condition';
+	field:
+		| 'emailStatus' // subscribed | unsubscribed | bounced | complained
+		| 'verified' // true | false
+		| 'source' // csv | action_network | organic | widget
+		| 'tag' // tag name
+		| 'createdAfter' // ISO date
+		| 'createdBefore' // ISO date
+		| 'postalCode' // exact match or prefix
+		| 'engagementTier' // 0-4 (from CampaignAction)
+		| 'campaignParticipation' // campaignId
+		| 'identityCommitment'; // has identity (not null)
+	operator: 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'exists';
+	value: string | number | boolean;
 }
 
 /** Group: AND or OR of children */
 export interface FilterGroup {
-  type: 'group';
-  logic: 'AND' | 'OR';
-  children: FilterNode[];
+	type: 'group';
+	logic: 'AND' | 'OR';
+	children: FilterNode[];
 }
 
 export type FilterNode = FilterCondition | FilterGroup;
 
 /** Saved segment payload */
 export interface SegmentDefinition {
-  name: string;
-  description?: string;
-  root: FilterGroup;
+	name: string;
+	description?: string;
+	root: FilterGroup;
 }
 ```
 
@@ -437,78 +446,78 @@ import type { QueryCtx } from './_generated/server';
 import type { Doc, Id } from './_generated/dataModel';
 
 export async function evaluateSegment(
-  ctx: QueryCtx,
-  orgId: Id<'organizations'>,
-  node: FilterNode,
+	ctx: QueryCtx,
+	orgId: Id<'organizations'>,
+	node: FilterNode
 ): Promise<Doc<'supporters'>[]> {
-  const seed = await ctx.db
-    .query('supporters')
-    .withIndex('by_org', q => q.eq('orgId', orgId))
-    .collect();
+	const seed = await ctx.db
+		.query('supporters')
+		.withIndex('by_org', (q) => q.eq('orgId', orgId))
+		.collect();
 
-  const results: Doc<'supporters'>[] = [];
-  for (const supporter of seed) {
-    if (await evalNode(ctx, supporter, node)) results.push(supporter);
-  }
-  return results;
+	const results: Doc<'supporters'>[] = [];
+	for (const supporter of seed) {
+		if (await evalNode(ctx, supporter, node)) results.push(supporter);
+	}
+	return results;
 }
 
 async function evalNode(ctx: QueryCtx, s: Doc<'supporters'>, n: FilterNode): Promise<boolean> {
-  if (n.type === 'condition') return evalCondition(ctx, s, n);
-  const results = await Promise.all(n.children.map(child => evalNode(ctx, s, child)));
-  return n.logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+	if (n.type === 'condition') return evalCondition(ctx, s, n);
+	const results = await Promise.all(n.children.map((child) => evalNode(ctx, s, child)));
+	return n.logic === 'AND' ? results.every(Boolean) : results.some(Boolean);
 }
 
 async function evalCondition(
-  ctx: QueryCtx,
-  s: Doc<'supporters'>,
-  c: FilterCondition,
+	ctx: QueryCtx,
+	s: Doc<'supporters'>,
+	c: FilterCondition
 ): Promise<boolean> {
-  switch (c.field) {
-    case 'emailStatus':
-      return c.operator === 'eq' ? s.emailStatus === c.value : s.emailStatus !== c.value;
-    case 'verified':
-      return s.verified === (c.value === true || c.value === 'true');
-    case 'source':
-      return c.operator === 'eq' ? s.source === c.value : s.source !== c.value;
-    case 'tag': {
-      const links = await ctx.db
-        .query('supporterTags')
-        .withIndex('by_supporter', q => q.eq('supporterId', s._id))
-        .collect();
-      const tagIds = links.map(l => l.tagId);
-      const tags = await Promise.all(tagIds.map(id => ctx.db.get(id)));
-      return tags.some(t => t?.name === String(c.value));
-    }
-    case 'createdAfter':
-      return s.createdAt >= new Date(String(c.value)).getTime();
-    case 'createdBefore':
-      return s.createdAt <= new Date(String(c.value)).getTime();
-    case 'postalCode':
-      return c.operator === 'contains'
-        ? s.postalCode?.startsWith(String(c.value)) === true
-        : s.postalCode === String(c.value);
-    case 'engagementTier': {
-      const actions = await ctx.db
-        .query('campaignActions')
-        .withIndex('by_supporter', q => q.eq('supporterId', s._id))
-        .collect();
-      return actions.some(a => (a.engagementTier ?? 0) >= Number(c.value));
-    }
-    case 'campaignParticipation': {
-      const actions = await ctx.db
-        .query('campaignActions')
-        .withIndex('by_supporter_campaign', q =>
-          q.eq('supporterId', s._id).eq('campaignId', c.value as Id<'campaigns'>),
-        )
-        .collect();
-      return actions.length > 0;
-    }
-    case 'identityCommitment':
-      return c.value ? s.identityCommitment !== undefined : s.identityCommitment === undefined;
-    default:
-      return true;
-  }
+	switch (c.field) {
+		case 'emailStatus':
+			return c.operator === 'eq' ? s.emailStatus === c.value : s.emailStatus !== c.value;
+		case 'verified':
+			return s.verified === (c.value === true || c.value === 'true');
+		case 'source':
+			return c.operator === 'eq' ? s.source === c.value : s.source !== c.value;
+		case 'tag': {
+			const links = await ctx.db
+				.query('supporterTags')
+				.withIndex('by_supporter', (q) => q.eq('supporterId', s._id))
+				.collect();
+			const tagIds = links.map((l) => l.tagId);
+			const tags = await Promise.all(tagIds.map((id) => ctx.db.get(id)));
+			return tags.some((t) => t?.name === String(c.value));
+		}
+		case 'createdAfter':
+			return s.createdAt >= new Date(String(c.value)).getTime();
+		case 'createdBefore':
+			return s.createdAt <= new Date(String(c.value)).getTime();
+		case 'postalCode':
+			return c.operator === 'contains'
+				? s.postalCode?.startsWith(String(c.value)) === true
+				: s.postalCode === String(c.value);
+		case 'engagementTier': {
+			const actions = await ctx.db
+				.query('campaignActions')
+				.withIndex('by_supporter', (q) => q.eq('supporterId', s._id))
+				.collect();
+			return actions.some((a) => (a.engagementTier ?? 0) >= Number(c.value));
+		}
+		case 'campaignParticipation': {
+			const actions = await ctx.db
+				.query('campaignActions')
+				.withIndex('by_supporter_campaign', (q) =>
+					q.eq('supporterId', s._id).eq('campaignId', c.value as Id<'campaigns'>)
+				)
+				.collect();
+			return actions.length > 0;
+		}
+		case 'identityCommitment':
+			return c.value ? s.identityCommitment !== undefined : s.identityCommitment === undefined;
+		default:
+			return true;
+	}
 }
 ```
 
@@ -520,18 +529,20 @@ Convex query that runs `evaluateSegment(...).length`.
 New file: `src/lib/components/org/SegmentBuilder.svelte`
 
 **Props**:
+
 ```typescript
 interface Props {
-  orgId: string;
-  tags: Array<{ id: string; name: string }>;
-  campaigns: Array<{ id: string; title: string }>;
-  initialFilter?: FilterGroup;
-  onCountUpdate?: (count: number) => void;
-  onSave?: (segment: SegmentDefinition) => void;
+	orgId: string;
+	tags: Array<{ id: string; name: string }>;
+	campaigns: Array<{ id: string; title: string }>;
+	initialFilter?: FilterGroup;
+	onCountUpdate?: (count: number) => void;
+	onSave?: (segment: SegmentDefinition) => void;
 }
 ```
 
 **Component structure**:
+
 - Root: `FilterGroupRow` (AND/OR toggle + child list)
 - Each child: `FilterConditionRow` (field select + operator + value input + remove button)
 - "Add condition" button at bottom of each group
@@ -553,18 +564,19 @@ src/routes/api/org/[slug]/segments/
 ```
 
 Count endpoint accepts raw filter JSON (no need to save first):
+
 ```typescript
 export const POST: RequestHandler = async ({ params, request }) => {
-  // Auth + org context (same pattern as campaigns API)
-  const body = await request.json();
-  const { root } = body as { root: FilterGroup };
+	// Auth + org context (same pattern as campaigns API)
+	const body = await request.json();
+	const { root } = body as { root: FilterGroup };
 
-  const count = await serverQuery(api.segments.countByFilter, {
-    orgId: org.id,
-    filter: root,
-  });
+	const count = await serverQuery(api.segments.countByFilter, {
+		orgId: org.id,
+		filter: root
+	});
 
-  return json({ count });
+	return json({ count });
 };
 ```
 
@@ -592,6 +604,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 ### 3.1 Current State (from codebase)
 
 **What exists**:
+
 - `VerificationPacket` computed in `src/lib/server/campaigns/verification.ts`: total, verified, verifiedPct, GDS, ALD, temporalEntropy, burstVelocity, CAI, tiers[], districtCount
 - `CampaignAction` tracks: verified, engagementTier, districtHash, messageHash, sentAt
 - `CampaignDelivery` tracks: status (queued/sent/delivered/bounced/opened), sentAt, packetSnapshot
@@ -609,36 +622,36 @@ Add open/click tracking fields to `emailBlasts` in `convex/schema.ts`:
 
 ```typescript
 emailBlasts: defineTable({
-  // ... existing fields
-  totalOpened: v.number(),
-  totalClicked: v.number(),
-  totalComplained: v.number(),
-})
+	// ... existing fields
+	totalOpened: v.number(),
+	totalClicked: v.number(),
+	totalComplained: v.number()
+});
 ```
 
 Add a tracking table for individual email events:
 
 ```typescript
 emailEvents: defineTable({
-  blastId: v.id('emailBlasts'),
+	blastId: v.id('emailBlasts'),
 
-  recipientEmail: v.string(),
-  eventType: v.union(
-    v.literal('open'),
-    v.literal('click'),
-    v.literal('bounce'),
-    v.literal('complaint'),
-  ),
+	recipientEmail: v.string(),
+	eventType: v.union(
+		v.literal('open'),
+		v.literal('click'),
+		v.literal('bounce'),
+		v.literal('complaint')
+	),
 
-  // Click-specific
-  linkUrl: v.optional(v.string()),
-  linkIndex: v.optional(v.number()),
+	// Click-specific
+	linkUrl: v.optional(v.string()),
+	linkIndex: v.optional(v.number()),
 
-  timestamp: v.number(),
+	timestamp: v.number()
 })
-  .index('by_blast', ['blastId'])
-  .index('by_blast_event', ['blastId', 'eventType'])
-  .index('by_recipient', ['recipientEmail']);
+	.index('by_blast', ['blastId'])
+	.index('by_blast_event', ['blastId', 'eventType'])
+	.index('by_recipient', ['recipientEmail']);
 ```
 
 ### 3.3 SES Webhook Enhancement
@@ -648,18 +661,19 @@ The current SES webhook (`src/routes/api/ses-webhook/+server.ts`) only handles B
 ```typescript
 // Additional SES notification types to handle
 interface SESOpenMessage {
-  notificationType: 'Open';    // Requires SES configuration set with open tracking
-  mail: { messageId: string; destination: string[] };
+	notificationType: 'Open'; // Requires SES configuration set with open tracking
+	mail: { messageId: string; destination: string[] };
 }
 
 interface SESClickMessage {
-  notificationType: 'Click';   // Requires SES configuration set with click tracking
-  click: { link: string };
-  mail: { messageId: string; destination: string[] };
+	notificationType: 'Click'; // Requires SES configuration set with click tracking
+	click: { link: string };
+	mail: { messageId: string; destination: string[] };
 }
 ```
 
 **Implementation**: SES sends open/click events via SNS when a configuration set has open/click tracking enabled. The webhook needs to:
+
 1. Parse the SES message ID from the notification
 2. Look up which EmailBlast it belongs to (store SES messageId -> blastId mapping)
 3. Increment the aggregate counters
@@ -696,31 +710,30 @@ Data source: `campaignActions` grouped per day where `verified === true`.
 ```typescript
 // In +page.server.ts
 const timeline = await serverQuery(api.campaigns.verificationTimeline, {
-  campaignId,
+	campaignId
 });
 
 // convex/campaigns.ts
 export const verificationTimeline = query({
-  args: { campaignId: v.id('campaigns') },
-  handler: async (ctx, { campaignId }) => {
-    const rows = await ctx.db
-      .query('campaignActions')
-      .withIndex('by_campaign_verified', q =>
-        q.eq('campaignId', campaignId).eq('verified', true),
-      )
-      .collect();
+	args: { campaignId: v.id('campaigns') },
+	handler: async (ctx, { campaignId }) => {
+		const rows = await ctx.db
+			.query('campaignActions')
+			.withIndex('by_campaign_verified', (q) => q.eq('campaignId', campaignId).eq('verified', true))
+			.collect();
 
-    const buckets = new Map<number, number>();
-    for (const r of rows) {
-      const day = Math.floor(r.sentAt / 86_400_000) * 86_400_000;
-      buckets.set(day, (buckets.get(day) ?? 0) + 1);
-    }
-    return [...buckets.entries()].sort(([a], [b]) => a - b).map(([day, count]) => ({ day, count }));
-  },
+		const buckets = new Map<number, number>();
+		for (const r of rows) {
+			const day = Math.floor(r.sentAt / 86_400_000) * 86_400_000;
+			buckets.set(day, (buckets.get(day) ?? 0) + 1);
+		}
+		return [...buckets.entries()].sort(([a], [b]) => a - b).map(([day, count]) => ({ day, count }));
+	}
 });
 ```
 
 **Rendering**: Use a lightweight chart. Options:
+
 - SVG-based sparkline (no dependency, matches zinc/teal design system)
 - Chart.js via dynamic import (heavier but feature-rich)
 - Recommendation: SVG sparkline for Phase 1, upgrade to Chart.js in Phase 2
@@ -747,20 +760,20 @@ For campaigns with enough data (>= K_THRESHOLD districts), show top-5 districts 
 
 ```typescript
 const rows = await ctx.db
-  .query('campaignActions')
-  .withIndex('by_campaign', q => q.eq('campaignId', campaignId))
-  .collect();
+	.query('campaignActions')
+	.withIndex('by_campaign', (q) => q.eq('campaignId', campaignId))
+	.collect();
 
 const counts = new Map<string, number>();
 for (const r of rows) {
-  if (!r.districtHash) continue;
-  counts.set(r.districtHash, (counts.get(r.districtHash) ?? 0) + 1);
+	if (!r.districtHash) continue;
+	counts.set(r.districtHash, (counts.get(r.districtHash) ?? 0) + 1);
 }
 
 const topDistricts = [...counts.entries()]
-  .sort(([, a], [, b]) => b - a)
-  .slice(0, 5)
-  .map(([districtHash, count]) => ({ districtHash, count }));
+	.sort(([, a], [, b]) => b - a)
+	.slice(0, 5)
+	.map(([districtHash, count]) => ({ districtHash, count }));
 ```
 
 Display as a simple ranked list (district hashes are opaque -- show as "District 1", "District 2", etc. for k-anonymity).
@@ -816,22 +829,24 @@ Add to the `emailBlasts` table in `convex/schema.ts`:
 
 ```typescript
 emailBlasts: defineTable({
-  // ... existing fields
-  isAbTest: v.boolean(),
-  abTestConfig: v.optional(v.object({
-    splitPct: v.number(),
-    winnerMetric: v.union(v.literal('open'), v.literal('click'), v.literal('verified_action')),
-    testDurationMs: v.number(),
-    testGroupSize: v.number(),
-  })),
-  abVariant: v.optional(v.union(v.literal('A'), v.literal('B'))), // undefined = winner send
-  abParentId: v.optional(v.string()),                              // correlation id
-  abWinnerPickedAt: v.optional(v.number()),
-})
-  .index('by_ab_parent', ['abParentId']);
+	// ... existing fields
+	isAbTest: v.boolean(),
+	abTestConfig: v.optional(
+		v.object({
+			splitPct: v.number(),
+			winnerMetric: v.union(v.literal('open'), v.literal('click'), v.literal('verified_action')),
+			testDurationMs: v.number(),
+			testGroupSize: v.number()
+		})
+	),
+	abVariant: v.optional(v.union(v.literal('A'), v.literal('B'))), // undefined = winner send
+	abParentId: v.optional(v.string()), // correlation id
+	abWinnerPickedAt: v.optional(v.number())
+}).index('by_ab_parent', ['abParentId']);
 ```
 
 **Relationships**: An A/B test creates 3 emailBlasts records:
+
 - Blast A (`abVariant='A'`, `abParentId=<group ID>`)
 - Blast B (`abVariant='B'`, `abParentId=<group ID>`)
 - Winner blast (`abVariant=undefined`, `abParentId=<group ID>`) — created when the winner is picked
@@ -848,10 +863,10 @@ import { serverQuery } from '$lib/server/convex';
 import { api } from '$convex/api';
 
 export async function requirePlan(orgId: string, minimumPlan: string): Promise<boolean> {
-  const PLAN_ORDER = ['free', 'starter', 'organization', 'coalition'];
-  const subscription = await serverQuery(api.subscriptions.getByOrg, { orgId });
-  const currentPlan = subscription?.plan ?? 'free';
-  return PLAN_ORDER.indexOf(currentPlan) >= PLAN_ORDER.indexOf(minimumPlan);
+	const PLAN_ORDER = ['free', 'starter', 'organization', 'coalition'];
+	const subscription = await serverQuery(api.subscriptions.getByOrg, { orgId });
+	const currentPlan = subscription?.plan ?? 'free';
+	return PLAN_ORDER.indexOf(currentPlan) >= PLAN_ORDER.indexOf(minimumPlan);
 }
 ```
 
@@ -869,16 +884,17 @@ Extend `src/routes/org/[slug]/emails/compose/+page.svelte`:
    - Test group size: "Send to X% first, then winner to remaining" (default: 20% test, 80% winner)
 
 **State additions**:
+
 ```typescript
 let abEnabled = $state(false);
 let subjectA = $state('');
 let subjectB = $state('');
 let bodyHtmlA = $state('');
 let bodyHtmlB = $state('');
-let splitPct = $state(50);        // % going to variant A
-let testDuration = $state('4h');   // '1h' | '4h' | '24h'
+let splitPct = $state(50); // % going to variant A
+let testDuration = $state('4h'); // '1h' | '4h' | '24h'
 let winnerMetric = $state('open'); // 'open' | 'click' | 'verified_action'
-let testGroupPct = $state(20);     // % of total recipients in test group
+let testGroupPct = $state(20); // % of total recipients in test group
 ```
 
 ### 4.5 Send Flow
@@ -895,37 +911,41 @@ When A/B test is submitted:
 ```typescript
 // convex/emailBlasts.ts — invoked via serverQuery from the cron.
 export const pickAbWinner = query({
-  args: { parentId: v.string() },
-  handler: async (ctx, { parentId }) => {
-    const blasts = await ctx.db
-      .query('emailBlasts')
-      .withIndex('by_ab_parent', q => q.eq('abParentId', parentId))
-      .collect();
+	args: { parentId: v.string() },
+	handler: async (ctx, { parentId }) => {
+		const blasts = await ctx.db
+			.query('emailBlasts')
+			.withIndex('by_ab_parent', (q) => q.eq('abParentId', parentId))
+			.collect();
 
-    const a = blasts.find(b => b.abVariant === 'A')!;
-    const b = blasts.find(b => b.abVariant === 'B')!;
-    const metric = a.abTestConfig?.winnerMetric ?? 'open';
+		const a = blasts.find((b) => b.abVariant === 'A')!;
+		const b = blasts.find((b) => b.abVariant === 'B')!;
+		const metric = a.abTestConfig?.winnerMetric ?? 'open';
 
-    const scoreA = computeScore(a, metric);
-    const scoreB = computeScore(b, metric);
-    return scoreA >= scoreB ? 'A' : 'B';
-  },
+		const scoreA = computeScore(a, metric);
+		const scoreB = computeScore(b, metric);
+		return scoreA >= scoreB ? 'A' : 'B';
+	}
 });
 
 function computeScore(blast: Doc<'emailBlasts'>, metric: string): number {
-  const sent = blast.totalSent || 1;
-  switch (metric) {
-    case 'open': return blast.totalOpened / sent;
-    case 'click': return blast.totalClicked / sent;
-    case 'verified_action': // count from linked campaignActions
-    default: return blast.totalOpened / sent;
-  }
+	const sent = blast.totalSent || 1;
+	switch (metric) {
+		case 'open':
+			return blast.totalOpened / sent;
+		case 'click':
+			return blast.totalClicked / sent;
+		case 'verified_action': // count from linked campaignActions
+		default:
+			return blast.totalOpened / sent;
+	}
 }
 ```
 
 ### 4.6 Winner Send
 
 After winner is picked:
+
 1. Create a new EmailBlast with `abVariant=null`, `abParentId=parentId`
 2. Use the winning variant's subject + body
 3. Target = original recipients minus those already in test groups
@@ -959,29 +979,29 @@ Add to `src/routes/api/cron/ab-winner/+server.ts`:
 
 ```typescript
 export const GET: RequestHandler = async ({ request }) => {
-  // Verify cron secret header
-  const pending = await serverQuery(api.emailBlasts.listPendingAbTests, {});
+	// Verify cron secret header
+	const pending = await serverQuery(api.emailBlasts.listPendingAbTests, {});
 
-  // dedupe on abParentId
-  const seen = new Set<string>();
-  let checked = 0;
-  for (const blast of pending) {
-    if (!blast.abParentId || seen.has(blast.abParentId)) continue;
-    seen.add(blast.abParentId);
-    checked++;
+	// dedupe on abParentId
+	const seen = new Set<string>();
+	let checked = 0;
+	for (const blast of pending) {
+		if (!blast.abParentId || seen.has(blast.abParentId)) continue;
+		seen.add(blast.abParentId);
+		checked++;
 
-    const durationMs = blast.abTestConfig?.testDurationMs ?? 0;
-    const sentAt = blast.sentAt ?? 0;
-    const elapsed = Date.now() - sentAt;
-    if (elapsed >= durationMs) {
-      const winner = await serverQuery(api.emailBlasts.pickAbWinner, {
-        parentId: blast.abParentId,
-      });
-      await sendWinnerBlast(blast.abParentId, winner);
-    }
-  }
+		const durationMs = blast.abTestConfig?.testDurationMs ?? 0;
+		const sentAt = blast.sentAt ?? 0;
+		const elapsed = Date.now() - sentAt;
+		if (elapsed >= durationMs) {
+			const winner = await serverQuery(api.emailBlasts.pickAbWinner, {
+				parentId: blast.abParentId
+			});
+			await sendWinnerBlast(blast.abParentId, winner);
+		}
+	}
 
-  return json({ ok: true, checked });
+	return json({ ok: true, checked });
 };
 ```
 
@@ -990,6 +1010,7 @@ The `emailBlasts.listPendingAbTests` query uses
 `isAbTest === true && abVariant !== undefined && abWinnerPickedAt === undefined && sentAt !== undefined`.
 
 Configure in `wrangler.toml`:
+
 ```toml
 [[triggers.crons]]
 cron = "*/15 * * * *"  # Every 15 minutes
@@ -1019,6 +1040,7 @@ This is a **marketing + onboarding** feature, not a technical integration. The g
 New route: `src/routes/compare/action-network/+page.svelte`
 
 **Page structure**:
+
 1. Hero: "Commons vs. Action Network" with positioning tagline
 2. Feature comparison table
 3. Pricing comparison
@@ -1027,22 +1049,22 @@ New route: `src/routes/compare/action-network/+page.svelte`
 
 **Feature comparison matrix**:
 
-| Feature | Action Network | Commons |
-|---------|---------------|---------|
-| Email blasts | Yes | Yes |
-| Supporter CRM | Basic | With verification tiers |
-| A/B testing | Paid add-on | Starter+ built-in |
-| API access | Yes | Yes (OpenAPI 3.1) |
-| Verification | None | ZK-proof identity |
-| Coordination integrity | None | GDS, ALD, entropy, CAI |
-| District targeting | Manual | Auto-resolved |
-| Report delivery | None | Decision-maker reports with verification packet |
-| Debate markets | None | On-chain deliberation |
-| Billing | Per-contact pricing | Flat tier pricing |
+| Feature                | Action Network      | Commons                                         |
+| ---------------------- | ------------------- | ----------------------------------------------- |
+| Email blasts           | Yes                 | Yes                                             |
+| Supporter CRM          | Basic               | With verification tiers                         |
+| A/B testing            | Paid add-on         | Starter+ built-in                               |
+| API access             | Yes                 | Yes (OpenAPI 3.1)                               |
+| Verification           | None                | ZK-proof identity                               |
+| Coordination integrity | None                | GDS, ALD, entropy, CAI                          |
+| District targeting     | Manual              | Auto-resolved                                   |
+| Report delivery        | None                | Decision-maker reports with verification packet |
+| Debate markets         | None                | On-chain deliberation                           |
+| Billing                | Per-contact pricing | Flat tier pricing                               |
 
 ### 5.3 Import Walkthrough
 
-The AN import already exists at `src/routes/org/[slug]/supporters/import/action-network/+page.svelte`.
+Historical note: the old Action Network-specific import URL now redirects to the platform-neutral boundary at `src/routes/org/[slug]/supporters/import/platform-api/+page.svelte`.
 
 Extend with a guided wizard:
 
@@ -1057,6 +1079,7 @@ Extend with a guided wizard:
 Static content page: `src/routes/compare/action-network/parallel/+page.svelte`
 
 Content sections:
+
 1. "Running both platforms simultaneously" -- why and for how long
 2. "Syncing supporters" -- set up periodic AN import (incremental sync via `AnSync.syncType = 'incremental'`)
 3. "Email migration" -- when to switch sending from AN to Commons
@@ -1096,12 +1119,14 @@ If `AnSync` records exist for the org, show a migration status card:
 ### Testing Strategy
 
 All features use the existing vitest config (`vitest.config.ts`):
+
 - Test files in `tests/` matching `**/*.{test,spec}.ts`
 - `convexMockPlugin()` intercepts `serverQuery` / `serverMutation` with mock handlers
 - MSW for HTTP mocking
 - `jsdom` environment with `@testing-library/svelte`
 
 **Test files to create**:
+
 - `tests/unit/api-v1-auth.test.ts` -- API key validation
 - `tests/unit/segment-evaluator.test.ts` -- filter tree -> Convex evaluator results
 - `tests/unit/verification-packet.test.ts` -- coordination integrity math
@@ -1114,6 +1139,7 @@ All features use the existing vitest config (`vitest.config.ts`):
 ### Schema Rollout Order
 
 Convex schema changes should be deployed in order:
+
 1. `apiKeys` table + indexes (no dependencies)
 2. `segments` table + indexes (no dependencies)
 3. `emailEvents` table + new aggregate fields on `emailBlasts`
@@ -1137,6 +1163,7 @@ AN_MIGRATION: false         // AN comparison + migration tools
 ```
 
 Gate at the route level (in `+page.server.ts` or `+server.ts`):
+
 ```typescript
 import { FEATURES } from '$lib/config/features';
 if (!FEATURES.PUBLIC_API) throw error(404, 'Not found');
@@ -1144,10 +1171,10 @@ if (!FEATURES.PUBLIC_API) throw error(404, 'Not found');
 
 ### Billing Integration
 
-| Feature | Free | Starter ($10) | Organization ($75) | Coalition ($200) |
-|---------|------|---------------|--------------------|--------------------|
-| API keys | 1 key, 100 req/min | 3 keys, 100 req/min | 10 keys, 500 req/min | 25 keys, 1000 req/min |
-| Segments | 5 saved | 25 saved | 100 saved | Unlimited |
-| A/B testing | No | Yes | Yes | Yes |
-| Analytics | Basic | Full | Full | Full |
-| AN migration | Yes | Yes | Yes | Yes |
+| Feature      | Free               | Starter ($10)       | Organization ($75)   | Coalition ($200)      |
+| ------------ | ------------------ | ------------------- | -------------------- | --------------------- |
+| API keys     | 1 key, 100 req/min | 3 keys, 100 req/min | 10 keys, 500 req/min | 25 keys, 1000 req/min |
+| Segments     | 5 saved            | 25 saved            | 100 saved            | Unlimited             |
+| A/B testing  | No                 | Yes                 | Yes                  | Yes                   |
+| Analytics    | Basic              | Full                | Full                 | Full                  |
+| AN migration | Yes                | Yes                 | Yes                  | Yes                   |

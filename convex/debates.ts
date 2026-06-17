@@ -21,6 +21,7 @@ import { v } from "convex/values";
 import { debateStatus as debateStatusV } from "./_validators";
 import { requireAuth } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
+import { hashTextToBytes32, offchainDebateId, offchainActionDomain } from "./_actionDomain";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -751,8 +752,6 @@ export const spawnDebate = action({
     // format-valid placeholders; values are not on-chain-verifiable
     // and the contract verifier will reject them — by design for the
     // off-chain branch.
-    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
-      await import("./_actionDomain");
     const timestamp = Math.floor(Date.now() / 1000);
     const propositionHash = await hashTextToBytes32(args.propositionText);
     const debateIdOnchain = await offchainDebateId(propositionHash, timestamp);
@@ -1223,8 +1222,6 @@ export const atomicSpawnIfEligible = internalAction({
     }
 
     // Derive action-domain values the same way spawnDebate does.
-    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
-      await import("./_actionDomain");
     const propositionText =
       campaign.title.length >= 10
         ? campaign.title
@@ -1288,8 +1285,6 @@ export const forceSpawnDebateForCampaign = action({
     if (!campaign.debateEnabled) return { spawned: false as const, reason: "disabled" };
     if (!campaign.templateId) return { spawned: false as const, reason: "no_template" };
 
-    const { hashTextToBytes32, offchainDebateId, offchainActionDomain } =
-      await import("./_actionDomain");
     const fallbackText = `${campaign.title} — debate spawned manually`;
     const propositionText =
       args.propositionText && args.propositionText.length >= 10

@@ -22,7 +22,10 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	const { orgSlug, plan } = body as { orgSlug: string; plan: string };
 
 	if (!orgSlug || !plan) throw error(400, 'orgSlug and plan required');
-	if (!PLANS[plan] || plan === 'free') throw error(400, 'Invalid plan');
+	// Only marketed tiers (PLAN_ORDER) are purchasable. The `inactive` floor is
+	// not a tier and has no Stripe price, so it (and any unknown slug) is rejected.
+	if (!PLANS[plan] || !PLAN_ORDER.includes(plan as (typeof PLAN_ORDER)[number]))
+		throw error(400, 'Invalid plan');
 
 	// Get org context + subscription + billing info via Convex (requires owner role)
 	const billing = await serverQuery(api.organizations.getBillingContext, { slug: orgSlug });

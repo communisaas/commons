@@ -37,12 +37,10 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('webhook STOP/START uses by_globalPhoneHash withIndex, not .filter()', () => {
 		const svelte = source('convex/webhooks.ts');
-		// .filter(q.eq(q.field("phoneHash"), …)) → gone.
-		expect(svelte).not.toMatch(
-			/\.filter\(\s*\(q\)\s*=>\s*q\.eq\(q\.field\("phoneHash"\)/,
-		);
+		// .filter(q.eq(q.field("phoneHash"), …)) → gone (either quote style).
+		expect(svelte).not.toMatch(/\.filter\(\s*\(q\)\s*=>\s*q\.eq\(q\.field\(['"]phoneHash['"]\)/);
 		// withIndex on by_globalPhoneHash present at both keyword sites.
-		const matches = svelte.match(/withIndex\("by_globalPhoneHash"/g);
+		const matches = svelte.match(/withIndex\(['"]by_globalPhoneHash['"]/g);
 		expect(matches).not.toBeNull();
 		expect(matches!.length).toBeGreaterThanOrEqual(2);
 	});
@@ -62,7 +60,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(svelte).not.toMatch(/^async function computeGlobalEmailHash/m);
 		expect(svelte).not.toMatch(/^async function computeGlobalPhoneHash/m);
 		// Import from _orgHash.
-		expect(svelte).toMatch(/from\s+"\.\/_orgHash"/);
+		expect(svelte).toMatch(/from\s+['"]\.\/_orgHash['"]/);
 	});
 
 	it('orphan recordEmailEvent removed from convex/email.ts', () => {
@@ -90,7 +88,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		const next = svelte.indexOf('export const ', start + 30);
 		const mutation = svelte.slice(start, next > 0 ? next : start + 3000);
 		// Collision detection reads by_sesMessageId before patching.
-		expect(mutation).toContain('withIndex("by_sesMessageId"');
+		expect(mutation).toMatch(/withIndex\(['"]by_sesMessageId['"]/);
 		expect(mutation).toContain('sesMessageId collision');
 	});
 
@@ -107,10 +105,10 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('webhook handleDeliveryEvent uses withIndex(by_sesMessageId), not .filter()', () => {
 		const svelte = source('convex/webhooks.ts');
-		// .filter on sesMessageId is gone.
-		expect(svelte).not.toMatch(/\.filter\(\s*\(q\)\s*=>\s*q\.eq\(q\.field\("sesMessageId"\)/);
+		// .filter on sesMessageId is gone (either quote style).
+		expect(svelte).not.toMatch(/\.filter\(\s*\(q\)\s*=>\s*q\.eq\(q\.field\(['"]sesMessageId['"]\)/);
 		// The new lookup is a single-doc withIndex + first().
-		expect(svelte).toContain('withIndex("by_sesMessageId"');
+		expect(svelte).toMatch(/withIndex\(['"]by_sesMessageId['"]/);
 	});
 
 	it('sendReportViaSes returns the SES MessageId so dispatch can persist it', () => {
@@ -123,17 +121,22 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('supporters.importWithEncryption uses single-phase V2 encrypt-then-insert', () => {
 		const svelte = source('convex/supporters.ts');
-		const fn = svelte.slice(
-			svelte.indexOf('export const importWithEncryption = action'),
-			svelte.indexOf('export const importWithEncryption = action') + 6000,
-		);
+		// The action grew an action-boundary length-cap block, so a fixed
+		// 6000-char window no longer reaches the encryption code — bound
+		// the extraction by the next export instead.
+		const start = svelte.indexOf('export const importWithEncryption = action');
+		expect(start).toBeGreaterThanOrEqual(0);
+		const next = svelte.indexOf('export const ', start + 30);
+		expect(next).toBeGreaterThan(start);
+		const fn = svelte.slice(start, next);
 		// V2 encrypt happens BEFORE the row build (no placeholder).
 		expect(fn).toContain('encryptForSupporterV2(normalizedEmail, orgKey, emailHash');
 		// Rows passed to importBatch carry real ciphertext.
 		expect(fn).toContain('encryptedEmail: JSON.stringify(encEmail)');
-		// Two-phase patterns gone (strip comments before checking).
+		// Two-phase patterns gone (strip comments before checking; match
+		// either quote style for the placeholder literal).
 		const stripped = fn.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-		expect(stripped).not.toMatch(/encryptedEmail:\s*""/);
+		expect(stripped).not.toMatch(/encryptedEmail:\s*(""|'')/);
 		expect(stripped).not.toContain('findByEmailHashRef');
 		expect(stripped).not.toContain('patchEncryptedPiiRef');
 	});
@@ -157,7 +160,9 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// Consumer sites that decrypt supporter blobs all use the
 		// version-aware dispatcher; the dispatcher routes by `blob.v`.
 		const email = source('convex/email.ts');
-		expect(email).toContain('decryptOrgPii(\n            parsed,\n            orgKey,\n            recipient.emailHash');
+		// Whitespace-flexible: the call site survived the refactor but the
+		// file's indentation changed (spaces → tabs).
+		expect(email).toMatch(/decryptOrgPii\(\s*parsed,\s*orgKey,\s*recipient\.emailHash/);
 		const segments = source('convex/segments.ts');
 		expect(segments).toContain('decryptOrgPii(parsed, orgKey, s.emailHash');
 		const backfill = source('convex/backfill.ts');
@@ -309,7 +314,9 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(svelte).toContain('EXECUTION_OR_WORKFLOW_MISSING_AFTER_CLAIM');
 		// After a successful claim, if getExecutionInternal returns null we
 		// MUST move the row out of "running" via updateExecution(status:"failed").
-		expect(svelte).toMatch(/if \(!data\) \{[\s\S]{0,800}status:\s*"failed"[\s\S]{0,400}EXECUTION_OR_WORKFLOW_MISSING_AFTER_CLAIM/);
+		expect(svelte).toMatch(
+			/if \(!data\) \{[\s\S]{0,800}status:\s*['"]failed['"][\s\S]{0,400}EXECUTION_OR_WORKFLOW_MISSING_AFTER_CLAIM/,
+		);
 	});
 
 	it('supporters.update enforces full PII triple invariant', () => {
@@ -395,7 +402,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// Threshold exceeds Convex action budget (10 min).
 		expect(svelte).toMatch(/STRANDED_THRESHOLD_MS = 15 \* 60 \* 1000/);
 		// Mutation re-checks placeholder state inside its transaction.
-		expect(svelte).toContain('current.encryptedEmail !== ""');
+		expect(svelte).toMatch(/current\.encryptedEmail !== (""|'')/);
 	});
 
 	it('cron schedule registers sweep-stranded-placeholders', () => {
@@ -449,18 +456,24 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 	});
 
 	it('segments.matchCondition fails CLOSED on unknown fields/operators', () => {
-		const svelte = source('convex/segments.ts');
-		const fn = svelte.slice(
-			svelte.indexOf('function matchCondition'),
-			svelte.indexOf('function matchCondition') + 5200,
-		);
+		// matchCondition moved from convex/segments.ts into the shared
+		// convex/_segmentMatch.ts module; segments.ts now imports it.
+		const segmentsSrc = source('convex/segments.ts');
+		expect(segmentsSrc).toMatch(/from\s+['"]\.\/_segmentMatch['"]/);
+		const svelte = source('convex/_segmentMatch.ts');
+		const start = svelte.indexOf('export function matchCondition');
+		expect(start).toBeGreaterThanOrEqual(0);
+		const end = svelte.indexOf('export const MAX_SEGMENT_CONDITIONS', start);
+		expect(end).toBeGreaterThan(start);
+		const fn = svelte.slice(start, end);
 		// Default unknown-field branch returns false (not true).
 		expect(fn).toMatch(/default:\s*\n[\s\S]{0,200}console\.warn\([\s\S]{0,200}unknown field[\s\S]{0,100}return false;/);
 		// Unknown tag operator returns false with warn.
 		expect(fn).toMatch(/unknown tag operator[\s\S]{0,80}return false;/);
-		// Intentional fail-open only for engagementTier (documented legacy).
-		const engagementCase = fn.slice(fn.indexOf('case "engagementTier":'));
-		expect(engagementCase.slice(0, 2000)).toContain('return true;');
+		// engagementTier is now action-context based, not a fail-open legacy pass-through.
+		const engagementCase = fn.slice(fn.indexOf("case 'engagementTier':"));
+		expect(engagementCase.slice(0, 2000)).toContain('actionContext?.maxEngagementTier');
+		expect(engagementCase.slice(0, 2000)).not.toContain('return true;');
 	});
 
 	it('importBatch passes allowPlaceholder=true; supporters.create + v1api stay strict', () => {
@@ -550,7 +563,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 			workflows.indexOf('export const updateExecution = internalMutation'),
 			workflows.indexOf('export const updateExecution = internalMutation') + 1800,
 		);
-		expect(update).toContain('v.literal("partial_no_op")');
+		expect(update).toMatch(/v\.literal\(['"]partial_no_op['"]\)/);
 	});
 
 	it('backfill force-mode uses OCC-guarded patch (updatedAt snapshot)', () => {
@@ -598,24 +611,28 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// contract revision).
 		expect(mutation).toMatch(/emailHash:\s*v\.string\(\)/);
 		// Walk-in branch inserts an RSVP sentinel for dedup.
-		expect(mutation).toContain('await ctx.db.insert("eventRsvps"');
+		expect(mutation).toMatch(/await ctx\.db\.insert\(['"]eventRsvps['"]/);
 		// EMAIL_HASH_INVALID guard at entry — bounded length check.
 		expect(mutation).toContain('EMAIL_HASH_INVALID');
 	});
 
 	it('createCampaignAction dedups via by_campaignId_supporterId, not .collect()', () => {
 		const svelte = source('convex/campaigns.ts');
-		const mutation = svelte.slice(
-			svelte.indexOf('export const createCampaignAction'),
-			svelte.indexOf('export const createCampaignAction') + 3000,
-		);
+		// Bound the extraction by the next export rather than a fixed char window —
+		// the args validator grew (metersOrgQuota/deliveryStatus) and a fixed
+		// window would clip the dedup logic. Matches the sibling tests below.
+		const start = svelte.indexOf('export const createCampaignAction');
+		const next = svelte.indexOf('export const ', start + 30);
+		const mutation = svelte.slice(start, next > 0 ? next : start + 10000);
 		// Composite index lookup replaces the scan-then-find.
-		expect(mutation).toContain('withIndex("by_campaignId_supporterId"');
+		expect(mutation).toMatch(/withIndex\(['"]by_campaignId_supporterId['"]/);
 		// Stripped of comments — legacy .collect() on by_campaignId is gone from this mutation.
 		const strippedMutation = mutation
 			.replace(/\/\/[^\n]*/g, '')
 			.replace(/\/\*[\s\S]*?\*\//g, '');
-		expect(strippedMutation).not.toMatch(/withIndex\("by_campaignId", \(q\) => q\.eq\("campaignId"[\s\S]{0,80}?\.collect\(\)/);
+		expect(strippedMutation).not.toMatch(
+			/withIndex\(['"]by_campaignId['"],\s*\(q\)\s*=>\s*q\.eq\(['"]campaignId['"][\s\S]{0,80}?\.collect\(\)/,
+		);
 	});
 
 	it('schema carries by_campaignId_supporterId composite index', () => {
@@ -640,20 +657,24 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 	it('v1 API createSupporter dedups via by_orgId_emailHash index', () => {
 		const svelte = source('convex/v1api.ts');
 		const stripped = svelte.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-		const mutation = stripped.slice(
-			stripped.indexOf('createSupporter'),
-			stripped.indexOf('createSupporter') + 3000,
-		);
-		expect(mutation).toContain('withIndex("by_orgId_emailHash"');
+		// Bound the extraction by the next export so the fixed window can't
+		// drift onto a neighboring function (other v1 list endpoints
+		// legitimately use .take(10_000)).
+		const start = stripped.indexOf('createSupporter');
+		expect(start).toBeGreaterThanOrEqual(0);
+		const next = stripped.indexOf('export const ', start + 30);
+		expect(next).toBeGreaterThan(start);
+		const mutation = stripped.slice(start, next);
+		expect(mutation).toMatch(/withIndex\(['"]by_orgId_emailHash['"]/);
 		expect(mutation).not.toMatch(/\.take\(10_000\)/);
 		expect(mutation).toContain('globalEmailHash: args.globalEmailHash');
 		expect(mutation).toContain('globalPhoneHash: args.globalPhoneHash');
 	});
 
-	it('workflow execute terminates as partial_no_op when any step no-op\'d', () => {
+	it("workflow execute terminates as partial_no_op when any step no-op'd", () => {
 		const svelte = source('convex/workflows.ts');
 		expect(svelte).toContain('anyStepNoOp');
-		expect(svelte).toContain("anyStepNoOp ? \"partial_no_op\" : \"completed\"");
+		expect(svelte).toMatch(/anyStepNoOp \? ['"]partial_no_op['"] : ['"]completed['"]/);
 	});
 
 	it('backfill action recomputes globalEmailHash / globalPhoneHash from encrypted blobs', () => {

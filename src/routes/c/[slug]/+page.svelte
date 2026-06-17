@@ -70,6 +70,8 @@
 	let districtState = $state('');
 	let districtZip = $state('');
 	let districtCode = $state(''); // e.g. "CA-12"
+	let h3Cell = $state('');
+	let atlasVersion = $state('');
 	let districtVerified = $state(false);
 	let districtVerifying = $state(false);
 	let districtError = $state('');
@@ -79,9 +81,7 @@
 
 	// ── Debate signal (read-only, no wallet needed) ──
 	const debateStanceMap = $derived(
-		data.debateSignal?.arguments
-			? buildArgumentStanceMap(data.debateSignal.arguments)
-			: undefined
+		data.debateSignal?.arguments ? buildArgumentStanceMap(data.debateSignal.arguments) : undefined
 	);
 	const debateHref = $derived(
 		data.debateSignal?.templateSlug
@@ -110,7 +110,9 @@
 						displayDistricts = stats.uniqueDistricts;
 					}
 				}
-			} catch { /* ignore polling failures */ }
+			} catch {
+				/* ignore polling failures */
+			}
 		}, intervalMs);
 
 		return () => clearInterval(interval);
@@ -141,13 +143,22 @@
 	// ── District verification ──
 	async function verifyDistrict() {
 		if (districtVerifying) return;
-		if (!districtStreet.trim() || !districtCity.trim() || !districtState.trim() || !districtZip.trim()) {
+		if (
+			!districtStreet.trim() ||
+			!districtCity.trim() ||
+			!districtState.trim() ||
+			!districtZip.trim()
+		) {
 			districtError = 'Please fill in all address fields.';
 			return;
 		}
 
 		districtVerifying = true;
 		districtError = '';
+		districtCode = '';
+		h3Cell = '';
+		atlasVersion = '';
+		districtVerified = false;
 
 		try {
 			// Use the campaign-specific public endpoint (no auth required)
@@ -175,13 +186,16 @@
 			}
 
 			districtCode = result.district.code;
+			h3Cell = result.h3Cell ?? '';
+			atlasVersion = result.atlasVersion ?? '';
 			districtVerified = true;
 			verificationTier = 2;
 
 			// Store encrypted address client-side for this public campaign flow.
 			if (browser) {
 				try {
-					const { storeConstituentAddress } = await import('$lib/core/identity/constituent-address');
+					const { storeConstituentAddress } =
+						await import('$lib/core/identity/constituent-address');
 					await storeConstituentAddress(email, {
 						street: districtStreet.trim(),
 						city: districtCity.trim(),
@@ -244,7 +258,10 @@
 	<title>{data.campaign.title} | {data.campaign.orgName}</title>
 	<meta name="description" content={data.campaign.body || `Take action: ${data.campaign.title}`} />
 	<meta property="og:title" content={data.campaign.title} />
-	<meta property="og:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
+	<meta
+		property="og:description"
+		content={data.campaign.body || `Take action with ${data.campaign.orgName}`}
+	/>
 	<meta property="og:type" content="website" />
 	<meta property="og:url" content={`${data.baseUrl}/c/${data.campaign.id}`} />
 	<meta property="og:image" content={`${data.baseUrl}/og/campaign/${data.campaign.id}`} />
@@ -252,17 +269,27 @@
 	<meta property="og:image:height" content="630" />
 	<meta name="twitter:card" content="summary_large_image" />
 	<meta name="twitter:title" content={data.campaign.title} />
-	<meta name="twitter:description" content={data.campaign.body || `Take action with ${data.campaign.orgName}`} />
+	<meta
+		name="twitter:description"
+		content={data.campaign.body || `Take action with ${data.campaign.orgName}`}
+	/>
 	<meta name="twitter:image" content={`${data.baseUrl}/og/campaign/${data.campaign.id}`} />
 </svelte:head>
 
 <div class="mx-auto min-h-[80vh] max-w-lg px-4 py-6 sm:py-10">
-
 	{#if currentStep === 'success'}
 		<!-- ═══════════ SUCCESS ═══════════ -->
 		<div class="text-center">
-			<div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-				<svg class="h-8 w-8 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+			<div
+				class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100"
+			>
+				<svg
+					class="h-8 w-8 text-emerald-600"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="2"
+				>
 					<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
 				</svg>
 			</div>
@@ -292,24 +319,41 @@
 			{/if}
 
 			<!-- Verification tier badge -->
-			<div class="mt-6 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm
-				{verificationTier >= 3 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' :
-				 verificationTier >= 2 ? 'border-emerald-200 bg-emerald-50 text-emerald-700' :
-				 verificationTier >= 1 ? 'border-blue-200 bg-blue-50 text-blue-700' :
-				 'border-slate-200 bg-slate-50 text-slate-600'}">
+			<div
+				class="mt-6 inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm
+				{verificationTier >= 3
+					? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+					: verificationTier >= 2
+						? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+						: verificationTier >= 1
+							? 'border-blue-200 bg-blue-50 text-blue-700'
+							: 'border-slate-200 bg-slate-50 text-slate-600'}"
+			>
 				{#if verificationTier >= 3}
 					<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+						<path
+							fill-rule="evenodd"
+							d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+							clip-rule="evenodd"
+						/>
 					</svg>
 					Identity Verified
 				{:else if verificationTier >= 2}
 					<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-						<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+						<path
+							fill-rule="evenodd"
+							d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+							clip-rule="evenodd"
+						/>
 					</svg>
 					District Verified
 				{:else if verificationTier >= 1}
 					<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-						<path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd" />
+						<path
+							fill-rule="evenodd"
+							d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z"
+							clip-rule="evenodd"
+						/>
 					</svg>
 					Location Verified
 				{:else}
@@ -319,7 +363,7 @@
 
 			<!-- Proof card -->
 			<div class="mt-6 rounded-md border border-slate-200 bg-slate-50 p-5">
-				<p class="text-xs font-medium uppercase tracking-wider text-slate-400">Verified Action</p>
+				<p class="text-xs font-medium tracking-wider text-slate-400 uppercase">Verified Action</p>
 				<h3 class="mt-1 text-base font-bold text-slate-900">{data.campaign.title}</h3>
 				<p class="text-sm text-slate-500">via {data.campaign.orgName}</p>
 				{#if FEATURES.ENGAGEMENT_METRICS}
@@ -328,7 +372,8 @@
 						<p class="text-sm text-slate-500">verified actions taken</p>
 						{#if displayDistricts > 0}
 							<p class="mt-1 text-xs text-slate-400">
-								across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
+								across {displayDistricts}
+								{displayDistricts === 1 ? 'district' : 'districts'}
 							</p>
 						{/if}
 					</div>
@@ -341,12 +386,15 @@
 				class="mt-6 inline-flex items-center gap-2 rounded-lg bg-slate-900 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-800"
 			>
 				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M7.217 10.907a2.25 2.25 0 100 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186l9.566-5.314m-9.566 7.5l9.566 5.314m0 0a2.25 2.25 0 103.935 2.186 2.25 2.25 0 00-3.935-2.186zm0-12.814a2.25 2.25 0 103.933-2.185 2.25 2.25 0 00-3.933 2.185z"
+					/>
 				</svg>
 				Share This Campaign
 			</button>
 		</div>
-
 	{:else if currentStep === 'info'}
 		<!-- ═══════════ INFO (Landing) ═══════════ -->
 		<div class="mb-4 flex items-center gap-2">
@@ -357,7 +405,9 @@
 					class="h-8 w-8 rounded-full object-cover"
 				/>
 			{:else}
-				<div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600">
+				<div
+					class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-600"
+				>
 					{data.campaign.orgName.charAt(0).toUpperCase()}
 				</div>
 			{/if}
@@ -376,10 +426,22 @@
 
 		<!-- Social proof bar -->
 		{#if FEATURES.ENGAGEMENT_METRICS}
-			<div class="mt-6 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3">
+			<div
+				class="mt-6 flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+			>
 				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-emerald-100">
-					<svg class="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.228A2 2 0 015 17.128V15.5a4.5 4.5 0 014.5-4.5h0a4.5 4.5 0 014.5 4.5v1.628M12 11.25h.008v.008H12v-.008zM12 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z" />
+					<svg
+						class="h-5 w-5 text-emerald-600"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128H5.228A2 2 0 015 17.128V15.5a4.5 4.5 0 014.5-4.5h0a4.5 4.5 0 014.5 4.5v1.628M12 11.25h.008v.008H12v-.008zM12 7.5a2.25 2.25 0 100-4.5 2.25 2.25 0 000 4.5z"
+						/>
 					</svg>
 				</div>
 				<div>
@@ -388,7 +450,8 @@
 						verified {displayCount === 1 ? 'action' : 'actions'} taken
 						{#if displayDistricts > 0}
 							<span class="ml-1 text-slate-400">
-								across {displayDistricts} {displayDistricts === 1 ? 'district' : 'districts'}
+								across {displayDistricts}
+								{displayDistricts === 1 ? 'district' : 'districts'}
 							</span>
 						{/if}
 					</p>
@@ -427,10 +490,13 @@
 		>
 			Take Action
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
+				/>
 			</svg>
 		</button>
-
 	{:else if currentStep === 'identify'}
 		<!-- ═══════════ IDENTIFY ═══════════ -->
 		<button
@@ -439,15 +505,17 @@
 			aria-label="Go back"
 		>
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+				/>
 			</svg>
 			Back
 		</button>
 
 		<h2 class="text-xl font-bold text-slate-900">Your Information</h2>
-		<p class="mt-1 text-sm text-slate-500">
-			Identify yourself to take action on this campaign.
-		</p>
+		<p class="mt-1 text-sm text-slate-500">Identify yourself to take action on this campaign.</p>
 
 		<div class="mt-5 space-y-4">
 			<div>
@@ -461,7 +529,7 @@
 					required
 					autocomplete="name"
 					placeholder="Your full name"
-					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 				/>
 			</div>
 
@@ -476,7 +544,7 @@
 					required
 					autocomplete="email"
 					placeholder="you@example.com"
-					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+					class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 				/>
 			</div>
 
@@ -493,13 +561,17 @@
 						autocomplete="postal-code"
 						placeholder="e.g. 90210"
 						onblur={validatePostalCode}
-						class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 					/>
 				</div>
 				{#if postalCodeResolved}
 					<p class="mt-1.5 flex items-center gap-1 text-xs text-emerald-600">
 						<svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
-							<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+							<path
+								fill-rule="evenodd"
+								d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+								clip-rule="evenodd"
+							/>
 						</svg>
 						Postal code recorded for verification
 					</p>
@@ -513,11 +585,14 @@
 			>
 				Continue
 				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
+					/>
 				</svg>
 			</button>
 		</div>
-
 	{:else if districtEnabled && currentStep === 'district'}
 		<!-- ═══════════ DISTRICT VERIFICATION (optional) ═══════════ -->
 		<button
@@ -526,32 +601,53 @@
 			aria-label="Go back"
 		>
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+				/>
 			</svg>
 			Back
 		</button>
 
 		<h2 class="text-xl font-bold text-slate-900">Verify Your District</h2>
 		<p class="mt-1 text-sm text-slate-500">
-			Enter your street address to verify your {labels.legislativeAdjective} district. This strengthens your action.
+			Enter your street address to verify your {labels.legislativeAdjective} district. This strengthens
+			your action.
 		</p>
 
 		<!-- Privacy note -->
 		<div class="mt-4 flex items-start gap-3 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
-			<svg class="mt-0.5 h-4 w-4 shrink-0 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+			<svg
+				class="mt-0.5 h-4 w-4 shrink-0 text-blue-600"
+				fill="none"
+				viewBox="0 0 24 24"
+				stroke="currentColor"
+				stroke-width="2"
+			>
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"
+				/>
 			</svg>
 			<p class="text-xs text-blue-700">
-				Your address is used to find your district. For official delivery flows, address
-				fields may be disclosed where the government endpoint requires them.
+				Your address is used to find your district. For official delivery flows, address fields may
+				be disclosed where the government endpoint requires them.
 			</p>
 		</div>
 
 		{#if districtVerified}
 			<!-- District verified success state -->
-			<div class="mt-5 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+			<div
+				class="mt-5 flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+			>
 				<svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-					<path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z" clip-rule="evenodd" />
+					<path
+						fill-rule="evenodd"
+						d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.857-9.809a.75.75 0 00-1.214-.882l-3.483 4.79-1.88-1.88a.75.75 0 10-1.06 1.061l2.5 2.5a.75.75 0 001.137-.089l4-5.5z"
+						clip-rule="evenodd"
+					/>
 				</svg>
 				District verified: {districtCode}
 			</div>
@@ -562,7 +658,11 @@
 			>
 				Continue
 				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3"
+					/>
 				</svg>
 			</button>
 		{:else}
@@ -578,21 +678,19 @@
 						bind:value={districtStreet}
 						autocomplete="street-address"
 						placeholder="123 Main Street"
-						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 					/>
 				</div>
 
 				<div>
-					<label for="districtCity" class="block text-sm font-medium text-slate-700">
-						City
-					</label>
+					<label for="districtCity" class="block text-sm font-medium text-slate-700"> City </label>
 					<input
 						type="text"
 						id="districtCity"
 						bind:value={districtCity}
 						autocomplete="address-level2"
 						placeholder="City"
-						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 					/>
 				</div>
 
@@ -608,7 +706,7 @@
 							autocomplete="address-level1"
 							placeholder="CA"
 							maxlength="2"
-							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 						/>
 					</div>
 					<div>
@@ -622,26 +720,44 @@
 							autocomplete="postal-code"
 							placeholder="90210"
 							maxlength="10"
-							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+							class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 						/>
 					</div>
 				</div>
 
 				{#if districtError}
-					<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+					<div
+						class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+						role="alert"
+					>
 						{districtError}
 					</div>
 				{/if}
 
 				<button
 					onclick={verifyDistrict}
-					disabled={districtVerifying || !districtStreet.trim() || !districtCity.trim() || !districtState.trim() || !districtZip.trim()}
+					disabled={districtVerifying ||
+						!districtStreet.trim() ||
+						!districtCity.trim() ||
+						!districtState.trim() ||
+						!districtZip.trim()}
 					class="flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-6 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
 				>
 					{#if districtVerifying}
 						<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+							<circle
+								class="opacity-25"
+								cx="12"
+								cy="12"
+								r="10"
+								stroke="currentColor"
+								stroke-width="4"
+							></circle>
+							<path
+								class="opacity-75"
+								fill="currentColor"
+								d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+							></path>
 						</svg>
 						Verifying...
 					{:else}
@@ -657,7 +773,6 @@
 				</button>
 			</div>
 		{/if}
-
 	{:else if currentStep === 'compose'}
 		<!-- ═══════════ COMPOSE / CONFIRM ═══════════ -->
 		<button
@@ -666,7 +781,11 @@
 			aria-label="Go back"
 		>
 			<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-				<path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"
+				/>
 			</svg>
 			Back
 		</button>
@@ -681,7 +800,10 @@
 		</p>
 
 		{#if form?.error}
-			<div class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+			<div
+				class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+				role="alert"
+			>
 				{form.error}
 			</div>
 		{/if}
@@ -703,6 +825,8 @@
 			<input type="hidden" name="postalCode" value={postalCode} />
 			{#if districtEnabled && districtVerified}
 				<input type="hidden" name="districtCode" value={districtCode} />
+				<input type="hidden" name="h3Cell" value={h3Cell} />
+				<input type="hidden" name="atlasVersion" value={atlasVersion} />
 			{/if}
 
 			<!-- Summary card -->
@@ -730,8 +854,14 @@
 				{#if verificationTier >= 1}
 					<div class="mt-2 flex items-center justify-between">
 						<span class="text-slate-500">Verification</span>
-						<span class="font-medium {verificationTier >= 2 ? 'text-emerald-600' : 'text-blue-600'}">
-							{verificationTier >= 3 ? 'Identity Verified' : verificationTier >= 2 ? 'District Verified' : 'Location Verified'}
+						<span
+							class="font-medium {verificationTier >= 2 ? 'text-emerald-600' : 'text-blue-600'}"
+						>
+							{verificationTier >= 3
+								? 'Identity Verified'
+								: verificationTier >= 2
+									? 'District Verified'
+									: 'Location Verified'}
 						</span>
 					</div>
 				{/if}
@@ -749,14 +879,14 @@
 						rows="5"
 						bind:value={message}
 						placeholder="Add a personal message..."
-						class="mt-1 block w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+						class="mt-1 block w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 placeholder-slate-400 transition-colors focus:border-slate-500 focus:ring-1 focus:ring-slate-500 focus:outline-none"
 					></textarea>
 				</div>
 			{/if}
 
 			{#if data.campaign.targets && data.campaign.targets.length > 0}
 				<div class="rounded-lg border border-slate-200 p-4">
-					<p class="text-xs font-medium uppercase tracking-wider text-slate-400">
+					<p class="text-xs font-medium tracking-wider text-slate-400 uppercase">
 						Your action will reach
 					</p>
 					<ul class="mt-2 space-y-1.5">
@@ -780,8 +910,13 @@
 			>
 				{#if submitting}
 					<svg class="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
-						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"
+						></circle>
+						<path
+							class="opacity-75"
+							fill="currentColor"
+							d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+						></path>
 					</svg>
 					Submitting...
 				{:else if data.campaign.type === 'LETTER'}
@@ -803,9 +938,15 @@
 	{#if currentStep === 'identify' || currentStep === 'district' || currentStep === 'compose'}
 		{@const steps = districtEnabled ? ['identify', 'district', 'compose'] : ['identify', 'compose']}
 		{@const currentIndex = steps.indexOf(currentStep)}
-		<div class="mt-8 flex items-center justify-center gap-2" role="progressbar" aria-label="Step {currentIndex + 1} of {steps.length}">
+		<div
+			class="mt-8 flex items-center justify-center gap-2"
+			role="progressbar"
+			aria-label="Step {currentIndex + 1} of {steps.length}"
+		>
 			{#each steps as _, i}
-				<div class="h-1.5 w-8 rounded-full {i <= currentIndex ? 'bg-slate-900' : 'bg-slate-200'}"></div>
+				<div
+					class="h-1.5 w-8 rounded-full {i <= currentIndex ? 'bg-slate-900' : 'bg-slate-200'}"
+				></div>
 			{/each}
 		</div>
 	{/if}

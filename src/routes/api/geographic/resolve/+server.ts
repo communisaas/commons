@@ -69,7 +69,24 @@ export const POST: RequestHandler = async ({ request }) => {
 				representatives
 			}
 		});
-	} catch {
+	} catch (error) {
+		if (
+			error &&
+			typeof error === 'object' &&
+			'code' in error &&
+			(error as { code?: unknown }).code === 'REP_LOOKUP_NOT_CONFIGURED'
+		) {
+			return json(
+				{
+					error:
+						error instanceof Error
+							? error.message
+							: 'Representative lookup is not configured for this country.',
+					code: 'REP_LOOKUP_NOT_CONFIGURED'
+				},
+				{ status: 503 }
+			);
+		}
 		return json({ error: 'Could not resolve district for the given input' }, { status: 422 });
 	}
 };

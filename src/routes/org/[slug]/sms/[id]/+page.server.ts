@@ -27,24 +27,71 @@ type SmsMessage = {
 	_creationTime: number;
 };
 
+type SmsReply = {
+	_id: string;
+	body: string;
+	matchedSupporter: boolean;
+	linkedBlastId?: string | null;
+	receivedAt: number;
+};
+
 type SmsBlastDetail = {
 	blast: SmsBlast;
 	messages: SmsMessage[];
 };
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+const EMPTY_SMS_HEALTH = {
+	subscribed: 0,
+	unsubscribed: 0,
+	stopped: 0,
+	none: 0,
+	phonePresent: 0
+};
+const EMPTY_CONSENT_EVIDENCE = {
+	email: 0,
+	emailSubscribed: 0,
+	sms: 0,
+	smsSubscribed: 0
+};
+
+export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw redirect(302, '/auth/login');
 
-	const result = await serverQuery(api.sms.getBlast, {
-		slug: params.slug,
-		blastId: params.id as Id<'smsBlasts'>
-	}) as SmsBlastDetail | null;
+	const { org, spaces, membership } = await parent();
+	const keyInfo =
+		membership.role === 'owner' || membership.role === 'editor'
+			? await serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug }).catch(() => null)
+			: null;
+	const [result, replies] = (await Promise.all([
+		serverQuery(api.sms.getBlast, {
+			slug: params.slug,
+			blastId: params.id as Id<'smsBlasts'>
+		}),
+		serverQuery(api.sms.listReplies, {
+			slug: params.slug,
+			blastId: params.id as Id<'smsBlasts'>,
+			limit: 20
+		})
+	])) as [SmsBlastDetail | null, SmsReply[]];
 
-	if (!result) throw error(404, 'SMS campaign not found');
+	if (!result) throw error(404, 'SMS draft not found');
 
 	return {
-		org: { name: params.slug, slug: params.slug },
+		org: { id: org.id, name: org.name, slug: org.slug },
+		orgKeyVerifier: keyInfo?.orgKeyVerifier ?? null,
+		smsHealth: spaces.base?.smsHealth ?? EMPTY_SMS_HEALTH,
+		consentEvidence: spaces.base?.consentEvidence ?? EMPTY_CONSENT_EVIDENCE,
+		textDispatchRuntimeReady: spaces.operating.textDelivery?.dispatchRuntimeReady ?? false,
+		textDispatchRuntimeMissing: spaces.operating.textDelivery?.dispatchRuntimeMissing ?? [],
+		textDispatchRuntimeDependency:
+			spaces.operating.textDelivery?.dispatchRuntimeDependency ??
+			'text dispatch gate, browser phone custody, Twilio dispatch runner, and transport credentials',
+		textDispatchRuntimeMessage:
+			spaces.operating.textDelivery?.dispatchRuntimeMessage ??
+			'Bulk text dispatch is dependency-bound. Drafts are preserved until carrier delivery dependencies are configured.',
+		textDispatchClientBatchRouteMounted:
+			spaces.operating.textDelivery?.dispatchClientBatchRouteMounted ?? false,
 		blast: {
 			id: result.blast._id,
 			body: result.blast.body,
@@ -63,6 +110,13 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			status: m.status,
 			errorCode: m.errorCode ?? null,
 			createdAt: new Date(m._creationTime).toISOString()
+		})),
+		replies: replies.map((reply) => ({
+			id: reply._id,
+			body: reply.body,
+			matchedSupporter: reply.matchedSupporter,
+			linkedBlastId: reply.linkedBlastId ?? null,
+			receivedAt: new Date(reply.receivedAt).toISOString()
 		}))
 	};
 };

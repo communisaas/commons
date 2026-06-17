@@ -4,10 +4,13 @@
 	import { goto } from '$app/navigation';
 	import { Datum } from '$lib/design';
 	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
+	import { participationDepth } from '$lib/components/org/participation-depth';
 	import ProofClaim from '$lib/components/crypto/ProofClaim.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 
 	const labels = getJurisdictionLabels();
+	const platformProfileCount = PLATFORM_EXPORT_PROFILES.length;
 
 	let { data }: { data: PageData } = $props();
 
@@ -19,24 +22,57 @@
 	// H3 cells: computed via latLngToCell(lat, lng, 7) from real SF neighborhoods
 	const ca11Boundary: GeoJSON.Polygon = {
 		type: 'Polygon',
-		coordinates: [[
-			[-122.612, 37.815], [-122.504, 37.708], [-122.486, 37.708],
-			[-122.481, 37.708], [-122.469, 37.708], [-122.467, 37.712],
-			[-122.466, 37.722], [-122.462, 37.722], [-122.453, 37.723],
-			[-122.449, 37.723], [-122.446, 37.727], [-122.44, 37.73],
-			[-122.435, 37.732], [-122.432, 37.732], [-122.426, 37.732],
-			[-122.42, 37.732], [-122.413, 37.733], [-122.407, 37.735],
-			[-122.403, 37.731], [-122.4, 37.721], [-122.399, 37.718],
-			[-122.397, 37.713], [-122.395, 37.708], [-122.379, 37.708],
-			[-122.29, 37.721], [-122.31, 37.754], [-122.335, 37.793],
-			[-122.349, 37.816], [-122.358, 37.842], [-122.399, 37.904],
-			[-122.428, 37.904], [-122.42, 37.863], [-122.42, 37.861],
-			[-122.47, 37.833], [-122.478, 37.833], [-122.478, 37.831],
-			[-122.478, 37.825], [-122.483, 37.826], [-122.492, 37.825],
-			[-122.5, 37.822], [-122.502, 37.822], [-122.512, 37.825],
-			[-122.523, 37.825], [-122.526, 37.821], [-122.529, 37.818],
-			[-122.529, 37.815], [-122.612, 37.815]
-		]]
+		coordinates: [
+			[
+				[-122.612, 37.815],
+				[-122.504, 37.708],
+				[-122.486, 37.708],
+				[-122.481, 37.708],
+				[-122.469, 37.708],
+				[-122.467, 37.712],
+				[-122.466, 37.722],
+				[-122.462, 37.722],
+				[-122.453, 37.723],
+				[-122.449, 37.723],
+				[-122.446, 37.727],
+				[-122.44, 37.73],
+				[-122.435, 37.732],
+				[-122.432, 37.732],
+				[-122.426, 37.732],
+				[-122.42, 37.732],
+				[-122.413, 37.733],
+				[-122.407, 37.735],
+				[-122.403, 37.731],
+				[-122.4, 37.721],
+				[-122.399, 37.718],
+				[-122.397, 37.713],
+				[-122.395, 37.708],
+				[-122.379, 37.708],
+				[-122.29, 37.721],
+				[-122.31, 37.754],
+				[-122.335, 37.793],
+				[-122.349, 37.816],
+				[-122.358, 37.842],
+				[-122.399, 37.904],
+				[-122.428, 37.904],
+				[-122.42, 37.863],
+				[-122.42, 37.861],
+				[-122.47, 37.833],
+				[-122.478, 37.833],
+				[-122.478, 37.831],
+				[-122.478, 37.825],
+				[-122.483, 37.826],
+				[-122.492, 37.825],
+				[-122.5, 37.822],
+				[-122.502, 37.822],
+				[-122.512, 37.825],
+				[-122.523, 37.825],
+				[-122.526, 37.821],
+				[-122.529, 37.818],
+				[-122.529, 37.815],
+				[-122.612, 37.815]
+			]
+		]
 	};
 
 	const specimenPacket: VerificationPacket = {
@@ -53,24 +89,24 @@
 		burstVelocity: 1.8,
 		cai: 0.72,
 		tiers: [
-			{ tier: 1, label: 'New', count: 68 },
-			{ tier: 2, label: 'Active', count: 85 },
-			{ tier: 3, label: 'Established', count: 62 },
-			{ tier: 4, label: 'Veteran', count: 33 },
+			{ tier: 0, label: participationDepth(0), count: 68 },
+			{ tier: 1, label: participationDepth(1), count: 85 },
+			{ tier: 2, label: participationDepth(2), count: 62 },
+			{ tier: 3, label: participationDepth(3), count: 33 }
 		],
 		geography: [{ hash: 'ca11', count: 248 }],
 		cells: [
-			{ h3: '87283082cffffff', count: 56 },  // Mission + Noe Valley
-			{ h3: '87283082dffffff', count: 39 },  // Castro + Haight
-			{ h3: '87283082affffff', count: 32 },  // SOMA
-			{ h3: '872830958ffffff', count: 20 },  // Sunset
-			{ h3: '872830828ffffff', count: 18 },  // Tenderloin
-			{ h3: '87283095bffffff', count: 16 },  // Richmond
-			{ h3: '87283082bffffff', count: 16 },  // North Beach
-			{ h3: '87283082effffff', count: 15 },  // Potrero Hill
-			{ h3: '872830876ffffff', count: 14 },  // Marina
-			{ h3: '872830825ffffff', count: 12 },  // Bayview
-			{ h3: '872830952ffffff', count: 10 },  // Excelsior
+			{ h3: '87283082cffffff', count: 56 }, // Mission + Noe Valley
+			{ h3: '87283082dffffff', count: 39 }, // Castro + Haight
+			{ h3: '87283082affffff', count: 32 }, // SOMA
+			{ h3: '872830958ffffff', count: 20 }, // Sunset
+			{ h3: '872830828ffffff', count: 18 }, // Tenderloin
+			{ h3: '87283095bffffff', count: 16 }, // Richmond
+			{ h3: '87283082bffffff', count: 16 }, // North Beach
+			{ h3: '87283082effffff', count: 15 }, // Potrero Hill
+			{ h3: '872830876ffffff', count: 14 }, // Marina
+			{ h3: '872830825ffffff', count: 12 }, // Bayview
+			{ h3: '872830952ffffff', count: 10 } // Excelsior
 		],
 		temporal: {
 			bins: [2, 4, 8, 14, 18, 25, 30, 42, 38, 35, 28, 22, 18, 12, 8, 5, 3],
@@ -117,7 +153,10 @@
 
 	function handleSlugInput(e: Event): void {
 		const val = (e.target as HTMLInputElement).value;
-		orgSlug = val.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 48);
+		orgSlug = val
+			.toLowerCase()
+			.replace(/[^a-z0-9-]/g, '')
+			.slice(0, 48);
 		slugEdited = true;
 	}
 
@@ -257,7 +296,13 @@
 			</div>
 
 			{#if showCreate}
-				<form class="create-form" onsubmit={(e) => { e.preventDefault(); handleCreate(); }}>
+				<form
+					class="create-form"
+					onsubmit={(e) => {
+						e.preventDefault();
+						handleCreate();
+					}}
+				>
 					<label class="create-form__label">
 						<span class="create-form__label-text">Name</span>
 						<input
@@ -289,28 +334,36 @@
 						<p class="create-form__error">{errorMsg}</p>
 					{/if}
 					<div class="create-form__actions">
-						<button type="button" class="create-form__cancel" onclick={() => { showCreate = false; }}>Cancel</button>
-						<button type="submit" class="cta" disabled={submitting || !orgName.trim() || !orgSlug.trim()}>
+						<button
+							type="button"
+							class="create-form__cancel"
+							onclick={() => {
+								showCreate = false;
+							}}>Cancel</button
+						>
+						<button
+							type="submit"
+							class="cta"
+							disabled={submitting || !orgName.trim() || !orgSlug.trim()}
+						>
 							{submitting ? 'Creating...' : 'Create'}
 						</button>
 					</div>
 				</form>
 			{:else}
-				<button class="create-link" onclick={openCreate}>
-					Create new organization
-				</button>
+				<button class="create-link" onclick={openCreate}> Create new organization </button>
 			{/if}
 		</div>
 	{:else}
 		<!-- ═══ ARGUMENT ═══ -->
 		<article class="argument">
-
 			<!-- ═══════════════════════════════════════════
 			     BEAT 1 — THE PROBLEM (empirical, cited)
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--problem" aria-labelledby="problem-heading">
 				<h1 id="problem-heading" class="problem__thesis">
-					<span class="problem__stat"><Datum value={312} /></span> signatures. No proof any of them live in the district.
+					<span class="problem__stat"><Datum value={312} /></span> signatures. No proof any of them live
+					in the district.
 				</h1>
 
 				<p class="problem__bridge">
@@ -318,7 +371,12 @@
 				</p>
 
 				<p class="problem__counter">
-					Only <span class="problem__stat problem__stat--weak"><Datum value={51} />%</span> of {labels.legislativeBody} staff say form emails influence undecided votes. Half believe those messages are sent <em>without</em> the constituent's knowledge. <span class="problem__stat problem__stat--weak"><Datum value={92} />%</span> say individualized emails DO influence &mdash; which is the filter staffers apply.
+					Only <span class="problem__stat problem__stat--weak"><Datum value={51} />%</span> of {labels.legislativeBody}
+					staff say form emails influence undecided votes. Half believe those messages are sent
+					<em>without</em>
+					the constituent's knowledge.
+					<span class="problem__stat problem__stat--weak"><Datum value={92} />%</span> say individualized
+					emails DO influence &mdash; which is the filter staffers apply.
 				</p>
 
 				<p class="problem__citation">
@@ -333,10 +391,14 @@
 			<section class="beat beat--evidence" aria-labelledby="evidence-heading">
 				<h2 id="evidence-heading" class="beat__heading">What the staffer actually sees</h2>
 				<p class="beat__subheading">
-					Shared-office mailbox, <span class="beat__subheading-num"><Datum value={6} /></span>-minute window, one morning in March.
+					Shared-office mailbox, <span class="beat__subheading-num"><Datum value={6} /></span
+					>-minute window, one morning in March.
 				</p>
 
-				<figure class="inbox-artifact" aria-label="{labels.legislativeBody} staff shared inbox showing mass-mail spray pattern">
+				<figure
+					class="inbox-artifact"
+					aria-label="{labels.legislativeBody} staff shared inbox showing mass-mail spray pattern"
+				>
 					<div class="inbox-artifact__chrome">
 						<span class="inbox-artifact__dot"></span>
 						<span class="inbox-artifact__dot"></span>
@@ -397,13 +459,14 @@
 				</figure>
 
 				<p class="evidence__caption">
-					Auto-grouped by the CRM as one campaign. Sampled, totaled, filed. No identity check. No district proof. Half of staff report these campaigns are sent without the constituent's knowledge.
+					Auto-grouped by the CRM as one campaign. Sampled, totaled, filed. No identity check. No
+					district proof. Half of staff report these campaigns are sent without the constituent's
+					knowledge.
 				</p>
+				<p class="evidence__citation">CMF 2004/2015 longitudinal staff panel</p>
 				<p class="evidence__citation">
-					CMF 2004/2015 longitudinal staff panel
-				</p>
-				<p class="evidence__citation">
-					Walker &amp; Le, <cite>Socius</cite> 2023 &middot; astroturf campaigns measurably harm trust in legitimate advocacy orgs
+					Walker &amp; Le, <cite>Socius</cite> 2023 &middot; astroturf campaigns measurably harm trust
+					in legitimate advocacy orgs
 				</p>
 			</section>
 
@@ -413,14 +476,13 @@
 			<section class="beat beat--mechanism" aria-labelledby="mechanism-heading">
 				<h2 id="mechanism-heading" class="beat__heading">What Commons delivers instead</h2>
 				<p class="beat__subheading">
-					A petition counts names. A verification packet documents constituents &mdash; each individually authored, identity-proven, district-matched, screened for duplicates.
+					A petition counts names. A verification packet documents constituents &mdash; each
+					individually authored, identity-proven, district-matched, screened for duplicates.
 				</p>
 
 				<div class="mechanism__layout">
 					<div class="mechanism__specimen-block">
-						<p class="mechanism__provenance">
-							Example packet &middot; CA-11 &middot; Feb 2026
-						</p>
+						<p class="mechanism__provenance">Example packet &middot; CA-11 &middot; Feb 2026</p>
 
 						<VerificationPacketComponent
 							packet={specimenPacket}
@@ -430,38 +492,55 @@
 					</div>
 
 					<!-- Staff-filter mapping: each specimen field → the question it answers, with a citation -->
-					<dl class="filter-map" aria-label="How each field maps to the staff intake filter it answers">
-					<div class="filter-map__row">
-						<dt class="filter-map__field">Identity</dt>
-						<dd class="filter-map__answer">answers the staffer's first filter:</dd>
-						<dd class="filter-map__question">&ldquo;Is this person real?&rdquo;</dd>
-						<dd class="filter-map__citation">CMF 2004/2015 &middot; 78% of staff say it is &ldquo;helpful&rdquo; or &ldquo;very helpful&rdquo; when advocacy campaigns reveal their identity</dd>
-					</div>
-					<div class="filter-map__row">
-						<dt class="filter-map__field">Geography</dt>
-						<dd class="filter-map__answer">answers:</dd>
-						<dd class="filter-map__question">&ldquo;Are they in my district?&rdquo;</dd>
-						<dd class="filter-map__citation">CMF 2017 &middot; 91% of staff weight district-specific impact information</dd>
-					</div>
-					<div class="filter-map__row">
-						<dt class="filter-map__field">Authorship</dt>
-						<dd class="filter-map__answer">answers:</dd>
-						<dd class="filter-map__question">&ldquo;Did they actually write this?&rdquo;</dd>
-						<dd class="filter-map__citation">CMF 2004/2015 &middot; 53% of staff say form campaigns are sent without the constituent's knowledge</dd>
-					</div>
-					<div class="filter-map__row">
-						<dt class="filter-map__field">Timing</dt>
-						<dd class="filter-map__answer">answers:</dd>
-						<dd class="filter-map__question">&ldquo;Is this organic or manufactured?&rdquo;</dd>
-						<dd class="filter-map__citation">Walker &amp; Le, Socius 2023 &middot; staffers can distinguish organic constituent engagement from coordinated astroturf by arrival patterns</dd>
-					</div>
-					<div class="filter-map__row">
-						<dt class="filter-map__field">Screening</dt>
-						<dd class="filter-map__answer">answers:</dd>
-						<dd class="filter-map__question">&ldquo;Is this astroturf?&rdquo;</dd>
-						<dd class="filter-map__citation">Walker &amp; Le, Socius 2023 &middot; unverified submissions measurably harm trust in legitimate orgs</dd>
-					</div>
-				</dl>
+					<dl
+						class="filter-map"
+						aria-label="How each field maps to the staff intake filter it answers"
+					>
+						<div class="filter-map__row">
+							<dt class="filter-map__field">Identity</dt>
+							<dd class="filter-map__answer">answers the staffer's first filter:</dd>
+							<dd class="filter-map__question">&ldquo;Is this person real?&rdquo;</dd>
+							<dd class="filter-map__citation">
+								CMF 2004/2015 &middot; 78% of staff say it is &ldquo;helpful&rdquo; or &ldquo;very
+								helpful&rdquo; when advocacy campaigns reveal their identity
+							</dd>
+						</div>
+						<div class="filter-map__row">
+							<dt class="filter-map__field">Geography</dt>
+							<dd class="filter-map__answer">answers:</dd>
+							<dd class="filter-map__question">&ldquo;Are they in my district?&rdquo;</dd>
+							<dd class="filter-map__citation">
+								CMF 2017 &middot; 91% of staff weight district-specific impact information
+							</dd>
+						</div>
+						<div class="filter-map__row">
+							<dt class="filter-map__field">Authorship</dt>
+							<dd class="filter-map__answer">answers:</dd>
+							<dd class="filter-map__question">&ldquo;Did they actually write this?&rdquo;</dd>
+							<dd class="filter-map__citation">
+								CMF 2004/2015 &middot; 53% of staff say form campaigns are sent without the
+								constituent's knowledge
+							</dd>
+						</div>
+						<div class="filter-map__row">
+							<dt class="filter-map__field">Timing</dt>
+							<dd class="filter-map__answer">answers:</dd>
+							<dd class="filter-map__question">&ldquo;Is this organic or manufactured?&rdquo;</dd>
+							<dd class="filter-map__citation">
+								Walker &amp; Le, Socius 2023 &middot; staffers can distinguish organic constituent
+								engagement from coordinated astroturf by arrival patterns
+							</dd>
+						</div>
+						<div class="filter-map__row">
+							<dt class="filter-map__field">Screening</dt>
+							<dd class="filter-map__answer">answers:</dd>
+							<dd class="filter-map__question">&ldquo;Is this astroturf?&rdquo;</dd>
+							<dd class="filter-map__citation">
+								Walker &amp; Le, Socius 2023 &middot; unverified submissions measurably harm trust
+								in legitimate orgs
+							</dd>
+						</div>
+					</dl>
 				</div>
 			</section>
 
@@ -473,7 +552,8 @@
 			<section class="beat beat--proof" aria-labelledby="proof-heading">
 				<h2 id="proof-heading" class="beat__heading">What the packet actually proves.</h2>
 				<p class="beat__subheading">
-					Every verified row is three independent cryptographic claims. What the sender keeps private stays private. What the decision-maker can verify is recorded publicly.
+					Every verified row is three independent cryptographic claims. What the sender keeps
+					private stays private. What the decision-maker can verify is recorded publicly.
 				</p>
 
 				<div class="proof-claims">
@@ -511,45 +591,66 @@
 			<section class="beat beat--platform" aria-labelledby="platform-heading">
 				<h2 id="platform-heading" class="beat__heading">One platform, not one more tool.</h2>
 				<p class="beat__subheading">
-					Verification is the foundation, not an add-on. Every tool an advocacy org runs today &mdash; built in, built around verified constituent voice.
+					Verification is the foundation, not an add-on. Every tool an advocacy org runs today
+					&mdash; built in, built around verified constituent voice.
 				</p>
 
 				<div class="platform__grid">
 					<div class="platform__tile">
 						<span class="platform__tile-name">Supporters</span>
-						<span class="platform__tile-desc">Import from Action Network, EveryAction, NationBuilder, CSV. District-match on import.</span>
+						<span class="platform__tile-desc"
+							>Recognize CSV exports from {platformProfileCount} common platforms and generic CSV. District-match
+							on import.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Campaigns</span>
-						<span class="platform__tile-desc">Each campaign assembles a proof packet. Every action verified and attributed.</span>
+						<span class="platform__tile-desc"
+							>Each campaign assembles a proof packet. Every action verified and attributed.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Email</span>
-						<span class="platform__tile-desc">Blasts, sequences, deliverability tracking. Segmented by verification tier.</span>
+						<span class="platform__tile-desc"
+							>Verification-scoped blasts and delivery evidence; server dispatch stays gated by send
+							readiness.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">SMS &amp; Calls</span>
-						<span class="platform__tile-desc">Verified constituent targeting. 10DLC-ready.</span>
+						<span class="platform__tile-desc"
+							>Verified targeting. Text dispatch stays custody-bound.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Events</span>
-						<span class="platform__tile-desc">Mobilize and coordinate. Attendance feeds the verification funnel.</span>
+						<span class="platform__tile-desc"
+							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays gated.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Fundraising</span>
-						<span class="platform__tile-desc">Contributions, donor management, compliance reporting.</span>
+						<span class="platform__tile-desc"
+							>Donation intake and baseline confirmations; tax and anchored receipts stay qualified.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Legislation</span>
-						<span class="platform__tile-desc">Track bills, monitor votes, trigger campaigns on activity.</span>
+						<span class="platform__tile-desc"
+							>Watch federal bills and register positions; alert fan-out stays gated.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Decision Makers</span>
-						<span class="platform__tile-desc">Follow across jurisdictions. Build scorecards. Prove accountability.</span>
+						<span class="platform__tile-desc"
+							>Follow across jurisdictions. Build scorecards. Prove accountability.</span
+						>
 					</div>
 					<div class="platform__tile">
 						<span class="platform__tile-name">Automation</span>
-						<span class="platform__tile-desc">Verification-gated workflows. Multi-step sequences. Conditional triggers.</span>
+						<span class="platform__tile-desc"
+							>Saved coordination definitions; side effects stay behind workflow execution gates.</span
+						>
 					</div>
 				</div>
 			</section>
@@ -560,30 +661,41 @@
 			<section class="beat beat--reach" aria-labelledby="reach-heading">
 				<h2 id="reach-heading" class="beat__heading">One packet model across fragmented intake.</h2>
 				<p class="beat__subheading">
-					Commons delivers verified packets across US {labels.legislativeBody}, state legislatures, federal agencies, and local boards.
+					Commons delivers verified packets across US {labels.legislativeBody}, state legislatures,
+					federal agencies, and local boards.
 				</p>
 
 				<ul class="reach__list" role="list">
 					<li class="reach__item">U.S. {labels.legislativeBody}</li>
-					<li class="reach__item"><a href="/org/for/state-legislature" class="reach__link">State legislatures</a></li>
-					<li class="reach__item"><a href="/org/for/agency-rulemaking" class="reach__link">Federal agency dockets</a></li>
+					<li class="reach__item">
+						<a href="/org/for/state-legislature" class="reach__link">State legislatures</a>
+					</li>
+					<li class="reach__item">
+						<a href="/org/for/agency-rulemaking" class="reach__link">Federal agency dockets</a>
+					</li>
 					<li class="reach__item">Governor's offices</li>
 					<li class="reach__item">County boards</li>
-					<li class="reach__item"><a href="/org/for/local-government" class="reach__link">City councils</a></li>
+					<li class="reach__item">
+						<a href="/org/for/local-government" class="reach__link">City councils</a>
+					</li>
 					<li class="reach__item">School boards</li>
 					<li class="reach__item">Water districts</li>
 					<li class="reach__item">Transit authorities</li>
 				</ul>
 
 				<p class="reach__international">
-					<span class="reach__international-label">International adapters shipping 2026:</span> UK Parliament, EU Parliament, Bundestag e-petitions.
+					<span class="reach__international-label">International adapters on the roadmap:</span> UK Parliament,
+					EU Parliament, Bundestag e-petitions.
 				</p>
 
 				<p class="reach__footer">
-					<span class="reach__stat"><Datum value={24} /></span> U.S. boundary types live today &middot; <span class="reach__stat"><Datum value={90887} /></span> local government entities covered.
+					<span class="reach__stat"><Datum value={24} /></span> U.S. boundary types live today
+					&middot; <span class="reach__stat"><Datum value={90887} /></span> local government entities
+					covered.
 				</p>
 				<p class="reach__citation">
-					U.S. Census Bureau Local Governments 2022 &middot; regulations.gov v4 &middot; UK petition.parliament.uk, EU ECI, Bundestag e-petitions
+					U.S. Census Bureau Local Governments 2022 &middot; regulations.gov v4 &middot; UK
+					petition.parliament.uk, EU ECI, Bundestag e-petitions
 				</p>
 			</section>
 
@@ -592,15 +704,21 @@
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--window" aria-labelledby="window-heading">
 				<h2 id="window-heading" class="window__pull-quote">
-					The progressive data stack is being renegotiated. Eighty of the largest coalition data-operations orgs are running RFPs for its replacement.
+					The progressive data stack is being renegotiated. Eighty of the largest coalition
+					data-operations orgs are running RFPs for its replacement.
 				</h2>
 
 				<p class="window__body">
-					The incumbent voter-file platform has shed engineering capacity and is priced for enterprises its customers no longer are. Switching costs &mdash; list migration, integration rewiring, staff retraining &mdash; kept orgs in place. The 2026 RFP window is when those costs get shared across the coalition rather than borne alone.
+					The incumbent voter-file platform has shed engineering capacity and is priced for
+					enterprises its customers no longer are. Switching costs &mdash; list migration,
+					integration rewiring, staff retraining &mdash; kept orgs in place. The 2026 RFP window is
+					when those costs get shared across the coalition rather than borne alone.
 				</p>
 
 				<p class="window__citation">
-					The Movement Cooperative next-generation voter DB RFP (80+ member orgs) &middot; Higher Ground Labs, <cite>Where do we go from here?</cite> (2024) &middot; Sifry, <cite>Living with VANxiety</cite> (2023)
+					The Movement Cooperative next-generation voter DB RFP (80+ member orgs) &middot; Higher
+					Ground Labs, <cite>Where do we go from here?</cite> (2024) &middot; Sifry,
+					<cite>Living with VANxiety</cite> (2023)
 				</p>
 			</section>
 
@@ -610,21 +728,30 @@
 			<section class="beat beat--access" aria-labelledby="access-heading">
 				<h2 id="access-heading" class="beat__heading">Private beta. Founding organizations.</h2>
 				<p class="beat__subheading">
-					We're onboarding advocacy organizations individually &mdash; not self-serve, not a free trial. Direct access to the engineering team. Your use case shapes the platform.
+					We're onboarding advocacy organizations individually &mdash; not self-serve, not a free
+					trial. Direct access to the engineering team. Your use case shapes the platform.
 				</p>
 
 				<dl class="access__points">
 					<div class="access__point">
 						<dt class="access__point-label">Import</dt>
-						<dd class="access__point-desc">Bring your supporter list. We district-match and start the verification funnel on day one.</dd>
+						<dd class="access__point-desc">
+							Bring your supporter list. We district-match and start the verification funnel on day
+							one.
+						</dd>
 					</div>
 					<div class="access__point">
 						<dt class="access__point-label">Ship</dt>
-						<dd class="access__point-desc">Produce your first verified proof packet during the beta period.</dd>
+						<dd class="access__point-desc">
+							Produce your first verified proof packet during the beta period.
+						</dd>
 					</div>
 					<div class="access__point">
 						<dt class="access__point-label">Shape</dt>
-						<dd class="access__point-desc">Founding partners get a permanent voice in the roadmap. Your feedback directly informs the product.</dd>
+						<dd class="access__point-desc">
+							Founding partners get a permanent voice in the roadmap. Your feedback directly informs
+							the product.
+						</dd>
 					</div>
 				</dl>
 			</section>
@@ -645,7 +772,13 @@
 						<p class="waitlist-form__error">{waitlistError}</p>
 					{/if}
 				{:else}
-					<form class="waitlist-form" onsubmit={(e) => { e.preventDefault(); handleWaitlist(); }}>
+					<form
+						class="waitlist-form"
+						onsubmit={(e) => {
+							e.preventDefault();
+							handleWaitlist();
+						}}
+					>
 						<div class="waitlist-form__row">
 							<input
 								type="email"
@@ -654,14 +787,20 @@
 								bind:value={waitlistEmail}
 								required
 							/>
-							<button type="submit" class="cta" disabled={waitlistSubmitting || !waitlistEmail.trim()}>
+							<button
+								type="submit"
+								class="cta"
+								disabled={waitlistSubmitting || !waitlistEmail.trim()}
+							>
 								{waitlistSubmitting ? 'Joining...' : 'Join the waitlist'}
 							</button>
 						</div>
 						{#if waitlistError}
 							<p class="waitlist-form__error">{waitlistError}</p>
 						{/if}
-						<p class="waitlist-form__note">No spam. We'll reach out when we're ready to onboard your org.</p>
+						<p class="waitlist-form__note">
+							No spam. We'll reach out when we're ready to onboard your org.
+						</p>
 					</form>
 				{/if}
 			</section>
@@ -683,7 +822,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.org-page { padding: 2rem 2rem 5rem; }
+		.org-page {
+			padding: 2rem 2rem 5rem;
+		}
 	}
 
 	@media (min-width: 1024px) {
@@ -717,10 +858,14 @@
 		transition: color 200ms ease-out;
 	}
 
-	.back-link:hover { color: oklch(0.35 0.06 180); }
+	.back-link:hover {
+		color: oklch(0.35 0.06 180);
+	}
 
 	@media (min-width: 640px) {
-		.back-link { margin-bottom: 4rem; }
+		.back-link {
+			margin-bottom: 4rem;
+		}
 	}
 
 	/* ═══ RETURNING USER (preserved from /org) ═══ */
@@ -752,7 +897,9 @@
 		border: 1px solid oklch(0.92 0.01 250);
 		background: oklch(0.99 0.003 250);
 		text-decoration: none;
-		transition: border-color 200ms ease-out, background 200ms ease-out;
+		transition:
+			border-color 200ms ease-out,
+			background 200ms ease-out;
 	}
 
 	.org-card:hover {
@@ -805,7 +952,9 @@
 		font-size: 0.875rem;
 		color: oklch(0.6 0.02 250);
 		flex-shrink: 0;
-		transition: transform 150ms ease-out, color 150ms ease-out;
+		transition:
+			transform 150ms ease-out,
+			color 150ms ease-out;
 	}
 
 	.org-card:hover .org-card__arrow {
@@ -827,7 +976,9 @@
 		transition: color 150ms ease-out;
 	}
 
-	.create-link:hover { color: oklch(0.38 0.1 180); }
+	.create-link:hover {
+		color: oklch(0.38 0.1 180);
+	}
 
 	/* ═══════════════════════════════════════════
 	   ARGUMENT — the composed surface
@@ -848,11 +999,25 @@
 	   reach→window: moderate (from system to market moment)
 	   window→price: largest (biggest cognitive pivot — now the commercial frame)
 	   price→CTA: tight (action follows price directly) */
-	.beat--problem { margin-bottom: 2rem; }
-	.beat--evidence { margin-bottom: 2.75rem; max-width: 54rem; }
-	.beat--mechanism { margin-bottom: 2.5rem; max-width: 54rem; }
-	.beat--proof { margin-bottom: 2.75rem; max-width: 54rem; }
-	.beat--platform { margin-bottom: 2.5rem; max-width: 54rem; }
+	.beat--problem {
+		margin-bottom: 2rem;
+	}
+	.beat--evidence {
+		margin-bottom: 2.75rem;
+		max-width: 54rem;
+	}
+	.beat--mechanism {
+		margin-bottom: 2.5rem;
+		max-width: 54rem;
+	}
+	.beat--proof {
+		margin-bottom: 2.75rem;
+		max-width: 54rem;
+	}
+	.beat--platform {
+		margin-bottom: 2.5rem;
+		max-width: 54rem;
+	}
 
 	.proof-claims {
 		display: flex;
@@ -871,24 +1036,47 @@
 		color: oklch(0.38 0.1 175);
 		text-decoration: none;
 		border-bottom: 1px solid oklch(0.82 0.06 180 / 0.5);
-		transition: color 150ms ease-out, border-bottom-color 150ms ease-out;
+		transition:
+			color 150ms ease-out,
+			border-bottom-color 150ms ease-out;
 	}
 	.proof-link:hover {
 		color: oklch(0.32 0.11 175);
 		border-bottom-color: oklch(0.45 0.1 180);
 	}
-	.beat--reach { margin-bottom: 2.5rem; }
-	.beat--window { margin-bottom: 4.25rem; }
-	.beat--price { margin-bottom: 1.5rem; max-width: 54rem; } /* legacy — kept for specificity */
+	.beat--reach {
+		margin-bottom: 2.5rem;
+	}
+	.beat--window {
+		margin-bottom: 4.25rem;
+	}
+	.beat--price {
+		margin-bottom: 1.5rem;
+		max-width: 54rem;
+	} /* legacy — kept for specificity */
 
 	@media (min-width: 768px) {
-		.beat--problem { margin-bottom: 2.5rem; }
-		.beat--evidence { margin-bottom: 3.5rem; }
-		.beat--mechanism { margin-bottom: 3rem; }
-		.beat--platform { margin-bottom: 3.5rem; }
-		.beat--reach { margin-bottom: 3rem; }
-		.beat--window { margin-bottom: 5.5rem; }
-		.beat--price { margin-bottom: 2rem; }
+		.beat--problem {
+			margin-bottom: 2.5rem;
+		}
+		.beat--evidence {
+			margin-bottom: 3.5rem;
+		}
+		.beat--mechanism {
+			margin-bottom: 3rem;
+		}
+		.beat--platform {
+			margin-bottom: 3.5rem;
+		}
+		.beat--reach {
+			margin-bottom: 3rem;
+		}
+		.beat--window {
+			margin-bottom: 5.5rem;
+		}
+		.beat--price {
+			margin-bottom: 2rem;
+		}
 	}
 
 	.beat__eyebrow {
@@ -1118,9 +1306,15 @@
 		text-overflow: ellipsis;
 	}
 
-	.inbox-row--dim { opacity: 0.78; }
-	.inbox-row--dimmer { opacity: 0.55; }
-	.inbox-row--dimmest { opacity: 0.35; }
+	.inbox-row--dim {
+		opacity: 0.78;
+	}
+	.inbox-row--dimmer {
+		opacity: 0.55;
+	}
+	.inbox-row--dimmest {
+		opacity: 0.35;
+	}
 
 	.inbox-row__ellipsis {
 		list-style: none;
@@ -1157,7 +1351,9 @@
 		margin-top: 0.375rem;
 	}
 
-	.evidence__citation cite { font-style: italic; }
+	.evidence__citation cite {
+		font-style: italic;
+	}
 
 	/* ═══════════════════════════════════════════
 	   BEAT 3 — MECHANISM (specimen + filter map)
@@ -1207,7 +1403,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen { font-size: 0.8125rem; }
+		.specimen {
+			font-size: 0.8125rem;
+		}
 	}
 
 	.specimen__title {
@@ -1228,10 +1426,14 @@
 		}
 	}
 
-	.specimen__meta { padding: 1.125rem 1.25rem 0; }
+	.specimen__meta {
+		padding: 1.125rem 1.25rem 0;
+	}
 
 	@media (min-width: 640px) {
-		.specimen__meta { padding: 1.375rem 2rem 0; }
+		.specimen__meta {
+			padding: 1.375rem 2rem 0;
+		}
 	}
 
 	.specimen__row {
@@ -1241,7 +1443,10 @@
 	}
 
 	@media (max-width: 479px) {
-		.specimen__row { flex-direction: column; gap: 0; }
+		.specimen__row {
+			flex-direction: column;
+			gap: 0;
+		}
 	}
 
 	.specimen__label {
@@ -1262,7 +1467,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__divider { margin: 1rem 2rem; }
+		.specimen__divider {
+			margin: 1rem 2rem;
+		}
 	}
 
 	.specimen__hero {
@@ -1273,7 +1480,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__hero { padding: 1.5rem 2rem 1.75rem; }
+		.specimen__hero {
+			padding: 1.5rem 2rem 1.75rem;
+		}
 	}
 
 	.specimen__count {
@@ -1284,7 +1493,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__count { font-size: 3.25rem; }
+		.specimen__count {
+			font-size: 3.25rem;
+		}
 	}
 
 	.specimen__count-label {
@@ -1302,7 +1513,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__evidence { padding: 0 2rem; }
+		.specimen__evidence {
+			padding: 0 2rem;
+		}
 	}
 
 	/* ═══ Self-labeling stacked segments ═══
@@ -1320,7 +1533,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__section-label { font-size: 0.625rem; }
+		.specimen__section-label {
+			font-size: 0.625rem;
+		}
 	}
 
 	.specimen__section-label:first-child {
@@ -1337,7 +1552,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__stack { height: 2.25rem; }
+		.specimen__stack {
+			height: 2.25rem;
+		}
 	}
 
 	.specimen__stack-seg {
@@ -1361,7 +1578,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__stack-name { font-size: 0.625rem; }
+		.specimen__stack-name {
+			font-size: 0.625rem;
+		}
 	}
 
 	.specimen__stack-count {
@@ -1371,7 +1590,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__stack-count { font-size: 0.8125rem; }
+		.specimen__stack-count {
+			font-size: 0.8125rem;
+		}
 	}
 
 	/* Deep: government ID, individual voice — proven, authoritative */
@@ -1402,7 +1623,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__map-container { height: 200px; }
+		.specimen__map-container {
+			height: 200px;
+		}
 	}
 
 	.specimen__geo-meta {
@@ -1413,7 +1636,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__geo-meta { font-size: 0.6875rem; }
+		.specimen__geo-meta {
+			font-size: 0.6875rem;
+		}
 	}
 
 	/* Temporal arrival — Pulse sparkline with date context */
@@ -1450,8 +1675,12 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__temporal-range { font-size: 0.75rem; }
-		.specimen__temporal-detail { font-size: 0.625rem; }
+		.specimen__temporal-range {
+			font-size: 0.75rem;
+		}
+		.specimen__temporal-detail {
+			font-size: 0.625rem;
+		}
 	}
 
 	.specimen__seal {
@@ -1462,7 +1691,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__seal { padding: 0.875rem 2rem; }
+		.specimen__seal {
+			padding: 0.875rem 2rem;
+		}
 	}
 
 	.specimen__seal-text {
@@ -1474,7 +1705,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.specimen__seal-text { font-size: 0.75rem; }
+		.specimen__seal-text {
+			font-size: 0.75rem;
+		}
 	}
 
 	/* ═══ FILTER MAP — specimen field → staff question → citation ═══
@@ -1489,7 +1722,9 @@
 	}
 
 	@media (min-width: 640px) {
-		.filter-map { gap: 1.5rem; }
+		.filter-map {
+			gap: 1.5rem;
+		}
 	}
 
 	.filter-map__row {
@@ -1630,7 +1865,9 @@
 		color: inherit;
 		text-decoration: none;
 		border-bottom: 1px solid oklch(0.82 0.06 180 / 0.5);
-		transition: border-bottom-color 150ms ease-out, color 150ms ease-out;
+		transition:
+			border-bottom-color 150ms ease-out,
+			color 150ms ease-out;
 	}
 
 	.reach__link:hover {
@@ -1742,7 +1979,9 @@
 		max-width: 40rem;
 	}
 
-	.window__citation cite { font-style: italic; }
+	.window__citation cite {
+		font-style: italic;
+	}
 
 	/* ═══════════════════════════════════════════
 	   BEAT 6 — BETA ACCESS
@@ -1752,7 +1991,9 @@
 	}
 
 	@media (min-width: 768px) {
-		.beat--access { margin-bottom: 2rem; }
+		.beat--access {
+			margin-bottom: 2rem;
+		}
 	}
 
 	.access__points {
@@ -1886,7 +2127,9 @@
 		font-weight: 600;
 		color: #ffffff;
 		cursor: pointer;
-		transition: background 150ms ease-out, border-color 150ms ease-out;
+		transition:
+			background 150ms ease-out,
+			border-color 150ms ease-out;
 	}
 
 	.cta:hover {

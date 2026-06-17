@@ -13,7 +13,10 @@
 
 <svelte:head>
 	<title>Developers | Commons</title>
-	<meta name="description" content="Commons Public API documentation. Free, uncapped REST API with TypeScript and Python SDKs." />
+	<meta
+		name="description"
+		content="Commons Public API documentation. Free, uncapped REST API with TypeScript and Python SDKs."
+	/>
 </svelte:head>
 
 <div class="dev-page">
@@ -21,7 +24,8 @@
 	<header class="hero">
 		<h1 class="hero-title">Building on Commons</h1>
 		<p class="hero-subtitle">
-			Free, uncapped REST API. TypeScript + Python SDKs. Cursor pagination. Verified civic infrastructure.
+			Free, uncapped REST API. TypeScript + Python SDKs. Cursor pagination. Verified civic
+			infrastructure.
 		</p>
 		<div class="hero-actions">
 			<a href="/org" class="btn btn-primary">Get API Key</a>
@@ -41,15 +45,24 @@
 					<div class="code-block">
 						<div class="code-header">
 							<span class="code-lang">bash</span>
-							<button class="copy-btn" onclick={() => copyCode('qs1', `curl -X POST https://commons.email/api/v1/keys \\
+							<button
+								class="copy-btn"
+								onclick={() =>
+									copyCode(
+										'qs1',
+										`curl -X POST https://commons.email/api/v1/keys \\
   -H "Content-Type: application/json" \\
-  -d '{"orgSlug": "your-org"}'`)}>
+  -d '{"orgSlug": "your-org"}'`
+									)}
+							>
 								{copiedId === 'qs1' ? 'Copied' : 'Copy'}
 							</button>
 						</div>
-						<pre><code>{`curl -X POST https://commons.email/api/v1/keys \\
+						<pre><code
+								>{`curl -X POST https://commons.email/api/v1/keys \\
   -H "Content-Type: application/json" \\
-  -d '{"orgSlug": "your-org"}'`}</code></pre>
+  -d '{"orgSlug": "your-org"}'`}</code
+							></pre>
 					</div>
 				</div>
 			</div>
@@ -61,13 +74,22 @@
 					<div class="code-block">
 						<div class="code-header">
 							<span class="code-lang">bash</span>
-							<button class="copy-btn" onclick={() => copyCode('qs2', `curl https://commons.email/api/v1/supporters \\
-  -H "Authorization: Bearer ck_live_your_key_here"`)}>
+							<button
+								class="copy-btn"
+								onclick={() =>
+									copyCode(
+										'qs2',
+										`curl https://commons.email/api/v1/supporters \\
+  -H "Authorization: Bearer ck_live_your_key_here"`
+									)}
+							>
 								{copiedId === 'qs2' ? 'Copied' : 'Copy'}
 							</button>
 						</div>
-						<pre><code>{`curl https://commons.email/api/v1/supporters \\
-  -H "Authorization: Bearer ck_live_your_key_here"`}</code></pre>
+						<pre><code
+								>{`curl https://commons.email/api/v1/supporters \\
+  -H "Authorization: Bearer ck_live_your_key_here"`}</code
+							></pre>
 					</div>
 				</div>
 			</div>
@@ -79,7 +101,12 @@
 					<div class="code-block">
 						<div class="code-header">
 							<span class="code-lang">json</span>
-							<button class="copy-btn" onclick={() => copyCode('qs3', `{
+							<button
+								class="copy-btn"
+								onclick={() =>
+									copyCode(
+										'qs3',
+										`{
   "data": [
     {
       "id": "sup_abc123",
@@ -94,11 +121,14 @@
     "hasMore": true,
     "total": 1450
   }
-}`)}>
+}`
+									)}
+							>
 								{copiedId === 'qs3' ? 'Copied' : 'Copy'}
 							</button>
 						</div>
-						<pre><code>{`{
+						<pre><code
+								>{`{
   "data": [
     {
       "id": "sup_abc123",
@@ -113,7 +143,8 @@
     "hasMore": true,
     "total": 1450
   }
-}`}</code></pre>
+}`}</code
+							></pre>
 					</div>
 				</div>
 			</div>
@@ -128,7 +159,10 @@
 				<div class="code-block">
 					<div class="code-header">
 						<span class="code-lang">TypeScript</span>
-						<button class="copy-btn" onclick={() => copyCode('inst-ts', 'npm install @commons-platform/sdk')}>
+						<button
+							class="copy-btn"
+							onclick={() => copyCode('inst-ts', 'npm install @commons-platform/sdk')}
+						>
 							{copiedId === 'inst-ts' ? 'Copied' : 'Copy'}
 						</button>
 					</div>
@@ -137,7 +171,12 @@
 				<div class="code-block" style="margin-top: 1rem;">
 					<div class="code-header">
 						<span class="code-lang">TypeScript</span>
-						<button class="copy-btn" onclick={() => copyCode('usage-ts', `import { Commons } from '@commons-platform/sdk';
+						<button
+							class="copy-btn"
+							onclick={() =>
+								copyCode(
+									'usage-ts',
+									`import { Commons } from '@commons-platform/sdk';
 
 const commons = new Commons({ apiKey: 'ck_live_...' });
 
@@ -148,11 +187,14 @@ const supporters = await commons.supporters.list();
 const campaign = await commons.campaigns.create({
   title: 'Clean Energy Act',
   type: 'LETTER'
-});`)}>
+});`
+								)}
+						>
 							{copiedId === 'usage-ts' ? 'Copied' : 'Copy'}
 						</button>
 					</div>
-					<pre><code>{`import { Commons } from '@commons-platform/sdk';
+					<pre><code
+							>{`import { Commons } from '@commons-platform/sdk';
 
 const commons = new Commons({ apiKey: 'ck_live_...' });
 
@@ -163,7 +205,8 @@ const supporters = await commons.supporters.list();
 const campaign = await commons.campaigns.create({
   title: 'Clean Energy Act',
   type: 'LETTER'
-});`}</code></pre>
+});`}</code
+						></pre>
 				</div>
 			</div>
 			<div>
@@ -179,7 +222,12 @@ const campaign = await commons.campaigns.create({
 				<div class="code-block" style="margin-top: 1rem;">
 					<div class="code-header">
 						<span class="code-lang">Python</span>
-						<button class="copy-btn" onclick={() => copyCode('usage-py', `from commons import Commons
+						<button
+							class="copy-btn"
+							onclick={() =>
+								copyCode(
+									'usage-py',
+									`from commons import Commons
 
 client = Commons(api_key="ck_live_...")
 
@@ -190,11 +238,14 @@ supporters = client.supporters.list()
 campaign = client.campaigns.create(
     title="Clean Energy Act",
     type="LETTER"
-)`)}>
+)`
+								)}
+						>
 							{copiedId === 'usage-py' ? 'Copied' : 'Copy'}
 						</button>
 					</div>
-					<pre><code>{`from commons import Commons
+					<pre><code
+							>{`from commons import Commons
 
 client = Commons(api_key="ck_live_...")
 
@@ -205,7 +256,8 @@ supporters = client.supporters.list()
 campaign = client.campaigns.create(
     title="Clean Energy Act",
     type="LETTER"
-)`}</code></pre>
+)`}</code
+						></pre>
 				</div>
 			</div>
 		</div>
@@ -215,8 +267,8 @@ campaign = client.campaigns.create(
 	<section class="section">
 		<h2 class="section-title">Authentication</h2>
 		<p class="section-desc">
-			All API requests require a Bearer token in the <code>Authorization</code> header.
-			API keys use the prefix <code>ck_live_</code> and are scoped to a single organization.
+			All API requests require a Bearer token in the <code>Authorization</code> header. API keys use
+			the prefix <code>ck_live_</code> and are scoped to a single organization.
 		</p>
 		<div class="auth-details">
 			<div class="info-card">
@@ -230,20 +282,32 @@ campaign = client.campaigns.create(
 		<div class="code-block">
 			<div class="code-header">
 				<span class="code-lang">bash</span>
-				<button class="copy-btn" onclick={() => copyCode('auth', `curl https://commons.email/api/v1/supporters \\
-  -H "Authorization: Bearer ck_live_abc123def456"`)}>
+				<button
+					class="copy-btn"
+					onclick={() =>
+						copyCode(
+							'auth',
+							`curl https://commons.email/api/v1/supporters \\
+  -H "Authorization: Bearer ck_live_abc123def456"`
+						)}
+				>
 					{copiedId === 'auth' ? 'Copied' : 'Copy'}
 				</button>
 			</div>
-			<pre><code>{`curl https://commons.email/api/v1/supporters \\
-  -H "Authorization: Bearer ck_live_abc123def456"`}</code></pre>
+			<pre><code
+					>{`curl https://commons.email/api/v1/supporters \\
+  -H "Authorization: Bearer ck_live_abc123def456"`}</code
+				></pre>
 		</div>
 	</section>
 
 	<!-- Resources Reference -->
 	<section class="section">
 		<h2 class="section-title">Resources</h2>
-		<p class="section-desc">All resources are accessed under <code>/api/v1/</code>. Responses use the envelope format <code>{`{ data, meta?, error? }`}</code>.</p>
+		<p class="section-desc">
+			All resources are accessed under <code>/api/v1/</code>. Responses use the envelope format
+			<code>{`{ data, meta?, error? }`}</code>.
+		</p>
 
 		<!-- Organization -->
 		<details class="resource">
@@ -260,7 +324,12 @@ campaign = client.campaigns.create(
 				<div class="code-block">
 					<div class="code-header">
 						<span class="code-lang">Response</span>
-						<button class="copy-btn" onclick={() => copyCode('org-resp', `{
+						<button
+							class="copy-btn"
+							onclick={() =>
+								copyCode(
+									'org-resp',
+									`{
   "data": {
     "id": "org_1",
     "name": "Climate Action Coalition",
@@ -272,11 +341,14 @@ campaign = client.campaigns.create(
       "templates": 15
     }
   }
-}`)}>
+}`
+								)}
+						>
 							{copiedId === 'org-resp' ? 'Copied' : 'Copy'}
 						</button>
 					</div>
-					<pre><code>{`{
+					<pre><code
+							>{`{
   "data": {
     "id": "org_1",
     "name": "Climate Action Coalition",
@@ -288,7 +360,8 @@ campaign = client.campaigns.create(
       "templates": 15
     }
   }
-}`}</code></pre>
+}`}</code
+						></pre>
 				</div>
 			</div>
 		</details>
@@ -319,9 +392,20 @@ campaign = client.campaigns.create(
 							<tr><td><code>cursor</code></td><td>string</td><td>Pagination cursor</td></tr>
 							<tr><td><code>limit</code></td><td>integer</td><td>Items per page (max 50)</td></tr>
 							<tr><td><code>email</code></td><td>string</td><td>Filter by exact email</td></tr>
-							<tr><td><code>verified</code></td><td>boolean</td><td>Filter by verification status</td></tr>
-							<tr><td><code>email_status</code></td><td>string</td><td>subscribed, unsubscribed, bounced, complained</td></tr>
-							<tr><td><code>source</code></td><td>string</td><td>csv, action_network, organic, widget</td></tr>
+							<tr
+								><td><code>verified</code></td><td>boolean</td><td>Filter by verification status</td
+								></tr
+							>
+							<tr
+								><td><code>email_status</code></td><td>string</td><td
+									>subscribed, unsubscribed, bounced, complained</td
+								></tr
+							>
+							<tr
+								><td><code>source</code></td><td>string</td><td
+									>csv, recognized platform profile, organic, widget</td
+								></tr
+							>
 							<tr><td><code>tag</code></td><td>string</td><td>Filter by tag ID</td></tr>
 						</tbody>
 					</table>
@@ -335,21 +419,30 @@ campaign = client.campaigns.create(
 				<div class="code-block">
 					<div class="code-header">
 						<span class="code-lang">Request Body</span>
-						<button class="copy-btn" onclick={() => copyCode('sup-create', `{
+						<button
+							class="copy-btn"
+							onclick={() =>
+								copyCode(
+									'sup-create',
+									`{
   "email": "jane@example.com",
   "name": "Jane Doe",
   "postalCode": "94105",
   "tags": ["tag_volunteer"]
-}`)}>
+}`
+								)}
+						>
 							{copiedId === 'sup-create' ? 'Copied' : 'Copy'}
 						</button>
 					</div>
-					<pre><code>{`{
+					<pre><code
+							>{`{
   "email": "jane@example.com",
   "name": "Jane Doe",
   "postalCode": "94105",
   "tags": ["tag_volunteer"]
-}`}</code></pre>
+}`}</code
+						></pre>
 				</div>
 
 				<div class="endpoint-row">
@@ -388,7 +481,10 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>status</code></td><td>string</td><td>DRAFT, ACTIVE, PAUSED, COMPLETE</td></tr>
+							<tr
+								><td><code>status</code></td><td>string</td><td>DRAFT, ACTIVE, PAUSED, COMPLETE</td
+								></tr
+							>
 							<tr><td><code>type</code></td><td>string</td><td>LETTER, EVENT, FORM</td></tr>
 						</tbody>
 					</table>
@@ -420,7 +516,10 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>verified</code></td><td>boolean</td><td>Filter by verification status</td></tr>
+							<tr
+								><td><code>verified</code></td><td>boolean</td><td>Filter by verification status</td
+								></tr
+							>
 						</tbody>
 					</table>
 				</div>
@@ -483,8 +582,15 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>status</code></td><td>string</td><td>DRAFT, PUBLISHED, CANCELLED, COMPLETED</td></tr>
-							<tr><td><code>eventType</code></td><td>string</td><td>IN_PERSON, VIRTUAL, HYBRID</td></tr>
+							<tr
+								><td><code>status</code></td><td>string</td><td
+									>DRAFT, PUBLISHED, CANCELLED, COMPLETED</td
+								></tr
+							>
+							<tr
+								><td><code>eventType</code></td><td>string</td><td>IN_PERSON, VIRTUAL, HYBRID</td
+								></tr
+							>
 						</tbody>
 					</table>
 				</div>
@@ -494,7 +600,8 @@ campaign = client.campaigns.create(
 				</div>
 				<div class="code-block">
 					<div class="code-header"><span class="code-lang">Response</span></div>
-					<pre><code>{`{
+					<pre><code
+							>{`{
   "data": {
     "id": "evt_1",
     "title": "Town Hall Q3",
@@ -507,7 +614,8 @@ campaign = client.campaigns.create(
     "rsvpCount": 142,
     "attendeeCount": 0
   }
-}`}</code></pre>
+}`}</code
+						></pre>
 				</div>
 			</div>
 		</details>
@@ -529,7 +637,10 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>status</code></td><td>string</td><td>pending, completed, refunded</td></tr>
+							<tr
+								><td><code>status</code></td><td>string</td><td>pending, completed, refunded</td
+								></tr
+							>
 							<tr><td><code>campaignId</code></td><td>string</td><td>Filter by campaign ID</td></tr>
 						</tbody>
 					</table>
@@ -558,7 +669,8 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>enabled</code></td><td>boolean</td><td>Filter by enabled status</td></tr>
+							<tr><td><code>enabled</code></td><td>boolean</td><td>Filter by enabled status</td></tr
+							>
 						</tbody>
 					</table>
 				</div>
@@ -586,7 +698,10 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>status</code></td><td>string</td><td>draft, sending, sent, failed</td></tr>
+							<tr
+								><td><code>status</code></td><td>string</td><td>draft, sending, sent, failed</td
+								></tr
+							>
 						</tbody>
 					</table>
 				</div>
@@ -610,7 +725,11 @@ campaign = client.campaigns.create(
 					<table class="params-table">
 						<thead><tr><th>Param</th><th>Type</th><th>Description</th></tr></thead>
 						<tbody>
-							<tr><td><code>status</code></td><td>string</td><td>initiated, ringing, in-progress, completed, failed, no-answer, busy</td></tr>
+							<tr
+								><td><code>status</code></td><td>string</td><td
+									>initiated, ringing, in-progress, completed, failed, no-answer, busy</td
+								></tr
+							>
 							<tr><td><code>campaignId</code></td><td>string</td><td>Filter by campaign ID</td></tr>
 						</tbody>
 					</table>
@@ -657,14 +776,16 @@ campaign = client.campaigns.create(
 				</div>
 				<div class="code-block">
 					<div class="code-header"><span class="code-lang">Response</span></div>
-					<pre><code>{`{
+					<pre><code
+							>{`{
   "data": {
     "verifiedActions": 847,
     "maxVerifiedActions": 5000,
     "emailsSent": 3200,
     "maxEmails": 10000
   }
-}`}</code></pre>
+}`}</code
+						></pre>
 				</div>
 			</div>
 		</details>
@@ -674,64 +795,96 @@ campaign = client.campaigns.create(
 	<section class="section">
 		<h2 class="section-title">Pagination</h2>
 		<p class="section-desc">
-			All list endpoints use cursor-based pagination. Pass the <code>cursor</code> from the previous response's <code>meta</code> object to get the next page.
+			All list endpoints use cursor-based pagination. Pass the <code>cursor</code> from the previous
+			response's <code>meta</code> object to get the next page.
 		</p>
 		<div class="code-block">
 			<div class="code-header">
 				<span class="code-lang">bash</span>
-				<button class="copy-btn" onclick={() => copyCode('pag-req', `# First page
+				<button
+					class="copy-btn"
+					onclick={() =>
+						copyCode(
+							'pag-req',
+							`# First page
 curl "https://commons.email/api/v1/supporters?limit=25"
 
 # Next page (use cursor from previous response)
-curl "https://commons.email/api/v1/supporters?limit=25&cursor=sup_abc123"`)}>
+curl "https://commons.email/api/v1/supporters?limit=25&cursor=sup_abc123"`
+						)}
+				>
 					{copiedId === 'pag-req' ? 'Copied' : 'Copy'}
 				</button>
 			</div>
-			<pre><code>{`# First page
+			<pre><code
+					>{`# First page
 curl "https://commons.email/api/v1/supporters?limit=25"
 
 # Next page (use cursor from previous response)
-curl "https://commons.email/api/v1/supporters?limit=25&cursor=sup_abc123"`}</code></pre>
+curl "https://commons.email/api/v1/supporters?limit=25&cursor=sup_abc123"`}</code
+				></pre>
 		</div>
 		<div class="code-block">
 			<div class="code-header"><span class="code-lang">Response meta</span></div>
-			<pre><code>{`{
+			<pre><code
+					>{`{
   "meta": {
     "cursor": "sup_xyz789",
     "hasMore": true,
     "total": 1450
   }
-}`}</code></pre>
+}`}</code
+				></pre>
 		</div>
-		<p class="section-desc" style="margin-top: 1.5rem;">The SDKs provide auto-pagination with async iterators:</p>
+		<p class="section-desc" style="margin-top: 1.5rem;">
+			The SDKs provide auto-pagination with async iterators:
+		</p>
 		<div class="install-grid">
 			<div class="code-block">
 				<div class="code-header">
 					<span class="code-lang">TypeScript</span>
-					<button class="copy-btn" onclick={() => copyCode('pag-ts', `// Auto-paginate through all supporters
+					<button
+						class="copy-btn"
+						onclick={() =>
+							copyCode(
+								'pag-ts',
+								`// Auto-paginate through all supporters
 for await (const supporter of commons.supporters.list()) {
   console.log(supporter.email);
-}`)}>
+}`
+							)}
+					>
 						{copiedId === 'pag-ts' ? 'Copied' : 'Copy'}
 					</button>
 				</div>
-				<pre><code>{`// Auto-paginate through all supporters
+				<pre><code
+						>{`// Auto-paginate through all supporters
 for await (const supporter of commons.supporters.list()) {
   console.log(supporter.email);
-}`}</code></pre>
+}`}</code
+					></pre>
 			</div>
 			<div class="code-block">
 				<div class="code-header">
 					<span class="code-lang">Python</span>
-					<button class="copy-btn" onclick={() => copyCode('pag-py', `# Auto-paginate through all supporters
+					<button
+						class="copy-btn"
+						onclick={() =>
+							copyCode(
+								'pag-py',
+								`# Auto-paginate through all supporters
 for supporter in client.supporters.list():
-    print(supporter.email)`)}>
+    print(supporter.email)`
+							)}
+					>
 						{copiedId === 'pag-py' ? 'Copied' : 'Copy'}
 					</button>
 				</div>
-				<pre><code>{`# Auto-paginate through all supporters
+				<pre><code
+						>{`# Auto-paginate through all supporters
 for supporter in client.supporters.list():
-    print(supporter.email)`}</code></pre>
+    print(supporter.email)`}</code
+					></pre>
 			</div>
 		</div>
 	</section>
@@ -740,29 +893,40 @@ for supporter in client.supporters.list():
 	<section class="section">
 		<h2 class="section-title">Errors</h2>
 		<p class="section-desc">
-			Error responses use the same envelope format with <code>data: null</code> and an <code>error</code> object:
+			Error responses use the same envelope format with <code>data: null</code> and an
+			<code>error</code> object:
 		</p>
 		<div class="code-block">
 			<div class="code-header"><span class="code-lang">Error response</span></div>
-			<pre><code>{`{
+			<pre><code
+					>{`{
   "data": null,
   "error": {
     "code": "NOT_FOUND",
     "message": "Resource not found"
   }
-}`}</code></pre>
+}`}</code
+				></pre>
 		</div>
 		<table class="error-table">
 			<thead>
 				<tr><th>Code</th><th>HTTP</th><th>Description</th></tr>
 			</thead>
 			<tbody>
-				<tr><td><code>BAD_REQUEST</code></td><td>400</td><td>Invalid input or malformed JSON</td></tr>
+				<tr
+					><td><code>BAD_REQUEST</code></td><td>400</td><td>Invalid input or malformed JSON</td></tr
+				>
 				<tr><td><code>UNAUTHORIZED</code></td><td>401</td><td>Missing or invalid API key</td></tr>
 				<tr><td><code>FORBIDDEN</code></td><td>403</td><td>API key lacks required scope</td></tr>
 				<tr><td><code>NOT_FOUND</code></td><td>404</td><td>Resource does not exist</td></tr>
-				<tr><td><code>CONFLICT</code></td><td>409</td><td>Duplicate resource (e.g. email already exists)</td></tr>
-				<tr><td><code>RATE_LIMITED</code></td><td>429</td><td>Too many requests -- slow down</td></tr>
+				<tr
+					><td><code>CONFLICT</code></td><td>409</td><td
+						>Duplicate resource (e.g. email already exists)</td
+					></tr
+				>
+				<tr
+					><td><code>RATE_LIMITED</code></td><td>429</td><td>Too many requests -- slow down</td></tr
+				>
 				<tr><td><code>INTERNAL_ERROR</code></td><td>500</td><td>Unexpected server error</td></tr>
 			</tbody>
 		</table>
@@ -772,14 +936,16 @@ for supporter in client.supporters.list():
 	<section class="section">
 		<h2 class="section-title">Rate Limits</h2>
 		<p class="section-desc">
-			Rate limits are applied per API key based on your organization's plan. When rate limited, you'll receive a <code>429</code> response.
+			Rate limits are applied per API key based on your organization's plan. Reads stay open
+			while you're building -- a plan lifts the write ceiling and unlocks delivery. When rate
+			limited, you'll receive a <code>429</code> response.
 		</p>
 		<table class="rate-table">
 			<thead>
 				<tr><th>Plan</th><th>Requests / min</th></tr>
 			</thead>
 			<tbody>
-				<tr><td>Free</td><td>100</td></tr>
+				<tr><td>No plan yet</td><td>Reads uncapped &middot; writes 100</td></tr>
 				<tr><td>Starter</td><td>300</td></tr>
 				<tr><td>Organization</td><td>1,000</td></tr>
 				<tr><td>Coalition</td><td>3,000</td></tr>
@@ -801,7 +967,12 @@ for supporter in client.supporters.list():
 		max-width: 960px;
 		margin: 0 auto;
 		padding: 3rem 1.5rem 4rem;
-		font-family: 'Satoshi', ui-sans-serif, system-ui, -apple-system, sans-serif;
+		font-family:
+			'Satoshi',
+			ui-sans-serif,
+			system-ui,
+			-apple-system,
+			sans-serif;
 		color: #1a1a2e;
 	}
 

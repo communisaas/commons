@@ -1,19 +1,28 @@
 <script lang="ts">
+	import { assessIntegrity } from '$lib/components/org/integrity-assessment';
+
 	type NetworkStats = {
-		orgCount: number;
-		totalVerifiedActions: number;
-		uniqueDistricts: number;
-		verifiedSupporters: number;
-		tierDistribution: { tier: number; count: number }[];
-		stateDistribution: { state: string; count: number }[];
+		memberCount: number;
+		// Counts arrive sub-K suppressed: 1-4 (districts 1-2) read as null.
+		totalSupporters: number | null;
+		uniqueSupporters: number | null;
+		verifiedSupporters: number | null;
+		totalCampaignActions: number | null;
+		verifiedCampaignActions: number | null;
+		stateDistribution: Record<string, number>;
+		gds: number | null;
+		ald: number | null;
+		temporalEntropy: number | null;
+		cai: number | null;
+		districtCount: number | null;
 	};
 
 	let { stats, loading, brandingAccent = null }: {
 		stats: NetworkStats | null;
 		loading: boolean;
-		// NEW-E-4: hex like '#0d9488'. Only set on Coalition-tier orgs. When
-		// present, overrides the default teal accent on stat highlights + tier
-		// bar fills. Validated upstream by organizations.update mutation.
+		// Hex like '#0d9488'. Only set on Coalition-tier orgs. When present,
+		// overrides the default teal accent on stat highlights. Validated
+		// upstream by the organizations.update mutation.
 		brandingAccent?: string | null;
 	} = $props();
 
@@ -24,20 +33,34 @@
 		brandingAccent ? `--coalition-accent: ${brandingAccent};` : ''
 	);
 
-	const tierLabels: Record<number, string> = {
-		0: 'Guest',
-		1: 'Authenticated',
-		2: 'District Verified',
-		3: 'Identity Verified',
-		4: 'Passport Verified',
-		5: 'Government Verified'
-	};
-
-	const maxTierCount = $derived(
-		stats?.tierDistribution
-			? Math.max(...stats.tierDistribution.map((t) => t.count), 1)
-			: 1
+	const countryDistribution = $derived(
+		Object.entries(stats?.stateDistribution ?? {})
+			.map(([country, count]) => ({ country, count }))
+			.sort((a, b) => b.count - a.count || a.country.localeCompare(b.country))
 	);
+
+	// A coalition with nothing on record gets one quiet sentence, not a grid
+	// of zero tiles.
+	// Null means sub-K suppressed — records exist but the count is withheld,
+	// so null counts as "something on record".
+	const hasStatRecords = $derived(
+		stats !== null &&
+			(stats.memberCount > 0 ||
+				stats.verifiedCampaignActions !== 0 ||
+				stats.districtCount !== 0 ||
+				stats.verifiedSupporters !== 0)
+	);
+
+	function formatCount(value: number | null): string {
+		return value === null ? 'fewer than 5' : value.toLocaleString();
+	}
+	function formatDistrictCount(value: number | null): string {
+		return value === null ? 'fewer than 3' : value.toLocaleString();
+	}
+
+	function formatScalar(value: number | null): string {
+		return value === null ? 'unavailable' : value.toFixed(2);
+	}
 </script>
 
 {#if loading}
@@ -53,23 +76,13 @@
 			{/each}
 		</div>
 
-		<!-- Tier distribution: label + bar rows -->
-		<div class="mb-4">
-			<div class="mb-2 h-3 w-24 rounded bg-zinc-700/50"></div>
-			<div class="space-y-1.5">
-				{#each Array(4) as _, i}
-					<div class="flex items-center gap-2">
-						<div class="h-3 w-28 shrink-0 rounded bg-zinc-700/50"></div>
-						<div class="h-2 flex-1 overflow-hidden rounded-full bg-zinc-800">
-							<div class="h-full rounded-full bg-zinc-700/50" style="width: {80 - i * 15}%"></div>
-						</div>
-						<div class="h-3 w-10 shrink-0 rounded bg-zinc-700/50"></div>
-					</div>
-				{/each}
-			</div>
+		<!-- Coordination reading line -->
+		<div class="mb-4 space-y-2">
+			<div class="h-3 w-3/4 rounded bg-zinc-700/50"></div>
+			<div class="h-3 w-24 rounded bg-zinc-700/50"></div>
 		</div>
 
-		<!-- State distribution: 2-3 col grid -->
+		<!-- Country distribution skeleton -->
 		<div>
 			<div class="mb-2 h-3 w-28 rounded bg-zinc-700/50"></div>
 			<div class="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
@@ -84,55 +97,83 @@
 	</div>
 {:else if stats}
 <div style={accentStyle}>
-	<!-- Stats grid -->
-	<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Member Orgs</p>
-			<p class="mt-1 text-xl font-bold text-zinc-100">{stats.orgCount}</p>
-		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Verified Actions</p>
-			<p class="mt-1 text-xl font-bold text-zinc-100">{stats.totalVerifiedActions.toLocaleString()}</p>
-		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
-			<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{stats.uniqueDistricts.toLocaleString()}</p>
-		</div>
-		<div class="rounded-lg bg-zinc-900/50 p-3">
-			<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
-			<p class="mt-1 text-xl font-bold text-green-400">{stats.verifiedSupporters.toLocaleString()}</p>
-		</div>
-	</div>
-
-	<!-- Tier distribution -->
-	{#if stats.tierDistribution.length > 0}
-		<div class="mb-4">
-			<h4 class="mb-2 text-xs font-medium text-zinc-500">Tier Distribution</h4>
-			<div class="space-y-1.5">
-				{#each stats.tierDistribution as tier (tier.tier)}
-					<div class="flex items-center gap-2">
-						<span class="w-28 shrink-0 text-xs text-zinc-400">{tierLabels[tier.tier] ?? `Tier ${tier.tier}`}</span>
-						<div class="flex-1 overflow-hidden rounded-full bg-zinc-800 h-2">
-							<div
-								class="h-full rounded-full transition-all"
-								style="width: {(tier.count / maxTierCount) * 100}%; background-color: var(--coalition-accent, #14b8a6);"
-							></div>
-						</div>
-						<span class="w-10 shrink-0 text-right text-xs text-zinc-500">{tier.count.toLocaleString()}</span>
-					</div>
-				{/each}
+	<!-- Stats grid — or one quiet sentence when nothing is on record yet. -->
+	{#if hasStatRecords}
+		<div class="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Member Orgs</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{stats.memberCount}</p>
 			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Verified Actions</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{formatCount(stats.verifiedCampaignActions)}</p>
+			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Unique Districts</p>
+				<p class="mt-1 text-xl font-bold" style="color: var(--coalition-accent, #2dd4bf);">{formatDistrictCount(stats.districtCount)}</p>
+			</div>
+			<div class="rounded-lg bg-zinc-900/50 p-3">
+				<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
+				<p class="mt-1 text-xl font-bold text-green-400">{formatCount(stats.verifiedSupporters)}</p>
+			</div>
+		</div>
+	{:else}
+		<p class="text-text-tertiary mb-4 text-sm">
+			Nothing is on record for this coalition yet — member organizations, verified actions, and
+			district coverage appear here as they happen.
+		</p>
+	{/if}
+
+	<!-- Coordination reading: one plain-language line; raw scores stay in the collapsed audit. -->
+	{#if stats.gds !== null || stats.ald !== null || stats.temporalEntropy !== null || stats.cai !== null}
+		<div class="mb-4">
+			<p class="text-text-secondary text-sm">
+				{assessIntegrity({
+					gds: stats.gds,
+					ald: stats.ald,
+					temporalEntropy: stats.temporalEntropy,
+					burstVelocity: null,
+					cai: stats.cai
+				})}
+			</p>
+			<details class="mt-2">
+				<summary
+					class="text-text-tertiary hover:text-text-secondary cursor-pointer text-xs font-medium"
+				>
+					Coordination audit
+				</summary>
+				<div class="mt-2 grid grid-cols-2 gap-3 md:grid-cols-4">
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Geographic diversity</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.gds)}</p>
+					</div>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Message distinctness</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.ald)}</p>
+					</div>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Timing spread</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">
+							{formatScalar(stats.temporalEntropy)}
+						</p>
+					</div>
+					<div class="border-surface-border bg-surface-raised rounded-lg border p-3">
+						<p class="text-text-tertiary text-xs font-medium">Engagement depth</p>
+						<p class="text-text-primary mt-1 font-mono text-sm">{formatScalar(stats.cai)}</p>
+					</div>
+				</div>
+			</details>
 		</div>
 	{/if}
 
-	<!-- State distribution -->
-	{#if stats.stateDistribution.length > 0}
+	<!-- Country distribution -->
+	{#if countryDistribution.length > 0}
 		<div>
-			<h4 class="mb-2 text-xs font-medium text-zinc-500">State Distribution</h4>
+			<h4 class="mb-2 text-xs font-medium text-zinc-500">Country Distribution</h4>
 			<div class="grid grid-cols-2 gap-x-4 gap-y-1 md:grid-cols-3">
-				{#each stats.stateDistribution as item (item.state)}
+				{#each countryDistribution as item (item.country)}
 					<div class="flex items-center justify-between text-xs">
-						<span class="text-zinc-400">{item.state}</span>
+						<span class="text-zinc-400">{item.country}</span>
 						<span class="text-zinc-500">{item.count.toLocaleString()}</span>
 					</div>
 				{/each}

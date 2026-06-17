@@ -1,11 +1,11 @@
 /**
  * Production gate for debate chain misconfig.
  *
- * The debate argument/cosign/reveal routes write state off-chain via Convex and
- * additionally post to the DebateMarket contract on-chain. When the chain is
- * unconfigured (env vars missing), dev builds proceed off-chain only; production
- * builds must fail-closed because on-chain is the authority for resolution and
- * silently accepting off-chain state creates an integrity gap.
+ * Debate create/argument/cosign/reveal/resolve/claim routes can write state
+ * off-chain via Convex while also expecting DebateMarket authority on-chain.
+ * When the chain is unconfigured (env vars missing), dev builds proceed
+ * off-chain only; production builds must fail-closed because silently accepting
+ * off-chain state creates an integrity gap.
  *
  * Use this helper in any route whose off-chain write must be paired with an
  * on-chain write in production.

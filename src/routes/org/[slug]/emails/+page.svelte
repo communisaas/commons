@@ -4,9 +4,10 @@
 
 	let { data }: { data: PageData } = $props();
 
-	const canCreate = $derived(
-		data.membership.role === 'owner' || data.membership.role === 'editor'
-	);
+	const canCreate = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
+	const draftCount = $derived(data.blasts.filter((blast) => blast.status === 'draft').length);
+	const sentCount = $derived(data.blasts.filter((blast) => blast.status === 'sent').length);
+	const failedCount = $derived(data.blasts.filter((blast) => blast.status === 'failed').length);
 
 	function statusBadgeClass(status: string): string {
 		switch (status) {
@@ -34,67 +35,95 @@
 	<!-- Header -->
 	<div class="flex items-center justify-between">
 		<div>
-			<h1 class="text-xl font-semibold text-text-primary">Emails</h1>
-			<p class="text-sm text-text-tertiary mt-1">
-				{data.blasts.length} invitation{data.blasts.length === 1 ? '' : 's'} sent
+			<h1 class="text-text-primary text-xl font-semibold">Email delivery</h1>
+			<p class="text-text-tertiary mt-1 text-sm">
+				{data.blasts.length} delivery record{data.blasts.length === 1 ? '' : 's'} ·
+				{sentCount} sent · {draftCount} draft{draftCount === 1 ? '' : 's'}{#if failedCount > 0}
+					· {failedCount} failed{/if}
 			</p>
 		</div>
 		{#if canCreate}
 			<a
 				href="/org/{data.org.slug}/emails/compose"
-				class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-500 transition-colors"
+				class="inline-flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-teal-500"
 			>
-				<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 					<path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
 				</svg>
-				New Invitation
+				Compose delivery
 			</a>
 		{/if}
 	</div>
 
 	<!-- Blast list -->
 	{#if data.blasts.length === 0}
-		<div class="rounded-md bg-surface-base border border-surface-border p-12 text-center">
-			<div class="mx-auto w-12 h-12 rounded-full bg-surface-overlay flex items-center justify-center mb-4">
-				<svg class="w-6 h-6 text-text-quaternary" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-					<path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75" />
+		<div class="bg-surface-base border-surface-border rounded-md border p-12 text-center">
+			<div
+				class="bg-surface-overlay mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full"
+			>
+				<svg
+					class="text-text-quaternary h-6 w-6"
+					fill="none"
+					viewBox="0 0 24 24"
+					stroke="currentColor"
+					stroke-width="1.5"
+				>
+					<path
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"
+					/>
 				</svg>
 			</div>
-			<p class="text-sm text-text-tertiary">
-				No invitations sent yet. Compose your first invitation to reach your supporters.
-			</p>
+			<p class="text-text-tertiary text-sm">No emails yet. Compose your first email.</p>
 		</div>
 	{:else}
 		<div class="space-y-3">
-			{#each data.blasts.filter(b => !b.isAbTest || b.abVariant === 'A' || (!b.abVariant && !b.isAbTest)) as blast (blast.id)}
+			{#each data.blasts.filter((b) => !b.isAbTest || b.abVariant === 'A' || (!b.abVariant && !b.isAbTest)) as blast (blast.id)}
 				{@const isAb = blast.isAbTest && blast.abVariant === 'A'}
 				<a
 					href="/org/{data.org.slug}/emails/{blast.id}"
-					class="block rounded-md bg-surface-base border border-surface-border p-5 hover:border-[var(--coord-route-solid)] transition-colors"
+					class="bg-surface-base border-surface-border block rounded-md border p-5 transition-colors hover:border-[var(--coord-route-solid)]"
 				>
 					<div class="flex items-start justify-between gap-4">
 						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-3 mb-2">
-								<h2 class="text-lg font-medium text-text-primary truncate">
+							<div class="mb-2 flex items-center gap-3">
+								<h2 class="text-text-primary truncate text-lg font-medium">
 									{blast.subject}
 								</h2>
 								{#if isAb}
-									<span class="inline-flex items-center rounded-md border bg-teal-500/15 text-teal-400 border-teal-500/20 px-2 py-0.5 text-xs font-mono">
+									<span
+										class="inline-flex items-center rounded-md border border-teal-500/20 bg-teal-500/15 px-2 py-0.5 font-mono text-xs text-teal-400"
+									>
 										A/B
 									</span>
 								{/if}
-								<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-mono {statusBadgeClass(blast.status)}">
+								<span
+									class="inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-xs {statusBadgeClass(
+										blast.status
+									)}"
+								>
 									{blast.status}
 								</span>
 							</div>
 
-							<div class="flex items-center gap-4 text-xs text-text-tertiary">
+							<div class="text-text-tertiary flex items-center gap-4 text-xs">
 								{#if blast.campaignTitle}
 									<span class="flex items-center gap-1">
-										<svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-											<path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" />
+										<svg
+											class="h-3 w-3"
+											fill="none"
+											viewBox="0 0 24 24"
+											stroke="currentColor"
+											stroke-width="1.5"
+										>
+											<path
+												stroke-linecap="round"
+												stroke-linejoin="round"
+												d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"
+											/>
 										</svg>
-										{blast.campaignTitle}
+										Action: {blast.campaignTitle}
 									</span>
 								{/if}
 
@@ -104,7 +133,7 @@
 									</span>
 
 									{#if blast.totalBounced > 0}
-										<span class="font-mono tabular-nums text-red-400">
+										<span class="font-mono text-red-400 tabular-nums">
 											{blast.totalBounced.toLocaleString()} bounced
 										</span>
 									{/if}

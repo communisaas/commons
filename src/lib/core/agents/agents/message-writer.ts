@@ -1,17 +1,20 @@
 /**
- * Message Writer Agent — Two-Phase Pipeline
+ * Message Writer Agent — Two-Stage Pipeline
  *
- * Phase 1 (Source Discovery): Deterministic retrieval via Exa + Firecrawl.
+ * Source discovery stage: Deterministic retrieval via Exa + Firecrawl.
  *   - Stratified Exa search (gov, news, general)
  *   - Firecrawl content fetch + provenance extraction
  *   - Gemini incentive-aware evaluation (structured JSON)
  *   - Returns evaluated source pool with credibility rationale
  *
- * Phase 2 (Message Generation): Write message using ONLY evaluated sources.
+ * Message generation stage: Write message using bounded source ground.
  *   - Cannot fabricate URLs—must cite from pool
- *   - Sources include incentive framing for context-aware citations
+ *   - Evaluated sources include incentive framing for context-aware citations
+ *   - Search-only fallback sources are context, not evaluated evidence
  *
- * This eliminates citation hallucination: every URL in the output is verified.
+ * This prevents citation hallucination: every URL in the output must come from
+ * the bounded source-ground pool, while evaluated/search-only status stays
+ * explicit.
  */
 
 import { z } from 'zod';
@@ -19,7 +22,14 @@ import { generateWithThoughts } from '../gemini-client';
 import { MESSAGE_WRITER_PROMPT } from '../prompts/message-writer';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
 import { discoverSources, formatSourcesForPrompt } from './source-discovery';
-import type { MessageResponse, DecisionMaker, TokenUsage, ExternalApiCounts, EvaluatedSource } from '../types';
+import type {
+	MessageResponse,
+	DecisionMaker,
+	TokenUsage,
+	ExternalApiCounts,
+	EvaluatedSource,
+	Source
+} from '../types';
 import { sumTokenUsage, emptyExternalCounts } from '../types';
 import { traceEvent } from '$lib/server/agent-trace';
 
@@ -80,6 +90,17 @@ const MessageResponseSchema = z.object({
 
 export type PipelinePhase = 'sources' | 'message' | 'complete';
 
+export interface SourceEvidenceUpdate {
+	sourceCount: number;
+	mode: 'discovery' | 'preverified';
+	evaluatedSourceCount: number;
+	searchOnlySourceCount: number;
+	evaluationFallback?: boolean;
+	candidateCount?: number;
+	failedCount?: number;
+	searchQueryCount?: number;
+}
+
 export interface GenerateMessageResult extends MessageResponse {
 	/** Accumulated token usage across source discovery + message generation */
 	tokenUsage?: TokenUsage;
@@ -103,7 +124,7 @@ export interface GenerateMessageOptions {
 		subdivision?: string;
 		locality?: string;
 	};
-	/** Pre-evaluated sources (skip Phase 1 if provided) */
+	/** Cached source ground (skip source discovery if provided) */
 	verifiedSources?: EvaluatedSource[];
 	/** Trace ID for observability — threaded to source discovery */
 	traceId?: string;
@@ -111,6 +132,18 @@ export interface GenerateMessageOptions {
 	onThought?: (thought: string, phase?: PipelinePhase) => void;
 	/** Callback for phase updates */
 	onPhase?: (phase: PipelinePhase, message: string) => void;
+	/** Callback when evaluated source ground becomes countable evidence */
+	onSourceEvidence?: (evidence: SourceEvidenceUpdate) => void;
+}
+
+const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
+
+function searchOnlySourceCount(sources: EvaluatedSource[]): number {
+	return sources.filter(
+		(source) =>
+			!source.incentive_position ||
+			source.credibility_rationale.startsWith(SOURCE_EVALUATION_FALLBACK_PREFIX)
+	).length;
 }
 
 // ============================================================================
@@ -118,20 +151,22 @@ export interface GenerateMessageOptions {
 // ============================================================================
 
 /**
- * Generate a research-backed message with VERIFIED citations
+ * Generate a research-backed message with bounded citation ground.
  *
- * Two-phase pipeline:
- * 1. Source Discovery: Find and validate sources (unless pre-verified sources provided)
- * 2. Message Generation: Write using ONLY verified sources
+ * Two-stage pipeline:
+ * 1. Source discovery: Find and validate source ground (unless cached sources are provided)
+ * 2. Message generation: Write using ONLY the provided source ground
  */
-export async function generateMessage(options: GenerateMessageOptions): Promise<GenerateMessageResult> {
+export async function generateMessage(
+	options: GenerateMessageOptions
+): Promise<GenerateMessageResult> {
 	const startTime = Date.now();
 	const { subjectLine, coreMessage, topics, decisionMakers, onThought, onPhase } = options;
 
-	console.debug('[message-writer] Starting two-phase message generation...');
+	console.debug('[message-writer] Starting two-stage message generation...');
 
 	// ====================================================================
-	// Phase 1: Source Discovery (skip if pre-verified sources provided)
+	// Source discovery stage (skip if cached source ground is provided)
 	// ====================================================================
 
 	let verifiedSources: EvaluatedSource[] = options.verifiedSources || [];
@@ -140,16 +175,16 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 	const externalCounts = emptyExternalCounts();
 
 	if (verifiedSources.length === 0) {
-		onPhase?.('sources', 'Discovering and verifying sources...');
+		onPhase?.('sources', 'Finding and checking sources…');
 
-		console.debug('[message-writer] Phase 1: Discovering sources...');
+		console.debug('[message-writer] Source discovery stage: Discovering sources...');
 
 		const sourceResult = await discoverSources({
 			coreMessage,
 			subjectLine,
 			topics,
 			geographicScope: options.geographicScope,
-			decisionMakers: decisionMakers.map(dm => ({
+			decisionMakers: decisionMakers.map((dm) => ({
 				name: dm.name,
 				title: dm.title,
 				organization: dm.organization
@@ -166,6 +201,19 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 		verifiedSources = sourceResult.evaluated;
 		actualSearchQueries = sourceResult.searchQueries;
 		sourceTokenUsage = sourceResult.tokenUsage;
+		const searchOnlyCount = sourceResult.evaluationFallback
+			? verifiedSources.length
+			: searchOnlySourceCount(verifiedSources);
+		options.onSourceEvidence?.({
+			sourceCount: verifiedSources.length,
+			mode: 'discovery',
+			evaluatedSourceCount: verifiedSources.length - searchOnlyCount,
+			searchOnlySourceCount: searchOnlyCount,
+			evaluationFallback: sourceResult.evaluationFallback,
+			candidateCount: sourceResult.discovered.length,
+			failedCount: sourceResult.failed.length,
+			searchQueryCount: actualSearchQueries.length
+		});
 
 		// Update external counts from new pipeline
 		if (sourceResult.externalCounts) {
@@ -176,7 +224,7 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 			externalCounts.groundingSearches = sourceResult.groundingSearches;
 		}
 
-		console.debug('[message-writer] Phase 1 complete:', {
+		console.debug('[message-writer] Source discovery stage complete:', {
 			discovered: sourceResult.discovered.length,
 			evaluated: sourceResult.evaluated.length,
 			failed: sourceResult.failed.length,
@@ -193,20 +241,31 @@ export async function generateMessage(options: GenerateMessageOptions): Promise<
 
 		// Bridging thought
 		if (onThought && verifiedSources.length > 0) {
+			const evaluatedCount = verifiedSources.length - searchOnlyCount;
 			onThought(
-				`Evaluated ${verifiedSources.length} sources. Now writing the message...`,
+				searchOnlyCount > 0
+					? `Source ground ready: ${evaluatedCount} evaluated, ${searchOnlyCount} search-only. Now writing the message...`
+					: `Evaluated ${evaluatedCount} sources. Now writing the message...`,
 				'sources'
 			);
 		}
 	} else {
-		console.debug('[message-writer] Using pre-verified sources:', verifiedSources.length);
+		console.debug('[message-writer] Using cached source ground:', verifiedSources.length);
+		const searchOnlyCount = searchOnlySourceCount(verifiedSources);
+		options.onSourceEvidence?.({
+			sourceCount: verifiedSources.length,
+			mode: 'preverified',
+			evaluatedSourceCount: verifiedSources.length - searchOnlyCount,
+			searchOnlySourceCount: searchOnlyCount,
+			evaluationFallback: searchOnlyCount > 0
+		});
 	}
 
 	// ====================================================================
-	// Phase 2: Message Generation with Verified Sources
+	// Message generation stage with source ground
 	// ====================================================================
 
-	onPhase?.('message', 'Writing message with verified sources...');
+	onPhase?.('message', 'Writing your message…');
 
 	// Build decision-maker list for context
 	const decisionMakerList = decisionMakers
@@ -258,25 +317,25 @@ Make them feel the presence of real constituents behind this — people with rea
 Find the emotional truth in the input above. Build a message that:
 - Opens with the human experience, not context-setting
 - Places [Personal Connection] where testimony amplifies the feeling
-- Uses ONLY the verified sources above (cite as [1], [2], etc.)
+- Uses ONLY the source ground above (cite as [1], [2], etc.)
 - Makes a clear, concrete ask these specific decision-makers can act on
 
 The stranger who shares this link should think "I need to send that too." Every sender should feel "this is exactly what I wanted to say."`;
 
-	console.debug('[message-writer] Phase 2: Generating message with verified sources...');
+	console.debug('[message-writer] Message generation stage: Generating message with source ground...');
 
 	const messageWriteStart = Date.now();
-	// Generate WITHOUT grounding — we already have verified sources
+	// Generate WITHOUT grounding — the source-ground pool is already bounded
 	// This prevents the model from hallucinating additional URLs
 	// Temperature 0.8: let the model's full linguistic range serve the writing.
-	// Factual grounding comes from pre-verified sources, not token suppression.
+	// Factual grounding comes from provided source ground, not token suppression.
 	const result = await generateWithThoughts<MessageResponse>(
 		prompt,
 		{
 			systemInstruction: systemPrompt,
 			temperature: 0.8,
 			thinkingLevel: 'high',
-			enableGrounding: false, // Disabled — using pre-verified sources
+			enableGrounding: false, // Disabled — using bounded source ground
 			maxOutputTokens: 65536
 		},
 		onThought ? (thought) => onThought(thought, 'message') : undefined
@@ -285,7 +344,7 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const messageTokenUsage = result.tokenUsage;
 	const messageWriteLatencyMs = Date.now() - messageWriteStart;
 
-	// Trace: Phase 2 Gemini call — FULL prompt + FULL response captured.
+	// Trace: message generation Gemini call — FULL prompt + FULL response captured.
 	// Privacy carried by TTL + `_secret` gate; replay needs the exact inputs
 	// the model saw and the exact text it returned.
 	if (options.traceId) {
@@ -299,7 +358,9 @@ The stranger who shares this link should think "I need to send that too." Every 
 			temperature: 0.8,
 			thinkingLevel: 'high',
 			groundingEnabled: false,
-			verifiedSourceCount: verifiedSources.length
+			sourceGroundCount: verifiedSources.length,
+			evaluatedSourceCount: verifiedSources.length - searchOnlySourceCount(verifiedSources),
+			searchOnlySourceCount: searchOnlySourceCount(verifiedSources)
 		});
 	}
 
@@ -330,26 +391,25 @@ The stranger who shares this link should think "I need to send that too." Every 
 		throw new Error('Message generation hit a snag. Please try again.');
 	}
 
-	// CRITICAL: Replace generated sources with verified/evaluated sources
-	// The model may have included source metadata in its output, but we trust only the verified pool
-	const verifiedSourcesForOutput = verifiedSources.map((s) => {
-		const base: Record<string, unknown> = {
+	// CRITICAL: Replace generated sources with bounded source ground.
+	// The model may include source metadata in its output, but we trust only the
+	// source-ground pool and preserve evaluated/search-only metadata.
+	const verifiedSourcesForOutput = verifiedSources.map((s): Source => {
+		const base: Source = {
 			num: s.num,
 			title: s.title,
 			url: s.url,
 			type: s.type
 		};
-		// Include evaluation fields when available (EvaluatedSource)
-		if ('credibility_rationale' in s) {
-			base.credibility_rationale = s.credibility_rationale;
-			base.incentive_position = s.incentive_position;
-			base.source_order = s.source_order;
-		}
-		return base as { num: number; title: string; url: string; type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other' };
+		base.credibility_rationale = s.credibility_rationale;
+		base.incentive_position = s.incentive_position;
+		base.source_order = s.source_order;
+		return base;
 	});
 
 	// Normalize [Personal Connection] — fix case variations the model may produce
-	const normalizedMessage = validationResult.data.message.trim()
+	const normalizedMessage = validationResult.data.message
+		.trim()
 		.replace(/\[personal\s+connection\]/gi, '[Personal Connection]');
 
 	// Append deterministic signature (name only — address is a privacy concern)
@@ -362,22 +422,27 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const data: GenerateMessageResult = {
 		...validationResult.data,
 		message: messageWithSignature,
-		sources: verifiedSourcesForOutput, // Use verified sources, not generated
+		sources: verifiedSourcesForOutput, // Use the bounded source-ground pool, not generated metadata
 		// Use ACTUAL search queries from source discovery, not model's fabricated "research steps"
 		research_log: actualSearchQueries.length > 0 ? actualSearchQueries : [],
 		tokenUsage: sumTokenUsage(sourceTokenUsage, messageTokenUsage),
 		externalCounts,
-		evaluatedSources: verifiedSources,
+		evaluatedSources: verifiedSources
 	};
 
-	console.debug('[message-writer] Two-phase generation complete', {
+	console.debug('[message-writer] Two-stage generation complete', {
 		messageLength: data.message.length,
-		verifiedSources: verifiedSourcesForOutput.length,
+		sourceGroundRows: verifiedSourcesForOutput.length,
 		latencyMs,
 		geographicScope: data.geographic_scope?.type || 'none'
 	});
 
-	onPhase?.('complete', `Message generated with ${verifiedSourcesForOutput.length} verified sources`);
+	onPhase?.(
+		'complete',
+		verifiedSourcesForOutput.length > 0
+			? `Your message is ready, with ${verifiedSourcesForOutput.length} source${verifiedSourcesForOutput.length === 1 ? '' : 's'} attached.`
+			: 'Your message is ready.'
+	);
 
 	return data;
 }

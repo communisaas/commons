@@ -14,10 +14,10 @@
       "id": "CP-2",
       "task_id": "NEW-A-3",
       "name": "ses-proxy Lambda deployment + secret sync",
-      "unblocks_count": 6,
+      "unblocks_count": 5,
       "gate_kind": "ops-deploy",
       "gate_owner": "Commons ops (AWS account 529088283822)",
-      "unblocks": ["NEW-T2-2 inferred (deploy step itself)", "NEW-T1-9 workflow send_email", "NEW-T2-4 List-Unsubscribe headers", "NEW-T2-10 open/click attribution", "NEW-T8-9 aggregate weekly digest", "first-org email blast"],
+      "unblocks": ["NEW-T2-2 inferred (deploy step itself)", "NEW-T1-9 workflow send_email", "NEW-T2-10 open/click attribution", "NEW-T8-9 aggregate weekly digest", "first-org email blast"],
       "rationale": "Lambda is dormant until first email blast goes live. Per memory/env-secret-management: BLAST_RECEIPTS_SECRET must sync across CF Pages ↔ Lambda."
     },
     {

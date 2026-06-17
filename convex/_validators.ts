@@ -14,25 +14,30 @@ import { v } from "convex/values";
  * boundary so a malformed write cannot persist a structurally
  * different filter — the failure mode the prior `v.any()` admitted
  * (e.g., tagIds: "abc" instead of ["abc"]) could widen a targeted
- * blast to the entire subscribed cohort. The single-tagId limit is
- * not encoded here (validator can't express it cleanly); the
- * application-level guard at email.ts/blasts.ts checks `length > 1`
- * after the validator passes.
+ * blast to the entire subscribed cohort.
  *
  * Fields:
- *   tagIds  — supporter-tag IDs to restrict the cohort to. Multi-tag
- *             semantics deferred (see email.ts comment); validator
- *             allows array of any length, application throws on >1.
+ *   tagIds  — supporter-tag IDs to restrict the cohort to. Multiple
+ *             tags are treated as a de-duplicated union of supporters.
+ *   segmentIds — saved People segment IDs to restrict the cohort to.
+ *             Multiple segments are treated as a de-duplicated union,
+ *             then tag/verification/hash axes can narrow that cohort.
  *   verified — verification-status restriction. "any" is the no-op.
+ *   includeEmailHashes — exact supporter email-hash allowlist, used by
+ *             A/B cohort snapshots and other saved cohort partitions.
+ *   excludeEmailHashes — exact supporter email-hash denylist.
  *
- * Any future filter axis (district, postalCode, segment) MUST be
+ * Any future filter axis (district, postalCode, consent) MUST be
  * added here, NOT bolted on via a separate v.any() field.
  */
 export const recipientFilterValidator = v.object({
 	tagIds: v.optional(v.array(v.id("tags"))),
+	segmentIds: v.optional(v.array(v.id("segments"))),
 	verified: v.optional(
 		v.union(v.literal("any"), v.literal("verified"), v.literal("unverified"))
-	)
+	),
+	includeEmailHashes: v.optional(v.array(v.string())),
+	excludeEmailHashes: v.optional(v.array(v.string()))
 });
 
 /**
@@ -40,7 +45,7 @@ export const recipientFilterValidator = v.object({
  * recipientFilterValidator above. The SMS HTTP endpoint at
  * src/routes/api/org/[slug]/sms/+server.ts:17-21 validates with a zod
  * schema using `{tags, segments, excludeTags}` (cohort-include +
- * cohort-exclude + segment-add); email uses `{tagIds, verified}`. The
+ * cohort-exclude + segment-add); email uses `{tagIds, segmentIds, verified}`. The
  * two channels' UIs and dispatchers diverged in product semantics, so
  * a single validator can't represent both honestly. tags/excludeTags
  * are typed v.array(v.id('tags')) — the zod boundary accepts string
@@ -65,7 +70,12 @@ export const campaignType = v.union(
 	v.literal('LETTER'),
 	v.literal('EVENT'),
 	v.literal('FORM'),
-	v.literal('FUNDRAISER')
+	v.literal('FUNDRAISER'),
+	// Congressional / CWC delivery campaign. Authored like a LETTER but
+	// dispatched through the congressional delivery spine (House proxy / Senate
+	// CWC). Tier-2 address-verified supporters DELIVER; tier-4 gov-ID actions
+	// are badged higher-assurance — a tiered floor, not a hard gate.
+	v.literal('CONGRESSIONAL')
 );
 
 export const campaignStatus = v.union(
@@ -89,10 +99,20 @@ export const eventStatus = v.union(
 );
 
 export const subscriptionPlan = v.union(
-	v.literal('free'),
+	// `inactive` is the gated floor for unsubscribed/canceled orgs — not a
+	// marketed tier (absent from PLAN_ORDER), but a persisted plan value the
+	// cancellation path writes, so it must validate.
+	v.literal('inactive'),
+	// Org (org-layer) plans — keyed on orgId.
 	v.literal('starter'),
 	v.literal('organization'),
-	v.literal('coalition')
+	v.literal('coalition'),
+	// Individual (person-layer) paid authoring tiers — keyed on userId. These buy
+	// ONLY authoring volume; they never carry org quotas. The polymorphic
+	// subscriptions.plan field stores these for user-scoped rows, so they must
+	// validate here. See src/lib/server/billing/plans.ts INDIVIDUAL_PLANS.
+	v.literal('voice'),
+	v.literal('advocate')
 );
 
 export const subscriptionStatus = v.union(
@@ -184,3 +204,45 @@ export const accountabilityResponseType = v.union(
 	v.literal('vote_cast'),
 	v.literal('public_statement')
 );
+
+// ===========================================================================
+// Org free-text field caps — the module-wide explicit-cap convention applied
+// to the org profile writers (create/update), which were the blind spot.
+// ===========================================================================
+export const ORG_FIELD_CAPS = {
+	name: 200,
+	description: 4000,
+	mission: 2000,
+	websiteUrl: 2048,
+	avatar: 2048,
+	logoUrl: 2048
+} as const;
+
+export function capOrThrow(field: keyof typeof ORG_FIELD_CAPS, val: string): void {
+	if (val.length > ORG_FIELD_CAPS[field]) {
+		throw new Error(`ORG_${field.toUpperCase()}_TOO_LARGE`);
+	}
+}
+
+/**
+ * Cap then parse a stored, later-rendered URL. An unparsed websiteUrl is a
+ * stored-link hole — it renders as a clickable link, so a `javascript:`/`data:`
+ * string is an XSS-class payload, not just bloat. Empty string clears.
+ * Rejects non-http(s) schemes, protocol-relative `//host`, and malformed URLs.
+ */
+export function parseHttpUrlOrThrow(field: 'websiteUrl', val: string): string {
+	capOrThrow(field, val);
+	if (val === '') return ''; // clear
+	let url: URL;
+	try {
+		url = new URL(val);
+	} catch {
+		throw new Error(`ORG_${field.toUpperCase()}_INVALID`);
+	}
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+		throw new Error(`ORG_${field.toUpperCase()}_INVALID`);
+	}
+	// Store the parser-NORMALIZED form (not the raw input) so what we validated is
+	// what we persist — collapses mixed-case scheme/host and stray characters.
+	return url.href;
+}

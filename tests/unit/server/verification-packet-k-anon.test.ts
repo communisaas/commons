@@ -79,3 +79,17 @@ describe('computeCellGeography sub-bucket K', () => {
 		expect(cell.temporalBins).toBeUndefined();
 	});
 });
+
+describe('computeTierDistribution K floor', () => {
+	it('keeps visible engagement tiers numeric and suppresses sub-K bins', () => {
+		const actions = [
+			...Array.from({ length: 5 }, () => action({ engagementTier: 2 })),
+			...Array.from({ length: 4 }, () => action({ engagementTier: 4 }))
+		];
+		const packet = computePacket(actions);
+
+		expect(packet.tiers).toContainEqual({ tier: 2, label: 'Established', count: 5 });
+		expect(packet.tiers).toContainEqual({ tier: 4, label: 'Pillar', count: -1 });
+		expect(packet.tiers.some((tier) => tier.tier === 0)).toBe(false);
+	});
+});

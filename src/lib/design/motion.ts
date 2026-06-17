@@ -92,3 +92,20 @@ export const TIMING = {
 
 /** Standard easing — matches --header-easing in app.css */
 export const EASING = 'cubic-bezier(0.4, 0, 0.2, 1)';
+
+// ─── Pulse ───────────────────────────────────────────────────────────
+//
+// The single canonical "alive" pulse tempo. Four sites animate the "something
+// is running" signal — ProcessDock chip, WorkspaceSwitcher badge, StudioSpace
+// live-dot, StudioReasoning working-dot. The keyframe BODIES legitimately differ
+// (opacity-only vs opacity+box-shadow), so the SSOT is the tempo, not a shared
+// @keyframes: consume via `style="--pulse-duration: {PULSE.duration}ms; --pulse-easing: {PULSE.easing}"`
+// so a single edit moves all four. Tempo is unified; phase is NOT guaranteed —
+// the four are separate elements on separate reactive paths (see RV-D1 §1).
+
+export const PULSE = {
+	/** Shared "alive" tempo — 1600ms, the dominant existing cadence. */
+	duration: 1600,
+	/** Shared pulse easing. */
+	easing: EASING
+} as const;

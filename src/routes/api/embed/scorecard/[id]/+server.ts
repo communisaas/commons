@@ -17,6 +17,24 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	});
 	if (!result) throw error(404, 'Decision-maker not found');
 
+	// D-10: a scorecard is a shared (DM-scoped) entity, so white-label is opt-in
+	// per embed via `?org=<slug>`. When the named org is on Coalition white-label,
+	// the "powered by Commons" attribution is dropped from this OUTBOUND payload.
+	// Absent / non-white-label org → Commons attribution stays. The /dm/[id]
+	// scorecard PAGE itself keeps its Commons attestation regardless.
+	const orgSlug = url.searchParams.get('org');
+	let whiteLabel = false;
+	if (orgSlug) {
+		try {
+			const branding = await serverQuery(api.organizations.getPublicBrandingBySlug, {
+				slug: orgSlug
+			});
+			whiteLabel = branding?.whiteLabel ?? false;
+		} catch {
+			// Non-fatal — fall back to Commons attribution.
+		}
+	}
+
 	// Embed consumers paste the URL into third-party pages where it is
 	// effectively immutable; emit the canonical-slug form (CONSTITUTION.md
 	// §1.3) regardless of what slug the caller supplied.
@@ -40,6 +58,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 				}
 			: null,
 		scorecardUrl: `${baseUrl}/dm/${slug}/scorecard`,
-		poweredBy: 'Commons'
+		// Omitted under white-label so embedders don't render Commons attribution.
+		...(whiteLabel ? {} : { poweredBy: 'Commons' })
 	});
 };

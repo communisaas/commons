@@ -4,6 +4,8 @@ import type { PageServerLoad, Actions } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import type { CongressionalDeliveryGroundData } from '$lib/components/org/os/spaces';
+import { congressionalDeliveryAvailable } from '$lib/congressional-readiness';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -12,28 +14,71 @@ function requireRole(role: string, required: string): void {
 	}
 }
 
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function buildCongressionalDeliveryGround(
+	result: unknown
+): CongressionalDeliveryGroundData | null {
+	if (!result || typeof result !== 'object') return null;
+	const runtime = result as Record<string, unknown>;
+	return {
+		runtimeReady: runtime.ready === true,
+		runtimeMissing: Array.isArray(runtime.missing)
+			? runtime.missing.filter((item): item is string => typeof item === 'string')
+			: [],
+		runtimeDependency: asString(
+			runtime.dependency,
+			'congressional launch flag + House CWC proxy env + Senate CWC API env + per-submission proof/template checks'
+		),
+		runtimeMessage: asString(
+			runtime.message,
+			'Congressional delivery runtime posture is unread.'
+		),
+		launched: runtime.launched === true,
+		houseTransportConfigured: runtime.houseTransportConfigured === true,
+		senateTransportConfigured: runtime.senateTransportConfigured === true
+	};
+}
+
 export const load: PageServerLoad = async ({ parent, url, params }) => {
 	const { membership } = await parent();
 	requireRole(membership.role, 'editor');
 
 	const fromAlertId = url.searchParams.get('fromAlert');
+	const requestedType = url.searchParams.get('type');
 
-	const [templates, alertPrefill] = await Promise.all([
+	const [templates, alertPrefill, congressionalDeliveryResult] = await Promise.all([
 		serverQuery(api.templates.listByOrg, { slug: params.slug }),
 		fromAlertId
 			? serverQuery(api.legislation.getAlertWithBill, {
 				slug: params.slug,
 				alertId: fromAlertId as Id<'legislativeAlerts'>
 			}).catch(() => null)
-			: Promise.resolve(null)
+			: Promise.resolve(null),
+		serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null)
 	]);
+
+	// Whether to OFFER the congressional type — runtime-readiness driven (one SSOT,
+	// shared with Studio), not the compile-time flag. B1 arming delivery flips this.
+	const congressionalAuthoringEnabled = congressionalDeliveryAvailable(
+		congressionalDeliveryResult as { launched?: boolean; ready?: boolean } | null
+	);
+	// Type preselection from a handoff (e.g. Studio "Send to Congress"); only
+	// honored when congressional is actually offered, else falls back to default.
+	const initialType =
+		requestedType === 'CONGRESSIONAL' && congressionalAuthoringEnabled ? 'CONGRESSIONAL' : 'LETTER';
 
 	return {
 		templates: templates.map((t: { _id: string; title: string }) => ({
 			id: t._id,
 			title: t.title
 		})),
-		alertPrefill
+		alertPrefill,
+		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult),
+		congressionalAuthoringEnabled,
+		initialType
 	};
 };
 
@@ -63,7 +108,19 @@ export const actions: Actions = {
 			return fail(400, { error: 'Title is required', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		if (!type || !['LETTER', 'EVENT', 'FORM'].includes(type)) {
+		// CONGRESSIONAL is accepted only when delivery readiness offers it — the
+		// same runtime-readiness SSOT the reveal uses (not a static flag), so a
+		// hand-crafted POST can't author a congressional campaign the UI doesn't
+		// offer. The CWC delivery gate is enforced independently at send time.
+		const readiness = await serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(
+			() => null
+		);
+		const allowedTypes = congressionalDeliveryAvailable(
+			readiness as { launched?: boolean; ready?: boolean } | null
+		)
+			? ['LETTER', 'EVENT', 'FORM', 'CONGRESSIONAL']
+			: ['LETTER', 'EVENT', 'FORM'];
+		if (!type || !allowedTypes.includes(type)) {
 			return fail(400, { error: 'Invalid campaign type', title, type, body, targetCountry, targetJurisdiction });
 		}
 
@@ -100,9 +157,9 @@ export const actions: Actions = {
 		const campaignId = await serverMutation(api.campaigns.create, {
 			slug: params.slug,
 			title,
-			// type was validated above against the LETTER/EVENT/FORM/FUNDRAISER
-			// allowlist; cast at the boundary to match the Convex args union.
-			type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER',
+			// type was validated above against the flag-scoped allowlist; cast at
+			// the boundary to match the Convex args union.
+			type: type as 'LETTER' | 'EVENT' | 'FORM' | 'FUNDRAISER' | 'CONGRESSIONAL',
 			body: body ?? undefined,
 			// Form-data string cast at API boundary; Convex args validator
 			// (now v.id('templates')) rejects malformed Ids.

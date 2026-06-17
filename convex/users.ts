@@ -1041,6 +1041,31 @@ export const getActiveCredentialDistrictCommitment = query({
 });
 
 /**
+ * Return the caller's own active credential hash for the `/v/[hash]` verify URL
+ * shown in proof footers. The hash is public by design (it is already printed in
+ * recipient email footers and `resolveCredentialHash` is unauthenticated), but
+ * this query is auth-scoped so a client only ever learns ITS OWN — preventing a
+ * userId→credentialHash→district enumeration oracle.
+ *
+ * Returns null when there is no active credential, or the active row predates
+ * hash issuance (empty `credentialHash`). Callers MUST render no verification
+ * link in that case rather than a guaranteed-404 one. The row returned here is
+ * the same authoritative active credential `resolveCredentialHash` validates
+ * against, so any hash returned is guaranteed to resolve.
+ */
+export const getActiveCredentialHash = query({
+	args: { userId: v.id('users') },
+	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
+		const active = await selectActiveCredentialForUser(ctx, args.userId);
+		if (!active || !active.credentialHash) return null;
+		return { credentialHash: active.credentialHash };
+	}
+});
+
+/**
  * Get user's identity commitment + verification method for Shadow Atlas.
  */
 export const getIdentityForAtlas = query({

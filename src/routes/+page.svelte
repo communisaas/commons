@@ -22,7 +22,12 @@
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
-	import type { Template, TemplateCreationContext, TemplateGroup } from '$lib/types/template';
+	import type {
+		Template,
+		TemplateCreationContext,
+		TemplateGroup,
+		RelationEdge
+	} from '$lib/types/template';
 	import type { PageData } from './$types';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import { analyzeEmailFlow } from '$lib/services/emailService';
@@ -30,6 +35,11 @@
 	import type { ModalComponent } from '$lib/types/component-props';
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
+	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
+	import RelationGraph from '$lib/components/template-browser/relation/RelationGraph.svelte';
+	import DescentDive from '$lib/components/template-browser/DescentDive.svelte';
+	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
+	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
 	import LocationScopeBar from '$lib/components/template-browser/LocationScopeBar.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
@@ -46,6 +56,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
+	import { selectLandingSurface } from '$lib/core/topic/landing-surface';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -78,6 +89,16 @@
 	let templatePublishError = $state<string | null>(null);
 	let pendingPublishData = $state<Omit<Template, 'id'> | null>(null);
 	let userInitiatedSelection = $state(false);
+	// At-cap individual AI-authoring upgrade card (Voice/Advocate).
+	let showAuthoringUpgrade = $state(false);
+	let authoringCapMessage = $state<string | null>(null);
+
+	// Whether the viewport is desktop-width (≥768px, the same breakpoint the layout
+	// uses to show the preview column vs the mobile TouchModal). The spectrum dive is
+	// the desktop descent; on mobile the existing TouchModal owns the preview, so the
+	// dive only engages here. Desktop-first default keeps SSR + first paint stable;
+	// the resize effect reconciles to the real width on the client.
+	let isDesktopView = $state(true);
 
 	// Location scope state (user-selected geographic filter for templates)
 	const SCOPE_KEY = 'commons_location_scope';
@@ -131,8 +152,19 @@
 							.then(() => {
 								sessionStorage.removeItem('pending_template_save');
 							})
-							.catch((_error) => {
-								// Template save failed - user can retry later
+							.catch((error) => {
+								// Post-auth resume: if the user is at their individual
+								// authoring cap, surface the Voice/Advocate upgrade card
+								// rather than silently dropping the publish.
+								if (
+									error instanceof AppError &&
+									error.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+								) {
+									sessionStorage.removeItem('pending_template_save');
+									authoringCapMessage = error.apiError.message;
+									showAuthoringUpgrade = true;
+								}
+								// Other failures: user can retry later.
 							});
 					} else {
 						console.warn('[HomePage] Invalid pending template data:', result.error.flatten());
@@ -217,6 +249,15 @@
 		}
 	});
 
+	// Track desktop vs mobile width so the dive engages only on desktop (mobile keeps
+	// the TouchModal). Effects never run under SSR, so the window read is client-only.
+	$effect(() => {
+		const update = () => (isDesktopView = !isMobile());
+		update();
+		window.addEventListener('resize', update);
+		return () => window.removeEventListener('resize', update);
+	});
+
 	// Enable smooth page transitions (browser only)
 	if (browser) {
 		onNavigate((navigation) => {
@@ -237,14 +278,23 @@
 
 		if (isMobile()) {
 			showMobilePreview = true;
-		} else {
-			// Scroll the template preview into view on desktop
+		} else if (!showSpectrum && !showGraph) {
+			// List fallback: the preview lives in its own column — scroll it into view.
+			// The spectrum and the graph each own their dive entrance (the field recedes
+			// and the preview rises as an Artifact), so no scroll-into-view is needed.
 			tick().then(() => {
 				document
 					.querySelector('.template-preview-column')
 					?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 			});
 		}
+	}
+
+	// Close the spectrum dive: clear the selection so the field returns to its exact
+	// prior state (no template selected). The selection was user-initiated, so the
+	// auto-select-first effect does not re-fire — the field stays at rest.
+	function closeDive() {
+		templateStore.clearSelection();
 	}
 
 	function handleSparkActivate(data: { initialText: string; draftId?: string }) {
@@ -274,7 +324,18 @@
 			const newTemplate = await templateStore.addTemplate(pendingPublishData);
 			savedTemplate = newTemplate;
 		} catch (err) {
-			templatePublishError = err instanceof Error ? err.message : 'Failed to publish template';
+			// At-cap individual authoring quota → upgrade card, not a dead-end.
+			if (
+				err instanceof AppError &&
+				err.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+			) {
+				showTemplateSuccess = false;
+				savedTemplate = null;
+				authoringCapMessage = err.apiError.message;
+				showAuthoringUpgrade = true;
+			} else {
+				templatePublishError = err instanceof Error ? err.message : 'Failed to publish template';
+			}
 		} finally {
 			templatePublishing = false;
 		}
@@ -312,6 +373,40 @@
 				t.deliveryMethod === 'direct'
 		)
 	);
+
+	// Discovery-surface swap. Three worlds over the same templates: the relatedness
+	// GRAPH (reachable at `?view=graph`), the hue-ordered topical SPECTRUM (the
+	// current default), and the flat geographic LIST (a working fallback reachable
+	// with `?spectrum=0`). The selection rule lives in one pure util so the page and
+	// its tests share a single source of truth and the worlds cannot drift apart.
+	// Reading the param off the page store keeps it reactive and SSR-safe (no
+	// window access).
+	const surface = $derived(selectLandingSurface($page.url));
+	const showGraph = $derived(surface === 'graph');
+	const showSpectrum = $derived(surface === 'spectrum');
+
+	// The desktop descent shared by both spatial surfaces. A dive engages only after
+	// a user-initiated selection (the store auto-selects the first template on
+	// hydration, so the dive must NOT auto-open on it) and only on desktop — mobile
+	// keeps the TouchModal preview. The spectrum renders its own DescentDive
+	// internally (the page hands it the snippet via the `dive` prop); the graph has
+	// no internal dive, so the page raises the SAME shared descent over it here. One
+	// gesture, one modal vocabulary, across both surfaces.
+	const diveOpen = $derived(!!selectedTemplate && userInitiatedSelection && isDesktopView);
+	const graphDiving = $derived(showGraph && diveOpen);
+
+	// The relation edges the graph draws beyond the family kinship it derives
+	// itself: the measured-twin tuples and the shared-concept tuples, both resolved
+	// server-side (embeddings and tag vectors never cross the wire — only the
+	// {a,b,kind[,score]} tuples do). Concept edges are usually empty at this corpus
+	// (tag embeddings unbackfilled), so this normally reduces to the twin set; the
+	// graph's concept legend item stays hidden while there are none. Both sources
+	// are independently guarded in the loader, so a transient failure of either
+	// degrades to its empty default rather than dropping the whole edge set.
+	const relationEdges = $derived<RelationEdge[]>([
+		...(data.relationEdges ?? []),
+		...(data.conceptRelations?.edges ?? [])
+	]);
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
@@ -719,61 +814,137 @@
 				/>
 			</div>
 
-			<!-- Template Browser: List + Preview Grid -->
-			<div class="template-browser" id="template-browser">
+			<!-- Template Browser: List + Preview Grid.
+			     In the spectrum the preview is the dive (it rises over the field, not in
+			     a side column), so the two-column split collapses to one full-width track
+			     and the field spreads across the whole stream column — multi-up on a wide
+			     screen — instead of being penned into the narrow list column with the
+			     hidden preview track left as dead space beside it. -->
+			<div
+				class="template-browser"
+				class:template-browser--spectrum={showSpectrum || showGraph}
+				id="template-browser"
+			>
 				<!-- Template List -->
 				<div class="template-list-column">
-					<TemplateList
-						groups={filteredGroups}
-						selectedId={templateStore.selectedId}
-						onSelect={handleTemplateSelect}
-						loading={isLoading}
-					/>
-				</div>
-
-				<!-- Template Preview (desktop only) -->
-				<div class="template-preview-column">
-					{#if hasError}
-						<div class="border-y border-slate-200 px-6 py-8 text-center">
-							<p class="font-brand text-base font-semibold text-slate-800">
-								Templates aren't loading right now.
-							</p>
-							<p class="mt-2 font-brand text-sm text-slate-500">
-								The list will return when the server responds.
-							</p>
-							<button
-								type="button"
-								onclick={() => templateStore.fetchTemplates()}
-								data-testid="retry-templates-button"
-								class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
-							>
-								Try again
-							</button>
+					{#if showGraph}
+						<!-- Relatedness graph: each template a hue-coloured node, linked by
+						     measured semantic twins (solid) and civic-family kinship (dashed),
+						     with the topically-isolated falling honestly to the periphery.
+						     Reachable at `?view=graph` while it is built out; the spectrum
+						     stays the default surface. Selecting a node falls into the template
+						     through the SAME descent the spectrum uses — the field goes inert
+						     beneath the risen Artifact (the shared DescentDive below), never a
+						     second modal. -->
+						<div class="graph-field" class:graph-field--inert={graphDiving}>
+							<RelationGraph
+								templates={allTemplates}
+								edges={relationEdges}
+								selectedId={templateStore.selectedId}
+								onSelect={handleTemplateSelect}
+							/>
 						</div>
-					{:else if isLoading && !selectedTemplate}
-						<SkeletonTemplate variant="preview" animate={true} />
-					{:else if selectedTemplate}
-						<TemplatePreview
-							template={selectedTemplate}
-							user={data.user as { id: string; name: string | null; trust_tier?: number } | null}
-							bind:personalConnectionValue
-							onSendMessage={async () => handleSendMessage(selectedTemplate)}
+					{:else if showSpectrum}
+						<!-- Topical field: templates grouped into hue-ordered domain bands,
+						     with a lens toggle to re-organise the same templates by place
+						     (the existing geographic precision grouping). Selecting a tile
+						     dives into it — the field recedes and the template rises as an
+						     Artifact wrapping the same preview below. Falls back to the list
+						     until the landscape is the default. -->
+						<SpectrumLandscape
+							templates={allTemplates}
+							placeGroups={filteredGroups}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+							dive={diveOpen ? templateDive : undefined}
+							onClose={closeDive}
 						/>
 					{:else}
-						<div class="px-6 py-12 text-center">
-							<p class="font-brand text-base font-semibold text-slate-800">
-								No templates yet.
-							</p>
-							<p class="mt-2 font-brand text-sm text-slate-500">
-								You can write the first one.
-							</p>
-						</div>
+						<TemplateList
+							groups={filteredGroups}
+							selectedId={templateStore.selectedId}
+							onSelect={handleTemplateSelect}
+							loading={isLoading}
+						/>
 					{/if}
 				</div>
+
+				<!-- Template Preview. In the list (fallback) it lives in its own column
+				     beside the list. In the spectrum and the relation graph, the preview is
+				     the dive: it rises as an Artifact over the receded field, so the side
+				     column is not shown. The preview itself is identical in both — the
+				     snippet wraps the SAME component. -->
+				{#if !showSpectrum && !showGraph}
+					<div class="template-preview-column">
+						{#if hasError}
+							<div class="border-y border-slate-200 px-6 py-8 text-center">
+								<p class="font-brand text-base font-semibold text-slate-800">
+									Templates aren't loading right now.
+								</p>
+								<p class="mt-2 font-brand text-sm text-slate-500">
+									The list will return when the server responds.
+								</p>
+								<button
+									type="button"
+									onclick={() => templateStore.fetchTemplates()}
+									data-testid="retry-templates-button"
+									class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
+								>
+									Try again
+								</button>
+							</div>
+						{:else if isLoading && !selectedTemplate}
+							<SkeletonTemplate variant="preview" animate={true} />
+						{:else if selectedTemplate}
+							{@render templateDive()}
+						{:else}
+							<div class="px-6 py-12 text-center">
+								<p class="font-brand text-base font-semibold text-slate-800">
+									No templates yet.
+								</p>
+								<p class="mt-2 font-brand text-sm text-slate-500">
+									You can write the first one.
+								</p>
+							</div>
+						{/if}
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>
 </section>
+
+<!-- The template preview, defined once and rendered in three places: in its own
+     column in the list fallback, and as the descent dive over either spatial surface
+     (the spectrum or the relation map), risen in an Artifact over the receded page.
+     The SAME component with the SAME wiring everywhere — send flow, personalization
+     persistence, and proof footer are not forked. -->
+{#snippet templateDive()}
+	{#if selectedTemplate}
+		<TemplatePreview
+			template={selectedTemplate}
+			user={data.user as { id: string; name: string | null; trust_tier?: number } | null}
+			bind:personalConnectionValue
+			onSendMessage={async () => handleSendMessage(selectedTemplate)}
+		/>
+	{/if}
+{/snippet}
+
+<!-- The relation map's descent: selecting a node falls into the template through the
+     SAME shared dive the spectrum uses (the spectrum mounts its own DescentDive
+     internally; the graph has none, so the page raises it here). Back / esc / a tap
+     on the scrim climbs out and clears the selection, restoring the map with focus
+     back on the node it rose from — no relayout, no second modal vocabulary. -->
+{#if graphDiving}
+	<DescentDive
+		dive={templateDive}
+		open={graphDiving}
+		onClose={closeDive}
+		restoreFocusSelector={templateStore.selectedId
+			? `[data-template-id="${templateStore.selectedId}"]`
+			: null}
+	/>
+{/if}
 
 <!-- Mobile Preview Modal -->
 {#if showMobilePreview && selectedTemplate}
@@ -954,9 +1125,23 @@
 						const newTemplate = await templateStore.addTemplate(templateData);
 						savedTemplate = newTemplate;
 					} catch (error) {
-						templatePublishError =
-							error instanceof Error ? error.message : 'Failed to publish template';
-						console.error('Template save failed:', error);
+						// At-cap individual AI-authoring quota → surface the
+						// Voice/Advocate upgrade card instead of a dead-end error.
+						// The store throws an AppError carrying the typed code so we
+						// branch on the code, not brittle message text.
+						if (
+							error instanceof AppError &&
+							error.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
+						) {
+							showTemplateSuccess = false;
+							savedTemplate = null;
+							authoringCapMessage = error.apiError.message;
+							showAuthoringUpgrade = true;
+						} else {
+							templatePublishError =
+								error instanceof Error ? error.message : 'Failed to publish template';
+							console.error('Template save failed:', error);
+						}
 					} finally {
 						templatePublishing = false;
 						isSubmitting = false;
@@ -992,6 +1177,25 @@
 			pendingPublishData = null;
 		}}
 	/>
+{/if}
+
+<!-- At-cap individual AI-authoring upgrade (Voice/Advocate) -->
+{#if showAuthoringUpgrade}
+	<SimpleModal
+		maxWidth="max-w-md"
+		onclose={() => {
+			showAuthoringUpgrade = false;
+			authoringCapMessage = null;
+		}}
+	>
+		<AuthoringUpgradeCard
+			message={authoringCapMessage}
+			onclose={() => {
+				showAuthoringUpgrade = false;
+				authoringCapMessage = null;
+			}}
+		/>
+	</SimpleModal>
 {/if}
 
 <style>
@@ -1148,10 +1352,46 @@
 		}
 	}
 
+	/*
+	 * Spectrum mode: the preview is the dive (it rises over the receded field, not
+	 * in a side column), so the list/preview split collapses to one full-width
+	 * track at every breakpoint. The field then uses the whole stream column and
+	 * lays its tiles out multi-up on a wide screen, rather than being confined to
+	 * the narrow list column with the hidden preview track left as empty space.
+	 */
+	.template-browser--spectrum {
+		grid-template-columns: 1fr;
+	}
+
+	@media (min-width: 768px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	@media (min-width: 1024px) {
+		.template-browser--spectrum {
+			grid-template-columns: 1fr;
+		}
+	}
+
 	.template-list-column {
 		min-width: 0;
 		position: relative;
 		z-index: 1;
+	}
+
+	/*
+	 * While the relation map's dive is open the map goes inert — it must not catch
+	 * clicks or focus, because the whole page is being read through the descent's
+	 * scrim. The recede itself is NOT applied here: the page (this map, the hero
+	 * beside it, the header above it) is blurred and dimmed as one by the shared
+	 * DescentDive's full-viewport scrim. No per-column filter, so there is no
+	 * half-sharp seam — the same inert posture the spectrum field takes under its
+	 * own dive.
+	 */
+	.graph-field--inert {
+		pointer-events: none;
 	}
 
 	.template-preview-column {

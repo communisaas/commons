@@ -414,7 +414,7 @@ The enterprise platforms (Quorum at $10K+/year) serve trade associations targeti
 
 **Commons serves 24 boundary types per cell.** Shadow Atlas already ingests TIGER/Line congressional, state legislative, county, municipal, school district, and voting tabulation district boundaries. The architecture (H3-indexed, 24 slots per cell) is designed to ingest special district boundaries as they become available — state by state, LAFCO by LAFCO. Every boundary type added instantly becomes targetable for verified advocacy campaigns. No other platform's architecture can accommodate this.
 
-**The market opportunity:** A platform that lets a transit advocacy group, a school parent coalition, or a water district accountability org run verified campaigns to their specific local officials — at a free tier — would have zero competition. Not underpriced competition. Zero.
+**The market opportunity:** A platform that lets a transit advocacy group, a school parent coalition, or a water district accountability org author verified campaigns to their specific local officials — free to author, $10 Starter to deliver — would have zero competition. Not underpriced competition. Zero.
 
 **Sources:** [Census of Governments 2022](https://www.census.gov/newsroom/press-releases/2023/census-of-governments.html), [Census Special Districts by Function](https://www.census.gov/library/visualizations/2023/econ/special-district-governments-by-function.html), [TIGER/Line Shapefiles](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html), [PoliEngine Elected Officials Count](https://poliengine.com/blog/how-many-politicians-are-there-in-the-us)
 
@@ -449,7 +449,7 @@ The conservative advocacy gap is not hypothetical. Organizations have been activ
 
 The gap is specific: **there is no conservative equivalent of Action Network** — an integrated, affordable platform combining email, petitions, write-your-legislator campaigns, event management, and supporter CRM at a self-serve price point. The bipartisan enterprise platforms (Quorum, VoterVoice) start at $5,000-$10,000+/year. Heritage Action's Sentinel program and Americans for Prosperity's i360 are bespoke internal systems, not commercial platforms.
 
-Commons fills this vacuum structurally. Verification is orthogonal to ideology. The protocol doesn't check politics — it checks proof. A free tier that includes email campaigns, verified advocacy, full API access, and 24-boundary-type district targeting is immediately the best tool a conservative advocacy org has ever had. It's also the best tool many progressive orgs have ever had — the ones too small for AN's $15/mo or excluded from EveryAction's ecosystem for other reasons.
+Commons fills this vacuum structurally. Verification is orthogonal to ideology. The protocol doesn't check politics — it checks proof. A $10 Starter entry (with author-free onboarding) that includes email campaigns, verified advocacy, full uncapped API access, and 24-boundary-type district targeting is immediately the best tool a conservative advocacy org has ever had. It's also the best tool many progressive orgs have ever had — the ones too small for AN's $15/mo or excluded from EveryAction's ecosystem for other reasons.
 
 **Sources:** [Senate Commerce Committee Investigation (2024)](https://www.commerce.senate.gov/2024/4/senate-commerce-investigation-reveals-how-big-tech-weaponizes-terms-of-service-to-silence-the-right), [AN Help: Who Can Use It](https://help.actionnetwork.org/hc/en-us/articles/203852955-Who-can-use-the-Action-Network-Only-progressives), [Startup Caucus: Areas of Need (2024)](https://startupcaucus.com/insights/identified-areas-of-need-in-the-republican-campaign-tech-ecosystem-2024)
 
@@ -906,7 +906,7 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 |---|---|---|---|
 | **Patch-through calling** | Capitol Canary, CallHub, One Click | Not spec'd | P2 — Twilio extension. **Verified caller district** is a differentiator no one else has. |
 | **Web form navigation** | Quorum, Capitol Canary, VoterVoice (99.6% deliverability) | Not planned | Skip — fragile (forms change constantly). Verification packet sent directly is more impactful. |
-| **Legislative tracking / bill alerts** | Quorum, FiscalNote, FastDemocracy, PolicyEngage | Spec'd (agentic-civic-infrastructure, Phase 3) | P3 — Agent monitors bills affecting verified districts. ~$6.50/org/month. |
+| **Legislative tracking / bill alerts** | Quorum, FiscalNote, FastDemocracy, PolicyEngage | Not built — deferred | Bill search + watch are live; vote-alignment scoring, relevance ranking, and alerts are not built (incumbent home turf; depends on the unreliable Congress.gov feed). |
 | **Legislator scorecards** | Quorum, FastDemocracy, Legislative Scorecard | Not spec'd | P2 — Natural extension of campaign delivery + response tracking. |
 | **Video messages to officials** | CiviClick, One Click | Not planned | Skip — niche, low ROI. |
 | **Social media advocacy** | Quorum, Capitol Canary, CiviClick, Ujoin | Not planned | Skip — low ROI relative to engineering cost. |
@@ -969,7 +969,7 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | **Analytics** | CSV export. Opens, clicks. No way to distinguish real constituents from bots or out-of-district signers. | Full dashboard. Opens, clicks, verified actions, tier distribution, GDS, ALD, temporal entropy. Analytics answer "who engaged" with mathematical certainty, not probabilistic guessing. |
 | **Identity** | Email + self-reported address. Platform stores full PII. | ZK proof of government credential. Platform stores commitment, not PII. Identity is a proof, not a record. |
 | **Credibility signal** | Count of emails sent. Staffers have no basis for trust. | Verification packet: verified count, tier distribution, coordination integrity scores (GDS, ALD, entropy), debate market signal. Staffers can mathematically verify every claim. |
-| **Pricing** | $15-$125/mo, no free tier | $0-$200/mo, free tier with full API |
+| **Pricing** | $15-$125/mo, no free tier | $10-$200/mo, author free + Starter $10 entry with full uncapped API |
 | **Political scope** | Progressive only (501(c)(4) ToS). Half the market excluded by policy. | All — protocol verifies proof, not politics. Verification is orthogonal to ideology. |
 | **API** | Paid plans only, 4 req/s cap | Free, all tiers, no cap |
 | **Reputation** | None. Every supporter is equally weightless. | Engagement tiers: New (0), Active (1), Established (2), Veteran (3), Pillar (4). Non-purchasable, on-chain, portable across orgs. |
@@ -977,8 +977,8 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | **Debate / quality** | None. Volume is the only metric. | LMSR market + AI panel. sqrt(stake) * 2^tier. Quality of reasoning, not just count. |
 | **Agentic** | None. | Verified delegation. Tier-gated. Privacy-preserving memory. ZK proof on every agent action. |
 | **Portability** | Per-org silos. Reputation resets with every new org. | Protocol-level identity. Verification and reputation travel across every org on the protocol. |
-| **Custom domain** | Paid add-on | Included (Organization tier+) |
-| **SQL mirror** | +$200/month add-on | Included (Organization tier+) |
+| **Custom domain** | Paid add-on | Upcoming — not yet available |
+| **SQL mirror** | +$200/month add-on | Upcoming — not yet available |
 
 ### Feature Build Status
 
@@ -1028,9 +1028,9 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 ## Pricing Comparison
 
-| Platform | Entry Price | Full-Featured | Free Tier | Self-Serve |
+| Platform | Entry Price | Full-Featured | Free to Author | Self-Serve |
 |---|---|---|---|---|
-| **Commons** | **$0/mo** | **$75–$200/mo** | **Yes (500 supporters, full API)** | **Yes** |
+| **Commons** | **$10/mo (Starter)** | **$75–$200/mo** | **Yes — author free, pay $10 to deliver (full uncapped API)** | **Yes** |
 | Action Network | $15/mo | $125/mo | Limited (no API) | Yes |
 | NationBuilder | $29/mo | $179/mo | No (14-day trial) | Yes |
 | Ujoin | $99/mo | $249/mo | Limited | Yes |
@@ -1051,7 +1051,7 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 1. **Science/health advocacy** — credibility over volume. ALI, disease foundations, research coalitions. These orgs need staffers to *believe* the signers are real. Verification is the product.
 2. **Nonpartisan/conservative groups** — structurally excluded from AN (progressive-only ToS) and priced out of enterprise platforms (Quorum, VoterVoice at $10K+). Underserved market with no good tooling at the $10–$200/mo price point.
-3. **Small orgs** — free tier vs AN's $15/month minimum. Full API access. No paywall on analytics.
+3. **Small orgs** — author free, Starter $10/month to deliver vs AN's $15/month minimum. Full uncapped API access. No paywall on analytics.
 4. **Local government advocacy** — school boards, water districts, transit authorities, fire districts, judicial circuits. 21 of 24 Shadow Atlas boundary types have **zero** coverage from any competitor. Shadow Atlas resolves districts that Quorum and VoterVoice literally don't have in their databases.
 
 ### Expansion (Year 2–4)
@@ -1064,8 +1064,8 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | Segment | What they need | What competitors offer | What Commons offers |
 |---|---|---|---|
 | Science/health | Credible constituent proof | Unverified email counts | ZK-verified counts + tier distribution + coordination integrity |
-| Conservative/nonpartisan | Affordable advocacy tooling | Nothing at <$7,500/yr | Full platform at $0–$200/mo |
-| Small orgs | Free/cheap, easy setup | AN $15/mo (no API), NationBuilder $29/mo | Free tier with full API |
+| Conservative/nonpartisan | Affordable advocacy tooling | Nothing at <$7,500/yr | Full platform at $10–$200/mo (author free, $10 Starter to deliver) |
+| Small orgs | Free/cheap, easy setup | AN $15/mo (no API), NationBuilder $29/mo | Author free, $10 Starter to deliver, full uncapped API |
 | Local government | Sub-state district targeting | Federal + state legislative only | 24 boundary types including school, water, fire, transit, judicial |
 | Progressive orgs | Better response rates from offices | Volume-based, unverified | Verified + unverified side-by-side. Migration tool. |
 | Corporate/trade | Legislative tracking + advocacy | Quorum/VoterVoice at $10K+/yr | $75/mo Organization tier + agentic bill monitoring (Phase 3) |

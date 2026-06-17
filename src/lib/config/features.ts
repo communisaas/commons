@@ -24,7 +24,7 @@ if (import.meta.env.PROD && forceShadowAtlasOff && import.meta.env.VITE_ENVIRONM
 
 export const FEATURES = {
 	/** Deliberation surfaces, argument submission, LMSR market, resolution/appeal */
-	DEBATE: true,
+	DEBATE: false,
 
 	/**
 	 * CWC delivery, district officials, congressional template routing.
@@ -53,6 +53,21 @@ export const FEATURES = {
 	/** Email A/B testing: two-variant split, winner selection, results comparison */
 	AB_TESTING: true,
 
+	/**
+	 * Server-side email dispatch from the org composer. Draft creation and
+	 * client-direct sends exist; the Convex server sender can be queued when
+	 * route-local SES, org-key, and unsubscribe runtime dependencies pass.
+	 */
+	EMAIL_SERVER_DISPATCH: true,
+
+	/**
+	 * Per-recipient merge-field substitution for client-direct Lambda sends.
+	 * The browser sender resolves tokens after org-key decryption and switches
+	 * to one-recipient Lambda calls when a subject/body contains supported
+	 * merge fields. Non-personalized sends keep the normal batch path.
+	 */
+	EMAIL_CLIENT_DIRECT_MERGE: true,
+
 	/** Public REST API at /api/v1/ with API key auth */
 	PUBLIC_API: true,
 
@@ -65,14 +80,38 @@ export const FEATURES = {
 	/** Automation: event-driven engagement ladders, workflow builder */
 	AUTOMATION: true,
 
+	/**
+	 * Workflow side effects and scheduled processing. The builder and saved
+	 * definitions are live; non-email workflows can arm tag writes, branch
+	 * conditions, delay/resume, and trigger dispatch. Workflow email remains
+	 * guarded by route-local SES/org-key/from-email dependencies.
+	 */
+	WORKFLOW_EXECUTION: true,
+
 	/** SMS campaigns + patch-through calling (Twilio) */
 	SMS: true,
+
+	/**
+	 * SMS blast dispatch. Draft CRUD is live; bulk send is gated until the
+	 * client-side phone decryptor / Twilio proxy path is wired.
+	 */
+	SMS_DISPATCH: false,
 
 	/** Multi-org coalition networks: parent/child orgs, shared supporter pools */
 	NETWORKS: true,
 
 	/** Legislative intelligence loop: bill monitoring, alerts, scorecards */
 	LEGISLATION: true,
+
+	/**
+	 * Legislative-intelligence PRODUCERS are live. Distinct from LEGISLATION, which
+	 * only gates the route's existence — bill SEARCH + WATCH are real. But the
+	 * producers behind relevance, vote-alignment scoring, and alerts are stubs with
+	 * zero callers (trackVotes, the bill topicEmbedding writer, createAlert), so
+	 * those surfaces produce nothing. They gate on THIS flag and show an explicit
+	 * "not yet available" state instead of an empty-as-working list, until E1 ships.
+	 */
+	LEGISLATIVE_INTELLIGENCE_LIVE: false,
 
 	/** Accountability receipts: proof-weighted decision-maker tracking */
 	ACCOUNTABILITY: true,

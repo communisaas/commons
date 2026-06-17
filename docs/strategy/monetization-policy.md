@@ -6,6 +6,19 @@
 
 ---
 
+> **Positioning + pricing recenter (2026-06-14).** "Individuals are free
+> forever" (Person Layer) is unchanged and still correct. **There is no free
+> ORG tier.** Org entry is **Starter ($10/mo)**. An org with no active
+> subscription falls to the non-marketed `inactive` floor (priceCents 0,
+> maxVerifiedActions/maxEmails/maxSms 0, maxSeats 1, maxTemplatesMonth 2) — it
+> can author a campaign or two to experience the product, but every delivery +
+> scale quota is zeroed until it subscribes. `inactive` is **not sellable** and
+> not in `PLAN_ORDER`; cancellation drops an org back to it. The motion is
+> author free, pay to deliver. Recorded 2026-06-02 / 2026-06-14; merged through
+> PR #34. Canonical source of truth: `src/lib/server/billing/plans.ts`.
+
+---
+
 ## Core Principle: Individuals Are Free
 
 Individual civic action on Commons is free. There is no individual subscription, no credit packs, no paywall on sending verified letters to decision-makers. This is not generosity — it is the structurally correct economic decision.
@@ -103,14 +116,16 @@ All subscription revenue flows from organizations. Pricing tiers meter verified 
 
 | Tier | Price | Verified Actions | Emails | SMS | Seats | Templates/mo |
 |---|---|---|---|---|---|---|
-| Free | $0/mo | 100 | 1,000 | 0 | 2 | 10 |
+| *inactive* (floor, non-marketed) | $0/mo | 0 | 0 | 0 | 1 | 2 |
 | Starter | $10/mo | 1,000 | 20,000 | 1,000 | 5 | 100 |
 | Organization | $75/mo | 5,000 | 100,000 | 10,000 | 10 | 500 |
 | Coalition | $200/mo | 10,000 | 250,000 | 50,000 | 25 | 1,000 |
 
+`inactive` is the gated fallback for an org with no active subscription, not a sellable tier: author up to 2 templates to experience the product; all delivery (email/SMS, verified-action submission) and scale (seats, volume) are zeroed. Entry is Starter ($10/mo). Cancellation drops an org to `inactive`.
+
 Overage pricing: $1.50-$3.00/1K verified actions (vs $0.01 COGS = 70%+ margin).
 
-Canonical definitions: `src/lib/server/billing/plans.ts` (SvelteKit) and `convex/subscriptions.ts` (Convex mirror). These MUST stay in sync.
+Canonical definitions: `src/lib/server/billing/plans.ts` (SvelteKit, source of truth — `PLANS` keyed by `inactive`/`starter`/`organization`/`coalition`; `PLAN_ORDER` excludes `inactive`) and `convex/subscriptions.ts` (Convex mirror). These MUST stay in sync with `plans.ts`.
 
 ### What Orgs Pay For
 

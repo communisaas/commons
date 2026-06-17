@@ -10,8 +10,8 @@ import { describe, it, expect } from 'vitest';
 import { PLANS, PLAN_ORDER } from '$lib/server/billing/plans';
 
 describe('SMS Plan Limits', () => {
-	it('free tier should have maxSms = 0', () => {
-		expect(PLANS.free.maxSms).toBe(0);
+	it('inactive floor should have maxSms = 0 (delivery gated)', () => {
+		expect(PLANS.inactive.maxSms).toBe(0);
 	});
 
 	it('starter tier should have maxSms = 1000', () => {

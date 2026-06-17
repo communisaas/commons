@@ -6,21 +6,26 @@
  * Returns Server-Sent Events (SSE) stream with:
  * - phase: Current pipeline phase (sources | message | complete)
  * - thought: Agent reasoning during source discovery and writing
- * - complete: Final message with VERIFIED sources
+ * - complete: Final message with bounded source ground
  * - error: Error message if generation fails
  *
  * Two-Phase Pipeline:
  * 1. Source Discovery: Find and validate URLs via web search
- * 2. Message Generation: Write using ONLY verified sources
+ * 2. Message Generation: Write using ONLY bounded source ground
  *
- * This eliminates citation hallucination—every URL in the output is verified.
+ * This prevents citation hallucination: every URL in the output comes from the
+ * bounded source-ground pool, while evaluated/search-only status remains visible.
  *
  * Rate Limiting: BLOCKED for guests, 10/hour authenticated, 30/hour verified.
  */
 
 import type { RequestHandler } from './$types';
-import { generateMessage, type PipelinePhase } from '$lib/core/agents/agents/message-writer';
-import { cleanThoughtForDisplay } from '$lib/core/agents/utils/thought-filter';
+import {
+	generateMessage,
+	type PipelinePhase,
+	type SourceEvidenceUpdate
+} from '$lib/core/agents/agents/message-writer';
+import { filterThoughtForDisplay } from '$lib/core/agents/utils/thought-filter';
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import {
 	enforceLLMRateLimit,
@@ -32,6 +37,7 @@ import {
 } from '$lib/server/llm-cost-protection';
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
+import { getMessageGenerationReadiness } from '$lib/server/agents/message-generation-readiness';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
@@ -74,6 +80,13 @@ interface RequestBody {
 		subdivision?: string;
 		locality?: string;
 	};
+	/**
+	 * Transparency level for streamed reasoning. STUDIO sets this true to
+	 * surface real planning thoughts (light filter); the public citizen flow
+	 * omits it and keeps the strict filter. Reasoning is never fabricated in
+	 * either mode — only the suppression threshold differs.
+	 */
+	verbose?: boolean;
 }
 
 function isRecoveryPublicKeyJwk(value: unknown): value is JsonWebKey {
@@ -83,7 +96,22 @@ function isRecoveryPublicKeyJwk(value: unknown): value is JsonWebKey {
 }
 
 export const POST: RequestHandler = async (event) => {
-	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation');
+	// Paid individuals (Voice/Advocate) are not hard-blocked by the free
+	// daily-global abuse breaker on the message-generation step — their monthly
+	// authored cap is the real bound. The daily-global key is shared across every
+	// LLM op, so an authoring run (decision-makers + message-generation) must
+	// elevate the ceiling on BOTH steps or the paying user is still blocked here.
+	// Best-effort: a lookup failure falls back to the free ceiling, never elevates.
+	let paidIndividual = false;
+	if (event.locals.session?.userId) {
+		try {
+			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
+		} catch (err) {
+			console.warn('[stream-message] paid-individual lookup failed, using free ceiling:', err);
+		}
+	}
+
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation', { paidIndividual });
 	if (!rateLimitCheck.allowed) {
 		return rateLimitResponse(rateLimitCheck);
 	}
@@ -126,12 +154,13 @@ export const POST: RequestHandler = async (event) => {
 		body.core_message.length > 16_000 ||
 		(body.voice_sample && body.voice_sample.length > 16_000) ||
 		(body.raw_input && body.raw_input.length > 16_000) ||
-		(Array.isArray(body.topics) && (body.topics.length > 20 || body.topics.some((t) => typeof t !== 'string' || t.length > 64)))
+		(Array.isArray(body.topics) &&
+			(body.topics.length > 20 || body.topics.some((t) => typeof t !== 'string' || t.length > 64)))
 	) {
-		return new Response(
-			JSON.stringify({ error: 'Input field exceeds maximum length' }),
-			{ status: 400, headers: { 'Content-Type': 'application/json' } },
-		);
+		return new Response(JSON.stringify({ error: 'Input field exceeds maximum length' }), {
+			status: 400,
+			headers: { 'Content-Type': 'application/json' }
+		});
 	}
 
 	const usesRecoverableJob = Boolean(
@@ -161,6 +190,26 @@ export const POST: RequestHandler = async (event) => {
 				headers: { 'Content-Type': 'application/json' }
 			});
 		}
+	}
+
+	const runtimeReadiness = getMessageGenerationReadiness({
+		GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+		EXA_API_KEY: process.env.EXA_API_KEY,
+		FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY
+	});
+	if (!runtimeReadiness.ready) {
+		return new Response(
+			JSON.stringify({
+				error: runtimeReadiness.message,
+				code: 'message_generation_runtime_not_configured',
+				missing: runtimeReadiness.missing,
+				dependency: runtimeReadiness.dependency
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
 	}
 
 	const traceId = crypto.randomUUID();
@@ -316,17 +365,18 @@ export const POST: RequestHandler = async (event) => {
 				emitter.send('job', {
 					jobId: messageJob.jobId,
 					inputHash: messageJob.inputHash,
-					status: messageJob.status
+					status: messageJob.status,
+					traceId
 				});
 
 				if (!messageJobCreated) {
 					if (messageJob.status === 'completed') {
-						emitter.send('job-complete', { job: messageJob });
+						emitter.send('job-complete', { job: { ...messageJob, traceId } });
 						streamSuccess = true;
 						return;
 					}
 					if (messageJob.status === 'pending' || messageJob.status === 'running') {
-						emitter.send('job-running', { job: messageJob });
+						emitter.send('job-running', { job: { ...messageJob, traceId } });
 						streamSuccess = true;
 						return;
 					}
@@ -419,7 +469,7 @@ export const POST: RequestHandler = async (event) => {
 				verifiedSources,
 				traceId,
 				onThought: (thought: string, phase?: PipelinePhase) => {
-					const cleaned = cleanThoughtForDisplay(thought);
+					const cleaned = filterThoughtForDisplay(thought, body.verbose ? 'verbose' : 'strict');
 					if (cleaned) {
 						emitter.send('thought', { content: cleaned, phase: phase || 'message' });
 					}
@@ -434,6 +484,10 @@ export const POST: RequestHandler = async (event) => {
 							console.warn('[stream-message] Message job phase checkpoint failed:', err);
 						});
 					}
+				},
+				onSourceEvidence: (evidence: SourceEvidenceUpdate) => {
+					emitter.send('source-evidence', evidence);
+					traceEvent(traceId, TRACE_ENDPOINT, 'source-evidence', evidence);
 				}
 			});
 
@@ -491,7 +545,15 @@ export const POST: RequestHandler = async (event) => {
 			console.log('[stream-message] Two-phase generation complete:', {
 				userId: session.userId,
 				messageLength: result.message.length,
-				verifiedSourceCount: result.sources.length,
+				sourceGroundCount: result.sources.length,
+				evaluatedSourceCount:
+					result.evaluatedSources?.filter(
+						(source) => !source.credibility_rationale.startsWith('Evaluation unavailable')
+					).length ?? result.sources.length,
+				searchOnlySourceCount:
+					result.evaluatedSources?.filter((source) =>
+						source.credibility_rationale.startsWith('Evaluation unavailable')
+					).length ?? 0,
 				latencyMs: Date.now() - startTime
 			});
 		} catch (error) {

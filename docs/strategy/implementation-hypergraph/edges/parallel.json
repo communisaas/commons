@@ -30,7 +30,7 @@
       "name": "W-2 launch enablement broad",
       "wave": "W-2",
       "task_ids": ["T1-3", "T1-6", "T1-9"],
-      "note": "AN OSDI sync (T1-3) is independent. A/B winner picker (T1-6) is independent. Workflow verbs (T1-9) depends on T2-2 but can be developed in parallel."
+      "note": "First platform API / OSDI adapter (T1-3) is independent. A/B winner picker (T1-6) is independent. Workflow verbs (T1-9) are implemented; remaining workflow email confidence is runtime configuration/validation rather than a T2-2 implementation blocker."
     },
     {
       "name": "W-3 mainnet deployment parallel set",

@@ -7,18 +7,43 @@
  *   No server-held encryption keys — org key only.
  */
 
-import { query, mutation, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import { makeFunctionReference } from "convex/server";
-import type { FunctionReference } from "convex/server";
-import { v } from "convex/values";
-import { requireOrgRole } from "./_authHelpers";
-import { requireInternalSecret } from "./_internalAuth";
+import {
+	query,
+	mutation,
+	action,
+	internalAction,
+	internalMutation,
+	internalQuery
+} from './_generated/server';
+import { internal } from './_generated/api';
+import type { Id } from './_generated/dataModel';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
+import { v } from 'convex/values';
+import { requireOrgRole } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
+import { computeDistrictVerified } from './_dashboardStats';
+import {
+	assertPiiTripleCreate,
+	computeOrgScopedEmailHash,
+	computeOrgScopedPhoneHash,
+	computeGlobalEmailHash,
+	computeGlobalPhoneHash
+} from './_orgHash';
+import { getOrgKeyForAction } from './_orgKeyUnseal';
+import { encryptForSupporterV2 } from './_orgKey';
+import {
+	applySupporterStatsDelta,
+	applySupporterStatsDeltaBatch,
+	emptySupporterStats,
+	visibleSourceCounts,
+	type CountableSupporter
+} from './_supporterStats';
+import { countTagSupporters, collectTagSupporterIds } from './_tagCounts';
 
-const getOrganizationBySlugRef = makeFunctionReference<"query">("organizations:getBySlug");
-const importBatchRef = makeFunctionReference<"mutation">("supporters:importBatch");
-const requireImportAuthRef = makeFunctionReference<"query">("supporters:requireImportAuth");
+const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
+const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
+const requireImportAuthRef = makeFunctionReference<'query'>('supporters:requireImportAuth');
 // `findByEmailHashRef` / `patchEncryptedPiiRef` declarations are no
 // longer needed — the two-phase placeholder + readback + patch flow
 // that required them is gone. `importWithEncryption` and
@@ -30,299 +55,652 @@ const requireImportAuthRef = makeFunctionReference<"query">("supporters:requireI
 // QUERIES (return encrypted blobs — client decrypts with org key)
 // =============================================================================
 
+function normalizeTagName(name: string): string {
+	const normalized = name.trim().replace(/\s+/g, ' ');
+	if (!normalized) throw new Error('TAG_NAME_REQUIRED');
+	if (normalized.length > 48) throw new Error('TAG_NAME_TOO_LONG');
+	return normalized;
+}
+
+const EMAIL_STATUS_RANK: Record<string, number> = {
+	subscribed: 0,
+	unsubscribed: 1,
+	bounced: 2,
+	complained: 3
+};
+
+const SMS_STATUS_RANK: Record<string, number> = {
+	none: 0,
+	subscribed: 1,
+	unsubscribed: 2,
+	stopped: 3
+};
+
+function stricterStatus(
+	current: string | undefined,
+	incoming: string,
+	rank: Record<string, number>
+) {
+	const currentRank = rank[current ?? ''] ?? 0;
+	const incomingRank = rank[incoming] ?? 0;
+	return incomingRank > currentRank ? incoming : (current ?? incoming);
+}
+
+function supporterSourceValue(supporter: { source?: string }): string {
+	return typeof supporter.source === 'string' && supporter.source.trim()
+		? supporter.source.trim()
+		: 'unknown';
+}
+
+/**
+ * Fields a non-editor member must NOT receive from any member-gated reader.
+ *
+ * - `emailHash` is a stable, org-scoped join key. Surfacing it to a plain
+ *   member lets them correlate a supporter across every list/search response
+ *   and use it as a membership/identity oracle — a quiet PII egress that the
+ *   org-key-encrypted blobs (`encrypted*`) do not expose.
+ * - The six consent-evidence fields carry the literal consent text/source/
+ *   timestamp the supporter agreed to. That is compliance evidence custodied
+ *   for the org's editors, not list-membership metadata for every member.
+ *
+ * Editor+ (`owner`/`editor`) callers keep the real values — they hold the org
+ * key and run export/search, both of which need `emailHash` as decryption AAD.
+ *
+ * Encrypted PII blobs (`encryptedEmail`/`encryptedName`/`encryptedPhone`/
+ * `encryptedCustomFields`) are intentionally left untouched: they are
+ * org-key-encrypted and the client decrypts them — that is the existing
+ * custody model, not a leak.
+ */
+type ProjectableSupporterFields = {
+	emailHash?: string | null;
+	emailConsentSource?: string | null;
+	emailConsentedAt?: number | null;
+	emailConsentText?: string | null;
+	smsConsentSource?: string | null;
+	smsConsentedAt?: number | null;
+	smsConsentText?: string | null;
+};
+
+/**
+ * Null the editor-only PII/consent fields for non-editor members. Editor+
+ * callers pass `isEditor: true` and the real values pass through unchanged.
+ *
+ * Applied in EVERY member-gated reader so the gate cannot drift between them.
+ * The `Record<string, unknown> &` intersection lets readers hand in their full
+ * mapped shape (with `_id`, `tags`, encrypted blobs, …) without tripping
+ * excess-property checks — only the seven projectable keys are overwritten.
+ */
+function projectSupporterFields<T extends Record<string, unknown> & ProjectableSupporterFields>(
+	doc: T,
+	isEditor: boolean
+): T {
+	if (isEditor) return doc;
+	return {
+		...doc,
+		emailHash: null,
+		emailConsentSource: null,
+		emailConsentedAt: null,
+		emailConsentText: null,
+		smsConsentSource: null,
+		smsConsentedAt: null,
+		smsConsentText: null
+	};
+}
+
+function membershipIsEditor(role: string): boolean {
+	return role === 'owner' || role === 'editor';
+}
+
 /**
  * Paginated supporter list with filters. Returns encrypted PII blobs.
  */
 export const list = query({
-  args: {
-    orgSlug: v.string(),
-    paginationOpts: v.object({
-      cursor: v.union(v.string(), v.null()),
-      numItems: v.number(),
-    }),
-    filters: v.optional(
-      v.object({
-        emailStatus: v.optional(v.string()),
-        verified: v.optional(v.boolean()),
-        source: v.optional(v.string()),
-        tagId: v.optional(v.id("tags")),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
-    const { cursor, numItems } = args.paginationOpts;
-    const filters = args.filters;
+	args: {
+		orgSlug: v.string(),
+		paginationOpts: v.object({
+			cursor: v.union(v.string(), v.null()),
+			numItems: v.number()
+		}),
+		filters: v.optional(
+			v.object({
+				emailStatus: v.optional(v.string()),
+				verified: v.optional(v.boolean()),
+				source: v.optional(v.string()),
+				tagId: v.optional(v.id('tags'))
+			})
+		)
+	},
+	handler: async (ctx, args) => {
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
+		const { cursor, numItems } = args.paginationOpts;
+		const filters = args.filters;
 
-    // All filters post-process in memory; org scope is always the primary index.
-    // Use .take() with a bounded cap to prevent unbounded memory usage.
-    const limit = Math.min(numItems, 100);
-    const MAX_SCAN = 10_000;
-    const allDocs = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .take(MAX_SCAN);
+		// All filters post-process in memory; org scope is always the primary index.
+		// Use .take() with a bounded cap to prevent unbounded memory usage.
+		const limit = Math.min(numItems, 100);
+		const MAX_SCAN = 10_000;
+		// Take ONE extra row as a truncation sentinel: an org sitting at exactly
+		// MAX_SCAN is complete, not truncated. `take(MAX_SCAN)` + `>= MAX_SCAN`
+		// would false-flag it. Fetch MAX_SCAN + 1 and treat `> MAX_SCAN` as the
+		// real truncation signal, then drop the sentinel row from the working set.
+		const scanned = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
+			.order('desc')
+			.take(MAX_SCAN + 1);
 
-    // Apply filters in memory (Convex indexes are limited to equality prefixes)
-    let filtered = allDocs;
-    if (filters?.emailStatus) {
-      filtered = filtered.filter((s) => s.emailStatus === filters.emailStatus);
-    }
-    if (filters?.verified !== undefined) {
-      filtered = filtered.filter((s) => s.verified === filters.verified);
-    }
-    if (filters?.source) {
-      filtered = filtered.filter((s) => s.source === filters.source);
-    }
+		// Scan newest-first so the 10K window is the MOST RECENT supporters — the
+		// rows an operator actually wants, and what the page's "showing the most
+		// recent 10,000" notice truthfully describes. When the scan saturates the
+		// cap, rows beyond the window (the OLDEST) are absent; surface the cap
+		// honestly so the page warns instead of presenting a truncated list as
+		// complete. Mirrors the v1 API's `truncated`/`scanLimit` envelope
+		// (convex/v1api.ts listSupporters).
+		const scanCapped = scanned.length > MAX_SCAN;
+		// Drop the sentinel +1 row so it isn't processed or returned.
+		const allDocs = scanned.slice(0, MAX_SCAN);
 
-    // Tag filter: need to join supporterTags
-    if (filters?.tagId) {
-      const tagLinks = await ctx.db
-        .query("supporterTags")
-        .withIndex("by_tagId", (idx) => idx.eq("tagId", filters.tagId!))
-        .collect();
-      const supporterIds = new Set(tagLinks.map((t) => t.supporterId));
-      filtered = filtered.filter((s) => supporterIds.has(s._id));
-    }
+		// Apply filters in memory (Convex indexes are limited to equality prefixes)
+		let filtered = allDocs;
+		if (filters?.emailStatus) {
+			filtered = filtered.filter((s) => s.emailStatus === filters.emailStatus);
+		}
+		if (filters?.verified !== undefined) {
+			filtered = filtered.filter((s) => s.verified === filters.verified);
+		}
+		if (filters?.source) {
+			filtered = filtered.filter((s) => supporterSourceValue(s) === filters.source);
+		}
 
-    // Sort by _creationTime descending (newest first)
-    filtered.sort((a, b) => b._creationTime - a._creationTime);
+		// Tag filter: join supporterTags via a BOUNDED scan (a popular tag's link
+		// set can exceed the per-query doc cap). The list page already scans a
+		// bounded supporter window and intersects, so a capped membership set
+		// still yields a correct page for the scanned window.
+		if (filters?.tagId) {
+			const { supporterIds } = await collectTagSupporterIds(ctx, filters.tagId);
+			filtered = filtered.filter((s) => supporterIds.has(s._id));
+		}
 
-    // Cursor-based slicing
-    let startIdx = 0;
-    if (cursor) {
-      const cursorIdx = filtered.findIndex((s) => s._id === cursor);
-      if (cursorIdx >= 0) startIdx = cursorIdx + 1;
-    }
+		// Two-stage ordering: the DB `order('desc')` above selects WHICH rows enter
+		// the scan window (the newest MAX_SCAN); this in-memory sort fixes the
+		// DISPLAY order of the filtered subset (newest first) after the filters run.
+		filtered.sort((a, b) => b._creationTime - a._creationTime);
 
-    const page = filtered.slice(startIdx, startIdx + limit + 1);
-    const hasMore = page.length > limit;
-    const items = page.slice(0, limit);
+		// Cursor-based slicing
+		let startIdx = 0;
+		if (cursor) {
+			const cursorIdx = filtered.findIndex((s) => s._id === cursor);
+			if (cursorIdx >= 0) startIdx = cursorIdx + 1;
+		}
 
-    // Return encrypted blobs — client decrypts with org key
-    const supporters = await Promise.all(
-      items.map(async (s) => {
-        // Load tags for this supporter
-        const tagLinks = await ctx.db
-          .query("supporterTags")
-          .withIndex("by_supporterId", (idx) => idx.eq("supporterId", s._id))
-          .collect();
-        const tags = await Promise.all(
-          tagLinks.map(async (link) => {
-            const tag = await ctx.db.get(link.tagId);
-            return tag ? { _id: tag._id, name: tag.name } : null;
-          }),
-        );
+		const page = filtered.slice(startIdx, startIdx + limit + 1);
+		const hasMore = page.length > limit;
+		const items = page.slice(0, limit);
 
-        return {
-          _id: s._id,
-          _creationTime: s._creationTime,
-          encryptedEmail: s.encryptedEmail,
-          encryptedName: s.encryptedName ?? null,
-          postalCode: s.postalCode ?? null,
-          country: s.country ?? null,
-          encryptedPhone: s.encryptedPhone ?? null,
-          verified: s.verified,
-          identityVerified: !!(s.identityCommitment && s.verified),
-          emailStatus: s.emailStatus,
-          source: s.source ?? null,
-          encryptedCustomFields: s.encryptedCustomFields ?? null,
-          updatedAt: s.updatedAt,
-          tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
-        };
-      }),
-    );
+		// Return encrypted blobs — client decrypts with org key
+		const supporters = await Promise.all(
+			items.map(async (s) => {
+				// Load tags for this supporter
+				const tagLinks = await ctx.db
+					.query('supporterTags')
+					.withIndex('by_supporterId', (idx) => idx.eq('supporterId', s._id))
+					.collect();
+				const tags = await Promise.all(
+					tagLinks.map(async (link) => {
+						const tag = await ctx.db.get(link.tagId);
+						return tag ? { _id: tag._id, name: tag.name } : null;
+					})
+				);
 
-    const nextCursor = hasMore ? items[items.length - 1]?._id ?? null : null;
+				return projectSupporterFields(
+					{
+						_id: s._id,
+						_creationTime: s._creationTime,
+						encryptedEmail: s.encryptedEmail,
+						emailHash: s.emailHash ?? null,
+						encryptedName: s.encryptedName ?? null,
+						postalCode: s.postalCode ?? null,
+						stateCode: s.stateCode ?? null,
+						congressionalDistrict: s.congressionalDistrict ?? null,
+						country: s.country ?? null,
+						encryptedPhone: s.encryptedPhone ?? null,
+						verified: s.verified,
+						identityVerified: !!(s.identityCommitment && s.verified),
+						emailStatus: s.emailStatus,
+						smsStatus: s.smsStatus,
+						source: s.source ?? null,
+						emailConsentSource: s.emailConsentSource ?? null,
+						emailConsentedAt: s.emailConsentedAt ?? null,
+						emailConsentText: s.emailConsentText ?? null,
+						smsConsentSource: s.smsConsentSource ?? null,
+						smsConsentedAt: s.smsConsentedAt ?? null,
+						smsConsentText: s.smsConsentText ?? null,
+						importedAt: s.importedAt ?? null,
+						encryptedCustomFields: s.encryptedCustomFields ?? null,
+						updatedAt: s.updatedAt,
+						tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+					},
+					isEditor
+				);
+			})
+		);
 
-    return {
-      supporters,
-      nextCursor,
-      hasMore,
-    };
-  },
+		const nextCursor = hasMore ? (items[items.length - 1]?._id ?? null) : null;
+
+		return {
+			supporters,
+			nextCursor,
+			hasMore,
+			// Additive — existing consumers read { supporters, nextCursor, hasMore }.
+			truncated: scanCapped,
+			scanLimit: MAX_SCAN
+		};
+	}
 });
 
 /**
  * Single supporter by ID with all fields + tags + decrypted email.
  */
 export const get = query({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters')
+	},
+	handler: async (ctx, args) => {
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
 
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    const tagLinks = await ctx.db
-      .query("supporterTags")
-      .withIndex("by_supporterId", (idx) =>
-        idx.eq("supporterId", supporter._id),
-      )
-      .collect();
-    const tags = await Promise.all(
-      tagLinks.map(async (link) => {
-        const tag = await ctx.db.get(link.tagId);
-        return tag ? { _id: tag._id, name: tag.name } : null;
-      }),
-    );
+		const tagLinks = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', supporter._id))
+			.collect();
+		const tags = await Promise.all(
+			tagLinks.map(async (link) => {
+				const tag = await ctx.db.get(link.tagId);
+				return tag ? { _id: tag._id, name: tag.name } : null;
+			})
+		);
 
-    return {
-      _id: supporter._id,
-      _creationTime: supporter._creationTime,
-      encryptedEmail: supporter.encryptedEmail,
-      encryptedName: supporter.encryptedName ?? null,
-      postalCode: supporter.postalCode ?? null,
-      country: supporter.country ?? null,
-      encryptedPhone: supporter.encryptedPhone ?? null,
-      verified: supporter.verified,
-      identityVerified: !!(supporter.identityCommitment && supporter.verified),
-      identityCommitment: supporter.identityCommitment ?? null,
-      emailStatus: supporter.emailStatus,
-      smsStatus: supporter.smsStatus,
-      source: supporter.source ?? null,
-      encryptedCustomFields: supporter.encryptedCustomFields ?? null,
-      importedAt: supporter.importedAt ?? null,
-      updatedAt: supporter.updatedAt,
-      tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
-    };
-  },
+		return projectSupporterFields(
+			{
+				_id: supporter._id,
+				_creationTime: supporter._creationTime,
+				encryptedEmail: supporter.encryptedEmail,
+				emailHash: supporter.emailHash ?? null,
+				encryptedName: supporter.encryptedName ?? null,
+				postalCode: supporter.postalCode ?? null,
+				stateCode: supporter.stateCode ?? null,
+				congressionalDistrict: supporter.congressionalDistrict ?? null,
+				country: supporter.country ?? null,
+				encryptedPhone: supporter.encryptedPhone ?? null,
+				verified: supporter.verified,
+				identityVerified: !!(supporter.identityCommitment && supporter.verified),
+				identityCommitment: supporter.identityCommitment ?? null,
+				emailStatus: supporter.emailStatus,
+				smsStatus: supporter.smsStatus,
+				source: supporter.source ?? null,
+				encryptedCustomFields: supporter.encryptedCustomFields ?? null,
+				importedAt: supporter.importedAt ?? null,
+				updatedAt: supporter.updatedAt,
+				tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+			},
+			isEditor
+		);
+	}
 });
 
 /**
  * Search by email hash — accepts pre-computed org-scoped hash from client.
  */
 export const findByEmailHash = query({
-  args: { slug: v.string(), emailHash: v.string() },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.slug, "member");
-    return ctx.db
-      .query("supporters")
-      .withIndex("by_orgId_emailHash", (idx) =>
-        idx.eq("orgId", org._id).eq("emailHash", args.emailHash),
-      )
-      .first();
-  },
+	args: { slug: v.string(), emailHash: v.string() },
+	handler: async (ctx, args) => {
+		// Editor-gated, not member: this reader returns null-vs-object keyed on a
+		// caller-supplied emailHash, which is an existence/membership oracle (a
+		// plain member could probe whether any email is in the org regardless of
+		// field projection). It has zero app consumers, so the legitimate
+		// supporter-search feature (searchByEmail) stays 'member' while existence-
+		// probing is restricted to editors.
+		const { org, membership } = await requireOrgRole(ctx, args.slug, 'editor');
+		// The editor gate above IS the access control here; isEditor is therefore
+		// always true and the projection below is a no-op today. It is kept as
+		// belt-and-suspenders so the field-level gate still holds if this reader is
+		// ever downgraded to 'member' — the role check and the projection won't drift.
+		const isEditor = membershipIsEditor(membership.role);
+		const doc = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId_emailHash', (idx) =>
+				idx.eq('orgId', org._id).eq('emailHash', args.emailHash)
+			)
+			.first();
+		if (!doc) return null;
+		// Return a CURATED allowlist, not the raw document: .first() carries
+		// cross-org join keys (globalEmailHash/globalPhoneHash/phoneHash) and
+		// other internal columns that no reader should expose. Mirror the
+		// deliberate field set the other readers emit, then role-gate the
+		// editor-only fields through the shared projection.
+		return projectSupporterFields(
+			{
+				_id: doc._id,
+				_creationTime: doc._creationTime,
+				encryptedEmail: doc.encryptedEmail,
+				emailHash: doc.emailHash ?? null,
+				encryptedName: doc.encryptedName ?? null,
+				postalCode: doc.postalCode ?? null,
+				stateCode: doc.stateCode ?? null,
+				congressionalDistrict: doc.congressionalDistrict ?? null,
+				country: doc.country ?? null,
+				encryptedPhone: doc.encryptedPhone ?? null,
+				verified: doc.verified,
+				identityVerified: !!(doc.identityCommitment && doc.verified),
+				identityCommitment: doc.identityCommitment ?? null,
+				emailStatus: doc.emailStatus,
+				smsStatus: doc.smsStatus,
+				source: doc.source ?? null,
+				emailConsentSource: doc.emailConsentSource ?? null,
+				emailConsentedAt: doc.emailConsentedAt ?? null,
+				emailConsentText: doc.emailConsentText ?? null,
+				smsConsentSource: doc.smsConsentSource ?? null,
+				smsConsentedAt: doc.smsConsentedAt ?? null,
+				smsConsentText: doc.smsConsentText ?? null,
+				encryptedCustomFields: doc.encryptedCustomFields ?? null,
+				importedAt: doc.importedAt ?? null,
+				updatedAt: doc.updatedAt
+			},
+			isEditor
+		);
+	}
 });
 
 export const searchByEmail = query({
-  args: {
-    orgSlug: v.string(),
-    emailHash: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: {
+		orgSlug: v.string(),
+		emailHash: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const isEditor = membershipIsEditor(membership.role);
 
-    const supporter = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId_emailHash", (idx) =>
-        idx.eq("orgId", org._id).eq("emailHash", args.emailHash),
-      )
-      .first();
+		const supporter = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId_emailHash', (idx) =>
+				idx.eq('orgId', org._id).eq('emailHash', args.emailHash)
+			)
+			.first();
 
-    if (!supporter) return null;
+		if (!supporter) return null;
 
-    const tagLinks = await ctx.db
-      .query("supporterTags")
-      .withIndex("by_supporterId", (idx) =>
-        idx.eq("supporterId", supporter._id),
-      )
-      .collect();
-    const tags = await Promise.all(
-      tagLinks.map(async (link) => {
-        const tag = await ctx.db.get(link.tagId);
-        return tag ? { _id: tag._id, name: tag.name } : null;
-      }),
-    );
+		const tagLinks = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', supporter._id))
+			.collect();
+		const tags = await Promise.all(
+			tagLinks.map(async (link) => {
+				const tag = await ctx.db.get(link.tagId);
+				return tag ? { _id: tag._id, name: tag.name } : null;
+			})
+		);
 
-    return {
-      _id: supporter._id,
-      _creationTime: supporter._creationTime,
-      encryptedEmail: supporter.encryptedEmail,
-      encryptedName: supporter.encryptedName ?? null,
-      verified: supporter.verified,
-      emailStatus: supporter.emailStatus,
-      tags: tags.filter((t): t is NonNullable<typeof t> => t !== null),
-    };
-  },
+		// This shape carries neither emailHash nor consent fields today; route
+		// it through the shared projection anyway so the editor gate cannot
+		// drift if either field is added back here later.
+		return projectSupporterFields(
+			{
+				_id: supporter._id,
+				_creationTime: supporter._creationTime,
+				encryptedEmail: supporter.encryptedEmail,
+				encryptedName: supporter.encryptedName ?? null,
+				verified: supporter.verified,
+				emailStatus: supporter.emailStatus,
+				tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
+			},
+			isEditor
+		);
+	}
 });
 
 /**
  * Verification funnel summary stats for an org.
- * Uses org's denormalized supporterCount for total,
- * queries supporters for postal-resolved and identity-verified counts.
+ *
+ * Reads the org's denormalized supporterCount + supporterStats breakdown
+ * counters — NO full-table scan. The previous implementation collected every
+ * supporter row plus every verified campaign action, which throws once an org
+ * passes the per-query document cap (and the page 500s). The counters are
+ * maintained at every supporter writer (applySupporterStatsDelta) so this read
+ * is O(1) and exact from the first insert.
+ *
+ * District-of-record cardinality is NOT in this always-on payload: it is set
+ * cardinality (a supporter active in two districts would double-count a scalar
+ * counter), so a denormalized counter can't represent it without drift. It is
+ * served separately by the bounded getDistrictVerifiedCount query.
+ *
+ * The returned buckets are not mutually exclusive: total people can also be
+ * address-resolved and identity-verified.
  */
 export const getSummaryStats = query({
-  args: {
-    orgSlug: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-    const allSupporters = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .take(10_001);
+		const total = org.supporterCount ?? 0;
+		const stats = org.supporterStats ?? emptySupporterStats();
 
-    const total = org.supporterCount ?? allSupporters.length;
+		return {
+			total,
+			imported: total,
+			identityVerified: stats.identityVerified,
+			postalResolved: stats.postalResolved,
+			// Strip zero-count buckets so a fully-deleted source ('csv: 0') never
+			// shows in the breakdown. computeSupporterStats keeps zeros for the
+			// stable-fold invariant; the UI only wants live buckets.
+			sourceCounts: visibleSourceCounts(stats.sourceCounts),
+			emailHealth: {
+				subscribed: stats.emailSubscribed,
+				unsubscribed: stats.emailUnsubscribed,
+				bounced: stats.emailBounced,
+				complained: stats.emailComplained
+			},
+			smsHealth: {
+				subscribed: stats.smsSubscribed,
+				unsubscribed: stats.smsUnsubscribed,
+				stopped: stats.smsStopped,
+				none: stats.smsNone,
+				phonePresent: stats.phonePresent
+			},
+			consentEvidence: {
+				email: stats.emailConsentEvidence,
+				emailSubscribed: stats.emailSubscribedConsentEvidence,
+				sms: stats.smsConsentEvidence,
+				smsSubscribed: stats.smsSubscribedConsentEvidence
+			}
+		};
+	}
+});
 
-    let identityVerified = 0;
-    let postalResolved = 0;
-    const emailHealth: Record<string, number> = {
-      subscribed: 0,
-      unsubscribed: 0,
-      bounced: 0,
-      complained: 0,
-    };
+/**
+ * District-of-record count for an org — distinct supporters with at least one
+ * verified action carrying a districtHash. Lazy + bounded: a separate query so
+ * the always-on funnel summary stays O(1), and the scan is capped so it can
+ * never throw the per-query document-cap error the way the old unbounded
+ * .collect() did. When the cap saturates, `truncated` is surfaced so the
+ * consumer can present a floor (">= N") instead of a wrong exact number.
+ *
+ * Set cardinality (distinct supporterIds) can't be a denormalized counter
+ * without double-counting cross-district supporters, so it is computed on
+ * demand here rather than maintained as a scalar.
+ */
+export const getDistrictVerifiedCount = query({
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-    for (const s of allSupporters) {
-      if (s.identityCommitment && s.verified) {
-        identityVerified++;
-      } else if (s.postalCode) {
-        postalResolved++;
-      }
-
-      if (s.emailStatus in emailHealth) {
-        emailHealth[s.emailStatus]++;
-      }
-    }
-
-    const imported = total - identityVerified - postalResolved;
-
-    return {
-      total,
-      identityVerified,
-      postalResolved,
-      imported,
-      emailHealth,
-    };
-  },
+		// Shared bounded path — same scan getDashboardStats's funnel uses, so the
+		// two never drift on the cap or the cardinality math.
+		return await computeDistrictVerified(ctx, org._id);
+	}
 });
 
 /**
  * List tags for an org.
  */
 export const getTags = query({
-  args: { orgSlug: v.string() },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: { orgSlug: v.string() },
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-    const tags = await ctx.db
-      .query("tags")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .collect();
+		const tags = await ctx.db
+			.query('tags')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
+			.collect();
 
-    return tags.map((t) => ({
-      _id: t._id,
-      id: t._id,
-      name: t.name,
-    }));
-  },
+		const rows = await Promise.all(
+			tags.map(async (t) => {
+				// Sub-class (B) pure count via a BOUNDED scan — a popular tag's link
+				// set can exceed the per-query doc cap. `truncated` marks a floor.
+				const { count, truncated } = await countTagSupporters(ctx, t._id);
+				return {
+					_id: t._id,
+					id: t._id,
+					name: t.name,
+					supporterCount: count,
+					supporterCountTruncated: truncated
+				};
+			})
+		);
+
+		return rows.sort((a, b) => a.name.localeCompare(b.name));
+	}
+});
+
+/**
+ * Create an org-scoped tag. Idempotent for an existing tag name so enhanced
+ * forms can safely retry without creating duplicates.
+ */
+export const createTag = mutation({
+	args: { orgSlug: v.string(), name: v.string() },
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		const name = normalizeTagName(args.name);
+		const folded = name.toLowerCase();
+
+		const tags = await ctx.db
+			.query('tags')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
+			.collect();
+		const existing = tags.find((tag) => tag.name.toLowerCase() === folded);
+		if (existing) {
+			return { id: existing._id, name: existing.name, created: false };
+		}
+
+		const id = await ctx.db.insert('tags', { orgId: org._id, name });
+		return { id, name, created: true };
+	}
+});
+
+/**
+ * Rename an org-scoped tag without losing supporter links.
+ */
+export const renameTag = mutation({
+	args: { orgSlug: v.string(), tagId: v.id('tags'), name: v.string() },
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		const name = normalizeTagName(args.name);
+		const tag = await ctx.db.get(args.tagId);
+		if (!tag || tag.orgId !== org._id) {
+			throw new Error('TAG_NOT_FOUND');
+		}
+
+		const folded = name.toLowerCase();
+		const tags = await ctx.db
+			.query('tags')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
+			.collect();
+		const duplicate = tags.find(
+			(candidate) => candidate._id !== args.tagId && candidate.name.toLowerCase() === folded
+		);
+		if (duplicate) {
+			throw new Error('TAG_NAME_EXISTS');
+		}
+
+		if (tag.name !== name) {
+			await ctx.db.patch(args.tagId, { name });
+		}
+		return { id: args.tagId, name, renamed: tag.name !== name };
+	}
+});
+
+/**
+ * Delete an org-scoped tag and detach it from supporters.
+ */
+export const deleteTag = mutation({
+	args: { orgSlug: v.string(), tagId: v.id('tags') },
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		const tag = await ctx.db.get(args.tagId);
+		if (!tag || tag.orgId !== org._id) {
+			throw new Error('TAG_NOT_FOUND');
+		}
+
+		// Enumerate-to-delete over a per-tag link set that can exceed both the
+		// per-query doc-read cap AND the per-mutation write-op budget. Delete a
+		// BOUNDED batch here, then drop the tag row. Any remaining links are
+		// scheduled for drain in `purgeTagLinks` (an internalMutation that loops
+		// bounded batches). Orphaned links pointing at a now-deleted tag are
+		// read-safe in the meantime: every reader resolves the tag via
+		// `ctx.db.get(link.tagId)` and drops the row when it returns null.
+		const batch = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
+			.take(TAG_DELETE_BATCH);
+		for (const link of batch) {
+			await ctx.db.delete(link._id);
+		}
+		await ctx.db.delete(args.tagId);
+
+		// More links than one batch could hold → drain the remainder out-of-band.
+		if (batch.length >= TAG_DELETE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.supporters.purgeTagLinks, { tagId: args.tagId });
+		}
+
+		return { deleted: true, removedLinks: batch.length };
+	}
+});
+
+/** Per-mutation cap on tag-link deletes. Well under the ~4096 write-op budget. */
+const TAG_DELETE_BATCH = 2_000;
+
+/**
+ * Drain the remaining `supporterTags` rows for a deleted tag in bounded
+ * batches. Self-schedules until the link set is empty. Idempotent: if the tag
+ * id has no links it's a no-op. Reads tolerate the in-flight orphans (the tag
+ * row is already gone, so `ctx.db.get(link.tagId)` returns null and the link is
+ * dropped from any join).
+ */
+export const purgeTagLinks = internalMutation({
+	args: { tagId: v.id('tags') },
+	handler: async (ctx, args) => {
+		const batch = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
+			.take(TAG_DELETE_BATCH);
+		for (const link of batch) {
+			await ctx.db.delete(link._id);
+		}
+		if (batch.length >= TAG_DELETE_BATCH) {
+			await ctx.scheduler.runAfter(0, internal.supporters.purgeTagLinks, { tagId: args.tagId });
+		}
+		return { removed: batch.length };
+	}
 });
 
 // =============================================================================
@@ -334,121 +712,150 @@ export const getTags = query({
  * from client. No server-side encryption — store as-is.
  */
 export const create = mutation({
-  args: {
-    orgSlug: v.string(),
-    encryptedEmail: v.string(),
-    emailHash: v.string(),
-    // Paired global hashes for cross-org webhook lookup. Optional
-    // during rollout; the client computes them via
-    // `src/lib/core/crypto/org-scoped-hash.ts` and forwards them here.
-    globalEmailHash: v.optional(v.string()),
-    encryptedName: v.optional(v.string()),
-    postalCode: v.optional(v.string()),
-    country: v.optional(v.string()),
-    encryptedPhone: v.optional(v.string()),
-    phoneHash: v.optional(v.string()),
-    globalPhoneHash: v.optional(v.string()),
-    source: v.optional(v.string()),
-    encryptedCustomFields: v.optional(v.string()),
-    tagIds: v.optional(v.array(v.id("tags"))),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		encryptedEmail: v.string(),
+		emailHash: v.string(),
+		// Paired global hashes for cross-org webhook lookup. Optional
+		// during rollout; the client computes them via
+		// `src/lib/core/crypto/org-scoped-hash.ts` and forwards them here.
+		globalEmailHash: v.optional(v.string()),
+		encryptedName: v.optional(v.string()),
+		postalCode: v.optional(v.string()),
+		stateCode: v.optional(v.string()),
+		congressionalDistrict: v.optional(v.string()),
+		country: v.optional(v.string()),
+		encryptedPhone: v.optional(v.string()),
+		phoneHash: v.optional(v.string()),
+		globalPhoneHash: v.optional(v.string()),
+		source: v.optional(v.string()),
+		encryptedCustomFields: v.optional(v.string()),
+		tagIds: v.optional(v.array(v.id('tags')))
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    // Enforce PII triple coherence at create time. Direct caller paths
-    // (this `create`, `importBatch`, `v1api.createSupporter`) have the
-    // full triple in hand — they can fail closed. The two-phase
-    // `findOrCreateSupporter` + `patchEncryptedPii` pattern used by
-    // `campaigns.submitAction` is exempted because its placeholder
-    // ciphertext state is transient by design; that path is tracked
-    // for a future refactor.
-    const { assertPiiTripleCreate } = await import("./_orgHash");
-    assertPiiTripleCreate(args);
+		// Enforce PII triple coherence at create time. Direct caller paths
+		// (this `create`, `importBatch`, `v1api.createSupporter`) have the
+		// full triple in hand — they can fail closed. The two-phase
+		// `findOrCreateSupporter` + `patchEncryptedPii` pattern used by
+		// `campaigns.submitAction` is exempted because its placeholder
+		// ciphertext state is transient by design; that path is tracked
+		// for a future refactor.
+		assertPiiTripleCreate(args);
 
-    // Dedup check using org-scoped emailHash
-    const existing = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId_emailHash", (idx) =>
-        idx.eq("orgId", org._id).eq("emailHash", args.emailHash),
-      )
-      .first();
+		// Dedup check using org-scoped emailHash
+		const existing = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId_emailHash', (idx) =>
+				idx.eq('orgId', org._id).eq('emailHash', args.emailHash)
+			)
+			.first();
 
-    if (existing) {
-      throw new Error("A supporter with this email already exists");
-    }
+		if (existing) {
+			throw new Error('A supporter with this email already exists');
+		}
 
-    const now = Date.now();
+		const now = Date.now();
 
-    const supporterId = await ctx.db.insert("supporters", {
-      orgId: org._id,
-      encryptedEmail: args.encryptedEmail,
-      emailHash: args.emailHash,
-      // Global hashes for cross-org webhook lookup. Optional —
-      // pre-rollout supporters land without them and are invisible to
-      // SES/TCPA webhooks until the backfill cron fills them in. The
-      // alternative (server-side compute from plaintext) is blocked
-      // by the PII-key elimination — server has only the encrypted blob.
-      globalEmailHash: args.globalEmailHash,
-      encryptedName: args.encryptedName,
-      encryptedPhone: args.encryptedPhone,
-      phoneHash: args.phoneHash,
-      globalPhoneHash: args.globalPhoneHash,
-      postalCode: args.postalCode,
-      country: args.country ?? "US",
-      source: args.source ?? "organic",
-      encryptedCustomFields: args.encryptedCustomFields,
-      verified: false,
-      emailStatus: "subscribed",
-      smsStatus: "none",
-      updatedAt: now,
-    });
+		const supporterId = await ctx.db.insert('supporters', {
+			orgId: org._id,
+			encryptedEmail: args.encryptedEmail,
+			emailHash: args.emailHash,
+			// Global hashes for cross-org webhook lookup. Optional —
+			// pre-rollout supporters land without them and are invisible to
+			// SES/TCPA webhooks until the backfill cron fills them in. The
+			// alternative (server-side compute from plaintext) is blocked
+			// by the PII-key elimination — server has only the encrypted blob.
+			globalEmailHash: args.globalEmailHash,
+			encryptedName: args.encryptedName,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash,
+			globalPhoneHash: args.globalPhoneHash,
+			postalCode: args.postalCode,
+			stateCode: args.stateCode,
+			congressionalDistrict: args.congressionalDistrict,
+			country: args.country ?? 'US',
+			source: args.source ?? 'organic',
+			encryptedCustomFields: args.encryptedCustomFields,
+			verified: false,
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			updatedAt: now
+		});
 
-    // Link tags
-    if (args.tagIds && args.tagIds.length > 0) {
-      for (const tagId of args.tagIds) {
-        const tag = await ctx.db.get(tagId);
-        if (tag && tag.orgId === org._id) {
-          await ctx.db.insert("supporterTags", {
-            supporterId,
-            tagId,
-          });
-        }
-      }
-    }
+		// Link tags
+		if (args.tagIds && args.tagIds.length > 0) {
+			for (const tagId of args.tagIds) {
+				const tag = await ctx.db.get(tagId);
+				if (tag && tag.orgId === org._id) {
+					await ctx.db.insert('supporterTags', {
+						supporterId,
+						tagId
+					});
+				}
+			}
+		}
 
-    // Emit supporter.created event (T9-3). No PII in payload — supporter
-    // identity remains in encrypted columns. Webhook consumers can fetch
-    // the supporter via the v1 API using their API key if they need details.
-    await ctx.runMutation(internal.orgWebhooks.queueEvent, {
-      orgId: org._id,
-      event: "supporter.created",
-      payload: JSON.stringify({
-        supporterId,
-        source: args.source ?? "organic",
-        country: args.country ?? "US",
-        timestamp: now,
-      }),
-    });
+		// Emit supporter.created event (T9-3). No PII in payload — supporter
+		// identity remains in encrypted columns. Webhook consumers can fetch
+		// the supporter via the v1 API using their API key if they need details.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'supporter.created',
+			payload: JSON.stringify({
+				supporterId,
+				source: args.source ?? 'organic',
+				country: args.country ?? 'US',
+				timestamp: now
+			})
+		});
+		await ctx.runMutation(internal.workflows.dispatchTrigger, {
+			orgId: org._id,
+			triggerType: 'supporter_created',
+			supporterId,
+			triggerEvent: {
+				type: 'supporter_created',
+				supporterId,
+				source: args.source ?? 'organic',
+				country: args.country ?? 'US',
+				timestamp: now
+			}
+		});
 
-    // Increment org supporterCount
-    const newCount = (org.supporterCount ?? 0) + 1;
-    const onboarding = org.onboardingState ?? {
-      hasDescription: false,
-      hasIssueDomains: false,
-      hasSupporters: false,
-      hasCampaigns: false,
-      hasTeam: false,
-      hasSentEmail: false,
-    };
+		// Increment org supporterCount
+		const newCount = (org.supporterCount ?? 0) + 1;
+		const onboarding = org.onboardingState ?? {
+			hasDescription: false,
+			hasIssueDomains: false,
+			hasSupporters: false,
+			hasCampaigns: false,
+			hasTeam: false,
+			hasSentEmail: false
+		};
 
-    await ctx.db.patch(org._id, {
-      supporterCount: newCount,
-      onboardingState: { ...onboarding, hasSupporters: true },
-      updatedAt: now,
-    });
+		await ctx.db.patch(org._id, {
+			supporterCount: newCount,
+			onboardingState: { ...onboarding, hasSupporters: true },
+			updatedAt: now
+		});
 
-    return supporterId;
-  },
+		// Maintain the denormalized breakdown counters for the just-created row.
+		// New rows always land subscribed/none with no identity/consent, so the
+		// only non-zero contributions are emailSubscribed + (postal/phone/source
+		// when present). Re-read the org inside the helper to fold onto the count
+		// we just wrote.
+		await applySupporterStatsDelta(ctx, org._id, null, {
+			emailStatus: 'subscribed',
+			smsStatus: 'none',
+			source: args.source ?? 'organic',
+			postalCode: args.postalCode,
+			encryptedPhone: args.encryptedPhone,
+			phoneHash: args.phoneHash
+		});
+
+		return supporterId;
+	}
 });
 
 /**
@@ -456,69 +863,117 @@ export const create = mutation({
  * No server-side encrypt/decrypt.
  */
 export const update = mutation({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-    encryptedEmail: v.optional(v.string()),
-    emailHash: v.optional(v.string()),
-    // Paired global hashes — written when email/phone is updated so
-    // the cross-org webhook lookups keep tracking the new value.
-    globalEmailHash: v.optional(v.string()),
-    encryptedName: v.optional(v.string()),
-    encryptedPhone: v.optional(v.string()),
-    phoneHash: v.optional(v.string()),
-    globalPhoneHash: v.optional(v.string()),
-    postalCode: v.optional(v.string()),
-    country: v.optional(v.string()),
-    encryptedCustomFields: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters'),
+		encryptedEmail: v.optional(v.string()),
+		emailHash: v.optional(v.string()),
+		// Paired global hashes — written when email/phone is updated so
+		// the cross-org webhook lookups keep tracking the new value.
+		globalEmailHash: v.optional(v.string()),
+		encryptedName: v.optional(v.string()),
+		encryptedPhone: v.optional(v.string()),
+		phoneHash: v.optional(v.string()),
+		globalPhoneHash: v.optional(v.string()),
+		postalCode: v.optional(v.string()),
+		stateCode: v.optional(v.string()),
+		congressionalDistrict: v.optional(v.string()),
+		country: v.optional(v.string()),
+		encryptedCustomFields: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
+		const patch: Record<string, unknown> = { updatedAt: Date.now() };
 
-    // Enforce PII coherence on update: each of the three legs
-    // (encryptedX ciphertext, org-scoped hash, global hash) MUST be
-    // patched together or not at all. A hash-pair check that covered
-    // only org-scoped↔global would still let `encryptedEmail` /
-    // `encryptedPhone` be patched in isolation — a caller could rotate
-    // the ciphertext while both hashes stayed pinned to the OLD
-    // plaintext. The ciphertext would then decrypt to a different
-    // identity than the index entries point at; both the org-scoped
-    // lookup and the SES/TCPA webhook lookup would resolve the row by
-    // stale identity. This invariant requires the triple to be set as
-    // a unit.
-    const hasEncEmail = args.encryptedEmail !== undefined;
-    const hasEmailHashUpdate = args.emailHash !== undefined;
-    const hasGlobalEmailUpdate = args.globalEmailHash !== undefined;
-    if (hasEncEmail !== hasEmailHashUpdate || hasEmailHashUpdate !== hasGlobalEmailUpdate) {
-      throw new Error("EMAIL_PII_TRIPLE_REQUIRED");
-    }
-    const hasEncPhone = args.encryptedPhone !== undefined;
-    const hasPhoneHashUpdate = args.phoneHash !== undefined;
-    const hasGlobalPhoneUpdate = args.globalPhoneHash !== undefined;
-    if (hasEncPhone !== hasPhoneHashUpdate || hasPhoneHashUpdate !== hasGlobalPhoneUpdate) {
-      throw new Error("PHONE_PII_TRIPLE_REQUIRED");
-    }
+		// Enforce PII coherence on update: each of the three legs
+		// (encryptedX ciphertext, org-scoped hash, global hash) MUST be
+		// patched together or not at all. A hash-pair check that covered
+		// only org-scoped↔global would still let `encryptedEmail` /
+		// `encryptedPhone` be patched in isolation — a caller could rotate
+		// the ciphertext while both hashes stayed pinned to the OLD
+		// plaintext. The ciphertext would then decrypt to a different
+		// identity than the index entries point at; both the org-scoped
+		// lookup and the SES/TCPA webhook lookup would resolve the row by
+		// stale identity. This invariant requires the triple to be set as
+		// a unit.
+		const hasEncEmail = args.encryptedEmail !== undefined;
+		const hasEmailHashUpdate = args.emailHash !== undefined;
+		const hasGlobalEmailUpdate = args.globalEmailHash !== undefined;
+		if (hasEncEmail !== hasEmailHashUpdate || hasEmailHashUpdate !== hasGlobalEmailUpdate) {
+			throw new Error('EMAIL_PII_TRIPLE_REQUIRED');
+		}
+		const hasEncPhone = args.encryptedPhone !== undefined;
+		const hasPhoneHashUpdate = args.phoneHash !== undefined;
+		const hasGlobalPhoneUpdate = args.globalPhoneHash !== undefined;
+		if (hasEncPhone !== hasPhoneHashUpdate || hasPhoneHashUpdate !== hasGlobalPhoneUpdate) {
+			throw new Error('PHONE_PII_TRIPLE_REQUIRED');
+		}
 
-    if (args.encryptedEmail !== undefined) patch.encryptedEmail = args.encryptedEmail;
-    if (args.emailHash !== undefined) patch.emailHash = args.emailHash;
-    if (args.globalEmailHash !== undefined) patch.globalEmailHash = args.globalEmailHash;
-    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
-    if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
-    if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
-    if (args.globalPhoneHash !== undefined) patch.globalPhoneHash = args.globalPhoneHash;
-    if (args.postalCode !== undefined) patch.postalCode = args.postalCode;
-    if (args.country !== undefined) patch.country = args.country;
-    if (args.encryptedCustomFields !== undefined) patch.encryptedCustomFields = args.encryptedCustomFields;
+		if (args.encryptedEmail !== undefined) patch.encryptedEmail = args.encryptedEmail;
+		if (args.emailHash !== undefined) patch.emailHash = args.emailHash;
+		if (args.globalEmailHash !== undefined) patch.globalEmailHash = args.globalEmailHash;
+		if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
+		if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
+		if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
+		if (args.globalPhoneHash !== undefined) patch.globalPhoneHash = args.globalPhoneHash;
+		if (args.postalCode !== undefined) patch.postalCode = args.postalCode;
+		if (args.stateCode !== undefined) patch.stateCode = args.stateCode;
+		if (args.congressionalDistrict !== undefined)
+			patch.congressionalDistrict = args.congressionalDistrict;
+		if (args.country !== undefined) patch.country = args.country;
+		if (args.encryptedCustomFields !== undefined)
+			patch.encryptedCustomFields = args.encryptedCustomFields;
 
-    await ctx.db.patch(args.supporterId, patch);
-  },
+		await ctx.db.patch(args.supporterId, patch);
+
+		// postalCode / phone are counted breakdown fields and can change here
+		// (e.g. a supporter gains an address or phone on edit). Apply a
+		// transition delta from the pre-patch row to the post-patch row so
+		// postalResolved / phonePresent stay exact. The merged `after` view
+		// reuses the existing value for any field this update didn't touch.
+		await applySupporterStatsDelta(
+			ctx,
+			org._id,
+			supporter as CountableSupporter,
+			{
+				emailStatus: supporter.emailStatus,
+				smsStatus: supporter.smsStatus,
+				source: supporter.source,
+				postalCode:
+					'postalCode' in patch ? (patch.postalCode as string | undefined) : supporter.postalCode,
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash,
+				identityCommitment: supporter.identityCommitment,
+				verified: supporter.verified,
+				emailConsentSource: supporter.emailConsentSource,
+				emailConsentedAt: supporter.emailConsentedAt,
+				emailConsentText: supporter.emailConsentText,
+				smsConsentSource: supporter.smsConsentSource,
+				smsConsentedAt: supporter.smsConsentedAt,
+				smsConsentText: supporter.smsConsentText
+			}
+		);
+
+		// Emit supporter.updated (A4) once per edit via this canonical update
+		// path — NOT from tag/sms sub-mutations, which would over-emit. No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'supporter.updated',
+			payload: JSON.stringify({
+				supporterId: args.supporterId,
+				timestamp: Date.now()
+			})
+		});
+	}
 });
 
 // =============================================================================
@@ -527,37 +982,55 @@ export const update = mutation({
 
 /** @deprecated Migrate callers to use supporters.create mutation with pre-encrypted blobs */
 export const patchEncryptedPii = internalMutation({
-  args: {
-    supporterId: v.id("supporters"),
-    encryptedEmail: v.string(),
-    encryptedName: v.optional(v.string()),
-    encryptedPhone: v.optional(v.string()),
-    phoneHash: v.optional(v.string()),
-    // Paired global hashes for cross-org webhook lookup (SES
-    // bounce/complaint, TCPA STOP/START). Callers
-    // (campaigns.submitAction) compute them alongside the org-scoped
-    // hashes.
-    globalEmailHash: v.optional(v.string()),
-    globalPhoneHash: v.optional(v.string()),
-    encryptedCustomFields: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter) throw new Error("Supporter not found");
+	args: {
+		supporterId: v.id('supporters'),
+		encryptedEmail: v.string(),
+		encryptedName: v.optional(v.string()),
+		encryptedPhone: v.optional(v.string()),
+		phoneHash: v.optional(v.string()),
+		// Paired global hashes for cross-org webhook lookup (SES
+		// bounce/complaint, TCPA STOP/START). Callers
+		// (campaigns.submitAction) compute them alongside the org-scoped
+		// hashes.
+		globalEmailHash: v.optional(v.string()),
+		globalPhoneHash: v.optional(v.string()),
+		encryptedCustomFields: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter) throw new Error('Supporter not found');
 
-    const patch: Record<string, unknown> = {
-      encryptedEmail: args.encryptedEmail,
-      updatedAt: Date.now(),
-    };
-    if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
-    if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
-    if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
-    if (args.globalEmailHash !== undefined) patch.globalEmailHash = args.globalEmailHash;
-    if (args.globalPhoneHash !== undefined) patch.globalPhoneHash = args.globalPhoneHash;
-    if (args.encryptedCustomFields !== undefined) patch.encryptedCustomFields = args.encryptedCustomFields;
+		const patch: Record<string, unknown> = {
+			encryptedEmail: args.encryptedEmail,
+			updatedAt: Date.now()
+		};
+		if (args.encryptedName !== undefined) patch.encryptedName = args.encryptedName;
+		if (args.encryptedPhone !== undefined) patch.encryptedPhone = args.encryptedPhone;
+		if (args.phoneHash !== undefined) patch.phoneHash = args.phoneHash;
+		if (args.globalEmailHash !== undefined) patch.globalEmailHash = args.globalEmailHash;
+		if (args.globalPhoneHash !== undefined) patch.globalPhoneHash = args.globalPhoneHash;
+		if (args.encryptedCustomFields !== undefined)
+			patch.encryptedCustomFields = args.encryptedCustomFields;
 
-    await ctx.db.patch(args.supporterId, patch);
-  },
+		await ctx.db.patch(args.supporterId, patch);
+
+		// encryptedPhone / phoneHash can change here (operator repair path), so
+		// keep phonePresent exact via a transition delta. All other counted
+		// fields are unchanged by this mutation.
+		await applySupporterStatsDelta(
+			ctx,
+			supporter.orgId,
+			supporter as CountableSupporter,
+			{
+				...(supporter as CountableSupporter),
+				encryptedPhone:
+					'encryptedPhone' in patch
+						? (patch.encryptedPhone as string | undefined)
+						: supporter.encryptedPhone,
+				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash
+			}
+		);
+	}
 });
 
 // =============================================================================
@@ -568,154 +1041,188 @@ export const patchEncryptedPii = internalMutation({
  * Delete a supporter + cleanup tags + decrement org counter.
  */
 export const remove = mutation({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    // Delete all tag links for this supporter
-    const tagLinks = await ctx.db
-      .query("supporterTags")
-      .withIndex("by_supporterId", (idx) =>
-        idx.eq("supporterId", args.supporterId),
-      )
-      .collect();
+		// Delete all tag links for this supporter
+		const tagLinks = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', args.supporterId))
+			.collect();
 
-    for (const link of tagLinks) {
-      await ctx.db.delete(link._id);
-    }
+		for (const link of tagLinks) {
+			await ctx.db.delete(link._id);
+		}
 
-    // Delete the supporter
-    await ctx.db.delete(args.supporterId);
+		// Delete the supporter
+		await ctx.db.delete(args.supporterId);
 
-    // Decrement org supporterCount
-    const newCount = Math.max((org.supporterCount ?? 1) - 1, 0);
-    await ctx.db.patch(org._id, {
-      supporterCount: newCount,
-      updatedAt: Date.now(),
-    });
+		// Decrement org supporterCount
+		const newCount = Math.max((org.supporterCount ?? 1) - 1, 0);
+		await ctx.db.patch(org._id, {
+			supporterCount: newCount,
+			updatedAt: Date.now()
+		});
 
-    return { deleted: true };
-  },
+		// Decrement the breakdown counters for the deleted row.
+		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, null);
+
+		// Emit supporter.deleted (A4) — only the user-facing delete is a
+		// subscriber-visible deletion (NOT deleteStrandedPlaceholder). No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'supporter.deleted',
+			payload: JSON.stringify({
+				supporterId: args.supporterId,
+				timestamp: Date.now()
+			})
+		});
+
+		return { deleted: true };
+	}
 });
 
 /**
  * Add a tag to a supporter. Idempotent (upsert-like).
  */
 export const addTag = mutation({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-    tagId: v.id("tags"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters'),
+		tagId: v.id('tags')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    // Verify supporter belongs to org
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		// Verify supporter belongs to org
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    // Verify tag belongs to org
-    const tag = await ctx.db.get(args.tagId);
-    if (!tag || tag.orgId !== org._id) {
-      throw new Error("Tag not found");
-    }
+		// Verify tag belongs to org
+		const tag = await ctx.db.get(args.tagId);
+		if (!tag || tag.orgId !== org._id) {
+			throw new Error('Tag not found');
+		}
 
-    // Check if link already exists (idempotent)
-    const existing = await ctx.db
-      .query("supporterTags")
-      .withIndex("by_supporterId_tagId", (idx) =>
-        idx.eq("supporterId", args.supporterId).eq("tagId", args.tagId),
-      )
-      .first();
+		// Check if link already exists (idempotent)
+		const existing = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_supporterId_tagId', (idx) =>
+				idx.eq('supporterId', args.supporterId).eq('tagId', args.tagId)
+			)
+			.first();
 
-    if (existing) return existing._id;
+		if (existing) return existing._id;
 
-    return await ctx.db.insert("supporterTags", {
-      supporterId: args.supporterId,
-      tagId: args.tagId,
-    });
-  },
+		const supporterTagId = await ctx.db.insert('supporterTags', {
+			supporterId: args.supporterId,
+			tagId: args.tagId
+		});
+		await ctx.runMutation(internal.workflows.dispatchTrigger, {
+			orgId: org._id,
+			triggerType: 'tag_added',
+			supporterId: args.supporterId,
+			triggerEvent: {
+				type: 'tag_added',
+				supporterId: args.supporterId,
+				tagId: args.tagId,
+				tagName: tag.name,
+				timestamp: Date.now()
+			}
+		});
+
+		return supporterTagId;
+	}
 });
 
 /**
  * Remove a tag from a supporter.
  */
 export const removeTag = mutation({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-    tagId: v.id("tags"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters'),
+		tagId: v.id('tags')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    // Verify supporter belongs to org
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		// Verify supporter belongs to org
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    const link = await ctx.db
-      .query("supporterTags")
-      .withIndex("by_supporterId_tagId", (idx) =>
-        idx.eq("supporterId", args.supporterId).eq("tagId", args.tagId),
-      )
-      .first();
+		const link = await ctx.db
+			.query('supporterTags')
+			.withIndex('by_supporterId_tagId', (idx) =>
+				idx.eq('supporterId', args.supporterId).eq('tagId', args.tagId)
+			)
+			.first();
 
-    if (link) {
-      await ctx.db.delete(link._id);
-    }
+		if (link) {
+			await ctx.db.delete(link._id);
+		}
 
-    return { removed: true };
-  },
+		return { removed: true };
+	}
 });
 
 /**
  * Update SMS status on a supporter. Enforces STOP keyword opt-out protection.
  */
 export const updateSmsStatus = mutation({
-  args: {
-    orgSlug: v.string(),
-    supporterId: v.id("supporters"),
-    smsStatus: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		supporterId: v.id('supporters'),
+		smsStatus: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    const ALLOWED_STATUSES = ["none", "subscribed", "unsubscribed"];
-    if (!ALLOWED_STATUSES.includes(args.smsStatus)) {
-      throw new Error("Invalid SMS status. Cannot manually set to 'stopped'.");
-    }
+		const ALLOWED_STATUSES = ['none', 'subscribed', 'unsubscribed'];
+		if (!ALLOWED_STATUSES.includes(args.smsStatus)) {
+			throw new Error("Invalid SMS status. Cannot manually set to 'stopped'.");
+		}
 
-    const supporter = await ctx.db.get(args.supporterId);
-    if (!supporter || supporter.orgId !== org._id) {
-      throw new Error("Supporter not found");
-    }
+		const supporter = await ctx.db.get(args.supporterId);
+		if (!supporter || supporter.orgId !== org._id) {
+			throw new Error('Supporter not found');
+		}
 
-    // Cannot override a STOP keyword opt-out manually
-    if (supporter.smsStatus === "stopped") {
-      throw new Error(
-        "Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.",
-      );
-    }
+		// Cannot override a STOP keyword opt-out manually
+		if (supporter.smsStatus === 'stopped') {
+			throw new Error(
+				'Cannot override STOP keyword opt-out. Supporter must text START to re-subscribe.'
+			);
+		}
 
-    await ctx.db.patch(args.supporterId, {
-      smsStatus: args.smsStatus,
-      updatedAt: Date.now(),
-    });
+		if (supporter.smsStatus === args.smsStatus) {
+			return { updated: true };
+		}
 
-    return { updated: true };
-  },
+		const after = { ...supporter, smsStatus: args.smsStatus };
+		await ctx.db.patch(args.supporterId, {
+			smsStatus: args.smsStatus,
+			updatedAt: Date.now()
+		});
+		// This manual editor is a status writer like the webhook paths; without
+		// the delta the smsSubscribed/smsUnsubscribed/smsNone buckets drift.
+		await applySupporterStatsDelta(ctx, org._id, supporter, after);
+
+		return { updated: true };
+	}
 });
 
 /**
@@ -727,17 +1234,17 @@ export const updateSmsStatus = mutation({
  * as a supporter-membership oracle).
  */
 export const getEmailStatus = query({
-  args: { _secret: v.string(), supporterId: v.id("supporters") },
-  handler: async (ctx, { _secret, supporterId }) => {
-    requireInternalSecret(_secret);
-    const supporter = await ctx.db.get(supporterId);
-    if (!supporter) return null;
-    return {
-      _id: supporter._id,
-      orgId: supporter.orgId,
-      emailStatus: supporter.emailStatus,
-    };
-  },
+	args: { _secret: v.string(), supporterId: v.id('supporters') },
+	handler: async (ctx, { _secret, supporterId }) => {
+		requireInternalSecret(_secret);
+		const supporter = await ctx.db.get(supporterId);
+		if (!supporter) return null;
+		return {
+			_id: supporter._id,
+			orgId: supporter.orgId,
+			emailStatus: supporter.emailStatus
+		};
+	}
 });
 
 /**
@@ -748,17 +1255,23 @@ export const getEmailStatus = query({
  * an opt-out without the email-recipient's HMAC token.
  */
 export const unsubscribe = mutation({
-  args: { _secret: v.string(), supporterId: v.id("supporters") },
-  handler: async (ctx, { _secret, supporterId }) => {
-    requireInternalSecret(_secret);
-    const supporter = await ctx.db.get(supporterId);
-    if (!supporter) throw new Error("Supporter not found");
-    await ctx.db.patch(supporterId, {
-      emailStatus: "unsubscribed",
-      updatedAt: Date.now(),
-    });
-    return { success: true };
-  },
+	args: { _secret: v.string(), supporterId: v.id('supporters') },
+	handler: async (ctx, { _secret, supporterId }) => {
+		requireInternalSecret(_secret);
+		const supporter = await ctx.db.get(supporterId);
+		if (!supporter) throw new Error('Supporter not found');
+		await ctx.db.patch(supporterId, {
+			emailStatus: 'unsubscribed',
+			updatedAt: Date.now()
+		});
+		// emailStatus transition — move the supporter out of its old email
+		// bucket and into 'unsubscribed' in the breakdown counters.
+		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+			...(supporter as CountableSupporter),
+			emailStatus: 'unsubscribed'
+		});
+		return { success: true };
+	}
 });
 
 /**
@@ -766,26 +1279,26 @@ export const unsubscribe = mutation({
  * Creates any missing tags.
  */
 export const ensureTags = mutation({
-  args: { slug: v.string(), tagNames: v.array(v.string()) },
-  handler: async (ctx, { slug, tagNames }) => {
-    const { org } = await requireOrgRole(ctx, slug, "editor");
+	args: { slug: v.string(), tagNames: v.array(v.string()) },
+	handler: async (ctx, { slug, tagNames }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
 
-    const tagMap: Record<string, string> = {};
-    for (const name of tagNames) {
-      // Check existing
-      const existing = await ctx.db
-        .query("tags")
-        .withIndex("by_orgId_name", (idx) => idx.eq("orgId", org._id).eq("name", name))
-        .first();
-      if (existing) {
-        tagMap[name] = existing._id;
-      } else {
-        const id = await ctx.db.insert("tags", { orgId: org._id, name });
-        tagMap[name] = id;
-      }
-    }
-    return { tagMap, tagsCreated: tagNames.length - Object.keys(tagMap).length };
-  },
+		const tagMap: Record<string, string> = {};
+		for (const name of tagNames) {
+			// Check existing
+			const existing = await ctx.db
+				.query('tags')
+				.withIndex('by_orgId_name', (idx) => idx.eq('orgId', org._id).eq('name', name))
+				.first();
+			if (existing) {
+				tagMap[name] = existing._id;
+			} else {
+				const id = await ctx.db.insert('tags', { orgId: org._id, name });
+				tagMap[name] = id;
+			}
+		}
+		return { tagMap, tagsCreated: tagNames.length - Object.keys(tagMap).length };
+	}
 });
 
 /**
@@ -801,184 +1314,282 @@ export const ensureTags = mutation({
  * key-unseal calls via the public action surface.
  */
 export const requireImportAuth = internalQuery({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }): Promise<{ ok: true }> => {
-    await requireOrgRole(ctx, slug, "editor");
-    return { ok: true };
-  },
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }): Promise<{ ok: true }> => {
+		await requireOrgRole(ctx, slug, 'editor');
+		return { ok: true };
+	}
 });
 
 export const importBatch = mutation({
-  args: {
-    slug: v.string(),
-    supporters: v.array(
-      v.object({
-        encryptedEmail: v.string(),
-        emailHash: v.string(),
-        // Global hashes paired with org-scoped hashes for cross-org
-        // webhook lookup (SES bounce/complaint, TCPA STOP/START).
-        globalEmailHash: v.optional(v.string()),
-        encryptedName: v.optional(v.string()),
-        postalCode: v.optional(v.string()),
-        encryptedPhone: v.optional(v.string()),
-        phoneHash: v.optional(v.string()),
-        globalPhoneHash: v.optional(v.string()),
-        country: v.optional(v.string()),
-        emailStatus: v.string(),
-        smsStatus: v.string(),
-        tagIds: v.array(v.string()),
-      }),
-    ),
-  },
-  handler: async (ctx, { slug, supporters }) => {
-    const { org } = await requireOrgRole(ctx, slug, "editor");
-    // Apply the PII triple invariant before the batch insert loop so
-    // a partially-coherent row is rejected before any side effects.
-    // The bulk-import action that wraps this mutation uses the
-    // two-phase placeholder pattern (encryptedEmail="" + populated
-    // hashes, then a follow-up patchEncryptedPii lands real ciphertext)
-    // — pass `allowPlaceholder: true` so the helper admits that
-    // transient state. Public-facing mutations (`supporters.create`,
-    // `v1api.createSupporter`) pass false to reject placeholder rows
-    // from being minted by direct callers.
-    const { assertPiiTripleCreate } = await import("./_orgHash");
-    for (const s of supporters) {
-      assertPiiTripleCreate({ ...s, allowPlaceholder: true });
-    }
-    let imported = 0;
-    let updated = 0;
-    let skipped = 0;
-    const errors: string[] = [];
+	args: {
+		slug: v.string(),
+		supporters: v.array(
+			v.object({
+				encryptedEmail: v.string(),
+				emailHash: v.string(),
+				// Global hashes paired with org-scoped hashes for cross-org
+				// webhook lookup (SES bounce/complaint, TCPA STOP/START).
+				globalEmailHash: v.optional(v.string()),
+				encryptedName: v.optional(v.string()),
+				postalCode: v.optional(v.string()),
+				stateCode: v.optional(v.string()),
+				congressionalDistrict: v.optional(v.string()),
+				encryptedPhone: v.optional(v.string()),
+				phoneHash: v.optional(v.string()),
+				globalPhoneHash: v.optional(v.string()),
+				country: v.optional(v.string()),
+				emailStatus: v.string(),
+				smsStatus: v.string(),
+				emailConsentSource: v.optional(v.string()),
+				emailConsentedAt: v.optional(v.number()),
+				emailConsentText: v.optional(v.string()),
+				smsConsentSource: v.optional(v.string()),
+				smsConsentedAt: v.optional(v.number()),
+				smsConsentText: v.optional(v.string()),
+				tagIds: v.array(v.string()),
+				encryptedCustomFields: v.optional(v.string()),
+				source: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, { slug, supporters }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		// Apply the PII triple invariant before the batch insert loop so
+		// a partially-coherent row is rejected before any side effects.
+		// The bulk-import action that wraps this mutation uses the
+		// two-phase placeholder pattern (encryptedEmail="" + populated
+		// hashes, then a follow-up patchEncryptedPii lands real ciphertext)
+		// — pass `allowPlaceholder: true` so the helper admits that
+		// transient state. Public-facing mutations (`supporters.create`,
+		// `v1api.createSupporter`) pass false to reject placeholder rows
+		// from being minted by direct callers.
+		for (const s of supporters) {
+			assertPiiTripleCreate({ ...s, allowPlaceholder: true });
+		}
+		let imported = 0;
+		let updated = 0;
+		let skipped = 0;
+		const errors: string[] = [];
+		// Breakdown-counter deltas accumulated across the batch and folded into
+		// the org's supporterStats once after the loop (one org write, not one
+		// per row). Includes both new-row creates and existing-row transitions.
+		const statsDeltas: Array<{
+			before: CountableSupporter | null;
+			after: CountableSupporter | null;
+		}> = [];
 
-    // Pre-validate every tagId belongs to THIS org. Accepting
-    // `tagIds: v.array(v.string())` with a `tagId as any` cast at
-    // insert time would let an editor pass tagIds from ANOTHER org
-    // and create supporterTags rows linking their supporters to
-    // foreign tags (tag-graph corruption across org boundaries with
-    // no audit). Collect all unique tagIds in the batch + verify each
-    // belongs to org._id BEFORE the supporter insert loop. Mismatch
-    // throws (refuses the entire batch rather than silently skipping —
-    // invalid tag refs should be a hard error, not a
-    // count-then-continue).
-    const allTagIds = new Set<string>();
-    for (const s of supporters) {
-      for (const t of s.tagIds) allTagIds.add(t);
-    }
-    const validTagIds = new Set<string>();
-    for (const rawTagId of allTagIds) {
-      const normalizedId = ctx.db.normalizeId("tags", rawTagId);
-      if (!normalizedId) {
-        throw new Error(`TAG_ID_INVALID:${rawTagId}`);
-      }
-      const tag = await ctx.db.get(normalizedId);
-      if (!tag) {
-        throw new Error(`TAG_NOT_FOUND:${rawTagId}`);
-      }
-      if (String(tag.orgId) !== String(org._id)) {
-        throw new Error(`TAG_CROSS_ORG:${rawTagId}`);
-      }
-      validTagIds.add(rawTagId);
-    }
+		// Pre-validate every tagId belongs to THIS org. Accepting
+		// `tagIds: v.array(v.string())` with a `tagId as any` cast at
+		// insert time would let an editor pass tagIds from ANOTHER org
+		// and create supporterTags rows linking their supporters to
+		// foreign tags (tag-graph corruption across org boundaries with
+		// no audit). Collect all unique tagIds in the batch + verify each
+		// belongs to org._id BEFORE the supporter insert loop. Mismatch
+		// throws (refuses the entire batch rather than silently skipping —
+		// invalid tag refs should be a hard error, not a
+		// count-then-continue).
+		const allTagIds = new Set<string>();
+		for (const s of supporters) {
+			for (const t of s.tagIds) allTagIds.add(t);
+		}
+		const validTagIds = new Set<string>();
+		for (const rawTagId of allTagIds) {
+			const normalizedId = ctx.db.normalizeId('tags', rawTagId);
+			if (!normalizedId) {
+				throw new Error(`TAG_ID_INVALID:${rawTagId}`);
+			}
+			const tag = await ctx.db.get(normalizedId);
+			if (!tag) {
+				throw new Error(`TAG_NOT_FOUND:${rawTagId}`);
+			}
+			if (String(tag.orgId) !== String(org._id)) {
+				throw new Error(`TAG_CROSS_ORG:${rawTagId}`);
+			}
+			validTagIds.add(rawTagId);
+		}
 
-    for (let i = 0; i < supporters.length; i++) {
-      const s = supporters[i];
-      try {
-        // Check if supporter exists by email hash
-        const existing = await ctx.db
-          .query("supporters")
-          .withIndex("by_orgId_emailHash", (idx) =>
-            idx.eq("orgId", org._id).eq("emailHash", s.emailHash),
-          )
-          .first();
+		for (let i = 0; i < supporters.length; i++) {
+			const s = supporters[i];
+			try {
+				// Check if supporter exists by email hash
+				const existing = await ctx.db
+					.query('supporters')
+					.withIndex('by_orgId_emailHash', (idx) =>
+						idx.eq('orgId', org._id).eq('emailHash', s.emailHash)
+					)
+					.first();
 
-        if (existing) {
-          // Update: only fill in null fields
-          const patch: Record<string, unknown> = {};
-          if (s.encryptedName && !existing.encryptedName) patch.encryptedName = s.encryptedName;
-          if (s.postalCode && !existing.postalCode) patch.postalCode = s.postalCode;
-          if (s.encryptedPhone && !existing.encryptedPhone) patch.encryptedPhone = s.encryptedPhone;
-          if (s.phoneHash && !existing.phoneHash) patch.phoneHash = s.phoneHash;
-          // Backfill globalEmailHash / globalPhoneHash on existing rows
-          // so SES + TCPA webhooks can find them. The
-          // `existing.global*Hash` guard preserves the "only fill in
-          // null fields" semantic — a previously-populated hash isn't
-          // overwritten (defends against caller-supplied hashes from a
-          // future code path with different normalization).
-          if (s.globalEmailHash && !existing.globalEmailHash) patch.globalEmailHash = s.globalEmailHash;
-          if (s.globalPhoneHash && !existing.globalPhoneHash) patch.globalPhoneHash = s.globalPhoneHash;
-          if (s.country && !existing.country) patch.country = s.country;
+				if (existing) {
+					// Update: only fill in null fields
+					const patch: Record<string, unknown> = {};
+					if (s.encryptedName && !existing.encryptedName) patch.encryptedName = s.encryptedName;
+					if (s.postalCode && !existing.postalCode) patch.postalCode = s.postalCode;
+					if (s.stateCode && !existing.stateCode) patch.stateCode = s.stateCode;
+					if (s.congressionalDistrict && !existing.congressionalDistrict)
+						patch.congressionalDistrict = s.congressionalDistrict;
+					if (s.encryptedPhone && !existing.encryptedPhone) patch.encryptedPhone = s.encryptedPhone;
+					if (s.phoneHash && !existing.phoneHash) patch.phoneHash = s.phoneHash;
+					// Backfill globalEmailHash / globalPhoneHash on existing rows
+					// so SES + TCPA webhooks can find them. The
+					// `existing.global*Hash` guard preserves the "only fill in
+					// null fields" semantic — a previously-populated hash isn't
+					// overwritten (defends against caller-supplied hashes from a
+					// future code path with different normalization).
+					if (s.globalEmailHash && !existing.globalEmailHash)
+						patch.globalEmailHash = s.globalEmailHash;
+					if (s.globalPhoneHash && !existing.globalPhoneHash)
+						patch.globalPhoneHash = s.globalPhoneHash;
+					if (s.country && !existing.country) patch.country = s.country;
+					if (s.encryptedCustomFields && !existing.encryptedCustomFields)
+						patch.encryptedCustomFields = s.encryptedCustomFields;
+					const nextEmailStatus = stricterStatus(
+						existing.emailStatus,
+						s.emailStatus,
+						EMAIL_STATUS_RANK
+					);
+					if (nextEmailStatus !== existing.emailStatus) patch.emailStatus = nextEmailStatus;
+					const nextSmsStatus = stricterStatus(existing.smsStatus, s.smsStatus, SMS_STATUS_RANK);
+					if (nextSmsStatus !== existing.smsStatus) patch.smsStatus = nextSmsStatus;
+					if (s.emailConsentSource && !existing.emailConsentSource)
+						patch.emailConsentSource = s.emailConsentSource;
+					if (s.emailConsentedAt && !existing.emailConsentedAt)
+						patch.emailConsentedAt = s.emailConsentedAt;
+					if (s.emailConsentText && !existing.emailConsentText)
+						patch.emailConsentText = s.emailConsentText;
+					if (s.smsConsentSource && !existing.smsConsentSource)
+						patch.smsConsentSource = s.smsConsentSource;
+					if (s.smsConsentedAt && !existing.smsConsentedAt) patch.smsConsentedAt = s.smsConsentedAt;
+					if (s.smsConsentText && !existing.smsConsentText) patch.smsConsentText = s.smsConsentText;
 
-          if (Object.keys(patch).length > 0) {
-            patch.updatedAt = Date.now();
-            await ctx.db.patch(existing._id, patch);
-          }
+					if (Object.keys(patch).length > 0) {
+						patch.updatedAt = Date.now();
+						await ctx.db.patch(existing._id, patch);
+						// Import can fill in postal/phone/consent and apply a
+						// stricter email/sms status on an existing row — all
+						// counted. Queue a transition delta from the pre-patch row
+						// to the merged post-patch row; folded into the org once
+						// after the loop so a 5000-row import does one org write.
+						statsDeltas.push({
+							before: existing as CountableSupporter,
+							after: { ...(existing as CountableSupporter), ...(patch as Partial<CountableSupporter>) }
+						});
+					}
 
-          // Add tags (skip duplicates). tagId was pre-validated against
-          // org._id above so the `as any` cast can't reach cross-org
-          // tag rows.
-          for (const tagId of s.tagIds) {
-            const normalizedTagId = ctx.db.normalizeId("tags", tagId)!;
-            const existingTag = await ctx.db
-              .query("supporterTags")
-              .withIndex("by_supporterId_tagId", (idx) =>
-                idx.eq("supporterId", existing._id).eq("tagId", normalizedTagId),
-              )
-              .first();
-            if (!existingTag) {
-              await ctx.db.insert("supporterTags", {
-                supporterId: existing._id,
-                tagId: normalizedTagId,
-              });
-            }
-          }
-          updated++;
-        } else {
-          // Create new supporter
-          const id = await ctx.db.insert("supporters", {
-            orgId: org._id,
-            encryptedName: s.encryptedName,
-            postalCode: s.postalCode ?? undefined,
-            encryptedPhone: s.encryptedPhone,
-            phoneHash: s.phoneHash,
-            // Paired global hashes for cross-org webhook lookup.
-            globalEmailHash: s.globalEmailHash,
-            globalPhoneHash: s.globalPhoneHash,
-            country: s.country ?? undefined,
-            emailStatus: s.emailStatus,
-            smsStatus: s.smsStatus,
-            verified: false,
-            source: "csv",
-            encryptedEmail: s.encryptedEmail,
-            emailHash: s.emailHash,
-            updatedAt: Date.now(),
-          });
+					// Add tags (skip duplicates). tagId was pre-validated against
+					// org._id above so the `as any` cast can't reach cross-org
+					// tag rows.
+					for (const tagId of s.tagIds) {
+						const normalizedTagId = ctx.db.normalizeId('tags', tagId)!;
+						const existingTag = await ctx.db
+							.query('supporterTags')
+							.withIndex('by_supporterId_tagId', (idx) =>
+								idx.eq('supporterId', existing._id).eq('tagId', normalizedTagId)
+							)
+							.first();
+						if (!existingTag) {
+							await ctx.db.insert('supporterTags', {
+								supporterId: existing._id,
+								tagId: normalizedTagId
+							});
+						}
+					}
+					updated++;
+				} else {
+					// Create new supporter
+					const id = await ctx.db.insert('supporters', {
+						orgId: org._id,
+						encryptedName: s.encryptedName,
+						postalCode: s.postalCode ?? undefined,
+						stateCode: s.stateCode ?? undefined,
+						congressionalDistrict: s.congressionalDistrict ?? undefined,
+						encryptedPhone: s.encryptedPhone,
+						phoneHash: s.phoneHash,
+						// Paired global hashes for cross-org webhook lookup.
+						globalEmailHash: s.globalEmailHash,
+						globalPhoneHash: s.globalPhoneHash,
+						country: s.country ?? undefined,
+						emailStatus: s.emailStatus,
+						smsStatus: s.smsStatus,
+						emailConsentSource: s.emailConsentSource,
+						emailConsentedAt: s.emailConsentedAt,
+						emailConsentText: s.emailConsentText,
+						smsConsentSource: s.smsConsentSource,
+						smsConsentedAt: s.smsConsentedAt,
+						smsConsentText: s.smsConsentText,
+						verified: false,
+						source: s.source ?? 'csv',
+						encryptedEmail: s.encryptedEmail,
+						emailHash: s.emailHash,
+						encryptedCustomFields: s.encryptedCustomFields,
+						updatedAt: Date.now()
+					});
 
-          // Add tags
-          for (const tagId of s.tagIds) {
-            const normalizedTagId = ctx.db.normalizeId("tags", tagId)!;
-            await ctx.db.insert("supporterTags", {
-              supporterId: id,
-              tagId: normalizedTagId,
-            });
-          }
-          imported++;
-        }
-      } catch (err) {
-        // Log the per-row error so an operator can see what failed and
-        // why (Convex schema violation, already-deleted tag/supporter,
-        // etc.). A silent `} catch { skipped++; }` would make failures
-        // invisible. Still count the row as skipped so the batch
-        // returns aggregate progress rather than throwing on first
-        // failure (cohorts can have one bad row).
-        skipped++;
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`row[${i}]: ${msg}`);
-        console.warn(`[importBatch] Row ${i} skipped (slug=${slug}): ${msg}`);
-      }
-    }
+					// Add tags
+					for (const tagId of s.tagIds) {
+						const normalizedTagId = ctx.db.normalizeId('tags', tagId)!;
+						await ctx.db.insert('supporterTags', {
+							supporterId: id,
+							tagId: normalizedTagId
+						});
+					}
+					imported++;
+					// Queue a create delta for the new row's breakdown counters.
+					statsDeltas.push({
+						before: null,
+						after: {
+							emailStatus: s.emailStatus,
+							smsStatus: s.smsStatus,
+							source: s.source ?? 'csv',
+							postalCode: s.postalCode ?? undefined,
+							encryptedPhone: s.encryptedPhone,
+							phoneHash: s.phoneHash,
+							emailConsentSource: s.emailConsentSource,
+							emailConsentedAt: s.emailConsentedAt,
+							emailConsentText: s.emailConsentText,
+							smsConsentSource: s.smsConsentSource,
+							smsConsentedAt: s.smsConsentedAt,
+							smsConsentText: s.smsConsentText
+						}
+					});
+				}
+			} catch (err) {
+				// Log the per-row error so an operator can see what failed and
+				// why (Convex schema violation, already-deleted tag/supporter,
+				// etc.). A silent `} catch { skipped++; }` would make failures
+				// invisible. Still count the row as skipped so the batch
+				// returns aggregate progress rather than throwing on first
+				// failure (cohorts can have one bad row).
+				skipped++;
+				const msg = err instanceof Error ? err.message : String(err);
+				errors.push(`row[${i}]: ${msg}`);
+				console.warn(`[importBatch] Row ${i} skipped (slug=${slug}): ${msg}`);
+			}
+		}
 
-    return { imported, updated, skipped, errors };
-  },
+		// Fold all breakdown-counter deltas into the org once, and advance
+		// supporterCount by the new-row count. supporterCount was previously not
+		// maintained on this import path — bringing it forward here keeps total
+		// and the breakdown coherent (stats buckets must never exceed total).
+		if (imported > 0) {
+			const onboarding = org.onboardingState ?? {
+				hasDescription: false,
+				hasIssueDomains: false,
+				hasSupporters: false,
+				hasCampaigns: false,
+				hasTeam: false,
+				hasSentEmail: false
+			};
+			await ctx.db.patch(org._id, {
+				supporterCount: (org.supporterCount ?? 0) + imported,
+				onboardingState: { ...onboarding, hasSupporters: true },
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDeltaBatch(ctx, org._id, statsDeltas);
+
+		return { imported, updated, skipped, errors };
+	}
 });
 
 /**
@@ -987,130 +1598,174 @@ export const importBatch = mutation({
  * then delegates to importBatch mutation.
  */
 export const importWithEncryption = action({
-  args: {
-    slug: v.string(),
-    supporters: v.array(
-      v.object({
-        email: v.string(),
-        name: v.optional(v.string()),
-        phone: v.optional(v.string()),
-        postalCode: v.optional(v.string()),
-        country: v.optional(v.string()),
-        emailStatus: v.string(),
-        smsStatus: v.string(),
-        tagIds: v.array(v.string()),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => {
-    // Auth check first — before any key operations
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+	args: {
+		slug: v.string(),
+		supporters: v.array(
+			v.object({
+				email: v.string(),
+				name: v.optional(v.string()),
+				phone: v.optional(v.string()),
+				postalCode: v.optional(v.string()),
+				stateCode: v.optional(v.string()),
+				congressionalDistrict: v.optional(v.string()),
+				country: v.optional(v.string()),
+				emailStatus: v.string(),
+				smsStatus: v.string(),
+				emailConsentSource: v.optional(v.string()),
+				emailConsentedAt: v.optional(v.number()),
+				emailConsentText: v.optional(v.string()),
+				smsConsentSource: v.optional(v.string()),
+				smsConsentedAt: v.optional(v.number()),
+				smsConsentText: v.optional(v.string()),
+				tagIds: v.array(v.string()),
+				customFields: v.optional(v.record(v.string(), v.string())),
+				source: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, args) => {
+		// Auth check first — before any key operations
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
 
-    // action-boundary length caps. Imports are bounded; if a CSV
-    // upload produces 5,000 rows of valid data fine, but no single row should
-    // contain a 1MB email. Convex doc cap is 1MiB — outsized rows ruin the batch.
-    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
-    if (args.supporters.length > 5000) throw new Error("SUPPORTERS_TOO_MANY");
-    for (const s of args.supporters) {
-      if (s.email.length > 254) throw new Error("EMAIL_TOO_LARGE");
-      if (s.name !== undefined && s.name.length > 200) throw new Error("NAME_TOO_LARGE");
-      if (s.phone !== undefined && s.phone.length > 32) throw new Error("PHONE_TOO_LARGE");
-      if (s.postalCode !== undefined && s.postalCode.length > 16) throw new Error("POSTAL_CODE_TOO_LARGE");
-      if (s.country !== undefined && s.country.length > 8) throw new Error("COUNTRY_TOO_LARGE");
-      if (s.emailStatus.length > 32) throw new Error("EMAIL_STATUS_TOO_LARGE");
-      if (s.smsStatus.length > 32) throw new Error("SMS_STATUS_TOO_LARGE");
-      if (s.tagIds.length > 100) throw new Error("TAG_IDS_TOO_MANY");
-      if (s.tagIds.some((t) => t.length > 64)) throw new Error("TAG_ID_TOO_LARGE");
-    }
+		// action-boundary length caps. Imports are bounded; if a CSV
+		// upload produces 5,000 rows of valid data fine, but no single row should
+		// contain a 1MB email. Convex doc cap is 1MiB — outsized rows ruin the batch.
+		if (args.slug.length > 64) throw new Error('SLUG_TOO_LARGE');
+		if (args.supporters.length > 5000) throw new Error('SUPPORTERS_TOO_MANY');
+		for (const s of args.supporters) {
+			if (s.email.length > 254) throw new Error('EMAIL_TOO_LARGE');
+			if (s.name !== undefined && s.name.length > 200) throw new Error('NAME_TOO_LARGE');
+			if (s.phone !== undefined && s.phone.length > 32) throw new Error('PHONE_TOO_LARGE');
+			if (s.postalCode !== undefined && s.postalCode.length > 16)
+				throw new Error('POSTAL_CODE_TOO_LARGE');
+			if (s.stateCode !== undefined && s.stateCode.length > 8)
+				throw new Error('STATE_CODE_TOO_LARGE');
+			if (s.congressionalDistrict !== undefined && s.congressionalDistrict.length > 32)
+				throw new Error('CONGRESSIONAL_DISTRICT_TOO_LARGE');
+			if (s.country !== undefined && s.country.length > 8) throw new Error('COUNTRY_TOO_LARGE');
+			if (s.emailStatus.length > 32) throw new Error('EMAIL_STATUS_TOO_LARGE');
+			if (s.smsStatus.length > 32) throw new Error('SMS_STATUS_TOO_LARGE');
+			if (s.emailConsentSource !== undefined && s.emailConsentSource.length > 120)
+				throw new Error('EMAIL_CONSENT_SOURCE_TOO_LARGE');
+			if (s.emailConsentText !== undefined && s.emailConsentText.length > 1000)
+				throw new Error('EMAIL_CONSENT_TEXT_TOO_LARGE');
+			if (s.smsConsentSource !== undefined && s.smsConsentSource.length > 120)
+				throw new Error('SMS_CONSENT_SOURCE_TOO_LARGE');
+			if (s.smsConsentText !== undefined && s.smsConsentText.length > 1000)
+				throw new Error('SMS_CONSENT_TEXT_TOO_LARGE');
+			if (s.tagIds.length > 100) throw new Error('TAG_IDS_TOO_MANY');
+			if (s.tagIds.some((t) => t.length > 64)) throw new Error('TAG_ID_TOO_LARGE');
+			if (s.source !== undefined && s.source.length > 48) throw new Error('SOURCE_TOO_LARGE');
+			const customEntries = Object.entries(s.customFields ?? {});
+			if (customEntries.length > 100) throw new Error('CUSTOM_FIELDS_TOO_MANY');
+			for (const [key, value] of customEntries) {
+				if (key.length > 80) throw new Error('CUSTOM_FIELD_KEY_TOO_LARGE');
+				if (value.length > 2000) throw new Error('CUSTOM_FIELD_VALUE_TOO_LARGE');
+			}
+			const customFieldsJson = customEntries.length > 0 ? JSON.stringify(s.customFields) : '';
+			if (customFieldsJson.length > 8192) throw new Error('CUSTOM_FIELDS_TOO_LARGE');
+		}
 
-    // Explicit editor-role gate at the action's top, BEFORE any hash
-    // computation / key unsealing / encryption work. The inner
-    // `importBatch` mutation already calls
-    // `requireOrgRole(slug, "editor")`, but that fires only after this
-    // action has computed HMAC hashes for all 5000 supporters and
-    // unsealed the org key into memory. A malicious authenticated
-    // caller with no membership in {slug} could amplify CPU and trigger
-    // key-unseal repeatedly via this path. The explicit gate here
-    // closes the amplification window; same shape of defense as
-    // `segments.exportDecrypted`.
-    await ctx.runQuery(requireImportAuthRef, { slug: args.slug });
+		// Explicit editor-role gate at the action's top, BEFORE any hash
+		// computation / key unsealing / encryption work. The inner
+		// `importBatch` mutation already calls
+		// `requireOrgRole(slug, "editor")`, but that fires only after this
+		// action has computed HMAC hashes for all 5000 supporters and
+		// unsealed the org key into memory. A malicious authenticated
+		// caller with no membership in {slug} could amplify CPU and trigger
+		// key-unseal repeatedly via this path. The explicit gate here
+		// closes the amplification window; same shape of defense as
+		// `segments.exportDecrypted`.
+		await ctx.runQuery(requireImportAuthRef, { slug: args.slug });
 
-    const {
-      computeOrgScopedEmailHash,
-      computeOrgScopedPhoneHash,
-      computeGlobalEmailHash,
-      computeGlobalPhoneHash,
-    } = await import("./_orgHash");
-    const { getOrgKeyForAction } = await import("./_orgKeyUnseal");
-    const { encryptForSupporterV2 } = await import("./_orgKey");
 
-    // Get org ID from slug
-    const org = await ctx.runQuery(getOrganizationBySlugRef, { slug: args.slug });
-    if (!org) throw new Error("Organization not found");
+		// Get org ID from slug
+		const org = await ctx.runQuery(getOrganizationBySlugRef, { slug: args.slug });
+		if (!org) throw new Error('Organization not found');
 
-    // Unseal org key
-    const orgKey = await getOrgKeyForAction(ctx, org._id);
-    if (!orgKey) throw new Error("Organization encryption not configured. An org owner must set up encryption in org settings before importing supporters.");
+		// Unseal org key
+		const orgKey = await getOrgKeyForAction(ctx, org._id);
+		if (!orgKey)
+			throw new Error(
+				'Organization encryption not configured. An org owner must set up encryption in org settings before importing supporters.'
+			);
 
-    // Single-phase encrypt-then-insert. The earlier two-phase pattern
-    // (insert placeholder ⇒ encrypt with post-insert `_id` AAD ⇒
-    // patch) has been replaced by V2 AAD that anchors on
-    // `eh:${emailHash}` — derivable BEFORE the insert because
-    // emailHash comes from plaintext we already have. Real ciphertext
-    // lands on the first insert; no follow-up patch loop, no
-    // findByEmailHash readbacks, no placeholder window.
-    const rows = await Promise.all(
-      args.supporters.map(async (s) => {
-        const normalizedEmail = s.email.trim().toLowerCase();
-        const emailHash = await computeOrgScopedEmailHash(org._id, normalizedEmail);
-        const globalEmailHash = await computeGlobalEmailHash(normalizedEmail);
-        // Phone hashes paired under a single try so invalid E.164
-        // doesn't half-populate the row (PII-triple discipline).
-        let phoneHash: string | undefined;
-        let globalPhoneHash: string | undefined;
-        if (s.phone) {
-          const trimmedPhone = s.phone.trim();
-          try {
-            phoneHash = await computeOrgScopedPhoneHash(org._id, trimmedPhone);
-            globalPhoneHash = await computeGlobalPhoneHash(trimmedPhone);
-          } catch {
-            phoneHash = undefined;
-            globalPhoneHash = undefined;
-          }
-        }
-        // Encrypt with V2 AAD (`eh:${emailHash}`) — pre-insert, no
-        // round-trip for the row _id needed.
-        const [encEmail, encName, encPhone] = await Promise.all([
-          encryptForSupporterV2(normalizedEmail, orgKey, emailHash, "email"),
-          s.name ? encryptForSupporterV2(s.name.trim(), orgKey, emailHash, "name") : null,
-          s.phone ? encryptForSupporterV2(s.phone.trim(), orgKey, emailHash, "phone") : null,
-        ]);
+		// Single-phase encrypt-then-insert. The earlier two-phase pattern
+		// (insert placeholder ⇒ encrypt with post-insert `_id` AAD ⇒
+		// patch) has been replaced by V2 AAD that anchors on
+		// `eh:${emailHash}` — derivable BEFORE the insert because
+		// emailHash comes from plaintext we already have. Real ciphertext
+		// lands on the first insert; no follow-up patch loop, no
+		// findByEmailHash readbacks, no placeholder window.
+		const rows = await Promise.all(
+			args.supporters.map(async (s) => {
+				const normalizedEmail = s.email.trim().toLowerCase();
+				const emailHash = await computeOrgScopedEmailHash(org._id, normalizedEmail);
+				const globalEmailHash = await computeGlobalEmailHash(normalizedEmail);
+				// Phone hashes paired under a single try so invalid E.164
+				// doesn't half-populate the row (PII-triple discipline).
+				let phoneHash: string | undefined;
+				let globalPhoneHash: string | undefined;
+				if (s.phone) {
+					const trimmedPhone = s.phone.trim();
+					try {
+						phoneHash = await computeOrgScopedPhoneHash(org._id, trimmedPhone);
+						globalPhoneHash = await computeGlobalPhoneHash(trimmedPhone);
+					} catch {
+						phoneHash = undefined;
+						globalPhoneHash = undefined;
+					}
+				}
+				// Encrypt with V2 AAD (`eh:${emailHash}`) — pre-insert, no
+				// round-trip for the row _id needed.
+				const customFieldsJson =
+					s.customFields && Object.keys(s.customFields).length > 0
+						? JSON.stringify(s.customFields)
+						: null;
+				const [encEmail, encName, encPhone, encCustomFields] = await Promise.all([
+					encryptForSupporterV2(normalizedEmail, orgKey, emailHash, 'email'),
+					s.name ? encryptForSupporterV2(s.name.trim(), orgKey, emailHash, 'name') : null,
+					s.phone ? encryptForSupporterV2(s.phone.trim(), orgKey, emailHash, 'phone') : null,
+					customFieldsJson
+						? encryptForSupporterV2(customFieldsJson, orgKey, emailHash, 'customFields')
+						: null
+				]);
 
-        return {
-          encryptedEmail: JSON.stringify(encEmail),
-          emailHash,
-          globalEmailHash,
-          encryptedName: encName ? JSON.stringify(encName) : undefined,
-          encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
-          phoneHash,
-          globalPhoneHash,
-          postalCode: s.postalCode,
-          country: s.country,
-          emailStatus: s.emailStatus,
-          smsStatus: s.smsStatus,
-          tagIds: s.tagIds,
-        };
-      }),
-    );
+				return {
+					encryptedEmail: JSON.stringify(encEmail),
+					emailHash,
+					globalEmailHash,
+					encryptedName: encName ? JSON.stringify(encName) : undefined,
+					encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
+					encryptedCustomFields: encCustomFields ? JSON.stringify(encCustomFields) : undefined,
+					phoneHash,
+					globalPhoneHash,
+					postalCode: s.postalCode,
+					stateCode: s.stateCode?.trim().toUpperCase(),
+					congressionalDistrict: s.congressionalDistrict?.trim().replace(/\s+/g, ' ').toUpperCase(),
+					country: s.country,
+					emailStatus: s.emailStatus,
+					smsStatus: s.smsStatus,
+					emailConsentSource: s.emailConsentSource,
+					emailConsentedAt: s.emailConsentedAt,
+					emailConsentText: s.emailConsentText,
+					smsConsentSource: s.smsConsentSource,
+					smsConsentedAt: s.smsConsentedAt,
+					smsConsentText: s.smsConsentText,
+					tagIds: s.tagIds,
+					source: s.source
+				};
+			})
+		);
 
-    const result = await ctx.runMutation(importBatchRef, {
-      slug: args.slug,
-      supporters: rows,
-    });
+		const result = await ctx.runMutation(importBatchRef, {
+			slug: args.slug,
+			supporters: rows
+		});
 
-    return result;
-  },
+		return result;
+	}
 });
 
 // =============================================================================
@@ -1128,45 +1783,41 @@ export const importWithEncryption = action({
  * delete them.
  */
 export const getStrandedPlaceholderSupporters = internalQuery({
-  args: {
-    olderThanMs: v.number(),
-    paginationCursor: v.optional(v.string()),
-    limit: v.number(),
-  },
-  handler: async (ctx, { olderThanMs, paginationCursor, limit }) => {
-    const cutoff = Date.now() - olderThanMs;
-    // Stranded placeholders are NEW rows (15-min-to-hours-old). An
-    // `order("asc").take(limit * 10)` would read the OLDEST 500 rows
-    // and filter — for an org with >500 supporters, that window
-    // NEVER touches a placeholder; the cron would look busy while
-    // doing nothing. Paginate through the table (no order assumption),
-    // filter the page in-memory, return what we find. Caller (sweep
-    // action) iterates pages until isDone. No index on
-    // `encryptedEmail === ""` is needed — placeholders are rare
-    // enough that per-page filter is cheap.
-    const result = await ctx.db
-      .query("supporters")
-      .paginate({ numItems: limit * 10, cursor: paginationCursor ?? null });
-    const stranded = result.page.filter(
-      (s) =>
-        s.encryptedEmail === "" &&
-        s._creationTime < cutoff,
-    );
-    return {
-      items: stranded.slice(0, limit).map((s) => ({
-        _id: s._id,
-        orgId: s.orgId,
-        ageMs: Date.now() - s._creationTime,
-        // Webhook patches can land on placeholder rows — surface
-        // emailStatus so the sweep action can preserve forensic
-        // state instead of silently deleting bounced/complained rows.
-        emailStatus: s.emailStatus,
-        smsStatus: s.smsStatus,
-      })),
-      continueCursor: result.continueCursor,
-      isDone: result.isDone,
-    };
-  },
+	args: {
+		olderThanMs: v.number(),
+		paginationCursor: v.optional(v.string()),
+		limit: v.number()
+	},
+	handler: async (ctx, { olderThanMs, paginationCursor, limit }) => {
+		const cutoff = Date.now() - olderThanMs;
+		// Stranded placeholders are NEW rows (15-min-to-hours-old). An
+		// `order("asc").take(limit * 10)` would read the OLDEST 500 rows
+		// and filter — for an org with >500 supporters, that window
+		// NEVER touches a placeholder; the cron would look busy while
+		// doing nothing. Paginate through the table (no order assumption),
+		// filter the page in-memory, return what we find. Caller (sweep
+		// action) iterates pages until isDone. No index on
+		// `encryptedEmail === ""` is needed — placeholders are rare
+		// enough that per-page filter is cheap.
+		const result = await ctx.db
+			.query('supporters')
+			.paginate({ numItems: limit * 10, cursor: paginationCursor ?? null });
+		const stranded = result.page.filter((s) => s.encryptedEmail === '' && s._creationTime < cutoff);
+		return {
+			items: stranded.slice(0, limit).map((s) => ({
+				_id: s._id,
+				orgId: s.orgId,
+				ageMs: Date.now() - s._creationTime,
+				// Webhook patches can land on placeholder rows — surface
+				// emailStatus so the sweep action can preserve forensic
+				// state instead of silently deleting bounced/complained rows.
+				emailStatus: s.emailStatus,
+				smsStatus: s.smsStatus
+			})),
+			continueCursor: result.continueCursor,
+			isDone: result.isDone
+		};
+	}
 });
 
 /**
@@ -1176,18 +1827,29 @@ export const getStrandedPlaceholderSupporters = internalQuery({
  * have landed concurrent with the cleanup action's pagination).
  */
 export const deleteStrandedPlaceholder = internalMutation({
-  args: { supporterId: v.id("supporters") },
-  handler: async (ctx, { supporterId }) => {
-    const current = await ctx.db.get(supporterId);
-    if (!current) return { ok: false, reason: "not_found" } as const;
-    if (current.encryptedEmail !== "") {
-      // The follow-up patch landed between our paginated read and
-      // this mutation — leave the row alone.
-      return { ok: false, reason: "not_placeholder" } as const;
-    }
-    await ctx.db.delete(supporterId);
-    return { ok: true } as const;
-  },
+	args: { supporterId: v.id('supporters') },
+	handler: async (ctx, { supporterId }) => {
+		const current = await ctx.db.get(supporterId);
+		if (!current) return { ok: false, reason: 'not_found' } as const;
+		if (current.encryptedEmail !== '') {
+			// The follow-up patch landed between our paginated read and
+			// this mutation — leave the row alone.
+			return { ok: false, reason: 'not_placeholder' } as const;
+		}
+		await ctx.db.delete(supporterId);
+		// The placeholder was counted into supporterCount + supporterStats when
+		// findOrCreateSupporter created it; decrement both so deleting a stranded
+		// row doesn't leave the counters overstated.
+		const org = await ctx.db.get(current.orgId);
+		if (org) {
+			await ctx.db.patch(current.orgId, {
+				supporterCount: Math.max((org.supporterCount ?? 1) - 1, 0),
+				updatedAt: Date.now()
+			});
+		}
+		await applySupporterStatsDelta(ctx, current.orgId, current as CountableSupporter, null);
+		return { ok: true } as const;
+	}
 });
 
 /**
@@ -1205,7 +1867,7 @@ export const deleteStrandedPlaceholder = internalMutation({
  * Threshold (15 min) is larger than Convex's 10-min action execution
  * budget so a slow-but-live submission isn't classified as stranded.
  */
-const SWEEP_KEY_STRANDED_PLACEHOLDERS = "supporters.strandedPlaceholders";
+const SWEEP_KEY_STRANDED_PLACEHOLDERS = 'supporters.strandedPlaceholders';
 
 /**
  * Internal mutation: load the persisted sweep cursor + wrap count.
@@ -1213,27 +1875,27 @@ const SWEEP_KEY_STRANDED_PLACEHOLDERS = "supporters.strandedPlaceholders";
  * branch on "first run vs resumed".
  */
 export const loadSweepCheckpoint = internalMutation({
-  args: { key: v.string() },
-  handler: async (ctx, { key }) => {
-    const existing = await ctx.db
-      .query("sweepCheckpoints")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .first();
-    if (existing) {
-      return {
-        cursor: existing.cursor,
-        wrapCount: existing.wrapCount,
-        checkpointId: existing._id,
-      };
-    }
-    const checkpointId = await ctx.db.insert("sweepCheckpoints", {
-      key,
-      cursor: undefined,
-      wrapCount: 0,
-      updatedAt: Date.now(),
-    });
-    return { cursor: undefined, wrapCount: 0, checkpointId };
-  },
+	args: { key: v.string() },
+	handler: async (ctx, { key }) => {
+		const existing = await ctx.db
+			.query('sweepCheckpoints')
+			.withIndex('by_key', (q) => q.eq('key', key))
+			.first();
+		if (existing) {
+			return {
+				cursor: existing.cursor,
+				wrapCount: existing.wrapCount,
+				checkpointId: existing._id
+			};
+		}
+		const checkpointId = await ctx.db.insert('sweepCheckpoints', {
+			key,
+			cursor: undefined,
+			wrapCount: 0,
+			updatedAt: Date.now()
+		});
+		return { cursor: undefined, wrapCount: 0, checkpointId };
+	}
 });
 
 /**
@@ -1242,130 +1904,130 @@ export const loadSweepCheckpoint = internalMutation({
  * the next tick starts from null again and the wrap counter increments.
  */
 export const saveSweepCheckpoint = internalMutation({
-  args: {
-    checkpointId: v.id("sweepCheckpoints"),
-    cursor: v.optional(v.string()),
-    wrapped: v.boolean(),
-  },
-  handler: async (ctx, { checkpointId, cursor, wrapped }) => {
-    const current = await ctx.db.get(checkpointId);
-    if (!current) return;
-    await ctx.db.patch(checkpointId, {
-      cursor: wrapped ? undefined : cursor,
-      wrapCount: wrapped ? current.wrapCount + 1 : current.wrapCount,
-      updatedAt: Date.now(),
-    });
-  },
+	args: {
+		checkpointId: v.id('sweepCheckpoints'),
+		cursor: v.optional(v.string()),
+		wrapped: v.boolean()
+	},
+	handler: async (ctx, { checkpointId, cursor, wrapped }) => {
+		const current = await ctx.db.get(checkpointId);
+		if (!current) return;
+		await ctx.db.patch(checkpointId, {
+			cursor: wrapped ? undefined : cursor,
+			wrapCount: wrapped ? current.wrapCount + 1 : current.wrapCount,
+			updatedAt: Date.now()
+		});
+	}
 });
 
 export const sweepStrandedPlaceholders = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const STRANDED_THRESHOLD_MS = 15 * 60 * 1000;
-    const BATCH = 50;
-    // Forensic-state preserving statuses — if a webhook patched the
-    // placeholder row to one of these BEFORE the cleanup landed, we
-    // skip deletion. Losing a bounce/complaint mark would let a
-    // future re-import resubscribe a known-bad email. The row stays
-    // as forensic dead-weight (encryptedEmail empty, but emailStatus
-    // intact) so the suppression survives.
-    const PRESERVE_STATUSES = new Set(["bounced", "complained"]);
+	args: {},
+	handler: async (ctx) => {
+		const STRANDED_THRESHOLD_MS = 15 * 60 * 1000;
+		const BATCH = 50;
+		// Forensic-state preserving statuses — if a webhook patched the
+		// placeholder row to one of these BEFORE the cleanup landed, we
+		// skip deletion. Losing a bounce/complaint mark would let a
+		// future re-import resubscribe a known-bad email. The row stays
+		// as forensic dead-weight (encryptedEmail empty, but emailStatus
+		// intact) so the suppression survives.
+		const PRESERVE_STATUSES = new Set(['bounced', 'complained']);
 
-    let deleted = 0;
-    let preserved = 0;
-    let skipped = 0;
-    let totalSeen = 0;
-    let isDone = false;
-    let pagesScanned = 0;
+		let deleted = 0;
+		let preserved = 0;
+		let skipped = 0;
+		let totalSeen = 0;
+		let isDone = false;
+		let pagesScanned = 0;
 
-    // Resume from the previous tick's cursor instead of restarting at
-    // null. Intra-tick pagination alone would still re-scan the same
-    // prefix every tick — for tables >10K rows, the sweep would
-    // traverse (BATCH*pageCap) rows from the start and never reach
-    // newer strandeds. The checkpoint table carries the cursor across
-    // cron invocations so the sweep walks the entire table over
-    // multiple ticks. `wrapCount` increments when we reach isDone; an
-    // external monitor can verify the sweep is making progress around
-    // the table.
-    const checkpoint: {
-      cursor?: string;
-      wrapCount: number;
-      checkpointId: Id<"sweepCheckpoints">;
-    } = await ctx.runMutation(internal.supporters.loadSweepCheckpoint, {
-      key: SWEEP_KEY_STRANDED_PLACEHOLDERS,
-    });
-    let paginationCursor: string | undefined = checkpoint.cursor;
+		// Resume from the previous tick's cursor instead of restarting at
+		// null. Intra-tick pagination alone would still re-scan the same
+		// prefix every tick — for tables >10K rows, the sweep would
+		// traverse (BATCH*pageCap) rows from the start and never reach
+		// newer strandeds. The checkpoint table carries the cursor across
+		// cron invocations so the sweep walks the entire table over
+		// multiple ticks. `wrapCount` increments when we reach isDone; an
+		// external monitor can verify the sweep is making progress around
+		// the table.
+		const checkpoint: {
+			cursor?: string;
+			wrapCount: number;
+			checkpointId: Id<'sweepCheckpoints'>;
+		} = await ctx.runMutation(internal.supporters.loadSweepCheckpoint, {
+			key: SWEEP_KEY_STRANDED_PLACEHOLDERS
+		});
+		let paginationCursor: string | undefined = checkpoint.cursor;
 
-    while (!isDone && pagesScanned < 20) {
-      const result: {
-        items: Array<{
-          _id: Id<"supporters">;
-          orgId: Id<"organizations">;
-          ageMs: number;
-          emailStatus: string;
-          smsStatus: string;
-        }>;
-        continueCursor: string;
-        isDone: boolean;
-      } = await ctx.runQuery(internal.supporters.getStrandedPlaceholderSupporters, {
-        olderThanMs: STRANDED_THRESHOLD_MS,
-        paginationCursor,
-        limit: BATCH,
-      });
-      pagesScanned++;
-      isDone = result.isDone;
-      paginationCursor = result.continueCursor;
-      totalSeen += result.items.length;
+		while (!isDone && pagesScanned < 20) {
+			const result: {
+				items: Array<{
+					_id: Id<'supporters'>;
+					orgId: Id<'organizations'>;
+					ageMs: number;
+					emailStatus: string;
+					smsStatus: string;
+				}>;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runQuery(internal.supporters.getStrandedPlaceholderSupporters, {
+				olderThanMs: STRANDED_THRESHOLD_MS,
+				paginationCursor,
+				limit: BATCH
+			});
+			pagesScanned++;
+			isDone = result.isDone;
+			paginationCursor = result.continueCursor;
+			totalSeen += result.items.length;
 
-      for (const s of result.items) {
-        // Preserve forensic suppression state if a webhook already
-        // landed before this sweep. Deletion would silently lose
-        // `bounced`/`complained` marks and a future re-import would
-        // resubscribe a known-bad email.
-        if (PRESERVE_STATUSES.has(s.emailStatus)) {
-          console.warn(
-            `[sweepStrandedPlaceholders] PRESERVING stranded supporter ${s._id} (emailStatus=${s.emailStatus}, ageMs=${s.ageMs}) — webhook-patched suppression must survive cleanup`,
-          );
-          preserved++;
-          continue;
-        }
-        const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
-          internal.supporters.deleteStrandedPlaceholder,
-          { supporterId: s._id },
-        );
-        if (deleteResult.ok) {
-          console.warn(
-            `[sweepStrandedPlaceholders] Deleted stranded supporter ${s._id} (orgId=${s.orgId}, ageMs=${s.ageMs}) — submitAction crashed mid-flight`,
-          );
-          deleted++;
-        } else {
-          skipped++;
-        }
-      }
+			for (const s of result.items) {
+				// Preserve forensic suppression state if a webhook already
+				// landed before this sweep. Deletion would silently lose
+				// `bounced`/`complained` marks and a future re-import would
+				// resubscribe a known-bad email.
+				if (PRESERVE_STATUSES.has(s.emailStatus)) {
+					console.warn(
+						`[sweepStrandedPlaceholders] PRESERVING stranded supporter ${s._id} (emailStatus=${s.emailStatus}, ageMs=${s.ageMs}) — webhook-patched suppression must survive cleanup`
+					);
+					preserved++;
+					continue;
+				}
+				const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
+					internal.supporters.deleteStrandedPlaceholder,
+					{ supporterId: s._id }
+				);
+				if (deleteResult.ok) {
+					console.warn(
+						`[sweepStrandedPlaceholders] Deleted stranded supporter ${s._id} (orgId=${s.orgId}, ageMs=${s.ageMs}) — submitAction crashed mid-flight`
+					);
+					deleted++;
+				} else {
+					skipped++;
+				}
+			}
 
-      // Bound the sweep — if we keep finding stranded rows above the
-      // threshold, something upstream is wrong; let the next cron
-      // tick continue rather than monopolizing this execution.
-      if (deleted + preserved >= BATCH * 4) break;
-    }
+			// Bound the sweep — if we keep finding stranded rows above the
+			// threshold, something upstream is wrong; let the next cron
+			// tick continue rather than monopolizing this execution.
+			if (deleted + preserved >= BATCH * 4) break;
+		}
 
-    // Persist the cursor for the next tick. If we reached isDone, the
-    // wrap counter increments and the cursor resets to null so the
-    // next sweep starts from the table head again.
-    await ctx.runMutation(internal.supporters.saveSweepCheckpoint, {
-      checkpointId: checkpoint.checkpointId,
-      cursor: paginationCursor,
-      wrapped: isDone,
-    });
+		// Persist the cursor for the next tick. If we reached isDone, the
+		// wrap counter increments and the cursor resets to null so the
+		// next sweep starts from the table head again.
+		await ctx.runMutation(internal.supporters.saveSweepCheckpoint, {
+			checkpointId: checkpoint.checkpointId,
+			cursor: paginationCursor,
+			wrapped: isDone
+		});
 
-    return {
-      deleted,
-      preserved,
-      skipped,
-      totalSeen,
-      pagesScanned,
-      wrapCount: isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
-      wrapped: isDone,
-    };
-  },
+		return {
+			deleted,
+			preserved,
+			skipped,
+			totalSeen,
+			pagesScanned,
+			wrapCount: isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
+			wrapped: isDone
+		};
+	}
 });

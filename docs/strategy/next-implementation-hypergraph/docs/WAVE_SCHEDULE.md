@@ -39,7 +39,7 @@ Each wave gate is a hard barrier — predecessor wave's exit criteria MUST hold 
 - [ ] DM enrichment + staffer dashboard (NEW-T8-1a, NEW-T8-1b)
 - [ ] On-chain stake + LMSR feed (NEW-T5-2, NEW-T5-8)
 - [ ] Audit log API + weekly digest wired (NEW-T9-5, NEW-T8-9)
-- [ ] Email path hardened (NEW-T1-9, NEW-T2-4, NEW-T2-10)
+- [ ] Email path hardened (NEW-T1-9, NEW-T2-4 provider evidence, NEW-T2-10)
 - [ ] SMS path operational (NEW-T2-1, NEW-T2-8, NEW-T2-9)
 - [ ] CRM integration (NEW-T8-5)
 
@@ -53,7 +53,7 @@ Each wave gate is a hard barrier — predecessor wave's exit criteria MUST hold 
 - [ ] Multi-jurisdiction routing + per-district feeds (NEW-T3-8, NEW-T3-10)
 - [ ] Postal Bubble disambiguation UX (NEW-T3-9)
 - [ ] Agentic legislative monitoring across 24 boundary types (NEW-T4-4)
-- [ ] AN OSDI sync + OSDI namespace (NEW-T1-3, NEW-T9-4)
+- [ ] Platform API adapter + OSDI namespace (NEW-T1-3, NEW-T9-4)
 - [ ] TS + Python SDK publish pipelines (NEW-T9-1, NEW-T9-2)
 - [ ] Developer portal (NEW-T9-8)
 - [ ] State-bill ingestion (NEW-T6-6)

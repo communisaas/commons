@@ -132,6 +132,14 @@ export interface ResolveContext {
 	/** Streaming callbacks for progress updates */
 	streaming?: StreamingCallbacks;
 
+	/**
+	 * Transparency level for streamed reasoning. When true (STUDIO interior),
+	 * the agent's tool-loop thoughts pass through a light filter that keeps
+	 * planning talk and removes only output-format mechanics. When false/omitted
+	 * (public citizen flow), the strict filter applies. Never fabricates.
+	 */
+	verbose?: boolean;
+
 	/** Abort signal from router timeout — providers should check on each iteration */
 	signal?: AbortSignal;
 }

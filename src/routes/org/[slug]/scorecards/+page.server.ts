@@ -32,34 +32,45 @@ export const load: PageServerLoad = async ({ parent }) => {
 		minReports: 1
 	});
 
-	return {
-		scorecards: result.scorecards.map((s: Record<string, unknown>) => ({
+	const scorecards = result.scorecards.map((s: Record<string, unknown>) => {
+		const scorecard = s.scorecard as Record<string, unknown> | undefined;
+		const composite = asNumberOrNull(scorecard?.composite);
+		const responsiveness = asNumberOrNull(scorecard?.responsiveness);
+
+		return {
 			name: asString((s.decisionMaker as Record<string, unknown> | undefined)?.name, 'Unknown'),
 			title: asString((s.decisionMaker as Record<string, unknown> | undefined)?.title),
 			district: asString((s.decisionMaker as Record<string, unknown> | undefined)?.district),
-			reportsReceived: asNumber(s.receiptCount),
-			reportsOpened: asNumber((s.scorecard as Record<string, unknown> | undefined)?.reportsOpened),
-			verifyLinksClicked: asNumber((s.scorecard as Record<string, unknown> | undefined)?.verifyLinksClicked),
-			repliesLogged: asNumber((s.scorecard as Record<string, unknown> | undefined)?.repliesLogged),
-			relevantVotes: asNumber((s.scorecard as Record<string, unknown> | undefined)?.relevantVotes),
-			alignedVotes: asNumber((s.scorecard as Record<string, unknown> | undefined)?.alignedVotes),
-			alignmentRate: asNumberOrNull((s.scorecard as Record<string, unknown> | undefined)?.alignmentRate),
-			avgResponseTime: asNumberOrNull((s.scorecard as Record<string, unknown> | undefined)?.avgResponseTime),
-			lastContactDate: typeof (s.scorecard as Record<string, unknown> | undefined)?.lastContactDate === 'string'
-				? ((s.scorecard as Record<string, unknown>).lastContactDate as string)
-				: null,
-			score: asNumber((s.scorecard as Record<string, unknown> | undefined)?.score),
+			reportsReceived: asNumber(scorecard?.deliveriesSent, asNumber(s.receiptCount)),
+			reportsOpened: asNumberOrNull(scorecard?.deliveriesOpened),
+			verifyLinksClicked: asNumberOrNull(scorecard?.deliveriesVerified),
+			repliesLogged: asNumberOrNull(scorecard?.repliesReceived),
+			relevantVotes: asNumberOrNull(scorecard?.totalScoredVotes),
+			alignedVotes: asNumberOrNull(scorecard?.alignedVotes),
+			alignmentRate: asNumberOrNull(scorecard?.alignment),
+			avgResponseTime:
+				responsiveness !== null ? Math.round((1 - responsiveness) * 168 * 10) / 10 : null,
+			lastContactDate: null,
+			score: composite !== null ? Math.round(composite * 100) : null,
 			proofWeighted: null
-		})),
+		};
+	});
+	const scoredRows = scorecards.filter((scorecard) => scorecard.score !== null);
+	const avgScore =
+		scoredRows.length > 0
+			? scoredRows.reduce((total, scorecard) => total + (scorecard.score ?? 0), 0) /
+				scoredRows.length
+			: null;
+
+	return {
+		scorecards,
 		meta: {
 			orgId: org.id,
 			computedAt: new Date().toISOString(),
-			decisionMakers: result.scorecards.length,
-			avgScore: asNumber(
-				result.scorecards.reduce((total: number, s: Record<string, unknown>) => (
-					total + asNumber((s.scorecard as Record<string, unknown> | undefined)?.score)
-				), 0) / Math.max(result.scorecards.length, 1)
-			)
+			decisionMakers: scorecards.length,
+			avgScore: avgScore !== null ? Math.round(avgScore) : null,
+			totalFollowed: asNumber((result.meta as Record<string, unknown> | undefined)?.totalFollowed),
+			withScorecards: asNumber((result.meta as Record<string, unknown> | undefined)?.withScorecards)
 		},
 		isMember: true
 	};

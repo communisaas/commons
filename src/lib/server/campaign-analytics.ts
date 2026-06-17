@@ -11,6 +11,7 @@
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { fetchAllPacketActions } from './packet-actions';
 
 // ── Types matching component interfaces ──
 
@@ -31,7 +32,6 @@ interface DeliveryMetrics {
 	opened: number;
 	clicked: number;
 	bounced: number;
-	complained: number;
 	deliveryRate: number;
 	openRate: number;
 	clickRate: number;
@@ -50,8 +50,9 @@ export async function loadCampaignAnalytics(
 	campaignId: Id<'campaigns'>,
 	orgId: Id<'organizations'>
 ): Promise<CampaignAnalytics> {
-	// Reuse the same query as packet computation — single Convex roundtrip
-	const actions = await serverQuery(api.campaigns.getActionsForPacket, { campaignId });
+	// Reuse the same query as packet computation — paginated under the hood so a
+	// large campaign never hits the per-query doc cap (cured).
+	const actions = await fetchAllPacketActions(campaignId);
 
 	// Timeline: group by day
 	const dayMap = new Map<string, { total: number; verified: number }>();
@@ -84,8 +85,15 @@ export async function loadCampaignAnalytics(
 	} catch {
 		// Fallback if query fails (e.g., no deliveries yet)
 		delivery = {
-			sent: 0, delivered: 0, opened: 0, clicked: 0, bounced: 0,
-			complained: 0, deliveryRate: 0, openRate: 0, clickRate: 0, bounceRate: 0
+			sent: 0,
+			delivered: 0,
+			opened: 0,
+			clicked: 0,
+			bounced: 0,
+			deliveryRate: 0,
+			openRate: 0,
+			clickRate: 0,
+			bounceRate: 0
 		};
 	}
 

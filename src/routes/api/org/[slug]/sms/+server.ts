@@ -66,6 +66,17 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		if (!campaign) throw error(400, 'Campaign not found in this organization');
 	}
 
+	const audience = (await serverQuery(api.sms.countEligibleRecipientsForFilter, {
+		slug: params.slug,
+		recipientFilter: parsedFilter
+			? {
+					tags: parsedFilter.tags as Id<'tags'>[] | undefined,
+					segments: parsedFilter.segments as Id<'segments'>[] | undefined,
+					excludeTags: parsedFilter.excludeTags as Id<'tags'>[] | undefined
+				}
+			: undefined
+	})) as { eligibleCount: number };
+
 	const blast = await serverMutation(api.sms.createBlast, {
 		slug: params.slug,
 		body: smsBody.trim(),
@@ -82,7 +93,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 					excludeTags: parsedFilter.excludeTags as Id<'tags'>[] | undefined
 				}
 			: undefined,
-		totalRecipients: 0
+		totalRecipients: audience.eligibleCount
 	});
 
 	return json(
@@ -91,6 +102,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			body: smsBody.trim(),
 			fromNumber: fromNumber || null,
 			status: 'draft',
+			totalRecipients: audience.eligibleCount,
 			createdAt: new Date().toISOString()
 		},
 		{ status: 201 }
