@@ -210,7 +210,7 @@
 
 	.chip--running .chip-pulse {
 		background: var(--coord-route-solid);
-		animation: chip-pulse 1.6s ease-in-out infinite;
+		animation: chip-pulse var(--pulse-duration) var(--pulse-easing) infinite;
 	}
 
 	.chip--error .chip-pulse {
@@ -286,8 +286,11 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 1.25rem;
-		height: 1.25rem;
+		/* 44px tappable hit area (WCAG 2.5.5). The glyph stays small (.chip-action svg
+		   below); the transparent box just enlarges the touch/click target — Stop and
+		   Dismiss are the only way to kill a run. */
+		min-width: 44px;
+		min-height: 44px;
 		padding: 0;
 		border: none;
 		border-radius: 5px;

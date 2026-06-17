@@ -204,7 +204,8 @@ describe('FIX 2a — campaigns.create / update reject a foreign templateId', () 
 					return null;
 				},
 				patch: async () => undefined
-			}
+			},
+			runMutation: async () => undefined
 		};
 		await expect(
 			runUpdate(ctx as any, {
@@ -224,7 +225,8 @@ describe('FIX 2a — campaigns.create / update reject a foreign templateId', () 
 					return null;
 				},
 				patch: async () => undefined
-			}
+			},
+			runMutation: async () => undefined
 		};
 		const ownedId = await runUpdate(ctx as any, {
 			campaignId: 'camp_1',

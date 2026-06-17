@@ -612,6 +612,17 @@ export const updateClientBlastProgress = mutation({
 		// attack is possible. If `totalSent` is somehow > blast.totalRecipients
 		// we'd have thrown; the counter can grow by at most that bound.
 		if (args.status === 'sent' && previousStatus !== 'sent') {
+			// Fail-closed recheck: an org can go inactive mid-blast (STS creds are
+			// minted for 15 min and unrevocable). Refuse to RECORD sends for an org
+			// at the inactive floor. Gate on maxEmails===0 (NOT >=) — emailsSent is
+			// period-scoped from already-'sent' blasts, so a >= recheck would
+			// false-reject an active org's final legitimate batch.
+			const planLimits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+				orgId: org._id
+			});
+			if (planLimits?.limits.maxEmails === 0) {
+				throw new Error('EMAIL_QUOTA_INACTIVE');
+			}
 			const orgDoc = await ctx.db.get(org._id);
 			if (orgDoc) {
 				const currentCount = orgDoc.sentEmailCount ?? 0;
@@ -633,6 +644,11 @@ export const updateClientBlastProgress = mutation({
  * Deeper cure: closes the browser-disconnect-mid-blast gap by giving
  * the Lambda a durable receipt write path independent of the browser.
  */
+// Send modes that produce per-recipient receipts. Positive allowlist (NOT a
+// `!==` denylist) so an unset/unknown sendMode still throws — sendMode is
+// optional in the schema, so a denylist would silently admit undefined/garbage.
+const RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server']);
+
 export const recordBlastReceiptsInternal = internalMutation({
 	args: {
 		blastId: v.id('emailBlasts'),
@@ -651,7 +667,7 @@ export const recordBlastReceiptsInternal = internalMutation({
 		if (!blast) {
 			throw new Error('Blast not found');
 		}
-		if (blast.sendMode !== 'client-direct' && blast.sendMode !== 'tee-sealed') {
+		if (!RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
 			throw new Error(`Receipts not supported for sendMode '${blast.sendMode ?? '(unset)'}'`);
 		}
 		if (blast.status !== 'sending' && blast.status !== 'sent') {
@@ -775,7 +791,7 @@ export const recordBlastReceipts = mutation({
 		if (!blast || blast.orgId !== org._id) {
 			throw new Error('Blast not found in this organization');
 		}
-		if (blast.sendMode !== 'client-direct' && blast.sendMode !== 'tee-sealed') {
+		if (!RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
 			throw new Error(`Receipts not supported for sendMode '${blast.sendMode ?? '(unset)'}'`);
 		}
 		if (blast.status !== 'sending' && blast.status !== 'sent') {

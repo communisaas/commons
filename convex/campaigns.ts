@@ -700,6 +700,17 @@ export const update = mutation({
 		if (args.position !== undefined) updates.position = args.position;
 
 		await ctx.db.patch(args.campaignId, updates);
+
+		// Emit campaign.updated (A4) after a field edit via this path. No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'campaign.updated',
+			payload: JSON.stringify({
+				campaignId: args.campaignId,
+				timestamp: Date.now()
+			})
+		});
+
 		return args.campaignId;
 	}
 });
@@ -916,6 +927,18 @@ export const updateStatus = mutation({
 		await ctx.db.patch(args.campaignId, {
 			status: args.status,
 			updatedAt: Date.now()
+		});
+
+		// Emit campaign.updated (A4) on a status transition — co-equal with the
+		// field-edit path so the event is not half-dead. No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'campaign.updated',
+			payload: JSON.stringify({
+				campaignId: args.campaignId,
+				status: args.status,
+				timestamp: Date.now()
+			})
 		});
 
 		return args.campaignId;

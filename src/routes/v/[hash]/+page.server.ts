@@ -43,19 +43,24 @@ export const load: PageServerLoad = async ({ params }) => {
 			return {
 				hash,
 				mode: 'campaign' as const,
-				trustTier: 2 as 0 | 1 | 2 | 3 | 4 | 5,
+				// Campaign mode is a COHORT report, not a per-sender identity. It has
+				// no single trust tier / verification method / composition — asserting
+				// one (the old synthetic trustTier:2 / identity:'mixed') was a false
+				// claim. The page renders cohort language + the recomputable attestation
+				// instead; these are null so a tier claim can never be reintroduced.
+				trustTier: null as (0 | 1 | 2 | 3 | 4 | 5) | null,
 				identity: {
-					verified: true,
-					method: 'mixed' as 'email' | 'gov-id' | 'mixed'
+					verified: false,
+					method: null as 'email' | 'gov-id' | 'mixed' | null
 				},
 				location: {
-					verified: (stats.uniqueDistricts ?? 0) > 0,
+					verified: false,
 					method: null as 'civic_api' | 'mdl' | 'postal' | null,
 					state: null as string | null,
 					districts: [] as { slot: number; label: string; value: string }[]
 				},
 				govCredential: false,
-				composition: 'mixed' as 'individual' | 'template' | 'mixed',
+				composition: null as 'individual' | 'template' | 'mixed' | null,
 				verifiedAt: Date.now(),
 				topic: null as string | null,
 				participantCount: stats.verifiedActions,

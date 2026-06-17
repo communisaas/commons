@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Datum } from '$lib/design';
+	import { FEATURES } from '$lib/config/features';
 	import type { PageData } from './$types';
 
 	type Bill = {
@@ -231,12 +232,21 @@
 							watched
 						</p>
 					</div>
-					<div class="bg-surface-base px-3 py-2">
+					<div
+						class="bg-surface-base px-3 py-2"
+						title={FEATURES.LEGISLATIVE_INTELLIGENCE_LIVE
+							? undefined
+							: 'Bill relevance scoring is not yet available'}
+					>
 						<p class="text-text-primary font-mono text-lg font-semibold tabular-nums">
-							<Datum value={relevantCount} />
+							{#if FEATURES.LEGISLATIVE_INTELLIGENCE_LIVE}
+								<Datum value={relevantCount} />
+							{:else}
+								<span class="text-text-quaternary">&mdash;</span>
+							{/if}
 						</p>
 						<p class="text-text-quaternary font-mono text-[9px] tracking-[0.12em] uppercase">
-							relevant
+							{FEATURES.LEGISLATIVE_INTELLIGENCE_LIVE ? 'relevant' : 'relevant · n/a'}
 						</p>
 					</div>
 					<div class="bg-surface-base px-3 py-2">
@@ -506,7 +516,14 @@
 	<!-- Relevant Section -->
 	<section id="bill-relevance" class="space-y-3">
 		<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Org relevance</h2>
-		{#if data.relevant.length === 0}
+		{#if !FEATURES.LEGISLATIVE_INTELLIGENCE_LIVE}
+			<div class="bg-surface-base border-surface-border rounded-md border p-6">
+				<p class="text-text-tertiary text-sm">
+					Bill relevance scoring is not yet available. When it ships, bills that match this
+					org's issue domains will be ranked here automatically — there's nothing to configure.
+				</p>
+			</div>
+		{:else if data.relevant.length === 0}
 			<div class="bg-surface-base border-surface-border rounded-md border p-6">
 				<p class="text-text-tertiary text-sm">
 					No relevance rows are loaded for this org. Bill relevance is computed from org

@@ -397,7 +397,8 @@ function renderHtml(ctx: ReportContext, attestationHash: string): string {
 
 function renderText(ctx: ReportContext, attestationHash: string): string {
 	const { campaignTitle, orgName, packet, verificationUrl } = ctx;
-	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography } = packet;
+	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography, debate } =
+		packet;
 	const rule = '─'.repeat(48);
 	const lines: string[] = [];
 
@@ -521,6 +522,21 @@ function renderText(ctx: ReportContext, attestationHash: string): string {
 			.map((g) => `${g.hash}=${g.count}`)
 			.join(',') || '(empty)'}`
 	);
+	// Debate field — the 11th canonical preimage element. Printed so a debate
+	// campaign's recipient can reproduce the committed hash; the `(no debate)`
+	// token maps back to null for the common non-debate case. Must mirror
+	// canonicalPreimage's debatePreimage exactly.
+	const debatePreimage = debate
+		? [
+				debate.marketPosition,
+				debate.totalStake,
+				debate.topArgumentScore,
+				debate.aiPanelConsensus === null ? '' : String(debate.aiPanelConsensus),
+				debate.participantCount === null ? '' : String(debate.participantCount),
+				debate.resolutionHash ?? ''
+			].join('|')
+		: '';
+	lines.push(`    ${debatePreimage || '(no debate)'}`);
 	lines.push('');
 	lines.push('  Result must equal the attestation hash above.');
 	lines.push('  Any platform-independent SHA-256 tool reproduces it:');

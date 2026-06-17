@@ -103,6 +103,16 @@ export const FEATURES = {
 	/** Legislative intelligence loop: bill monitoring, alerts, scorecards */
 	LEGISLATION: true,
 
+	/**
+	 * Legislative-intelligence PRODUCERS are live. Distinct from LEGISLATION, which
+	 * only gates the route's existence — bill SEARCH + WATCH are real. But the
+	 * producers behind relevance, vote-alignment scoring, and alerts are stubs with
+	 * zero callers (trackVotes, the bill topicEmbedding writer, createAlert), so
+	 * those surfaces produce nothing. They gate on THIS flag and show an explicit
+	 * "not yet available" state instead of an empty-as-working list, until E1 ships.
+	 */
+	LEGISLATIVE_INTELLIGENCE_LIVE: false,
+
 	/** Accountability receipts: proof-weighted decision-maker tracking */
 	ACCOUNTABILITY: true,
 

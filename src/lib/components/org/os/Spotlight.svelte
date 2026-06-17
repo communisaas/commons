@@ -118,6 +118,11 @@
 		} else if (e.key === 'Escape') {
 			e.preventDefault();
 			close();
+		} else if (e.key === 'Tab') {
+			// Focus stays on the input; options are driven by Arrow keys +
+			// aria-activedescendant, so Tab must not escape the modal to the page
+			// behind it (which aria-modal="true" alone does not prevent).
+			e.preventDefault();
 		} else {
 			// any other key edits the query — keep selection in range next tick
 			selected = 0;
@@ -151,6 +156,9 @@
 				aria-expanded="true"
 				aria-controls="sp-list"
 				aria-autocomplete="list"
+				aria-activedescendant={filtered.length
+					? `sp-opt-${Math.min(selected, filtered.length - 1)}`
+					: undefined}
 				placeholder="Search pages and workspaces…"
 				aria-label="Page and workspace search"
 			/>
@@ -163,7 +171,7 @@
 						{#if i === 0 || filtered[i - 1].group !== d.group}
 							<li class="sp-group" aria-hidden="true">{d.group}</li>
 						{/if}
-						<li role="option" aria-selected={i === selected}>
+						<li role="option" id={`sp-opt-${i}`} aria-selected={i === selected}>
 							<!-- svelte-ignore a11y_mouse_events_have_key_events -->
 							<button
 								type="button"

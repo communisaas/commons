@@ -70,8 +70,8 @@ the org subscribes. Cancellation drops an org back to it.
 |---|---|
 | Verified actions | 5,000 included ($2.00/1K overage) |
 | Emails | 100,000 included ($0.75/1K overage) |
-| SQL mirror | Included |
-| Custom domain | Included |
+| SQL mirror | Upcoming — not yet available |
+| Custom domain | Upcoming — not yet available |
 | Debate markets | Included |
 | Coordination integrity reports | Included |
 

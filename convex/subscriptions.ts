@@ -9,13 +9,14 @@ import { query, mutation, internalAction, internalMutation, internalQuery } from
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from "./_validators";
+import { effectivelyActive } from "./_brandingGate";
 import { requireAuth, requireOrgRole } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import type { Id, Doc } from "./_generated/dataModel";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 
 // Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
-const PLANS: Record<
+export const PLANS: Record<
   string,
   {
     priceCents: number;
@@ -76,7 +77,7 @@ const INDIVIDUAL_PLANS: Record<string, { priceCents: number; authoredPerMonth: n
 // limit it gates. For verified actions the max plan limit is 10K < 16K cap, so a
 // saturated clamp (16K) still blocks. If a plan limit ever rises above a cap,
 // raise the cap in lockstep or the clamp would UNDER-enforce.
-const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
+export const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
 // Blasts are one row per send (not per recipient), so a period rarely holds many;
 // the cap is a doc-cap backstop. On saturation blastSentThisPeriod fails safe by
 // returning MAX_SAFE_INTEGER (blocks) rather than clamping a recipient SUM low.
@@ -280,12 +281,8 @@ export const hasActivePaidIndividual = query({
     if (!sub) return false;
     if (!INDIVIDUAL_PLANS[sub.plan]) return false; // org plan / unknown → not paid individual
 
-    const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-    const isWithinGrace =
-      sub.status === "past_due" &&
-      sub.pastDueSince !== undefined &&
-      Date.now() - sub.pastDueSince < GRACE_PERIOD_MS;
-    return sub.status === "active" || sub.status === "trialing" || isWithinGrace;
+    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
+    return effectivelyActive(sub, Date.now());
   },
 });
 
@@ -324,27 +321,17 @@ export const checkPlanLimits = query({
     // Grace period: past_due orgs retain paid access for 7 days
     // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
     // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
-    const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-    const pastDueSince = sub?.pastDueSince;
-    const isWithinGrace =
-      sub?.status === "past_due" &&
-      pastDueSince &&
-      Date.now() - pastDueSince < GRACE_PERIOD_MS;
-
-    // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not the inactive floor — until Stripe transitions them to 'active' on
-    // first successful payment. Without this, an org granted a paid trial would
-    // hit the gated floor during the trial window.
-    const effectivelyActive =
-      sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
+    // Branding deliberately uses the no-grace effectivePlan instead.
+    const isPaidWithGrace = effectivelyActive(sub, Date.now());
+    const plan = isPaidWithGrace ? (sub?.plan ?? "inactive") : "inactive";
     const limits = PLANS[plan] ?? PLANS.inactive;
 
     // Determine billing period start
     // For paid/grace orgs: subscription's currentPeriodStart
     // For inactive (unsubscribed) orgs: start of current calendar month (UTC)
     let periodStart: number;
-    if (effectivelyActive && sub?.currentPeriodStart) {
+    if (isPaidWithGrace && sub?.currentPeriodStart) {
       periodStart = sub.currentPeriodStart;
     } else {
       const now = new Date();
@@ -408,23 +395,13 @@ export const checkPlanLimitsByOrgId = internalQuery({
 
     // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
     // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
-    const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-    const pastDueSince = sub?.pastDueSince;
-    const isWithinGrace =
-      sub?.status === "past_due" &&
-      pastDueSince &&
-      Date.now() - pastDueSince < GRACE_PERIOD_MS;
-    // 'trialing' counts as active so trial orgs receive their plan tier limits
-    // — not the inactive floor — until Stripe transitions them to 'active' on
-    // first successful payment. Without this, an org granted a paid trial would
-    // hit the gated floor during the trial window.
-    const effectivelyActive =
-      sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-    const plan = effectivelyActive ? (sub?.plan ?? "inactive") : "inactive";
+    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
+    const isPaidWithGrace = effectivelyActive(sub, Date.now());
+    const plan = isPaidWithGrace ? (sub?.plan ?? "inactive") : "inactive";
     const limits = PLANS[plan] ?? PLANS.inactive;
 
     let periodStart: number;
-    if (effectivelyActive && sub?.currentPeriodStart) {
+    if (isPaidWithGrace && sub?.currentPeriodStart) {
       periodStart = sub.currentPeriodStart;
     } else {
       const now = new Date();

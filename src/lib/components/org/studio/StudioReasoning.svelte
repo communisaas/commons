@@ -240,7 +240,7 @@
 	/* Working pulse: a slow SIGNAL-class breath. The instrument is alive. */
 	.reasoning--working .reasoning-pulse {
 		background: var(--coord-route-solid, #3bc4b8);
-		animation: working-pulse 1.6s ease-in-out infinite;
+		animation: working-pulse var(--pulse-duration) var(--pulse-easing) infinite;
 	}
 
 	@keyframes working-pulse {

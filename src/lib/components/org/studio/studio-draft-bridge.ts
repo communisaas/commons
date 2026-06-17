@@ -1,5 +1,7 @@
 import { generateDraftId, templateDraftStore } from '$lib/stores/templateDraft';
 import { saveOrgEmailComposeDraft } from '$lib/stores/orgEmailComposeDraft';
+import { saveOrgCampaignDraft } from '$lib/stores/orgCampaignDraft';
+import type { GeoScope } from '$lib/core/agents/types';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 import type {
@@ -181,6 +183,47 @@ export function saveStudioProcessAsTemplateDraft(proc: OrgProcess): string {
 
 	templateDraftStore.saveDraft(draftId, formData, 'content');
 	return draftId;
+}
+
+// Map the authoring scope to the campaign's coarse target fields. international
+// → cleared (no country); nationwide → country; subnational → country + the
+// subdivision (or locality), bounded to the create action's 64-char cap.
+function geoScopeToTargets(scope: GeoScope | null | undefined): {
+	targetCountry?: string;
+	targetJurisdiction?: string;
+} {
+	if (!scope || scope.type === 'international') return {};
+	if (scope.type === 'nationwide') return { targetCountry: scope.country };
+	const jurisdiction = scope.subdivision ?? scope.locality;
+	return {
+		targetCountry: scope.country,
+		targetJurisdiction: jurisdiction ? jurisdiction.slice(0, 64) : undefined
+	};
+}
+
+/**
+ * Studio → campaigns/new (congressional). Carries the campaign SHELL — title,
+ * the PLAIN composed message (NOT the email-HTML serializer), type, and derived
+ * targets — plus carried-count metadata for the "Draft from Studio" banner.
+ */
+export function saveStudioProcessAsCampaignDraft(proc: OrgProcess): string {
+	const targets = geoScopeToTargets(proc.geographicScope);
+	return saveOrgCampaignDraft({
+		source: 'studio',
+		title: proc.intent.subjectLine,
+		body: proc.composedMessage,
+		type: 'CONGRESSIONAL',
+		targetCountry: targets.targetCountry,
+		targetJurisdiction: targets.targetJurisdiction,
+		createdAt: Date.now(),
+		metadata: {
+			processId: proc.id,
+			title: proc.title,
+			decisionMakerCount: proc.decisionMakers.length,
+			sourceCount: proc.sources.length,
+			geographicScopeLabel: proc.geographicScopeLabel
+		}
+	});
 }
 
 export function saveStudioProcessAsOrgEmailDraft(proc: OrgProcess): string {

@@ -40,6 +40,25 @@ function hasResponse(
 	return responses.some((r) => r.type === 'opened');
 }
 
+// Classify a clicked SES link as a constituent verify-click. The shipped report
+// email links the public proof page at `/v/<campaignId>`; the per-delivery
+// credential route `/verify/<hash>` is also a live verify surface. Match either
+// as a leading path *segment* (not a bare substring) so unrelated paths that
+// merely contain "/v/" — `/services/v/x`, `/communisaas/voter-protocol/...`,
+// or a `?next=/v/...` query — are not misclassified as verify clicks. Must not
+// throw: it runs inside the webhook mutation, and a throw would drop the event.
+function isVerifyLink(linkUrl: string | undefined): boolean {
+	if (!linkUrl) return false;
+	let path = linkUrl;
+	try {
+		path = new URL(linkUrl).pathname;
+	} catch {
+		// Relative or malformed URL — keep the raw string and still anchor on a
+		// leading segment so `/v/<id>` (relative) classifies, `not a url` does not.
+	}
+	return /^\/(v|verify)\//.test(path);
+}
+
 // =============================================================================
 // SES WEBHOOK — INTERNAL MUTATIONS
 // =============================================================================
@@ -338,7 +357,7 @@ export const handleDeliveryEvent = internalMutation({
 					.withIndex('by_deliveryId', (q) => q.eq('deliveryId', delivery._id))
 					.first();
 
-				const isVerifyClick = args.linkUrl?.includes('/verify/') ?? false;
+				const isVerifyClick = isVerifyLink(args.linkUrl);
 				const event: DeliveryResponseEvent = isVerifyClick
 					? {
 							type: 'clicked_verify',
@@ -916,6 +935,20 @@ export const refundDonation = internalMutation({
 		await ctx.db.patch(donation._id, {
 			status: 'refunded',
 			updatedAt: Date.now()
+		});
+
+		// Emit donation.refunded (A4) — mirror of donation.completed. Sits after
+		// the early-return guard so a replayed/non-completed refund never emits a
+		// phantom event. No donor PII (identity stays on the encrypted donation row).
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: donation.orgId,
+			event: 'donation.refunded',
+			payload: JSON.stringify({
+				donationId: donation._id,
+				campaignId: donation.campaignId ?? null,
+				amountCents: donation.amountCents,
+				timestamp: Date.now()
+			})
 		});
 
 		// Decrement campaign counters

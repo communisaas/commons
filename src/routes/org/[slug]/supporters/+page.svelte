@@ -2,6 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
+	import { EntityCluster } from '$lib/design';
 	import { Download, Upload } from '@lucide/svelte';
 	import VerificationPipeline from '$lib/components/org/VerificationPipeline.svelte';
 	import SegmentBuilder from '$lib/components/segments/SegmentBuilder.svelte';
@@ -843,7 +844,7 @@
 					<span class="text-text-tertiary">{fmt(data.emailHealth.subscribed)} subscribed</span>
 				</span>
 				<span class="inline-flex items-center gap-1.5 text-xs">
-					<span class="inline-block h-2 w-2 rounded-full bg-yellow-500"></span>
+					<span class="inline-block h-2 w-2 rounded-full bg-amber-500"></span>
 					<span class="text-text-tertiary">{fmt(data.emailHealth.unsubscribed)} unsubscribed</span>
 				</span>
 				<span class="inline-flex items-center gap-1.5 text-xs">
@@ -1400,149 +1401,92 @@
 			</p>
 		</div>
 	{:else}
-		<div class="border-surface-border overflow-hidden rounded-md border">
-			<div class="overflow-x-auto">
-				<table class="w-full text-left">
-					<thead>
-						<tr class="border-surface-border bg-surface-raised border-b">
-							<th
-								class="text-text-tertiary w-24 px-4 py-3 text-xs font-medium tracking-wider uppercase"
-								>Status</th
+		<!-- People as void-separated clusters (no card, no border — the void IS the
+		     boundary). Each row: status-dot · name(link) · email on the primary line;
+		     the table's other columns reflow onto a wrapping mono meta line (never
+		     hidden, never horizontally scrolled). -->
+		<EntityCluster as="ul" density="tight" class="px-1">
+			{#each tableRows as supporter (supporter.id)}
+				{@const vState = verificationState(supporter)}
+				<li class="group min-w-0">
+					<!-- Primary line: status dot (glance rail) · name link · email -->
+					<div class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+						<span class="inline-flex shrink-0 items-center" title={vState} aria-hidden="true">
+							{#if vState === 'Verified'}
+								<span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+							{:else if vState === 'Resolved'}
+								<span
+									class="inline-block h-2.5 w-2.5 rounded-full border-2 border-teal-500 bg-teal-500/30"
+								></span>
+							{:else}
+								<span class="bg-text-quaternary inline-block h-2.5 w-2.5 rounded-full"></span>
+							{/if}
+						</span>
+						<a
+							href="/org/{data.org.slug}/supporters/{supporter.id}"
+							class="text-text-primary truncate text-sm transition-colors hover:text-teal-400 focus-visible:text-teal-400 focus-visible:underline focus-visible:outline-none"
+							>{supporter.name}</a
+						>
+						<span class="text-text-quaternary shrink-0" aria-hidden="true">·</span>
+						<span class="flex min-w-0 items-center gap-1.5">
+							<!-- Email-status dot: amber=unsubscribed (warning), red=bounced/
+							     complained (error) — on the semantic warning/error axis, NOT the
+							     categorical-palette exception (which design-system.md withholds for
+							     delivery status). The dot is NEVER color-alone: the adjacent
+							     uppercase word carries the same status as TEXT (and complained also
+							     strikes the email), so color is redundant, not the sole signal. -->
+							{#if supporter.emailStatus === 'unsubscribed'}
+								<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500"></span>
+							{:else if supporter.emailStatus === 'bounced' || supporter.emailStatus === 'complained'}
+								<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"></span>
+							{/if}
+							<span
+								class="text-text-tertiary truncate text-sm {supporter.emailStatus === 'complained'
+									? 'line-through'
+									: ''}">{supporter.email}</span
 							>
-							<th class="text-text-tertiary px-4 py-3 text-xs font-medium tracking-wider uppercase"
-								>Name</th
-							>
-							<th class="text-text-tertiary px-4 py-3 text-xs font-medium tracking-wider uppercase"
-								>Email</th
-							>
-							<th
-								class="text-text-tertiary hidden px-4 py-3 text-xs font-medium tracking-wider uppercase lg:table-cell"
-								>Postal</th
-							>
-							<th
-								class="text-text-tertiary hidden px-4 py-3 text-xs font-medium tracking-wider uppercase xl:table-cell"
-								>Tags</th
-							>
-							<th
-								class="text-text-tertiary hidden w-16 px-4 py-3 text-xs font-medium tracking-wider uppercase lg:table-cell"
-								>Source</th
-							>
-							<th
-								class="text-text-tertiary hidden w-24 px-4 py-3 text-xs font-medium tracking-wider uppercase md:table-cell"
-								>Added</th
-							>
-						</tr>
-					</thead>
-					<tbody class="divide-surface-border divide-y">
-						{#each tableRows as supporter (supporter.id)}
-							{@const vState = verificationState(supporter)}
-							<tr class="hover:bg-surface-raised group transition-colors">
-								<!-- Verification status -->
-								<td class="px-4 py-3">
-									{#if vState === 'Verified'}
-										<span class="inline-flex items-center gap-1.5">
-											<span class="inline-block h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-											<span class="text-xs text-emerald-400">Verified</span>
-										</span>
-									{:else if vState === 'Resolved'}
-										<span class="inline-flex items-center gap-1.5">
-											<span
-												class="inline-block h-2.5 w-2.5 rounded-full border-2 border-teal-500 bg-teal-500/30"
-											></span>
-											<span class="text-xs text-teal-400">Resolved</span>
-										</span>
-									{:else}
-										<span class="inline-flex items-center gap-1.5">
-											<span class="bg-text-quaternary inline-block h-2.5 w-2.5 rounded-full"></span>
-											<span class="text-text-tertiary text-xs">Imported</span>
-										</span>
-									{/if}
-								</td>
+							{#if supporter.emailStatus === 'unsubscribed'}
+								<span class="shrink-0 font-mono text-[10px] uppercase text-amber-400">unsubscribed</span>
+							{:else if supporter.emailStatus === 'bounced'}
+								<span class="shrink-0 font-mono text-[10px] uppercase text-red-400">bounced</span>
+							{:else if supporter.emailStatus === 'complained'}
+								<span class="shrink-0 font-mono text-[10px] uppercase text-red-400">complained</span>
+							{/if}
+						</span>
+					</div>
 
-								<!-- Name -->
-								<td class="px-4 py-3">
-									<a
-										href="/org/{data.org.slug}/supporters/{supporter.id}"
-										class="text-text-primary text-sm transition-colors hover:text-teal-400"
-									>
-										{supporter.name}
-									</a>
-								</td>
-
-								<!-- Email with status dot -->
-								<td class="px-4 py-3">
-									<div class="flex min-w-0 items-center gap-1.5">
-										{#if supporter.emailStatus === 'unsubscribed'}
-											<span
-												class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-yellow-500"
-											></span>
-										{:else if supporter.emailStatus === 'bounced'}
-											<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"
-											></span>
-										{:else if supporter.emailStatus === 'complained'}
-											<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"
-											></span>
-										{/if}
-										<span
-											class="max-w-48 truncate text-sm {supporter.emailStatus === 'complained'
-												? 'text-text-tertiary line-through'
-												: 'text-text-tertiary'}"
-										>
-											{supporter.email}
-										</span>
-									</div>
-								</td>
-
-								<!-- Postal -->
-								<td class="hidden px-4 py-3 lg:table-cell">
-									<span class="text-text-tertiary font-mono text-sm tabular-nums"
-										>{supporter.postalCode || '\u2014'}</span
-									>
-								</td>
-
-								<!-- Tags -->
-								<td class="hidden px-4 py-3 xl:table-cell">
-									{#if supporter.tags.length > 0}
-										<div class="flex flex-wrap items-center gap-1">
-											{#each supporter.tags.slice(0, 3) as tag}
-												<span
-													class="bg-surface-overlay text-text-tertiary inline-flex items-center rounded-full px-2 py-0.5 text-xs"
-												>
-													{tag.name}
-												</span>
-											{/each}
-											{#if supporter.tags.length > 3}
-												<span class="text-text-quaternary text-xs"
-													>+{supporter.tags.length - 3} more</span
-												>
-											{/if}
-										</div>
-									{:else}
-										<span class="text-text-quaternary">&mdash;</span>
-									{/if}
-								</td>
-
-								<!-- Source -->
-								<td class="hidden px-4 py-3 lg:table-cell">
-									<span
-										class="bg-surface-overlay text-text-tertiary inline-flex items-center rounded px-1.5 py-0.5 font-mono text-[10px] uppercase"
-									>
-										{sourceLabel(supporter.source)}
-									</span>
-								</td>
-
-								<!-- Added -->
-								<td class="hidden px-4 py-3 md:table-cell">
-									<span class="text-text-quaternary font-mono text-xs tabular-nums"
-										>{supporter.createdAt ? relativeTime(supporter.createdAt) : '—'}</span
-									>
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
-		</div>
+					<!-- Meta line (mono, mid-dot separated) — recency-first:
+					     status · age · postal · source · tags. The table's demoted columns
+					     reflow here; flex-wrap replaces column-hiding, so no field is dropped. -->
+					<p
+						class="text-text-quaternary mt-0.5 flex flex-wrap items-baseline gap-x-2 font-mono text-xs tabular-nums"
+					>
+						<span
+							class={vState === 'Verified'
+								? 'text-emerald-400'
+								: vState === 'Resolved'
+									? 'text-teal-400'
+									: 'text-text-tertiary'}>{vState}</span
+						>
+						<span aria-hidden="true">·</span>
+						<span>{supporter.createdAt ? relativeTime(supporter.createdAt) : '—'}</span>
+						<span aria-hidden="true">·</span>
+						<span class="text-text-tertiary">{supporter.postalCode || '—'}</span>
+						<span aria-hidden="true">·</span>
+						<span class="uppercase">{sourceLabel(supporter.source)}</span>
+						{#if supporter.tags.length > 0}
+							<span aria-hidden="true">·</span>
+							{#each supporter.tags.slice(0, 3) as tag}
+								<span class="text-text-tertiary">#{tag.name}</span>
+							{/each}
+							{#if supporter.tags.length > 3}
+								<span>+{supporter.tags.length - 3}</span>
+							{/if}
+						{/if}
+					</p>
+				</li>
+			{/each}
+		</EntityCluster>
 
 		<!-- Load more -->
 		{#if hasMore && !searchEngaged}

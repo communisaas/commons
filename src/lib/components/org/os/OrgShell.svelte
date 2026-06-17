@@ -31,8 +31,10 @@
 -->
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { browser } from '$app/environment';
 	import { replaceState, afterNavigate } from '$app/navigation';
 	import { getOrgOS, spaceForPath, pathForSpace, SPACE_LABELS, type SpaceId } from './orgOS.svelte';
+	import { spaceSwitchDirection } from './perceptual';
 	import StudioSpace from './StudioSpace.svelte';
 	import ReturnSpace from './ReturnSpace.svelte';
 	import BaseSpace from './BaseSpace.svelte';
@@ -63,6 +65,12 @@
 	function show(space: SpaceId): boolean {
 		return os.activeSpace === space;
 	}
+
+	// Directional hint for the cross-fade — +1 rightward in switcher order, −1 left,
+	// 0 on first paint. prevSpace is non-reactive, but this re-derives on the
+	// reactive activeSpace change (set AFTER prevSpace in switchSpace), so the read
+	// is correct.
+	const switchDir = $derived(spaceSwitchDirection(os.prevSpace, os.activeSpace));
 
 	// ADDRESSABILITY — two directions, kept from fighting each other:
 	//
@@ -114,18 +122,41 @@
 			await tick();
 		}
 	});
+
+	// (3) Per-space scroll memory. On a switch, capture the OUTGOING space's document
+	// scroll, then restore the INCOMING space's remembered offset after it lays out
+	// (rAF). Scroll is at the document ROOT (window) — NOT main.scrollTop; there is
+	// no inner scrollport, so main.scrollTop would silently restore to top. This
+	// effect's only reactive dep is activeSpace; it writes no rune the URL effect
+	// reads, so it cannot re-enter effect (1).
+	let lastScrollSpace: SpaceId = os.activeSpace;
+	$effect(() => {
+		const space = os.activeSpace;
+		if (!browser || space === lastScrollSpace) return;
+		os.recordScroll(lastScrollSpace, window.scrollY);
+		lastScrollSpace = space;
+		const target = os.getScroll(space);
+		// 'auto', never 'smooth' — a restore must be instant. Clamp to the new
+		// content's max so a stale offset into now-shorter content can't jump past.
+		requestAnimationFrame(() => {
+			const max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+			window.scrollTo({ top: Math.min(target, max), behavior: 'auto' });
+		});
+	});
 </script>
 
 <!--
-  All four spaces are mounted at once. Visibility is toggled with `display:none`
-  via [hidden]; the inactive space's DOM (and its component state) is preserved,
-  never destroyed. This is the multitasking ground: the Studio process view
-  stays alive behind People, Power, and Results.
+  All four spaces are mounted at once. The inactive spaces are kept in the DOM via
+  `visibility:hidden` + `opacity:0` (NEVER `display:none`) and lifted out of normal
+  flow (`position:absolute`) so the ACTIVE space alone defines the document scroll
+  height. Their DOM and component state are preserved — the multitasking ground:
+  the Studio process view streams alive behind People, Power, and Results, and a
+  switch cross-fades (140ms) rather than hard-cutting. Reduced-motion → instant.
 -->
-<div class="org-spaces">
+<div class="org-spaces" style="--switch-dir: {switchDir};">
 	<div
 		class="org-space"
-		hidden={!show('studio')}
+		data-active={show('studio')}
 		aria-hidden={!show('studio')}
 		aria-label="{SPACE_LABELS.studio} workspace"
 	>
@@ -134,7 +165,7 @@
 
 	<div
 		class="org-space"
-		hidden={!show('base')}
+		data-active={show('base')}
 		aria-hidden={!show('base')}
 		aria-label="{SPACE_LABELS.base} workspace"
 	>
@@ -143,7 +174,7 @@
 
 	<div
 		class="org-space"
-		hidden={!show('landscape')}
+		data-active={show('landscape')}
 		aria-hidden={!show('landscape')}
 		aria-label="{SPACE_LABELS.landscape} workspace"
 	>
@@ -152,7 +183,7 @@
 
 	<div
 		class="org-space"
-		hidden={!show('return')}
+		data-active={show('return')}
 		aria-hidden={!show('return')}
 		aria-label="{SPACE_LABELS.return} workspace"
 	>
@@ -162,16 +193,51 @@
 
 <style>
 	.org-spaces {
+		position: relative;
 		width: 100%;
 	}
 
 	.org-space {
 		width: 100%;
+		min-width: 0;
 	}
 
-	/* [hidden] is honored by the attribute; this hardens it against utility CSS
-	   that might set display on descendants. The space is hidden, not unmounted. */
-	.org-space[hidden] {
-		display: none;
+	/* Inactive spaces leave normal flow (so the ACTIVE space alone sizes the scroll
+	   height — no tallest-of-four inflation) but keep their DOM + state via
+	   visibility:hidden, NOT display:none — the Studio stream is never stranded.
+	   The `visibility 0s 140ms` delay fades opacity out FIRST, then leaves the a11y
+	   tree. */
+	.org-space:not([data-active='true']) {
+		position: absolute;
+		inset: 0 0 auto 0;
+		opacity: 0;
+		visibility: hidden;
+		pointer-events: none;
+		transform: translateX(calc(var(--switch-dir, 0) * 8px));
+		transition:
+			opacity 140ms var(--header-easing),
+			transform 140ms var(--header-easing),
+			visibility 0s linear 140ms;
+	}
+
+	.org-space[data-active='true'] {
+		position: relative;
+		opacity: 1;
+		transform: none;
+		transition:
+			opacity 140ms var(--header-easing),
+			transform 140ms var(--header-easing);
+	}
+
+	/* a11y hard gate — instant swap, no fade/translate. MUST match the per-state
+	   selectors' (0,2,0) specificity: a bare `.org-space` (0,1,0) is OUTRANKED by
+	   `.org-space[data-active='true']` / `:not([data-active='true'])`, so the
+	   override would silently lose and motion would still run under reduced-motion. */
+	@media (prefers-reduced-motion: reduce) {
+		.org-space:not([data-active='true']),
+		.org-space[data-active='true'] {
+			transition: none;
+			transform: none;
+		}
 	}
 </style>

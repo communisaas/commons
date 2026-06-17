@@ -122,6 +122,20 @@ interface AccountabilityReceipt {
 	responses?: AccountabilityResponse[];
 }
 
+// Byte-for-byte mirror of `isVerifyLink` in convex/webhooks.ts. Kept identical
+// so this drift-canary pins the real classifier: segment-anchored on /v/ or
+// /verify/, never a bare substring.
+function isVerifyLink(linkUrl: string | undefined): boolean {
+	if (!linkUrl) return false;
+	let path = linkUrl;
+	try {
+		path = new URL(linkUrl).pathname;
+	} catch {
+		// Relative or malformed — keep the raw string and still segment-anchor.
+	}
+	return /^\/(v|verify)\//.test(path);
+}
+
 class MockReceiptState {
 	receipts = new Map<string, AccountabilityReceipt>();
 
@@ -133,7 +147,7 @@ class MockReceiptState {
 		if (!receipt) return;
 
 		const responses = receipt.responses ?? [];
-		const isVerifyClick = args.linkUrl?.includes('/verify/') ?? false;
+		const isVerifyClick = isVerifyLink(args.linkUrl);
 		const newType = isVerifyClick ? 'clicked_verify' : 'opened';
 		const newDetail = isVerifyClick ? args.linkUrl : undefined;
 
@@ -163,7 +177,23 @@ describe('handleDeliveryEvent Click case — retry-inflation guard', () => {
 		state.receipts.set('rec_1', { _id: 'rec_1', deliveryId: 'del_1' });
 	});
 
-	it('records a verify click on first delivery', async () => {
+	// The shipped report email links the proof page at /v/<campaignId>. This is
+	// the test that would have caught the dead verify-click metric: reverting the
+	// production classifier to `includes('/verify/')` turns this RED.
+	it('records a verify click on the shipped /v/ link', async () => {
+		await state.recordClick({
+			deliveryId: 'del_1',
+			linkUrl: 'https://commons.email/v/camp_1'
+		});
+		const responses = state.receipts.get('rec_1')!.responses!;
+		expect(responses).toHaveLength(1);
+		expect(responses[0].type).toBe('clicked_verify');
+		expect(responses[0].detail).toBe('https://commons.email/v/camp_1');
+	});
+
+	// The legacy per-delivery credential route /verify/<hash> stays a co-valid
+	// verify surface.
+	it('records a verify click on the legacy /verify/ route', async () => {
 		await state.recordClick({
 			deliveryId: 'del_1',
 			linkUrl: 'https://commons.email/verify/abc123'
@@ -171,7 +201,30 @@ describe('handleDeliveryEvent Click case — retry-inflation guard', () => {
 		const responses = state.receipts.get('rec_1')!.responses!;
 		expect(responses).toHaveLength(1);
 		expect(responses[0].type).toBe('clicked_verify');
-		expect(responses[0].detail).toBe('https://commons.email/verify/abc123');
+	});
+
+	// Over-match guard: paths that merely *contain* "/v/" or "/verify" but are not
+	// a leading verify segment must classify as "opened", never clicked_verify.
+	it.each([
+		'https://github.com/communisaas/voter-protocol/blob/main/specs/REPORT-ATTESTATION-SPEC.md',
+		'https://commons.email/services/v/x',
+		'https://commons.email/u?next=/v/camp_1',
+		'https://commons.email', // bare origin, empty path
+		'https://example.com/news'
+	])('does NOT classify a non-segment "/v/" URL as a verify click: %s', async (linkUrl) => {
+		await state.recordClick({ deliveryId: 'del_1', linkUrl });
+		const responses = state.receipts.get('rec_1')!.responses ?? [];
+		expect(responses.every((r) => r.type !== 'clicked_verify')).toBe(true);
+	});
+
+	// Relative / malformed URLs must not throw (a throw aborts the mutation and
+	// drops the SES event). Relative /v/ still classifies via the raw-path fallback.
+	it('handles relative and malformed link URLs without throwing', async () => {
+		await expect(
+			state.recordClick({ deliveryId: 'del_1', linkUrl: '/v/camp_1' })
+		).resolves.not.toThrow();
+		const responses = state.receipts.get('rec_1')!.responses!;
+		expect(responses[0].type).toBe('clicked_verify');
 	});
 
 	it('does NOT double-record a duplicate verify-click for the same link', async () => {

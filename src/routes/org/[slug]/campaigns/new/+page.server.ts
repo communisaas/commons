@@ -5,7 +5,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { CongressionalDeliveryGroundData } from '$lib/components/org/os/spaces';
-import { FEATURES } from '$lib/config/features';
+import { congressionalDeliveryAvailable } from '$lib/congressional-readiness';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -47,12 +47,7 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 	requireRole(membership.role, 'editor');
 
 	const fromAlertId = url.searchParams.get('fromAlert');
-	// Type preselection from a handoff (e.g. Studio "Send to Congress"). Only
-	// honored for CONGRESSIONAL and only while the flag reveals it; anything
-	// else falls back to the default.
 	const requestedType = url.searchParams.get('type');
-	const initialType =
-		requestedType === 'CONGRESSIONAL' && FEATURES.CONGRESSIONAL ? 'CONGRESSIONAL' : 'LETTER';
 
 	const [templates, alertPrefill, congressionalDeliveryResult] = await Promise.all([
 		serverQuery(api.templates.listByOrg, { slug: params.slug }),
@@ -65,6 +60,16 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 		serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null)
 	]);
 
+	// Whether to OFFER the congressional type — runtime-readiness driven (one SSOT,
+	// shared with Studio), not the compile-time flag. B1 arming delivery flips this.
+	const congressionalAuthoringEnabled = congressionalDeliveryAvailable(
+		congressionalDeliveryResult as { launched?: boolean; ready?: boolean } | null
+	);
+	// Type preselection from a handoff (e.g. Studio "Send to Congress"); only
+	// honored when congressional is actually offered, else falls back to default.
+	const initialType =
+		requestedType === 'CONGRESSIONAL' && congressionalAuthoringEnabled ? 'CONGRESSIONAL' : 'LETTER';
+
 	return {
 		templates: templates.map((t: { _id: string; title: string }) => ({
 			id: t._id,
@@ -72,10 +77,7 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 		})),
 		alertPrefill,
 		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult),
-		// Whether the congressional campaign type is offered in authoring. The
-		// authoring surface exists and is correct regardless; the flag decides
-		// whether it's revealed (launch decision lives with the flag, not here).
-		congressionalAuthoringEnabled: FEATURES.CONGRESSIONAL,
+		congressionalAuthoringEnabled,
 		initialType
 	};
 };
@@ -106,11 +108,16 @@ export const actions: Actions = {
 			return fail(400, { error: 'Title is required', title, type, body, targetCountry, targetJurisdiction });
 		}
 
-		// CONGRESSIONAL is accepted only while the launch flag is on — the flag
-		// is the reveal gate for the authoring surface, so the server-side
-		// allowlist mirrors it rather than letting a hand-crafted POST author a
-		// congressional campaign the UI doesn't yet offer.
-		const allowedTypes = FEATURES.CONGRESSIONAL
+		// CONGRESSIONAL is accepted only when delivery readiness offers it — the
+		// same runtime-readiness SSOT the reveal uses (not a static flag), so a
+		// hand-crafted POST can't author a congressional campaign the UI doesn't
+		// offer. The CWC delivery gate is enforced independently at send time.
+		const readiness = await serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(
+			() => null
+		);
+		const allowedTypes = congressionalDeliveryAvailable(
+			readiness as { launched?: boolean; ready?: boolean } | null
+		)
 			? ['LETTER', 'EVENT', 'FORM', 'CONGRESSIONAL']
 			: ['LETTER', 'EVENT', 'FORM'];
 		if (!type || !allowedTypes.includes(type)) {

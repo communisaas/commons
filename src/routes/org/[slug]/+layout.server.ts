@@ -174,48 +174,23 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 	// ─── RESULTS proof posture + watermark ────────────────────────────
 	// Reuses the org-root page load's Convex calls. dashboardStats also feeds the
 	// Mantle watermark, so we share the one query.
-	const [dashboard, dashboardStats, receiptSummary] = await Promise.all([
-		serverQuery(api.organizations.getDashboard, { slug }).catch(() => null),
-		serverQuery(api.organizations.getDashboardStats, { slug }).catch(() => null),
-		FEATURES.ACCOUNTABILITY
-			? serverQuery(api.legislation.getOrgReceiptSummary, { slug, limit: 200 }).catch(() => null)
-			: Promise.resolve(null)
-	]);
-
-	const watermark = dashboardStats
-		? {
-				thisWeek: dashboardStats.growth.thisWeek,
-				lastWeek: dashboardStats.growth.lastWeek,
-				tiers: dashboardStats.tiers.map((t: { tier: number; count: number }) => ({
-					tier: t.tier,
-					count: t.count
-				}))
-			}
-		: null;
-
-	// ─── PEOPLE verification and reach summary ────────────────────────
-	// Pipeline + email-health summary for the BASE surface. The full supporter
-	// table (paginated, filterable, with PII decryption) stays on the /supporters
-	// deep route; BASE surfaces the pipeline signal + a link in.
-	const [supporterSummary, districtVerifiedResult, orgKeyResult, segmentsResult] = await Promise.all([
-		serverQuery(api.supporters.getSummaryStats, {
-			orgSlug: slug
-		}).catch(() => null),
-		// District-of-record is set cardinality, served by a separate bounded
-		// query (not the always-on funnel summary). Null-safe so a failure or an
-		// org with no district signal just shows 0.
-		serverQuery(api.supporters.getDistrictVerifiedCount, {
-			orgSlug: slug
-		}).catch(() => null),
-		serverQuery(api.organizations.getOrgKeyVerifier, { slug }).catch(() => null),
-		serverQuery(api.segments.list, { slug }).catch(() => null)
-	]);
-
-	// ─── OPERATING GROUND (fundraising posture, no donor PII) ──────────
-	// The deep fundraising routes own donor lists and mutations. The shell only
-	// loads aggregate fundraiser/donation posture for the bounded action notices,
-	// without fabricating receipt or donor identity claims.
+	// One fan-out for the whole shell. Batches below take only `slug` and depend on
+	// nothing from each other; the prior four serial Promise.all waves added ~3
+	// extra round-trips per org navigation for no reason. The ONLY genuine serial
+	// dependency is the verification packet (needs topCampaignId from the
+	// dashboard) — it is awaited after this fan-out. Every query keeps its own
+	// `.catch(() => null)` so one slice's hiccup never 500s the shell.
 	const [
+		// RESULTS — dashboard + watermark source + receipts
+		dashboard,
+		dashboardStats,
+		receiptSummary,
+		// PEOPLE — verification + reach summary (full table stays on /supporters)
+		supporterSummary,
+		districtVerifiedResult,
+		orgKeyResult,
+		segmentsResult,
+		// OPERATING GROUND — fundraising posture (no donor PII), automation, sms, calls
 		fundraiserResult,
 		donationConfirmationSummary,
 		workflowResult,
@@ -225,8 +200,23 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 		congressionalDeliveryResult,
 		networkResult,
 		signalEventsResult,
-		platformApiStateResult
+		platformApiStateResult,
+		// LANDSCAPE — decision-makers + watched bills + scorecards
+		dmFollows,
+		watchedBills,
+		relevantBills,
+		scorecardResult
 	] = await Promise.all([
+		serverQuery(api.organizations.getDashboard, { slug }).catch(() => null),
+		serverQuery(api.organizations.getDashboardStats, { slug }).catch(() => null),
+		FEATURES.ACCOUNTABILITY
+			? serverQuery(api.legislation.getOrgReceiptSummary, { slug, limit: 200 }).catch(() => null)
+			: Promise.resolve(null),
+		serverQuery(api.supporters.getSummaryStats, { orgSlug: slug }).catch(() => null),
+		// District-of-record is set cardinality, served by a separate bounded query.
+		serverQuery(api.supporters.getDistrictVerifiedCount, { orgSlug: slug }).catch(() => null),
+		serverQuery(api.organizations.getOrgKeyVerifier, { slug }).catch(() => null),
+		serverQuery(api.segments.list, { slug }).catch(() => null),
 		FEATURES.FUNDRAISING
 			? serverQuery(api.donations.listByOrgWithDonors, {
 					orgSlug: slug,
@@ -254,16 +244,7 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 			? serverQuery(api.networks.list, { orgSlug: slug }).catch(() => null)
 			: Promise.resolve(null),
 		serverQuery(api.orgWebhooks.sessionListRecentEvents, { slug, limit: 8 }).catch(() => null),
-		serverQuery(api.organizations.getPlatformApiState, { slug }).catch(() => null)
-	]);
-
-	// ─── LANDSCAPE (decision-makers + watched bills + scorecards) ─────
-	// The followed/watched/tracked terrain, folded into one surface. Search and
-	// mutation tooling stays on deep routes; the shell only reads aggregate
-	// relevance/position posture so monitoring claims do not drift.
-	// Legislation-gated reads short-circuit to null when the feature is off,
-	// matching the deep routes' 404/redirect.
-	const [dmFollows, watchedBills, relevantBills, scorecardResult] = await Promise.all([
+		serverQuery(api.organizations.getPlatformApiState, { slug }).catch(() => null),
 		serverQuery(api.legislation.listOrgDmFollows, { slug, limit: 12 }).catch(() => null),
 		FEATURES.LEGISLATION
 			? serverQuery(api.legislation.listWatchedBills, { slug, limit: 10 }).catch(() => null)
@@ -279,6 +260,17 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 				}).catch(() => null)
 			: Promise.resolve(null)
 	]);
+
+	const watermark = dashboardStats
+		? {
+				thisWeek: dashboardStats.growth.thisWeek,
+				lastWeek: dashboardStats.growth.lastWeek,
+				tiers: dashboardStats.tiers.map((t: { tier: number; count: number }) => ({
+					tier: t.tier,
+					count: t.count
+				}))
+			}
+		: null;
 
 	// ─── Compose RETURN space data (mirrors the org-root page mapping) ─
 	let returnSpace: ReturnSpaceData | null = null;

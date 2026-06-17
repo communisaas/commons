@@ -1,7 +1,14 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { browser } from '$app/environment';
+	import { page } from '$app/stores';
 	import CountrySelector from '$lib/components/geographic/CountrySelector.svelte';
 	import JurisdictionPicker from '$lib/components/geographic/JurisdictionPicker.svelte';
+	import {
+		getOrgCampaignDraft,
+		deleteOrgCampaignDraft,
+		type OrgCampaignDraft
+	} from '$lib/stores/orgCampaignDraft';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -12,8 +19,43 @@
 	let targetJurisdiction = $state(form?.targetJurisdiction ?? '');
 	let position = $state<string>('');
 	let campaignType = $state<string>(form?.type ?? data.initialType ?? 'LETTER');
+	// title/body are controlled $state so a Studio handoff can seed them (they were
+	// uncontrolled inline `value=` before, which dropped the authored artifact).
+	let title = $state(form?.title ?? prefill?.billTitle ?? '');
+	let body = $state(form?.body ?? prefill?.billSummary ?? '');
+	let studioDraftRestored = $state<OrgCampaignDraft | null>(null);
 
 	const isCongressional = $derived(campaignType === 'CONGRESSIONAL');
+
+	// One-shot Studio → campaigns/new handoff: hydrate the campaign shell from the
+	// authored artifact, then consume the draft + strip the param so a reload does
+	// not re-import over edits. Mirrors the org-email composer handoff.
+	const studioDraftId = $derived($page.url.searchParams.get('studioDraft') ?? '');
+	let hasAppliedStudioDraft = false;
+	$effect(() => {
+		const draftId = studioDraftId;
+		if (!browser || hasAppliedStudioDraft || !draftId) return;
+		hasAppliedStudioDraft = true;
+
+		const draft = getOrgCampaignDraft(draftId);
+		if (!draft) return;
+
+		title = draft.title;
+		body = draft.body;
+		campaignType = draft.type;
+		if (draft.targetCountry) targetCountry = draft.targetCountry;
+		if (draft.targetJurisdiction) targetJurisdiction = draft.targetJurisdiction;
+		studioDraftRestored = draft;
+		deleteOrgCampaignDraft(draftId);
+
+		try {
+			const url = new URL(window.location.href);
+			url.searchParams.delete('studioDraft');
+			window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+		} catch {
+			// URL cleanup is non-critical; the one-time guard prevents re-import loops.
+		}
+	});
 </script>
 
 <div class="space-y-6">
@@ -42,6 +84,11 @@
 	{/if}
 
 	<form method="POST" use:enhance class="space-y-6">
+		<!-- A5: `prefill` comes from getAlertWithBill(?fromAlert=<id>). Legislative
+		     alerts are DEAD (createAlert has zero callers), so no legislativeAlerts
+		     row can exist and this banner is currently unreachable. Do NOT wire a
+		     `?fromAlert` link from any surface until LEGISLATIVE_INTELLIGENCE_LIVE
+		     ships — otherwise this would assert a live-alert response that never fired. -->
 		{#if prefill}
 			<input type="hidden" name="fromAlertId" value={prefill.alertId} />
 			<input type="hidden" name="billId" value={prefill.billId} />
@@ -155,6 +202,25 @@
 			{/if}
 		</div>
 
+		{#if studioDraftRestored}
+			<div class="rounded-lg border border-teal-500/25 bg-teal-500/5 px-4 py-3">
+				<p class="text-text-secondary text-sm font-medium">Draft from Studio</p>
+				<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
+					Title and message are filled in from your authored draft. Confirm targets and chambers,
+					then create the action.
+					<span class="text-text-quaternary">
+						({studioDraftRestored.metadata.decisionMakerCount} decision-maker{studioDraftRestored
+							.metadata.decisionMakerCount === 1
+							? ''
+							: 's'}, {studioDraftRestored.metadata.sourceCount} source{studioDraftRestored.metadata
+							.sourceCount === 1
+							? ''
+							: 's'} carried from Studio)
+					</span>
+				</p>
+			</div>
+		{/if}
+
 		<!-- Section 2: What are you proving? -->
 		<div id="action-identity" class="scroll-mt-24 space-y-5">
 			<p class="text-text-secondary text-sm font-medium">What are you proving?</p>
@@ -168,7 +234,7 @@
 					id="title"
 					name="title"
 					required
-					value={form?.title ?? prefill?.billTitle ?? ''}
+					bind:value={title}
 					placeholder="e.g., District 5 Zoning Letter Drive"
 					class="participation-input w-full rounded-lg text-sm transition-colors focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
 				/>
@@ -217,10 +283,10 @@
 					id="body"
 					name="body"
 					rows="4"
+					bind:value={body}
 					placeholder="What civic action are people being asked to prove?"
 					class="participation-input w-full resize-y rounded-lg text-sm transition-colors focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
-					>{form?.body ?? prefill?.billSummary ?? ''}</textarea
-				>
+				></textarea>
 			</div>
 
 			<!-- Template -->

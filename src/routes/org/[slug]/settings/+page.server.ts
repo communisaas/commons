@@ -73,8 +73,8 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			}> = [
 				{
 					label: `${plan.maxVerifiedActions.toLocaleString('en-US')} verified actions/mo`,
-					state: 'live',
-					detail: 'Quota enforced by billing limits.'
+					state: 'partial',
+					detail: 'Metered and shown on your usage meter; not a hard cap today.'
 				},
 				{
 					label: `${plan.maxEmails.toLocaleString('en-US')} emails/mo`,

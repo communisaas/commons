@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { spring } from 'svelte/motion';
+	import { SPRINGS } from '$lib/design/motion';
 
 	interface DeliveryMetrics {
 		sent: number;
@@ -15,13 +16,12 @@
 
 	let { metrics }: { metrics: DeliveryMetrics } = $props();
 
-	const springOpts = { stiffness: 0.15, damping: 0.8 };
-	const animSent = spring(0, springOpts);
-	const animDelivered = spring(0, springOpts);
-	const animOpened = spring(0, springOpts);
-	const animClicked = spring(0, springOpts);
-	const animBounced = spring(0, springOpts);
-	const animDeliveryRate = spring(0, springOpts);
+	const animSent = spring(0, SPRINGS.METRIC);
+	const animDelivered = spring(0, SPRINGS.METRIC);
+	const animOpened = spring(0, SPRINGS.METRIC);
+	const animClicked = spring(0, SPRINGS.METRIC);
+	const animBounced = spring(0, SPRINGS.METRIC);
+	const animDeliveryRate = spring(0, SPRINGS.METRIC);
 
 	$effect(() => {
 		animSent.set(metrics.sent);

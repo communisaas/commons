@@ -27,6 +27,7 @@
 <script lang="ts">
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
+	import { goto } from '$app/navigation';
 	import { Artifact, Datum } from '$lib/design';
 	import { SPRINGS, TIMING, EASING } from '$lib/design/motion';
 	import { getOrgOS, isRunning } from './orgOS.svelte';
@@ -41,8 +42,10 @@
 	} from '$lib/data/org-limit-sentences';
 	import {
 		saveStudioProcessAsOrgEmailDraft,
-		saveStudioProcessAsTemplateDraft
+		saveStudioProcessAsTemplateDraft,
+		saveStudioProcessAsCampaignDraft
 	} from '$lib/components/org/studio/studio-draft-bridge';
+	import { congressionalDeliveryAvailable } from '$lib/congressional-readiness';
 	import type { OrgSpacesData } from './spaces';
 
 	let {
@@ -69,6 +72,11 @@
 
 	const os = getOrgOS();
 	const composeHref = '/?create=true';
+	// SSR-safe reduced-motion read (mirrors Datum.svelte) — gates the fly entrances
+	// so motion-sensitive users get the content without the 8px slide.
+	const prefersReducedMotion =
+		typeof window !== 'undefined' &&
+		window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	const orgEmailHref = $derived(`${os.base}/emails/compose`);
 
 	// ─── Authoring runtime ground (from the layout's real env probes) ───
@@ -79,7 +87,10 @@
 	// Congressional delivery is one plain sentence until it is available.
 	const congressionalDelivery = $derived(spaces.operating?.congressionalDelivery ?? null);
 	const congressionalAvailable = $derived(
-		congressionalDelivery?.launched === true && congressionalDelivery?.runtimeReady === true
+		congressionalDeliveryAvailable({
+			launched: congressionalDelivery?.launched,
+			ready: congressionalDelivery?.runtimeReady
+		})
 	);
 	const congressionalNotice = $derived(
 		congressionalAvailable ? null : congressionalDeliveryLimitNotice(congressionalDelivery)
@@ -199,24 +210,30 @@
 	function takeToPublish() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
 		const draftId = saveStudioProcessAsTemplateDraft(proc);
-		// Creation is modal-first at the public authoring entry. STUDIO hands
-		// off the real resolved audience, sources, and composed message as a
-		// draft instead of dropping state on a blank creator.
+		// Creation is modal-first at the PUBLIC authoring entry (`/?create=`), a
+		// different shell that does not mount the org kernel — so a full nav is
+		// intentional here (no kernel to preserve, and the create-modal init runs
+		// on a fresh load). The other two handoffs stay in-shell via goto().
 		window.location.href = `${composeHref}&resumeDraft=${encodeURIComponent(draftId)}`;
 	}
 
 	function takeToOrgEmail() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
 		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
-		window.location.href = `${orgEmailHref}?studioDraft=${encodeURIComponent(draftId)}`;
+		// Same-origin org route — goto() keeps the OS kernel/process registry alive.
+		goto(`${orgEmailHref}?studioDraft=${encodeURIComponent(draftId)}`);
 	}
 
 	function takeToCongressional() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
-		// The congressional campaign is authored on the new-campaign surface with
-		// the type preselected — that surface owns target chambers, the tiered
-		// floor explainer, and the confirm step before any CWC send.
-		window.location.href = `${os.base}/campaigns/new?type=CONGRESSIONAL`;
+		// Carry the authored artifact (title + composed message + derived targets +
+		// carried counts) into the new-campaign surface instead of dropping it on a
+		// blank form. `type` stays for graceful degradation if the draft expired.
+		// That surface owns target chambers, the tiered floor explainer, and the
+		// confirm step before any CWC send. Same-origin org route — goto() keeps
+		// the kernel alive.
+		const draftId = saveStudioProcessAsCampaignDraft(proc);
+		goto(`${os.base}/campaigns/new?type=CONGRESSIONAL&studioDraft=${encodeURIComponent(draftId)}`);
 	}
 </script>
 
@@ -315,7 +332,7 @@
 		<section
 			class="trace"
 			aria-label="Run replay"
-			in:fly={{ y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+			in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
 		>
 			<header class="trace-head">
 				<div>
@@ -386,7 +403,7 @@
 			<section
 				class="dm"
 				aria-label="Resolved decision-makers"
-				in:fly={{ y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+				in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
 			>
 				<header class="dm-head">
 					<span class="dm-title">Resolved decision-makers</span>
@@ -417,14 +434,14 @@
 		{/if}
 
 		{#if sources.length > 0}
-			<div in:fly={{ y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
+			<div in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
 				<StudioSources {sources} />
 			</div>
 		{/if}
 
 		{#if composedMessage}
 			<!-- AUTHOR output — the white specimen. Every citation traces to a real URL. -->
-			<div class="specimen" in:fly={{ y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
+			<div class="specimen" in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
 				<span class="specimen-label">Authored message</span>
 				<Artifact padding="default">
 					{#if procSubject}
@@ -514,7 +531,7 @@
 		height: 0.4375rem;
 		border-radius: 50%;
 		background: var(--coord-route-solid, #3bc4b8);
-		animation: studio-live-pulse 1.6s ease-in-out infinite;
+		animation: studio-live-pulse var(--pulse-duration) var(--pulse-easing) infinite;
 	}
 
 	@keyframes studio-live-pulse {

@@ -34,6 +34,7 @@ import {
 import { internal } from './_generated/api';
 import { requireOrgRole } from './_authHelpers';
 import type { Id } from './_generated/dataModel';
+import { WEBHOOK_EVENT_SET } from './_webhookEvents';
 
 const MAX_ATTEMPTS = 5;
 const RETRY_BASE_MS = 60_000; // 1 minute; backoff is 2^attempt * RETRY_BASE_MS
@@ -386,16 +387,8 @@ export const expireOldEvents = internalMutation({
 // logic (URL parse, scheme allowlist, events allowlist) is repeated here so
 // the session path and the v1 path enforce the same rules.
 
-const SESSION_ALLOWED_EVENTS = new Set([
-	'campaign_action.created',
-	'campaign.updated',
-	'supporter.created',
-	'supporter.updated',
-	'supporter.deleted',
-	'donation.completed',
-	'donation.refunded',
-	'event.rsvp_created'
-]);
+// Session-auth and v1 API paths both validate against the canonical catalog.
+const SESSION_ALLOWED_EVENTS = WEBHOOK_EVENT_SET;
 
 function generateSecretSession(): string {
 	const bytes = new Uint8Array(32);

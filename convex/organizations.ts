@@ -16,6 +16,7 @@ import {
 	logoWriteAllowed,
 	whiteLabelWriteAllowed
 } from './_brandingGate';
+import { capOrThrow, parseHttpUrlOrThrow } from './_validators';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
 import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
 import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
@@ -631,17 +632,33 @@ export const update = mutation({
 			updatedAt: Date.now()
 		};
 
-		if (args.description !== undefined) updates.description = args.description;
+		if (args.description !== undefined) {
+			capOrThrow('description', args.description);
+			updates.description = args.description;
+		}
 		if (args.encryptedBillingEmail !== undefined) {
 			updates.encryptedBillingEmail = args.encryptedBillingEmail;
 		}
 		if (args.billingEmailHash !== undefined) {
 			updates.billingEmailHash = args.billingEmailHash;
 		}
-		if (args.avatar !== undefined) updates.avatar = args.avatar;
-		if (args.mission !== undefined) updates.mission = args.mission;
-		if (args.websiteUrl !== undefined) updates.websiteUrl = args.websiteUrl;
-		if (args.logoUrl !== undefined) updates.logoUrl = args.logoUrl;
+		if (args.avatar !== undefined) {
+			capOrThrow('avatar', args.avatar);
+			updates.avatar = args.avatar;
+		}
+		if (args.mission !== undefined) {
+			capOrThrow('mission', args.mission);
+			updates.mission = args.mission;
+		}
+		// websiteUrl is rendered as a clickable link — parse + scheme-allowlist it,
+		// not just length-cap, so a javascript:/data: payload can't be stored.
+		if (args.websiteUrl !== undefined) {
+			updates.websiteUrl = parseHttpUrlOrThrow('websiteUrl', args.websiteUrl);
+		}
+		if (args.logoUrl !== undefined) {
+			capOrThrow('logoUrl', args.logoUrl);
+			updates.logoUrl = args.logoUrl;
+		}
 		if (args.brandingAccent !== undefined) {
 			// FIX-V4: Coalition-tier gate. brandingAccent (white-label Layer a) is
 			// a Coalition plan feature only. Gate + hex validation routed through
@@ -908,6 +925,9 @@ export const create = mutation({
 		if (!/^[a-z0-9-]+$/.test(args.slug) || args.slug.length < 2 || args.slug.length > 48) {
 			throw new Error('slug must be 2-48 lowercase alphanumeric characters or hyphens');
 		}
+
+		capOrThrow('name', args.name);
+		if (args.description !== undefined) capOrThrow('description', args.description);
 
 		// Check slug uniqueness
 		const existing = await ctx.db

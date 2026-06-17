@@ -962,6 +962,17 @@ export const update = mutation({
 				smsConsentText: supporter.smsConsentText
 			}
 		);
+
+		// Emit supporter.updated (A4) once per edit via this canonical update
+		// path — NOT from tag/sms sub-mutations, which would over-emit. No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'supporter.updated',
+			payload: JSON.stringify({
+				supporterId: args.supporterId,
+				timestamp: Date.now()
+			})
+		});
 	}
 });
 
@@ -1064,6 +1075,17 @@ export const remove = mutation({
 
 		// Decrement the breakdown counters for the deleted row.
 		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, null);
+
+		// Emit supporter.deleted (A4) — only the user-facing delete is a
+		// subscriber-visible deletion (NOT deleteStrandedPlaceholder). No PII.
+		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
+			orgId: org._id,
+			event: 'supporter.deleted',
+			payload: JSON.stringify({
+				supporterId: args.supporterId,
+				timestamp: Date.now()
+			})
+		});
 
 		return { deleted: true };
 	}

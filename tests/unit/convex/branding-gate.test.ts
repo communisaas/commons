@@ -19,12 +19,16 @@
 import { describe, it, expect } from 'vitest';
 import {
 	effectivePlan,
+	effectivelyActive,
+	effectivePlanWithGrace,
 	isCoalitionPlan,
 	isValidAccentHex,
 	decideAccentWrite,
 	logoWriteAllowed,
 	whiteLabelWriteAllowed
 } from '../../../convex/_brandingGate';
+
+const GRACE = 7 * 24 * 60 * 60 * 1000;
 
 describe('effectivePlan', () => {
 	it('treats active/trialing subscriptions as their paid plan', () => {
@@ -127,5 +131,61 @@ describe('whiteLabelWriteAllowed — Coalition gate', () => {
 		expect(whiteLabelWriteAllowed('inactive', false)).toBe(true);
 		expect(whiteLabelWriteAllowed('organization', false)).toBe(true);
 		expect(whiteLabelWriteAllowed('coalition', false)).toBe(true);
+	});
+});
+
+describe('effectivelyActive — single grace-bearing predicate', () => {
+	const NOW = 1_000_000_000_000;
+
+	it('active / trialing confer access regardless of pastDueSince', () => {
+		expect(effectivelyActive({ status: 'active', plan: 'coalition' }, NOW)).toBe(true);
+		expect(effectivelyActive({ status: 'trialing', plan: 'starter' }, NOW)).toBe(true);
+	});
+
+	it('canceled / none / null / undefined do NOT confer access', () => {
+		expect(effectivelyActive({ status: 'canceled', plan: 'coalition' }, NOW)).toBe(false);
+		expect(effectivelyActive(null, NOW)).toBe(false);
+		expect(effectivelyActive(undefined, NOW)).toBe(false);
+		expect(effectivelyActive({}, NOW)).toBe(false);
+	});
+
+	it('past_due grace boundary is a strict 7-day window', () => {
+		const within = { status: 'past_due', plan: 'coalition', pastDueSince: NOW - (GRACE - 1) };
+		const exact = { status: 'past_due', plan: 'coalition', pastDueSince: NOW - GRACE };
+		const expired = { status: 'past_due', plan: 'coalition', pastDueSince: NOW - (GRACE + 1) };
+		expect(effectivelyActive(within, NOW)).toBe(true);
+		expect(effectivelyActive(exact, NOW)).toBe(false); // strict <
+		expect(effectivelyActive(expired, NOW)).toBe(false);
+	});
+
+	it('past_due with undefined pastDueSince does NOT silently grant grace', () => {
+		expect(effectivelyActive({ status: 'past_due', plan: 'coalition' }, NOW)).toBe(false);
+	});
+
+	it('pastDueSince=0 is a real timestamp, not a falsy "no grace" sentinel', () => {
+		// At epoch the window is open; far in the future it is closed. This pins the
+		// harmonization of the previously-divergent truthy vs strict-undefined guards.
+		expect(effectivelyActive({ status: 'past_due', plan: 'coalition', pastDueSince: 0 }, 0)).toBe(
+			true
+		);
+		expect(
+			effectivelyActive({ status: 'past_due', plan: 'coalition', pastDueSince: 0 }, GRACE + 1)
+		).toBe(false);
+	});
+});
+
+describe('branding vs billing grace asymmetry (documented, pinned)', () => {
+	const NOW = 1_000_000_000_000;
+	const pastDueInGrace = {
+		status: 'past_due',
+		plan: 'coalition',
+		pastDueSince: NOW - (GRACE - 1)
+	};
+
+	it('billing keeps the plan during grace; branding retracts it', () => {
+		// Billing path (grace-bearing) → still Coalition.
+		expect(effectivePlanWithGrace(pastDueInGrace, NOW)).toBe('coalition');
+		// Branding path (no grace) → inactive the instant payment lapses.
+		expect(effectivePlan(pastDueInGrace)).toBe('inactive');
 	});
 });
