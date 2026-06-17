@@ -103,8 +103,10 @@ const FORCE_ITERATIONS = 400;
 const DECLUMP_ITERATIONS = 300;
 /** Ideal edge length in the unit (pre-scale) field; the FR `k`. */
 const IDEAL_DISTANCE = 1.4;
-/** Repulsion gain — the mock's 1.3× over the bare k²/d. */
-const REPULSION_GAIN = 1.3;
+/** Repulsion gain over the bare k²/d. Raised above the mock's 1.3 so separate
+ *  clusters + isolated nodes push further apart — cleaner void between the real
+ *  knots without touching the declump floor (connected nodes still settle at it). */
+const REPULSION_GAIN = 1.7;
 /** Pull weight per relation kind. Measured twins pull harder than kin (mock). */
 const TWIN_PULL = 1.4;
 const FAMILY_PULL = 0.7;

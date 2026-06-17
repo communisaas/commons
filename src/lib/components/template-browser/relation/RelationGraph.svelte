@@ -140,6 +140,14 @@
 		return set;
 	});
 
+	// At-rest honesty caption: the live corpus size + measured-kinship count, so the
+	// sparsity reads as a growing record rather than an empty surface. Never hardcoded —
+	// both numbers derive from the live data and rise as the commons grows.
+	const relationCounts = $derived.by(() => ({
+		concerns: templates.length,
+		measured: allEdges.filter((e) => e.kind === 'twin').length
+	}));
+
 	// Deterministic positions: the same nodes + edges always settle identically, on
 	// the server and again on the client, so the map paints once and never lurches.
 	// The compute is quadratic, so it runs through the MEMOIZED entry point — keyed
@@ -492,6 +500,11 @@
 		The commons, by relation
 		<span class="relation-graph__subtitle"
 			>linked by meaning; the topically-isolated fall to the edges</span
+		>
+		<span class="relation-graph__count"
+			>{relationCounts.concerns} concerns · {relationCounts.measured} measured {relationCounts.measured === 1
+				? 'kinship'
+				: 'kinships'} so far — the map fills as the commons grows</span
 		>
 	</figcaption>
 
@@ -868,6 +881,15 @@
 		font-size: 0.8125rem;
 		color: oklch(0.5 0.02 60);
 		margin-top: 0.125rem;
+	}
+
+	.relation-graph__count {
+		display: block;
+		font-weight: 450;
+		font-size: 0.75rem;
+		color: oklch(0.58 0.015 60);
+		margin-top: 0.25rem;
+		font-variant-numeric: tabular-nums;
 	}
 
 	/* ─── Search — recognition navigation ─────────────────────────────────────
