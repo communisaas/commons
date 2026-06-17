@@ -204,3 +204,45 @@ export const accountabilityResponseType = v.union(
 	v.literal('vote_cast'),
 	v.literal('public_statement')
 );
+
+// ===========================================================================
+// Org free-text field caps — the module-wide explicit-cap convention applied
+// to the org profile writers (create/update), which were the blind spot.
+// ===========================================================================
+export const ORG_FIELD_CAPS = {
+	name: 200,
+	description: 4000,
+	mission: 2000,
+	websiteUrl: 2048,
+	avatar: 2048,
+	logoUrl: 2048
+} as const;
+
+export function capOrThrow(field: keyof typeof ORG_FIELD_CAPS, val: string): void {
+	if (val.length > ORG_FIELD_CAPS[field]) {
+		throw new Error(`ORG_${field.toUpperCase()}_TOO_LARGE`);
+	}
+}
+
+/**
+ * Cap then parse a stored, later-rendered URL. An unparsed websiteUrl is a
+ * stored-link hole — it renders as a clickable link, so a `javascript:`/`data:`
+ * string is an XSS-class payload, not just bloat. Empty string clears.
+ * Rejects non-http(s) schemes, protocol-relative `//host`, and malformed URLs.
+ */
+export function parseHttpUrlOrThrow(field: 'websiteUrl', val: string): string {
+	capOrThrow(field, val);
+	if (val === '') return ''; // clear
+	let url: URL;
+	try {
+		url = new URL(val);
+	} catch {
+		throw new Error(`ORG_${field.toUpperCase()}_INVALID`);
+	}
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+		throw new Error(`ORG_${field.toUpperCase()}_INVALID`);
+	}
+	// Store the parser-NORMALIZED form (not the raw input) so what we validated is
+	// what we persist — collapses mixed-case scheme/host and stray characters.
+	return url.href;
+}

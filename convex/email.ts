@@ -1473,8 +1473,19 @@ export const sendBlastBatch = internalAction({
 
 			let batchSent = 0;
 			let batchFailed = 0;
+			// Per-recipient receipts — fed to the SAME writer + invariants (upsert,
+			// never-downgrade-sent, messageId-only-on-sent, cohort cap) the
+			// client-direct/Lambda paths use, instead of only aggregate counters.
+			const receipts: Array<{
+				recipientEmailHash: string;
+				sesMessageId?: string;
+				status: 'sent' | 'failed';
+				sentAt: number;
+				error?: string;
+			}> = [];
 
 			for (const recipient of batch) {
+				const recipientEmailHash = recipient.emailHash;
 				try {
 					const parsed = JSON.parse(recipient.encryptedEmail);
 					// Version-aware decrypt dispatch (v=org-1 legacy AAD vs
@@ -1540,7 +1551,7 @@ export const sendBlastBatch = internalAction({
 						String(recipient._id),
 						String(blast.orgId)
 					);
-					const success = await sendViaSes(
+					const result = await sendViaSesWithResult(
 						email,
 						blast.fromEmail,
 						blast.fromName,
@@ -1551,14 +1562,55 @@ export const sendBlastBatch = internalAction({
 						awsRegion,
 						unsubscribeUrl
 					);
-					if (success) {
+					if (!result.ok) {
+						// Status only — never the raw SES body: it is persisted to a
+						// member-readable receipt (listReceiptsForBlast), and SES 4xx
+						// rejection bodies (suppression list / unverified identity) echo
+						// the recipient PLAINTEXT email, which members otherwise never see.
+						console.error(`[sendBlastBatch] SES send failed: status=${result.status ?? 'transport'}`);
+					}
+					receipts.push({
+						recipientEmailHash,
+						sesMessageId: result.ok ? result.messageId : undefined,
+						status: result.ok ? 'sent' : 'failed',
+						sentAt: Date.now(),
+						// Non-PII reason code only (see above).
+						error: result.ok
+							? undefined
+							: result.status
+								? `ses_http_${result.status}`
+								: 'ses_send_failed'
+					});
+					if (result.ok) {
 						batchSent++;
 					} else {
 						batchFailed++;
 					}
 				} catch {
+					// Threw BEFORE SES was reached (decrypt/merge) — the case the old
+					// `catch {}` recorded nothing. Persist a GENERIC code: the raw
+					// message may carry PII and the receipt is member-readable.
 					batchFailed++;
+					console.error('[sendBlastBatch] pre-SES failure (decrypt/merge)');
+					receipts.push({
+						recipientEmailHash,
+						sesMessageId: undefined,
+						status: 'failed',
+						sentAt: Date.now(),
+						error: 'predispatch_failed'
+					});
 				}
+			}
+
+			// Persist per-recipient receipts FIRST (the forensic rows) via the shared
+			// internal writer — upsert on (blastId, recipientEmailHash) so a
+			// scheduler retry of this page never double-inserts and never downgrades
+			// a confirmed 'sent'. Then the aggregate counters.
+			if (receipts.length > 0) {
+				await ctx.runMutation(internal.blasts.recordBlastReceiptsInternal, {
+					blastId: args.blastId,
+					receipts
+				});
 			}
 
 			// Update running counters

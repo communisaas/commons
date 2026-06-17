@@ -11,6 +11,7 @@
 		describeReportSignals
 	} from '$lib/components/org/os/power-coverage';
 	import { Datum } from '$lib/design';
+	import { FEATURES } from '$lib/config/features';
 	import type { DecisionMakerScore } from '$lib/server/legislation/scorecard/types';
 
 	type ScorecardMeta = {
@@ -143,13 +144,18 @@
 				<button class="sort-btn" class:active={sortBy === 'name'} onclick={() => (sortBy = 'name')}>
 					Name
 				</button>
-				<button
-					class="sort-btn"
-					class:active={sortBy === 'alignment'}
-					onclick={() => (sortBy = 'alignment')}
-				>
-					Alignment
-				</button>
+				<!-- Alignment sorts by vote-based alignmentRate, which the stubbed
+				     vote-tracker never populates. Hidden until LEGISLATIVE_INTELLIGENCE_LIVE
+				     ships (per-card "Vote basis not loaded" stays honest meanwhile). -->
+				{#if FEATURES.LEGISLATIVE_INTELLIGENCE_LIVE}
+					<button
+						class="sort-btn"
+						class:active={sortBy === 'alignment'}
+						onclick={() => (sortBy = 'alignment')}
+					>
+						Alignment
+					</button>
+				{/if}
 			</div>
 		</div>
 	{/if}

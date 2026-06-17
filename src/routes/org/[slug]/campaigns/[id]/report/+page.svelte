@@ -53,39 +53,39 @@
 		}
 	}
 
+	// Color-only typographic annotation (de-pilled — DESIGN.md "pill badges → use
+	// typographic annotations"). No bg/border box chrome; the semantic hue carries it.
 	function statusBadgeClass(status: string): string {
 		switch (status) {
 			case 'sent':
-				return 'bg-teal-500/15 text-teal-400 border-teal-500/20';
+				return 'text-teal-400'; // route axis
 			case 'delivered':
-				return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20';
+				return 'text-emerald-400'; // verified axis
 			case 'opened':
-				return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
+				return 'text-emerald-300'; // verified axis, lighter depth-step (intentional)
 			case 'bounced':
-				return 'bg-red-500/15 text-red-400 border-red-500/20';
+				return 'text-red-400'; // error axis
 			case 'queued':
-				return 'bg-text-tertiary/15 text-text-tertiary border-text-tertiary/20';
 			default:
-				return 'bg-text-tertiary/15 text-text-tertiary border-text-tertiary/20';
+				return 'text-text-tertiary';
 		}
 	}
 
 	function eventDotColor(type: string): string {
 		switch (type) {
 			case 'opened':
-				return 'bg-emerald-400';
+				return 'bg-emerald-400'; // verified/delivery axis
 			case 'clicked_verify':
-				return 'bg-teal-400';
-			case 'replied':
-				return 'bg-blue-400';
 			case 'meeting_requested':
-				return 'bg-teal-400';
+				return 'bg-teal-400'; // route/coordination axis
+			// Inbound signals — already disambiguated by the adjacent eventLabel
+			// text, so the 2.5px dot stays neutral rather than minting an
+			// off-palette taxonomy hue (was blue / amber / rose / zinc).
+			case 'replied':
 			case 'vote_cast':
-				return 'bg-amber-400';
 			case 'public_statement':
-				return 'bg-rose-400';
 			default:
-				return 'bg-zinc-400';
+				return 'bg-text-tertiary';
 		}
 	}
 
@@ -113,11 +113,10 @@
 			case 'observed':
 				return 'text-emerald-500';
 			case 'inferred':
-				return 'text-amber-500';
+				return 'text-amber-500'; // lower-confidence = warning axis (semantic)
 			case 'reported':
-				return 'text-blue-400';
 			default:
-				return 'text-text-tertiary';
+				return 'text-text-tertiary'; // was blue — neutral, text carries it
 		}
 	}
 
@@ -125,18 +124,18 @@
 		receiptBacked: boolean;
 		receiptEligibility: string;
 	}): string {
-		if (delivery.receiptBacked) return 'border-emerald-500/30 text-emerald-400';
+		// Color-only annotation (de-pilled) — drop the colored border box, keep the hue.
+		if (delivery.receiptBacked) return 'text-emerald-400'; // verified axis
 		switch (delivery.receiptEligibility) {
 			case 'eligible':
-				return 'border-teal-500/30 text-teal-400';
+				return 'text-teal-400'; // route axis
 			case 'missing_bill':
-				return 'border-amber-500/30 text-amber-400';
+				return 'text-amber-400'; // warning axis
 			case 'unresolved_target':
-				return 'border-red-500/30 text-red-400';
 			case 'missing_bill_and_target':
-				return 'border-red-500/30 text-red-400';
+				return 'text-red-400'; // error axis
 			default:
-				return 'border-text-tertiary/20 text-text-tertiary';
+				return 'text-text-tertiary';
 		}
 	}
 
@@ -360,13 +359,13 @@
 						href="email-html"
 						target="_blank"
 						rel="noopener"
-						class="font-brand text-xs text-indigo-600 hover:text-indigo-800"
+						class="font-brand text-xs text-text-secondary hover:text-text-primary"
 					>
 						Open for printing →
 					</a>
 					<a
 						href="email-html?download=1"
-						class="font-brand text-xs text-indigo-600 hover:text-indigo-800"
+						class="font-brand text-xs text-text-secondary hover:text-text-primary"
 					>
 						Download HTML
 					</a>
@@ -452,7 +451,7 @@
 									{delivery.targetName ?? delivery.targetEmail}
 								</span>
 								<span
-									class="inline-flex items-center rounded-md border px-2 py-0.5 font-mono text-xs {statusBadgeClass(
+									class="font-mono text-xs uppercase tracking-wide {statusBadgeClass(
 										delivery.status
 									)}"
 								>
@@ -473,7 +472,7 @@
 						</div>
 						<div class="flex shrink-0 items-center gap-2">
 							<span
-								class="rounded border px-2 py-0.5 font-mono text-[10px] uppercase {receiptBadgeClass(
+								class="font-mono text-[10px] uppercase {receiptBadgeClass(
 									delivery
 								)}"
 							>

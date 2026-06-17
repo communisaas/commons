@@ -32,6 +32,21 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		throw error(503, 'Bulk-send dispatch is not configured (BLAST_DISPATCH_SECRET unset)');
 	}
 
+	// Gate-at-delivery: refuse to sign a dispatch claim when the org may not send.
+	// Slug-first so a blocked org never pays the cohort scan, and BEFORE
+	// signDispatchClaim so a direct API call can't mint send authority past quota.
+	// inactive ⇒ maxEmails:0 ⇒ refused; exhausted ⇒ refused; null ⇒ fail closed.
+	const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug });
+	if (!limits?.current || limits.current.emailsSent >= limits.limits.maxEmails) {
+		const subscribeGate = (limits?.limits.maxEmails ?? 0) <= 0;
+		throw error(403, {
+			message: subscribeGate
+				? 'Sending to your people needs a plan. Authoring stays free.'
+				: 'Email send limit reached for the current billing period. Upgrade your plan to send more.',
+			code: subscribeGate ? 'DELIVERY_QUOTA_SUBSCRIBE_GATE' : 'EMAIL_QUOTA_EXCEEDED'
+		});
+	}
+
 	const supporters = await serverQuery(api.blasts.getEncryptedSupportersForBlast, {
 		orgSlug,
 		blastId: params.blastId as Id<'emailBlasts'>

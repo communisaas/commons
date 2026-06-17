@@ -1,0 +1,46 @@
+[
+	{
+		"label": "Healthcare",
+		"hue": 240
+	},
+	{
+		"label": "Environment",
+		"hue": 150
+	},
+	{
+		"label": "Housing",
+		"hue": 55
+	},
+	{
+		"label": "Education",
+		"hue": 290
+	},
+	{
+		"label": "Labor",
+		"hue": 180
+	},
+	{
+		"label": "Immigration",
+		"hue": 270
+	},
+	{
+		"label": "Justice",
+		"hue": 320
+	},
+	{
+		"label": "Governance",
+		"hue": 85
+	},
+	{
+		"label": "Technology",
+		"hue": 160
+	},
+	{
+		"label": "Transportation",
+		"hue": 35
+	},
+	{
+		"label": "Indigenous Rights",
+		"hue": 25
+	}
+]

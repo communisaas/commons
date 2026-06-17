@@ -684,7 +684,7 @@
 				</ul>
 
 				<p class="reach__international">
-					<span class="reach__international-label">International adapters shipping 2026:</span> UK Parliament,
+					<span class="reach__international-label">International adapters on the roadmap:</span> UK Parliament,
 					EU Parliament, Bundestag e-petitions.
 				</p>
 

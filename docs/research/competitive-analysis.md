@@ -906,7 +906,7 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 |---|---|---|---|
 | **Patch-through calling** | Capitol Canary, CallHub, One Click | Not spec'd | P2 — Twilio extension. **Verified caller district** is a differentiator no one else has. |
 | **Web form navigation** | Quorum, Capitol Canary, VoterVoice (99.6% deliverability) | Not planned | Skip — fragile (forms change constantly). Verification packet sent directly is more impactful. |
-| **Legislative tracking / bill alerts** | Quorum, FiscalNote, FastDemocracy, PolicyEngage | Spec'd (agentic-civic-infrastructure, Phase 3) | P3 — Agent monitors bills affecting verified districts. ~$6.50/org/month. |
+| **Legislative tracking / bill alerts** | Quorum, FiscalNote, FastDemocracy, PolicyEngage | Not built — deferred | Bill search + watch are live; vote-alignment scoring, relevance ranking, and alerts are not built (incumbent home turf; depends on the unreliable Congress.gov feed). |
 | **Legislator scorecards** | Quorum, FastDemocracy, Legislative Scorecard | Not spec'd | P2 — Natural extension of campaign delivery + response tracking. |
 | **Video messages to officials** | CiviClick, One Click | Not planned | Skip — niche, low ROI. |
 | **Social media advocacy** | Quorum, Capitol Canary, CiviClick, Ujoin | Not planned | Skip — low ROI relative to engineering cost. |
@@ -977,8 +977,8 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | **Debate / quality** | None. Volume is the only metric. | LMSR market + AI panel. sqrt(stake) * 2^tier. Quality of reasoning, not just count. |
 | **Agentic** | None. | Verified delegation. Tier-gated. Privacy-preserving memory. ZK proof on every agent action. |
 | **Portability** | Per-org silos. Reputation resets with every new org. | Protocol-level identity. Verification and reputation travel across every org on the protocol. |
-| **Custom domain** | Paid add-on | Included (Organization tier+) |
-| **SQL mirror** | +$200/month add-on | Included (Organization tier+) |
+| **Custom domain** | Paid add-on | Upcoming — not yet available |
+| **SQL mirror** | +$200/month add-on | Upcoming — not yet available |
 
 ### Feature Build Status
 

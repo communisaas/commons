@@ -85,6 +85,36 @@ function assertCongressionalDeliveryLaunched() {
 	}
 }
 
+// Safety: 'messages' is the LIVE Senate inbox; 'testing-messages' is the no-op
+// sandbox. Refuse the live prefix unless an operator explicitly opts into prod
+// (CWC_PRODUCTION=true), so a TEST arm can never reach real staffers by leaving a
+// stale 'messages' prefix. (CWC_PRODUCTION was documented in .env.example but read
+// nowhere — this is the only place that consults it.) Fails safe to the sandbox.
+function resolveSenatePathPrefix(): string {
+	// Normalize before the guard so '/messages', 'messages/', ' messages ' all
+	// collapse to the canonical 'messages' and can't slip a live-routing variant
+	// past the live-inbox check.
+	const prefix = (process.env.CWC_SENATE_PATH_PREFIX || 'testing-messages')
+		.trim()
+		.replace(/^\/+|\/+$/g, '');
+	// Allow-list: only the two real CWC inboxes. Anything else (a typo, or a
+	// path-suffix variant like 'messages/extra' that survives slash-stripping)
+	// falls back to the no-op sandbox rather than building a live-looking URL.
+	if (prefix !== 'messages' && prefix !== 'testing-messages') {
+		console.error(
+			`[submissions] Unrecognized CWC_SENATE_PATH_PREFIX="${prefix}"; using testing-messages sandbox`
+		);
+		return 'testing-messages';
+	}
+	if (prefix === 'messages' && process.env.CWC_PRODUCTION !== 'true') {
+		console.error(
+			'[submissions] CWC_SENATE_PATH_PREFIX=messages (live Senate) requires CWC_PRODUCTION=true; falling back to testing-messages sandbox'
+		);
+		return 'testing-messages';
+	}
+	return prefix;
+}
+
 function getCongressionalTransportConfig(): CongressionalTransportConfig {
 	const houseProxyUrl = process.env.GCP_PROXY_URL;
 	const houseProxyToken = process.env.GCP_PROXY_AUTH_TOKEN;
@@ -96,7 +126,7 @@ function getCongressionalTransportConfig(): CongressionalTransportConfig {
 		houseProxyToken,
 		senateBaseUrl,
 		senateKey,
-		senatePathPrefix: process.env.CWC_SENATE_PATH_PREFIX || 'testing-messages',
+		senatePathPrefix: resolveSenatePathPrefix(),
 		hasHouseConfig: Boolean(houseProxyUrl && houseProxyToken),
 		hasSenateConfig: Boolean(senateBaseUrl && senateKey)
 	};
@@ -1506,7 +1536,16 @@ export const deliverToCongress = internalAction({
 			try {
 				resolveResponse = await fetch(`${teeUrl}/resolve`, {
 					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
+					headers: {
+						'Content-Type': 'application/json',
+						// The /resolve service is INTERNAL_API_SECRET-gated (it decrypts
+						// witness data into PII). Send the shared secret so the resolver
+						// is not a public oracle; an unset value yields a 503/403 from the
+						// resolver and the delivery fails closed.
+						...(process.env.INTERNAL_API_SECRET
+							? { 'x-internal-secret': process.env.INTERNAL_API_SECRET }
+							: {})
+					},
 					body: JSON.stringify({
 						ciphertext: submission.encryptedWitness,
 						nonce: submission.witnessNonce,

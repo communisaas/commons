@@ -8,7 +8,7 @@
 	} from '$lib/types/verification-packet';
 	import DistrictMap from '$lib/components/geographic/DistrictMap.svelte';
 	import { participationDepth } from './participation-depth';
-	import { Datum, Pulse } from '$lib/design';
+	import { Datum, Pulse, Ratio } from '$lib/design';
 	import { SPRINGS } from '$lib/design/motion';
 
 	let {
@@ -62,6 +62,29 @@
 	const suppressedEngagementTierCount = $derived(
 		engagementTiers.filter((tier) => tier.count < 0).length
 	);
+
+	// Composition segments for the identity + authorship Ratio bars. These are real
+	// non-sentinel counts (the k-anon -1 sentinel lives ONLY on tiers, which stay a
+	// Rings-safe text list — never fed to Ratio), so summing into Ratio's total is
+	// safe. govId→verified, address→route, email/shared→muted neutral. The per-
+	// segment counts move OUT of the bar into the legend below it.
+	const identitySegments = $derived(
+		p.identityBreakdown
+			? [
+					{ value: p.identityBreakdown.govId, color: 'var(--coord-verified)', label: 'Government ID' },
+					{
+						value: p.identityBreakdown.addressVerified,
+						color: 'var(--coord-route-solid)',
+						label: 'Address'
+					},
+					{ value: p.identityBreakdown.emailOnly, color: 'oklch(0.82 0.01 250)', label: 'Email' }
+				]
+			: []
+	);
+	const authorshipSegments = $derived([
+		{ value: p.authorship.individual, color: 'var(--coord-verified)', label: 'Individual voice' },
+		{ value: p.authorship.shared, color: 'oklch(0.82 0.01 250)', label: 'Shared' }
+	]);
 </script>
 
 <div class="vp">
@@ -88,69 +111,70 @@
 
 		<div class="vp__divider"></div>
 
-		<!-- ═══ IDENTITY — self-labeling stacked bar ═══ -->
+		<!-- ═══ IDENTITY — Ratio bar (pure proportion) + ledger legend ═══ -->
 		{#if p.identityBreakdown}
 			<p class="vp__section-label">Identity verification</p>
-			<div
-				class="vp__stack"
-				role="img"
-				aria-label="Identity: Government ID {p.identityBreakdown.govId}, Address {p
-					.identityBreakdown.addressVerified}{p.identityBreakdown.emailOnly > 0
-					? `, Email ${p.identityBreakdown.emailOnly}`
-					: ''}"
-			>
+			<!-- Ratio builds its own role=img aria-label from segment labels + pct. -->
+			<Ratio segments={identitySegments} height={16} class="vp__ratio" />
+			<ul class="vp__legend" aria-hidden="true">
 				{#if p.identityBreakdown.govId > 0}
-					<span class="vp__stack-seg vp__stack-seg--deep" style="flex: {p.identityBreakdown.govId}">
-						<span class="vp__stack-name">Government ID</span>
-						<span class="vp__stack-count"><Datum value={p.identityBreakdown.govId} /></span>
-					</span>
+					<li class="vp__legend-item">
+						<span class="vp__legend-label">
+							<span class="vp__legend-swatch" style="background: var(--coord-verified)"></span>
+							<span class="vp__legend-name">Government ID</span>
+						</span>
+						<span class="vp__legend-count"><Datum value={p.identityBreakdown.govId} /></span>
+					</li>
 				{/if}
 				{#if p.identityBreakdown.addressVerified > 0}
-					<span
-						class="vp__stack-seg vp__stack-seg--mid"
-						style="flex: {p.identityBreakdown.addressVerified}"
-					>
-						<span class="vp__stack-name">Address</span>
-						<span class="vp__stack-count"
+					<li class="vp__legend-item">
+						<span class="vp__legend-label">
+							<span class="vp__legend-swatch" style="background: var(--coord-route-solid)"></span>
+							<span class="vp__legend-name">Address</span>
+						</span>
+						<span class="vp__legend-count"
 							><Datum value={p.identityBreakdown.addressVerified} /></span
 						>
-					</span>
+					</li>
 				{/if}
 				{#if p.identityBreakdown.emailOnly > 0}
-					<span
-						class="vp__stack-seg vp__stack-seg--muted"
-						style="flex: {p.identityBreakdown.emailOnly}"
-					>
-						<span class="vp__stack-name">Email</span>
-						<span class="vp__stack-count"><Datum value={p.identityBreakdown.emailOnly} /></span>
-					</span>
+					<li class="vp__legend-item">
+						<span class="vp__legend-label">
+							<span class="vp__legend-swatch" style="background: oklch(0.82 0.01 250)"></span>
+							<span class="vp__legend-name">Email</span>
+						</span>
+						<span class="vp__legend-count"><Datum value={p.identityBreakdown.emailOnly} /></span>
+					</li>
 				{/if}
-			</div>
+			</ul>
 
 			<div class="vp__divider"></div>
 		{/if}
 
-		<!-- ═══ AUTHORSHIP — self-labeling stacked bar ═══ -->
+		<!-- ═══ AUTHORSHIP — Ratio bar (pure proportion) + ledger legend ═══ -->
 		{#if p.authorship.individual > 0 || p.authorship.shared > 0}
 			<p class="vp__section-label">Authorship</p>
-			<div
-				class="vp__stack"
-				role="img"
-				aria-label="Authorship: Individual {p.authorship.individual}, Shared {p.authorship.shared}"
-			>
+			<Ratio segments={authorshipSegments} height={16} class="vp__ratio" />
+			<ul class="vp__legend" aria-hidden="true">
 				{#if p.authorship.individual > 0}
-					<span class="vp__stack-seg vp__stack-seg--deep" style="flex: {p.authorship.individual}">
-						<span class="vp__stack-name">Individual voice</span>
-						<span class="vp__stack-count"><Datum value={p.authorship.individual} /></span>
-					</span>
+					<li class="vp__legend-item">
+						<span class="vp__legend-label">
+							<span class="vp__legend-swatch" style="background: var(--coord-verified)"></span>
+							<span class="vp__legend-name">Individual voice</span>
+						</span>
+						<span class="vp__legend-count"><Datum value={p.authorship.individual} /></span>
+					</li>
 				{/if}
 				{#if p.authorship.shared > 0}
-					<span class="vp__stack-seg vp__stack-seg--muted" style="flex: {p.authorship.shared}">
-						<span class="vp__stack-name">Shared</span>
-						<span class="vp__stack-count"><Datum value={p.authorship.shared} /></span>
-					</span>
+					<li class="vp__legend-item">
+						<span class="vp__legend-label">
+							<span class="vp__legend-swatch" style="background: oklch(0.82 0.01 250)"></span>
+							<span class="vp__legend-name">Shared</span>
+						</span>
+						<span class="vp__legend-count"><Datum value={p.authorship.shared} /></span>
+					</li>
 				{/if}
-			</div>
+			</ul>
 
 			<div class="vp__divider"></div>
 		{/if}
@@ -230,15 +254,24 @@
 				<dl class="vp__seal-hashes">
 					<div class="vp__seal-hash-row">
 						<dt>identity registry</dt>
-						<dd><code>user_root</code> &mdash; commitment to every verified person</dd>
+						<dd>
+							<code>user_root</code> &mdash; the protocol&rsquo;s standing commitment to every
+							verified person (registry scheme, not a value bound to this report)
+						</dd>
 					</div>
 					<div class="vp__seal-hash-row">
 						<dt>district registry</dt>
-						<dd><code>cell_map_root</code> &mdash; commitment to H3-cell → district assignments</dd>
+						<dd>
+							<code>cell_map_root</code> &mdash; the protocol&rsquo;s standing commitment to H3-cell
+							→ district assignments (registry scheme, not a value bound to this report)
+						</dd>
 					</div>
 					<div class="vp__seal-hash-row">
 						<dt>action anchor</dt>
-						<dd><code>engagement_root</code> &mdash; commitment to per-person action history</dd>
+						<dd>
+							<code>engagement_root</code> &mdash; the protocol&rsquo;s standing commitment to
+							per-person action history (registry scheme, not a value bound to this report)
+						</dd>
 					</div>
 					<div class="vp__seal-hash-row">
 						<dt>one-time receipts</dt>
@@ -284,8 +317,9 @@
 					{/if}
 				</dl>
 				<p class="vp__seal-footnote">
-					Every row in this packet carries a zero-knowledge proof. A decision-maker can verify the
-					proofs without learning who signed.
+					This report is bound by a single SHA-256 attestation over its aggregate figures &mdash; a
+					decision-maker can recompute it independently without learning who signed. Counts are
+					K-anonymized aggregates, never per-person.
 					<a href="/spec" class="vp__seal-link">Read the full protocol &rarr;</a>
 				</p>
 			</div>
@@ -415,70 +449,72 @@
 		}
 	}
 
-	/* Self-labeling stacked bars */
-	.vp__stack {
-		display: flex;
-		height: 2rem;
-		border-radius: 3px;
-		overflow: hidden;
-		gap: 1px;
-		background: oklch(0.91 0.005 250);
+	/* Composition: Ratio bar (pure proportion) + ledger legend (the counts) */
+	.vp__ratio {
 		margin: 0 1.25rem;
 	}
 	@media (min-width: 640px) {
-		.vp__stack {
-			height: 2.25rem;
+		.vp__ratio {
 			margin: 0 2rem;
 		}
 	}
 
-	.vp__stack-seg {
+	.vp__legend {
+		list-style: none;
+		margin: 0.5rem 1.25rem 0;
+		padding: 0;
 		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 0.5rem;
-		min-width: 3rem;
-		overflow: hidden;
+		flex-direction: column;
 		gap: 0.25rem;
 	}
-
-	.vp__stack-name {
-		font-size: 0.5625rem;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		min-width: 0;
-	}
 	@media (min-width: 640px) {
-		.vp__stack-name {
-			font-size: 0.625rem;
+		.vp__legend {
+			margin-left: 2rem;
+			margin-right: 2rem;
 		}
 	}
 
-	.vp__stack-count {
+	.vp__legend-item {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1rem;
+	}
+
+	.vp__legend-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		min-width: 0;
+	}
+
+	.vp__legend-swatch {
+		width: 0.5rem;
+		height: 0.5rem;
+		border-radius: 2px;
+		flex-shrink: 0;
+	}
+
+	.vp__legend-name {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.625rem;
+		font-weight: 500;
+		letter-spacing: 0.02em;
+		color: oklch(0.45 0.012 250);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.vp__legend-count {
 		font-weight: 700;
 		font-size: 0.75rem;
 		flex-shrink: 0;
 	}
 	@media (min-width: 640px) {
-		.vp__stack-count {
+		.vp__legend-count {
 			font-size: 0.8125rem;
 		}
-	}
-
-	.vp__stack-seg--deep {
-		background: oklch(0.38 0.1 170);
-		color: oklch(0.97 0.005 170);
-	}
-	.vp__stack-seg--mid {
-		background: oklch(0.92 0.04 175);
-		color: oklch(0.25 0.03 250);
-	}
-	.vp__stack-seg--muted {
-		background: oklch(0.94 0.005 250);
-		color: oklch(0.4 0.015 250);
 	}
 
 	/* District map */

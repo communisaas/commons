@@ -502,6 +502,14 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 	// Ambient org events. Newest first, capped so the menu bar log stays light.
 	let signal = $state<OrgSignalEvent[]>([]);
 
+	// Per-space scroll memory — session-scoped, in-RAM. Restored against
+	// `window.scrollY` (the org layout scrolls at the document ROOT; there is no
+	// inner scrollport, so `main.scrollTop` would be a silent no-op). Plain
+	// non-rune state: OrgShell drives capture/restore via rAF in an $effect keyed
+	// on activeSpace; the kernel only holds the map + the space we switched from.
+	const scrollMemory: Partial<Record<SpaceId, number>> = {};
+	let prevSpace: SpaceId | null = null;
+
 	let spotlightOpen = $state(false);
 
 	let counter = 0;
@@ -539,7 +547,27 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 		 * via shallow routing for addressability. Instant + stateful: every space
 		 * stays mounted, so its in-flight state survives the switch. */
 		switchSpace(space: SpaceId): void {
+			if (space === activeSpace) return;
+			// Capture the OUTGOING space's scroll NOW — synchronously, while it is
+			// still the active (in-flow, full-height) space. Capturing after the flip
+			// (in an effect) reads a browser-CLAMPED offset once the outgoing space
+			// goes position:absolute and the document shrinks. Pre-reflow is correct
+			// for every caller (switcher, dock, spotlight, afterNavigate).
+			if (browser) scrollMemory[activeSpace] = window.scrollY;
+			prevSpace = activeSpace;
 			activeSpace = space;
+		},
+		/** The space switched FROM — drives the directional cross-fade + scroll restore. */
+		get prevSpace(): SpaceId | null {
+			return prevSpace;
+		},
+		/** Remember a space's document scroll offset (window.scrollY). */
+		recordScroll(space: SpaceId, y: number): void {
+			scrollMemory[space] = y;
+		},
+		/** The remembered offset for a space (0 if never recorded). */
+		getScroll(space: SpaceId): number {
+			return scrollMemory[space] ?? 0;
 		},
 
 		// ── Processes ──

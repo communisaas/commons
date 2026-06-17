@@ -6,6 +6,9 @@
   out of the shell; only event kind and timestamp are rendered.
 -->
 <script lang="ts">
+	import { getOrgOS } from '$lib/components/org/os/orgOS.svelte';
+	import { mergeSignal } from '$lib/components/org/os/perceptual';
+
 	export interface OrgSignal {
 		id: string;
 		event: string;
@@ -18,7 +21,23 @@
 		events?: OrgSignal[] | null;
 	} = $props();
 
-	const eventCount = $derived(events?.length ?? null);
+	// Read the live kernel signal in ADDITION to the server snapshot and merge —
+	// the durable server events and the live this-session kernel events are
+	// different kinds of truth and must not clobber each other. SignalWell only
+	// ever mounts inside the OS-context layout, but guard so a standalone render
+	// (tests / a context-less branch) falls back to server-prop-only and never throws.
+	let os: ReturnType<typeof getOrgOS> | null = null;
+	try {
+		os = getOrgOS();
+	} catch {
+		os = null;
+	}
+
+	// `os.signal` is a reactive getter — reading it inside $derived means a live
+	// emitSignal() ("Composed …" / "Authoring failed …") re-derives and scrolls
+	// the new row into the well with no reload.
+	const merged = $derived(mergeSignal(events, os ? os.signal : [], 12));
+	const eventCount = $derived(merged.count);
 
 	function stamp(ms: number): string {
 		return new Date(ms).toLocaleTimeString('en-US', {
@@ -60,20 +79,25 @@
 		</span>
 	</header>
 
-	{#if events === null}
-		<p class="signal-empty">
-			Activity didn't load with this page view. Reload to see what's happened recently.
-		</p>
-	{:else if events.length === 0}
-		<p class="signal-empty">
-			Nothing's happened here yet. New actions, people, and responses show up as they come in.
-		</p>
+	{#if merged.rows.length === 0}
+		{#if events === null}
+			<p class="signal-empty">
+				Activity didn't load with this page view. Reload to see what's happened recently.
+			</p>
+		{:else}
+			<p class="signal-empty">
+				Nothing's happened here yet. New actions, people, and responses show up as they come in.
+			</p>
+		{/if}
 	{:else}
 		<ul class="signal-list">
-			{#each events as e (e.id)}
+			{#each merged.rows as e (e.id)}
 				<li class="signal-row">
 					<time class="signal-time" datetime={new Date(e.emittedAt).toISOString()}>{stamp(e.emittedAt)}</time>
-					<span class="signal-event" title={e.event}>{eventLabel(e.event)}</span>
+					<!-- kernel rows are verbatim sentences; only server event-keys get relabeled -->
+					<span class="signal-event" title={e.event}>
+						{e.source === 'kernel' ? e.event : eventLabel(e.event)}
+					</span>
 				</li>
 			{/each}
 		</ul>
@@ -131,6 +155,26 @@
 		align-items: baseline;
 		gap: 0.5rem;
 		min-width: 0;
+		/* New rows ARRIVE rather than appear. Keyed-each only re-mounts the new
+		   node, so this fires per fresh signal, not on every list re-render. */
+		animation: signal-enter 150ms var(--header-easing, ease-out);
+	}
+
+	@keyframes signal-enter {
+		from {
+			opacity: 0;
+			transform: translateY(-3px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.signal-row {
+			animation: none;
+		}
 	}
 
 	.signal-time {

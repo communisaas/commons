@@ -14,6 +14,7 @@ import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
 import { assertPiiTripleCreate } from './_orgHash';
 import { applySupporterStatsDelta } from './_supporterStats';
+import { WEBHOOK_EVENT_SET } from './_webhookEvents';
 import { countTagSupporters, collectTagSupporterIds } from './_tagCounts';
 // PII returned as encrypted blobs — v1 API consumers decrypt with org key
 
@@ -1569,16 +1570,7 @@ function generateSigningSecret(): string {
 // Allowed event names. Restricts what subscribers can claim to receive.
 // Adding a new event here ALSO requires the emit site to call queueEvent
 // with the matching string. Keep in sync with the dispatch in convex/orgWebhooks.ts.
-const ALLOWED_WEBHOOK_EVENTS = new Set([
-	'campaign_action.created',
-	'campaign.updated',
-	'supporter.created',
-	'supporter.updated',
-	'supporter.deleted',
-	'donation.completed',
-	'donation.refunded',
-	'event.rsvp_created'
-]);
+const ALLOWED_WEBHOOK_EVENTS = WEBHOOK_EVENT_SET;
 
 type WebhookTestDeliveryResult =
 	| {

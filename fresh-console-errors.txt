@@ -1,0 +1,5 @@
+Total messages: 6 (Errors: 2, Warnings: 1)
+Returning 2 messages for level "error"
+
+[ERROR] Connecting to 'https://o4510735138422784.ingest.us.sentry.io/api/4510735149760512/envelope/?sentry_version=7&sentry_key=7dde1fee8e73bfca86e17949b40f54d5&sentry_client=sentry.javascript.sveltekit%2F10.49.0' violates the following Content Security Policy directive: "connect-src 'self' https://nominatim.openstreetmap.org https://crs.aztec.network data: blob: https://sepolia-rpc.scroll.io https://rpc.scroll.io https://rpc.testnet.near.org https://rpc.mainnet.near.org https://build.protomaps.com https://demotiles.maplibre.org https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://atlas.commons.email https://*.convex.cloud wss://*.convex.cloud". The action has been blocked. @ http://localhost:5199/?spectrum=1&_fresh=1:0
+[ERROR] Fetch API cannot load https://o4510735138422784.ingest.us.sentry.io/api/4510735149760512/envelope/?sentry_version=7&sentry_key=7dde1fee8e73bfca86e17949b40f54d5&sentry_client=sentry.javascript.sveltekit%2F10.49.0. Refused to connect because it violates the document's Content Security Policy. @ http://localhost:5199/?spectrum=1&_fresh=1:0

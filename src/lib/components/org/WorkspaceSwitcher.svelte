@@ -73,6 +73,26 @@
 		return os.activeSpace === mark.id;
 	}
 
+	// Per-space accent — subordinate to the calm cream ground, echoed ONLY in the
+	// active mark (left border + alive dot), never the page/rail ground. Studio=teal
+	// (route/active), Results=emerald (verified/delivery) reuse the design palette;
+	// People/Power get subordinate warm/institutional hues (exact values pending
+	// design sign-off — the mechanism is what this fixes).
+	function markAccent(id: WorkspaceMark['id']): string {
+		switch (id) {
+			case 'studio':
+				return 'var(--coord-route-solid)';
+			case 'base':
+				return '#e0a458';
+			case 'landscape':
+				return '#7c8cc4';
+			case 'return':
+				return 'var(--coord-verified)';
+			default:
+				return 'var(--coord-route-solid)';
+		}
+	}
+
 	// The Studio mark reads the kernel directly: its badge is the live count of
 	// running authoring processes, so work-in-flight shows from any space.
 	const runningCount = $derived(os.runningProcesses.length);
@@ -109,6 +129,7 @@
 			class="ws-mark"
 			class:ws-mark--active={active}
 			class:ws-mark--alive={alive}
+			style="--space-accent: {markAccent(mark.id)};"
 			aria-current={active ? 'page' : undefined}
 			aria-label={alive
 				? `${mark.label}, ${runningCount} running ${runningCount === 1 ? 'process' : 'processes'}`
@@ -167,7 +188,7 @@
 	}
 
 	.ws--horizontal .ws-mark--active {
-		border-color: var(--coord-route-solid);
+		border-color: var(--space-accent, var(--coord-route-solid));
 		background-color: var(--org-sidebar-active);
 	}
 
@@ -195,7 +216,7 @@
 	.ws-mark--active {
 		color: var(--org-sidebar-text);
 		background-color: var(--org-sidebar-active);
-		border-left-color: var(--coord-route-solid);
+		border-left-color: var(--space-accent, var(--coord-route-solid));
 	}
 
 	.ws-icon {
@@ -241,7 +262,7 @@
 	.ws-count--alive {
 		color: var(--org-sidebar-bg);
 		background: var(--coord-verified, #10b981);
-		animation: ws-alive 2s var(--easing) infinite;
+		animation: ws-alive var(--pulse-duration) var(--pulse-easing) infinite;
 	}
 
 	.ws-mark--alive {

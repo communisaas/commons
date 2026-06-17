@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { spring } from 'svelte/motion';
+	import { SPRINGS } from '$lib/design/motion';
 
 	let {
 		total,
@@ -17,11 +18,10 @@
 		class?: string;
 	} = $props();
 
-	const springOpts = { stiffness: 0.15, damping: 0.8 };
-	const animTotal = spring(0, springOpts);
-	const animPostal = spring(0, springOpts);
-	const animDistrict = spring(0, springOpts);
-	const animVerified = spring(0, springOpts);
+	const animTotal = spring(0, SPRINGS.METRIC);
+	const animPostal = spring(0, SPRINGS.METRIC);
+	const animDistrict = spring(0, SPRINGS.METRIC);
+	const animVerified = spring(0, SPRINGS.METRIC);
 
 	$effect(() => {
 		animTotal.set(total);

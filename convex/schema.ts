@@ -2050,7 +2050,7 @@ export default defineSchema({
 		// Scheduled / TEE-sealed sends
 		scheduledAt: v.optional(v.number()), // Future send time (epoch ms)
 		sealedOrgKey: v.optional(v.string()), // Org key sealed to TEE public key, deleted after send
-		sendMode: v.optional(v.string()), // 'client-direct' | 'tee-sealed'
+		sendMode: v.optional(v.string()), // 'client-direct' | 'tee-sealed' | 'server'
 
 		// A/B testing
 		isAbTest: v.boolean(),

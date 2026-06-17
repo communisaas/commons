@@ -40,6 +40,22 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
 	const orgId = orgContext.org._id;
 
+	// Gate-at-delivery: mint send authority only when the org may actually send —
+	// the same predicate the compose form uses (checkPlanLimits by slug), enforced
+	// here BEFORE any STS issuance so a direct API call can't bypass the form gate.
+	// inactive ⇒ maxEmails:0 ⇒ 0>=0 ⇒ refused; exhausted active ⇒ refused; a null
+	// result (org deleted mid-request) fails closed.
+	const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+	if (!limits?.current || limits.current.emailsSent >= limits.limits.maxEmails) {
+		const subscribeGate = (limits?.limits.maxEmails ?? 0) <= 0;
+		throw error(403, {
+			message: subscribeGate
+				? 'Sending to your people needs a plan. Authoring stays free.'
+				: 'Email send limit reached for the current billing period. Upgrade your plan to send more.',
+			code: subscribeGate ? 'DELIVERY_QUOTA_SUBSCRIBE_GATE' : 'EMAIL_QUOTA_EXCEEDED'
+		});
+	}
+
 	// Rate limit: 1 token per org per 5 minutes
 	const lastIssued = lastIssuedMap.get(orgId);
 	if (lastIssued && Date.now() - lastIssued < TOKEN_COOLDOWN_MS) {
