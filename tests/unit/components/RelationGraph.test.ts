@@ -795,4 +795,126 @@ describe('RelationGraph — the relatedness map', () => {
 		expect(container.querySelector('.relation-graph__pan')).toBeTruthy();
 		expect(container.querySelector('[data-testid="relation-focus-view"]')).toBeNull();
 	});
+
+	// ─── Immediate, unjanky, SSR-safe (R9) ────────────────────────────────────
+	//
+	// The surface must paint structure-first and never lurch: the layout is computed
+	// once (memoized) and is identical on the server and the client (no clock, no
+	// randomness in the render path), the box is reserved so nothing jumps on mount,
+	// and reduced motion is honoured. These guard that contract at the component
+	// level — not just in the layout unit.
+
+	/** The drawn node positions, read off the glyph cx/cy, keyed by template id. */
+	function nodePositions(container: HTMLElement): Map<string, { x: number; y: number }> {
+		const out = new Map<string, { x: number; y: number }>();
+		for (const node of container.querySelectorAll('.relation-node')) {
+			const id = node.getAttribute('data-template-id') ?? '';
+			const glyph = node.querySelector('.relation-node__glyph') as SVGCircleElement | null;
+			if (!glyph) continue;
+			out.set(id, {
+				x: parseFloat(glyph.getAttribute('cx') ?? 'NaN'),
+				y: parseFloat(glyph.getAttribute('cy') ?? 'NaN')
+			});
+		}
+		return out;
+	}
+
+	it('renders identical node positions across two independent renders (SSR ⇄ client parity)', () => {
+		// Two renders of the same templates stand in for the server render and the
+		// client hydration. Every glyph must land at the exact same coordinate, or the
+		// map would jump when the client takes over. (The component memoizes the layout,
+		// so this also exercises the cache returning a stable arrangement.)
+		const templates = [
+			makeTemplate({ id: 'a', domain: 'Transportation', title: 'Bike lanes' }),
+			makeTemplate({ id: 'b', domain: 'Transportation', title: 'Freeway removal' }),
+			makeTemplate({ id: 'c', domain: 'Healthcare', title: 'Clinic hours' }),
+			makeTemplate({ id: 'd', domain: 'Labor', title: 'Retail wages' })
+		];
+		const first = render(RelationGraph, { props: { templates, onSelect: vi.fn() } });
+		const posA = nodePositions(first.container);
+		first.unmount();
+		const second = render(RelationGraph, { props: { templates, onSelect: vi.fn() } });
+		const posB = nodePositions(second.container);
+
+		expect([...posB.keys()].sort()).toEqual([...posA.keys()].sort());
+		for (const [id, p] of posA) {
+			const q = posB.get(id)!;
+			expect(q.x).toBe(p.x);
+			expect(q.y).toBe(p.y);
+		}
+	});
+
+	it('does not move a node when an unrelated interaction (hover) fires — no relayout on focus', async () => {
+		// Hover changes the focus/dim, never the geometry. The memoized layout must not
+		// recompute (and must not shift any node) when the viewer merely points at one.
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, { props: { templates, onSelect: vi.fn() } });
+		const before = nodePositions(container);
+		const a = container.querySelector('[data-template-id="a"]') as HTMLElement;
+		await fireEvent.mouseEnter(a);
+		const after = nodePositions(container);
+		for (const [id, p] of before) {
+			const q = after.get(id)!;
+			expect(q.x).toBe(p.x);
+			expect(q.y).toBe(p.y);
+		}
+	});
+
+	it('reserves the SVG box so there is no layout shift on mount (R9 no-CLS)', () => {
+		const src = readFileSync(resolve(process.cwd(), COMPONENT_PATH), 'utf8');
+		// The field claims its height from the first layout pass via an explicit
+		// aspect-ratio on the SVG (the viewBox's own ratio), so the box is reserved
+		// before the SVG's intrinsic size resolves — nothing below it jumps on mount.
+		expect(src).toMatch(/\.relation-graph__svg\b[\s\S]*?aspect-ratio:/);
+	});
+
+	it('reads no wall-clock or randomness anywhere in the render path (re-confirmed at the component)', () => {
+		const src = readFileSync(resolve(process.cwd(), COMPONENT_PATH), 'utf8');
+		// SSR parity breaks the instant any clock or randomness reaches a rendered
+		// value. Neither may appear in the component source.
+		expect(src).not.toMatch(/Date\.now/);
+		expect(src).not.toMatch(/Math\.random/);
+		expect(src).not.toMatch(/performance\.now/);
+		expect(src).not.toMatch(/new Date\b/);
+	});
+
+	it('honours reduced motion: the focus state changes instantly (hard-set spring, no travel)', async () => {
+		// Shim matchMedia so the reduced-motion query reports a match; the component reads
+		// it once and hard-sets the focus spring, so a hover snaps the dim in with no ease.
+		const original = window.matchMedia;
+		Object.defineProperty(window, 'matchMedia', {
+			value: (query: string) => ({
+				matches: /prefers-reduced-motion/.test(query),
+				media: query,
+				onchange: null,
+				addEventListener: () => {},
+				removeEventListener: () => {},
+				addListener: () => {},
+				removeListener: () => {},
+				dispatchEvent: () => false
+			}),
+			writable: true,
+			configurable: true
+		});
+		try {
+			const templates = neighbourhoodFixture();
+			const { container } = render(RelationGraph, { props: { templates, onSelect: vi.fn() } });
+			const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+			const a = container.querySelector('[data-template-id="a"]') as HTMLElement;
+			await fireEvent.mouseEnter(a);
+			// The focus depth (the spring-driven dim value) is at its target immediately —
+			// no animated intermediate frame — because reduced motion hard-sets it.
+			const depth = parseFloat(svg.style.getPropertyValue('--focus-depth'));
+			expect(depth).toBe(1);
+			// And the dim is engaged at once (the neighbourhood read is instant).
+			expect(svg.classList.contains('has-focus')).toBe(true);
+			expect(dimmedIds(container)).toEqual(['c']);
+		} finally {
+			Object.defineProperty(window, 'matchMedia', {
+				value: original,
+				writable: true,
+				configurable: true
+			});
+		}
+	});
 });

@@ -36,7 +36,7 @@
 	import type { Template, RelationEdge } from '$lib/types/template';
 	import { resolveDomainHue, anchorLabelForHue, matchAnchor } from '$lib/utils/domain-hue';
 	import { familyEdges } from '$lib/core/topic/relation-edges';
-	import { layoutRelationGraph } from '$lib/core/topic/graph-layout';
+	import { layoutRelationGraphMemo } from '$lib/core/topic/graph-layout';
 	import { spring as svelteSpring } from 'svelte/motion';
 	import { SPRINGS } from '$lib/design/motion';
 	import { Search } from '@lucide/svelte';
@@ -142,8 +142,14 @@
 
 	// Deterministic positions: the same nodes + edges always settle identically, on
 	// the server and again on the client, so the map paints once and never lurches.
+	// The compute is quadratic, so it runs through the MEMOIZED entry point — keyed
+	// on (nodeIds, edgeKey, size) — and is paid once at mount, not on every hover or
+	// keystroke. The key invalidates only when the node set or an admissible edge
+	// genuinely changes, so a transient interaction never relays the field and a new
+	// edge set never serves a stale map. SSR computes the same key as the client (the
+	// templates hydrate from the same SSR payload), so both render the identical map.
 	const positions = $derived(
-		layoutRelationGraph(
+		layoutRelationGraphMemo(
 			nodes.map((n) => ({ id: n.id })),
 			// The layout knows two pull strengths: a measured twin pulls hardest, all
 			// taxonomic ties (family + tag-concept, both subordinate) pull as kin.
@@ -941,8 +947,14 @@
 	.relation-graph__svg {
 		display: block;
 		width: 100%;
+		/* Reserve the box at the viewBox's own ratio (1080:600) so the field claims
+		 * its full height from the first layout pass — before the browser has parsed
+		 * the SVG's intrinsic size and before hydration. Without this the height is
+		 * resolved late and the map (and everything below it) jumps on mount; with it
+		 * there is no CLS. The ratio is the WIDTH:HEIGHT constants the layout uses, so
+		 * the reserved box matches the painted field exactly. */
+		aspect-ratio: 1080 / 600;
 		height: auto;
-		max-height: 70vh;
 		/* Let the field breathe to its natural aspect; never overflow horizontally. */
 		overflow: visible;
 		/* The neighbourhood read's depth (0 at rest → 1 focused), the value the

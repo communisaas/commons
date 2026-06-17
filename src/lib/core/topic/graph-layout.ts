@@ -33,6 +33,28 @@
  * Pull weights (twin > family) reproduce the mock's edge stiffness; the FR
  * constants (repulsion gain, cooling) are the mock's, tuned there against the
  * live seed so the four measured twin-pairs cluster while the loners drift out.
+ *
+ * COST CEILING (worker boundary, documented not built). The layout is
+ * O(FORCE_ITERATIONS · N²) — every pair repels each of 400 iterations — plus two
+ * O(DECLUMP_ITERATIONS · N²) relaxation passes. That is fine for the live corpus
+ * and well past it, but it grows quadratically. Measured on the dev machine's
+ * main thread (warm, averaged):
+ *
+ *     N= 13 (the seed)  ~2.6ms     N= 90   ~85ms
+ *     N= 50            ~28ms       N=110  ~118ms
+ *     N= 75            ~55ms       N=150  ~224ms
+ *
+ * The compute runs ONCE per distinct (nodeIds, edgeKey, size, seed) — memoized by
+ * {@link layoutRelationGraphMemo}, so it is a one-time mount cost, never per
+ * frame. Up to ~N=40 it lands inside a single 16ms frame; by ~N=100 it is a
+ * ~100ms main-thread stall the viewer would feel on the first paint. The honest
+ * ceiling: keep this on the main thread while the public corpus stays under ~100
+ * templates. PAST that, move the compute off-thread (a Web Worker returning the
+ * position map, the component painting from a reserved box meanwhile) or switch
+ * the repulsion to a Barnes–Hut quadtree (O(N log N)). Neither is built now — at
+ * a dozen-odd templates it would be speculative engineering for load that does
+ * not exist; this note is the trigger to revisit when the corpus approaches the
+ * ceiling.
  */
 
 /** A node to lay out. Only the stable `id` is required; `hue` rides along for
@@ -405,4 +427,86 @@ export function layoutRelationGraph(
 		result.set(ids[i], { x, y });
 	}
 	return result;
+}
+
+// --- Memoized entry point ---------------------------------------------------
+//
+// The compute above is quadratic (see the COST CEILING note at the top), so a
+// reactive surface must not re-run it on every tick — a hover or a search must
+// never pay for a relayout. This wrapper makes the layout a one-time mount cost:
+// it computes a STABLE KEY from exactly the inputs that move a node — the present
+// id set, the canonical (lo,hi,kind) edge set, the canvas size, the seed, and the
+// separation — and returns the cached map whenever that key recurs. Two different
+// edge sets produce two different keys, so a stale graph can never be served
+// across a genuine change (the R9 memoization risk): the key invalidates the
+// instant any admissible relation is added or dropped.
+
+/**
+ * Build the memo key. It folds in only what the geometry depends on, in a
+ * canonical, order-independent form, so the SAME logical graph keys identically
+ * however the caller ordered its arrays — the same invariance the layout itself
+ * guarantees. Node ids are sorted; edges are normalized to sorted (lo|hi|kind)
+ * tuples and sorted, so a flipped or reordered edge list yields the same key.
+ */
+function layoutKey(
+	nodes: GraphLayoutNode[],
+	edges: GraphLayoutEdge[],
+	opts: GraphLayoutOptions
+): string {
+	const ids = nodes
+		.map((nd) => nd?.id)
+		.filter((id): id is string => typeof id === 'string' && id.length > 0)
+		.sort((x, y) => x.localeCompare(y));
+	const edgeKeys = edges
+		.filter((e) => e && typeof e.a === 'string' && typeof e.b === 'string' && e.a !== e.b)
+		.map((e) => {
+			const [lo, hi] = e.a <= e.b ? [e.a, e.b] : [e.b, e.a];
+			return `${lo}|${hi}|${e.kind}`;
+		})
+		.sort();
+	const seed = opts.seed ?? 0;
+	const minSep = opts.minSeparation ?? DEFAULT_MIN_SEPARATION;
+	// Length prefixes keep the segments unambiguous (no id can forge a boundary).
+	return [
+		`${opts.width}x${opts.height}`,
+		`s${seed}`,
+		`m${minSep}`,
+		`n${ids.length}:${ids.join(',')}`,
+		`e${edgeKeys.length}:${edgeKeys.join(',')}`
+	].join('§');
+}
+
+/** A tiny bounded cache. The surface lays out one or two graphs (the live set,
+ *  maybe a search-filtered one), so a handful of entries is plenty; the bound
+ *  keeps a long-running tab from accreting stale maps. Oldest-out on overflow. */
+const MEMO_LIMIT = 8;
+const layoutMemo = new Map<string, Map<string, Point>>();
+
+/**
+ * Lay out the relation graph, memoized by its inputs. Same `(nodeIds, edgeKey,
+ * size, seed, minSeparation)` ⇒ the identical `Map` returned without recomputing;
+ * any genuine change to that key recomputes. Use this from the reactive surface —
+ * {@link layoutRelationGraph} stays exported as the pure, un-cached primitive the
+ * determinism tests pin.
+ */
+export function layoutRelationGraphMemo(
+	nodes: GraphLayoutNode[],
+	edges: GraphLayoutEdge[],
+	opts: GraphLayoutOptions
+): Map<string, Point> {
+	const key = layoutKey(nodes, edges, opts);
+	const hit = layoutMemo.get(key);
+	if (hit) {
+		// Refresh recency so the genuinely-current graph survives eviction.
+		layoutMemo.delete(key);
+		layoutMemo.set(key, hit);
+		return hit;
+	}
+	const computed = layoutRelationGraph(nodes, edges, opts);
+	layoutMemo.set(key, computed);
+	if (layoutMemo.size > MEMO_LIMIT) {
+		const oldest = layoutMemo.keys().next().value;
+		if (oldest !== undefined) layoutMemo.delete(oldest);
+	}
+	return computed;
 }

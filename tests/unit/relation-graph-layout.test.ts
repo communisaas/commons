@@ -20,6 +20,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	layoutRelationGraph,
+	layoutRelationGraphMemo,
 	type GraphLayoutNode,
 	type GraphLayoutEdge,
 	type Point
@@ -273,6 +274,81 @@ describe('layoutRelationGraph — bounded + within canvas (R9)', () => {
 			expect(point.x).toBeLessThanOrEqual(1440);
 			expect(point.y).toBeGreaterThanOrEqual(0);
 			expect(point.y).toBeLessThanOrEqual(900);
+		}
+	});
+});
+
+// --- Memoization (one compute per distinct graph; no stale cache) -----------
+
+describe('layoutRelationGraphMemo — memoized by (nodeIds, edgeKey, size)', () => {
+	it('returns the SAME map instance for identical inputs (no recompute)', () => {
+		const first = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		const second = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		// Reference equality is the proof the layout did not run again — a hover or a
+		// keystroke that re-derives with the same graph pays nothing.
+		expect(second).toBe(first);
+	});
+
+	it('is keyed independent of node/edge order (same logical graph → same instance)', () => {
+		const forward = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		const shuffledNodes = [...NODES].reverse();
+		const shuffledEdges = [...EDGES].reverse().map((e) => ({ a: e.b, b: e.a, kind: e.kind }));
+		const reordered = layoutRelationGraphMemo(shuffledNodes, shuffledEdges, { ...SIZE, seed: 0 });
+		// The key canonicalizes ids + edges, so reordering hits the same cache entry.
+		expect(reordered).toBe(forward);
+	});
+
+	it('does NOT serve a stale map when the edge set genuinely changes', () => {
+		const base = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		// Drop one measured twin — a genuinely different graph. The memo must recompute,
+		// not hand back the prior arrangement (the R9 stale-graph risk).
+		const fewerEdges = EDGES.filter((e) => !(e.a === 'bike' && e.b === 'freeway'));
+		const next = layoutRelationGraphMemo(NODES, fewerEdges, { ...SIZE, seed: 0 });
+		expect(next).not.toBe(base);
+		// And the positions actually differ where the dropped tie mattered.
+		expect(next.get('bike')).not.toEqual(base.get('bike'));
+	});
+
+	it('recomputes for a different size or seed (size/seed are part of the key)', () => {
+		const a = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		const bigger = layoutRelationGraphMemo(NODES, EDGES, { width: 1440, height: 900, seed: 0 });
+		const reseeded = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 9 });
+		expect(bigger).not.toBe(a);
+		expect(reseeded).not.toBe(a);
+	});
+
+	it('agrees with the pure layout — memoization changes caching, not geometry', () => {
+		const pure = layoutRelationGraph(NODES, EDGES, { ...SIZE, seed: 0 });
+		const memoized = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE, seed: 0 });
+		expect(memoized.size).toBe(pure.size);
+		for (const [id, point] of pure) {
+			expect(memoized.get(id)).toEqual(point);
+		}
+	});
+
+	it('a second render with the same graph reuses the cache — the one-time mount cost (R9)', () => {
+		// Simulate SSR then client: two calls with the same logical graph. The second
+		// is a cache hit (same instance), so the quadratic compute is paid exactly once
+		// regardless of how many times the reactive surface re-derives.
+		const ssr = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE });
+		const client = layoutRelationGraphMemo(NODES, EDGES, { ...SIZE });
+		expect(client).toBe(ssr);
+	});
+});
+
+// --- SSR ⇄ client position parity (the R9 measure) --------------------------
+
+describe('layoutRelationGraph — SSR ⇄ client parity (no post-hydration jump)', () => {
+	it('the seed-shape graph lays out byte-identically on a "server" and "client" pass', () => {
+		// Two independent computes stand in for the server render and the client
+		// hydration. With no clock or randomness in the path, every coordinate must
+		// match exactly — so the painted map cannot lurch when the client takes over.
+		const server = layoutRelationGraph(NODES, EDGES, { ...SIZE });
+		const client = layoutRelationGraph(NODES, EDGES, { ...SIZE });
+		for (const [id, point] of server) {
+			const c = client.get(id)!;
+			expect(c.x).toBe(point.x);
+			expect(c.y).toBe(point.y);
 		}
 	});
 });
