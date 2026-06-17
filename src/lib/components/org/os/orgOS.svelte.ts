@@ -548,6 +548,12 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 		 * stays mounted, so its in-flight state survives the switch. */
 		switchSpace(space: SpaceId): void {
 			if (space === activeSpace) return;
+			// Capture the OUTGOING space's scroll NOW — synchronously, while it is
+			// still the active (in-flow, full-height) space. Capturing after the flip
+			// (in an effect) reads a browser-CLAMPED offset once the outgoing space
+			// goes position:absolute and the document shrinks. Pre-reflow is correct
+			// for every caller (switcher, dock, spotlight, afterNavigate).
+			if (browser) scrollMemory[activeSpace] = window.scrollY;
 			prevSpace = activeSpace;
 			activeSpace = space;
 		},

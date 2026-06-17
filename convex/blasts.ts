@@ -644,10 +644,16 @@ export const updateClientBlastProgress = mutation({
  * Deeper cure: closes the browser-disconnect-mid-blast gap by giving
  * the Lambda a durable receipt write path independent of the browser.
  */
-// Send modes that produce per-recipient receipts. Positive allowlist (NOT a
+// Send modes that produce per-recipient receipts. Positive allowlists (NOT a
 // `!==` denylist) so an unset/unknown sendMode still throws — sendMode is
 // optional in the schema, so a denylist would silently admit undefined/garbage.
-const RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server']);
+//
+// Split by trust surface: the INTERNAL writer (called only by the platform
+// Lambda/server path) admits 'server'; the PUBLIC, editor-callable writer must
+// NOT — server-dispatch receipts are server-authoritative, so admitting 'server'
+// publicly would let an editor forge/overwrite backend SES receipt rows.
+const INTERNAL_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server']);
+const PUBLIC_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed']);
 
 export const recordBlastReceiptsInternal = internalMutation({
 	args: {
@@ -667,7 +673,7 @@ export const recordBlastReceiptsInternal = internalMutation({
 		if (!blast) {
 			throw new Error('Blast not found');
 		}
-		if (!RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
+		if (!INTERNAL_RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
 			throw new Error(`Receipts not supported for sendMode '${blast.sendMode ?? '(unset)'}'`);
 		}
 		if (blast.status !== 'sending' && blast.status !== 'sent') {
@@ -791,7 +797,7 @@ export const recordBlastReceipts = mutation({
 		if (!blast || blast.orgId !== org._id) {
 			throw new Error('Blast not found in this organization');
 		}
-		if (!RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
+		if (!PUBLIC_RECEIPT_SENDMODES.has(blast.sendMode ?? '')) {
 			throw new Error(`Receipts not supported for sendMode '${blast.sendMode ?? '(unset)'}'`);
 		}
 		if (blast.status !== 'sending' && blast.status !== 'sent') {

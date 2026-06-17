@@ -88,6 +88,25 @@ const IDENTITY_EMPTY = '(no identity breakdown)';
 const GEO_EMPTY = '(empty)';
 const DEBATE_EMPTY = '(no debate)';
 
+// Parse a REQUIRED numeric field. Number('')/(' ') are 0 — both finite — so a
+// blank would silently become 0 and corrupt the preimage into a FALSE mismatch.
+// Reject blank + non-finite so a malformed paste is a typed parse ERROR (rendered
+// neutral), not a wrong "✗ Mismatch".
+function strictNum(raw: string, field: string): number {
+	if (raw.trim() === '') throw new Error(`${field} must not be blank`);
+	const n = Number(raw);
+	if (!Number.isFinite(n)) throw new Error(`${field} must be a number`);
+	return n;
+}
+
+// Optional numeric: '' is a legitimate null sentinel; a non-empty value must be finite.
+function strictNumOrNull(raw: string, field: string): number | null {
+	if (raw === '') return null;
+	const n = Number(raw);
+	if (!Number.isFinite(n)) throw new Error(`${field} must be a number`);
+	return n;
+}
+
 export function parseIdentity(
 	s: string
 ): { govId: number; addressVerified: number; emailOnly: number } | null {
@@ -95,10 +114,9 @@ export function parseIdentity(
 	if (t === '' || t === IDENTITY_EMPTY) return null;
 	const parts = t.split('|');
 	if (parts.length !== 3) throw new Error('identity must be govId|addressVerified|emailOnly');
-	const [govId, addressVerified, emailOnly] = parts.map((p) => Number(p));
-	if (![govId, addressVerified, emailOnly].every(Number.isFinite)) {
-		throw new Error('identity counts must be numbers');
-	}
+	const govId = strictNum(parts[0], 'govId');
+	const addressVerified = strictNum(parts[1], 'addressVerified');
+	const emailOnly = strictNum(parts[2], 'emailOnly');
 	return { govId, addressVerified, emailOnly };
 }
 
@@ -109,11 +127,8 @@ export function parseAuthorship(s: string): {
 } {
 	const parts = s.trim().split('|');
 	if (parts.length !== 3) throw new Error('authorship must be individual|shared|explicit');
-	const individual = Number(parts[0]);
-	const shared = Number(parts[1]);
-	if (!Number.isFinite(individual) || !Number.isFinite(shared)) {
-		throw new Error('authorship counts must be numbers');
-	}
+	const individual = strictNum(parts[0], 'individual');
+	const shared = strictNum(parts[1], 'shared');
 	return { individual, shared, explicit: parts[2] === '1' };
 }
 
@@ -124,8 +139,7 @@ export function parseDateRange(s: string): {
 } {
 	const parts = s.trim().split('|');
 	if (parts.length !== 3) throw new Error('date range must be earliest|latest|spanDays');
-	const spanDays = Number(parts[2]);
-	if (!Number.isFinite(spanDays)) throw new Error('spanDays must be a number');
+	const spanDays = strictNum(parts[2], 'spanDays');
 	return { earliest: parts[0], latest: parts[1], spanDays };
 }
 
@@ -136,8 +150,7 @@ export function parseGeography(s: string): Array<{ hash: string; count: number }
 		const eq = pair.lastIndexOf('=');
 		if (eq <= 0) throw new Error(`geography pair "${pair}" must be hash=count`);
 		const hash = pair.slice(0, eq);
-		const count = Number(pair.slice(eq + 1));
-		if (!Number.isFinite(count)) throw new Error(`geography count for "${hash}" must be a number`);
+		const count = strictNum(pair.slice(eq + 1), `geography count for "${hash}"`);
 		return { hash, count };
 	});
 }
@@ -151,8 +164,8 @@ export function parseDebate(s: string): AttestationPreimage['debate'] {
 		marketPosition: p[0],
 		totalStake: p[1],
 		topArgumentScore: p[2],
-		aiPanelConsensus: p[3] === '' ? null : Number(p[3]),
-		participantCount: p[4] === '' ? null : Number(p[4]),
+		aiPanelConsensus: strictNumOrNull(p[3], 'aiPanelConsensus'),
+		participantCount: strictNumOrNull(p[4], 'participantCount'),
 		resolutionHash: p[5] === '' ? null : p[5]
 	};
 }

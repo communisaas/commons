@@ -123,8 +123,9 @@
 		}
 	});
 
-	// (3) Per-space scroll memory. On a switch, capture the OUTGOING space's document
-	// scroll, then restore the INCOMING space's remembered offset after it lays out
+	// (3) Per-space scroll RESTORE. The outgoing space's offset is captured
+	// synchronously inside os.switchSpace (pre-reflow, before it leaves flow); here
+	// we only restore the INCOMING space's remembered offset after it lays out
 	// (rAF). Scroll is at the document ROOT (window) — NOT main.scrollTop; there is
 	// no inner scrollport, so main.scrollTop would silently restore to top. This
 	// effect's only reactive dep is activeSpace; it writes no rune the URL effect
@@ -133,7 +134,6 @@
 	$effect(() => {
 		const space = os.activeSpace;
 		if (!browser || space === lastScrollSpace) return;
-		os.recordScroll(lastScrollSpace, window.scrollY);
 		lastScrollSpace = space;
 		const target = os.getScroll(space);
 		// 'auto', never 'smooth' — a restore must be instant. Clamp to the new

@@ -36,12 +36,14 @@ describe('server-dispatch receipts (B3)', () => {
 		expect(body).toContain('internal.blasts.recordBlastReceiptsInternal');
 	});
 
-	it('the throw-before-SES catch records a failed receipt with an error (not a silent counter)', () => {
-		const catchIdx = body.indexOf('} catch (err) {');
-		expect(catchIdx, 'outer catch(err) not found').toBeGreaterThanOrEqual(0);
-		const catchBlock = body.slice(catchIdx, catchIdx + 500);
-		expect(catchBlock).toContain("status: 'failed'");
-		expect(catchBlock).toMatch(/error:/);
+	it('the throw-before-SES catch records a failed receipt with a NON-PII code (not raw err)', () => {
+		// CodeRabbit F2: the receipt error is member-readable via listReceiptsForBlast,
+		// so it must be a coded reason, never err.message (which can carry PII).
+		expect(body).toContain("'predispatch_failed'");
+		expect(body).not.toMatch(/err\.message\.slice/); // raw exception no longer persisted
+		// the SES-fail branch likewise persists a code, not the raw SES body
+		expect(body).toMatch(/ses_http_/);
+		expect(body).not.toMatch(/error: result\.ok \? undefined : result\.error/);
 	});
 
 	it('sesMessageId is set only on success — never on a failed row', () => {
@@ -55,13 +57,21 @@ describe('server-dispatch receipts (B3)', () => {
 	});
 });
 
-describe('receipt-writer sendMode guard (B3)', () => {
-	it('is one shared positive allowlist incl. server, not two divergent literal denylists', () => {
+describe('receipt-writer sendMode guard (B3 + CodeRabbit F1)', () => {
+	it('splits the allowlist: INTERNAL admits server, PUBLIC is browser-only', () => {
+		// F1: a SHARED set including 'server' let an editor forge server-dispatch
+		// receipts via the public mutation. Split by trust surface.
 		expect(blasts).toContain(
-			"const RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server'])"
+			"const INTERNAL_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server'])"
 		);
-		const guards = blasts.match(/RECEIPT_SENDMODES\.has\(blast\.sendMode/g) ?? [];
-		expect(guards.length).toBe(2); // both the internal + public writer
+		expect(blasts).toContain(
+			"const PUBLIC_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed'])"
+		);
+		// internal writer uses the server-inclusive set; public writer the browser-only set
+		expect(blasts).toContain('INTERNAL_RECEIPT_SENDMODES.has(blast.sendMode');
+		expect(blasts).toContain('PUBLIC_RECEIPT_SENDMODES.has(blast.sendMode');
+		// no surviving shared set (would re-admit 'server' publicly) and no denylist
+		expect(blasts).not.toMatch(/const RECEIPT_SENDMODES =/);
 		expect(blasts).not.toContain(
 			"blast.sendMode !== 'client-direct' && blast.sendMode !== 'tee-sealed'"
 		);

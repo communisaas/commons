@@ -70,7 +70,11 @@
 
 	const authRow = $derived.by(() => {
 		if (data.mode === 'campaign') {
-			return { label: 'Attestation', value: 'SHA-256 (recompute below)', verified: true };
+			// Only promise "recompute below" when an attestation actually exists (the
+			// verifier block gates on attestationHash); otherwise say so plainly.
+			return attestationHash
+				? { label: 'Attestation', value: 'SHA-256 (recompute below)', verified: true }
+				: { label: 'Attestation', value: 'No attestation issued yet', verified: false };
 		}
 		if (data.identity.method === 'gov-id') {
 			return { label: 'Identity', value: 'Government credential (mDL)', verified: true };
@@ -180,7 +184,12 @@
 					<span class="text-text-secondary text-right">{compositionValue}</span>
 				{/if}
 
-				<span class="text-text-quaternary">Attestation</span>
+				<!-- `data.hash` is the route param: the real SHA-256 attestation in
+				     individual mode, but the campaign ROUTE ID in campaign mode (the
+				     real attestation is the verifier block below). Label honestly. -->
+				<span class="text-text-quaternary"
+					>{data.mode === 'campaign' ? 'Report ID' : 'Attestation'}</span
+				>
 				<span class="font-mono text-text-tertiary text-right">{data.hash}</span>
 
 				<span class="text-text-quaternary">Verified</span>

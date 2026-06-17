@@ -657,6 +657,13 @@ export const update = mutation({
 		}
 		if (args.logoUrl !== undefined) {
 			capOrThrow('logoUrl', args.logoUrl);
+			// Coalition-tier gate — a custom logo is a white-label feature, same gate
+			// `setBranding` enforces. Without this, the editor-gated `update`/profile
+			// path is a paywall bypass for the logo. Empty string clears it (any tier).
+			const plan = await resolveOrgPlan(ctx, org._id);
+			if (!logoWriteAllowed(plan, args.logoUrl === '')) {
+				throw new Error('Custom logo requires Coalition tier');
+			}
 			updates.logoUrl = args.logoUrl;
 		}
 		if (args.brandingAccent !== undefined) {

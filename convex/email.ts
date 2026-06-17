@@ -1562,29 +1562,42 @@ export const sendBlastBatch = internalAction({
 						awsRegion,
 						unsubscribeUrl
 					);
+					if (!result.ok) {
+						// Status only — never the raw SES body: it is persisted to a
+						// member-readable receipt (listReceiptsForBlast), and SES 4xx
+						// rejection bodies (suppression list / unverified identity) echo
+						// the recipient PLAINTEXT email, which members otherwise never see.
+						console.error(`[sendBlastBatch] SES send failed: status=${result.status ?? 'transport'}`);
+					}
 					receipts.push({
 						recipientEmailHash,
 						sesMessageId: result.ok ? result.messageId : undefined,
 						status: result.ok ? 'sent' : 'failed',
 						sentAt: Date.now(),
-						error: result.ok ? undefined : result.error
+						// Non-PII reason code only (see above).
+						error: result.ok
+							? undefined
+							: result.status
+								? `ses_http_${result.status}`
+								: 'ses_send_failed'
 					});
 					if (result.ok) {
 						batchSent++;
 					} else {
 						batchFailed++;
 					}
-				} catch (err) {
-					// Threw BEFORE SES was reached (decrypt/merge) — the case a
-					// receipt matters most, and the case the old `catch {}` recorded
-					// nothing. No sesMessageId; only the (already-truncated) reason.
+				} catch {
+					// Threw BEFORE SES was reached (decrypt/merge) — the case the old
+					// `catch {}` recorded nothing. Persist a GENERIC code: the raw
+					// message may carry PII and the receipt is member-readable.
 					batchFailed++;
+					console.error('[sendBlastBatch] pre-SES failure (decrypt/merge)');
 					receipts.push({
 						recipientEmailHash,
 						sesMessageId: undefined,
 						status: 'failed',
 						sentAt: Date.now(),
-						error: err instanceof Error ? err.message.slice(0, 500) : 'send_failed'
+						error: 'predispatch_failed'
 					});
 				}
 			}

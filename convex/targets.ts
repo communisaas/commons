@@ -53,9 +53,11 @@ export const cohortDistrictHistogram = query({
 		let unrecognizedDistrictCount = 0;
 		for (const s of cohort) {
 			const district = normDistrict(s.congressionalDistrict);
-			// State falls back to the district's state prefix when stateCode is absent
-			// so a district-only supporter still feeds senator coverage.
-			const state = normState(s.stateCode) ?? (district ? district.split('-')[0] : null);
+			// A valid district's prefix is the canonical state (it's atlas-format
+			// STATE-NUM), so a mismatched stateCode (CA-12 + NY) can't orphan the
+			// supporter's senate signal under the wrong state. stateCode is the
+			// fallback only when there's no district.
+			const state = district ? district.split('-')[0] : normState(s.stateCode);
 			if (s.congressionalDistrict && !district) unrecognizedDistrictCount++;
 			if (district) districtCounts[district] = (districtCounts[district] ?? 0) + 1;
 			if (state) stateCounts[state] = (stateCounts[state] ?? 0) + 1;

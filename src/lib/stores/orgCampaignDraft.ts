@@ -55,7 +55,12 @@ function saveDrafts(drafts: DraftStorage): void {
 function pruneDrafts(drafts: DraftStorage): DraftStorage {
 	const cutoff = Date.now() - DRAFT_TTL_MS;
 	return Object.fromEntries(
-		Object.entries(drafts).filter(([, draft]) => draft.createdAt >= cutoff)
+		// Guard the per-entry shape — localStorage can hold a malformed/null value
+		// that would throw on `draft.createdAt`. Drop anything not well-formed.
+		Object.entries(drafts).filter(([, draft]) => {
+			const createdAt = (draft as Partial<OrgCampaignDraft> | null)?.createdAt;
+			return typeof createdAt === 'number' && createdAt >= cutoff;
+		})
 	);
 }
 

@@ -91,7 +91,12 @@ function assertCongressionalDeliveryLaunched() {
 // stale 'messages' prefix. (CWC_PRODUCTION was documented in .env.example but read
 // nowhere — this is the only place that consults it.) Fails safe to the sandbox.
 function resolveSenatePathPrefix(): string {
-	const prefix = process.env.CWC_SENATE_PATH_PREFIX || 'testing-messages';
+	// Normalize before the guard so '/messages', 'messages/', ' messages ' all
+	// collapse to the canonical 'messages' and can't slip a live-routing variant
+	// past the live-inbox check.
+	const prefix = (process.env.CWC_SENATE_PATH_PREFIX || 'testing-messages')
+		.trim()
+		.replace(/^\/+|\/+$/g, '');
 	if (prefix === 'messages' && process.env.CWC_PRODUCTION !== 'true') {
 		console.error(
 			'[submissions] CWC_SENATE_PATH_PREFIX=messages (live Senate) requires CWC_PRODUCTION=true; falling back to testing-messages sandbox'

@@ -84,7 +84,10 @@ export function buildCohortRoster(
 		const districtCount = hist.districtCounts[d.code] ?? 0;
 		for (const o of d.officials) {
 			const chamber: 'house' | 'senate' = o.chamber === 'senate' ? 'senate' : 'house';
-			const state = o.state ?? '';
+			// Normalize to the histogram's uppercase key space so a lowercase/padded
+			// atlas state can't miss the stateCounts lookup (→ supporterCount 0) or
+			// overstate statesMissingSenators.
+			const state = normalizeStateCode(o.state) ?? '';
 			const key = o.bioguide_id
 				? `bio:${o.bioguide_id}`
 				: `${chamber}:${state}:${o.district ?? ''}:${o.name ?? ''}`;

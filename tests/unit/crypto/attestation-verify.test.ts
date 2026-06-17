@@ -105,6 +105,14 @@ describe('field parsers', () => {
 		expect(parseIdentity('5|20|17')).toEqual({ govId: 5, addressVerified: 20, emailOnly: 17 });
 		expect(() => parseIdentity('5|20')).toThrow();
 	});
+	it('rejects blank/whitespace/NaN numerics as parse errors, not coerced 0/NaN (CodeRabbit F9)', () => {
+		// Number('')/(' ') are a finite 0 — without the strict guard a malformed paste
+		// would build a valid-looking struct and read as a FALSE mismatch.
+		expect(() => parseIdentity('|20|17')).toThrow();
+		expect(() => parseIdentity(' |20|17')).toThrow();
+		expect(() => parseIdentity('x|20|17')).toThrow();
+		expect(() => parseAuthorship('|3|1')).toThrow();
+	});
 	it('geography: tokens map to [], pairs parse, garbage rejected', () => {
 		expect(parseGeography('(empty)')).toEqual([]);
 		expect(parseGeography('')).toEqual([]);

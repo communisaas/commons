@@ -29,7 +29,13 @@ import type { RequestHandler } from './$types';
 import { matchInternalSecret } from '$lib/server/internal/secret-auth';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
 import { getConstituentResolver } from '$lib/server/tee';
+import { readBoundedJson } from '$lib/server/bounded-json';
 import type { ResolveRequest } from '$lib/server/tee/constituent-resolver';
+
+// The legit payload is ciphertext + nonce + two pubkeys + proof hex + publicInputs
+// + 3 short strings — comfortably under 64KB. Cap before parsing so a leaked secret
+// can't burn memory/CPU with oversized bodies despite the request-count limiter.
+const MAX_RESOLVE_BODY_BYTES = 64 * 1024;
 
 export const POST: RequestHandler = async ({ request }) => {
 	const auth = matchInternalSecret(request.headers.get('x-internal-secret'));
@@ -45,7 +51,15 @@ export const POST: RequestHandler = async ({ request }) => {
 	// Crypto-heavy + PII endpoint: cap request volume to blunt a leaked-secret flood.
 	await enforceInternalRateLimit({ endpoint: 'tee-resolve', maxRequests: 120, windowMs: 60_000 });
 
-	const body = (await request.json().catch(() => null)) as Partial<ResolveRequest> | null;
+	// Bounded read (content-length + streaming abort) before JSON.parse. A
+	// too-large or unparseable body maps to the same clean MISSING_FIELDS result
+	// below — fail-closed, no retry storm, no unbounded buffering.
+	let body: Partial<ResolveRequest> | null;
+	try {
+		body = (await readBoundedJson(request, MAX_RESOLVE_BODY_BYTES)) as Partial<ResolveRequest>;
+	} catch {
+		return json({ success: false, errorCode: 'MISSING_FIELDS' });
+	}
 
 	// A malformed body is a RESOLVER result (200 + typed errorCode), not a transport
 	// error — so the caller records a clean delivery failure instead of retrying a
