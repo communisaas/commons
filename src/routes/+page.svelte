@@ -37,6 +37,7 @@
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
 	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
 	import RelationGraph from '$lib/components/template-browser/relation/RelationGraph.svelte';
+	import DescentDive from '$lib/components/template-browser/DescentDive.svelte';
 	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
 	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
@@ -383,6 +384,16 @@
 	const surface = $derived(selectLandingSurface($page.url));
 	const showGraph = $derived(surface === 'graph');
 	const showSpectrum = $derived(surface === 'spectrum');
+
+	// The desktop descent shared by both spatial surfaces. A dive engages only after
+	// a user-initiated selection (the store auto-selects the first template on
+	// hydration, so the dive must NOT auto-open on it) and only on desktop — mobile
+	// keeps the TouchModal preview. The spectrum renders its own DescentDive
+	// internally (the page hands it the snippet via the `dive` prop); the graph has
+	// no internal dive, so the page raises the SAME shared descent over it here. One
+	// gesture, one modal vocabulary, across both surfaces.
+	const diveOpen = $derived(!!selectedTemplate && userInitiatedSelection && isDesktopView);
+	const graphDiving = $derived(showGraph && diveOpen);
 
 	// The relation edges the graph draws beyond the family kinship it derives
 	// itself: the measured-twin tuples and the shared-concept tuples, both resolved
@@ -821,13 +832,18 @@
 						     measured semantic twins (solid) and civic-family kinship (dashed),
 						     with the topically-isolated falling honestly to the periphery.
 						     Reachable at `?view=graph` while it is built out; the spectrum
-						     stays the default surface. -->
-						<RelationGraph
-							templates={allTemplates}
-							edges={relationEdges}
-							selectedId={templateStore.selectedId}
-							onSelect={handleTemplateSelect}
-						/>
+						     stays the default surface. Selecting a node falls into the template
+						     through the SAME descent the spectrum uses — the field goes inert
+						     beneath the risen Artifact (the shared DescentDive below), never a
+						     second modal. -->
+						<div class="graph-field" class:graph-field--inert={graphDiving}>
+							<RelationGraph
+								templates={allTemplates}
+								edges={relationEdges}
+								selectedId={templateStore.selectedId}
+								onSelect={handleTemplateSelect}
+							/>
+						</div>
 					{:else if showSpectrum}
 						<!-- Topical field: templates grouped into hue-ordered domain bands,
 						     with a lens toggle to re-organise the same templates by place
@@ -840,9 +856,7 @@
 							placeGroups={filteredGroups}
 							selectedId={templateStore.selectedId}
 							onSelect={handleTemplateSelect}
-							dive={selectedTemplate && userInitiatedSelection && isDesktopView
-								? templateDive
-								: undefined}
+							dive={diveOpen ? templateDive : undefined}
 							onClose={closeDive}
 						/>
 					{:else}
@@ -900,10 +914,11 @@
 	</div>
 </section>
 
-<!-- The template preview, defined once and rendered in two places: in its own
-     column in the list fallback, and as the spectrum dive (risen in an Artifact
-     over the receded field). The SAME component with the SAME wiring in both —
-     send flow, personalization persistence, and proof footer are not forked. -->
+<!-- The template preview, defined once and rendered in three places: in its own
+     column in the list fallback, and as the descent dive over either spatial surface
+     (the spectrum or the relation map), risen in an Artifact over the receded page.
+     The SAME component with the SAME wiring everywhere — send flow, personalization
+     persistence, and proof footer are not forked. -->
 {#snippet templateDive()}
 	{#if selectedTemplate}
 		<TemplatePreview
@@ -914,6 +929,22 @@
 		/>
 	{/if}
 {/snippet}
+
+<!-- The relation map's descent: selecting a node falls into the template through the
+     SAME shared dive the spectrum uses (the spectrum mounts its own DescentDive
+     internally; the graph has none, so the page raises it here). Back / esc / a tap
+     on the scrim climbs out and clears the selection, restoring the map with focus
+     back on the node it rose from — no relayout, no second modal vocabulary. -->
+{#if graphDiving}
+	<DescentDive
+		dive={templateDive}
+		open={graphDiving}
+		onClose={closeDive}
+		restoreFocusSelector={templateStore.selectedId
+			? `[data-template-id="${templateStore.selectedId}"]`
+			: null}
+	/>
+{/if}
 
 <!-- Mobile Preview Modal -->
 {#if showMobilePreview && selectedTemplate}
@@ -1348,6 +1379,19 @@
 		min-width: 0;
 		position: relative;
 		z-index: 1;
+	}
+
+	/*
+	 * While the relation map's dive is open the map goes inert — it must not catch
+	 * clicks or focus, because the whole page is being read through the descent's
+	 * scrim. The recede itself is NOT applied here: the page (this map, the hero
+	 * beside it, the header above it) is blurred and dimmed as one by the shared
+	 * DescentDive's full-viewport scrim. No per-column filter, so there is no
+	 * half-sharp seam — the same inert posture the spectrum field takes under its
+	 * own dive.
+	 */
+	.graph-field--inert {
+		pointer-events: none;
 	}
 
 	.template-preview-column {

@@ -101,6 +101,7 @@ export default defineConfig({
 			'tests/unit/components/SpectrumLandscape.test.ts',
 			'tests/unit/components/SpectrumOverview.test.ts',
 			'tests/unit/components/RelationGraph.test.ts',
+			'tests/unit/components/DescentDive.test.ts',
 			// Behavioral test for the delivery-gate conversion prompt — requires
 			// the components-lane config for @testing-library/svelte rendering.
 			'tests/unit/components/DeliveryGateNotice.test.ts',

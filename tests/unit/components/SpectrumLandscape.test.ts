@@ -549,18 +549,16 @@ describe('SpectrumLandscape — the dive (descent into a template)', () => {
 	it('disables the scrim blur under reduced motion — only the warm dim remains', () => {
 		// The blur is the expensive, vestibular channel, so under
 		// prefers-reduced-motion the scrim must drop its backdrop-filter while the
-		// (cheap, non-vestibular) warm dim stays. This component's scoped CSS is not
-		// injected into the jsdom document (so getComputedStyle/styleSheets cannot
-		// see it); the contract is structural, so assert it against the component
-		// source: the scrim declares the blur at rest, and a reduced-motion block
-		// zeroes that blur for the scrim.
+		// (cheap, non-vestibular) warm dim stays. The descent is the ONE shared dive
+		// (DescentDive), so its scrim CSS lives there, not forked per surface. The
+		// component's scoped CSS is not injected into the jsdom document (so
+		// getComputedStyle/styleSheets cannot see it); the contract is structural, so
+		// assert it against the shared descent's source: the scrim declares the blur
+		// at rest, and a reduced-motion block zeroes that blur for the scrim.
 		// Resolved from the vitest root (process.cwd() = the repo), so it does not
 		// depend on import.meta.url being available under the test transform.
 		const src = readFileSync(
-			resolve(
-				process.cwd(),
-				'src/lib/components/template-browser/spectrum/SpectrumLandscape.svelte'
-			),
+			resolve(process.cwd(), 'src/lib/components/template-browser/DescentDive.svelte'),
 			'utf8'
 		);
 
