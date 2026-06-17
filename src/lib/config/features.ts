@@ -28,11 +28,21 @@ export const FEATURES = {
 
 	/**
 	 * CWC delivery, district officials, congressional template routing.
-	 * Code exists, but this is a launch gate: when false, CWC templates are
+	 * Code exists; this is the ENTRY launch gate: when false, CWC templates are
 	 * excluded from discovery and direct CWC template routes 404. The submission
 	 * endpoint also requires Tier 4+ proof authority before delivery can run.
+	 *
+	 * Env-driven so the entry opens from BUILD config (`VITE_CONGRESSIONAL=1`) per
+	 * environment, not by editing this constant — default OFF leaves prod unchanged
+	 * until a build sets it. (The Convex DELIVERY gate is separate:
+	 * `CONGRESSIONAL_DELIVERY_LAUNCHED` + the Senate path prefix.)
+	 *
+	 * SAFETY: only open this on a build whose Convex deployment routes the Senate to
+	 * the LIVE inbox (`CWC_SENATE_PATH_PREFIX=messages` + `CWC_PRODUCTION=true`).
+	 * Opening the entry on the `testing-messages` sandbox would surface "delivered"
+	 * receipts for no-op sends — a false claim.
 	 */
-	CONGRESSIONAL: false,
+	CONGRESSIONAL: import.meta.env.VITE_CONGRESSIONAL === '1',
 
 	/**
 	 * Address verification specificity level.
