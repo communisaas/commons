@@ -39,6 +39,7 @@
 	import { layoutRelationGraph } from '$lib/core/topic/graph-layout';
 	import { spring as svelteSpring } from 'svelte/motion';
 	import { SPRINGS } from '$lib/design/motion';
+	import { Search } from '@lucide/svelte';
 
 	interface Props {
 		/** The public templates to relate — one node each. */
@@ -238,7 +239,48 @@
 	// "this one is the dive owner" marker on its single node — it dims nothing.
 	let hoverId = $state<string | null>(null);
 	let focusedId = $state<string | null>(null);
-	const focusId = $derived(hoverId ?? focusedId);
+
+	// Recognition navigation: the viewer types a fragment they remember and the
+	// matching node comes to them — pulled to the centre, its neighbourhood lit, the
+	// rest of the field receding. This is recognition over recall: you don't reconstruct
+	// where a template sits, you name a piece of it and the map answers. The match runs
+	// CLIENT-SIDE over the already-loaded nodes (no server round-trip at this size), so
+	// it is immediate and causal — the field responds as you type.
+	let searchQuery = $state('');
+
+	// The node a query selects: the FIRST loaded node whose title or civic family
+	// contains the trimmed query (case-insensitive). First-in-stable-order is a stable,
+	// repeatable pick — the same query always lands on the same node. Empty query → no
+	// match, so the field rests un-panned and un-focused.
+	const searchMatch = $derived.by<GraphNode | null>(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return null;
+		return (
+			nodes.find(
+				(n) => n.label.toLowerCase().includes(q) || (n.family?.toLowerCase().includes(q) ?? false)
+			) ?? null
+		);
+	});
+	const searchMatchId = $derived(searchMatch?.id ?? null);
+
+	// How many loaded nodes the query touches — the plain-English feedback line reads
+	// from this. (The PAN/focus lands on the first; the count tells the viewer whether
+	// their query was specific.) A query with no match reports zero, honestly.
+	const searchHitCount = $derived.by<number>(() => {
+		const q = searchQuery.trim().toLowerCase();
+		if (!q) return 0;
+		return nodes.filter(
+			(n) => n.label.toLowerCase().includes(q) || (n.family?.toLowerCase().includes(q) ?? false)
+		).length;
+	});
+
+	// Focus precedence: a live hover or keyboard focus is the viewer's immediate,
+	// transient act and wins; the search match is the standing recognition target
+	// underneath. So a search centres + lights a node, and the viewer can still hover a
+	// neighbour to read ITS ties without the search fighting back — on mouse-leave the
+	// field falls back to the search-focused neighbourhood, not to nothing. Clearing the
+	// search drops searchMatchId and the field returns to full presence.
+	const focusId = $derived(hoverId ?? focusedId ?? searchMatchId);
 
 	// Whether the viewer asked for less motion. Read once, on the client, via the
 	// same matchMedia probe the dimensional primitives use — server-side it stays
@@ -264,6 +306,30 @@
 		// spring carry it — its first frame already moves, so the onset is causal.
 		focusDepth.set(target, prefersReducedMotion ? { hard: true } : undefined);
 	});
+
+	// Search centres a match by PANNING the field, never by relaying it out — the
+	// layout is the viewer's spatial memory and must not scramble. The whole
+	// drawn field is one rigid `<g>` that slides so the matched node lands at canvas
+	// centre; every node keeps its relative place, the map just translates beneath the
+	// viewport. At rest (no match) the pan is (0,0) and the field sits as laid out.
+	// The translation rides ENTRANCE — a firm arrival with no bounce — so the match
+	// settles at centre without overshoot. Reduced motion snaps it.
+	// svelte-ignore state_referenced_locally — the rest value is captured once per instance
+	const pan = svelteSpring({ x: 0, y: 0 }, SPRINGS.ENTRANCE);
+	$effect(() => {
+		const p = searchMatchId ? positions.get(searchMatchId) : null;
+		// Bring the matched node to the canvas centre; with no match, rest at origin.
+		const target = p ? { x: WIDTH / 2 - p.x, y: HEIGHT / 2 - p.y } : { x: 0, y: 0 };
+		pan.set(target, prefersReducedMotion ? { hard: true } : undefined);
+	});
+
+	// Clearing the search query restores the field: the spring carries the pan back to
+	// origin and dropping searchMatchId returns every node to full presence. Escape and
+	// the clear button both route here so the field always returns to exactly where it
+	// rested before the search.
+	function clearSearch() {
+		searchQuery = '';
+	}
 
 	// The lit set: the focused node + every node an admissible edge connects to it.
 	// Empty when nothing is focused → the whole field reads at full presence (no
@@ -325,6 +391,60 @@
 	</figcaption>
 
 	{#if drawNodes.length > 0}
+		<!-- Recognition navigation: name a fragment you remember and the map brings the
+		     matching node to the centre, lit, the rest receding. Reuses the template
+		     search vocabulary (the same search glyph + type=search field), but the copy
+		     speaks to relation — you are finding a concern in the field, not filtering a
+		     list. Matching is client-side over the loaded nodes, so it answers as you type. -->
+		<div class="relation-graph__search">
+			<div class="relation-search__field">
+				<Search class="relation-search__icon" size={16} aria-hidden="true" />
+				<input
+					type="search"
+					class="relation-search__input font-brand"
+					placeholder="Find a concern by name…"
+					aria-label="Find a template by name or civic family"
+					bind:value={searchQuery}
+					data-testid="relation-search-input"
+					onkeydown={(e) => {
+						// Escape clears the field and returns the map to full presence.
+						if (e.key === 'Escape') {
+							e.preventDefault();
+							clearSearch();
+						}
+						// Enter commits the recognition: keep the current match centred and
+						// drop the soft keyboard, so the viewer can read the lit neighbourhood
+						// without the field changing under them.
+						if (e.key === 'Enter') {
+							e.preventDefault();
+							(e.currentTarget as HTMLInputElement).blur();
+						}
+					}}
+				/>
+				{#if searchQuery}
+					<button
+						type="button"
+						class="relation-search__clear font-brand"
+						onclick={clearSearch}
+						aria-label="Clear search"
+					>
+						Clear
+					</button>
+				{/if}
+			</div>
+			{#if searchQuery.trim()}
+				<p class="relation-search__feedback font-brand" aria-live="polite" data-testid="relation-search-feedback">
+					{#if searchMatch}
+						Centred on “{searchMatch.label}”{searchHitCount > 1
+							? `, ${searchHitCount} match the search`
+							: ''}.
+					{:else}
+						Nothing here by that name yet.
+					{/if}
+				</p>
+			{/if}
+		</div>
+
 		<svg
 			class="relation-graph__svg"
 			viewBox="0 0 {WIDTH} {HEIGHT}"
@@ -333,6 +453,13 @@
 			class:has-focus={litSet.size > 0}
 			style="--focus-depth: {$focusDepth};"
 		>
+			<!-- The whole field rides one panning group. Search slides this so the matched
+			     node reaches the centre — a translate, never a relayout, so the viewer's
+			     spatial memory of the map survives. At rest the translate is (0,0). -->
+			<g
+				class="relation-graph__pan"
+				transform="translate({$pan.x.toFixed(2)} {$pan.y.toFixed(2)})"
+			>
 			<!-- Edges first, so nodes and labels sit over them. -->
 			<g class="relation-graph__edges" aria-hidden="true">
 				{#each drawEdges as edge (edge.key)}
@@ -410,6 +537,7 @@
 					</g>
 				{/each}
 			</g>
+		</g>
 		</svg>
 
 		<!-- The legend names the relation kinds in plain English. The two line samples
@@ -473,6 +601,80 @@
 		font-size: 0.8125rem;
 		color: oklch(0.5 0.02 60);
 		margin-top: 0.125rem;
+	}
+
+	/* ─── Search — recognition navigation ─────────────────────────────────────
+	 * A single field centred over the map. It carries no heavy chrome: a thin warm
+	 * underline-and-border on the cream ground (no white box, no pill), the search
+	 * glyph at the lead, and a quiet feedback line below that names where the field
+	 * just centred. The field is the only affordance that pulls the map; everything
+	 * else is the map itself. */
+	.relation-graph__search {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.3rem;
+		margin: 0 auto 0.75rem;
+		max-width: 24rem;
+		padding: 0 1rem;
+	}
+
+	.relation-search__field {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		width: 100%;
+		padding: 0.4rem 0.6rem;
+		border: 1px solid oklch(0.82 0.02 70);
+		border-radius: 0.5rem;
+		background: oklch(0.99 0.005 80);
+		transition: border-color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.relation-search__field:focus-within {
+		border-color: var(--coord-share-solid);
+	}
+
+	.relation-search__field :global(.relation-search__icon) {
+		flex-shrink: 0;
+		color: oklch(0.6 0.02 70);
+	}
+
+	.relation-search__input {
+		flex: 1;
+		min-width: 0;
+		border: none;
+		background: transparent;
+		font-size: 0.875rem;
+		color: oklch(0.3 0.02 60);
+		outline: none;
+	}
+	.relation-search__input::placeholder {
+		color: oklch(0.62 0.02 70);
+	}
+	/* Suppress the native search-clear control — we render our own plain-English one. */
+	.relation-search__input::-webkit-search-cancel-button {
+		appearance: none;
+	}
+
+	.relation-search__clear {
+		flex-shrink: 0;
+		border: none;
+		background: transparent;
+		padding: 0.1rem 0.25rem;
+		font-size: 0.75rem;
+		color: oklch(0.5 0.02 60);
+		cursor: pointer;
+		transition: color 150ms cubic-bezier(0.4, 0, 0.2, 1);
+	}
+	.relation-search__clear:hover {
+		color: oklch(0.34 0.02 60);
+	}
+
+	.relation-search__feedback {
+		margin: 0;
+		font-size: 0.75rem;
+		color: oklch(0.5 0.02 60);
+		text-align: center;
 	}
 
 	.relation-graph__svg {

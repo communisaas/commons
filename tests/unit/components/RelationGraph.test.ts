@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { fireEvent, render } from '@testing-library/svelte';
+import { fireEvent, render, waitFor } from '@testing-library/svelte';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Template, RelationEdge } from '$lib/types/template';
@@ -430,5 +430,179 @@ describe('RelationGraph — the relatedness map', () => {
 		expect(src).not.toMatch(/rounded-(xl|2xl|3xl|full)\b/);
 		// No bg-white container utility (white is for Artifacts only; the ground is cream).
 		expect(src).not.toMatch(/class="[^"]*\bbg-white\b/);
+	});
+
+	// ─── Search-to-centre: recognition navigation ────────────────────────────
+	//
+	// Typing a fragment the viewer remembers must bring the matching node TO THEM:
+	// the field pans so the match lands at centre (a translate, never a relayout —
+	// spatial memory survives), the match's neighbourhood lights, non-matches dim.
+	// Clearing the field restores it: pan back to origin, every node at presence.
+
+	/** The pan group's translate, parsed to {x,y}. (0,0) means the field rests as laid out. */
+	function panTranslate(container: HTMLElement): { x: number; y: number } {
+		const g = container.querySelector('.relation-graph__pan');
+		const t = g?.getAttribute('transform') ?? 'translate(0 0)';
+		const m = t.match(/translate\(\s*(-?[\d.]+)[ ,]+(-?[\d.]+)\s*\)/);
+		return m ? { x: parseFloat(m[1]), y: parseFloat(m[2]) } : { x: 0, y: 0 };
+	}
+
+	function searchInput(container: HTMLElement): HTMLInputElement {
+		return container.querySelector('[data-testid="relation-search-input"]') as HTMLInputElement;
+	}
+
+	it('offers a search field reusing the template search vocabulary, with plain-English copy', () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const input = searchInput(container);
+		expect(input).toBeTruthy();
+		// The shared search affordance: a native search field, keyboard-reachable.
+		expect(input.getAttribute('type')).toBe('search');
+		expect(input.tabIndex).toBeGreaterThanOrEqual(0);
+		// Plain-English placeholder — recognition, not a filter verb.
+		expect(input.getAttribute('placeholder')).toMatch(/find a concern/i);
+		// No feedback line until the viewer types.
+		expect(container.querySelector('[data-testid="relation-search-feedback"]')).toBeNull();
+	});
+
+	it('typing a query centres the best match (pans the field) and lights its neighbourhood; non-matches dim', async () => {
+		const templates = neighbourhoodFixture(); // a,b transportation pair + c healthcare loner
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		// At rest: the field sits un-panned and at full presence.
+		expect(panTranslate(container)).toEqual({ x: 0, y: 0 });
+		expect(dimmedIds(container)).toEqual([]);
+
+		// Type a fragment of node `a`'s title.
+		const input = searchInput(container);
+		await fireEvent.input(input, { target: { value: 'Bike' } });
+
+		// FOCUS is synchronous: the match `a` + its same-family neighbour `b` light, the
+		// loner `c` dims — the search engages the identical neighbourhood read as hover.
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		const lit = litIds(container);
+		expect(lit).toContain('a');
+		expect(lit).toContain('b');
+		expect(dimmedIds(container)).toEqual(['c']);
+
+		// CENTRING is the spring-driven pan: it settles to a non-origin translate (the
+		// field slid so `a` reaches the canvas centre). A relayout would scramble the
+		// map; a pan keeps every node's relative place — so we assert the GROUP moved.
+		await waitFor(() => {
+			const p = panTranslate(container);
+			expect(p.x !== 0 || p.y !== 0).toBe(true);
+		});
+
+		// The plain-English feedback names where the field centred.
+		const feedback = container.querySelector('[data-testid="relation-search-feedback"]');
+		expect(feedback?.textContent).toMatch(/centred on/i);
+	});
+
+	it('clearing the search restores the field — pan returns to origin and every node lights', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		const input = searchInput(container);
+
+		// Search, then clear via the input itself.
+		await fireEvent.input(input, { target: { value: 'Bike' } });
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		await fireEvent.input(input, { target: { value: '' } });
+
+		// Focus releases synchronously: full presence, nothing dimmed, no feedback line.
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+		expect(litIds(container).length).toBe(nodes(container).length);
+		expect(container.querySelector('[data-testid="relation-search-feedback"]')).toBeNull();
+
+		// The pan spring carries the field back to origin.
+		await waitFor(() => {
+			expect(panTranslate(container)).toEqual({ x: 0, y: 0 });
+		});
+	});
+
+	it('Escape clears the search (keyboard-accessible restore)', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		const input = searchInput(container);
+
+		await fireEvent.input(input, { target: { value: 'Bike' } });
+		expect(svg.classList.contains('has-focus')).toBe(true);
+
+		// Escape on the field restores the map without a pointer.
+		await fireEvent.keyDown(input, { key: 'Escape' });
+		expect(input.value).toBe('');
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+	});
+
+	it('matches client-side over the loaded nodes — by title and by civic family — with no server call', async () => {
+		const fetchSpy = vi.spyOn(globalThis, 'fetch');
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		const input = searchInput(container);
+
+		// A civic-family fragment ('Transp…') matches the transportation nodes — the
+		// match reads the loaded node set's family captions, not a remote index.
+		await fireEvent.input(input, { target: { value: 'Transp' } });
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		// The focused node is one of the transportation pair (the first in order, `a`).
+		expect(litIds(container)).toContain('a');
+
+		// No network round-trip for the seed-size set.
+		expect(fetchSpy).not.toHaveBeenCalled();
+		fetchSpy.mockRestore();
+	});
+
+	it('reports no match honestly when nothing in the field carries the name', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		const input = searchInput(container);
+
+		await fireEvent.input(input, { target: { value: 'zzzz-nothing' } });
+		// No match → no centring, no dim (the field stays whole), honest feedback.
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+		expect(panTranslate(container)).toEqual({ x: 0, y: 0 });
+		const feedback = container.querySelector('[data-testid="relation-search-feedback"]');
+		expect(feedback?.textContent).toMatch(/nothing here by that name/i);
+	});
+
+	it('search-focus and hover-focus do not fight: hover overrides, then falls back to the search match', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const input = searchInput(container);
+
+		// Search centres `a` (lights a,b; dims c).
+		await fireEvent.input(input, { target: { value: 'Bike' } });
+		expect(dimmedIds(container)).toEqual(['c']);
+
+		// Hovering the loner `c` overrides: its neighbourhood is just itself, so a,b dim.
+		const c = container.querySelector('[data-template-id="c"]') as HTMLElement;
+		await fireEvent.mouseEnter(c);
+		expect(litIds(container)).toContain('c');
+		expect(dimmedIds(container).sort()).toEqual(['a', 'b']);
+
+		// On mouse-leave the field falls BACK to the search-focused neighbourhood, not to
+		// nothing — the two focus channels reconcile, they don't cancel.
+		await fireEvent.mouseLeave(c);
+		expect(dimmedIds(container)).toEqual(['c']);
 	});
 });
