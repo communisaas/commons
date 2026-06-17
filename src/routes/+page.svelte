@@ -22,7 +22,12 @@
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
-	import type { Template, TemplateCreationContext, TemplateGroup } from '$lib/types/template';
+	import type {
+		Template,
+		TemplateCreationContext,
+		TemplateGroup,
+		RelationEdge
+	} from '$lib/types/template';
 	import type { PageData } from './$types';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import { analyzeEmailFlow } from '$lib/services/emailService';
@@ -31,6 +36,8 @@
 
 	import TemplateCreator from '$lib/components/template/TemplateCreator.svelte';
 	import SpectrumLandscape from '$lib/components/template-browser/spectrum/SpectrumLandscape.svelte';
+	import RelationGraph from '$lib/components/template-browser/relation/RelationGraph.svelte';
+	import DescentDive from '$lib/components/template-browser/DescentDive.svelte';
 	import AuthoringUpgradeCard from '$lib/components/billing/AuthoringUpgradeCard.svelte';
 	import { AppError, ERROR_CODES } from '$lib/types/errors';
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
@@ -49,7 +56,7 @@
 	import { getUserLocation } from '$lib/core/location/inference-engine';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
-	import { shouldShowSpectrum } from '$lib/core/topic/landing-surface';
+	import { selectLandingSurface } from '$lib/core/topic/landing-surface';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -271,10 +278,10 @@
 
 		if (isMobile()) {
 			showMobilePreview = true;
-		} else if (!showSpectrum) {
+		} else if (!showSpectrum && !showGraph) {
 			// List fallback: the preview lives in its own column — scroll it into view.
-			// In the spectrum the dive owns its own entrance (the field recedes and the
-			// preview rises as an Artifact), so no scroll-into-view is needed.
+			// The spectrum and the graph each own their dive entrance (the field recedes
+			// and the preview rises as an Artifact), so no scroll-into-view is needed.
 			tick().then(() => {
 				document
 					.querySelector('.template-preview-column')
@@ -367,12 +374,39 @@
 		)
 	);
 
-	// Topical-field swap. The hue-ordered landscape is the default surface; the
-	// flat geographic list stays a working fallback, reachable with `?spectrum=0`
-	// so it can be re-enabled without code changes. The rule lives in a pure util so
-	// the page and its tests share one source of truth. Reading the param off the
-	// page store keeps it reactive and SSR-safe (no window access).
-	const showSpectrum = $derived(shouldShowSpectrum($page.url));
+	// Discovery-surface swap. Three worlds over the same templates: the relatedness
+	// GRAPH (reachable at `?view=graph`), the hue-ordered topical SPECTRUM (the
+	// current default), and the flat geographic LIST (a working fallback reachable
+	// with `?spectrum=0`). The selection rule lives in one pure util so the page and
+	// its tests share a single source of truth and the worlds cannot drift apart.
+	// Reading the param off the page store keeps it reactive and SSR-safe (no
+	// window access).
+	const surface = $derived(selectLandingSurface($page.url));
+	const showGraph = $derived(surface === 'graph');
+	const showSpectrum = $derived(surface === 'spectrum');
+
+	// The desktop descent shared by both spatial surfaces. A dive engages only after
+	// a user-initiated selection (the store auto-selects the first template on
+	// hydration, so the dive must NOT auto-open on it) and only on desktop — mobile
+	// keeps the TouchModal preview. The spectrum renders its own DescentDive
+	// internally (the page hands it the snippet via the `dive` prop); the graph has
+	// no internal dive, so the page raises the SAME shared descent over it here. One
+	// gesture, one modal vocabulary, across both surfaces.
+	const diveOpen = $derived(!!selectedTemplate && userInitiatedSelection && isDesktopView);
+	const graphDiving = $derived(showGraph && diveOpen);
+
+	// The relation edges the graph draws beyond the family kinship it derives
+	// itself: the measured-twin tuples and the shared-concept tuples, both resolved
+	// server-side (embeddings and tag vectors never cross the wire — only the
+	// {a,b,kind[,score]} tuples do). Concept edges are usually empty at this corpus
+	// (tag embeddings unbackfilled), so this normally reduces to the twin set; the
+	// graph's concept legend item stays hidden while there are none. Both sources
+	// are independently guarded in the loader, so a transient failure of either
+	// degrades to its empty default rather than dropping the whole edge set.
+	const relationEdges = $derived<RelationEdge[]>([
+		...(data.relationEdges ?? []),
+		...(data.conceptRelations?.edges ?? [])
+	]);
 
 	// Sort templates within a group by display score (send_count, recency)
 	// so the homepage order matches what TemplateList renders
@@ -788,12 +822,29 @@
 			     hidden preview track left as dead space beside it. -->
 			<div
 				class="template-browser"
-				class:template-browser--spectrum={showSpectrum}
+				class:template-browser--spectrum={showSpectrum || showGraph}
 				id="template-browser"
 			>
 				<!-- Template List -->
 				<div class="template-list-column">
-					{#if showSpectrum}
+					{#if showGraph}
+						<!-- Relatedness graph: each template a hue-coloured node, linked by
+						     measured semantic twins (solid) and civic-family kinship (dashed),
+						     with the topically-isolated falling honestly to the periphery.
+						     Reachable at `?view=graph` while it is built out; the spectrum
+						     stays the default surface. Selecting a node falls into the template
+						     through the SAME descent the spectrum uses — the field goes inert
+						     beneath the risen Artifact (the shared DescentDive below), never a
+						     second modal. -->
+						<div class="graph-field" class:graph-field--inert={graphDiving}>
+							<RelationGraph
+								templates={allTemplates}
+								edges={relationEdges}
+								selectedId={templateStore.selectedId}
+								onSelect={handleTemplateSelect}
+							/>
+						</div>
+					{:else if showSpectrum}
 						<!-- Topical field: templates grouped into hue-ordered domain bands,
 						     with a lens toggle to re-organise the same templates by place
 						     (the existing geographic precision grouping). Selecting a tile
@@ -805,9 +856,7 @@
 							placeGroups={filteredGroups}
 							selectedId={templateStore.selectedId}
 							onSelect={handleTemplateSelect}
-							dive={selectedTemplate && userInitiatedSelection && isDesktopView
-								? templateDive
-								: undefined}
+							dive={diveOpen ? templateDive : undefined}
 							onClose={closeDive}
 						/>
 					{:else}
@@ -821,11 +870,11 @@
 				</div>
 
 				<!-- Template Preview. In the list (fallback) it lives in its own column
-				     beside the list. In the spectrum, the preview is the dive: it rises as
-				     an Artifact over the receded field (rendered by SpectrumLandscape via
-				     the snippet below), so the side column is not shown. The preview itself
-				     is identical in both — the snippet wraps the SAME component. -->
-				{#if !showSpectrum}
+				     beside the list. In the spectrum and the relation graph, the preview is
+				     the dive: it rises as an Artifact over the receded field, so the side
+				     column is not shown. The preview itself is identical in both — the
+				     snippet wraps the SAME component. -->
+				{#if !showSpectrum && !showGraph}
 					<div class="template-preview-column">
 						{#if hasError}
 							<div class="border-y border-slate-200 px-6 py-8 text-center">
@@ -865,10 +914,11 @@
 	</div>
 </section>
 
-<!-- The template preview, defined once and rendered in two places: in its own
-     column in the list fallback, and as the spectrum dive (risen in an Artifact
-     over the receded field). The SAME component with the SAME wiring in both —
-     send flow, personalization persistence, and proof footer are not forked. -->
+<!-- The template preview, defined once and rendered in three places: in its own
+     column in the list fallback, and as the descent dive over either spatial surface
+     (the spectrum or the relation map), risen in an Artifact over the receded page.
+     The SAME component with the SAME wiring everywhere — send flow, personalization
+     persistence, and proof footer are not forked. -->
 {#snippet templateDive()}
 	{#if selectedTemplate}
 		<TemplatePreview
@@ -879,6 +929,22 @@
 		/>
 	{/if}
 {/snippet}
+
+<!-- The relation map's descent: selecting a node falls into the template through the
+     SAME shared dive the spectrum uses (the spectrum mounts its own DescentDive
+     internally; the graph has none, so the page raises it here). Back / esc / a tap
+     on the scrim climbs out and clears the selection, restoring the map with focus
+     back on the node it rose from — no relayout, no second modal vocabulary. -->
+{#if graphDiving}
+	<DescentDive
+		dive={templateDive}
+		open={graphDiving}
+		onClose={closeDive}
+		restoreFocusSelector={templateStore.selectedId
+			? `[data-template-id="${templateStore.selectedId}"]`
+			: null}
+	/>
+{/if}
 
 <!-- Mobile Preview Modal -->
 {#if showMobilePreview && selectedTemplate}
@@ -1313,6 +1379,19 @@
 		min-width: 0;
 		position: relative;
 		z-index: 1;
+	}
+
+	/*
+	 * While the relation map's dive is open the map goes inert — it must not catch
+	 * clicks or focus, because the whole page is being read through the descent's
+	 * scrim. The recede itself is NOT applied here: the page (this map, the hero
+	 * beside it, the header above it) is blurred and dimmed as one by the shared
+	 * DescentDive's full-viewport scrim. No per-column filter, so there is no
+	 * half-sharp seam — the same inert posture the spectrum field takes under its
+	 * own dive.
+	 */
+	.graph-field--inert {
+		pointer-events: none;
 	}
 
 	.template-preview-column {

@@ -263,9 +263,23 @@ export default defineSchema({
 		districtCounts: v.optional(v.array(v.object({ code: v.string(), count: v.number() }))),
 		tierCounts: v.optional(v.array(v.number())),
 
-		// Semantic embeddings (768-dim Gemini vectors)
+		// Semantic embeddings (768-dim Gemini vectors). All three are SERVER-ONLY:
+		// consumed for vector search, relatedness twins, concept edges, and hue
+		// projection. The public template queries that return raw documents
+		// (`getBySlug`, `list`) run them through `stripEmbeddings` so these fields
+		// never cross the client boundary; the enriched queries (`listPublic`,
+		// `getBySlugPublic`) project explicit field sets that omit them.
 		locationEmbedding: v.optional(v.array(v.float64())),
 		topicEmbedding: v.optional(v.array(v.float64())),
+		// Per-tag embeddings, generated the same way as topicEmbedding (one Gemini
+		// vector per raw tag). Consumed to cluster tags into concepts and derive
+		// concept edges; only concept labels and edge tuples cross out, never the
+		// vectors (stripped by the same projection as the other embeddings).
+		// Co-located with the template like topicEmbedding so the concept query
+		// reads them without a join.
+		tagEmbeddings: v.optional(
+			v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) }))
+		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
@@ -3044,5 +3058,22 @@ export default defineSchema({
 		event: v.string(),
 		payload: v.string(), // JSON-serialized event payload (same shape as webhook payload)
 		emittedAt: v.number()
-	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt'])
+	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt']),
+
+	// Persisted relatedness normalization (singleton, keyed like smtRoots/treeId).
+	// Holds the public-corpus centroid — the genre common-mode that mean-centering
+	// removes before scoring template twins — plus the calibrated centered-cosine
+	// threshold that was in force when the centroid was fit. The template
+	// relatedness query reads this instead of recomputing the centroid on every
+	// call; a daily cron refits it so the normalization tracks the corpus as it
+	// grows. One canonical row under `key: 'public'`. Recompute is pure Convex
+	// compute — no external/recurring cost.
+	relatednessCalibration: defineTable({
+		key: v.string(), // singleton selector — always 'public'
+		centroid: v.array(v.float64()),
+		threshold: v.float64(),
+		count: v.number(), // usable (embedded) templates the centroid was fit over
+		dim: v.number(), // embedding dimensionality
+		updatedAt: v.number()
+	}).index('by_key', ['key'])
 });

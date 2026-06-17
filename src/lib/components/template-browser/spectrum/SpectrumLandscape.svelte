@@ -29,7 +29,6 @@
 	 */
 
 	import type { Snippet } from 'svelte';
-	import { tick } from 'svelte';
 	import type { Template, TemplateGroup } from '$lib/types/template';
 	import { groupByDomain, bandDomId } from '$lib/core/topic/domain-grouping';
 	import { toPlaceBands } from '$lib/core/topic/place-bands';
@@ -37,8 +36,9 @@
 	import DomainBand from './DomainBand.svelte';
 	import LensToggle, { type Lens } from './LensToggle.svelte';
 	import SpectrumOverview from './SpectrumOverview.svelte';
-	import { Artifact, EntityCluster } from '$lib/design';
-	import { TIMING, EASING } from '$lib/design/motion';
+	import DescentDive from '../DescentDive.svelte';
+	import { EntityCluster } from '$lib/design';
+	import { TIMING } from '$lib/design/motion';
 
 	interface Props {
 		/** The public templates to lay out as a topical field. */
@@ -273,124 +273,27 @@
 
 	// ─── The dive: a descent into the chosen template ─────────────────────────
 	//
-	// Selecting a tile is falling into it. The WHOLE page recedes behind a single
-	// full-viewport backdrop scrim (blur + a faint warm dim) and the chosen template
-	// ascends into an Artifact — the one white bounded surface for a floated object —
-	// wrapping the page's own preview. Because the scrim is one fixed plane over
-	// everything, the hero beside the field and the header above it recede with the
-	// field, as one — no half-sharp seam, one composited blur layer. Back / esc / a
-	// tap on the scrim reverses the fall: the Artifact settles away, the page returns
-	// to the EXACT state it left (scroll position, lens, selection cleared), and
-	// focus lands back on the tile it rose from. Reversible, no hidden state.
+	// Selecting a tile is falling into it — through the SAME descent the relation map
+	// uses, so the landing speaks one modal vocabulary, not two. The shared
+	// `DescentDive` recedes the whole page behind a single full-viewport scrim and
+	// raises the chosen template into an Artifact; back / esc / a tap on the scrim
+	// climbs out and restores the page (scroll, lens, selection cleared) with focus
+	// back on the tile it rose from. The orchestration — scroll-lock, focus trap,
+	// portal — lives there, not forked here.
 	//
 	// The dive is on only when the page supplies the preview snippet AND a tile is
 	// selected; without the snippet the surface keeps the split-view behaviour (the
 	// preview lives in its own column) and nothing here engages.
 	const diving = $derived(!!dive && !!selectedId);
 
-	// The body scroll position captured as the dive opens, restored as it closes,
-	// so the field comes back exactly where it was — the reversibility the descent
-	// promises. The element focus was on (the originating tile) is restored too.
-	let lockedScrollY = 0;
-	let diveSurface = $state<HTMLElement | null>(null);
-	let restoreFocusId: string | null = null;
-
-	function lockFieldScroll() {
-		lockedScrollY = window.scrollY;
-		document.body.style.position = 'fixed';
-		document.body.style.top = `-${lockedScrollY}px`;
-		document.body.style.left = '0';
-		document.body.style.right = '0';
-	}
-
-	function unlockFieldScroll() {
-		document.body.style.position = '';
-		document.body.style.top = '';
-		document.body.style.left = '';
-		document.body.style.right = '';
-		window.scrollTo(0, lockedScrollY);
-	}
-
-	// Open / close is driven by `diving`. On open: remember the originating tile,
-	// lock the field's scroll, move focus into the Artifact. On close: restore the
-	// scroll and return focus to the tile. Effects never run under SSR and the dive
-	// only exists on the client, so the window/document reads need no guard.
-	$effect(() => {
-		if (!diving) return;
-		restoreFocusId = selectedId;
-		lockFieldScroll();
-		// Focus the first focusable inside the risen Artifact once it has mounted.
-		// `preventScroll` so moving focus never nudges the (fixed) body underneath.
-		tick().then(() => {
-			const first = diveSurface?.querySelector<HTMLElement>(
-				'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-			);
-			(first ?? diveSurface)?.focus({ preventScroll: true });
-		});
-		return () => {
-			unlockFieldScroll();
-			// Return focus to the tile the dive rose from, so the body knows where it
-			// came back to. `preventScroll` is essential: a bare focus() scrolls the
-			// tile into view and would override the exact scroll position we just
-			// restored — the field must come back where it left, not jump to the tile.
-			const id = restoreFocusId;
-			restoreFocusId = null;
-			tick().then(() => {
-				if (!id) return;
-				document
-					.querySelector<HTMLElement>(`[data-template-button][data-template-id="${id}"]`)
-					?.focus({ preventScroll: true });
-			});
-		};
-	});
+	// The originating tile to return focus to on close — the descent resolves this
+	// selector against the document so the field comes back exactly where it left.
+	const diveRestoreSelector = $derived(
+		selectedId ? `[data-template-button][data-template-id="${selectedId}"]` : null
+	);
 
 	function closeDive() {
 		onClose?.();
-	}
-
-	// Portal the descent layer to <body>. The field sits inside the page's
-	// `.template-list-column`, which is a `position: relative; z-index: 1` stacking
-	// context, and the hero beside it sits in a sticky `z-index: 10` column — so a
-	// scrim left in place would be capped at z-index 1 and the hero (z-index 10)
-	// would paint OVER it, leaving the left half sharp. Moving the layer to <body>
-	// lifts it to the document root, where its z-index clears every page context and
-	// its backdrop-filter blurs the WHOLE page beneath it as one. Mirrors the
-	// existing body-portal pattern (AnimatedPopover). Client-only (actions never run
-	// under SSR), so the document reads need no guard.
-	function portalToBody(node: HTMLElement) {
-		document.body.appendChild(node);
-		return {
-			destroy() {
-				node.remove();
-			}
-		};
-	}
-
-	// Esc reverses the dive. A keydown on the descent layer is enough — focus is
-	// trapped inside it while diving, so the handler always sees the key.
-	function handleDiveKeydown(event: KeyboardEvent) {
-		if (event.key === 'Escape') {
-			event.preventDefault();
-			closeDive();
-			return;
-		}
-		if (event.key !== 'Tab') return;
-		// Trap focus inside the Artifact: wrap from last → first and first → last so
-		// tab never leaves the risen object for the receded field beneath it.
-		const focusables = diveSurface?.querySelectorAll<HTMLElement>(
-			'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-		);
-		if (!focusables || focusables.length === 0) return;
-		const first = focusables[0];
-		const last = focusables[focusables.length - 1];
-		const active = document.activeElement;
-		if (event.shiftKey && active === first) {
-			event.preventDefault();
-			last.focus();
-		} else if (!event.shiftKey && active === last) {
-			event.preventDefault();
-			first.focus();
-		}
 	}
 </script>
 
@@ -440,43 +343,19 @@
 	{/if}
 </div>
 
-{#if diving}
-	<!-- The descent: the chosen template, risen as an Artifact over the whole
-	     receded page. A tap on the scrim, esc, or back reverses it. Focus is trapped
-	     inside the Artifact while it is up and restored to the originating tile on
-	     close. The preview inside is the page's own — mounted here, never forked. -->
-	<div
-		class="dive-layer"
-		role="presentation"
-		onkeydown={handleDiveKeydown}
-		use:portalToBody
-	>
-		<!-- The scrim recedes the whole page as one: a fixed full-viewport plane that
-		     blurs and faintly dims everything painted behind it — this field, the hero
-		     beside it, the header above it — so the dive reads as a fall away from the
-		     entire page, not just one column. It is also the way back: a click anywhere
-		     on it closes the dive. A button (not a div) so the keyboard reaches it. -->
-		<button
-			type="button"
-			class="dive-scrim"
-			aria-label="Back to the field"
-			onclick={closeDive}
-		></button>
-
-		<div
-			bind:this={diveSurface}
-			class="dive-surface"
-			role="dialog"
-			aria-modal="true"
-			aria-label="Template preview"
-			tabindex="-1"
-			style="--dive-ascent-ms: {TIMING.SLOW}ms; --dive-ascent-ease: {EASING};"
-		>
-			<Artifact padding="compact" class="dive-artifact">
-				{@render dive?.()}
-			</Artifact>
-		</div>
-	</div>
+<!-- The descent: the chosen template, risen as an Artifact over the whole receded
+     page. The one shared dive — a tap on the scrim, esc, or back reverses it; focus
+     is trapped inside the Artifact while it is up and restored to the originating
+     tile on close. The preview inside is the page's own — mounted here, never
+     forked. `dive` is always set when `diving` is true (it is part of the guard), so
+     the snippet hands straight through. -->
+{#if diving && dive}
+	<DescentDive
+		{dive}
+		open={diving}
+		onClose={closeDive}
+		restoreFocusSelector={diveRestoreSelector}
+	/>
 {/if}
 
 <style>
@@ -529,96 +408,5 @@
 	 */
 	.spectrum-field.field-inert {
 		pointer-events: none;
-	}
-
-	/*
-	 * The descent layer — a full-viewport plane the risen Artifact floats in. It
-	 * sits over the whole page; its scrim is the recede AND the way back.
-	 */
-	.dive-layer {
-		position: fixed;
-		inset: 0;
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 1.5rem;
-	}
-
-	/*
-	 * The scrim recedes the whole page as one. A fixed full-viewport plane that
-	 * blurs everything painted behind it (one composited backdrop-filter layer, not
-	 * a blurred 300-node subtree) and lays a faint warm dim over it — the modal
-	 * surface token (warm cream) at half alpha, never a hard black overlay. So the
-	 * field, the hero beside it, and the header above it recede together, with no
-	 * half-sharp seam. Clicking it reverses the dive. The blur is the expensive
-	 * channel, so it is dropped under reduced motion (below); the dim stays.
-	 */
-	.dive-scrim {
-		position: absolute;
-		inset: 0;
-		border: none;
-		margin: 0;
-		padding: 0;
-		cursor: pointer;
-		/* Fallback for engines without color-mix: the modal surface token at full
-		   weight; the color-mix below takes it to half alpha where supported. */
-		background: var(--surface-overlay, oklch(0.975 0.005 55));
-		background: color-mix(in oklch, var(--surface-overlay, oklch(0.975 0.005 55)) 50%, transparent);
-		backdrop-filter: blur(4px);
-		-webkit-backdrop-filter: blur(4px);
-	}
-
-	/*
-	 * The risen object. Bounded so the preview keeps its column rhythm, scrollable
-	 * within when the preview is taller than the viewport, and raised above the
-	 * backdrop. The white surface and border belong to the Artifact inside it.
-	 */
-	.dive-surface {
-		position: relative;
-		z-index: 1;
-		width: 100%;
-		max-width: 40rem;
-		max-height: calc(100vh - 3rem);
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
-		/* The ascent: the Artifact rises on system motion — SLOW (320ms) for the
-		   weight of a surfacing object, with the standard EASING. Both come from
-		   motion.ts via the inline custom properties above (TIMING.SLOW / EASING),
-		   so this transition carries no off-token literal. */
-		animation: dive-ascend var(--dive-ascent-ms) var(--dive-ascent-ease) both;
-	}
-
-	.dive-surface :global(.dive-artifact) {
-		max-height: 100%;
-		overflow-y: auto;
-	}
-
-	@keyframes dive-ascend {
-		from {
-			opacity: 0;
-			transform: translateY(16px) scale(0.985);
-		}
-		to {
-			opacity: 1;
-			transform: translateY(0) scale(1);
-		}
-	}
-
-	/*
-	 * Reduced motion: no blur, no rise. The scrim keeps only its faint warm dim
-	 * (cheap, non-vestibular) so the dive is still legibly set apart, and the
-	 * Artifact appears at once — the descent is instant, not animated.
-	 */
-	@media (prefers-reduced-motion: reduce) {
-		.dive-scrim {
-			backdrop-filter: none;
-			-webkit-backdrop-filter: none;
-		}
-
-		.dive-surface {
-			animation: none;
-		}
 	}
 </style>
