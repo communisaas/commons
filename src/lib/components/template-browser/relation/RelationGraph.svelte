@@ -37,6 +37,8 @@
 	import { resolveDomainHue, anchorLabelForHue, matchAnchor } from '$lib/utils/domain-hue';
 	import { familyEdges } from '$lib/core/topic/relation-edges';
 	import { layoutRelationGraph } from '$lib/core/topic/graph-layout';
+	import { spring as svelteSpring } from 'svelte/motion';
+	import { SPRINGS } from '$lib/design/motion';
 
 	interface Props {
 		/** The public templates to relate — one node each. */
@@ -238,6 +240,31 @@
 	let focusedId = $state<string | null>(null);
 	const focusId = $derived(hoverId ?? focusedId);
 
+	// Whether the viewer asked for less motion. Read once, on the client, via the
+	// same matchMedia probe the dimensional primitives use — server-side it stays
+	// false (no window), and the spring starts at rest, so SSR and first paint
+	// agree. With it on, the focus transition jumps hard rather than springing.
+	const prefersReducedMotion =
+		typeof window !== 'undefined'
+			? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+			: false;
+
+	// The neighbourhood read is spring-driven, not a fixed CSS fade: a single 0→1
+	// value (`--focus-depth`) that the SCORE_BAR spring drives toward 1 the instant
+	// a node takes focus and back to 0 when focus clears. SCORE_BAR is snappy
+	// (stiffness 0.3) so the dim deepens with a causal sub-100ms onset — the field
+	// answers "what is near this one" immediately, then settles, never lurching.
+	// The CSS interpolates the dim/lit opacities against this depth, so at rest
+	// (depth 0) every node and tie reads at full presence and nothing is dimmed.
+	// svelte-ignore state_referenced_locally — the rest value is captured once per instance
+	const focusDepth = svelteSpring(0, SPRINGS.SCORE_BAR);
+	$effect(() => {
+		const target = focusId ? 1 : 0;
+		// Reduced motion: snap to the target with no travel. Otherwise let the
+		// spring carry it — its first frame already moves, so the onset is causal.
+		focusDepth.set(target, prefersReducedMotion ? { hard: true } : undefined);
+	});
+
 	// The lit set: the focused node + every node an admissible edge connects to it.
 	// Empty when nothing is focused → the whole field reads at full presence (no
 	// node is dimmed just because nothing is hovered).
@@ -304,6 +331,7 @@
 			role="group"
 			aria-label="Relation map"
 			class:has-focus={litSet.size > 0}
+			style="--focus-depth: {$focusDepth};"
 		>
 			<!-- Edges first, so nodes and labels sit over them. -->
 			<g class="relation-graph__edges" aria-hidden="true">
@@ -320,7 +348,11 @@
 				{/each}
 			</g>
 
-			<!-- Nodes + their haloed labels. -->
+			<!-- Nodes + their haloed labels. The nodes render in `drawNodes` order —
+			     which is the `templates` prop order, the same stable order the layout
+			     seeds from — so Tab walks the field in a deterministic, repeatable
+			     sequence and keyboard focus lights one node's neighbourhood at a time,
+			     identically to hover. -->
 			<g class="relation-graph__nodes">
 				{#each drawNodes as node (node.id)}
 					<g
@@ -350,6 +382,15 @@
 						<!-- A generous transparent hit-target so a node is easy to reach with a
 						     pointer or thumb without enlarging the glyph itself. -->
 						<circle class="relation-node__hit" cx={node.x.toFixed(1)} cy={node.y.toFixed(1)} r="22" />
+						<!-- The keyboard focus ring: a sharing-indigo halo that appears only on
+						     :focus-visible, so a tabbing reader always sees which node holds
+						     focus. Drawn behind the glyph so it reads as a ring around it. -->
+						<circle
+							class="relation-node__focus-ring"
+							cx={node.x.toFixed(1)}
+							cy={node.y.toFixed(1)}
+							r="16"
+						/>
 						<circle
 							class="relation-node__glyph"
 							cx={node.x.toFixed(1)}
@@ -441,46 +482,51 @@
 		max-height: 70vh;
 		/* Let the field breathe to its natural aspect; never overflow horizontally. */
 		overflow: visible;
+		/* The neighbourhood read's depth (0 at rest → 1 focused), the value the
+		 * SCORE_BAR spring carries in. Defaults to 0 so a server-rendered SVG (no
+		 * inline var yet) paints at full presence and the map never lurches. */
+		--focus-depth: 0;
 	}
 
 	/* ─── Edges ──────────────────────────────────────────────────────────────
 	 * Three kinds, three encodings. The colours are warm neutrals (not the topic
 	 * hue — a tie is not a topic), so the hue stays the node's alone. Twin is the
 	 * heaviest, solid; family is dashed + lighter; concept is the lightest dashed.
-	 */
+	 * Each tie's opacity interpolates from its rest presence toward a recede target
+	 * as `--focus-depth` climbs; an incident tie brightens instead. No CSS
+	 * transition — the spring is the animation, so the change is causal, never
+	 * double-eased. */
 	.relation-edge {
 		fill: none;
-		transition: opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+		/* rest presence → recede target, mixed by the spring depth. */
+		opacity: calc(var(--edge-rest) - (var(--edge-rest) - 0.12) * var(--focus-depth));
 	}
 
 	.relation-edge--twin {
 		stroke: oklch(0.5 0.06 60);
 		stroke-width: 2.2px; /* default; the node sets a score-scaled width inline */
-		opacity: 0.75;
+		--edge-rest: 0.75;
 	}
 
 	.relation-edge--family {
 		stroke: oklch(0.6 0.03 60);
 		stroke-width: 1.3px;
-		opacity: 0.45;
+		--edge-rest: 0.45;
 		stroke-dasharray: 2 4;
 	}
 
 	.relation-edge--concept {
 		stroke: oklch(0.62 0.04 60);
 		stroke-width: 1.2px;
-		opacity: 0.4;
+		--edge-rest: 0.4;
 		stroke-dasharray: 1 5;
 	}
 
-	/* When a node is focused, its incident ties brighten and the rest recede, so
-	 * "what is near this one" answers at a glance. Only applies once something is
-	 * focused (`.has-focus`); at rest every tie reads at full presence. */
-	.relation-graph__svg.has-focus .relation-edge {
-		opacity: 0.12;
-	}
-	.relation-graph__svg.has-focus .relation-edge--incident {
-		opacity: 0.85;
+	/* An incident tie (one endpoint is the focused node) brightens toward full as
+	 * the depth climbs, so "what is near this one" answers at a glance while the
+	 * rest of the field recedes into composed void. */
+	.relation-edge--incident {
+		opacity: calc(var(--edge-rest) + (0.85 - var(--edge-rest)) * var(--focus-depth));
 	}
 
 	/* ─── Nodes ──────────────────────────────────────────────────────────────── */
@@ -494,9 +540,9 @@
 
 	.relation-node__glyph {
 		stroke-width: 1.6px;
-		transition:
-			transform 150ms cubic-bezier(0.4, 0, 0.2, 1),
-			opacity 150ms cubic-bezier(0.4, 0, 0.2, 1);
+		/* Only the hover/focus lift is a CSS micro-interaction; the focus DIM is
+		 * spring-driven on the group (below), so it is not eased here. */
+		transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 		transform-box: fill-box;
 		transform-origin: center;
 	}
@@ -514,10 +560,13 @@
 		stroke-width: 2.6px;
 	}
 
-	/* The focused neighbourhood stays at presence; the rest of the field dims to a
-	 * composed void so the lit cluster reads as the strong center. */
+	/* The focused neighbourhood holds at presence; a non-neighbour recedes toward a
+	 * composed void as the spring depth climbs. The floor (0.28) is deliberate — a
+	 * dimmed node stays PERCEIVABLE so the global shape never disappears; the dim
+	 * composes the void, it does not erase it. With no focus (depth 0) every node
+	 * sits at 1, the full even field. No CSS transition — the spring is the motion. */
 	.relation-node--dimmed {
-		opacity: 0.28;
+		opacity: calc(1 - 0.72 * var(--focus-depth));
 	}
 	.relation-node--lit {
 		opacity: 1;
@@ -555,14 +604,24 @@
 		pointer-events: none;
 	}
 
-	/* Keyboard focus ring — a ring on the glyph, not the whole group, so it tracks
-	 * the visible mark. */
+	/* Keyboard focus ring — a sharing-indigo halo around the glyph, visible only on
+	 * :focus-visible so it never shows for a mouse click. The default SVG outline is
+	 * suppressed in favour of this ring, which tracks the mark and reads clearly
+	 * against the warm-cream ground at the small glyph scale. */
 	.relation-node:focus-visible {
 		outline: none;
 	}
-	.relation-node:focus-visible .relation-node__glyph {
-		stroke: var(--indigo-share);
-		stroke-width: 2.4px;
+	.relation-node__focus-ring {
+		fill: none;
+		stroke: var(--coord-share-solid);
+		stroke-width: 2px;
+		opacity: 0;
+		transform-box: fill-box;
+		transform-origin: center;
+		pointer-events: none;
+	}
+	.relation-node:focus-visible .relation-node__focus-ring {
+		opacity: 0.9;
 	}
 
 	/* ─── Legend ─────────────────────────────────────────────────────────────── */
@@ -608,10 +667,11 @@
 		margin: 0.5rem 0 0;
 	}
 
-	/* Respect vestibular preferences: no glyph scaling transition, no edge fade. */
+	/* Respect vestibular preferences: no glyph scaling transition. The focus dim is
+	 * already suppressed in JS — the spring hard-sets `--focus-depth` under reduced
+	 * motion, so the neighbourhood read snaps in with no travel rather than easing. */
 	@media (prefers-reduced-motion: reduce) {
-		.relation-node__glyph,
-		.relation-edge {
+		.relation-node__glyph {
 			transition: none;
 		}
 	}

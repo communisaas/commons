@@ -294,6 +294,118 @@ describe('RelationGraph — the relatedness map', () => {
 		expect(svg.classList.contains('has-focus')).toBe(false);
 	});
 
+	// ─── Focus lights the neighbourhood (R1) ──────────────────────────────────
+	//
+	// Focusing a node — by hover OR by keyboard — must light its incident edges and
+	// adjacent nodes and dim the rest, so "what is near this one" is answerable at a
+	// glance. Clearing focus restores the full field. The dim/lit set is asserted on
+	// a fixture with one connected pair + one loner.
+
+	/** The lit (non-dimmed) node ids in the field. */
+	function litIds(container: HTMLElement): string[] {
+		return Array.from(container.querySelectorAll('.relation-node--lit')).map(
+			(n) => n.getAttribute('data-template-id') ?? ''
+		);
+	}
+	/** The dimmed (non-neighbour) node ids in the field. */
+	function dimmedIds(container: HTMLElement): string[] {
+		return Array.from(container.querySelectorAll('.relation-node--dimmed')).map(
+			(n) => n.getAttribute('data-template-id') ?? ''
+		);
+	}
+
+	/** A three-node fixture: a connected same-family pair (a,b) + a loner (c). */
+	function neighbourhoodFixture() {
+		return [
+			makeTemplate({ id: 'a', domain: 'Transportation', title: 'Bike lanes' }),
+			makeTemplate({ id: 'b', domain: 'Transportation', title: 'Freeway removal' }),
+			makeTemplate({ id: 'c', domain: 'Healthcare', title: 'Clinic hours' })
+		];
+	}
+
+	it('focusing a node by hover lights its neighbour + incident edge and dims the rest', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		// At rest: full presence, nothing dimmed.
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+
+		// Hover node `a` — its same-family neighbour `b` lights, the loner `c` dims.
+		const a = container.querySelector('[data-template-id="a"]') as HTMLElement;
+		await fireEvent.mouseEnter(a);
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		const lit = litIds(container);
+		expect(lit).toContain('a'); // the focused node
+		expect(lit).toContain('b'); // its admissible neighbour
+		expect(lit).not.toContain('c'); // the loner is not in the neighbourhood
+		expect(dimmedIds(container)).toEqual(['c']);
+
+		// The incident edge (the a–b tie) is marked; the rest are not.
+		const incident = container.querySelectorAll('.relation-edge--incident');
+		expect(incident.length).toBe(1);
+
+		// Clearing focus restores the full field — nothing dimmed, no has-focus.
+		await fireEvent.mouseLeave(a);
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+		expect(litIds(container).length).toBe(nodes(container).length);
+	});
+
+	it('focusing a node by KEYBOARD lights the identical neighbourhood as hover', async () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		const svg = container.querySelector('.relation-graph__svg') as SVGElement;
+		const a = container.querySelector('[data-template-id="a"]') as HTMLElement;
+
+		// Keyboard focus (the onfocus channel) engages the same neighbourhood read.
+		await fireEvent.focus(a);
+		expect(svg.classList.contains('has-focus')).toBe(true);
+		const lit = litIds(container);
+		expect(lit).toContain('a');
+		expect(lit).toContain('b');
+		expect(dimmedIds(container)).toEqual(['c']);
+
+		// Blur restores the full field — keyboard focus is transient, like hover.
+		await fireEvent.blur(a);
+		expect(svg.classList.contains('has-focus')).toBe(false);
+		expect(dimmedIds(container)).toEqual([]);
+	});
+
+	it('keeps every node keyboard-focusable in a stable order with a visible focus ring', () => {
+		const templates = neighbourhoodFixture();
+		const { container } = render(RelationGraph, {
+			props: { templates, onSelect: vi.fn() }
+		});
+		// Every node is a tab stop (tabindex 0), in the templates' own order — the
+		// same stable order the layout seeds from, so Tab walks deterministically.
+		const ordered = Array.from(container.querySelectorAll('.relation-node')).map((n) => ({
+			id: n.getAttribute('data-template-id'),
+			tabindex: n.getAttribute('tabindex')
+		}));
+		expect(ordered.map((n) => n.id)).toEqual(['a', 'b', 'c']);
+		expect(ordered.every((n) => n.tabindex === '0')).toBe(true);
+
+		// Each node carries a dedicated focus-ring element (the visible keyboard ring).
+		const rings = container.querySelectorAll('.relation-node__focus-ring');
+		expect(rings.length).toBe(templates.length);
+	});
+
+	it('drives the focus dim with a motion.ts spring, not a foreign config', () => {
+		const src = readFileSync(resolve(process.cwd(), COMPONENT_PATH), 'utf8');
+		// The focus transition rides a named motion.ts spring (imported, not inlined).
+		expect(src).toMatch(/from\s+['"]\$lib\/design\/motion['"]/);
+		expect(src).toMatch(/SPRINGS\./);
+		// And honors reduced motion (the hard-set escape hatch is present).
+		expect(src).toMatch(/prefers-reduced-motion/);
+		// No bespoke spring literal smuggled in alongside the named config.
+		expect(src).not.toMatch(/stiffness:\s*0?\.\d/);
+	});
+
 	it('renders an honest empty state when there are no templates', () => {
 		const { container, getByText } = render(RelationGraph, {
 			props: { templates: [], onSelect: vi.fn() }
