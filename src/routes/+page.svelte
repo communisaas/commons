@@ -278,10 +278,10 @@
 
 		if (isMobile()) {
 			showMobilePreview = true;
-		} else if (!showSpectrum) {
+		} else if (!showSpectrum && !showGraph) {
 			// List fallback: the preview lives in its own column — scroll it into view.
-			// In the spectrum the dive owns its own entrance (the field recedes and the
-			// preview rises as an Artifact), so no scroll-into-view is needed.
+			// The spectrum and the graph each own their dive entrance (the field recedes
+			// and the preview rises as an Artifact), so no scroll-into-view is needed.
 			tick().then(() => {
 				document
 					.querySelector('.template-preview-column')
