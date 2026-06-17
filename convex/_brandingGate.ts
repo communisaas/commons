@@ -47,6 +47,9 @@ export function effectivelyActive(sub: SubGraceLike, now: number): boolean {
 	return (
 		sub?.status === 'past_due' &&
 		typeof sub.pastDueSince === 'number' &&
+		// Clock only runs forward: a FUTURE pastDueSince (anomalous data) would make
+		// `now - pastDueSince` negative (< GRACE) and grant grace indefinitely.
+		now >= sub.pastDueSince &&
 		now - sub.pastDueSince < GRACE_PERIOD_MS
 	);
 }

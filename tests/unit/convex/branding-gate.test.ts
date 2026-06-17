@@ -162,6 +162,13 @@ describe('effectivelyActive — single grace-bearing predicate', () => {
 		expect(effectivelyActive({ status: 'past_due', plan: 'coalition' }, NOW)).toBe(false);
 	});
 
+	it('a FUTURE pastDueSince does NOT grant indefinite grace — the clock runs forward', () => {
+		// Anomalous data: pastDueSince after `now`. Without the >= guard, now - future
+		// is negative (< GRACE) → grace forever.
+		const future = { status: 'past_due', plan: 'coalition', pastDueSince: NOW + GRACE };
+		expect(effectivelyActive(future, NOW)).toBe(false);
+	});
+
 	it('pastDueSince=0 is a real timestamp, not a falsy "no grace" sentinel', () => {
 		// At epoch the window is open; far in the future it is closed. This pins the
 		// harmonization of the previously-divergent truthy vs strict-undefined guards.

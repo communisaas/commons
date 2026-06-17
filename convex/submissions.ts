@@ -97,6 +97,15 @@ function resolveSenatePathPrefix(): string {
 	const prefix = (process.env.CWC_SENATE_PATH_PREFIX || 'testing-messages')
 		.trim()
 		.replace(/^\/+|\/+$/g, '');
+	// Allow-list: only the two real CWC inboxes. Anything else (a typo, or a
+	// path-suffix variant like 'messages/extra' that survives slash-stripping)
+	// falls back to the no-op sandbox rather than building a live-looking URL.
+	if (prefix !== 'messages' && prefix !== 'testing-messages') {
+		console.error(
+			`[submissions] Unrecognized CWC_SENATE_PATH_PREFIX="${prefix}"; using testing-messages sandbox`
+		);
+		return 'testing-messages';
+	}
 	if (prefix === 'messages' && process.env.CWC_PRODUCTION !== 'true') {
 		console.error(
 			'[submissions] CWC_SENATE_PATH_PREFIX=messages (live Senate) requires CWC_PRODUCTION=true; falling back to testing-messages sandbox'

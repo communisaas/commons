@@ -242,5 +242,7 @@ export function parseHttpUrlOrThrow(field: 'websiteUrl', val: string): string {
 	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
 		throw new Error(`ORG_${field.toUpperCase()}_INVALID`);
 	}
-	return val;
+	// Store the parser-NORMALIZED form (not the raw input) so what we validated is
+	// what we persist — collapses mixed-case scheme/host and stray characters.
+	return url.href;
 }

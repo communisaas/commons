@@ -17,8 +17,13 @@ describe('org field caps', () => {
 	});
 
 	it('parseHttpUrlOrThrow accepts http(s) and clears empty', () => {
-		expect(parseHttpUrlOrThrow('websiteUrl', 'https://example.org')).toBe('https://example.org');
-		expect(parseHttpUrlOrThrow('websiteUrl', 'http://a.b')).toBe('http://a.b');
+		// returns the parser-NORMALIZED href (B2): bare domains gain a trailing slash,
+		// and a mixed-case scheme/host is lowercased — what we validated is what we store.
+		expect(parseHttpUrlOrThrow('websiteUrl', 'https://example.org')).toBe('https://example.org/');
+		expect(parseHttpUrlOrThrow('websiteUrl', 'http://a.b')).toBe('http://a.b/');
+		expect(parseHttpUrlOrThrow('websiteUrl', 'HTTPS://Example.ORG/Path')).toBe(
+			'https://example.org/Path'
+		);
 		expect(parseHttpUrlOrThrow('websiteUrl', '')).toBe(''); // clear
 	});
 

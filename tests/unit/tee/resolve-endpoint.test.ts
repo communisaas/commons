@@ -94,5 +94,9 @@ describe('congressional delivery wiring (source pins)', () => {
 		expect(fn).toMatch(/prefix === 'messages'/);
 		expect(fn).toMatch(/CWC_PRODUCTION !== 'true'/);
 		expect(fn).toMatch(/return 'testing-messages'/); // fail-safe to sandbox
+		// normalize + allow-list (brutalist B3): trim/strip slashes, and anything not
+		// {messages, testing-messages} falls back to the sandbox (no 'messages/extra' bypass).
+		expect(fn).toMatch(/\.trim\(\)/);
+		expect(fn).toMatch(/prefix !== 'messages' && prefix !== 'testing-messages'/);
 	});
 });
