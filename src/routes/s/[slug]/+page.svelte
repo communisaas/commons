@@ -21,6 +21,7 @@
 	import type { DebateData } from '$lib/stores/debateState.svelte';
 	import StanceRegistration from '$lib/components/action/StanceRegistration.svelte';
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
+	import CredibilityLadder from '$lib/components/auth/CredibilityLadder.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
@@ -626,6 +627,16 @@
 	// recipient entity (PowerLandscape → RoleGroup → card), not as an aggregate list.
 	const canReportBounce = $derived((data.user?.trust_tier ?? 0) >= 2);
 
+	// Credibility-ladder nudge at the send moment: only for a signed-in,
+	// account-verified-but-not-district-confirmed user on a DIRECT (non-CWC)
+	// template — the case where email-only sending is genuinely permitted, so
+	// "you can send right now · confirm district to count for more" is honest.
+	// CWC/congressional requires district proof (a hard gate), so no nudge there.
+	const ladderNudgeTier = $derived(data.user?.trust_tier ?? 0);
+	const showLadderNudge = $derived(
+		!!data.user && ladderNudgeTier >= 1 && ladderNudgeTier < 2 && !isCongressional
+	);
+
 	async function handleReportBounce(email: string) {
 		if (reportingBounce || reportedBounces.has(email)) return;
 		reportingBounce = email;
@@ -1088,6 +1099,23 @@
 
 		<!-- RIGHT: Relational field — who you're writing to, who's with you, what's been contested -->
 		<div class="mt-8 min-w-0 space-y-8 lg:mt-0">
+			{#if showLadderNudge}
+				<!-- Send-moment ladder nudge: the present value + the climb, never a wall.
+				     Email-only sending already works here; this just makes the upgrade legible. -->
+				<CredibilityLadder
+					compact
+					currentTier={ladderNudgeTier}
+					onClimb={() =>
+						modalActions.openModal('address-modal', 'address', {
+							template,
+							source,
+							mode: 'collection',
+							onComplete: async (detail: AddressModalDetail) => {
+								await _handleAddressSubmit(detail);
+							}
+						})}
+				/>
+			{/if}
 			<!-- Power Landscape: the strong center — who holds power, present from first render -->
 			<div id="power-landscape">
 				<PowerLandscape

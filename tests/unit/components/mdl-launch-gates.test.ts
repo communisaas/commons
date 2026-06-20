@@ -23,7 +23,12 @@ describe('mDL launch gates', () => {
 		expect(nextBranch).toBeGreaterThan(placeholder);
 		expect(gatedBranch).toContain('data-testid="mdl-gated-panel"');
 		expect(gatedBranch).toContain('Government-ID verification');
-		expect(svelte).toContain('Coming soon.');
+		// P5 (mDL dead-end invert): the gate no longer leads with a bare "Coming
+		// soon." headline. It shows the credibility ladder (gov-ID as a "soon" rung)
+		// and keeps the still-available address alternative, so the most-committed
+		// user is met with what they CAN do, not a wall.
+		expect(svelte).toContain('<CredibilityLadder');
+		expect(gatedBranch).toContain('Address-attested verification');
 		expect(gatedBranch).not.toContain('<IdentityVerificationFlow');
 	});
 
