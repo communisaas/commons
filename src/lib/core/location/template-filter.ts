@@ -110,7 +110,9 @@ function inferredLocationToScope(location: InferredLocation): ScopeMapping {
  *
  * Hierarchical matching rules:
  * - User in "CA-12" (district) → matches "CA-12", "California", "Nationwide"
- * - User in "California" (region) → matches "California", "Nationwide" (NOT "CA-12")
+ * - User in "California" (region) → matches "California", "Nationwide", AND the
+ *   cities/districts WITHIN California (surfaced as state-level relevance) — but never
+ *   another state's local campaigns (an Oregon city stays out of a California view)
  * - User in "US" (country) → matches "Nationwide" only
  *
  * @returns Match level ('district' | 'region' | 'locality' | 'country' | null)
@@ -189,11 +191,28 @@ function getHierarchicalMatch(
 		}
 	}
 
-	// User in region → can see country templates in same country (but NOT more specific)
+	// User in region (state) → sees country templates in the same country AND the
+	// more-specific campaigns WITHIN their region. A state campaign list should include
+	// its cities' and districts' campaigns; they surface at STATE-level relevance
+	// (they're in your state, not necessarily your exact city/district). Gated on the
+	// finer scope carrying a region code that matches the user's state, so a California
+	// view never pulls in an Oregon city.
 	if (userLocation.scope_level === 'region') {
 		// Region user sees country templates in same country
 		if (templateScope.scope_level === 'country') {
 			return 'country';
+		}
+
+		// Region user sees locality/district templates in the same region. The finer
+		// scope MUST carry a region code (a region-less local scope can't be placed in a
+		// state, so it never matches an arbitrary state user).
+		if (
+			(templateScope.scope_level === 'locality' || templateScope.scope_level === 'district') &&
+			normalizeStateCode(templateScope.region_code || '') !== '' &&
+			normalizeStateCode(templateScope.region_code || '') ===
+				normalizeStateCode(userLocation.region_code || '')
+		) {
+			return 'region';
 		}
 	}
 
@@ -257,19 +276,21 @@ export class ClientSideTemplateFilter {
 	 */
 	scoreByRelevance(): ScoredTemplate[] {
 		const matched = this.templates
-			.map((template) => {
+			.map((template): ScoredTemplate | null => {
 				let bestScore = 0;
 				let bestJurisdiction: TemplateJurisdiction | null = null;
 				let matchReason = '';
+				let bestLevel: GeographicScope = null;
 
 				// PRIORITY 1: Use TemplateScope if available (NEW hierarchical system)
 				if (template.scopes && template.scopes.length > 0) {
 					for (const scope of template.scopes) {
-						const { score, reason } = this.scoreTemplateScope(scope as TemplateScope);
+						const { score, reason, level } = this.scoreTemplateScope(scope as TemplateScope);
 
 						if (score > bestScore) {
 							bestScore = score;
 							matchReason = reason;
+							bestLevel = level;
 							// Map scope to jurisdiction for backward compatibility
 							bestJurisdiction = null; // No jurisdiction object for scopes
 						}
@@ -278,12 +299,13 @@ export class ClientSideTemplateFilter {
 				// FALLBACK: Use TemplateJurisdiction if no scopes (legacy system)
 				else if (template.jurisdictions && template.jurisdictions.length > 0) {
 					for (const jurisdiction of template.jurisdictions) {
-						const { score, reason } = this.scoreJurisdiction(jurisdiction);
+						const { score, reason, level } = this.scoreJurisdiction(jurisdiction);
 
 						if (score > bestScore) {
 							bestScore = score;
 							bestJurisdiction = jurisdiction;
 							matchReason = reason;
+							bestLevel = level;
 						}
 					}
 				}
@@ -297,6 +319,7 @@ export class ClientSideTemplateFilter {
 				if (bestScore === 0 && hasNoGeoTargeting) {
 					bestScore = 0.3;
 					matchReason = 'Available everywhere';
+					bestLevel = 'nationwide';
 				}
 
 				if (bestScore > 0) {
@@ -328,7 +351,8 @@ export class ClientSideTemplateFilter {
 						template,
 						score: finalScore,
 						matchReason: enhancedReason,
-						jurisdiction: bestJurisdiction!
+						jurisdiction: bestJurisdiction!,
+						matchLevel: bestLevel
 					};
 				}
 
@@ -457,7 +481,11 @@ export class ClientSideTemplateFilter {
 	 * Breadcrumb scope boosting:
 	 * When user selects a specific breadcrumb level, boost templates matching that level
 	 */
-	private scoreJurisdiction(jurisdiction: TemplateJurisdiction): { score: number; reason: string } {
+	private scoreJurisdiction(jurisdiction: TemplateJurisdiction): {
+		score: number;
+		reason: string;
+		level: GeographicScope;
+	} {
 		let score = 0;
 		let reason = '';
 		let matchLevel: GeographicScope = null;
@@ -473,7 +501,7 @@ export class ClientSideTemplateFilter {
 			this.inferredLocation.country_code &&
 			jurisdictionCountry !== this.inferredLocation.country_code
 		) {
-			return { score: 0, reason: 'Country mismatch' };
+			return { score: 0, reason: 'Country mismatch', level: null };
 		}
 
 		// Exact congressional district match (1.0 — federal)
@@ -577,7 +605,9 @@ export class ClientSideTemplateFilter {
 			score = boostedScore;
 		}
 
-		return { score, reason };
+		// The boost mutates `score` for RANKING only; `level` carries the match level so
+		// grouping tiers by what actually matched, not by the boosted number.
+		return { score, reason, level: matchLevel };
 	}
 
 	/**
@@ -593,7 +623,11 @@ export class ClientSideTemplateFilter {
 	 * 0.3 = Country match (baseline)
 	 * 0.0 = No match
 	 */
-	private scoreTemplateScope(templateScope: TemplateScope): { score: number; reason: string } {
+	private scoreTemplateScope(templateScope: TemplateScope): {
+		score: number;
+		reason: string;
+		level: GeographicScope;
+	} {
 		// Convert InferredLocation to ScopeMapping for hierarchical matching
 		const userScope = inferredLocationToScope(this.inferredLocation);
 
@@ -601,7 +635,7 @@ export class ClientSideTemplateFilter {
 		const matchLevel = getHierarchicalMatch(userScope, templateScope);
 
 		if (!matchLevel) {
-			return { score: 0, reason: 'No scope match' };
+			return { score: 0, reason: 'No scope match', level: null };
 		}
 
 		// Score based on match level
@@ -646,7 +680,9 @@ export class ClientSideTemplateFilter {
 			score = boostedScore;
 		}
 
-		return { score, reason };
+		// The boost mutates `score` for RANKING only; `level` is the actual match level
+		// so grouping tiers by what matched, not by the boosted number.
+		return { score, reason, level: geographicScope };
 	}
 }
 
@@ -945,7 +981,16 @@ export function groupByPrecision(scored: ScoredTemplate[]): TemplateGroup[] {
 			GROUP_TIERS[GROUP_TIERS.indexOf(tier) - 1]?.minScore ?? Infinity;
 
 		const templates = scored
-			.filter((s) => s.score >= tier.minScore && s.score < nextTierMin)
+			.filter((s) => {
+				// Tier by the MATCH LEVEL, not the (boostable) score — a county folds into
+				// the city/county tier. This is what keeps an in-state city campaign labeled
+				// "In Your State" for a state viewer even when the breadcrumb boost lifts its
+				// score across a tier floor. Entries with no recorded level (proximity /
+				// behavioral paths) fall back to the score band.
+				const level = s.matchLevel === 'county' ? 'city' : s.matchLevel;
+				if (level) return level === tier.level;
+				return s.score >= tier.minScore && s.score < nextTierMin;
+			})
 			.map((s) => s.template);
 
 		if (templates.length === 0) continue;
