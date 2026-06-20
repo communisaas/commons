@@ -34,7 +34,6 @@
 
 	import { ChevronRight, Landmark, Building2, Mail, Users, MapPin } from '@lucide/svelte';
 	import type { Template } from '$lib/types/template';
-	import MessageMetrics from '../MessageMetrics.svelte';
 	import { Pulse, Ratio, Rings } from '$lib/design';
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { topicHue } from '$lib/utils/topic-hue';
@@ -129,48 +128,10 @@
 	onkeydown={(e) => onKeydown?.(e, template.id, index)}
 >
 	<div class="min-w-0 flex-1">
-		{#if targetInfo.type === 'multi-level'}
-			<!-- Multi-Level: Stacked jurisdiction lines -->
-			<div class="mb-1.5 space-y-0.5">
-				{#each targetInfo.targets as target}
-					<div class="flex items-center gap-1.5">
-						{#if target.emphasis === 'federal'}
-							<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
-							<span class="font-brand text-xs font-medium card-label">{target.primary}</span>
-						{:else}
-							<Building2 class="h-3.5 w-3.5 shrink-0 card-icon" />
-							<span class="font-brand text-xs font-semibold card-label">{target.primary}</span>
-						{/if}
-						{#if target.secondary}
-							<span class="text-xs font-medium text-slate-500">{target.secondary}</span>
-						{/if}
-					</div>
-				{/each}
-			</div>
-		{:else if isCongressional}
-			<!-- Congressional -->
-			<div class="mb-1.5 flex items-center gap-1.5">
-				<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
-				<span class="font-brand text-xs font-medium card-label">{targetInfo.primary}</span>
-			</div>
-		{:else}
-			<!-- Direct/Universal: Name-forward -->
-			<div class="mb-1.5 flex items-center gap-1.5">
-				{#if targetInfo.icon === 'Building'}
-					<Building2 class="h-3.5 w-3.5 shrink-0 card-icon" />
-				{:else if targetInfo.icon === 'Users'}
-					<Users class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
-				{:else}
-					<Mail class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
-				{/if}
-				<span class="font-brand text-sm font-bold card-label">{targetInfo.primary}</span>
-				{#if targetInfo.secondary}
-					<span class="text-xs font-medium text-slate-500">{targetInfo.secondary}</span>
-				{/if}
-			</div>
-		{/if}
-
-		<h3 class="truncate font-medium text-gray-900">
+		<!-- Title is the single peak: top of the card, the largest + heaviest element,
+		     the eye's first fixation. It wraps to full length in the narrow column —
+		     never truncates to a clipped line. -->
+		<h3 class="font-brand text-lg font-semibold leading-snug text-balance text-gray-900">
 			{template.title}
 		</h3>
 
@@ -184,11 +145,55 @@
 			</div>
 		{/if}
 
-		<p class="mb-2 line-clamp-2 text-xs text-gray-600 md:mb-3 md:text-sm">
-			{template.description}
-		</p>
+		<!-- Who you'd reach: a quiet valley beneath the headline. Weight is capped so a
+		     target line never out-weights the title peak; the hue icon is a small
+		     pre-attentive category cue, not a competing focal point. -->
+		{#if targetInfo.type === 'multi-level'}
+			<!-- Multi-Level: the federal line leads; the local line is demoted so two
+			     lines never stack into a block that rivals the title. -->
+			<div class="mt-1.5 space-y-0.5">
+				{#each targetInfo.targets as target}
+					<div class="flex items-center gap-1.5">
+						{#if target.emphasis === 'federal'}
+							<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
+							<span class="font-brand text-xs font-medium card-label">{target.primary}</span>
+						{:else}
+							<Building2 class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
+							<span class="font-brand text-xs font-medium card-label-muted">{target.primary}</span>
+						{/if}
+						{#if target.secondary}
+							<span class="text-xs font-medium text-slate-500">{target.secondary}</span>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{:else if isCongressional}
+			<!-- Congressional -->
+			<div class="mt-1.5 flex items-center gap-1.5">
+				<Landmark class="h-3.5 w-3.5 shrink-0 card-icon" />
+				<span class="font-brand text-xs font-medium card-label">{targetInfo.primary}</span>
+			</div>
+		{:else}
+			<!-- Direct/Universal -->
+			<div class="mt-1.5 flex items-center gap-1.5">
+				{#if targetInfo.icon === 'Building'}
+					<Building2 class="h-3.5 w-3.5 shrink-0 card-icon" />
+				{:else if targetInfo.icon === 'Users'}
+					<Users class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
+				{:else}
+					<Mail class="h-3.5 w-3.5 shrink-0 card-icon-muted" />
+				{/if}
+				<span class="font-brand text-xs font-medium card-label">{targetInfo.primary}</span>
+				{#if targetInfo.secondary}
+					<span class="text-xs font-medium text-slate-500">{targetInfo.secondary}</span>
+				{/if}
+			</div>
+		{/if}
 
-		<MessageMetrics {template} />
+		<!-- Domain register mark: the card's one hue gesture (the real .card-rule token),
+		     separating the headline cluster from the closing colophon. A horizontal
+		     hairline fading right — never a decorative vertical left-border. -->
+		<div class="card-rule tile-rule"></div>
 
 		{#if hasSends}
 			<dl class="template-dimensions" aria-hidden="true">
@@ -239,6 +244,13 @@
 </button>
 
 <style>
+	/* Domain register mark spacing — the .card-rule gradient (defined globally in
+	   app.css) gets breathing room above and below so it reads as the seam between the
+	   headline cluster and the colophon, not a divider crammed against either. */
+	.tile-rule {
+		margin: 0.625rem 0;
+	}
+
 	/*
 	 * Topic Ground — anchoring context at the card's base.
 	 *
