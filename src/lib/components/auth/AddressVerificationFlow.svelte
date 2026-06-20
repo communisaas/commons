@@ -1,17 +1,25 @@
 <!--
   AddressVerificationFlow.svelte
 
-  Dual-path Tier 2 verification flow: geolocation OR address-based.
+  Tier 2 verification flow. The flow opens directly on TRUE-address entry: there
+  is no method chooser. Congressional (CWC) delivery needs the constituent's real
+  name + address, so a district-only resolution (a geolocation pin / map pin) is
+  never deliverable. The privacy mechanisms run transparently underneath address
+  entry — the user just types their address.
 
-  When SHADOW_ATLAS_VERIFICATION is enabled (client-side path):
-    Path A: Browser geolocation → IPFS district lookup (no server call) → commitment
-    Path B: Manual address → server geocode only → IPFS district lookup → commitment
+  Privacy chain (SHADOW_ATLAS_VERIFICATION enabled — the production path):
+    Address → /api/location/resolve-address (self-hosted geocoder; logs the
+    district, never the address) → returns district + coordinates → the district
+    commitment is computed CLIENT-SIDE from those coordinates (resolveClientSide)
+    → confirm-district → handleConfirmDistrict mints the credential and stores the
+    full address ENCRYPTED on-device (ground vault + constituent-address cache) so
+    messages can be delivered to Congress without re-entry.
 
-  When disabled (legacy server-side path):
-    Path A: Browser geolocation → /api/location/resolve
-    Path B: Manual address → /api/location/resolve-address
+  Legacy server path (only when SHADOW_ATLAS_VERIFICATION is off): the same
+  /api/location/resolve-address response is consumed directly via
+  processResolveResponse.
 
-  Flow: path-select → [geolocating | address-input] → resolving → confirm-district → issuing-credential → complete
+  Flow: address-input → resolving → confirm-district → issuing-credential → complete
 
   ─── Re-grounding mode ───
 
@@ -37,12 +45,9 @@
 		AlertCircle,
 		Building2,
 		ChevronRight,
-		Navigation,
-		Lock,
-		Map
+		Lock
 	} from '@lucide/svelte';
 	import { storeCredential } from '$lib/core/identity/credential-store';
-	import { getBrowserGeolocation } from '$lib/core/location/browser-location';
 	import {
 		storeConstituentAddress,
 		clearConstituentAddress,
@@ -65,17 +70,13 @@
 	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import { trackAddressChanged } from '$lib/core/analytics/client';
-	import MapPinSelector from './MapPinSelector.svelte';
 	import RegroundingAddressCapture from './address-steps/RegroundingAddressCapture.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	const jurisdictionLabels = getJurisdictionLabels();
 
 	type FlowStep =
-		| 'path-select'
-		| 'geolocating'
 		| 'address-input'
-		| 'map-pin'
 		| 'resolving'
 		| 'confirm-district'
 		| 'issuing-credential'
@@ -132,11 +133,13 @@
 		/^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(zipCode.trim()) ? 'CA' : 'US'
 	);
 
-	// Flow state. The re-grounding fallback path-select surface is address-only;
-	// on mount, re-grounding advances directly to address input.
-	let flowStep: FlowStep = $state('path-select');
+	// Flow state. The flow opens directly on true-address entry — there is no
+	// method chooser. Congressional (CWC) delivery needs the constituent's real
+	// name + address, so a district-only resolution is never sufficient; the
+	// privacy mechanisms (client-side district commitment, encrypted ground)
+	// run transparently underneath address entry.
+	let flowStep: FlowStep = $state('address-input');
 	let errorMessage: string = $state('');
-	let geoPermissionDenied: boolean = $state(false);
 
 	// Verification results
 	let verifiedDistrict: string = $state('');
@@ -151,8 +154,11 @@
 		district?: string;
 	}> = $state([]);
 
-	// Which verification path was chosen
-	let verificationMethod: 'browser' | 'address' = $state('browser');
+	// Verification is always address-based now (the location/map chooser was
+	// removed because neither captures the real address CWC delivery requires).
+	// There is no longer a 'browser' path; this is effectively a constant kept
+	// for readability at the captured-address site below.
+	const verificationMethod = 'address' as const;
 
 	// B-3: 24 district slots from IPFS (for Poseidon2 commitment)
 	let districtSlots: string[] = $state([]);
@@ -246,7 +252,6 @@
 	onMount(() => {
 		if (regroundingMode) {
 			flowStep = 'address-input';
-			verificationMethod = 'address';
 			emitRegroundingPhase('capture');
 		}
 	});
@@ -269,7 +274,7 @@
 		if (!ok || !data.resolved || !data.district) {
 			errorMessage =
 				(data.error as string) || 'Could not determine your district. Please try again.';
-			flowStep = verificationMethod === 'browser' ? 'path-select' : 'address-input';
+			flowStep = 'address-input';
 			return;
 		}
 
@@ -333,87 +338,11 @@
 	}
 
 	/**
-	 * Path A: Browser geolocation flow
-	 */
-	async function handleGeolocationPath() {
-		verificationMethod = 'browser';
-		resetCommitmentState();
-		flowStep = 'geolocating';
-		errorMessage = '';
-
-		try {
-			// Step 1: Get browser geolocation (returns LocationSignal with lat/lng only)
-			const signal = await getBrowserGeolocation();
-
-			if (!signal) {
-				// Permission denied or unavailable — auto-redirect to address path
-				geoPermissionDenied = true;
-				flowStep = 'address-input';
-				verificationMethod = 'address';
-				return;
-			}
-
-			const lat = signal.latitude;
-			const lng = signal.longitude;
-
-			if (lat == null || lng == null) {
-				geoPermissionDenied = true;
-				flowStep = 'address-input';
-				verificationMethod = 'address';
-				return;
-			}
-
-			flowStep = 'resolving';
-
-			// B-3: Client-side resolution (no server call) when feature flag enabled
-			if (clientSideEnabled) {
-				const resolved = await resolveClientSide(lat, lng);
-				if (resolved) return;
-				// Client-side failed — show error instead of leaking to server
-				errorMessage =
-					'Could not resolve your district from IPFS data. Please try the map pin option.';
-				flowStep = 'path-select';
-				return;
-			}
-
-			// Legacy server path (only when SHADOW_ATLAS_VERIFICATION is off)
-			const response = await fetch('/api/location/resolve', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					lat,
-					lng,
-					signal_type: 'browser',
-					confidence: 0.6
-				})
-			});
-
-			const data = await response.json();
-			// F-2.4 follow-up: capture geo-mode token (no addressHash) so the
-			// downstream verify-address call can satisfy the "coordinates
-			// require token" gate. Browser-geolocation path issues this from
-			// /api/location/resolve.
-			if (typeof data.addressToken === 'string') {
-				addressResolutionToken = data.addressToken;
-				addressResolutionHash = null;
-			}
-			processResolveResponse(data, response.ok);
-		} catch (err) {
-			console.error('[AddressVerificationFlow] Geolocation error:', err);
-			errorMessage = 'Location detection failed. Please enter your address instead.';
-			geoPermissionDenied = true;
-			flowStep = 'address-input';
-			verificationMethod = 'address';
-		}
-	}
-
-	/**
-	 * Path B: Address-based verification flow
+	 * Address-based verification — the single entry path.
 	 */
 	async function handleAddressPath() {
 		if (!isFormValid) return;
 
-		verificationMethod = 'address';
 		resetCommitmentState();
 		flowStep = 'resolving';
 		errorMessage = '';
@@ -503,7 +432,6 @@
 	async function handleConfirmDistrict() {
 		if (regroundingMode && !isFormValid) {
 			errorMessage = 'Enter the new address before re-grounding.';
-			verificationMethod = 'address';
 			flowStep = 'address-input';
 			emitRegroundingPhase('capture');
 			return;
@@ -537,12 +465,11 @@
 					slot_count: nonZeroSlots,
 					verification_method: 'shadow_atlas',
 					coordinates: commitmentCoordinates ?? undefined,
-					// F-2.4: forward the resolve-address (addr-mode) or
-					// /api/location/resolve (geo-mode) token. Server requires
-					// SOME token whenever coordinates are supplied; the
-					// addressHash is forwarded only when present (manual-address
-					// path). The mode is encoded in the token itself, so server
-					// chooses the right validation branch.
+					// F-2.4: forward the resolve-address (addr-mode) token. This
+					// flow only ever mints an addr-mode token; the server requires
+					// SOME token whenever coordinates are supplied, and the
+					// addressHash always accompanies the addr-mode token, so it is
+					// forwarded here as well.
 					...(addressResolutionToken
 						? {
 								address_token: addressResolutionToken,
@@ -825,32 +752,6 @@
 		onComplete?.({ district: verifiedDistrict, method });
 	}
 
-	function handleSelectAddressPath() {
-		verificationMethod = 'address';
-		resetCommitmentState();
-		geoPermissionDenied = false;
-		flowStep = regroundingMode ? 'address-input' : clientSideEnabled ? 'map-pin' : 'address-input';
-	}
-
-	/**
-	 * Path B (client-side): Map pin selection flow.
-	 * User drops a pin on the map. This path does not capture address text and
-	 * is therefore unavailable for re-grounding.
-	 */
-	async function handleMapPinSelect(coords: { lat: number; lng: number }) {
-		verificationMethod = 'address';
-		resetCommitmentState();
-		flowStep = 'resolving';
-		errorMessage = '';
-
-		const resolved = await resolveClientSide(coords.lat, coords.lng);
-		if (!resolved) {
-			errorMessage =
-				'Could not determine your district from this location. Please try a different spot or use device location.';
-			flowStep = 'map-pin';
-		}
-	}
-
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter' && isFormValid && flowStep === 'address-input') {
 			handleAddressPath();
@@ -859,17 +760,6 @@
 
 	function handleCancel() {
 		onCancel?.();
-	}
-
-	function handleBack() {
-		errorMessage = '';
-		geoPermissionDenied = false;
-		resetCommitmentState();
-		if (regroundingMode) {
-			handleCancel();
-			return;
-		}
-		flowStep = 'path-select';
 	}
 
 	function handleEditAddress() {
@@ -888,15 +778,12 @@
 	<!-- Step Indicator (suppressed in re-grounding — the ceremony is the progress) -->
 	{#if !regroundingMode}
 		<div class="mb-6 flex items-center justify-center gap-2">
-			{#each ['path-select', 'confirm-district', 'complete'] as step, i}
+			{#each ['address-input', 'confirm-district', 'complete'] as step, i}
 				{@const stepLabels = ['Verify', 'Confirm', 'Done']}
-				{@const stepIndex = ['path-select', 'confirm-district', 'complete'].indexOf(flowStep)}
+				{@const stepIndex = ['address-input', 'confirm-district', 'complete'].indexOf(flowStep)}
 				{@const isActive =
 					i <= stepIndex ||
-					((flowStep === 'geolocating' ||
-						flowStep === 'address-input' ||
-						flowStep === 'resolving') &&
-						i === 0) ||
+					(flowStep === 'resolving' && i === 0) ||
 					(flowStep === 'issuing-credential' && i <= 1)}
 				<div class="flex items-center gap-2">
 					<div
@@ -927,8 +814,8 @@
 		</div>
 	{/if}
 
-	<!-- PATH SELECT STEP -->
-	{#if flowStep === 'path-select'}
+	<!-- ADDRESS INPUT STEP — the single entry point into verification -->
+	{#if flowStep === 'address-input'}
 		{#if regroundingMode}
 			<RegroundingAddressCapture
 				bind:streetAddress={street}
@@ -937,169 +824,6 @@
 				bind:zipCode
 				{detectedCountry}
 				{errorMessage}
-				{geoPermissionDenied}
-				onSubmit={handleAddressPath}
-				onCancel={handleCancel}
-				onKeydown={handleKeydown}
-			/>
-		{:else}
-			<div class="space-y-5">
-				<div class="text-center">
-					<div
-						class="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100"
-					>
-						<MapPin class="h-6 w-6 text-emerald-600" />
-					</div>
-					<h3 class="text-lg font-semibold text-slate-900">Verify Your District</h3>
-					<p class="mt-1 text-sm text-slate-600">
-						Choose how to confirm your {jurisdictionLabels.legislativeAdjective} district.
-					</p>
-				</div>
-
-				<div class="space-y-3">
-					<!-- Option A: Use my location -->
-					<button
-						type="button"
-						class="flex w-full cursor-pointer items-start gap-4 rounded-md border border-slate-200 p-5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
-						onclick={handleGeolocationPath}
-					>
-						<div
-							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
-						>
-							<Navigation class="h-5 w-5 text-emerald-600" />
-						</div>
-						<div class="min-w-0 flex-1">
-							<p class="text-sm font-semibold text-slate-900">Use my location</p>
-							<p class="mt-0.5 text-xs text-slate-500">
-								Quick verification using your device's location
-							</p>
-						</div>
-						<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
-					</button>
-
-					<!-- Option B: Choose on map (client-side) or Enter address (legacy) -->
-					<button
-						type="button"
-						class="flex w-full cursor-pointer items-start gap-4 rounded-md border border-slate-200 p-5 text-left transition-all hover:border-emerald-300 hover:bg-emerald-50/30"
-						onclick={handleSelectAddressPath}
-					>
-						<div
-							class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100"
-						>
-							{#if clientSideEnabled}
-								<Map class="h-5 w-5 text-emerald-600" />
-							{:else}
-								<Building2 class="h-5 w-5 text-emerald-600" />
-							{/if}
-						</div>
-						<div class="min-w-0 flex-1">
-							{#if clientSideEnabled}
-								<p class="text-sm font-semibold text-slate-900">Choose on map</p>
-								<p class="mt-0.5 text-xs text-slate-500">
-									Drop a pin to resolve your district without typing an address
-								</p>
-							{:else}
-								<p class="text-sm font-semibold text-slate-900">Enter my address</p>
-								<p class="mt-0.5 text-xs text-slate-500">
-									Verify with your home address for constituency proof
-								</p>
-							{/if}
-						</div>
-						<ChevronRight class="mt-2.5 h-4 w-4 shrink-0 text-slate-400" />
-					</button>
-				</div>
-
-				<!-- Privacy note -->
-				<div class="flex items-center justify-center gap-1.5">
-					<Lock class="h-3 w-3 text-emerald-700" />
-					<p class="text-xs font-medium text-emerald-700">
-						{#if clientSideEnabled}
-							Location and map paths avoid address entry; server verification checks the selected
-							point against the district commitment.
-						{:else}
-							Your address is matched to a district, then saved only as encrypted ground state for
-							verified delivery.
-						{/if}
-					</p>
-				</div>
-
-				{#if onCancel}
-					<button
-						type="button"
-						class="w-full text-center text-sm text-slate-500 transition-colors hover:text-slate-700"
-						onclick={handleCancel}
-					>
-						Cancel
-					</button>
-				{/if}
-			</div>
-		{/if}
-
-		<!-- GEOLOCATING STEP (loading) -->
-	{:else if flowStep === 'geolocating'}
-		{#if regroundingMode}
-			<section class="py-6" aria-live="polite">
-				<div class="mb-5">
-					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
-						New ground
-					</p>
-					<h2
-						class="mt-1.5 text-base font-medium text-slate-900"
-						style="font-family: 'Satoshi', system-ui, sans-serif"
-					>
-						Awaiting location permission
-					</h2>
-				</div>
-				<div
-					class="flex items-center gap-3 border-t border-b border-dotted border-slate-300 py-4 text-sm text-slate-500"
-				>
-					<Loader2 class="h-4 w-4 shrink-0 animate-spin text-slate-500" />
-					<span>Please allow location access when prompted.</span>
-				</div>
-			</section>
-		{:else}
-			<div class="flex flex-col items-center justify-center py-12 text-center">
-				<div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100">
-					<Loader2 class="h-8 w-8 animate-spin text-emerald-600" />
-				</div>
-				<h3 class="text-lg font-semibold text-slate-900">Detecting Location</h3>
-				<p class="mt-2 text-sm text-slate-600">Please allow location access when prompted...</p>
-			</div>
-		{/if}
-
-		<!-- MAP PIN STEP (client-side, privacy-preserving) -->
-	{:else if flowStep === 'map-pin'}
-		{#if regroundingMode}
-			<RegroundingAddressCapture
-				bind:streetAddress={street}
-				bind:city
-				bind:stateCode
-				bind:zipCode
-				{detectedCountry}
-				errorMessage={errorMessage ||
-					'Verified address changes require address text, not a map pin.'}
-				{geoPermissionDenied}
-				onSubmit={handleAddressPath}
-				onCancel={handleCancel}
-				onKeydown={handleKeydown}
-			/>
-		{:else}
-			<div class="space-y-4">
-				<MapPinSelector onSelect={handleMapPinSelect} onCancel={handleBack} />
-			</div>
-		{/if}
-
-		<!-- ADDRESS INPUT STEP -->
-	{:else if flowStep === 'address-input'}
-		{#if regroundingMode}
-			<RegroundingAddressCapture
-				bind:streetAddress={street}
-				bind:city
-				bind:stateCode
-				bind:zipCode
-				{detectedCountry}
-				{errorMessage}
-				{geoPermissionDenied}
 				onSubmit={handleAddressPath}
 				onCancel={handleCancel}
 				onKeydown={handleKeydown}
@@ -1114,21 +838,16 @@
 					</div>
 					<h3 class="text-lg font-semibold text-slate-900">Enter Your Address</h3>
 					<p class="mt-1 text-sm text-slate-600">
-						Confirm your district to send messages to your representatives.
+						We use it to confirm your {detectedCountry === 'CA'
+							? 'riding'
+							: 'district'} and deliver your messages to your representatives.
 					</p>
-					{#if geoPermissionDenied}
-						<div
-							class="mt-2 flex items-center justify-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2"
-						>
-							<AlertCircle class="h-3.5 w-3.5 text-amber-600" />
-							<p class="text-xs text-amber-700">
-								Location access was denied. Please enter your address instead.
-							</p>
-						</div>
-					{/if}
-					<p class="mt-1 text-xs font-medium text-emerald-700">
-						Address used once for verification, then deleted.
-					</p>
+					<div class="mt-2 flex items-center justify-center gap-1.5">
+						<Lock class="h-3 w-3 shrink-0 text-emerald-700" />
+						<p class="text-xs font-medium text-emerald-700">
+							Your address is encrypted on this device — the server only sees your district.
+						</p>
+					</div>
 				</div>
 
 				<div class="space-y-3">
@@ -1208,26 +927,29 @@
 					Verify Address
 				</button>
 
-				<button
-					type="button"
-					class="w-full text-center text-sm text-slate-500 transition-colors hover:text-slate-700"
-					onclick={handleBack}
-				>
-					Back
-				</button>
+				{#if onCancel}
+					<button
+						type="button"
+						class="w-full text-center text-sm text-slate-500 transition-colors hover:text-slate-700"
+						onclick={handleCancel}
+					>
+						Cancel
+					</button>
+				{/if}
 
 				<!-- Privacy note -->
 				<details class="text-center">
 					<summary class="cursor-pointer text-xs text-slate-400 hover:text-slate-600">
-						How is my address used?
+						What happens to my address?
 					</summary>
 					<p class="mt-2 text-xs leading-relaxed text-slate-500">
-						Your address is sent to our server, geocoded via self-hosted infrastructure, and matched
-						to your {detectedCountry === 'CA'
+						Your address is sent to our self-hosted geocoder, which looks up your {detectedCountry ===
+						'CA'
 							? 'federal electoral district (riding)'
-							: `${jurisdictionLabels.legislativeAdjective} district`}. After verification, the address may be saved into your
-						encrypted ground vault, with district/cell metadata retained to explain and deliver the
-						credential.
+							: `${jurisdictionLabels.legislativeAdjective} district`} and returns only the district — the
+						server logs your district, never your address. Your full address is then encrypted on this
+						device and kept in your ground vault so we can deliver your messages to your
+						representatives without you re-entering it.
 					</p>
 				</details>
 			</div>

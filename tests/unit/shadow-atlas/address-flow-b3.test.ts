@@ -155,16 +155,50 @@ describe('B-3b: AddressVerificationFlow client-side resolution', () => {
 
 			expect(svelte).toContain('RegroundingAddressCapture');
 			expect(svelte).toContain("flowStep = 'address-input';");
-			expect(svelte).toContain("verificationMethod = 'address';");
-			expect(svelte).toContain(
-				"flowStep = regroundingMode ? 'address-input' : clientSideEnabled ? 'map-pin' : 'address-input'"
-			);
+			expect(svelte).toContain("const verificationMethod = 'address' as const");
 			expect(svelte).toContain('Enter the new address before re-grounding.');
 			expect(capture).toContain('Address text is required for a verified address change.');
 			expect(capture).toContain("from '$lib/components/ui/Button.svelte'");
 			expect(svelte).not.toContain('Choose how to attest your new coordinates');
 			expect(svelte).not.toContain('Device geolocation — nothing leaves the browser');
 			expect(svelte).not.toContain('Drop a pin on your new location');
+		});
+	});
+
+	describe('method chooser removal — address entry is the single entry point', () => {
+		it('opens directly on true-address entry with no location/map chooser', () => {
+			const svelte = source('src/lib/components/auth/AddressVerificationFlow.svelte');
+
+			// The flow starts on address entry; the method is a fixed const (not a chooser).
+			expect(svelte).toContain("let flowStep: FlowStep = $state('address-input')");
+			expect(svelte).toContain("const verificationMethod = 'address' as const");
+
+			// The chooser, geolocation, and map-pin paths are gone entirely.
+			expect(svelte).not.toContain("'path-select'");
+			expect(svelte).not.toContain("'geolocating'");
+			expect(svelte).not.toContain("'map-pin'");
+			expect(svelte).not.toContain('handleGeolocationPath');
+			expect(svelte).not.toContain('handleSelectAddressPath');
+			expect(svelte).not.toContain('handleMapPinSelect');
+			expect(svelte).not.toContain('MapPinSelector');
+
+			// No crypto jargon and no false "deleted" claim leaks into user copy.
+			// (The chooser's "against the district commitment" privacy note and the
+			// "used once for verification, then deleted" line are both gone.)
+			expect(svelte).not.toContain('against the district commitment');
+			expect(svelte).not.toContain('without typing an address');
+			expect(svelte).not.toContain('then deleted');
+		});
+
+		it('preserves the client-side commitment privacy chain on the address path', () => {
+			const svelte = source('src/lib/components/auth/AddressVerificationFlow.svelte');
+
+			// resolveClientSide stays — it computes the commitment client-side from
+			// the server-returned coordinates.
+			expect(svelte).toContain('async function resolveClientSide');
+			expect(svelte).toContain('/api/location/resolve-address');
+			expect(svelte).toContain('persistGroundVaultForAddress');
+			expect(svelte).toContain('poseidon2Sponge24');
 		});
 	});
 
