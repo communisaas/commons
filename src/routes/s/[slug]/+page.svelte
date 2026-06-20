@@ -22,6 +22,7 @@
 	import StanceRegistration from '$lib/components/action/StanceRegistration.svelte';
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
 	import CredibilityLadder from '$lib/components/auth/CredibilityLadder.svelte';
+	import SendConfirmation from '$lib/components/action/SendConfirmation.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
@@ -352,6 +353,16 @@
 	// UI state
 	let contactedRecipients = $state(new Set<string>());
 	let departingRecipients = $state(new Set<string>());
+
+	// Send confirmation peak (P2): a mailto handoff only tells us the mail app
+	// OPENED, never that mail was sent. "contacted" is set ONLY on an explicit
+	// confirm — never a tab-return/timer heuristic.
+	let sendConfirmation = $state<{
+		memberIds: string[];
+		recipientNames: string[];
+		attestationLine?: string;
+		messageText: string;
+	} | null>(null);
 	let batchRegistrationState = $state<'idle' | 'registering' | 'complete'>('idle');
 
 	// Bounce reporting state
@@ -383,37 +394,26 @@
 		)
 	);
 
-	// Mail app handoff detection — settle departing cards when user returns
-	$effect(() => {
-		if (departingRecipients.size === 0 || !browser) return;
+	// P2: contact is confirmed EXPLICITLY (the send-confirmation peak), not by a
+	// tab-return/timer heuristic. Yes → promote in-flight to contacted.
+	function confirmSendContacted() {
+		if (!sendConfirmation) return;
+		const ids = sendConfirmation.memberIds;
+		contactedRecipients = new Set([...contactedRecipients, ...ids]);
+		departingRecipients = new Set([...departingRecipients].filter((id) => !ids.includes(id)));
+		if (batchRegistrationState === 'registering') batchRegistrationState = 'complete';
+	}
 
-		const settle = () => {
-			if (departingRecipients.size > 0) {
-				// Promote departing → contacted, then clear departing
-				contactedRecipients = new Set([...contactedRecipients, ...departingRecipients]);
-				departingRecipients = new Set();
-				// Complete batch registration if it was in progress
-				if (batchRegistrationState === 'registering') {
-					batchRegistrationState = 'complete';
-				}
-			}
-		};
-
-		const onFocus = () => settle();
-		const onVisible = () => {
-			if (!document.hidden) settle();
-		};
-
-		window.addEventListener('focus', onFocus);
-		document.addEventListener('visibilitychange', onVisible);
-		const timer = setTimeout(settle, 3000);
-
-		return () => {
-			window.removeEventListener('focus', onFocus);
-			document.removeEventListener('visibilitychange', onVisible);
-			clearTimeout(timer);
-		};
-	});
+	// Close/dismiss without a confirmed send → revert the still-in-flight cards
+	// (nothing was confirmed contacted; never leave a false "contacted").
+	function closeSendConfirmation() {
+		if (sendConfirmation) {
+			const ids = sendConfirmation.memberIds;
+			departingRecipients = new Set([...departingRecipients].filter((id) => !ids.includes(id)));
+			if (batchRegistrationState === 'registering') batchRegistrationState = 'idle';
+		}
+		sendConfirmation = null;
+	}
 
 	// Initialize positionState from server data on template change
 	$effect(() => {
@@ -481,6 +481,9 @@
 	}
 
 	function handleWriteTo(member: LandscapeMember) {
+		// Resolve any pending send confirmation first (defense-in-depth — the peak's
+		// modal backdrop + focus trap already block interaction with the cards behind).
+		if (sendConfirmation) return;
 		if (member.deliveryRoute === 'cwc') {
 			// Congressional officials: route through existing CWC modal infrastructure
 			// TemplateModal handles tier-based routing (mailto for T1-2, ZKP for T3+)
@@ -521,12 +524,12 @@
 			});
 
 			if ('url' in result) {
-				// Track email handoff — we know the mail app was opened, not that it was sent
-				contactedRecipients = new Set([...contactedRecipients, member.id]);
+				// Mail app OPENED, not confirmed sent — mark IN-FLIGHT only and confirm
+				// explicitly via the send peak (no optimistic "contacted").
 				departingRecipients = new Set([...departingRecipients, member.id]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery record — stance-agnostic civic action (fire-and-forget)
+				// Record the delivery ATTEMPT — stance-agnostic civic action (fire-and-forget)
 				if (data.user?.id) {
 					fetch('/api/deliveries/record', {
 						method: 'POST',
@@ -542,10 +545,23 @@
 							]
 						}),
 						keepalive: true
-					}).catch(() => {}); // Fire-and-forget — UI already updated
+					}).catch(() => {}); // Fire-and-forget
 				}
 
 				window.location.href = result.url;
+				sendConfirmation = {
+					memberIds: [member.id],
+					recipientNames: [member.name],
+					attestationLine: attestation?.split('\n')[0],
+					messageText: [
+						subject ? `Subject: ${subject}` : '',
+						member.accountabilityOpener ?? '',
+						resolvedBody,
+						attestation ?? ''
+					]
+						.filter(Boolean)
+						.join('\n\n')
+				};
 			}
 		} else if (member.deliveryRoute === 'form' && member.contactFormUrl) {
 			// Web contact form: open in new tab
@@ -554,6 +570,7 @@
 	}
 
 	function handleBatchRegister(memberIds: string[]) {
+		if (sendConfirmation) return; // resolve the pending send peak first
 		if (batchRegistrationState === 'registering') return;
 		batchRegistrationState = 'registering';
 
@@ -591,7 +608,7 @@
 			const url = `mailto:${encodeURIComponent(emails)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
 
 			if (url.length <= 8000) {
-				// Set departing only — settle handler promotes to contacted when user returns
+				// Set departing only — the send peak promotes to contacted on an explicit confirm
 				departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
@@ -612,8 +629,14 @@
 					}).catch(() => {});
 				}
 
-				// Stay in 'registering' — settle handler transitions to 'complete' on return
 				window.location.href = url;
+				// In-flight until the user confirms in the send peak (not a return heuristic).
+				sendConfirmation = {
+					memberIds: emailMembers.map((m) => m.id),
+					recipientNames: emailMembers.map((m) => m.name),
+					attestationLine: attestation?.split('\n')[0],
+					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${bodyParts.join('\n\n')}`
+				};
 				return;
 			}
 		}
@@ -1248,4 +1271,17 @@
 <!-- Mobile debate awareness — sticky banner below lg: breakpoint -->
 {#if FEATURES.DEBATE}
 	<MobileDebateBanner debate={(data.debate as DebateData) ?? null} />
+{/if}
+
+<!-- Send peak (P2): the honest "did it send?" confirm + the proof/share moment -->
+{#if sendConfirmation}
+	<SendConfirmation
+		recipientNames={sendConfirmation.recipientNames}
+		attestationLine={sendConfirmation.attestationLine}
+		proofUrl={data.user?.credentialHash ? `/v/${data.user.credentialHash}` : undefined}
+		shareUrl={browser ? `${window.location.origin}/s/${template.slug}` : `/s/${template.slug}`}
+		messageText={sendConfirmation.messageText}
+		onConfirmSent={confirmSendContacted}
+		onClose={closeSendConfirmation}
+	/>
 {/if}
