@@ -38,7 +38,9 @@ jobs:
           mkdir -p "$HOME/.codex"
           printf '[features]\nimage_generation = false\n' > "$HOME/.codex/config.toml"
       - name: Brutalist review
-        uses: ejmockler/brutalist-mcp/packages/github-action@93b4ec30bf6987970432d7d53662aa28d390a9b0 # v1.15.0
+        # Tracks the moving @v1 tag (repointed to each release upstream by the
+        # move-tags automation) so this repo auto-updates to the latest action.
+        uses: ejmockler/brutalist-mcp/packages/github-action@v1
         env:
           BRUTALIST_TIMEOUT: "900000"
           BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2100000"
