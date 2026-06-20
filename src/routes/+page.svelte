@@ -54,6 +54,7 @@
 		type GeographicScope
 	} from '$lib/core/location/template-filter';
 	import { getUserLocation } from '$lib/core/location/inference-engine';
+	import { getStateName } from '$lib/core/location/state-codes';
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
 	import { selectLandingSurface } from '$lib/core/topic/landing-surface';
@@ -114,6 +115,31 @@
 			return scope.locality ? 'city' : 'state';
 		}
 		return null;
+	}
+
+	// Human label for a scope, for the located-no-match notice ("No campaigns reach
+	// {place} yet."). Prefers the explicit displayName the scope bar attaches, then the
+	// most specific place name available; the ISO subdivision suffix / country code are
+	// last-resort fallbacks for inferred scopes that carry no display name.
+	function countryName(code: string): string {
+		try {
+			return new Intl.DisplayNames(['en'], { type: 'region' }).of(code) || code;
+		} catch {
+			return code;
+		}
+	}
+
+	function geoScopeLabel(scope: GeoScope): string {
+		if (scope.type === 'international') return 'everywhere';
+		if (scope.type === 'nationwide') return scope.displayName || countryName(scope.country);
+		// Subnational: prefer the bare place name (a city/state stands alone, never the
+		// full "City, State, Country" hierarchy), resolving ISO codes to readable names.
+		if (scope.locality) return scope.locality;
+		if (scope.subdivision) {
+			const code = scope.subdivision.split('-')[1] || scope.subdivision;
+			return getStateName(code);
+		}
+		return scope.displayName || countryName(scope.country);
 	}
 
 	function handleScopeChange(scope: GeoScope | null) {
@@ -279,9 +305,10 @@
 		if (isMobile()) {
 			showMobilePreview = true;
 		} else if (!showSpectrum && !showGraph) {
-			// List fallback: the preview lives in its own column — scroll it into view.
-			// The spectrum and the graph each own their dive entrance (the field recedes
-			// and the preview rises as an Artifact), so no scroll-into-view is needed.
+			// List: the preview lives in its own column — scroll it into view (matters
+			// when the column stacks below on a narrow screen). The spectrum and the graph
+			// own their dive entrance (the field recedes and the preview rises as an
+			// Artifact), so no scroll-into-view is needed there.
 			tick().then(() => {
 				document
 					.querySelector('.template-preview-column')
@@ -429,57 +456,74 @@
 		return sortTemplatesByScore(scored);
 	}
 
-	const filteredGroups = $derived.by(() => {
-		// No scope or international → show all templates in one group
-		if (!selectedScope || selectedScope.type === 'international') {
-			return [
-				{
-					title: 'All Templates',
-					templates: sortGroupTemplates(allTemplates),
-					minScore: 0,
-					level: 'nationwide' as const,
-					coordinationCount: allTemplates.reduce((sum, t) => sum + (t.send_count || 0), 0)
-				}
-			];
-		}
-
-		const inferredLocation = geoScopeToInferredLocation(selectedScope);
-		if (!inferredLocation) {
-			return [
-				{
-					title: 'All Templates',
-					templates: sortGroupTemplates(allTemplates),
-					minScore: 0,
-					level: 'nationwide' as const,
-					coordinationCount: allTemplates.reduce((sum, t) => sum + (t.send_count || 0), 0)
-				}
-			];
-		}
-
-		// Score templates against the selected location
-		const scored = scoreTemplatesByRelevance(
-			allTemplates as unknown as TemplateWithJurisdictions[],
-			inferredLocation,
-			geoScopeToGeographicScope(selectedScope)
-		);
-
-		const groups = groupByPrecision(scored);
-
-		// If scoring produced groups, use them (with display-score sorting within each)
-		if (groups.length > 0) {
-			return groups.map((g) => ({ ...g, templates: sortGroupTemplates(g.templates) }));
-		}
-
-		return [
-			{
-				title: 'All Templates',
-				templates: sortGroupTemplates(allTemplates),
-				minScore: 0,
-				level: 'nationwide' as const,
-				coordinationCount: allTemplates.reduce((sum, t) => sum + (t.send_count || 0), 0)
+	// Location result — the SINGLE source of truth for which templates each surface
+	// shows, as a discriminated state so "a place matched nothing" is never confused
+	// with "no place selected". The old three-branch collapse returned the SAME full
+	// multi-country "All Templates" group in BOTH cases, silently dumping other-country
+	// templates over a location that simply had no local campaigns. Scored ONCE here;
+	// the list, spectrum, and graph all read from it.
+	type LocationResultKind = 'no-location' | 'located-matched' | 'located-no-match';
+	const locationResult = $derived.by(
+		(): {
+			kind: LocationResultKind;
+			placeLabel?: string;
+			groups: TemplateGroup[];
+			templates: Template[];
+		} => {
+			// NO LOCATION: no scope, international, or an unmappable scope → show everything
+			// (first paint is always here, since selectedScope is null until onMount). The
+			// all-templates group (and its full-set coordination sum) is built ONLY here, so
+			// the located branches don't pay for an aggregate they discard.
+			const inferredLocation = selectedScope ? geoScopeToInferredLocation(selectedScope) : null;
+			if (!selectedScope || selectedScope.type === 'international' || !inferredLocation) {
+				return {
+					kind: 'no-location',
+					groups: [
+						{
+							title: 'All Templates',
+							templates: sortGroupTemplates(allTemplates),
+							minScore: 0,
+							level: 'nationwide' as const,
+							coordinationCount: allTemplates.reduce((sum, t) => sum + (t.send_count || 0), 0)
+						}
+					],
+					templates: allTemplates
+				};
 			}
-		];
-	});
+
+			// LOCATED: score the (country-guarded) set once against the place.
+			const scored = scoreTemplatesByRelevance(
+				allTemplates as unknown as TemplateWithJurisdictions[],
+				inferredLocation,
+				geoScopeToGeographicScope(selectedScope)
+			);
+			const groups = groupByPrecision(scored);
+			const placeLabel = geoScopeLabel(selectedScope);
+
+			// LOCATED, MATCHED: the precision tiers. The scorer's country guard already
+			// excludes other countries, so this is genuinely the in-place set — never a
+			// re-dump of the full multi-country list.
+			if (groups.length > 0) {
+				const sorted = groups.map((g) => ({ ...g, templates: sortGroupTemplates(g.templates) }));
+				return {
+					kind: 'located-matched',
+					placeLabel,
+					groups: sorted,
+					templates: sorted.flatMap((g) => g.templates)
+				};
+			}
+
+			// LOCATED, NO MATCH: a place is selected but nothing reaches it. Honest empty —
+			// NOT a silent fallback to the full unfiltered list.
+			return { kind: 'located-no-match', placeLabel, groups: [], templates: [] };
+		}
+	);
+
+	// Stable aliases. `filteredGroups` keeps TemplateList + the auto-select effect on
+	// their existing contract; `filteredTemplates` is the flat SSOT fed to the spectrum
+	// and graph so selecting a location reshapes EVERY surface, not just the list.
+	const filteredGroups = $derived(locationResult.groups);
+	const filteredTemplates = $derived(locationResult.templates);
 
 	// Handle URL parameter initialization when templates load
 	// Sync selection to URL param or first visible template after filtering
@@ -825,20 +869,37 @@
 				class:template-browser--spectrum={showSpectrum || showGraph}
 				id="template-browser"
 			>
+				{#if locationResult.kind === 'located-no-match' && !isLoading}
+					<!-- Located, but nothing reaches this place. ONE honest notice across every
+					     view (no empty list / graph / spectrum, and never the old silent dump of
+					     the full multi-country list). Gated on !isLoading so it can't flash
+					     before the corpus has loaded. "Templates", not "campaigns" — the person
+					     layer never says "campaigns" (voice.md). -->
+					<div class="no-match-notice">
+						<p class="no-match-head">No templates in {locationResult.placeLabel} yet.</p>
+						<button
+							type="button"
+							class="no-match-clear"
+							onclick={() => handleScopeChange(null)}
+						>
+							Clear location
+						</button>
+					</div>
+				{:else}
 				<!-- Template List -->
 				<div class="template-list-column">
 					{#if showGraph}
 						<!-- Relatedness graph: each template a hue-coloured node, linked by
 						     measured semantic twins (solid) and civic-family kinship (dashed),
 						     with the topically-isolated falling honestly to the periphery.
-						     Reachable at `?view=graph` while it is built out; the spectrum
-						     stays the default surface. Selecting a node falls into the template
+						     An explicit opt-in at `?view=graph`; the list-and-preview surface
+						     is the default front door. Selecting a node falls into the template
 						     through the SAME descent the spectrum uses — the field goes inert
 						     beneath the risen Artifact (the shared DescentDive below), never a
 						     second modal. -->
 						<div class="graph-field" class:graph-field--inert={graphDiving}>
 							<RelationGraph
-								templates={allTemplates}
+								templates={filteredTemplates}
 								edges={relationEdges}
 								selectedId={templateStore.selectedId}
 								onSelect={handleTemplateSelect}
@@ -849,10 +910,10 @@
 						     with a lens toggle to re-organise the same templates by place
 						     (the existing geographic precision grouping). Selecting a tile
 						     dives into it — the field recedes and the template rises as an
-						     Artifact wrapping the same preview below. Falls back to the list
-						     until the landscape is the default. -->
+						     Artifact wrapping the same preview below. An explicit opt-in at
+						     `?view=spectrum`; the list-and-preview surface is the default. -->
 						<SpectrumLandscape
-							templates={allTemplates}
+							templates={filteredTemplates}
 							placeGroups={filteredGroups}
 							selectedId={templateStore.selectedId}
 							onSelect={handleTemplateSelect}
@@ -868,13 +929,14 @@
 						/>
 					{/if}
 				</div>
+				{/if}
 
-				<!-- Template Preview. In the list (fallback) it lives in its own column
+				<!-- Template Preview. In the list (the default) it lives in its own column
 				     beside the list. In the spectrum and the relation graph, the preview is
 				     the dive: it rises as an Artifact over the receded field, so the side
 				     column is not shown. The preview itself is identical in both — the
 				     snippet wraps the SAME component. -->
-				{#if !showSpectrum && !showGraph}
+				{#if !showSpectrum && !showGraph && locationResult.kind !== 'located-no-match'}
 					<div class="template-preview-column">
 						{#if hasError}
 							<div class="border-y border-slate-200 px-6 py-8 text-center">
@@ -932,10 +994,11 @@
 
 <!-- The relation map's descent: selecting a node falls into the template through the
      SAME shared dive the spectrum uses (the spectrum mounts its own DescentDive
-     internally; the graph has none, so the page raises it here). Back / esc / a tap
-     on the scrim climbs out and clears the selection, restoring the map with focus
-     back on the node it rose from — no relayout, no second modal vocabulary. -->
-{#if graphDiving}
+     internally; the graph has none, so the page raises it here). The reading room and
+     the list use their side preview column instead, so they do not dive. Back / esc /
+     a tap on the scrim climbs out and clears the selection, restoring the map with
+     focus back on the node it rose from — no relayout, no second modal vocabulary. -->
+{#if graphDiving && locationResult.kind !== 'located-no-match'}
 	<DescentDive
 		dive={templateDive}
 		open={graphDiving}
@@ -947,7 +1010,7 @@
 {/if}
 
 <!-- Mobile Preview Modal -->
-{#if showMobilePreview && selectedTemplate}
+{#if showMobilePreview && selectedTemplate && locationResult.kind !== 'located-no-match'}
 	<TouchModal onclose={() => (showMobilePreview = false)}>
 		<div class="h-full">
 			<TemplatePreview
@@ -1405,6 +1468,53 @@
 			position: relative;
 			z-index: 2;
 		}
+	}
+
+	/*
+	 * Located-no-match notice — shown when a place is selected but nothing reaches it.
+	 * A quiet typographic cluster on the warm-cream ground (no card / pill / shadow /
+	 * bg-white, per DESIGN.md): the place stands alone, and a latent text action
+	 * activates to teal on hover. Spans the browser grid so it reads centered whether
+	 * the grid is one or two columns.
+	 */
+	.no-match-notice {
+		grid-column: 1 / -1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.625rem;
+		padding: 4rem 1.5rem;
+		text-align: center;
+	}
+
+	.no-match-head {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 1.0625rem;
+		font-weight: 500;
+		color: oklch(0.4 0.02 250);
+	}
+
+	.no-match-clear {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px; /* 44px touch target — design-system.md, no exceptions */
+		padding: 0.625rem 0.875rem;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.875rem;
+		font-weight: 500;
+		cursor: pointer;
+		color: oklch(0.55 0.02 250);
+		border-radius: 6px;
+		transition: color 150ms ease-out;
+	}
+
+	.no-match-clear:hover {
+		color: var(--coord-route-solid); /* the canonical route/action teal */
+	}
+
+	.no-match-clear:focus-visible {
+		outline: 2px solid var(--coord-route-solid);
+		outline-offset: 2px;
 	}
 
 	/* Stream Explainer - Spatially adjacent to coordination signals */
