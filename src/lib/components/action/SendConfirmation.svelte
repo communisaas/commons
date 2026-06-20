@@ -17,7 +17,9 @@
 
 	let {
 		recipientNames = [],
-		/** The attestation line the message carried, e.g. "Verified resident · CA-12". */
+		/** The attestation line the message carried — the SSOT tier label + district,
+		 *  e.g. "Self-reported constituent (Census geocoder) · CA-12" or
+		 *  "Address-resolved constituent (mDL) · CA-12". */
 		attestationLine = undefined,
 		/** Real receipt link (/v/[hash]) — only present for verified senders. */
 		proofUrl = undefined,

@@ -46,6 +46,7 @@
 	import { topicHue } from '$lib/utils/topic-hue';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
+	import { formatTierEmailFooter, type VerificationMethod } from '$lib/core/identity/tier-display';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
@@ -62,15 +63,36 @@
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
 	const hue = $derived(topicHue(template?.domain ?? '', template?.topics, template?.domainHue));
 
-	/** Build proof footer for email attestation based on user verification tier */
+	/**
+	 * Build the sender's own signature line(s) for the email footer.
+	 *
+	 * This is the SENDER attesting to their own standing — not a label aimed at
+	 * the recipient and not a request that the recipient verify anything. Line 1
+	 * stays a clean third-person NOUN PHRASE (consumed as `attestationLine` via
+	 * `split('\n')[0]`, and reused mid-sentence inside SendConfirmation's "Your
+	 * message carried <attestationLine>." frame — a first-person clause there
+	 * would read as a person/voice mismatch). The optional URL is the sender
+	 * offering verifiability of themselves, never an instruction to the addressee.
+	 */
 	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {
 		const parts: string[] = [];
-		if (trustTier >= 2 && districtCode) parts.push(`Verified resident · ${districtCode}`);
-		else if (trustTier >= 1) parts.push('Verified sender');
-		if (trustTier >= 3) parts[0] += ' · Gov ID';
+		if (trustTier >= 2 && districtCode) {
+			// SSOT label (matches /v/[hash]): method-specific so a self-reported
+			// (civic_api) sender reads "Self-reported constituent", never overclaimed
+			// as "Verified resident". The method label already encodes mDL/gov-ID.
+			const label = formatTierEmailFooter({
+				method: (data.user?.verification_method as VerificationMethod) ?? null,
+				trustTier
+			});
+			parts.push(`${label} · ${districtCode}`);
+		} else if (trustTier >= 1) {
+			parts.push('Verified sender');
+		}
 		// Only emit the verify URL when it resolves: the active credential hash is
-		// the record /v/[hash] looks up. A truncated user id always 404s.
-		if (data.user?.credentialHash) parts.push(`commons.email/v/${data.user.credentialHash}`);
+		// the record /v/[hash] looks up. A truncated user id always 404s. Framed as
+		// the sender offering proof of themselves, not asking the recipient to act.
+		if (data.user?.credentialHash)
+			parts.push(`Confirm I'm a real constituent: commons.email/v/${data.user.credentialHash}`);
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
 	// Simplified - no query parameters needed, default to direct-link

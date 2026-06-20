@@ -90,10 +90,15 @@
     }
   });
 
-  // Attestation text (only for Tier 2+)
+  // The sender's own signature line (only for Tier 2+). This is the SENDER
+  // attesting to their standing — not a recipient-facing label and not a claim
+  // of cryptographic proof. This path has NO verification method, so it uses the
+  // generic SSOT fallback ("Verified constituent") rather than "Verified resident"
+  // — the latter would overclaim residency for the self-reported (civic_api) case.
+  // Label-only: no /v/ URL here, since ComposePane has no credentialHash.
   const attestationText = $derived(
     trustTier >= 2
-      ? `Verified resident, ${districtName}\nCryptographic proof of residency`
+      ? `Verified constituent · ${districtName}`
       : undefined
   );
 
