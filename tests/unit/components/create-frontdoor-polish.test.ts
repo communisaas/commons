@@ -50,7 +50,9 @@ describe('SEARCH — front-door type-ahead surfaces real campaigns only', () => 
 	it('picking a match routes through the existing send path (participate fast-path)', () => {
 		expect(spark).toContain('onMatchSelect');
 		expect(home).toContain('onMatchSelect={handleSendMessage}');
-		expect(home).toContain('matchTemplates={templateStore.templates}');
+		// the matcher must use the GATED corpus (allTemplates — feature-flag + delivery
+		// filtered), not raw templateStore.templates, or it could surface gated campaigns
+		expect(home).toContain('matchTemplates={allTemplates}');
 	});
 
 	it('the matcher is the dedicated client-side text sibling, not the location filter or server search', () => {

@@ -795,7 +795,7 @@
 		<div class="creation-column">
 			<CreationSpark
 				onactivate={handleSparkActivate}
-				matchTemplates={templateStore.templates}
+				matchTemplates={allTemplates}
 				onMatchSelect={handleSendMessage}
 			>
 				{#snippet context()}

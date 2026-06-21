@@ -204,7 +204,10 @@ export function matchExistingCampaigns(
 	text: string,
 	options: MatchOptions = {}
 ): TextMatch[] {
-	const { limit = 3, minScore = DEFAULT_MIN_SCORE } = options;
+	const { limit: rawLimit = 3, minScore = DEFAULT_MIN_SCORE } = options;
+	// Clamp: a negative limit would make slice(0, limit) return the list minus its
+	// tail — violating the "maximum results" contract.
+	const limit = Math.max(0, rawLimit);
 
 	const trimmed = text.trim();
 	if (trimmed.length < MIN_QUERY_LENGTH) return [];
