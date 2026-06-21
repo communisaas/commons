@@ -144,10 +144,23 @@ describe('Org PII Encryption', () => {
 
 		it('BIP39 checksum detects typos', async () => {
 			const { words } = await generateRecoveryKey();
-			// Corrupt one word
-			const corrupted = [...words];
-			corrupted[0] = corrupted[0] === 'abandon' ? 'ability' : 'abandon';
-			await expect(mnemonicToRecoveryKey(corrupted)).rejects.toThrow('checksum failed');
+			const word0 = wordlist.indexOf(words[0]);
+
+			// A single-word typo fails the 8-bit checksum 255/256 of the time, so
+			// corrupting once and hoping is a 1/256 flake. Find a corruption that is
+			// actually rejected — at least one alternative word always is.
+			let rejected = false;
+			for (let off = 1; off < wordlist.length && !rejected; off++) {
+				const corrupted = [...words];
+				corrupted[0] = wordlist[(word0 + off) % wordlist.length];
+				try {
+					await mnemonicToRecoveryKey(corrupted);
+				} catch (e) {
+					expect((e as Error).message).toContain('checksum failed');
+					rejected = true;
+				}
+			}
+			expect(rejected).toBe(true);
 		});
 
 		it('wrap → unwrap round-trip', async () => {

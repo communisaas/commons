@@ -274,6 +274,9 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 			avatar: locals.user.avatar,
 			trust_tier: locals.user.trust_tier,
 			is_verified: locals.user.is_verified,
+			// Method drives the honest tier label (SSOT) — self-reported vs mDL vs postal —
+			// so the email footer matches what /v/[hash] shows (no residency overclaim).
+			verification_method: locals.user.verification_method,
 			credentialHash
 		} : null,
 		template: parentData.template,

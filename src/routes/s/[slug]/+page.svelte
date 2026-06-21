@@ -21,6 +21,8 @@
 	import type { DebateData } from '$lib/stores/debateState.svelte';
 	import StanceRegistration from '$lib/components/action/StanceRegistration.svelte';
 	import PowerLandscape from '$lib/components/action/PowerLandscape.svelte';
+	import CredibilityLadder from '$lib/components/auth/CredibilityLadder.svelte';
+	import SendConfirmation from '$lib/components/action/SendConfirmation.svelte';
 	import { positionState } from '$lib/stores/positionState.svelte';
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
@@ -44,6 +46,7 @@
 	import { topicHue } from '$lib/utils/topic-hue';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
+	import { formatTierEmailFooter, type VerificationMethod } from '$lib/core/identity/tier-display';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
@@ -60,15 +63,41 @@
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
 	const hue = $derived(topicHue(template?.domain ?? '', template?.topics, template?.domainHue));
 
-	/** Build proof footer for email attestation based on user verification tier */
+	/**
+	 * Build the sender's own signature line(s) for the email footer.
+	 *
+	 * This is the SENDER attesting to their own standing — not a label aimed at
+	 * the recipient and not a request that the recipient verify anything. Line 1
+	 * stays a clean third-person NOUN PHRASE (consumed as `attestationLine` via
+	 * `split('\n')[0]`, and reused mid-sentence inside SendConfirmation's "Your
+	 * message carried <attestationLine>." frame — a first-person clause there
+	 * would read as a person/voice mismatch). The optional URL is the sender
+	 * offering verifiability of themselves, never an instruction to the addressee.
+	 */
 	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {
 		const parts: string[] = [];
-		if (trustTier >= 2 && districtCode) parts.push(`Verified resident · ${districtCode}`);
-		else if (trustTier >= 1) parts.push('Verified sender');
-		if (trustTier >= 3) parts[0] += ' · Gov ID';
-		// Only emit the verify URL when it resolves: the active credential hash is
-		// the record /v/[hash] looks up. A truncated user id always 404s.
-		if (data.user?.credentialHash) parts.push(`commons.email/v/${data.user.credentialHash}`);
+		if (trustTier >= 2 && districtCode) {
+			// SSOT label (matches /v/[hash]): method-specific so a self-reported
+			// (civic_api) sender reads "Self-reported constituent", never overclaimed
+			// as "Verified resident". The method label already encodes mDL/gov-ID.
+			const label = formatTierEmailFooter({
+				method: (data.user?.verification_method ?? null) as VerificationMethod,
+				trustTier
+			});
+			parts.push(`${label} · ${districtCode}`);
+			// The verify URL lives INSIDE the tier>=2 block, gated identically to the
+			// constituent label it backs: "Confirm I'm a real constituent" is itself a
+			// constituent claim, so a sub-tier-2 sender (who only ever gets "Verified
+			// sender" above) must never emit it — that would overclaim standing the
+			// system hasn't established. Emitted only when the hash resolves: the active
+			// credential hash is the record /v/[hash] looks up (a truncated id 404s).
+			// Framed as the sender offering proof of themselves, not an instruction to
+			// the recipient.
+			if (data.user?.credentialHash)
+				parts.push(`Confirm I'm a real constituent: https://commons.email/v/${data.user.credentialHash}`);
+		} else if (trustTier >= 1) {
+			parts.push('Verified sender');
+		}
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
 	// Simplified - no query parameters needed, default to direct-link
@@ -351,6 +380,20 @@
 	// UI state
 	let contactedRecipients = $state(new Set<string>());
 	let departingRecipients = $state(new Set<string>());
+
+	// Send confirmation peak (P2): a mailto handoff only tells us the mail app
+	// OPENED, never that mail was sent. "contacted" is set ONLY on an explicit
+	// confirm — never a tab-return/timer heuristic.
+	let sendConfirmation = $state<{
+		memberIds: string[];
+		recipientNames: string[];
+		// Delivery detail threaded for the on-confirm /api/deliveries/record POST.
+		// A DELIVERY is a confirmed COUNT, so it must reflect the explicit confirm —
+		// not the mailto launch (a dismissed peak would otherwise inflate server counts).
+		recipients: { name: string; email?: string; deliveryMethod: 'email' }[];
+		attestationLine?: string;
+		messageText: string;
+	} | null>(null);
 	let batchRegistrationState = $state<'idle' | 'registering' | 'complete'>('idle');
 
 	// Bounce reporting state
@@ -382,37 +425,40 @@
 		)
 	);
 
-	// Mail app handoff detection — settle departing cards when user returns
-	$effect(() => {
-		if (departingRecipients.size === 0 || !browser) return;
+	// P2: contact is confirmed EXPLICITLY (the send-confirmation peak), not by a
+	// tab-return/timer heuristic. Yes → promote in-flight to contacted.
+	function confirmSendContacted() {
+		if (!sendConfirmation) return;
+		const ids = sendConfirmation.memberIds;
+		contactedRecipients = new Set([...contactedRecipients, ...ids]);
+		departingRecipients = new Set([...departingRecipients].filter((id) => !ids.includes(id)));
+		if (batchRegistrationState === 'registering') batchRegistrationState = 'complete';
 
-		const settle = () => {
-			if (departingRecipients.size > 0) {
-				// Promote departing → contacted, then clear departing
-				contactedRecipients = new Set([...contactedRecipients, ...departingRecipients]);
-				departingRecipients = new Set();
-				// Complete batch registration if it was in progress
-				if (batchRegistrationState === 'registering') {
-					batchRegistrationState = 'complete';
-				}
-			}
-		};
+		// DELIVERY record fires HERE — on the explicit confirm, the same moment
+		// contact is set — never on the mailto launch. A delivery is a confirmed
+		// COUNT, so a dismissed/un-sent peak must not record one (consistent with P2:
+		// contacted only on confirm). Fire-and-forget; stance-agnostic civic action.
+		const recipients = sendConfirmation.recipients;
+		if (data.user?.id && recipients.length > 0) {
+			fetch('/api/deliveries/record', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ templateId: template.id, recipients }),
+				keepalive: true
+			}).catch(() => {});
+		}
+	}
 
-		const onFocus = () => settle();
-		const onVisible = () => {
-			if (!document.hidden) settle();
-		};
-
-		window.addEventListener('focus', onFocus);
-		document.addEventListener('visibilitychange', onVisible);
-		const timer = setTimeout(settle, 3000);
-
-		return () => {
-			window.removeEventListener('focus', onFocus);
-			document.removeEventListener('visibilitychange', onVisible);
-			clearTimeout(timer);
-		};
-	});
+	// Close/dismiss without a confirmed send → revert the still-in-flight cards
+	// (nothing was confirmed contacted; never leave a false "contacted").
+	function closeSendConfirmation() {
+		if (sendConfirmation) {
+			const ids = sendConfirmation.memberIds;
+			departingRecipients = new Set([...departingRecipients].filter((id) => !ids.includes(id)));
+			if (batchRegistrationState === 'registering') batchRegistrationState = 'idle';
+		}
+		sendConfirmation = null;
+	}
 
 	// Initialize positionState from server data on template change
 	$effect(() => {
@@ -480,6 +526,9 @@
 	}
 
 	function handleWriteTo(member: LandscapeMember) {
+		// Resolve any pending send confirmation first (defense-in-depth — the peak's
+		// modal backdrop + focus trap already block interaction with the cards behind).
+		if (sendConfirmation) return;
 		if (member.deliveryRoute === 'cwc') {
 			// Congressional officials: route through existing CWC modal infrastructure
 			// TemplateModal handles tier-based routing (mailto for T1-2, ZKP for T3+)
@@ -520,31 +569,38 @@
 			});
 
 			if ('url' in result) {
-				// Track email handoff — we know the mail app was opened, not that it was sent
-				contactedRecipients = new Set([...contactedRecipients, member.id]);
+				// Mirror the actual mailto body (generatePersonalizedMailto): the same
+				// zone order — opener, body, then '---' before the attestation — so the
+				// copy a no-mail-client user pastes matches what the mailto would send.
+				// Subject is a clear leading indication (consistent with the batch path),
+				// not inlined into the body. Built first (pure, no state side effects) so
+				// the in-flight→peak handoff below stays a tight, auditable sequence.
+				const copyBodyParts: string[] = [];
+				if (member.accountabilityOpener?.trim())
+					copyBodyParts.push(member.accountabilityOpener.trim());
+				if (resolvedBody.trim()) copyBodyParts.push(resolvedBody.trim());
+				if (attestation?.trim()) {
+					copyBodyParts.push('---');
+					copyBodyParts.push(attestation.trim());
+				}
+
+				// Mail app OPENED, not confirmed sent — mark IN-FLIGHT only and confirm
+				// explicitly via the send peak (no optimistic "contacted"). The DELIVERY
+				// record (a delivery COUNT) is NOT posted here — it fires only on the
+				// explicit confirm inside confirmSendContacted(), so a dismissed/un-sent
+				// peak never inflates server counts (consistent with the P2 contract).
+				// trackDeliveryAttempt stays here: it is genuinely an attempt metric.
 				departingRecipients = new Set([...departingRecipients, member.id]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery record — stance-agnostic civic action (fire-and-forget)
-				if (data.user?.id) {
-					fetch('/api/deliveries/record', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							templateId: template.id,
-							recipients: [
-								{
-									name: member.name,
-									email: member.email,
-									deliveryMethod: 'email'
-								}
-							]
-						}),
-						keepalive: true
-					}).catch(() => {}); // Fire-and-forget — UI already updated
-				}
-
 				window.location.href = result.url;
+				sendConfirmation = {
+					memberIds: [member.id],
+					recipientNames: [member.name],
+					recipients: [{ name: member.name, email: member.email ?? undefined, deliveryMethod: 'email' }],
+					attestationLine: attestation?.split('\n')[0],
+					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${copyBodyParts.join('\n\n')}`
+				};
 			}
 		} else if (member.deliveryRoute === 'form' && member.contactFormUrl) {
 			// Web contact form: open in new tab
@@ -553,6 +609,7 @@
 	}
 
 	function handleBatchRegister(memberIds: string[]) {
+		if (sendConfirmation) return; // resolve the pending send peak first
 		if (batchRegistrationState === 'registering') return;
 		batchRegistrationState = 'registering';
 
@@ -590,29 +647,27 @@
 			const url = `mailto:${encodeURIComponent(emails)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
 
 			if (url.length <= 8000) {
-				// Set departing only — settle handler promotes to contacted when user returns
+				// Set departing only — the send peak promotes to contacted on an explicit confirm
 				departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery records — stance-agnostic civic action (fire-and-forget)
-				if (data.user?.id) {
-					fetch('/api/deliveries/record', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							templateId: template.id,
-							recipients: emailMembers.map((m) => ({
-								name: m.name,
-								email: m.email ?? undefined,
-								deliveryMethod: 'email' as const
-							}))
-						}),
-						keepalive: true
-					}).catch(() => {});
-				}
-
-				// Stay in 'registering' — settle handler transitions to 'complete' on return
+				// The DELIVERY record (a delivery COUNT) is deferred to the explicit
+				// confirm in confirmSendContacted() — threaded via sendConfirmation.recipients
+				// below. Posting it here (on mailto launch) would inflate server counts for
+				// a dismissed/un-sent peak. trackDeliveryAttempt stays — it's an attempt metric.
 				window.location.href = url;
+				// In-flight until the user confirms in the send peak (not a return heuristic).
+				sendConfirmation = {
+					memberIds: emailMembers.map((m) => m.id),
+					recipientNames: emailMembers.map((m) => m.name),
+					recipients: emailMembers.map((m) => ({
+						name: m.name,
+						email: m.email ?? undefined,
+						deliveryMethod: 'email' as const
+					})),
+					attestationLine: attestation?.split('\n')[0],
+					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${bodyParts.join('\n\n')}`
+				};
 				return;
 			}
 		}
@@ -625,6 +680,16 @@
 	// for users who can actually file a report — the action lives on the
 	// recipient entity (PowerLandscape → RoleGroup → card), not as an aggregate list.
 	const canReportBounce = $derived((data.user?.trust_tier ?? 0) >= 2);
+
+	// Credibility-ladder nudge at the send moment: only for a signed-in,
+	// account-verified-but-not-district-confirmed user on a DIRECT (non-CWC)
+	// template — the case where email-only sending is genuinely permitted, so
+	// "you can send right now · confirm district to count for more" is honest.
+	// CWC/congressional requires district proof (a hard gate), so no nudge there.
+	const ladderNudgeTier = $derived(data.user?.trust_tier ?? 0);
+	const showLadderNudge = $derived(
+		!!data.user && ladderNudgeTier >= 1 && ladderNudgeTier < 2 && !isCongressional
+	);
 
 	async function handleReportBounce(email: string) {
 		if (reportingBounce || reportedBounces.has(email)) return;
@@ -1088,6 +1153,23 @@
 
 		<!-- RIGHT: Relational field — who you're writing to, who's with you, what's been contested -->
 		<div class="mt-8 min-w-0 space-y-8 lg:mt-0">
+			{#if showLadderNudge}
+				<!-- Send-moment ladder nudge: the present value + the climb, never a wall.
+				     Email-only sending already works here; this just makes the upgrade legible. -->
+				<CredibilityLadder
+					compact
+					currentTier={ladderNudgeTier}
+					onClimb={() =>
+						modalActions.openModal('address-modal', 'address', {
+							template,
+							source,
+							mode: 'collection',
+							onComplete: async (detail: AddressModalDetail) => {
+								await _handleAddressSubmit(detail);
+							}
+						})}
+				/>
+			{/if}
 			<!-- Power Landscape: the strong center — who holds power, present from first render -->
 			<div id="power-landscape">
 				<PowerLandscape
@@ -1220,4 +1302,19 @@
 <!-- Mobile debate awareness — sticky banner below lg: breakpoint -->
 {#if FEATURES.DEBATE}
 	<MobileDebateBanner debate={(data.debate as DebateData) ?? null} />
+{/if}
+
+<!-- Send peak (P2): the honest "did it send?" confirm + the proof/share moment -->
+{#if sendConfirmation}
+	<SendConfirmation
+		recipientNames={sendConfirmation.recipientNames}
+		attestationLine={sendConfirmation.attestationLine}
+		proofUrl={(data.user?.trust_tier ?? 0) >= 2 && data.user?.credentialHash
+			? `/v/${data.user.credentialHash}`
+			: undefined}
+		shareUrl={browser ? `${window.location.origin}/s/${template.slug}` : `/s/${template.slug}`}
+		messageText={sendConfirmation.messageText}
+		onConfirmSent={confirmSendContacted}
+		onClose={closeSendConfirmation}
+	/>
 {/if}

@@ -13,6 +13,23 @@ const atlasHosts = configuredAtlasHost && configuredAtlasHost !== DEFAULT_ATLAS_
 	? [DEFAULT_ATLAS_HOST, configuredAtlasHost]
 	: [DEFAULT_ATLAS_HOST];
 
+// Sentry ingest host for connect-src, derived from the DSN at build time (like
+// atlasHosts above) so the CSP allows ONLY our exact org's ingest endpoint — no
+// `*.sentry.io` wildcard (which would permit exfiltration to other Sentry orgs
+// under XSS) and no drift-prone hardcoded org id in the policy. Falls back to the
+// known org host if PUBLIC_SENTRY_DSN isn't in the build env, so error monitoring
+// is never silently CSP-blocked.
+const SENTRY_INGEST_FALLBACK = 'https://o4510735138422784.ingest.us.sentry.io';
+const sentryIngestOrigin = (() => {
+	const dsn = (process.env.PUBLIC_SENTRY_DSN || '').trim();
+	if (!dsn) return SENTRY_INGEST_FALLBACK;
+	try {
+		return new URL(dsn).origin;
+	} catch {
+		return SENTRY_INGEST_FALLBACK;
+	}
+})();
+
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
 	preprocess: [vitePreprocess()],
@@ -85,7 +102,11 @@ const config = {
 					...atlasHosts,
 					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
 					'https://*.convex.cloud',
-					'wss://*.convex.cloud'
+					'wss://*.convex.cloud',
+					// Sentry error-monitoring ingest — exact org host derived from the DSN
+					// at build time (see sentryIngestOrigin above): no wildcard, no
+					// hardcoded org id in the policy.
+					sentryIngestOrigin
 				],
 				'worker-src': ['self', 'blob:'],
 				'object-src': ['none'],

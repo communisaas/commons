@@ -166,7 +166,17 @@ export function formatTierDisplay(input: TierDisplayInput): TierDisplay {
  */
 export function formatTierEmailFooter(input: TierDisplayInput): string {
 	const display = formatTierDisplay(input);
-	if (display.confidenceClass === 'mdl') return 'Address-resolved constituent (mDL)';
+	if (display.confidenceClass === 'mdl') {
+		// Both actual-mDL and shadow_atlas share confidenceClass 'mdl' (same
+		// "Address-Resolved Constituent" epistemic class). Only an actual mDL
+		// method may claim the "(mDL)" government-credential protocol suffix —
+		// shadow_atlas is client-side index resolution, not a state credential.
+		// Asserting "(mDL)" for shadow_atlas would be a false government-ID claim
+		// and would diverge from /v/[hash], which shows the bare headline for both.
+		return isMdlMethod(input.method)
+			? 'Address-resolved constituent (mDL)'
+			: 'Address-resolved constituent';
+	}
 	if (display.confidenceClass === 'self-reported')
 		return 'Self-reported constituent (Census geocoder)';
 	if (display.confidenceClass === 'postal')

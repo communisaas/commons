@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { TemplateCreationContext } from '$lib/types/template';
 	import { Sparkles, ArrowRight } from '@lucide/svelte';
+	import { page } from '$app/stores';
 	import { api } from '$lib/core/api/client';
 	import { slide, fade } from 'svelte/transition';
 	import { onMount, tick } from 'svelte';
@@ -163,6 +164,11 @@
 	const hasExistingText = $derived(
 		(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH
 	);
+
+	// Honest "no logged-in user" check — null user = guest per +layout.server.ts.
+	// Drives a quiet pre-signal only; it adds no auth gate and does not move the
+	// downstream send/verify wall (that fires after investment in TemplateModal).
+	const isGuest = $derived(!$page.data.user);
 
 	// Auto-scroll thought container when new thoughts arrive
 	$effect(() => {
@@ -985,22 +991,27 @@
 			</div>
 
 			<!-- Footer -->
-			<div class="flex items-center justify-end border-t border-participation-primary-100 bg-participation-primary-50/20 px-4 py-2.5">
-				<div class="flex items-center gap-3">
-					{#if !isGenerating}
-						<button
-							type="button"
-							onclick={() => generateSuggestion()}
-							class="inline-flex transform-gpu items-center gap-1.5 px-1 py-0.5
-							text-sm font-medium text-participation-primary-600
-							transition-all duration-150
-							hover:scale-[1.04] hover:text-participation-primary-700
-							active:scale-[0.97]"
-						>
-							<kbd class="hidden rounded bg-participation-primary-100 px-1 py-0.5 font-mono text-xs text-participation-primary-700 md:inline">{shortcutKey}+Enter</kbd>
-							<span class="text-xs md:hidden"><Sparkles class="inline h-3 w-3" aria-hidden="true" /> Generate</span>
-						</button>
-					{/if}
+			<!-- (a) Mirror the ACTIVE-state primary trigger so the Generate -->
+			<!-- affordance stays prominent when a draft lands in the WRITTEN -->
+			<!-- artifact view (onblur, or returning with an autosaved draft). -->
+			<div class="border-t border-participation-primary-100 bg-participation-primary-50/20 px-4 py-3">
+				{#if !isGenerating}
+					<button
+						type="button"
+						onclick={() => generateSuggestion()}
+						class="inline-flex w-full transform-gpu items-center justify-center gap-2 rounded-lg
+						bg-gradient-to-r from-participation-primary-600 to-participation-primary-500 px-4 py-2.5 text-sm font-semibold text-white
+						shadow-participation-primary transition-all duration-200
+						hover:from-participation-primary-700 hover:to-participation-primary-600 hover:shadow-lg
+						active:scale-[0.97]
+						focus:outline-none focus:ring-2 focus:ring-participation-primary-500 focus:ring-offset-2"
+					>
+						<Sparkles class="h-4 w-4" aria-hidden="true" />
+						Generate
+						<kbd class="hidden rounded bg-white/20 px-1 py-0.5 font-mono text-xs md:inline">{shortcutKey}+Enter</kbd>
+					</button>
+				{/if}
+				<div class="mt-2 flex items-center justify-end">
 					<button
 						type="button"
 						onclick={() => {
@@ -1044,36 +1055,59 @@
 	             disabled:cursor-not-allowed disabled:opacity-60"
 			></textarea>
 
+			<!-- (a) Full-width primary trigger at peak intent (input long enough). -->
+			<!-- Mobile-visible: the kbd hint below is desktop-only, so this is the -->
+			<!-- mobile generate affordance. Reuses generateSuggestion() — no auto-fire. -->
+			{#if !isSettled && !manualMode && !isGenerating && (data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH}
+				<button
+					type="button"
+					onpointerdown={(e) => e.preventDefault()}
+					onclick={() => generateSuggestion()}
+					tabindex={0}
+					class="mt-3 inline-flex w-full transform-gpu items-center justify-center gap-2 rounded-lg
+		             bg-gradient-to-r from-participation-primary-600 to-participation-primary-500 px-4 py-2.5 text-sm font-semibold text-white
+		             shadow-participation-primary transition-all duration-200
+		             hover:from-participation-primary-700 hover:to-participation-primary-600 hover:shadow-lg
+		             active:scale-[0.97]
+		             focus:outline-none focus:ring-2 focus:ring-participation-primary-500 focus:ring-offset-2"
+				>
+					<Sparkles class="h-4 w-4" aria-hidden="true" />
+					Generate
+				</button>
+			{/if}
+
 			<div class="mt-2 flex items-center justify-between text-xs text-slate-600">
 				{#if (data.rawInput || '').trim().length > 0}
 					<span class="font-mono">{(data.rawInput || '').length} characters</span>
 				{:else}
 					<span class="italic">Describe the problem you want to solve</span>
 				{/if}
-				{#if !isSettled && !manualMode}
-					{#if !isGenerating && (data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH}
-						<button
-							type="button"
-							onpointerdown={(e) => e.preventDefault()}
-							onclick={() => generateSuggestion()}
-							class="inline-flex transform-gpu items-center gap-1.5 px-1 py-0.5
-							font-medium text-participation-primary-600
-							transition-all duration-150
-							hover:scale-[1.04] hover:text-participation-primary-700
-							active:scale-[0.97]"
+				{#if !isSettled && !manualMode && !isGenerating}
+					<!-- Secondary signal only: keep the desktop Cmd/Ctrl+Enter hint -->
+					<!-- (handler at handleTextareaKeydown). The primary button above -->
+					<!-- now owns the click affordance, so no duplicate Generate span. -->
+					<div
+						class="flex items-center gap-1.5 {(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH ? 'text-participation-primary-600' : 'text-slate-400'}"
+					>
+						<Sparkles class="h-3 w-3" aria-hidden="true" />
+						<kbd
+							class="hidden rounded px-1 py-0.5 font-mono md:inline {(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH ? 'bg-participation-primary-100 text-participation-primary-700' : 'bg-slate-100 text-slate-400'}"
+							>{shortcutKey}+Enter</kbd
 						>
-							<Sparkles class="h-3 w-3" aria-hidden="true" />
-							<kbd class="hidden rounded bg-participation-primary-100 px-1 py-0.5 font-mono text-participation-primary-700 md:inline">{shortcutKey}+Enter</kbd>
-							<span class="text-xs md:hidden">Generate</span>
-						</button>
-					{:else if !isGenerating}
-						<div class="flex items-center gap-1.5 text-slate-400">
-							<Sparkles class="h-3 w-3" aria-hidden="true" />
-							<kbd class="hidden rounded bg-slate-100 px-1 py-0.5 font-mono text-slate-400 md:inline">{shortcutKey}+Enter</kbd>
-						</div>
-					{/if}
+					</div>
 				{/if}
 			</div>
+
+			<!-- (b) Quiet, guest-only pre-signal. One line, muted, no box/wall. -->
+			<!-- Truthful: the OAuth wall fires downstream at send/verify, never -->
+			<!-- in this objective step. Leads on the unambiguously-true benefit -->
+			<!-- (sign-in is the send gate); drafts already persist via localStorage -->
+			<!-- (templateDraftStore), so we don't claim sign-in is what "keeps" them. -->
+			{#if isGuest}
+				<p class="mt-2 text-xs text-slate-400">
+					You'll sign in once, when you're ready to send.
+				</p>
+			{/if}
 		</div>
 	{/if}
 
@@ -1385,6 +1419,13 @@
 					<ArrowRight class="h-4 w-4" />
 				</button>
 
+				<!-- (c) Lead on the free, unlimited path: editing the subject/message -->
+				<!-- inline above is always available. Regen is the secondary path -->
+				<!-- (real LLM cost, hence the cap) — framed as optional, not depleting. -->
+				<p class="text-xs text-participation-primary-600/50">
+					Tweak the subject or message above — edit it directly, free and unlimited.
+				</p>
+
 				<div class="flex items-center justify-between">
 					{#if attemptCount < 5}
 						<button
@@ -1411,7 +1452,10 @@
 							Try another ({5 - attemptCount} left)
 						</button>
 					{:else}
-						<span class="text-sm text-participation-primary-700/60">Out of refinements</span>
+						<!-- (c) No terminal-state copy: the always-present helper line -->
+						<!-- above ("edit it directly, free and unlimited") already covers -->
+						<!-- this. Empty spacer keeps "Write manually" right-aligned. -->
+						<span aria-hidden="true"></span>
 					{/if}
 
 					<button

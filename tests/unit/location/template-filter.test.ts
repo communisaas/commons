@@ -15,7 +15,8 @@ import {
 	scoreByProximity,
 	boostByLocalAdoption,
 	boostByRecency,
-	boostByUserBehavior
+	boostByUserBehavior,
+	groupByPrecision
 } from '$lib/core/location/template-filter';
 import type {
 	InferredLocation,
@@ -477,12 +478,39 @@ describe('Template Filter', () => {
 			expect(scored).toHaveLength(0);
 		});
 
-		it('should NOT match district scope for user with only region-level location', () => {
+		it('should match an in-state CITY scope for a region-level user (California sees Oakland)', () => {
 			const location = makeLocation({
 				congressional_district: null,
 				state_code: 'CA',
 				city_name: null,
-				confidence: 0.8
+				confidence: 1.0
+			});
+			const template = makeTemplate(
+				'1',
+				[],
+				[makeScope({
+					scope_level: 'locality',
+					locality_code: 'Oakland',
+					region_code: 'CA',
+					country_code: 'US',
+					display_text: 'Oakland'
+				})]
+			);
+
+			const scored = scoreTemplatesByRelevance([template], location);
+
+			// A state campaign list includes its cities' campaigns, surfaced at STATE-level
+			// relevance (0.51 → "In Your State") — not as the user's exact city.
+			expect(scored).toHaveLength(1);
+			expect(scored[0].score).toBeCloseTo(0.51, 1);
+		});
+
+		it('should match an in-state DISTRICT scope for a region-level user (state sees its districts)', () => {
+			const location = makeLocation({
+				congressional_district: null,
+				state_code: 'CA',
+				city_name: null,
+				confidence: 1.0
 			});
 			const template = makeTemplate(
 				'1',
@@ -498,8 +526,89 @@ describe('Template Filter', () => {
 
 			const scored = scoreTemplatesByRelevance([template], location);
 
-			// Region user cannot see district templates (more specific)
+			expect(scored).toHaveLength(1);
+			expect(scored[0].score).toBeCloseTo(0.51, 1);
+		});
+
+		it('should NOT match an OUT-of-state city scope for a region-level user (California excludes Portland)', () => {
+			const location = makeLocation({
+				congressional_district: null,
+				state_code: 'CA',
+				city_name: null,
+				confidence: 1.0
+			});
+			const template = makeTemplate(
+				'1',
+				[],
+				[makeScope({
+					scope_level: 'locality',
+					locality_code: 'Portland',
+					region_code: 'OR',
+					country_code: 'US',
+					display_text: 'Portland'
+				})]
+			);
+
+			const scored = scoreTemplatesByRelevance([template], location);
+
+			// Portland is in Oregon, not California — it must stay out of a CA view.
 			expect(scored).toHaveLength(0);
+		});
+
+		it('should NOT match a region-LESS city scope for a region-level user (cannot place it in a state)', () => {
+			const location = makeLocation({
+				congressional_district: null,
+				state_code: 'CA',
+				city_name: null,
+				confidence: 1.0
+			});
+			const template = makeTemplate(
+				'1',
+				[],
+				[makeScope({
+					scope_level: 'locality',
+					locality_code: 'Oakland',
+					country_code: 'US',
+					display_text: 'Oakland'
+				})]
+			);
+
+			const scored = scoreTemplatesByRelevance([template], location);
+
+			// No region_code → can't be placed in a state → never matches an arbitrary state user.
+			expect(scored).toHaveLength(0);
+		});
+
+		it('tiers an in-state city campaign as "In Your State" even when the breadcrumb boost lifts its score past the city/county floor', () => {
+			const location = makeLocation({
+				congressional_district: null,
+				state_code: 'CA',
+				city_name: null,
+				confidence: 1.0
+			});
+			const oakland = makeTemplate(
+				'oak',
+				[],
+				[makeScope({
+					scope_level: 'locality',
+					locality_code: 'Oakland',
+					region_code: 'CA',
+					country_code: 'US',
+					display_text: 'Oakland'
+				})]
+			);
+
+			// selectedScope 'state' fires the ×1.3 breadcrumb boost: 0.51 → ~0.66, which
+			// crosses the 0.65 city/county tier floor.
+			const scored = scoreTemplatesByRelevance([oakland], location, 'state');
+			expect(scored[0].score).toBeGreaterThan(0.65); // the boost did lift it across the floor
+
+			const groups = groupByPrecision(scored);
+			// Tiered by the match LEVEL (state), not the boosted score → "In Your State",
+			// never "In Your City / County" (the user is in CA, not necessarily Oakland).
+			const stateGroup = groups.find((g) => g.level === 'state');
+			expect(stateGroup?.templates.map((t) => t.id)).toContain('oak');
+			expect(groups.find((g) => g.level === 'city')).toBeUndefined();
 		});
 
 		it('should match country scope for user at region level', () => {

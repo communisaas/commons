@@ -330,6 +330,13 @@ export interface ScoredTemplate {
 	score: number;
 	matchReason: string; // Human-readable explanation of why this matched
 	jurisdiction: TemplateJurisdiction; // The specific jurisdiction that matched
+	/**
+	 * The geographic LEVEL this template matched at — used to tier it into a group
+	 * (district / city-county / state / nationwide) independent of the score, so the
+	 * breadcrumb boost can rank a match without re-labeling its tier. Mirrors
+	 * GeographicScope (kept inline to avoid a types ↔ template-filter import cycle).
+	 */
+	matchLevel?: 'district' | 'city' | 'county' | 'state' | 'nationwide' | null;
 }
 
 // ============================================================================

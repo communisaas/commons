@@ -27,6 +27,7 @@
 	import IdentityVerificationFlow from './IdentityVerificationFlow.svelte';
 	import IdentityRecoveryFlow from './IdentityRecoveryFlow.svelte';
 	import AddressVerificationFlow from './AddressVerificationFlow.svelte';
+	import CredibilityLadder from './CredibilityLadder.svelte';
 	import {
 		credentialMeetsMinimumTier,
 		getUsableProofCredential,
@@ -59,6 +60,16 @@
 		 * a tier-2+ user otherwise cannot re-enter the address flow.
 		 */
 		forceAddressFlow?: boolean;
+		/**
+		 * True when this gate fronts a send to an ELECTED office (CWC /
+		 * representative messaging), where district confirmation literally
+		 * weights the message as a constituent. Forwarded to CredibilityLadder.
+		 * Default false → the honest generic ladder copy ("a verified local
+		 * resident"), correct for institutional/direct targets and for non
+		 * target-specific contexts (e.g. the profile page). Never overclaim
+		 * constituent prioritization where the recipient isn't an elected office.
+		 */
+		electedTarget?: boolean;
 		onverified?: (data: { userId: string; method: string; verified?: boolean }) => void;
 		oncancel?: () => void;
 	}
@@ -71,6 +82,7 @@
 		minimumTier = 2,
 		userTrustTier = 0,
 		forceAddressFlow = false,
+		electedTarget = false,
 		onverified,
 		oncancel
 	}: Props = $props();
@@ -362,22 +374,7 @@
 			</button>
 
 			<!-- Header (tier-aware) -->
-			{#if mdlGated}
-				<div
-					class="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100 px-8 py-6"
-				>
-					<p class="font-mono text-[10px] text-slate-500 uppercase" style="letter-spacing: 0.22em">
-						Government-ID verification
-					</p>
-					<h2
-						id="verification-gate-title"
-						class="mt-2 text-2xl font-semibold text-slate-900"
-						style="font-family: 'Satoshi', system-ui, sans-serif"
-					>
-						Coming soon.
-					</h2>
-				</div>
-			{:else if showRecovery}
+			{#if showRecovery}
 				<div
 					class="border-b border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-8 py-6"
 				>
@@ -389,39 +386,39 @@
 						them.
 					</p>
 				</div>
-			{:else if needsTier4Plus}
-				<div
-					class="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-emerald-100 px-8 py-6"
-					>
-						<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
-							Verify with Government Credential
-						</h2>
-						<p class="mt-2 text-slate-600">
-							This action requires document-level verification. Use your mobile driver's license
-							in a supported wallet for the fastest, most private verification available.
-						</p>
-					</div>
-			{:else if needsTier2}
-				<div
-					class="border-b border-emerald-200 bg-gradient-to-r from-emerald-50 to-teal-50 px-8 py-6"
-				>
-					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
-						Verify Your Address to Send
-					</h2>
-					<p class="mt-2 text-slate-600">
-						Confirm your district to message your representatives. Takes 30 seconds and lets you
-						send instantly in the future.
-					</p>
-				</div>
 			{:else}
-				<div class="border-b border-slate-200 bg-gradient-to-r from-blue-50 to-indigo-50 px-8 py-6">
-					<h2 id="verification-gate-title" class="text-2xl font-bold text-slate-900">
-						Verify Your Identity to Send
+				<!--
+					The ladder replaces the binary "Verify X to Send" walls: it shows
+					where the user stands on the climb and what the needed rung buys
+					(interaction-driven), instead of a one-shot toll. mDL gates fold in
+					here as a "soon" rung rather than a dead "Coming soon." headline.
+					No climb/send-now buttons — the flow content below IS the climb, and
+					the gate only opens when a higher tier is genuinely required.
+				-->
+				<div class="border-b border-slate-200 bg-gradient-to-r from-slate-50 to-slate-100 px-8 py-6">
+					<h2
+						id="verification-gate-title"
+						class="text-lg font-semibold text-slate-900"
+						style="font-family: 'Satoshi', system-ui, sans-serif"
+					>
+						{#if mdlGated}Government&#8209;ID is coming soon{:else if needsTier4Plus}Verify with a government credential{:else if needsTier2}Confirm your district to send{:else}Verify to send{/if}
 					</h2>
-					<p class="mt-2 text-slate-600">
-						{labels.legislativeBody} offices prioritize verified constituents. This one-time verification takes
-						30 seconds and lets you send instantly in the future.
-					</p>
+					{#if !mdlGated}
+						<!--
+							Not in the mdlGated case: there, the action requires gov-ID
+							(unavailable), so confirming district would NOT unblock it —
+							a climbable ladder would falsely imply a next step. The
+							content panel below carries the honest "gov-ID is coming,
+							address remains available" framing instead.
+						-->
+						<div class="mt-3">
+							<CredibilityLadder
+								currentTier={safeUserTrustTier}
+								govIdAvailable={isAnyMdlProtocolEnabled()}
+								{electedTarget}
+							/>
+						</div>
+					{/if}
 				</div>
 			{/if}
 

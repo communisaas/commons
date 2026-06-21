@@ -11,16 +11,31 @@
 	import { onMount } from 'svelte';
 	import { ArrowRight, Clock } from '@lucide/svelte';
 	import { templateDraftStore, formatTimeAgo } from '$lib/stores/templateDraft';
+	import { matchExistingCampaigns } from '$lib/core/topic/template-text-match';
 
 	import type { Snippet } from 'svelte';
+	import type { Template } from '$lib/types/template';
 
 	// Props
 	interface Props {
 		context?: Snippet;
 		onactivate?: (data: { initialText: string; draftId?: string }) => void;
+		/**
+		 * Full public template corpus — the homepage already loads this via
+		 * `templates.listPublic`. Passed in so the front-door type-ahead can match
+		 * the typed grievance against EXISTING campaigns client-side (no fetch).
+		 * Optional so other mounts (and tests) need not supply it.
+		 */
+		matchTemplates?: Template[];
+		/**
+		 * Invoked when the user picks an existing campaign from the inline matches.
+		 * The host wires this to its existing send path, so the deferred
+		 * onboarding/address auth wall fires at send time exactly as today.
+		 */
+		onMatchSelect?: (template: Template) => void;
 	}
 
-	let { context, onactivate }: Props = $props();
+	let { context, onactivate, matchTemplates, onMatchSelect }: Props = $props();
 
 	let issueText = $state('');
 	let isFocused = $state(false);
@@ -108,6 +123,28 @@
 	const hasContent = $derived(issueText.trim().length > 0);
 	const isActivated = $derived(hasContent || isFocused);
 	const hasDraft = $derived(activeDraftId !== null);
+
+	// Search-first front door: surface EXISTING campaigns matching the typed text.
+	// Debounced so we don't re-score on every keystroke (mirrors the debounce
+	// posture used elsewhere); the rescore runs ~250ms after typing settles.
+	let debouncedText = $state('');
+	$effect(() => {
+		const next = issueText;
+		const handle = setTimeout(() => {
+			debouncedText = next;
+		}, 250);
+		return () => clearTimeout(handle);
+	});
+
+	// Only match in the ACTIVE editable state (never over the read-only draft
+	// artifact) and only once the surface is engaged. Honest empty by
+	// construction: `matchExistingCampaigns` returns [] when nothing clears the
+	// score floor, so the block below simply doesn't render — no fabricated match.
+	const matches = $derived(
+		!hasDraft && (isFocused || hasContent)
+			? matchExistingCampaigns(matchTemplates ?? [], debouncedText, { limit: 3 })
+			: []
+	);
 
 	// Check draft state for button text accuracy
 	const draftHasSuggestion = $derived.by(() => {
@@ -255,6 +292,40 @@
 				</p>
 			{/if}
 		</div>
+
+		<!--
+			Search-first matches — EXISTING campaigns whose curated facets match the
+			typed text. Secondary to "Continue" (author new), which stays the primary
+			co-present action. Only renders when ≥1 real match clears the score floor;
+			absent otherwise (no fabricated match, no false scarcity). The heading
+			frames these as existing campaigns matched to the text (observable), never
+			"popular"/"trending" (unobservable).
+		-->
+		{#if matches.length > 0}
+			<div class="spark-matches" role="region" aria-label="Existing campaigns matching what you wrote">
+				<p class="matches-head">Already a campaign on this?</p>
+				<ul class="matches-list">
+					{#each matches as match (match.template.id)}
+						<li class="match-row">
+							<span class="match-info">
+								<span class="match-title">{match.template.title}</span>
+								{#if match.template.send_count}
+									<span class="match-signal">{match.template.send_count.toLocaleString()} sent</span>
+								{/if}
+							</span>
+							<button
+								type="button"
+								class="match-send"
+								onclick={() => onMatchSelect?.(match.template)}
+							>
+								<span class="match-send-text">send to this one</span>
+								<ArrowRight class="match-send-icon" />
+							</button>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Or browse existing -->
@@ -698,6 +769,112 @@
 		}
 	}
 
+	/*
+	 * Search-first matches — low-emphasis block beneath the writing surface.
+	 * Quiet by design so "Continue" (author new) stays the primary action;
+	 * these are a secondary "or send to an existing one" affordance.
+	 */
+	.spark-matches {
+		display: flex;
+		flex-direction: column;
+		gap: 0.375rem;
+		padding-top: 0.25rem;
+	}
+
+	.matches-head {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: oklch(0.45 0.02 250);
+		margin: 0;
+	}
+
+	.matches-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.match-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.5rem 0.625rem;
+		border-radius: 8px;
+		border: 1px solid oklch(0.9 0.01 250);
+		background: oklch(0.99 0.005 250);
+	}
+
+	.match-info {
+		display: flex;
+		flex-direction: column;
+		gap: 0.125rem;
+		min-width: 0;
+	}
+
+	.match-title {
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.8125rem;
+		font-weight: 500;
+		line-height: 1.3;
+		color: oklch(0.3 0.02 250);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
+	}
+
+	.match-signal {
+		font-family: 'JetBrains Mono', ui-monospace, monospace;
+		font-feature-settings: 'tnum';
+		font-size: 0.625rem;
+		font-weight: 500;
+		color: var(--coord-verified, #10b981);
+	}
+
+	.match-send {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		flex-shrink: 0;
+		padding: 0.375rem 0.5rem;
+		border: none;
+		border-radius: 6px;
+		background: transparent;
+		font-family: 'Satoshi', system-ui, sans-serif;
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--coord-route-solid, #3bc4b8);
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 150ms ease-out;
+	}
+
+	.match-send:hover {
+		background: oklch(0.96 0.02 195);
+	}
+
+	.match-send:focus-visible {
+		outline: 2px solid var(--coord-route-solid, #3bc4b8);
+		outline-offset: 2px;
+	}
+
+	.match-send :global(.match-send-icon) {
+		width: 0.8125rem;
+		height: 0.8125rem;
+		transition: transform 150ms ease-out;
+	}
+
+	.match-send:hover :global(.match-send-icon) {
+		transform: translateX(2px);
+	}
+
 	/* Reduced motion */
 	@media (prefers-reduced-motion: reduce) {
 		.spark-actions {
@@ -709,6 +886,11 @@
 		}
 
 		.input-container {
+			transition: none;
+		}
+
+		.match-send,
+		.match-send :global(.match-send-icon) {
 			transition: none;
 		}
 	}
