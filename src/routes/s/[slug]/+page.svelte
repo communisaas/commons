@@ -85,14 +85,19 @@
 				trustTier
 			});
 			parts.push(`${label} · ${districtCode}`);
+			// The verify URL lives INSIDE the tier>=2 block, gated identically to the
+			// constituent label it backs: "Confirm I'm a real constituent" is itself a
+			// constituent claim, so a sub-tier-2 sender (who only ever gets "Verified
+			// sender" above) must never emit it — that would overclaim standing the
+			// system hasn't established. Emitted only when the hash resolves: the active
+			// credential hash is the record /v/[hash] looks up (a truncated id 404s).
+			// Framed as the sender offering proof of themselves, not an instruction to
+			// the recipient.
+			if (data.user?.credentialHash)
+				parts.push(`Confirm I'm a real constituent: commons.email/v/${data.user.credentialHash}`);
 		} else if (trustTier >= 1) {
 			parts.push('Verified sender');
 		}
-		// Only emit the verify URL when it resolves: the active credential hash is
-		// the record /v/[hash] looks up. A truncated user id always 404s. Framed as
-		// the sender offering proof of themselves, not asking the recipient to act.
-		if (data.user?.credentialHash)
-			parts.push(`Confirm I'm a real constituent: commons.email/v/${data.user.credentialHash}`);
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
 	// Simplified - no query parameters needed, default to direct-link
@@ -382,6 +387,10 @@
 	let sendConfirmation = $state<{
 		memberIds: string[];
 		recipientNames: string[];
+		// Delivery detail threaded for the on-confirm /api/deliveries/record POST.
+		// A DELIVERY is a confirmed COUNT, so it must reflect the explicit confirm —
+		// not the mailto launch (a dismissed peak would otherwise inflate server counts).
+		recipients: { name: string; email?: string; deliveryMethod: 'email' }[];
 		attestationLine?: string;
 		messageText: string;
 	} | null>(null);
@@ -424,6 +433,20 @@
 		contactedRecipients = new Set([...contactedRecipients, ...ids]);
 		departingRecipients = new Set([...departingRecipients].filter((id) => !ids.includes(id)));
 		if (batchRegistrationState === 'registering') batchRegistrationState = 'complete';
+
+		// DELIVERY record fires HERE — on the explicit confirm, the same moment
+		// contact is set — never on the mailto launch. A delivery is a confirmed
+		// COUNT, so a dismissed/un-sent peak must not record one (consistent with P2:
+		// contacted only on confirm). Fire-and-forget; stance-agnostic civic action.
+		const recipients = sendConfirmation.recipients;
+		if (data.user?.id && recipients.length > 0) {
+			fetch('/api/deliveries/record', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ templateId: template.id, recipients }),
+				keepalive: true
+			}).catch(() => {});
+		}
 	}
 
 	// Close/dismiss without a confirmed send → revert the still-in-flight cards
@@ -546,43 +569,37 @@
 			});
 
 			if ('url' in result) {
+				// Mirror the actual mailto body (generatePersonalizedMailto): the same
+				// zone order — opener, body, then '---' before the attestation — so the
+				// copy a no-mail-client user pastes matches what the mailto would send.
+				// Subject is a clear leading indication (consistent with the batch path),
+				// not inlined into the body. Built first (pure, no state side effects) so
+				// the in-flight→peak handoff below stays a tight, auditable sequence.
+				const copyBodyParts: string[] = [];
+				if (member.accountabilityOpener?.trim())
+					copyBodyParts.push(member.accountabilityOpener.trim());
+				if (resolvedBody.trim()) copyBodyParts.push(resolvedBody.trim());
+				if (attestation?.trim()) {
+					copyBodyParts.push('---');
+					copyBodyParts.push(attestation.trim());
+				}
+
 				// Mail app OPENED, not confirmed sent — mark IN-FLIGHT only and confirm
-				// explicitly via the send peak (no optimistic "contacted").
+				// explicitly via the send peak (no optimistic "contacted"). The DELIVERY
+				// record (a delivery COUNT) is NOT posted here — it fires only on the
+				// explicit confirm inside confirmSendContacted(), so a dismissed/un-sent
+				// peak never inflates server counts (consistent with the P2 contract).
+				// trackDeliveryAttempt stays here: it is genuinely an attempt metric.
 				departingRecipients = new Set([...departingRecipients, member.id]);
 				trackDeliveryAttempt(template.id, 'email');
-
-				// Record the delivery ATTEMPT — stance-agnostic civic action (fire-and-forget)
-				if (data.user?.id) {
-					fetch('/api/deliveries/record', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							templateId: template.id,
-							recipients: [
-								{
-									name: member.name,
-									email: member.email,
-									deliveryMethod: 'email'
-								}
-							]
-						}),
-						keepalive: true
-					}).catch(() => {}); // Fire-and-forget
-				}
 
 				window.location.href = result.url;
 				sendConfirmation = {
 					memberIds: [member.id],
 					recipientNames: [member.name],
+					recipients: [{ name: member.name, email: member.email ?? undefined, deliveryMethod: 'email' }],
 					attestationLine: attestation?.split('\n')[0],
-					messageText: [
-						subject ? `Subject: ${subject}` : '',
-						member.accountabilityOpener ?? '',
-						resolvedBody,
-						attestation ?? ''
-					]
-						.filter(Boolean)
-						.join('\n\n')
+					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${copyBodyParts.join('\n\n')}`
 				};
 			}
 		} else if (member.deliveryRoute === 'form' && member.contactFormUrl) {
@@ -634,28 +651,20 @@
 				departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
 				trackDeliveryAttempt(template.id, 'email');
 
-				// Persist delivery records — stance-agnostic civic action (fire-and-forget)
-				if (data.user?.id) {
-					fetch('/api/deliveries/record', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							templateId: template.id,
-							recipients: emailMembers.map((m) => ({
-								name: m.name,
-								email: m.email ?? undefined,
-								deliveryMethod: 'email' as const
-							}))
-						}),
-						keepalive: true
-					}).catch(() => {});
-				}
-
+				// The DELIVERY record (a delivery COUNT) is deferred to the explicit
+				// confirm in confirmSendContacted() — threaded via sendConfirmation.recipients
+				// below. Posting it here (on mailto launch) would inflate server counts for
+				// a dismissed/un-sent peak. trackDeliveryAttempt stays — it's an attempt metric.
 				window.location.href = url;
 				// In-flight until the user confirms in the send peak (not a return heuristic).
 				sendConfirmation = {
 					memberIds: emailMembers.map((m) => m.id),
 					recipientNames: emailMembers.map((m) => m.name),
+					recipients: emailMembers.map((m) => ({
+						name: m.name,
+						email: m.email ?? undefined,
+						deliveryMethod: 'email' as const
+					})),
 					attestationLine: attestation?.split('\n')[0],
 					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${bodyParts.join('\n\n')}`
 				};
@@ -1300,7 +1309,9 @@
 	<SendConfirmation
 		recipientNames={sendConfirmation.recipientNames}
 		attestationLine={sendConfirmation.attestationLine}
-		proofUrl={data.user?.credentialHash ? `/v/${data.user.credentialHash}` : undefined}
+		proofUrl={(data.user?.trust_tier ?? 0) >= 2 && data.user?.credentialHash
+			? `/v/${data.user.credentialHash}`
+			: undefined}
 		shareUrl={browser ? `${window.location.origin}/s/${template.slug}` : `/s/${template.slug}`}
 		messageText={sendConfirmation.messageText}
 		onConfirmSent={confirmSendContacted}

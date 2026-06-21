@@ -138,6 +138,19 @@ describe('formatTierEmailFooter — short labels for plaintext emails', () => {
 		);
 	});
 
+	it('shadow_atlas → "Address-resolved constituent" with NO "(mDL)" suffix (not a state credential)', () => {
+		// shadow_atlas shares confidenceClass 'mdl' (same epistemic class) but is
+		// client-side index resolution, NOT a government mobile driver's license.
+		// Claiming "(mDL)" here would be a false government-ID assertion and would
+		// diverge from /v/[hash], which shows the bare "Address-Resolved Constituent"
+		// headline for both shadow_atlas and actual mDL.
+		const footer = formatTierEmailFooter({ method: 'shadow_atlas' });
+		expect(footer).toBe('Address-resolved constituent');
+		expect(footer).not.toContain('mDL');
+		// Same confidence class as mDL, but the footer must not borrow its protocol claim.
+		expect(formatTierDisplay({ method: 'shadow_atlas' }).confidenceClass).toBe('mdl');
+	});
+
 	it('postal → "Postal-verified constituent"', () => {
 		expect(formatTierEmailFooter({ method: 'postal' })).toBe('Postal-verified constituent');
 	});

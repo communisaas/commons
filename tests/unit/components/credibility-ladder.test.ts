@@ -60,11 +60,33 @@ describe('CredibilityLadder wiring — verification gate (walls → ladder, P5 f
 		expect(gate).not.toContain('Verify Your Identity to Send');
 	});
 
-	it('the gate ladder is the elected context and carries NO false lower-tier send-now escape', () => {
+	it('the gate forwards a TARGET-DERIVED electedTarget (never hardcoded true) and carries NO false lower-tier send-now escape', () => {
 		const start = gate.indexOf('<CredibilityLadder');
 		const tag = gate.slice(start, gate.indexOf('/>', start));
-		expect(tag).toContain('electedTarget={true}');
+		// The gate opens in non-elected contexts too (institutional/direct
+		// templates at tier 2, the profile page). Hardcoding electedTarget={true}
+		// here mis-claimed "offices prioritize constituents" outside CWC. The
+		// ladder must instead receive the gate's own (caller-set, default-false)
+		// electedTarget prop — never the literal true.
+		expect(tag).toContain('{electedTarget}');
+		expect(tag).not.toContain('electedTarget={true}');
 		expect(tag).not.toContain('onSendNow'); // hard-required gate: lower-tier send isn't an option here
+	});
+
+	it('VerificationGate exposes electedTarget as a prop defaulting to the honest generic (false)', () => {
+		// default false → the generic "verified local resident" ladder copy where
+		// the context isn't known-elected; callers opt in for CWC/elected sends.
+		expect(gate).toMatch(/electedTarget\?:\s*boolean/);
+		expect(gate).toMatch(/electedTarget\s*=\s*false/);
+	});
+
+	it('the two real callers set electedTarget from the actual target', () => {
+		// TemplateModal: elected iff the template delivers via CWC.
+		const modal = src('src/lib/components/template/TemplateModal.svelte');
+		expect(modal).toContain("electedTarget={template.deliveryMethod === 'cwc'}");
+		// Profile: generic verify entry, not a target-specific send.
+		const profile = src('src/routes/profile/+page.svelte');
+		expect(profile).toContain('electedTarget={false}');
 	});
 
 	it('does NOT render the climbable ladder in the mdlGated dead-end (no false next step)', () => {

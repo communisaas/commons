@@ -60,6 +60,16 @@
 		 * a tier-2+ user otherwise cannot re-enter the address flow.
 		 */
 		forceAddressFlow?: boolean;
+		/**
+		 * True when this gate fronts a send to an ELECTED office (CWC /
+		 * representative messaging), where district confirmation literally
+		 * weights the message as a constituent. Forwarded to CredibilityLadder.
+		 * Default false → the honest generic ladder copy ("a verified local
+		 * resident"), correct for institutional/direct targets and for non
+		 * target-specific contexts (e.g. the profile page). Never overclaim
+		 * constituent prioritization where the recipient isn't an elected office.
+		 */
+		electedTarget?: boolean;
 		onverified?: (data: { userId: string; method: string; verified?: boolean }) => void;
 		oncancel?: () => void;
 	}
@@ -72,6 +82,7 @@
 		minimumTier = 2,
 		userTrustTier = 0,
 		forceAddressFlow = false,
+		electedTarget = false,
 		onverified,
 		oncancel
 	}: Props = $props();
@@ -404,7 +415,7 @@
 							<CredibilityLadder
 								currentTier={safeUserTrustTier}
 								govIdAvailable={isAnyMdlProtocolEnabled()}
-								electedTarget={true}
+								{electedTarget}
 							/>
 						</div>
 					{/if}
