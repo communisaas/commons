@@ -87,9 +87,11 @@ const config = {
 					'https://*.convex.cloud',
 					'wss://*.convex.cloud',
 					// Sentry error-monitoring ingest (envelope POSTs from the browser SDK).
-					// DSN host is o<org>.ingest.us.sentry.io — the wildcard matches the org
-					// subdomain. Without this the SDK's reports are CSP-blocked.
-					'https://*.ingest.us.sentry.io'
+					// Pinned to OUR org's EXACT ingest host — NOT a `*.ingest.us.sentry.io`
+					// wildcard, which would let an XSS exfiltrate to any Sentry US org. The
+					// `o<org>` subdomain is stable across projects; keep in sync with
+					// PUBLIC_SENTRY_DSN's host if the Sentry org ever changes.
+					'https://o4510735138422784.ingest.us.sentry.io'
 				],
 				'worker-src': ['self', 'blob:'],
 				'object-src': ['none'],
