@@ -55,7 +55,13 @@
 				: `${count} recipients`
 	);
 
+	// Guard the double-click race: confirmSent() calls onConfirmSent() (which now also
+	// fires the delivery-record POST) BEFORE `stage` flips, so two rapid clicks queued
+	// before the re-render could double-fire it. One-shot.
+	let hasConfirmed = $state(false);
 	function confirmSent() {
+		if (hasConfirmed) return;
+		hasConfirmed = true;
 		onConfirmSent(); // mark contact FIRST, then advance to the success stage
 		stage = 'sent';
 	}

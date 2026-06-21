@@ -19,6 +19,12 @@ describe('SendConfirmation — honest peak', () => {
 		expect(sc).not.toMatch(/\b(delivered|received by|reached their inbox)\b/i);
 	});
 
+	it('guards against double-submit — onConfirmSent (now the delivery-record POST) fires once', () => {
+		// a rapid double-click before `stage` flips must not double-fire onConfirmSent
+		expect(sc).toContain('hasConfirmed');
+		expect(sc).toMatch(/if \(hasConfirmed\) return/);
+	});
+
 	it('marks contact only via an explicit confirm — contact FIRST, then advance to success', () => {
 		const start = sc.indexOf('function confirmSent');
 		const fn = sc.slice(start, sc.indexOf('}', start) + 1);

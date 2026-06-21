@@ -46,6 +46,8 @@ describe('P4 — proof footer is sender-framed + uses the SSOT tier label', () =
 
 	it('the verify URL is offered as the SENDER\'s proof, not an instruction to the recipient', () => {
 		expect(slug).toContain("Confirm I'm a real constituent");
+		// the URL carries https:// so it auto-links in mail clients (Gmail/Apple Mail/Outlook)
+		expect(slug).toContain('https://commons.email/v/');
 		expect(slug).not.toMatch(/push\(`commons\.email\/v\//); // no bare unframed URL
 	});
 

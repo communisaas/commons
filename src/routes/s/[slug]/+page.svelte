@@ -81,7 +81,7 @@
 			// (civic_api) sender reads "Self-reported constituent", never overclaimed
 			// as "Verified resident". The method label already encodes mDL/gov-ID.
 			const label = formatTierEmailFooter({
-				method: (data.user?.verification_method as VerificationMethod) ?? null,
+				method: (data.user?.verification_method ?? null) as VerificationMethod,
 				trustTier
 			});
 			parts.push(`${label} · ${districtCode}`);
@@ -94,7 +94,7 @@
 			// Framed as the sender offering proof of themselves, not an instruction to
 			// the recipient.
 			if (data.user?.credentialHash)
-				parts.push(`Confirm I'm a real constituent: commons.email/v/${data.user.credentialHash}`);
+				parts.push(`Confirm I'm a real constituent: https://commons.email/v/${data.user.credentialHash}`);
 		} else if (trustTier >= 1) {
 			parts.push('Verified sender');
 		}
