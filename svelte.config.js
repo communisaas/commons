@@ -85,7 +85,11 @@ const config = {
 					...atlasHosts,
 					// Convex: HTTP queries + WebSocket subscriptions (dual-stack, Cycle 1)
 					'https://*.convex.cloud',
-					'wss://*.convex.cloud'
+					'wss://*.convex.cloud',
+					// Sentry error-monitoring ingest (envelope POSTs from the browser SDK).
+					// DSN host is o<org>.ingest.us.sentry.io — the wildcard matches the org
+					// subdomain. Without this the SDK's reports are CSP-blocked.
+					'https://*.ingest.us.sentry.io'
 				],
 				'worker-src': ['self', 'blob:'],
 				'object-src': ['none'],
