@@ -24,12 +24,21 @@
 	let {
 		currentTier = 0,
 		govIdAvailable = false,
+		/**
+		 * True when the target is an ELECTED office (CWC / representative messaging),
+		 * where district confirmation literally weights the message as a constituent.
+		 * Default false → the honest generic payoff (a verified local resident), which
+		 * is true for institutional/direct targets too. Never claim "offices prioritize
+		 * constituents" to an institutional recipient.
+		 */
+		electedTarget = false,
 		onClimb,
 		onSendNow,
 		compact = false
 	}: {
 		currentTier?: number;
 		govIdAvailable?: boolean;
+		electedTarget?: boolean;
 		onClimb?: (targetTier: number) => void;
 		onSendNow?: () => void;
 		compact?: boolean;
@@ -42,7 +51,14 @@
 
 	const stops = $derived<Stop[]>([
 		{ tier: 1, short: 'Account', label: 'Account verified', payoff: 'Signed by a real, sybil-resistant account.' },
-		{ tier: 2, short: 'District', label: 'District confirmed', payoff: `${labels.legislativeBody} offices prioritize confirmed constituents.` },
+		{
+			tier: 2,
+			short: 'District',
+			label: 'District confirmed',
+			payoff: electedTarget
+				? `${labels.legislativeBody} offices prioritize confirmed constituents.`
+				: "Confirms you're a real local resident, not an anonymous sender."
+		},
 		{ tier: 4, short: 'Gov-ID', label: 'Government ID', payoff: 'Document-level credential — the highest assurance.', future: !govIdAvailable }
 	]);
 
@@ -72,8 +88,9 @@
 {#if compact}
 	<div class="cl-compact">
 		<span class="cl-compact-status">
-			{#if tier >= 2}You're district-confirmed — this counts as a constituent.
-			{:else if tier >= 1}You can send right now.{/if}
+			{#if tier >= 2}You're district-confirmed{electedTarget ? ' — this counts as a constituent' : ' — a verified local resident'}.
+			{:else if tier >= 1}You can send right now.
+			{:else}Sign in to send.{/if}
 		</span>
 		{#if nextStop && onClimb}
 			<button type="button" class="cl-link" onclick={() => onClimb?.(nextStop.tier)}>
@@ -114,7 +131,7 @@
 
 		<!-- One live line, driven by interaction (rests on the next stop). -->
 		<p class="cl-detail" aria-live="polite">
-			{#if shownStop}{shownStop.payoff}{:else if tier >= 2}You're at the highest live tier.{/if}
+			{#if shownStop}{shownStop.payoff}{:else if tier >= 2}You're district-confirmed — the highest level available today.{/if}
 		</p>
 
 		<!-- Affordances carry the value; no explanatory paragraph. -->
@@ -306,6 +323,11 @@
 		white-space: nowrap;
 	}
 	.cl-link:hover { text-decoration: underline; }
+	.cl-link:focus-visible {
+		outline: 2px solid var(--coord-verified, #10b981);
+		outline-offset: 2px;
+		border-radius: 2px;
+	}
 
 	@media (prefers-reduced-motion: reduce) {
 		.cl-conn,
@@ -314,5 +336,6 @@
 		.cl-send-now,
 		.cl-detail { transition: none; }
 		.cl-stop--next .cl-dot { animation: none; }
+		.cl-stop--active .cl-dot { transform: none; }
 	}
 </style>

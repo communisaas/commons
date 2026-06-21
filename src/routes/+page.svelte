@@ -793,7 +793,11 @@
 	<div class="activation-container">
 		<!-- Left Column: Creation Spark + Minimal Footer -->
 		<div class="creation-column">
-			<CreationSpark onactivate={handleSparkActivate}>
+			<CreationSpark
+				onactivate={handleSparkActivate}
+				matchTemplates={allTemplates}
+				onMatchSelect={handleSendMessage}
+			>
 				{#snippet context()}
 					<footer class="creation-footer">
 						<div class="creation-footer__row">

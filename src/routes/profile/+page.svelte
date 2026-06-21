@@ -748,6 +748,7 @@
 		bind:showModal={showVerificationGate}
 		minimumTier={pendingMinimumTier}
 		userTrustTier={trustTier}
+		electedTarget={false}
 		onverified={handleVerificationComplete}
 		oncancel={() => (showVerificationGate = false)}
 	/>

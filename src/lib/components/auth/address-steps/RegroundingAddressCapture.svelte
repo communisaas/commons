@@ -16,7 +16,6 @@
 		description = '',
 		footer = '',
 		errorMessage = '',
-		geoPermissionDenied = false,
 		onSubmit,
 		onCancel,
 		onKeydown
@@ -31,7 +30,6 @@
 		description?: string;
 		footer?: string;
 		errorMessage?: string;
-		geoPermissionDenied?: boolean;
 		onSubmit: () => void;
 		onCancel?: () => void;
 		onKeydown: (event: KeyboardEvent) => void;
@@ -67,12 +65,6 @@
 			{description ||
 				`We resolve the address to your ${regionLabel}, then replace the verified address on this device after attestation.`}
 		</p>
-		{#if geoPermissionDenied}
-			<p class="mt-2 flex items-center gap-1.5 text-xs text-amber-700">
-				<AlertCircle class="h-3.5 w-3.5 shrink-0" />
-				Location access was denied. Enter the address instead.
-			</p>
-		{/if}
 	</div>
 
 	<div class="space-y-3 border-t border-b border-dotted border-slate-300 py-4">

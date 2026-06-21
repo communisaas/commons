@@ -963,17 +963,17 @@
 						<div
 							class="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"
 						></div>
-						Publishing...
+						Saving…
 					{:else if publishError}
-						Try publishing again
+						Try again
 					{:else}
-						Publish action page
+						Continue to send
 					{/if}
 				</button>
 			</div>
 
 			<p class="mt-3 text-right text-xs text-slate-500">
-				Publishing creates a public action page — sending happens from that page.
+				This creates a public action page so you can send now — and so others can send it too.
 			</p>
 		</div>
 	{:else if stage === 'editing'}
