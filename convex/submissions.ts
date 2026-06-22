@@ -13,6 +13,7 @@ import { requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { CWCXmlGenerator } from './_cwcXml';
 import { selectActiveCredentialForUser } from './_credentialSelect';
+import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from './_policy';
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
@@ -321,7 +322,9 @@ export const create = action({
 		// resolver (`+server.ts`), NOT here — on the direct Convex path the domain
 		// in publicInputs is still self-referential. See follow-up note in the
 		// security review; closing it means moving the rebind into this action.
-		const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
+		//
+		// REQUIRED_CONGRESSIONAL_PROOF_TIER is imported from `convex/_policy` — the
+		// single source of truth shared with the SvelteKit handler + client gate.
 		if (credentialStatus.trustTier < REQUIRED_CONGRESSIONAL_PROOF_TIER) {
 			throw new Error('INSUFFICIENT_AUTHORITY');
 		}

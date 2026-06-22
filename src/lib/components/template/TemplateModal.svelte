@@ -62,6 +62,7 @@
 	import type { ComponentTemplate } from '$lib/types/component-props';
 	import type { Representative } from '$lib/types/any-replacements';
 	import type { Representative as ProviderRepresentative } from '$lib/core/legislative/types';
+	import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
 
 	let {
 		template,
@@ -865,7 +866,7 @@
 		}
 
 		const credential = await getUsableProofCredential(user.id);
-		if (!credential || !credentialMeetsMinimumTier(credential, 4)) {
+		if (!credential || !credentialMeetsMinimumTier(credential, REQUIRED_CONGRESSIONAL_PROOF_TIER)) {
 			showVerificationGate = true;
 			return;
 		}
@@ -2022,21 +2023,14 @@
 
 <!-- Verification Gate Modal -->
 {#if user?.id}
-	<!--
-		minimumTier=2: Tier 2 (district-confirmed via the address-first flow) is the
-		DELIVERY bar for API-relayed sends — it mirrors REQUIRED_CONGRESSIONAL_PROOF_TIER
-		in BOTH submission endpoints (convex/submissions.ts + api/submissions/create).
-		Gov-ID (tier 4) raises the assurance BADGE on the proof, it is not the gate; the
-		ladder surfaces it as the optional "counts more" upgrade. The client was
-		over-gating at 4 — this aligns it to the server's actual bar so a verified
-		constituent can send through the CWC API today (no mDL dependency).
-	-->
+	<!-- API-delivery floor; see REQUIRED_CONGRESSIONAL_PROOF_TIER above. gov-ID is the
+	     optional "counts more" upgrade the ladder surfaces, not the gate. -->
 	<VerificationGate
 		bind:this={verificationGateRef}
 		userId={user.id}
 		templateSlug={template.slug}
 		cellId={verifiedCellId}
-		minimumTier={2}
+		minimumTier={REQUIRED_CONGRESSIONAL_PROOF_TIER}
 		electedTarget={template.deliveryMethod === 'cwc'}
 		userTrustTier={user.trust_tier ?? 1}
 		bind:showModal={showVerificationGate}
