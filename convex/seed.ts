@@ -2273,6 +2273,10 @@ export const insertDebates = internalMutation({
 // PHASE 16: GRANT DEV ACCOUNT ACCESS
 // =============================================================================
 
+// Convex reads env vars via process.env at runtime; declare the shape so it
+// typechecks (convex/tsconfig.json has no @types/node). Mirrors convex/_cwcXml.ts.
+declare const process: { env: Record<string, string | undefined> };
+
 const DEV_ACCOUNT_EMAIL = "mock7ee@gmail.com";
 
 export const grantDevAccount = internalMutation({
@@ -2283,6 +2287,12 @@ export const grantDevAccount = internalMutation({
     email: v.optional(v.string()),
   },
   handler: async (ctx, { orgIds, email }) => {
+    // Dev-only privilege grant (a fixed email gets owner on the seeded orgs).
+    // internalMutation already blocks public callers; this refuses to run against a
+    // production deployment as defense-in-depth against an accidental `convex run`.
+    if (process.env.SENTRY_ENVIRONMENT === "production") {
+      throw new Error("grantDevAccount is dev-only; refusing to run against production");
+    }
     const devEmail = email ?? DEV_ACCOUNT_EMAIL;
     const now = Date.now();
 

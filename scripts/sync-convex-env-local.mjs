@@ -5,7 +5,7 @@
  * A fresh self-hosted Convex deployment starts with zero env vars. The cloud
  * deployment had them set; this script reconstructs the set for local dev by:
  *   1. Reading .env + .env.local for values the convex/ functions reference.
- *   2. Generating keys that aren't in dotenv (ORG_KEY_WRAPPING_KEY).
+ *   2. Generating ORG_KEY_WRAPPING_KEY if absent, persisting it to .env.local.
  *   3. Mirroring cross-side salts (PSEUDONYMOUS_ID_SALT <- SUBMISSION_ANONYMIZATION_SALT).
  *   4. Applying local URL overrides so the container can reach the host.
  *
@@ -14,7 +14,7 @@
  *
  * Usage: node scripts/sync-convex-env-local.mjs
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 
@@ -54,7 +54,10 @@ function parseDotenv(path) {
 // .env first, .env.local overrides.
 const env = { ...parseDotenv(ROOT + ".env"), ...parseDotenv(ROOT + ".env.local") };
 
-// Vars the convex/ functions read at runtime, pulled straight from dotenv.
+// Vars the convex/ functions read at runtime, pulled straight from dotenv. Some are
+// real upstream credentials (Stripe/AWS/CWC/Gemini/...) — copied verbatim into the
+// LOCAL backend because the functions genuinely need them to run. Bounded because the
+// backend binds to loopback only (see docker-compose.yml); nothing here leaves the host.
 const PASSTHROUGH = [
   "AWS_ACCESS_KEY_ID",
   "AWS_REGION",
@@ -87,9 +90,17 @@ for (const k of PASSTHROUGH) {
   if (env[k]) toSet[k] = env[k];
 }
 
-// Generated: org key wrapping key (32 bytes hex). Fresh is fine on a clean
-// backend — there's no pre-existing sealed data to decrypt.
-toSet.ORG_KEY_WRAPPING_KEY = env.ORG_KEY_WRAPPING_KEY || randomBytes(32).toString("hex");
+// Generated: org key wrapping key (32 bytes hex). Persisted to .env.local on first
+// generation so every re-run reuses the SAME key (this is what makes the script
+// idempotent) — regenerating it would orphan any org data already sealed under the
+// previous key.
+if (env.ORG_KEY_WRAPPING_KEY) {
+  toSet.ORG_KEY_WRAPPING_KEY = env.ORG_KEY_WRAPPING_KEY;
+} else {
+  toSet.ORG_KEY_WRAPPING_KEY = randomBytes(32).toString("hex");
+  appendFileSync(ROOT + ".env.local", `\nORG_KEY_WRAPPING_KEY=${toSet.ORG_KEY_WRAPPING_KEY}\n`);
+  console.log("Generated ORG_KEY_WRAPPING_KEY and persisted it to .env.local.\n");
+}
 
 // Mirror: SvelteKit falls back to SUBMISSION_ANONYMIZATION_SALT, Convex reads
 // PSEUDONYMOUS_ID_SALT — they must match for pseudonymous IDs to line up.
@@ -112,6 +123,9 @@ console.log(`Setting ${keys.length} env vars on the local Convex deployment...\n
 let ok = 0;
 for (const k of keys) {
   try {
+    // Values pass as argv (the convex CLI's only interface for `env set`). On this
+    // single-user local machine the values already live in .env files, so argv
+    // visibility adds negligible exposure beyond what is already on disk.
     execFileSync("npx", ["convex", "env", "set", k, toSet[k]], {
       cwd: ROOT,
       env: childEnv,
