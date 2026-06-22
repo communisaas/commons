@@ -1,15 +1,62 @@
 # Commons Local Development Stack
 #
 # Usage:
-#   docker compose up        - Start all services
-#   docker compose up -d     - Start in background
+#   docker compose up -d     - Start all services in background
 #   docker compose down      - Stop all services
 #   docker compose down -v   - Stop and remove volumes (full reset)
 #
-# Backend: Convex (cloud-hosted, no local container needed)
-#   npx convex dev           - Start Convex dev server
+# First run — generate the Convex admin key:
+#   docker compose up -d convex-backend
+#   docker compose exec convex-backend ./generate_admin_key.sh
+#   # Copy the output into .env.local as CONVEX_SELF_HOSTED_ADMIN_KEY
+#
+# Then start the dev servers:
+#   npx convex dev           - Push schema + functions to local backend
+#   npm run dev              - Start SvelteKit dev server
+#
+# Dashboard: http://localhost:6791
 
 services:
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: commons-convex-backend
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      # Loopback only — the backend runs with DO_NOT_REQUIRE_SSL and no auth, so a
+      # 0.0.0.0 publish would expose an unauthenticated Convex API to the whole LAN.
+      - "127.0.0.1:3210:3210"   # Convex API
+      - "127.0.0.1:3211:3211"   # HTTP actions (site proxy)
+    volumes:
+      - convex-data:/convex/data
+    environment:
+      - DO_NOT_REQUIRE_SSL=true
+      - RUST_LOG=info
+      - DOCUMENT_RETENTION_DELAY=172800
+      - DISABLE_METRICS_ENDPOINT=true
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: commons-convex-dashboard
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    ports:
+      # Loopback only — the admin dashboard must not be reachable from the LAN.
+      - "127.0.0.1:6791:6791"
+    environment:
+      - NEXT_PUBLIC_DEPLOYMENT_URL=http://127.0.0.1:3210
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
   ipfs:
     image: ipfs/kubo:latest
     container_name: commons-ipfs
@@ -29,5 +76,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  convex-data:
+    driver: local
   ipfs-data:
     driver: local
