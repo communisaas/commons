@@ -20,8 +20,10 @@
  * - Campaign deliveries and actions
  * - 4 debates with 12 arguments
  *
- * Dev account integration: if a user with email 'mock7ee@gmail.com' exists,
- * they are granted owner on all seeded orgs.
+ * Dev account integration: 'mock7ee@gmail.com' is always granted owner on all
+ * seeded orgs. A stub user is created if the account doesn't exist yet (it's
+ * normally minted via Google OAuth); login later dedups onto the same row by
+ * email. Re-running `npm run seed` re-ensures ownership even on a seeded DB.
  *
  * Run via the Convex dashboard or CLI:
  *   npx convex run seed:seedAll
@@ -53,6 +55,16 @@ function hoursAgo(n: number): number {
 
 function daysFromNow(n: number): number {
   return Date.now() + n * 86_400_000;
+}
+
+// SHA-256(email.toLowerCase().trim()) — the canonical emailHash pattern used by
+// waitlist (src/routes/api/waitlist/+server.ts:18) and the email-sybil throttle
+// (convex/users.ts). Shared by insertUsers and grantDevAccount.
+async function sha256Hex(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // =============================================================================
@@ -204,10 +216,16 @@ const REPRESENTATIVES = [
 export const seedAll = internalAction({
   args: {},
   handler: async (ctx) => {
-    // Guard: skip if data already exists
+    // Guard: skip the bulk seed if data already exists — but always (re-)ensure
+    // dev account ownership so `npm run seed` reliably restores access whether
+    // the DB is fresh or already seeded.
     const existing = await ctx.runQuery(internal.seed.checkSeeded);
     if (existing) {
-      console.log("Database already seeded — skipping.");
+      console.log("Database already seeded — ensuring dev account access only.");
+      const orgIds = await ctx.runQuery(internal.seed.getSeedOrgIds);
+      if (orgIds.length > 0) {
+        await ctx.runMutation(internal.seed.grantDevAccount, { orgIds });
+      }
       return;
     }
 
@@ -366,22 +384,10 @@ export const insertUsers = internalMutation({
     const now = Date.now();
     const ids: Id<"users">[] = [];
 
-    // SHA-256(email.toLowerCase().trim()) — matches the canonical pattern
-    // used by waitlist (src/routes/api/waitlist/+server.ts:18) and bounce
-    // reports. user.emailHash is the dedup key for the email-sybil
-    // throttle at convex/users.ts:747-758; leaving it unset (the prior
-    // state) silently bypassed the throttle. Production OAuth signup
-    // does not yet compute this — see [[F37-prod-user-emailHash-writer]].
-    const sha256Hex = async (text: string): Promise<string> => {
-      const buf = await crypto.subtle.digest(
-        "SHA-256",
-        new TextEncoder().encode(text),
-      );
-      return Array.from(new Uint8Array(buf))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-    };
-
+    // user.emailHash is the dedup key for the email-sybil throttle at
+    // convex/users.ts:747-758; leaving it unset (the prior state) silently
+    // bypassed the throttle. Production OAuth signup does not yet compute this
+    // — see [[F37-prod-user-emailHash-writer]]. Hash helper is module-scoped.
     for (let i = 0; i < SEED_USERS.length; i++) {
       const u = SEED_USERS[i];
       const emailHash = await sha256Hex(u.email.toLowerCase().trim());
@@ -2278,19 +2284,50 @@ export const grantDevAccount = internalMutation({
   },
   handler: async (ctx, { orgIds, email }) => {
     const devEmail = email ?? DEV_ACCOUNT_EMAIL;
-    // Check if dev account exists
-    const devUser = await ctx.db
+    const now = Date.now();
+
+    // Find the dev account, or create a stub so the grant always lands on a
+    // fresh DB. The dev account is normally minted via Google OAuth, but on a
+    // freshly-seeded backend it doesn't exist yet, so the grant used to no-op.
+    // A stub with email + emailHash (and NO tokenIdentifier) is safe: at real
+    // login, authOps.upsertOAuthUser dedups by email (Step 2), links the OAuth
+    // account to this same row, and backfills tokenIdentifier to the canonical
+    // `${ISSUER_PREFIX}|${userId}` — so the owner memberships granted here carry
+    // straight through to the logged-in account.
+    let devUser = await ctx.db
       .query("users")
       .withIndex("by_email", (q) => q.eq("email", devEmail))
       .first();
 
     if (!devUser) {
-      console.log(`[seed] Dev account ${devEmail} not found — skipping dev grants.`);
+      const stubId = await ctx.db.insert("users", {
+        email: devEmail,
+        emailHash: await sha256Hex(devEmail.toLowerCase().trim()),
+        name: "Dev Account",
+        updatedAt: now,
+        // New-user defaults, mirroring authOps.upsertOAuthUser Step 3.
+        // tokenIdentifier intentionally omitted — login backfills it.
+        isVerified: false,
+        authorityLevel: 1,
+        trustTier: 0,
+        trustScore: 50,
+        reputationTier: "new",
+        districtVerified: false,
+        templatesContributed: 0,
+        templateAdoptionRate: 0,
+        peerEndorsements: 0,
+        activeMonths: 0,
+        profileVisibility: "private",
+      });
+      devUser = await ctx.db.get(stubId);
+      console.log(`[seed] Dev account ${devEmail} not found — created stub ${stubId}.`);
+    }
+    if (!devUser) {
+      console.log(`[seed] Failed to resolve dev account ${devEmail} — skipping grants.`);
       return;
     }
 
-    console.log(`[seed] Found dev account ${devEmail} — granting owner on ${orgIds.length} seeded org(s).`);
-    const now = Date.now();
+    console.log(`[seed] Granting ${devEmail} owner on ${orgIds.length} seeded org(s).`);
 
     for (const orgId of orgIds) {
       // Check if membership already exists
@@ -2316,13 +2353,13 @@ export const grantDevAccount = internalMutation({
 // =============================================================================
 // STANDALONE DEV GRANT
 // =============================================================================
-// Resolves org IDs itself, so it works any time — independent of seedAll's
-// idempotency guard. Use when the dev Google account was created AFTER the
-// initial seed (the common case): the Phase-16 grant inside seedAll skipped
-// because the account didn't exist yet, and re-running `npm run seed` no-ops
-// on an already-seeded DB, so the grant never lands.
-//   npx convex run seed:grantDev
+// Resolves org IDs itself, so it works any time — independent of seedAll.
+// `npm run seed` already ensures owner for the default mock7ee account on every
+// run (creating a stub if needed). Use this standalone form to grant a DIFFERENT
+// email (e.g. you signed in with your own Google account):
 //   npx convex run seed:grantDev '{"email":"you@example.com"}'
+//   npx convex run seed:grantDev                  # same as the default seed grant
+// (prefix with the IPv4-first NODE_OPTIONS on this dev machine — see CLAUDE memory)
 // (prefix with the IPv4-first NODE_OPTIONS on this dev machine — see CLAUDE memory)
 export const grantDev = internalAction({
   args: {

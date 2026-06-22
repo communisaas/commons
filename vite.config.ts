@@ -166,6 +166,10 @@ export default defineConfig({
 
 	// Add cross-origin isolation headers for SharedArrayBuffer support (required for ZK proving)
 	server: {
+		// Allow the self-hosted Convex container to fetch the JWKS endpoint from
+		// the host via host.docker.internal. Without this, Vite's host check
+		// rejects the Host header with 403 and auth JWT verification fails.
+		allowedHosts: ['host.docker.internal'],
 		headers: {
 			'Cross-Origin-Opener-Policy': 'same-origin',
 			'Cross-Origin-Embedder-Policy': 'require-corp'
