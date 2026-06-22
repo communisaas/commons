@@ -62,6 +62,7 @@
 	import type { ComponentTemplate } from '$lib/types/component-props';
 	import type { Representative } from '$lib/types/any-replacements';
 	import type { Representative as ProviderRepresentative } from '$lib/core/legislative/types';
+	import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
 
 	let {
 		template,
@@ -865,7 +866,7 @@
 		}
 
 		const credential = await getUsableProofCredential(user.id);
-		if (!credential || !credentialMeetsMinimumTier(credential, 4)) {
+		if (!credential || !credentialMeetsMinimumTier(credential, REQUIRED_CONGRESSIONAL_PROOF_TIER)) {
 			showVerificationGate = true;
 			return;
 		}
@@ -2022,12 +2023,14 @@
 
 <!-- Verification Gate Modal -->
 {#if user?.id}
+	<!-- API-delivery floor; see REQUIRED_CONGRESSIONAL_PROOF_TIER above. gov-ID is the
+	     optional "counts more" upgrade the ladder surfaces, not the gate. -->
 	<VerificationGate
 		bind:this={verificationGateRef}
 		userId={user.id}
 		templateSlug={template.slug}
 		cellId={verifiedCellId}
-		minimumTier={template.deliveryMethod === 'cwc' ? 4 : 2}
+		minimumTier={REQUIRED_CONGRESSIONAL_PROOF_TIER}
 		electedTarget={template.deliveryMethod === 'cwc'}
 		userTrustTier={user.trust_tier ?? 1}
 		bind:showModal={showVerificationGate}

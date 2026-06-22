@@ -30,7 +30,9 @@ export const FEATURES = {
 	 * CWC delivery, district officials, congressional template routing.
 	 * Code exists; this is the ENTRY launch gate: when false, CWC templates are
 	 * excluded from discovery and direct CWC template routes 404. The submission
-	 * endpoint also requires Tier 4+ proof authority before delivery can run.
+	 * endpoints additionally require Tier 2+ (district-confirmed) proof authority
+	 * before delivery runs — gov-ID (tier 4) raises the assurance badge, it is not
+	 * the bar (see REQUIRED_CONGRESSIONAL_PROOF_TIER).
 	 *
 	 * Env-driven so the entry opens from BUILD config (`VITE_CONGRESSIONAL=1`) per
 	 * environment, not by editing this constant — default OFF leaves prod unchanged

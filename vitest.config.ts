@@ -105,6 +105,10 @@ export default defineConfig({
 			// Behavioral test for the delivery-gate conversion prompt — requires
 			// the components-lane config for @testing-library/svelte rendering.
 			'tests/unit/components/DeliveryGateNotice.test.ts',
+			// Behavioral render of the congressional delivery floor (VerificationGate at
+			// REQUIRED_CONGRESSIONAL_PROOF_TIER). Components-lane only; the structural
+			// single-source lock runs in CI via congressional-delivery-tier.test.ts.
+			'tests/unit/components/congressional-delivery-gate.behavior.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

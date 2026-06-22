@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types';
 import { serverAction, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
 import {
 	isCredentialValidForAction,
 	formatValidationError,
@@ -27,8 +28,10 @@ const CURRENT_SESSION_ID = '119th-congress';
 // non-revoked district credential (the structural requirement deliverToCongress
 // enforces), so this is a policy threshold, not a security mechanic — every
 // fail-closed check (active credential, revocation, nullifier, domain binding,
-// witness expiry) is unchanged.
-const REQUIRED_CONGRESSIONAL_PROOF_TIER = 2;
+// witness expiry) is unchanged. REQUIRED_CONGRESSIONAL_PROOF_TIER is imported from
+// `$convex/_policy` — the single source of truth shared with the Convex action
+// (convex/submissions.ts) and the client gate (TemplateModal), so the floor can
+// never drift across the three enforcement points.
 
 /**
  * Submission Creation Endpoint
