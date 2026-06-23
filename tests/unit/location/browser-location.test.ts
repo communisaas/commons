@@ -105,7 +105,9 @@ describe('Browser Location Module', () => {
 			expect(signal!.state_code).toBeNull();
 		});
 
-		it('should return US for America/Puerto_Rico', () => {
+		it('should return the ISO code PR for America/Puerto_Rico', () => {
+			// Territories carry their own ISO 3166-1 code (matches the IP path, which
+			// surfaces 'PR' too) rather than being folded into 'US'.
 			vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
 				() =>
 					({
@@ -114,7 +116,7 @@ describe('Browser Location Module', () => {
 			);
 
 			const signal = getTimezoneLocation();
-			expect(signal!.country_code).toBe('US');
+			expect(signal!.country_code).toBe('PR');
 			expect(signal!.state_code).toBeNull();
 		});
 
@@ -132,16 +134,31 @@ describe('Browser Location Module', () => {
 			expect(signal!.state_code).toBeNull();
 		});
 
-		it('should return null for unmapped timezone', () => {
+		it('should return null for an unknown (non-IANA) timezone', () => {
 			vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
 				() =>
 					({
-						resolvedOptions: () => ({ timeZone: 'Antarctica/McMurdo' })
+						resolvedOptions: () => ({ timeZone: 'Fictional/Nowhere' })
 					}) as Intl.DateTimeFormat
 			);
 
 			const signal = getTimezoneLocation();
 			expect(signal).toBeNull();
+		});
+
+		it('resolves countries outside the legacy curated set (regression: Malaysia)', () => {
+			// Asia/Kuala_Lumpur was absent from the old hand-maintained table, so a
+			// Malaysian user got no timezone signal. The complete IANA map covers it.
+			vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
+				() =>
+					({
+						resolvedOptions: () => ({ timeZone: 'Asia/Kuala_Lumpur' })
+					}) as Intl.DateTimeFormat
+			);
+
+			const signal = getTimezoneLocation();
+			expect(signal!.country_code).toBe('MY');
+			expect(signal!.state_code).toBeNull();
 		});
 
 		it('should return null when Intl throws', () => {
@@ -205,7 +222,7 @@ describe('Browser Location Module', () => {
 			expect(signal!.congressional_district).toBeNull();
 		});
 
-		it('should return US for Pacific/Guam', () => {
+		it('should return the ISO code GU for Pacific/Guam', () => {
 			vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(
 				() =>
 					({
@@ -214,7 +231,7 @@ describe('Browser Location Module', () => {
 			);
 
 			const signal = getTimezoneLocation();
-			expect(signal!.country_code).toBe('US');
+			expect(signal!.country_code).toBe('GU');
 			expect(signal!.state_code).toBeNull();
 		});
 	});
@@ -269,6 +286,31 @@ describe('Browser Location Module', () => {
 			const result = await getBrowserGeolocation();
 
 			expect(result).toBeNull();
+		});
+
+		it('returns coordinates without assuming a country', async () => {
+			const mockGeolocation = {
+				getCurrentPosition: vi.fn((success: PositionCallback) => {
+					success({
+						coords: { latitude: 1.4, longitude: 103.6 },
+						timestamp: 0
+					} as GeolocationPosition);
+				})
+			};
+
+			Object.defineProperty(window.navigator, 'geolocation', {
+				value: mockGeolocation,
+				writable: true,
+				configurable: true
+			});
+
+			const result = await getBrowserGeolocation();
+
+			expect(result).not.toBeNull();
+			expect(result!.latitude).toBe(1.4);
+			expect(result!.longitude).toBe(103.6);
+			// Coordinates don't reveal a country — must not be hardcoded to US.
+			expect(result!.country_code).toBeNull();
 		});
 	});
 });

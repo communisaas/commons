@@ -158,13 +158,50 @@ const AU_STATE_CODES: Record<string, string> = {
 // ============================================================================
 
 /**
+ * Lazily-constructed ISO 3166-1 region display-name resolver.
+ *
+ * `Intl.DisplayNames` covers every ISO 3166-1 alpha-2 region (~249), so we no
+ * longer depend on the hand-maintained COUNTRY_CODES table — which stopped at a
+ * few dozen and left codes like "MY" rendering raw. Supported in all evergreen
+ * browsers and the Cloudflare Workers runtime. Cached because constructing it is
+ * comparatively expensive; `undefined` = not yet attempted, `null` = unavailable.
+ */
+let regionDisplayNames: Intl.DisplayNames | null | undefined;
+
+function getRegionDisplayNames(): Intl.DisplayNames | null {
+	if (regionDisplayNames !== undefined) return regionDisplayNames;
+	try {
+		regionDisplayNames = new Intl.DisplayNames(['en'], { type: 'region', fallback: 'none' });
+	} catch {
+		regionDisplayNames = null;
+	}
+	return regionDisplayNames;
+}
+
+/**
  * Convert country code to human-readable name
  *
  * @param code - ISO 3166-1 alpha-2 code (e.g., 'US', 'CA')
  * @returns Country name or null if not found
  */
 export function countryCodeToName(code: string): string | null {
-	return COUNTRY_CODES[code.toUpperCase()] || null;
+	const upper = code.toUpperCase();
+	// ISO 3166-1 alpha-2 only. (Intl.DisplayNames also accepts UN M49 numerics,
+	// but our inputs are always two-letter country codes.)
+	if (!/^[A-Z]{2}$/.test(upper)) return null;
+
+	const display = getRegionDisplayNames();
+	if (display) {
+		try {
+			// fallback:'none' → undefined for unassigned codes (e.g. "XX").
+			const name = display.of(upper);
+			if (name) return name;
+		} catch {
+			// Fall through to the static table.
+		}
+	}
+
+	return COUNTRY_CODES[upper] || null;
 }
 
 /**
@@ -214,6 +251,7 @@ export function resolveToGeoScope(location: LocationHierarchy): GeoScope {
 			type: 'subnational',
 			country: country.code,
 			subdivision: state ? `${country.code}-${state.code}` : undefined,
+			subdivisionName: state?.name,
 			locality: city.name,
 			displayName: formatDisplayName(location)
 		};
@@ -225,6 +263,7 @@ export function resolveToGeoScope(location: LocationHierarchy): GeoScope {
 			type: 'subnational',
 			country: country.code,
 			subdivision: `${country.code}-${state.code}`,
+			subdivisionName: state.name,
 			displayName: formatDisplayName(location)
 		};
 	}
@@ -287,12 +326,14 @@ export function displayGeoScope(scope: GeoScope): string {
 	}
 
 	if (scope.subdivision) {
-		// Extract state from "US-CA" -> "CA" -> "California"
+		// Prefer the preserved subdivision name; otherwise reverse the code
+		// ("US-CA" -> "CA" -> "California"), falling back to the bare code.
 		const stateCode = scope.subdivision.split('-')[1];
-		if (stateCode) {
-			const stateName = stateCodeToName(stateCode, scope.country);
-			parts.push(stateName || stateCode);
-		}
+		const stateName =
+			scope.subdivisionName ||
+			(stateCode ? stateCodeToName(stateCode, scope.country) : null) ||
+			stateCode;
+		if (stateName) parts.push(stateName);
 	}
 
 	const countryName = countryCodeToName(scope.country);

@@ -910,6 +910,7 @@ export function geoScopeToInferredLocation(scope: GeoScope): InferredLocation | 
 		country_code: scope.country,
 		congressional_district: null,
 		state_code: stateCode,
+		state_name: scope.subdivisionName ?? null,
 		city_name: scope.locality ?? null,
 		confidence: 1.0,
 		signals: [
@@ -920,7 +921,11 @@ export function geoScopeToInferredLocation(scope: GeoScope): InferredLocation | 
 				state_code: stateCode,
 				city_name: scope.locality ?? null,
 				source: 'location_scope_bar',
-				timestamp: now
+				timestamp: now,
+				// Carry the subdivision name on the signal too (IP convention), so a
+				// re-fusion over these signals doesn't drop it — the top-level
+				// state_name above and metadata.state_name stay in agreement.
+				...(scope.subdivisionName ? { metadata: { state_name: scope.subdivisionName } } : {})
 			}
 		],
 		inferred_at: now
@@ -941,6 +946,7 @@ export function inferredLocationToGeoScope(location: InferredLocation): GeoScope
 			type: 'subnational',
 			country: location.country_code,
 			subdivision: `${location.country_code}-${location.state_code}`,
+			subdivisionName: location.state_name ?? undefined,
 			locality: location.city_name ?? undefined
 		};
 	}

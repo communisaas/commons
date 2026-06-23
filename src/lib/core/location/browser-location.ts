@@ -5,6 +5,7 @@
  */
 
 import type { LocationSignal } from './types';
+import { timezoneToCountry } from './tz-country';
 
 // ============================================================================
 // Browser Geolocation Utilities
@@ -31,7 +32,11 @@ export async function getBrowserGeolocation(): Promise<LocationSignal | null> {
 				resolve({
 					signal_type: 'browser',
 					confidence: 0.6,
-					country_code: 'US',
+					// Coordinates alone don't reveal a country — reverse geocoding happens
+					// server-side via /api/location/resolve. Leave country unset so the
+					// fusion takes it from a signal that actually knows it (IP/timezone),
+					// instead of mislabeling every GPS user as US.
+					country_code: null,
 					congressional_district: null,
 					state_code: null,
 					city_name: null,
@@ -60,74 +65,19 @@ export async function getBrowserGeolocation(): Promise<LocationSignal | null> {
  *
  * Design principle: timezone → country is reliable (IANA zone names are
  * geographically scoped). Timezone → state is NOT (US Eastern covers 20+
- * states, Canada and US share America/* prefix). We intentionally do NOT
+ * states, Canada and US share the America/* prefix). We intentionally do NOT
  * infer state/province from timezone — that's what IP lookup and user
  * selection are for.
  *
- * The map below covers IANA reference cities for countries we actively
- * support. Unknown zones return null. This scales globally by adding
- * one line per IANA city, not per state×timezone.
+ * Coverage is the complete IANA zone → country map (see ./tz-country), so any
+ * country resolves. Unknown zones return null.
  */
 export function getTimezoneLocation(): LocationSignal | null {
 	try {
 		const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 		console.debug(`[Location] Detected timezone: ${timezone}`);
 
-		// IANA reference city → ISO 3166-1 alpha-2 country code
-		// One entry per city. No state inference — country only.
-		const tzToCountry: Record<string, string> = {
-			// North America
-			'America/New_York': 'US', 'America/Chicago': 'US', 'America/Denver': 'US',
-			'America/Los_Angeles': 'US', 'America/Phoenix': 'US', 'America/Anchorage': 'US',
-			'America/Boise': 'US', 'America/Detroit': 'US', 'America/Juneau': 'US',
-			'America/Nome': 'US', 'America/Sitka': 'US', 'America/Yakutat': 'US',
-			'America/Metlakatla': 'US', 'America/Adak': 'US', 'America/Menominee': 'US',
-			'America/Indiana/Indianapolis': 'US', 'America/Indiana/Knox': 'US',
-			'America/Indiana/Marengo': 'US', 'America/Indiana/Petersburg': 'US',
-			'America/Indiana/Tell_City': 'US', 'America/Indiana/Vevay': 'US',
-			'America/Indiana/Vincennes': 'US', 'America/Indiana/Winamac': 'US',
-			'America/Kentucky/Louisville': 'US', 'America/Kentucky/Monticello': 'US',
-			'America/North_Dakota/Beulah': 'US', 'America/North_Dakota/Center': 'US',
-			'America/North_Dakota/New_Salem': 'US',
-			'Pacific/Honolulu': 'US', 'America/Puerto_Rico': 'US', 'America/Virgin': 'US',
-			'Pacific/Guam': 'US', 'Pacific/Saipan': 'US',
-			'America/Toronto': 'CA', 'America/Montreal': 'CA', 'America/Vancouver': 'CA',
-			'America/Winnipeg': 'CA', 'America/Edmonton': 'CA', 'America/Halifax': 'CA',
-			'America/St_Johns': 'CA', 'America/Regina': 'CA', 'America/Iqaluit': 'CA',
-			'America/Whitehorse': 'CA', 'America/Dawson': 'CA', 'America/Moncton': 'CA',
-			'America/Yellowknife': 'CA',
-			'America/Mexico_City': 'MX', 'America/Tijuana': 'MX', 'America/Hermosillo': 'MX',
-			'America/Mazatlan': 'MX', 'America/Matamoros': 'MX', 'America/Ojinaga': 'MX',
-			// Caribbean & Central America
-			'America/Nassau': 'BS', 'America/Panama': 'PA',
-			'America/Jamaica': 'JM', 'America/Barbados': 'BB',
-			// Oceania
-			'Australia/Sydney': 'AU', 'Australia/Melbourne': 'AU', 'Australia/Brisbane': 'AU',
-			'Australia/Adelaide': 'AU', 'Australia/Perth': 'AU', 'Australia/Hobart': 'AU',
-			'Australia/Darwin': 'AU', 'Australia/Canberra': 'AU',
-			'Pacific/Auckland': 'NZ', 'Pacific/Chatham': 'NZ',
-			// Europe
-			'Europe/London': 'GB', 'Europe/Dublin': 'IE', 'Europe/Paris': 'FR',
-			'Europe/Berlin': 'DE', 'Europe/Madrid': 'ES', 'Europe/Rome': 'IT',
-			'Europe/Amsterdam': 'NL', 'Europe/Brussels': 'BE', 'Europe/Zurich': 'CH',
-			'Europe/Vienna': 'AT', 'Europe/Stockholm': 'SE', 'Europe/Oslo': 'NO',
-			'Europe/Copenhagen': 'DK', 'Europe/Helsinki': 'FI', 'Europe/Warsaw': 'PL',
-			'Europe/Prague': 'CZ', 'Europe/Lisbon': 'PT', 'Europe/Athens': 'GR',
-			'Europe/Bucharest': 'RO', 'Europe/Budapest': 'HU',
-			// Asia
-			'Asia/Tokyo': 'JP', 'Asia/Seoul': 'KR', 'Asia/Shanghai': 'CN',
-			'Asia/Hong_Kong': 'HK', 'Asia/Singapore': 'SG', 'Asia/Kolkata': 'IN',
-			'Asia/Dubai': 'AE', 'Asia/Jerusalem': 'IL', 'Asia/Bangkok': 'TH',
-			'Asia/Jakarta': 'ID', 'Asia/Taipei': 'TW', 'Asia/Manila': 'PH',
-			// South America
-			'America/Sao_Paulo': 'BR', 'America/Buenos_Aires': 'AR',
-			'America/Santiago': 'CL', 'America/Bogota': 'CO', 'America/Lima': 'PE',
-			// Africa
-			'Africa/Lagos': 'NG', 'Africa/Cairo': 'EG', 'Africa/Johannesburg': 'ZA',
-			'Africa/Nairobi': 'KE', 'Africa/Casablanca': 'MA'
-		};
-
-		const countryCode = tzToCountry[timezone];
+		const countryCode = timezoneToCountry(timezone);
 
 		if (!countryCode) {
 			console.debug(`[Location] No country mapping for timezone: ${timezone}`);

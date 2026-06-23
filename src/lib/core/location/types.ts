@@ -103,6 +103,14 @@ export interface InferredLocation {
 	/** State code (highest confidence signal) */
 	state_code: string | null;
 
+	/**
+	 * Human-readable state/region name (e.g. "Johor", "Texas"), preserved from
+	 * the source signal's metadata. Carried separately from state_code because
+	 * subdivision codes have no universal code → name table; the name is the
+	 * only reliable display label outside US/CA/AU.
+	 */
+	state_name?: string | null;
+
 	/** City name (optional, from highest confidence signal) */
 	city_name?: string | null;
 

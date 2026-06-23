@@ -19,6 +19,13 @@ export type GeoScope =
 			type: 'subnational';
 			country: string;
 			subdivision?: string;
+			/**
+			 * Human-readable subdivision name (e.g. "Johor", "California"). Preserved
+			 * from the source (search result or IP geolocation) so display paths need
+			 * not reverse a code → name table — which only covers US/CA/AU. Without it,
+			 * a code like ISO 3166-2:MY "01" renders as the bare "01".
+			 */
+			subdivisionName?: string;
 			locality?: string;
 			displayName?: string;
 	  };
