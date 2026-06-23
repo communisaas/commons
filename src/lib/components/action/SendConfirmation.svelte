@@ -14,6 +14,7 @@
 -->
 <script lang="ts">
 	import { Check, Copy, Share2, ExternalLink, X } from '@lucide/svelte';
+	import { tryNativeShare } from '$lib/utils/web-share';
 
 	let {
 		recipientNames = [],
@@ -82,22 +83,18 @@
 		}
 	}
 	async function share() {
-		const payload = { text: shareMessage || undefined, url: shareUrl };
+		const result = await tryNativeShare({ text: shareMessage || shareUrl });
+		if (result === 'shared') {
+			shared = true;
+			return;
+		}
+		if (result === 'dismissed') return;
+		// No native sheet: shareMessage already embeds the URL; fall back to bare URL.
 		try {
-			if (
-				typeof navigator !== 'undefined' &&
-				navigator.share &&
-				(!navigator.canShare || navigator.canShare(payload))
-			) {
-				await navigator.share(payload);
-				shared = true;
-			} else {
-				// shareMessage already embeds the URL; fall back to the bare URL when absent.
-				await navigator.clipboard.writeText(shareMessage || shareUrl);
-				shared = true;
-			}
+			await navigator.clipboard.writeText(shareMessage || shareUrl);
+			shared = true;
 		} catch {
-			/* user dismissed the share sheet / clipboard denied — no-op */
+			/* clipboard denied — no-op */
 		}
 	}
 

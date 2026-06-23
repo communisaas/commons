@@ -799,7 +799,10 @@
 			// Check if the objective changed since content was generated
 			const generatedFor = formData.content.generatedForSubject;
 			const currentSubject = formData.objective.title;
-			const isStale = generatedFor && generatedFor !== currentSubject;
+			const isStale =
+				generatedFor &&
+				generatedFor !== currentSubject &&
+				formData.content.staleAckForSubject !== currentSubject;
 
 			if (isStale) {
 				// Preserve the existing message and surface the stale banner so the author
@@ -869,10 +872,11 @@
 		void generateMessage();
 	}
 
-	/** Keep the existing message; re-stamp so it's no longer stale, then persist. */
+	/** Keep the existing message: record the acknowledgement for this subject so the
+	 *  banner stops, WITHOUT rewriting generatedForSubject's true provenance. */
 	function handleKeepContent() {
 		contentStale = false;
-		formData.content.generatedForSubject = formData.objective.title;
+		formData.content.staleAckForSubject = formData.objective.title;
 		onSaveDraft?.();
 	}
 
@@ -882,7 +886,8 @@
 		// instead of silently returning a subject/body mismatch.
 		contentStale =
 			!!formData.content.generatedForSubject &&
-			formData.content.generatedForSubject !== formData.objective.title;
+			formData.content.generatedForSubject !== formData.objective.title &&
+			formData.content.staleAckForSubject !== formData.objective.title;
 		stage = 'results';
 	}
 
@@ -913,7 +918,8 @@
 		// the stale banner so the author resolves the mismatch (update or keep) first.
 		if (
 			formData.content.generatedForSubject &&
-			formData.content.generatedForSubject !== formData.objective.title
+			formData.content.generatedForSubject !== formData.objective.title &&
+			formData.content.staleAckForSubject !== formData.objective.title
 		) {
 			contentStale = true;
 			return;

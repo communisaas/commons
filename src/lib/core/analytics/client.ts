@@ -413,8 +413,9 @@ export function trackAddressChanged(districtChanged: boolean, stateChanged: bool
  * Track the coarse base-rate relation between the viewer's district and the
  * template author's district.
  *
- * The relation is computed ENTIRELY server-side (HMAC equality of the two
- * district codes) and only the 3-valued result reaches the client. No district
+ * The relation is computed ENTIRELY server-side (a plain equality of the two
+ * district codes, inside the internal-secret-guarded Convex query) and only the
+ * 3-valued result reaches the client. No district
  * code, district hash, or any identifier is ever emitted — only `rel_same`,
  * `rel_diff`, or `rel_unknown`, encoded into the `utm_source` dimension (matching
  * the sanitizer's alphanumeric/underscore allowlist), mirroring trackAddressChanged.

@@ -191,6 +191,9 @@ export interface TemplateFormData {
 		customRecipients: CustomRecipient[];
 		/** Subject line DMs were resolved for — triggers re-resolution on mismatch */
 		resolvedForSubject?: string;
+		/** Subject the author explicitly acknowledged keeping stale DMs for. Suppresses
+		 *  the stale banner WITHOUT rewriting resolvedForSubject's true provenance. */
+		staleAckForSubject?: string;
 	};
 	content: {
 		preview: string;
@@ -202,6 +205,9 @@ export interface TemplateFormData {
 		edited?: boolean; // Flag indicating user edited AI-generated message
 		/** Subject line content was generated for — triggers re-generation on mismatch */
 		generatedForSubject?: string;
+		/** Subject the author explicitly acknowledged keeping the stale body for.
+		 *  Suppresses the stale banner WITHOUT rewriting generatedForSubject. */
+		staleAckForSubject?: string;
 		/** Active/recoverable message generation job for tab hibernation recovery */
 		activeMessageJob?: ActiveMessageJob | null;
 		/** Draft-local provenance for resumed route handoffs such as Studio -> public action. */

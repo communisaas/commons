@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Share2, CheckCircle } from '@lucide/svelte';
 	import SimpleTooltip from './SimpleTooltip.svelte';
+	import { tryNativeShare } from '$lib/utils/web-share';
 
 	let {
 		url,
@@ -26,19 +27,15 @@
 	let hovered = $state(false);
 
 	async function handleShare() {
-		// Native share sheet when message is provided and platform supports it
-		if (message && typeof navigator !== 'undefined' && navigator.share) {
-			const shareData = { title: _title, text: message, url };
-			try {
-				if (navigator.canShare?.(shareData)) {
-					await navigator.share(shareData);
-					onShared?.();
-					return;
-				}
-			} catch (err) {
-				if (err instanceof Error && err.name === 'AbortError') return;
-				// Fall through to clipboard copy
+		// Native share sheet when there's recruiting copy and the platform supports it.
+		if (message) {
+			const result = await tryNativeShare({ title: _title, text: message });
+			if (result === 'shared') {
+				onShared?.();
+				return;
 			}
+			if (result === 'dismissed') return;
+			// 'unavailable' → fall through to clipboard copy.
 		}
 		await copyToClipboard();
 	}

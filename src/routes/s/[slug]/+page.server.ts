@@ -158,7 +158,13 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 					userId: userId as Id<'users'>,
 					_secret: env.INTERNAL_API_SECRET
 				})
-					.catch(() => null)
+					.catch((err) => {
+						console.error(
+							'[recipient-page] getUserDmRelation failed (check INTERNAL_API_SECRET / Convex):',
+							err
+						);
+						return null;
+					})
 			: Promise.resolve(null),
 
 		// Viewer-vs-author relation (viewerIsAuthor + coarse base-rate), computed
@@ -170,7 +176,13 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 					viewerUserId: userId ? (userId as Id<'users'>) : undefined,
 					_secret: env.INTERNAL_API_SECRET
 				})
-					.catch(() => null)
+					.catch((err) => {
+						console.error(
+							'[recipient-page] getViewerAuthorRelation failed (check INTERNAL_API_SECRET / Convex):',
+							err
+						);
+						return null;
+					})
 			: Promise.resolve(null)
 	]);
 

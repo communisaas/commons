@@ -362,7 +362,10 @@
 			// If the subject line is different, the old DMs are stale — re-resolve.
 			const resolvedFor = formData.audience.resolvedForSubject;
 			const currentSubject = formData.objective.title;
-			const isStale = resolvedFor && resolvedFor !== currentSubject;
+			const isStale =
+				resolvedFor &&
+				resolvedFor !== currentSubject &&
+				formData.audience.staleAckForSubject !== currentSubject;
 
 			// Also detect corrupted draft data (no names on any AI-resolved DM).
 			const isCorrupted = formData.audience.decisionMakers.every(
@@ -396,10 +399,11 @@
 		resolveDecisionMakers();
 	}
 
-	/** Keep the existing decision-makers; re-stamp so they're no longer stale, then persist. */
+	/** Keep the existing decision-makers: record the acknowledgement for this subject so
+	 *  the banner stops, WITHOUT rewriting resolvedForSubject's true provenance. */
 	function handleKeepAudience() {
 		audienceStale = false;
-		formData.audience.resolvedForSubject = formData.objective.title;
+		formData.audience.staleAckForSubject = formData.objective.title;
 		onSaveDraft?.();
 	}
 

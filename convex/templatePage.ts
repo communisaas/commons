@@ -130,6 +130,11 @@ export const getViewerAuthorRelation = query({
 
     const viewerIsAuthor =
       viewerUserId != null && viewerUserId === template.userId;
+    // An author viewing their own template is not a recipient — exclude from the
+    // base-rate signal (skips a redundant lookup and avoids inflating 'same').
+    if (viewerIsAuthor) {
+      return { viewerIsAuthor: true, baseRateRelation: "unknown" as const };
+    }
 
     const districtFor = async (uid: Id<"users">): Promise<string | null> => {
       const rel = await ctx.db
@@ -144,14 +149,16 @@ export const getViewerAuthorRelation = query({
         : null;
     };
 
-    const authorDistrict = await districtFor(template.userId);
-    const viewerDistrict = viewerUserId ? await districtFor(viewerUserId) : null;
+    const [authorDistrict, viewerDistrict] = await Promise.all([
+      districtFor(template.userId),
+      viewerUserId ? districtFor(viewerUserId) : Promise.resolve(null),
+    ]);
 
     let baseRateRelation: "same" | "diff" | "unknown" = "unknown";
     if (viewerDistrict != null && authorDistrict != null) {
       baseRateRelation = viewerDistrict === authorDistrict ? "same" : "diff";
     }
 
-    return { viewerIsAuthor, baseRateRelation };
+    return { viewerIsAuthor: false, baseRateRelation };
   },
 });
