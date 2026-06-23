@@ -72,6 +72,15 @@ export function timezoneToCountry(timeZone: string): string | null {
 }
 `;
 
+// Sanity floor: a truncated, header-only, or wrong-format source would parse to
+// a near-empty map and silently clobber the committed ~400-zone file. Fail loud
+// instead so a regenerate-from-broken-tzdata accident can't ship a coverage gap.
+if (zones.length < 100) {
+	throw new Error(
+		`Refusing to write ${OUT}: only ${zones.length} zones parsed from ${TAB} (expected >400). Truncated or wrong-format source?`
+	);
+}
+
 writeFileSync(OUT, out);
 console.log(`Wrote ${zones.length} zones (${new Set(Object.values(map)).size} countries) to ${OUT}`);
 console.log(`Provenance: ${provenance}`);
