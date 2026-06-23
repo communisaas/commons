@@ -884,6 +884,40 @@ describe('Location Inference Engine', () => {
 			expect(result.state_name).toBe('Johor');
 		});
 
+		it('folds US territories into US jurisdiction with the territory as subdivision', async () => {
+			const engine = new LocationInferenceEngine();
+			// IANA/Cloudflare surface Puerto Rico as its own ISO country 'PR'. For
+			// civic engagement it's a US jurisdiction (US-keyed resolvers/filters),
+			// so fold to US with 'PR' as the subdivision.
+			const prSignal = makeSignal({
+				country_code: 'PR',
+				state_code: null,
+				source: 'ip.geolocation'
+			});
+			mockStorage.getSignals.mockResolvedValue([prSignal]);
+
+			const result = await engine.inferLocation();
+
+			expect(result.country_code).toBe('US');
+			expect(result.state_code).toBe('PR');
+		});
+
+		it('folds Guam (timezone-derived) into US jurisdiction', async () => {
+			const engine = new LocationInferenceEngine();
+			const guSignal = makeSignal({
+				country_code: 'GU',
+				state_code: null,
+				source: 'browser.timezone',
+				confidence: 0.15
+			});
+			mockStorage.getSignals.mockResolvedValue([guSignal]);
+
+			const result = await engine.inferLocation();
+
+			expect(result.country_code).toBe('US');
+			expect(result.state_code).toBe('GU');
+		});
+
 		it('should generate initial signals when storage is empty', async () => {
 			const engine = new LocationInferenceEngine();
 			// First call: empty, second call: with timezone signal

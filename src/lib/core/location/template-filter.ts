@@ -921,7 +921,11 @@ export function geoScopeToInferredLocation(scope: GeoScope): InferredLocation | 
 				state_code: stateCode,
 				city_name: scope.locality ?? null,
 				source: 'location_scope_bar',
-				timestamp: now
+				timestamp: now,
+				// Carry the subdivision name on the signal too (IP convention), so a
+				// re-fusion over these signals doesn't drop it — the top-level
+				// state_name above and metadata.state_name stay in agreement.
+				...(scope.subdivisionName ? { metadata: { state_name: scope.subdivisionName } } : {})
 			}
 		],
 		inferred_at: now

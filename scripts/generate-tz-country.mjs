@@ -35,7 +35,9 @@ const lines = readFileSync(TAB, 'utf8')
 const map = {};
 for (const line of lines) {
 	const cols = line.split('\t');
-	const cc = (cols[0] || '').trim();
+	// zone.tab carries one country code; zone1970.tab carries a comma-separated
+	// list (principal country first). Take the first so either file works.
+	const cc = (cols[0] || '').split(',')[0].trim();
 	const zone = (cols[2] || '').trim();
 	if (zone && /^[A-Z]{2}$/.test(cc)) map[zone] = cc;
 }

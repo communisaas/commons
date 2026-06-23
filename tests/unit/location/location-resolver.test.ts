@@ -93,6 +93,17 @@ describe('displayGeoScope', () => {
 		};
 		expect(displayGeoScope(scope)).toBe('California, United States');
 	});
+
+	it('names US territory subdivisions (fold-to-US keeps the territory label)', () => {
+		// A territory inferred from IP/timezone folds to country 'US' with the
+		// territory as the subdivision, so it reads as the territory, not a code.
+		const scope: GeoScope = {
+			type: 'subnational',
+			country: 'US',
+			subdivision: 'US-PR'
+		};
+		expect(displayGeoScope(scope)).toBe('Puerto Rico, United States');
+	});
 });
 
 describe('inferredLocationToGeoScope — Forest City regression', () => {

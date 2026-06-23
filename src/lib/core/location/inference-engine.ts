@@ -21,6 +21,21 @@ import {
 } from './types';
 
 // ============================================================================
+// US territory normalization
+// ============================================================================
+
+/**
+ * ISO 3166-1 codes for US territories that the IANA/CLDR data and Cloudflare's
+ * IP geolocation surface as standalone countries. For civic engagement they are
+ * US jurisdictions (territory residents have non-voting US delegates), and the
+ * location resolvers + template filter are keyed on country_code === 'US'. We
+ * fold them into 'US' with the territory carried as the US subdivision (e.g.
+ * 'PR'), which US_STATE_CODES already names — so jurisdiction and filtering see
+ * the US while the breadcrumb still reads "United States › Puerto Rico".
+ */
+const US_TERRITORY_CODES = new Set(['PR', 'GU', 'VI', 'AS', 'MP']);
+
+// ============================================================================
 // Location Inference Engine
 // ============================================================================
 
@@ -203,14 +218,27 @@ export class LocationInferenceEngine {
 		// Fallback to any signal with country code (IP is highly reliable for country)
 		const countrySignal = signals.find((s) => s.country_code) || primarySignal;
 
+		let countryCode = countrySignal.country_code || null;
+		let stateCode = primarySignal.state_code || null;
+		// Preserve the region's human-readable name (e.g. "Johor") from the same
+		// signal that supplied state_code. IP geolocation stashes it in metadata;
+		// without lifting it here the display layer is left with only the code.
+		let stateName = (primarySignal.metadata?.state_name as string | undefined) ?? null;
+
+		// Fold US territories into US jurisdiction, carrying the territory as the
+		// subdivision (see US_TERRITORY_CODES). The territory name comes from
+		// US_STATE_CODES at display time, so we drop any sub-territory region here.
+		if (countryCode && US_TERRITORY_CODES.has(countryCode)) {
+			stateCode = countryCode;
+			stateName = null;
+			countryCode = 'US';
+		}
+
 		return {
-			country_code: countrySignal.country_code || null,
+			country_code: countryCode,
 			congressional_district: primarySignal.congressional_district || null,
-			state_code: primarySignal.state_code || null,
-			// Preserve the region's human-readable name (e.g. "Johor") from the same
-			// signal that supplied state_code. IP geolocation stashes it in metadata;
-			// without lifting it here the display layer is left with only the code.
-			state_name: (primarySignal.metadata?.state_name as string | undefined) ?? null,
+			state_code: stateCode,
+			state_name: stateName,
 			city_name: primarySignal.city_name || null,
 			county_name: (primarySignal.metadata?.county_name as string | null) || null,
 			county_fips: primarySignal.county_fips || null,
