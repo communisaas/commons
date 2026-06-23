@@ -58,6 +58,8 @@
 	import type { TemplateWithJurisdictions } from '$lib/core/location/types';
 	import { scoreTemplate, sortTemplatesByScore } from '$lib/utils/template-scoring';
 	import { selectLandingSurface } from '$lib/core/topic/landing-surface';
+	import { selectLandingIntent } from '$lib/core/topic/landing-intent';
+	import { trackFrontDoorIntent } from '$lib/core/analytics/client';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
@@ -156,6 +158,12 @@
 
 	// Handle OAuth return for template creation and URL parameter initialization
 	onMount(() => {
+		// Emit the coarse front-door persona once per landing (find vs author),
+		// derived purely from the URL. No PII, no IP/geo — only which affordance
+		// the visitor arrived on. trackFrontDoorIntent is a client-only no-op
+		// otherwise; onMount runs once per mount.
+		trackFrontDoorIntent(landingIntent);
+
 		if (browser && $page.url.searchParams.get('template_saved') === 'pending') {
 			const pendingData = sessionStorage.getItem('pending_template_save');
 			if (pendingData) {
@@ -411,6 +419,13 @@
 	const surface = $derived(selectLandingSurface($page.url));
 	const showGraph = $derived(surface === 'graph');
 	const showSpectrum = $derived(surface === 'spectrum');
+
+	// The front-door INTENT (find-existing vs author-new) is orthogonal to the
+	// surface above. Derived off the page store so it stays reactive + SSR-safe,
+	// exactly like the surface. `findFirst` leads CreationSpark to the existing
+	// matches when the visitor arrived with `?intent=find`.
+	const landingIntent = $derived(selectLandingIntent($page.url));
+	const findFirst = $derived(landingIntent === 'find');
 
 	// The desktop descent shared by both spatial surfaces. A dive engages only after
 	// a user-initiated selection (the store auto-selects the first template on
@@ -797,6 +812,7 @@
 				onactivate={handleSparkActivate}
 				matchTemplates={allTemplates}
 				onMatchSelect={handleSendMessage}
+				{findFirst}
 			>
 				{#snippet context()}
 					<footer class="creation-footer">

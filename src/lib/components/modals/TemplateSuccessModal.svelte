@@ -115,7 +115,12 @@
 				}
 			}
 		} else {
-			await handleCopy();
+			// No native share sheet: copy the recruiting message (it already embeds the URL).
+			const ok = await clipboardCopy(shareMessage || shareUrl);
+			if (ok) {
+				copied = true;
+				setTimeout(() => (copied = false), 2000);
+			}
 		}
 	}
 

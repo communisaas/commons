@@ -11,6 +11,10 @@
  * than each re-reading the parameters, so the default cannot silently drift apart
  * between them.
  *
+ * The surface (which browsing world shows) is orthogonal to the landing INTENT
+ * (find-existing vs author-new), which is resolved by the sibling
+ * `landing-intent.ts`: a visitor can arrive with either intent on any surface.
+ *
  * The rules, in precedence order:
  *
  *   1. `?view=graph` opens the relatedness graph (a spatial surface kept as an

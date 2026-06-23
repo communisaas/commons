@@ -94,3 +94,40 @@ export const getUserDmRelation = query({
     return { districtCode };
   },
 });
+
+/**
+ * Resolve a template author's identity + active district for server-internal
+ * use only (base-rate relation HMAC + viewerIsAuthor check in +page.server.ts).
+ *
+ * The returned `authorUserId` and `authorDistrictCode` are opaque identifiers
+ * consumed exclusively server-side; they are NEVER forwarded to the client
+ * payload. The district code in particular only ever feeds an HMAC equality
+ * comparison whose 3-valued result (same/diff/unknown) is the only thing that
+ * can leave the server.
+ */
+export const getAuthorDmRelation = query({
+  args: { slug: v.string() },
+  handler: async (ctx, { slug }) => {
+    const template = await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (idx) => idx.eq("slug", slug))
+      .first();
+
+    if (!template || !template.userId) return null;
+
+    const relations = await ctx.db
+      .query("userDmRelations")
+      .withIndex("by_userId", (idx) => idx.eq("userId", template.userId!))
+      .collect();
+
+    const active = relations.find((r) => r.isActive);
+    const dm = active ? await ctx.db.get(active.decisionMakerId) : null;
+
+    const districtCode =
+      dm && dm.jurisdiction && dm.district
+        ? `${dm.jurisdiction}-${dm.district}`
+        : null;
+
+    return { authorUserId: template.userId, authorDistrictCode: districtCode };
+  },
+});

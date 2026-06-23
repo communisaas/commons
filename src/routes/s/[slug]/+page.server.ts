@@ -5,6 +5,7 @@ import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
+import { computeBaseRateRelation } from '$lib/server/analytics/base-rate-relation';
 import type { Id } from '$convex/_generated/dataModel';
 
 type DebateArgumentRow = {
@@ -107,6 +108,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	const parentData = await parent();
 
 	const templateId = parentData.template?.id;
+	const templateSlug = parentData.template?.slug;
 	const userId = locals.user?.id;
 	const userDistrictHash = locals.user?.district_hash;
 	const identityCommitment =
@@ -119,7 +121,8 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		debateResult,
 		positionCountsResult,
 		existingPositionResult,
-		userRepResult
+		userRepResult,
+		authorRelResult
 	] = await Promise.all([
 		// District message aggregates via Convex
 		templateId
@@ -153,6 +156,13 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		userId && userDistrictHash
 			? serverQuery(api.templatePage.getUserDmRelation, { userId: userId as Id<'users'> })
 					.catch(() => null)
+			: Promise.resolve(null),
+
+		// Template author's identity + district — server-internal only (base-rate
+		// relation HMAC + viewerIsAuthor). Never forwarded to the client payload.
+		templateSlug
+			? serverQuery(api.templatePage.getAuthorDmRelation, { slug: templateSlug })
+					.catch(() => null)
 			: Promise.resolve(null)
 	]);
 
@@ -167,6 +177,25 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	const userDistrictCode = userRepResult && typeof userRepResult === 'object' && 'districtCode' in userRepResult
 		? (userRepResult as { districtCode: string | null }).districtCode
 		: null;
+
+	// Author identity + district stay SERVER-INTERNAL: authorUserId is used only
+	// to derive viewerIsAuthor, and authorDistrictCode only feeds the HMAC
+	// equality for the base-rate relation. Neither is forwarded to the client.
+	const authorRel = authorRelResult as
+		| { authorUserId: string | null; authorDistrictCode: string | null }
+		| null;
+	const authorUserId = authorRel?.authorUserId ?? null;
+	const authorDistrictCode = authorRel?.authorDistrictCode ?? null;
+
+	const viewerIsAuthor = userId != null && authorUserId != null && userId === authorUserId;
+	// A viewer may be framed possessively ("YOUR REPRESENTATIVES") only as the
+	// author or with a real verified/entered-address district.
+	const viewerIsConstituent = viewerIsAuthor || userDistrictCode != null;
+
+	// Coarse 3-valued relation (same/diff/unknown). Computed by HMAC equality so
+	// no district identifier ever leaves the server. Fail-soft to 'unknown'.
+	const baseRateRelation = await computeBaseRateRelation(userDistrictCode, authorDistrictCode);
+
 	const positionCounts = positionCountsResult;
 
 	const existingPosition = existingPositionResult
@@ -291,6 +320,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		existingPosition,
 		districtOfficials: districtOfficials as DistrictOfficialInput[],
 		recipientConfig,
-		engagementByDistrict
+		engagementByDistrict,
+		// Honesty gating + coarse relation. authorUserId / authorDistrictCode are
+		// intentionally NOT included — only these derived, non-identifying flags.
+		viewerIsAuthor,
+		viewerIsConstituent,
+		baseRateRelation
 	};
 };

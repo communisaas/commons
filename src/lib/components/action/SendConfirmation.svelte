@@ -25,6 +25,8 @@
 		proofUrl = undefined,
 		/** Campaign URL for the share-forward. */
 		shareUrl,
+		/** Recruiting copy carried at the share moment — embeds the action URL; distinct from the email body. */
+		shareMessage = '',
 		/** Full message text for the copy fallback. */
 		messageText = '',
 		/** Called only on an explicit "Yes, it sent" — this is what marks contact. */
@@ -35,6 +37,7 @@
 		attestationLine?: string;
 		proofUrl?: string;
 		shareUrl: string;
+		shareMessage?: string;
 		messageText?: string;
 		onConfirmSent: () => void;
 		onClose: () => void;
@@ -79,12 +82,18 @@
 		}
 	}
 	async function share() {
+		const payload = { text: shareMessage || undefined, url: shareUrl };
 		try {
-			if (typeof navigator !== 'undefined' && navigator.share) {
-				await navigator.share({ url: shareUrl });
+			if (
+				typeof navigator !== 'undefined' &&
+				navigator.share &&
+				(!navigator.canShare || navigator.canShare(payload))
+			) {
+				await navigator.share(payload);
 				shared = true;
 			} else {
-				await navigator.clipboard.writeText(shareUrl);
+				// shareMessage already embeds the URL; fall back to the bare URL when absent.
+				await navigator.clipboard.writeText(shareMessage || shareUrl);
 				shared = true;
 			}
 		} catch {

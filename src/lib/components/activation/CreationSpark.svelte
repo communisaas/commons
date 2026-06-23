@@ -33,13 +33,29 @@
 		 * onboarding/address auth wall fires at send time exactly as today.
 		 */
 		onMatchSelect?: (template: Template) => void;
+		/**
+		 * Seed text the surface opens with — e.g. a grievance carried in from a deep
+		 * link. Optional; absent on the default author front door. Never overwrites a
+		 * recovered draft (draft precedence wins).
+		 */
+		seedQuery?: string;
+		/**
+		 * When true, after seeding, lead focus to the first existing-campaign match
+		 * (the find-first front door) instead of leaving "Continue"/author primary.
+		 * Honest no-op when no match clears the score floor, and it only re-weights
+		 * presentation — it never auto-navigates or auto-sends, so the deferred
+		 * onboarding/address wall still fires at the user's explicit send.
+		 */
+		findFirst?: boolean;
 	}
 
-	let { context, onactivate, matchTemplates, onMatchSelect }: Props = $props();
+	let { context, onactivate, matchTemplates, onMatchSelect, seedQuery, findFirst }: Props =
+		$props();
 
 	let issueText = $state('');
 	let isFocused = $state(false);
 	let inputEl = $state<HTMLTextAreaElement | null>(null);
+	let matchesEl = $state<HTMLDivElement | null>(null);
 
 	// Draft state - integrated into the surface
 	let activeDraftId = $state<string | null>(null);
@@ -56,6 +72,21 @@
 		});
 		return unsubscribe;
 	});
+
+	// Seed the surface from a deep-link intent ONCE on mount — but only when there
+	// is no recovered draft and the surface is still empty. A saved draft always
+	// wins (the draft `$effect` owns issueText when a draft exists), so a seed can
+	// never clobber a user's in-progress work.
+	onMount(() => {
+		const seed = seedQuery?.trim();
+		if (seed && activeDraftId === null && issueText === '') {
+			issueText = seed;
+		}
+	});
+
+	// Whether the person has engaged the writing surface. Once they have, the
+	// find-first lead must never yank focus away from where they're typing.
+	let userTouched = $state(false);
 
 	// Load draft reactively - re-runs when store updates
 	$effect(() => {
@@ -145,6 +176,21 @@
 			? matchExistingCampaigns(matchTemplates ?? [], debouncedText, { limit: 3 })
 			: []
 	);
+
+	// Find-first lead: when the visitor arrived to FIND an existing campaign and
+	// at least one real match clears the floor, gently lead the eye to the matches
+	// block — but only before they've engaged the surface, so we never yank focus
+	// once they start typing. This re-weights presentation only: it never
+	// auto-selects or navigates, so the deferred onboarding/address wall still
+	// fires at the user's explicit send. A no-op when nothing matches (matches is
+	// honestly empty), and only fires once.
+	let hasLedToMatches = false;
+	$effect(() => {
+		if (findFirst && !userTouched && !hasLedToMatches && matches.length > 0 && matchesEl) {
+			hasLedToMatches = true;
+			matchesEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+		}
+	});
 
 	// Check draft state for button text accuracy
 	const draftHasSuggestion = $derived.by(() => {
@@ -242,8 +288,12 @@
 					class="spark-input"
 					placeholder="The rent keeps going up but wages don't..."
 					rows="3"
-					onfocus={() => (isFocused = true)}
+					onfocus={() => {
+						isFocused = true;
+						userTouched = true;
+					}}
 					onblur={() => (isFocused = false)}
+					oninput={() => (userTouched = true)}
 					onkeydown={handleKeydown}
 				></textarea>
 
@@ -302,7 +352,12 @@
 			"popular"/"trending" (unobservable).
 		-->
 		{#if matches.length > 0}
-			<div class="spark-matches" role="region" aria-label="Existing campaigns matching what you wrote">
+			<div
+				bind:this={matchesEl}
+				class="spark-matches"
+				role="region"
+				aria-label="Existing campaigns matching what you wrote"
+			>
 				<p class="matches-head">Already a campaign on this?</p>
 				<ul class="matches-list">
 					{#each matches as match (match.template.id)}

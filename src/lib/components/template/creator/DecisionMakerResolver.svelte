@@ -13,6 +13,7 @@
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
 	import DecisionMakerResults from './DecisionMakerResults.svelte';
 	import AuthGateOverlay from './AuthGateOverlay.svelte';
+	import StaleArtifactBanner from '../StaleArtifactBanner.svelte';
 
 	interface Props {
 		formData: TemplateFormData;
@@ -31,6 +32,8 @@
 	let errorMessage = $state<string | null>(null);
 	let rateLimitResetAt = $state<string | null>(null);
 	let isResolving = $state(false);
+	/** True when the resolved decision-makers were built for a now-stale subject. */
+	let audienceStale = $state(false);
 
 	// Streaming state
 	let thoughts = $state<string[]>([]);
@@ -367,12 +370,13 @@
 			);
 
 			if (isStale) {
-				console.log('[DecisionMakerResolver] Subject changed, clearing stale DMs', {
+				// Preserve the existing decision-makers and surface the stale banner so the
+				// author chooses to update (re-resolve) or keep them — no silent wipe.
+				console.log('[DecisionMakerResolver] Subject changed, flagging DMs as stale', {
 					resolvedFor, currentSubject
 				});
-				formData.audience.decisionMakers = [];
-				formData.audience.resolvedForSubject = undefined;
-				resolveDecisionMakers();
+				audienceStale = true;
+				stage = 'results';
 			} else if (isCorrupted) {
 				console.log('[DecisionMakerResolver] Corrupted draft data (no names), re-resolving...');
 				resolveDecisionMakers();
@@ -382,6 +386,21 @@
 			}
 		}
 	});
+
+	/** Re-resolve decision-makers for the current subject, replacing the stale set. */
+	function handleUpdateAudience() {
+		audienceStale = false;
+		formData.audience.decisionMakers = [];
+		formData.audience.resolvedForSubject = undefined;
+		resolveDecisionMakers();
+	}
+
+	/** Keep the existing decision-makers; re-stamp so they're no longer stale, then persist. */
+	function handleKeepAudience() {
+		audienceStale = false;
+		formData.audience.resolvedForSubject = formData.objective.title;
+		onSaveDraft?.();
+	}
 
 	/**
 	 * Skip agent resolution and go straight to results with empty AI list.
@@ -461,6 +480,16 @@
 		{/if}
 	{:else if stage === 'results'}
 		<!-- Results display -->
+		{#if audienceStale}
+			<StaleArtifactBanner
+				builtForSubject={formData.audience.resolvedForSubject ?? ''}
+				currentSubject={formData.objective.title}
+				artifactLabel="decision-makers"
+				busy={isResolving}
+				onUpdate={handleUpdateAudience}
+				onKeep={handleKeepAudience}
+			/>
+		{/if}
 		<DecisionMakerResults
 			bind:decisionMakers={formData.audience.decisionMakers}
 			bind:customRecipients={formData.audience.customRecipients}

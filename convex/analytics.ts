@@ -27,6 +27,7 @@ const ALLOWED_METRICS = new Set([
   "template_view", "template_use", "template_share",
   "delivery_attempt", "delivery_success", "delivery_fail",
   "auth_start", "auth_complete",
+  "address_changed", "base_rate_relation", "front_door_intent",
   "error_network", "error_validation", "error_auth", "error_timeout", "error_unknown",
   "funnel_1", "funnel_2", "funnel_3", "funnel_4", "funnel_5",
   "cohort_first_seen", "cohort_return",
