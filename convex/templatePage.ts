@@ -120,6 +120,13 @@ export const getViewerAuthorRelation = query({
   handler: async (ctx, { slug, viewerUserId, _secret }) => {
     requireInternalSecret(_secret);
 
+    // Anonymous viewers can't be the author and have no district to compare, so the
+    // result is always (false, "unknown"). Short-circuit before any DB work — most
+    // recipient-page traffic is logged out, and this is a hot path.
+    if (!viewerUserId) {
+      return { viewerIsAuthor: false, baseRateRelation: "unknown" as const };
+    }
+
     const template = await ctx.db
       .query("templates")
       .withIndex("by_slug", (idx) => idx.eq("slug", slug))

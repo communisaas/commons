@@ -424,6 +424,21 @@
 	}
 
 	function handleNext() {
+		// Honesty gate, symmetric with the message step: don't advance with decision-makers
+		// resolved for a different subject. Surface the stale banner so the author updates or
+		// explicitly keeps them first (acknowledgement, not provenance, suppresses it).
+		const resolvedFor = formData.audience.resolvedForSubject;
+		const currentSubject = formData.objective.title;
+		if (
+			resolvedFor &&
+			resolvedFor !== currentSubject &&
+			formData.audience.staleAckForSubject !== currentSubject
+		) {
+			audienceStale = true;
+			stage = 'results';
+			return;
+		}
+
 		// Ensure recipientEmails is updated from decision-makers
 		formData.audience.recipientEmails = extractRecipientEmails(
 			formData.audience.decisionMakers,
