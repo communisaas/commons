@@ -864,6 +864,26 @@ describe('Location Inference Engine', () => {
 			expect(result.confidence).toBeCloseTo(1.0, 5);
 		});
 
+		it('lifts the region name from the IP signal metadata into state_name', async () => {
+			const engine = new LocationInferenceEngine();
+			// Forest City, Johor: Cloudflare returns regionCode "01" (ISO 3166-2:MY)
+			// alongside the region name "Johor" (stashed in metadata.state_name).
+			const ipSignal = makeSignal({
+				country_code: 'MY',
+				state_code: '01',
+				source: 'ip.geolocation',
+				metadata: { state_name: 'Johor' }
+			});
+			mockStorage.getSignals.mockResolvedValue([ipSignal]);
+
+			const result = await engine.inferLocation();
+
+			expect(result.country_code).toBe('MY');
+			expect(result.state_code).toBe('01');
+			// Without lifting the name, the display layer is left with only "01".
+			expect(result.state_name).toBe('Johor');
+		});
+
 		it('should generate initial signals when storage is empty', async () => {
 			const engine = new LocationInferenceEngine();
 			// First call: empty, second call: with timezone signal

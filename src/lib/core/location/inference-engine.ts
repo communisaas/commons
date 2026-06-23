@@ -183,6 +183,7 @@ export class LocationInferenceEngine {
 				country_code: null,
 				congressional_district: null,
 				state_code: null,
+				state_name: null,
 				city_name: null,
 				county_name: null,
 				county_fips: null,
@@ -206,6 +207,10 @@ export class LocationInferenceEngine {
 			country_code: countrySignal.country_code || null,
 			congressional_district: primarySignal.congressional_district || null,
 			state_code: primarySignal.state_code || null,
+			// Preserve the region's human-readable name (e.g. "Johor") from the same
+			// signal that supplied state_code. IP geolocation stashes it in metadata;
+			// without lifting it here the display layer is left with only the code.
+			state_name: (primarySignal.metadata?.state_name as string | undefined) ?? null,
 			city_name: primarySignal.city_name || null,
 			county_name: (primarySignal.metadata?.county_name as string | null) || null,
 			county_fips: primarySignal.county_fips || null,
