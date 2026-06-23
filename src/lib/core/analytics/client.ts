@@ -374,6 +374,26 @@ export function trackFunnelStep(step: 1 | 2 | 3 | 4 | 5, templateId?: string): v
 }
 
 /**
+ * Track which front-door affordance a visitor arrived on.
+ *
+ * Emits ONLY a coarse two-value persona tag — find (came to join an existing
+ * campaign) vs author (the default write-new front door) — encoded into the
+ * `utm_source` dimension via the sanitizer's alphanumeric/underscore allowlist:
+ *   - `fd_find` — arrived with the find-existing intent (`?intent=find`)
+ *   - `fd_author` — arrived on the author default
+ *
+ * No PII, no session, no geo — the server sees only which affordance the visitor
+ * landed on. Emitted on the dedicated `front_door_intent` metric (carrying the
+ * persona in `utm_source`, exactly as trackAddressChanged / trackBaseRateRelation
+ * carry their tags) so front-door arrivals never blend with funnel-step counts.
+ */
+export function trackFrontDoorIntent(intent: 'find' | 'author'): void {
+	analytics.increment(METRICS.front_door_intent, {
+		utm_source: intent === 'find' ? 'fd_find' : 'fd_author'
+	});
+}
+
+/**
  * Track a constituent re-grounding (address change after initial verification).
  *
  * The server never sees old or new district identifiers. Only two boolean flags
@@ -386,5 +406,22 @@ export function trackFunnelStep(step: 1 | 2 | 3 | 4 | 5, templateId?: string): v
 export function trackAddressChanged(districtChanged: boolean, stateChanged: boolean): void {
 	analytics.increment(METRICS.address_changed, {
 		utm_source: `d${districtChanged ? 1 : 0}_s${stateChanged ? 1 : 0}`
+	});
+}
+
+/**
+ * Track the coarse base-rate relation between the viewer's district and the
+ * template author's district.
+ *
+ * The relation is computed ENTIRELY server-side (a plain equality of the two
+ * district codes, inside the internal-secret-guarded Convex query) and only the
+ * 3-valued result reaches the client. No district
+ * code, district hash, or any identifier is ever emitted — only `rel_same`,
+ * `rel_diff`, or `rel_unknown`, encoded into the `utm_source` dimension (matching
+ * the sanitizer's alphanumeric/underscore allowlist), mirroring trackAddressChanged.
+ */
+export function trackBaseRateRelation(relation: 'same' | 'diff' | 'unknown'): void {
+	analytics.increment(METRICS.base_rate_relation, {
+		utm_source: `rel_${relation}`
 	});
 }

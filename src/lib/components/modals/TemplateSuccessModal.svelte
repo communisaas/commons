@@ -15,6 +15,7 @@
 	import { parseRecipientConfig } from '$lib/types/template';
 	import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 	import { supportsWebShare, copyToClipboard as clipboardCopy } from '$lib/utils/browserUtils';
+	import { tryNativeShare } from '$lib/utils/web-share';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 
 	let {
@@ -100,22 +101,14 @@
 	}
 
 	async function handleShare() {
-		const shareData = {
-			title: template.title,
-			text: shareMessage,
-			url: shareUrl
-		};
-
-		if (typeof navigator !== 'undefined' && navigator.share && navigator.canShare?.(shareData)) {
-			try {
-				await navigator.share(shareData);
-			} catch (err) {
-				if (err instanceof Error && err.name !== 'AbortError') {
-					console.error('[Share] Native share failed:', err);
-				}
-			}
-		} else {
-			await handleCopy();
+		const result = await tryNativeShare({ title: template.title, text: shareMessage });
+		// 'shared' or 'dismissed' → done; don't copy behind the user's back.
+		if (result === 'shared' || result === 'dismissed') return;
+		// No native share sheet: copy the recruiting message (it already embeds the URL).
+		const ok = await clipboardCopy(shareMessage || shareUrl);
+		if (ok) {
+			copied = true;
+			setTimeout(() => (copied = false), 2000);
 		}
 	}
 

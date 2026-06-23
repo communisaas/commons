@@ -166,12 +166,6 @@
 				}
 	);
 
-	// State machine checkpoint: the subject line that downstream steps were built for.
-	// When the subject changes and the user advances, downstream state is invalidated.
-	let downstreamSubjectCheckpoint = $state<string | undefined>(
-		_loadedDraft ? formData.objective.title : undefined
-	);
-
 	// Derived: has content worth saving (for ambient indicator)
 	const hasContent = $derived(
 		formData.objective.rawInput?.trim() ||
@@ -246,20 +240,10 @@
 		const currentIndex = steps.indexOf(currentStep);
 
 		if (currentIndex < steps.length - 1) {
-			// State machine invalidation: when subject changed, clear downstream state.
-			// This is the authoritative check — children re-resolve on mount when empty.
-			if (currentStep === 'objective') {
-				const currentTitle = formData.objective.title;
-				if (downstreamSubjectCheckpoint && downstreamSubjectCheckpoint !== currentTitle) {
-					formData.audience.decisionMakers = [];
-					formData.audience.resolvedForSubject = undefined;
-					formData.content.preview = '';
-					formData.content.aiGenerated = false;
-					formData.content.generatedForSubject = undefined;
-					formData.content.draftOrigin = null;
-				}
-				downstreamSubjectCheckpoint = currentTitle;
-			}
+			// Subject changes do NOT wipe downstream artifacts. The preserved
+			// resolvedForSubject/generatedForSubject no longer match the new title, so the
+			// child resolvers detect the mismatch on mount and show a stale banner offering
+			// update-or-keep instead of silently discarding the author's work.
 
 			// Show immediate feedback - button enters loading state
 			isTransitioning = true;

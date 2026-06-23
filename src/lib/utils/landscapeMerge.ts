@@ -126,7 +126,12 @@ function resolveDeliveryRoute(member: {
 
 export function mergeLandscape(
   templateDMs: ProcessedDecisionMaker[],
-  districtOfficials: DistrictOfficialInput[] = []
+  districtOfficials: DistrictOfficialInput[] = [],
+  // True only for the author or a viewer with a real verified/entered-address
+  // district. Gates the possessive "YOUR REPRESENTATIVES" label so a guest or a
+  // logged-in non-constituent never sees this district's officials framed as
+  // their own. Defaults false so callers are honest by omission.
+  viewerIsConstituent = false
 ): MergedLandscape {
   const seen = new Set<string>();
   const roleGroupMap = new Map<RoleCategory, LandscapeMember[]>();
@@ -224,7 +229,10 @@ export function mergeLandscape(
     }));
 
   const districtGroup = districtMembers.length > 0
-    ? { label: 'YOUR REPRESENTATIVES', members: districtMembers }
+    ? {
+        label: viewerIsConstituent ? 'YOUR REPRESENTATIVES' : 'DISTRICT OFFICIALS',
+        members: districtMembers
+      }
     : null;
 
   const totalCount = roleGroups.reduce((sum, g) => sum + g.members.length, 0) + districtMembers.length;

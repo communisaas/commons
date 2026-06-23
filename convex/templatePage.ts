@@ -9,6 +9,8 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { requireInternalSecret } from "./_internalAuth";
 
 /**
  * Get message delivery counts grouped by district hash for a template.
@@ -72,8 +74,12 @@ export const getTotalStates = query({
  * Get the user's active DM relation (for district code lookup).
  */
 export const getUserDmRelation = query({
-  args: { userId: v.id("users") },
-  handler: async (ctx, { userId }) => {
+  args: { userId: v.id("users"), _secret: v.optional(v.string()) },
+  handler: async (ctx, { userId, _secret }) => {
+    // Server-only: callable solely from trusted SvelteKit server code, never a
+    // browser. Closes the userId-enumeration vector for district codes
+    // (internalQuery isn't reachable via the public HTTP client serverQuery uses).
+    requireInternalSecret(_secret);
     const relations = await ctx.db
       .query("userDmRelations")
       .withIndex("by_userId", (idx) => idx.eq("userId", userId))
@@ -92,5 +98,74 @@ export const getUserDmRelation = query({
         : null;
 
     return { districtCode };
+  },
+});
+
+/**
+ * Resolve the viewer-vs-author relation for the recipient page WITHOUT ever
+ * returning the author's identity or district across the boundary. Guarded by
+ * the shared internal secret, so it is callable only from trusted SvelteKit
+ * server code (browsers cannot reach it). Returns only two non-identifying
+ * facts:
+ *   - viewerIsAuthor: the viewer authored this template
+ *   - baseRateRelation: coarse same/diff/unknown of the viewer's vs the
+ *     author's district, compared in-place and discarded — only the enum leaves.
+ */
+export const getViewerAuthorRelation = query({
+  args: {
+    slug: v.string(),
+    viewerUserId: v.optional(v.id("users")),
+    _secret: v.optional(v.string()),
+  },
+  handler: async (ctx, { slug, viewerUserId, _secret }) => {
+    requireInternalSecret(_secret);
+
+    // Anonymous viewers can't be the author and have no district to compare, so the
+    // result is always (false, "unknown"). Short-circuit before any DB work — most
+    // recipient-page traffic is logged out, and this is a hot path.
+    if (!viewerUserId) {
+      return { viewerIsAuthor: false, baseRateRelation: "unknown" as const };
+    }
+
+    const template = await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (idx) => idx.eq("slug", slug))
+      .first();
+    if (!template || !template.userId) {
+      return { viewerIsAuthor: false, baseRateRelation: "unknown" as const };
+    }
+
+    const viewerIsAuthor =
+      viewerUserId != null && viewerUserId === template.userId;
+    // An author viewing their own template is not a recipient — exclude from the
+    // base-rate signal (skips a redundant lookup and avoids inflating 'same').
+    if (viewerIsAuthor) {
+      return { viewerIsAuthor: true, baseRateRelation: "unknown" as const };
+    }
+
+    const districtFor = async (uid: Id<"users">): Promise<string | null> => {
+      const rel = await ctx.db
+        .query("userDmRelations")
+        .withIndex("by_userId", (idx) => idx.eq("userId", uid))
+        .filter((q) => q.eq(q.field("isActive"), true))
+        .first();
+      if (!rel) return null;
+      const dm = await ctx.db.get(rel.decisionMakerId);
+      return dm && dm.jurisdiction && dm.district
+        ? `${dm.jurisdiction}-${dm.district}`
+        : null;
+    };
+
+    const [authorDistrict, viewerDistrict] = await Promise.all([
+      districtFor(template.userId),
+      viewerUserId ? districtFor(viewerUserId) : Promise.resolve(null),
+    ]);
+
+    let baseRateRelation: "same" | "diff" | "unknown" = "unknown";
+    if (viewerDistrict != null && authorDistrict != null) {
+      baseRateRelation = viewerDistrict === authorDistrict ? "same" : "diff";
+    }
+
+    return { viewerIsAuthor: false, baseRateRelation };
   },
 });

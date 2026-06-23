@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Share2, CheckCircle } from '@lucide/svelte';
 	import SimpleTooltip from './SimpleTooltip.svelte';
+	import { tryNativeShare } from '$lib/utils/web-share';
 
 	let {
 		url,
@@ -8,7 +9,8 @@
 		message = '',
 		variant = 'primary',
 		size = 'default',
-		classNames = ''
+		classNames = '',
+		onShared
 	}: {
 		url: string;
 		_title?: string;
@@ -17,33 +19,35 @@
 		variant?: 'primary' | 'secondary';
 		size?: 'sm' | 'default' | 'lg';
 		classNames?: string;
+		/** Fired after a successful native share or clipboard copy. Optional and coarse — no PII. */
+		onShared?: () => void;
 	} = $props();
 
 	let copied = $state(false);
 	let hovered = $state(false);
 
 	async function handleShare() {
-		// Native share sheet when message is provided and platform supports it
-		if (message && typeof navigator !== 'undefined' && navigator.share) {
-			const shareData = { title: _title, text: message, url };
-			try {
-				if (navigator.canShare?.(shareData)) {
-					await navigator.share(shareData);
-					return;
-				}
-			} catch (err) {
-				if (err instanceof Error && err.name === 'AbortError') return;
-				// Fall through to clipboard copy
+		// Native share sheet when there's recruiting copy and the platform supports it.
+		if (message) {
+			const result = await tryNativeShare({ title: _title, text: message });
+			if (result === 'shared') {
+				onShared?.();
+				return;
 			}
+			if (result === 'dismissed') return;
+			// 'unavailable' → fall through to clipboard copy.
 		}
 		await copyToClipboard();
 	}
 
 	async function copyToClipboard() {
 		try {
-			await navigator.clipboard.writeText(url);
+			// Carry the recruiting copy when present (it already embeds the URL), else the bare URL.
+			const clipboardText = message ? message : url;
+			await navigator.clipboard.writeText(clipboardText);
 			copied = true;
 			hovered = false;
+			onShared?.();
 
 			setTimeout(() => {
 				copied = false;

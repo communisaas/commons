@@ -32,6 +32,14 @@ export const METRICS = {
 	// Re-grounding (address change by verified constituent)
 	address_changed: 'address_changed',
 
+	// Base-rate relation (viewer-vs-author district: same/diff/unknown only,
+	// computed server-side by HMAC equality — never carries a district identifier)
+	base_rate_relation: 'base_rate_relation',
+
+	// Front-door persona (which affordance a visitor arrived on: find vs author —
+	// a coarse two-value tag carried in utm_source; no PII, session, or geo)
+	front_door_intent: 'front_door_intent',
+
 	// Errors (categorized, never raw messages)
 	error_network: 'error_network',
 	error_validation: 'error_validation',

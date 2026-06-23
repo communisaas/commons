@@ -105,6 +105,9 @@ export default defineConfig({
 			// Behavioral test for the delivery-gate conversion prompt — requires
 			// the components-lane config for @testing-library/svelte rendering.
 			'tests/unit/components/DeliveryGateNotice.test.ts',
+			// Mount-based render of the stale-artifact advisory banner (authoring honesty).
+			// Components-lane only; same @testing-library/svelte mount path.
+			'tests/unit/components/StaleArtifactBanner.test.ts',
 			// Behavioral render of the congressional delivery floor (VerificationGate at
 			// REQUIRED_CONGRESSIONAL_PROOF_TIER). Components-lane only; the structural
 			// single-source lock runs in CI via congressional-delivery-tier.test.ts.

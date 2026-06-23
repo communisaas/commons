@@ -15,6 +15,7 @@
 	import MessageResults from './MessageResults.svelte';
 	import AuthGateOverlay from './AuthGateOverlay.svelte';
 	import SourceEditor from './SourceEditor.svelte';
+	import StaleArtifactBanner from '../StaleArtifactBanner.svelte';
 	import { FileText } from '@lucide/svelte';
 
 	interface Props {
@@ -55,6 +56,8 @@
 	let rateLimitResetAt = $state<string | null>(null);
 	let rateLimitMessage = $state<string | null>(null);
 	let isGenerating = $state(false);
+	/** True when the generated message was built for a now-stale subject. */
+	let contentStale = $state(false);
 	let destroyed = false;
 
 	// Streaming state
@@ -796,19 +799,23 @@
 			// Check if the objective changed since content was generated
 			const generatedFor = formData.content.generatedForSubject;
 			const currentSubject = formData.objective.title;
-			const isStale = generatedFor && generatedFor !== currentSubject;
+			const isStale =
+				generatedFor &&
+				generatedFor !== currentSubject &&
+				formData.content.staleAckForSubject !== currentSubject;
 
 			if (isStale) {
-				console.log('[MessageGenerationResolver] Subject changed, clearing stale content', {
+				// Preserve the existing message and surface the stale banner so the author
+				// chooses to update (re-generate) or keep it — no silent wipe.
+				console.log('[MessageGenerationResolver] Subject changed, flagging content as stale', {
 					generatedFor,
 					currentSubject
 				});
-				formData.content.preview = '';
-				formData.content.aiGenerated = false;
-				formData.content.generatedForSubject = undefined;
-				formData.content.activeMessageJob = null;
-				formData.content.draftOrigin = null;
-				await generateMessage();
+				originalMessage = formData.content.preview;
+				originalSubject = formData.objective.title;
+				originalSources = [...(formData.content.sources || [])];
+				contentStale = true;
+				stage = 'results';
 			} else if (!formData.content.preview || !formData.content.aiGenerated) {
 				const activeJob = formData.content.activeMessageJob;
 				if (activeJob) {
@@ -854,8 +861,33 @@
 		stage = 'results';
 	}
 
+	/** Re-generate the message for the current subject, replacing the stale one. */
+	function handleUpdateContent() {
+		contentStale = false;
+		// Don't clear the current message up-front: generateMessage() overwrites it
+		// on success (applyMessageResult), so a transient failure preserves the
+		// prior body/sources for retry instead of losing them.
+		formData.content.activeMessageJob = null;
+		formData.content.draftOrigin = null;
+		void generateMessage();
+	}
+
+	/** Keep the existing message: record the acknowledgement for this subject so the
+	 *  banner stops, WITHOUT rewriting generatedForSubject's true provenance. */
+	function handleKeepContent() {
+		contentStale = false;
+		formData.content.staleAckForSubject = formData.objective.title;
+		onSaveDraft?.();
+	}
+
 	function handleSaveEdit() {
-		// User finished editing, back to results
+		// User finished editing, back to results. If the subject was changed in-place, the
+		// message body was written for the old subject — surface the stale banner (non-destructive)
+		// instead of silently returning a subject/body mismatch.
+		contentStale =
+			!!formData.content.generatedForSubject &&
+			formData.content.generatedForSubject !== formData.objective.title &&
+			formData.content.staleAckForSubject !== formData.objective.title;
 		stage = 'results';
 	}
 
@@ -882,6 +914,17 @@
 			return;
 		}
 
+		// Honesty gate: don't publish a message body built for a different subject. Surface
+		// the stale banner so the author resolves the mismatch (update or keep) first.
+		if (
+			formData.content.generatedForSubject &&
+			formData.content.generatedForSubject !== formData.objective.title &&
+			formData.content.staleAckForSubject !== formData.objective.title
+		) {
+			contentStale = true;
+			return;
+		}
+
 		onnext();
 	}
 </script>
@@ -905,6 +948,16 @@
 		</div>
 	{:else if stage === 'results'}
 		<!-- Results display with citations, sources, and research log -->
+		{#if contentStale}
+			<StaleArtifactBanner
+				builtForSubject={formData.content.generatedForSubject ?? ''}
+				currentSubject={formData.objective.title}
+				artifactLabel="message"
+				busy={isGenerating}
+				onUpdate={handleUpdateContent}
+				onKeep={handleKeepContent}
+			/>
+		{/if}
 		<MessageResults
 			bind:geographicScope={formData.content.geographicScope}
 			message={formData.content.preview}
