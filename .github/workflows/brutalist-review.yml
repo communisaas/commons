@@ -44,7 +44,9 @@ jobs:
         env:
           BRUTALIST_TIMEOUT: "900000"
           BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2100000"
-          # Freeze agy's binary version for the run (stops self-update drift).
+          # Disable agy's in-run self-update (it self-updates from a us-central1
+          # endpoint mid-run). NOTE: this does NOT pin the installed version —
+          # install.sh above fetches the latest; this only stops drift WITHIN a run.
           AGY_CLI_DISABLE_AUTO_UPDATE: "1"
         with:
           github-token: ${{ github.token }}
