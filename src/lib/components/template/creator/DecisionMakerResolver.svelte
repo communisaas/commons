@@ -390,8 +390,9 @@
 	/** Re-resolve decision-makers for the current subject, replacing the stale set. */
 	function handleUpdateAudience() {
 		audienceStale = false;
-		formData.audience.decisionMakers = [];
-		formData.audience.resolvedForSubject = undefined;
+		// Don't wipe the current set up-front: resolveDecisionMakers() assigns a
+		// fresh list on success, so a failed re-resolve leaves the prior audience
+		// intact instead of stranding the user with an empty set.
 		resolveDecisionMakers();
 	}
 

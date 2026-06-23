@@ -861,9 +861,9 @@
 	/** Re-generate the message for the current subject, replacing the stale one. */
 	function handleUpdateContent() {
 		contentStale = false;
-		formData.content.preview = '';
-		formData.content.aiGenerated = false;
-		formData.content.generatedForSubject = undefined;
+		// Don't clear the current message up-front: generateMessage() overwrites it
+		// on success (applyMessageResult), so a transient failure preserves the
+		// prior body/sources for retry instead of losing them.
 		formData.content.activeMessageJob = null;
 		formData.content.draftOrigin = null;
 		void generateMessage();

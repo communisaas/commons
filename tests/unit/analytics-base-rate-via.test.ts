@@ -3,7 +3,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // The analytics client early-returns unless it believes it's in the browser.
 vi.mock('$app/environment', () => ({ browser: true }));
 
-import { analytics, trackBaseRateRelation, trackTemplateShare } from '$lib/core/analytics/client';
+import {
+	analytics,
+	trackBaseRateRelation,
+	trackTemplateShare,
+	trackFrontDoorIntent
+} from '$lib/core/analytics/client';
 import { METRICS } from '$lib/types/analytics';
 
 describe('trackBaseRateRelation — coarse relation encoded into utm_source', () => {
@@ -56,5 +61,32 @@ describe('trackTemplateShare — coarse ?via= channel tag', () => {
 			template_id: 'tmpl_123',
 			utm_source: 'share'
 		});
+	});
+});
+
+describe('trackFrontDoorIntent — coarse front-door persona on its own metric', () => {
+	let spy: ReturnType<typeof vi.spyOn>;
+
+	beforeEach(() => {
+		spy = vi.spyOn(analytics, 'increment').mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		spy.mockRestore();
+	});
+
+	it('encodes "find" as fd_find on the front_door_intent metric', () => {
+		trackFrontDoorIntent('find');
+		expect(spy).toHaveBeenCalledWith(METRICS.front_door_intent, { utm_source: 'fd_find' });
+	});
+
+	it('encodes "author" as fd_author', () => {
+		trackFrontDoorIntent('author');
+		expect(spy).toHaveBeenCalledWith(METRICS.front_door_intent, { utm_source: 'fd_author' });
+	});
+
+	it('does not blend into the funnel_1 metric', () => {
+		trackFrontDoorIntent('find');
+		expect(spy).not.toHaveBeenCalledWith(METRICS.funnel_1, expect.anything());
 	});
 });

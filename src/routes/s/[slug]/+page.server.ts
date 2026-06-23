@@ -5,7 +5,7 @@ import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
-import { computeBaseRateRelation } from '$lib/server/analytics/base-rate-relation';
+import { env } from '$env/dynamic/private';
 import type { Id } from '$convex/_generated/dataModel';
 
 type DebateArgumentRow = {
@@ -122,7 +122,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		positionCountsResult,
 		existingPositionResult,
 		userRepResult,
-		authorRelResult
+		viewerAuthorResult
 	] = await Promise.all([
 		// District message aggregates via Convex
 		templateId
@@ -154,14 +154,22 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 		// User representative (for district code) via Convex
 		userId && userDistrictHash
-			? serverQuery(api.templatePage.getUserDmRelation, { userId: userId as Id<'users'> })
+			? serverQuery(api.templatePage.getUserDmRelation, {
+					userId: userId as Id<'users'>,
+					_secret: env.INTERNAL_API_SECRET
+				})
 					.catch(() => null)
 			: Promise.resolve(null),
 
-		// Template author's identity + district — server-internal only (base-rate
-		// relation HMAC + viewerIsAuthor). Never forwarded to the client payload.
+		// Viewer-vs-author relation (viewerIsAuthor + coarse base-rate), computed
+		// entirely inside Convex behind the internal-secret gate. The author's
+		// identity and district never cross the boundary — only the derived facts do.
 		templateSlug
-			? serverQuery(api.templatePage.getAuthorDmRelation, { slug: templateSlug })
+			? serverQuery(api.templatePage.getViewerAuthorRelation, {
+					slug: templateSlug,
+					viewerUserId: userId ? (userId as Id<'users'>) : undefined,
+					_secret: env.INTERNAL_API_SECRET
+				})
 					.catch(() => null)
 			: Promise.resolve(null)
 	]);
@@ -178,23 +186,16 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		? (userRepResult as { districtCode: string | null }).districtCode
 		: null;
 
-	// Author identity + district stay SERVER-INTERNAL: authorUserId is used only
-	// to derive viewerIsAuthor, and authorDistrictCode only feeds the HMAC
-	// equality for the base-rate relation. Neither is forwarded to the client.
-	const authorRel = authorRelResult as
-		| { authorUserId: string | null; authorDistrictCode: string | null }
+	// Viewer-vs-author facts come back already minimized from Convex: the
+	// author's identity and district never crossed the boundary — only these.
+	const viewerAuthorRel = viewerAuthorResult as
+		| { viewerIsAuthor: boolean; baseRateRelation: 'same' | 'diff' | 'unknown' }
 		| null;
-	const authorUserId = authorRel?.authorUserId ?? null;
-	const authorDistrictCode = authorRel?.authorDistrictCode ?? null;
-
-	const viewerIsAuthor = userId != null && authorUserId != null && userId === authorUserId;
+	const viewerIsAuthor = viewerAuthorRel?.viewerIsAuthor ?? false;
 	// A viewer may be framed possessively ("YOUR REPRESENTATIVES") only as the
 	// author or with a real verified/entered-address district.
 	const viewerIsConstituent = viewerIsAuthor || userDistrictCode != null;
-
-	// Coarse 3-valued relation (same/diff/unknown). Computed by HMAC equality so
-	// no district identifier ever leaves the server. Fail-soft to 'unknown'.
-	const baseRateRelation = await computeBaseRateRelation(userDistrictCode, authorDistrictCode);
+	const baseRateRelation = viewerAuthorRel?.baseRateRelation ?? 'unknown';
 
 	const positionCounts = positionCountsResult;
 
@@ -321,8 +322,8 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		districtOfficials: districtOfficials as DistrictOfficialInput[],
 		recipientConfig,
 		engagementByDistrict,
-		// Honesty gating + coarse relation. authorUserId / authorDistrictCode are
-		// intentionally NOT included — only these derived, non-identifying flags.
+		// Honesty gating + coarse relation. These derived, non-identifying flags
+		// are all that the guarded Convex query returns — no author id/district.
 		viewerIsAuthor,
 		viewerIsConstituent,
 		baseRateRelation

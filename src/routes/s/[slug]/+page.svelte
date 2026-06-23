@@ -184,9 +184,11 @@
 		// Track template view (aggregated, no source tracking - that's surveillance)
 		trackTemplateView(template.id);
 
-		// Coarse base-rate relation (same/diff/unknown) computed server-side by HMAC
-		// equality of viewer-vs-author district — no district identifier ever leaves
-		// the server. Fire once on mount only when the server resolved a relation.
+		// Coarse base-rate relation (same/diff/unknown) compared server-side inside
+		// Convex — no district code leaves the server, and the event carries no
+		// template_id/session/geo. The relation is district-derived (an author's own
+		// view always resolves to 'same'), so it's coarse signal, not "anonymous".
+		// Fire once on mount when the server resolved a relation.
 		if (data.baseRateRelation) {
 			trackBaseRateRelation(data.baseRateRelation);
 		}

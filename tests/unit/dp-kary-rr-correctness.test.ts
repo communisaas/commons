@@ -409,9 +409,11 @@ describe('k-ary RR Statistical Properties', () => {
 	it('should use correct domain size k from METRIC_VALUES', () => {
 		const k = METRIC_VALUES.length;
 
-		// Verify we have the expected domain size (21 metrics: 20 original +
-		// address_changed for Stage 3 re-grounding instrumentation)
-		expect(k).toBe(21);
+		// Verify we have the expected domain size. This literal is a deliberate
+		// tripwire: adding a metric changes k for the k-ary RR, so client and
+		// server must be reviewed to stay in sync. 23 = 20 original +
+		// address_changed + base_rate_relation + front_door_intent.
+		expect(k).toBe(23);
 
 		// All metrics should be distinct
 		const uniqueMetrics = new Set(METRIC_VALUES);

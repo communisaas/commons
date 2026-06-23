@@ -9,6 +9,8 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
+import { requireInternalSecret } from "./_internalAuth";
 
 /**
  * Get message delivery counts grouped by district hash for a template.
@@ -72,8 +74,12 @@ export const getTotalStates = query({
  * Get the user's active DM relation (for district code lookup).
  */
 export const getUserDmRelation = query({
-  args: { userId: v.id("users") },
-  handler: async (ctx, { userId }) => {
+  args: { userId: v.id("users"), _secret: v.optional(v.string()) },
+  handler: async (ctx, { userId, _secret }) => {
+    // Server-only: callable solely from trusted SvelteKit server code, never a
+    // browser. Closes the userId-enumeration vector for district codes
+    // (internalQuery isn't reachable via the public HTTP client serverQuery uses).
+    requireInternalSecret(_secret);
     const relations = await ctx.db
       .query("userDmRelations")
       .withIndex("by_userId", (idx) => idx.eq("userId", userId))
@@ -96,38 +102,56 @@ export const getUserDmRelation = query({
 });
 
 /**
- * Resolve a template author's identity + active district for server-internal
- * use only (base-rate relation HMAC + viewerIsAuthor check in +page.server.ts).
- *
- * The returned `authorUserId` and `authorDistrictCode` are opaque identifiers
- * consumed exclusively server-side; they are NEVER forwarded to the client
- * payload. The district code in particular only ever feeds an HMAC equality
- * comparison whose 3-valued result (same/diff/unknown) is the only thing that
- * can leave the server.
+ * Resolve the viewer-vs-author relation for the recipient page WITHOUT ever
+ * returning the author's identity or district across the boundary. Guarded by
+ * the shared internal secret, so it is callable only from trusted SvelteKit
+ * server code (browsers cannot reach it). Returns only two non-identifying
+ * facts:
+ *   - viewerIsAuthor: the viewer authored this template
+ *   - baseRateRelation: coarse same/diff/unknown of the viewer's vs the
+ *     author's district, compared in-place and discarded — only the enum leaves.
  */
-export const getAuthorDmRelation = query({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
+export const getViewerAuthorRelation = query({
+  args: {
+    slug: v.string(),
+    viewerUserId: v.optional(v.id("users")),
+    _secret: v.optional(v.string()),
+  },
+  handler: async (ctx, { slug, viewerUserId, _secret }) => {
+    requireInternalSecret(_secret);
+
     const template = await ctx.db
       .query("templates")
       .withIndex("by_slug", (idx) => idx.eq("slug", slug))
       .first();
+    if (!template || !template.userId) {
+      return { viewerIsAuthor: false, baseRateRelation: "unknown" as const };
+    }
 
-    if (!template || !template.userId) return null;
+    const viewerIsAuthor =
+      viewerUserId != null && viewerUserId === template.userId;
 
-    const relations = await ctx.db
-      .query("userDmRelations")
-      .withIndex("by_userId", (idx) => idx.eq("userId", template.userId!))
-      .collect();
-
-    const active = relations.find((r) => r.isActive);
-    const dm = active ? await ctx.db.get(active.decisionMakerId) : null;
-
-    const districtCode =
-      dm && dm.jurisdiction && dm.district
+    const districtFor = async (uid: Id<"users">): Promise<string | null> => {
+      const rel = await ctx.db
+        .query("userDmRelations")
+        .withIndex("by_userId", (idx) => idx.eq("userId", uid))
+        .filter((q) => q.eq(q.field("isActive"), true))
+        .first();
+      if (!rel) return null;
+      const dm = await ctx.db.get(rel.decisionMakerId);
+      return dm && dm.jurisdiction && dm.district
         ? `${dm.jurisdiction}-${dm.district}`
         : null;
+    };
 
-    return { authorUserId: template.userId, authorDistrictCode: districtCode };
+    const authorDistrict = await districtFor(template.userId);
+    const viewerDistrict = viewerUserId ? await districtFor(viewerUserId) : null;
+
+    let baseRateRelation: "same" | "diff" | "unknown" = "unknown";
+    if (viewerDistrict != null && authorDistrict != null) {
+      baseRateRelation = viewerDistrict === authorDistrict ? "same" : "diff";
+    }
+
+    return { viewerIsAuthor, baseRateRelation };
   },
 });
