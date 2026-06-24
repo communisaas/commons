@@ -135,8 +135,11 @@
 		if (scope.type === 'international') return 'everywhere';
 		if (scope.type === 'nationwide') return scope.displayName || countryName(scope.country);
 		// Subnational: prefer the bare place name (a city/state stands alone, never the
-		// full "City, State, Country" hierarchy), resolving ISO codes to readable names.
+		// full "City, State, Country" hierarchy). Prefer the preserved subdivisionName
+		// (e.g. "Johor") — the code → name table only covers US/CA/AU, so outside those
+		// a bare ISO 3166-2 code like "01" would otherwise leak through.
 		if (scope.locality) return scope.locality;
+		if (scope.subdivisionName) return scope.subdivisionName;
 		if (scope.subdivision) {
 			const code = scope.subdivision.split('-')[1] || scope.subdivision;
 			return getStateName(code);
