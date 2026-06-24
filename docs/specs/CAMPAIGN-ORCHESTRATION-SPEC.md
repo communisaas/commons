@@ -87,7 +87,7 @@ Editor clicks **New** in the campaign list. No wizard. No multi-step onboarding.
 │                                                          │
 │  ─── Verification ─────────────────────────────────────  │
 │                                                          │
-│  Postal Bubble: ON (district resolution for every action)│
+│  District resolution: ON (for every action)              │
 │  mDL scan: OPTIONAL (verified actions weighted higher)   │
 │  Debate market: OFF  [ Enable when 50+ actions ]         │
 │                                                          │
@@ -101,7 +101,7 @@ Three types. No subtypes.
 
 | Type | What ships to the decision-maker | Primary input |
 |------|----------------------------------|---------------|
-| **Letter** | Verification packet + constituent letters | Template body + Postal Bubble targeting |
+| **Letter** | Verification packet + constituent letters | Template body + postal→district targeting |
 | **Event** | Verification packet + RSVP count + attendee tiers | Date, location, capacity |
 | **Form** | Verification packet + structured field summaries | Custom fields (freeform schema) |
 
@@ -159,7 +159,7 @@ Not a settings panel. Structural defaults that the org can adjust at the margin.
 
 | Setting | Default | Adjustable? |
 |---------|---------|-------------|
-| Postal Bubble district resolution | ON | No — every action resolves geography |
+| Postal→district resolution | ON | No — every action resolves geography |
 | mDL identity verification | Optional | Org can require it (verified-only actions) |
 | Debate market | OFF | Org enables manually, or auto-triggers at threshold |
 | Debate market threshold | 50 verified actions | Yes (min 25, max 500) |
@@ -401,8 +401,8 @@ The script injects an iframe. Communication via `postMessage`. No cookies, no tr
 **Steps:**
 
 1. Supporter enters postal code.
-2. Postal Bubble resolves all matching districts across the campaign's target boundary types.
-3. If postal code spans multiple districts within a boundary type, disambiguation bubble renders (see `POSTAL-BUBBLE-SPEC.md`).
+2. Postal→district resolution returns all matching districts across the campaign's target boundary types.
+3. If a postal code spans multiple districts within a boundary type, every matching district is returned; the supporter's submission records all of them.
 4. Supporter optionally scans mDL for verified action (4-6s browser-side ZK proof).
 5. Supporter submits. Action recorded. Verification packet updates.
 6. Widget shows: "Verified constituent #891 in AD-17."
@@ -432,7 +432,7 @@ interface WidgetConfig {
 }
 ```
 
-The widget iframe loads from `commons.email`. Origin validation prevents unauthorized embedding. Rate limits prevent automated submissions. The action itself requires either postal code resolution (Postal Bubble) or mDL verification (ZK proof) — neither is trivially automatable.
+The widget iframe loads from `commons.email`. Origin validation prevents unauthorized embedding. Rate limits prevent automated submissions. The action itself requires either postal→district resolution or mDL verification (ZK proof) — neither is trivially automatable.
 
 ---
 

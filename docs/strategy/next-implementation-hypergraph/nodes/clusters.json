@@ -17,7 +17,7 @@
       "slug": "reach",
       "name": "Reach",
       "v1_status": "0% in v1 (0/10). All international + multi-state deferred to this hypergraph.",
-      "remaining_target": "OpenStates ingestion (NEW-T3-1); special districts (NEW-T3-2); CA/GB/AU rep-lookup (NEW-T3-3/4/5); TIGER 2026 monitoring (NEW-T3-7); multi-jurisdiction routing (NEW-T3-8); per-district feed (NEW-T3-10); Postal Bubble UX (NEW-T3-9)",
+      "remaining_target": "OpenStates ingestion (NEW-T3-1); special districts (NEW-T3-2); CA/GB/AU rep-lookup (NEW-T3-3/4/5); TIGER 2026 monitoring (NEW-T3-7); multi-jurisdiction routing (NEW-T3-8); per-district feed (NEW-T3-10)",
       "contributing_tasks": [
         "NEW-T3-1",
         "NEW-T3-2",
@@ -27,7 +27,6 @@
         "NEW-T3-6",
         "NEW-T3-7",
         "NEW-T3-8",
-        "NEW-T3-9",
         "NEW-T3-10"
       ]
     },

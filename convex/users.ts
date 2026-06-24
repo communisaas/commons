@@ -1246,43 +1246,6 @@ export const updateShadowAtlasRegistration = mutation({
 });
 
 // =============================================================================
-// COMMUNITY FIELD CONTRIBUTIONS
-// =============================================================================
-
-export const checkCommunityFieldContribution = query({
-	args: { epochDate: v.string(), epochNullifier: v.string() },
-	handler: async (ctx, args) => {
-		return await ctx.db
-			.query('communityFieldContributions')
-			.withIndex('by_epochDate_epochNullifier', (q) =>
-				q.eq('epochDate', args.epochDate).eq('epochNullifier', args.epochNullifier)
-			)
-			.first();
-	}
-});
-
-export const createCommunityFieldContribution = mutation({
-	args: {
-		epochDate: v.string(),
-		epochNullifier: v.string(),
-		cellTreeRoot: v.string(),
-		proofHash: v.string(),
-		verificationStatus: v.string()
-	},
-	handler: async (ctx, args) => {
-		const { userId } = await requireAuth(ctx);
-		return await ctx.db.insert('communityFieldContributions', {
-			userId,
-			epochDate: args.epochDate,
-			epochNullifier: args.epochNullifier,
-			cellTreeRoot: args.cellTreeRoot,
-			proofHash: args.proofHash,
-			verificationStatus: args.verificationStatus
-		});
-	}
-});
-
-// =============================================================================
 // ADMIN: SHADOW ATLAS RECONCILIATION
 // =============================================================================
 

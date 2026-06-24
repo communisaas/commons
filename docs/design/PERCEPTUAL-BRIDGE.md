@@ -5,7 +5,7 @@
 **Audited:** 2026-03-17
 **Updated:** 2026-04-13
 **Depends on:** design-system.md, voice.md, ORG-ACQUISITION-SURFACE.md
-**Context:** Both layers are now shipping. The person-facing layer is deeply built (Postal Bubble, Power Landscape, RelayLoom, trust journey, three-zone template flow). The org-facing layer is operational (campaigns, supporter management, email delivery, RBAC, embeddable widgets). This document defines how they connect — not as two products stitched together, but as two perspectives on one event.
+**Context:** Both layers are now shipping. The person-facing layer is deeply built (postal→district resolution, Power Landscape, RelayLoom, trust journey, three-zone template flow). The org-facing layer is operational (campaigns, supporter management, email delivery, RBAC, embeddable widgets). This document defines how they connect — not as two products stitched together, but as two perspectives on one event.
 
 > **Design reconciliation (2026-04-30):** The bridge principle remains
 > canonical. Recipient/staffer-facing packet language is now governed by
@@ -17,7 +17,7 @@
 
 ## The Event
 
-Jane opens a campaign link from her tenant union's email. She enters her postal code. The Postal Bubble renders her city council district. She scans her mDL. A ZK proof generates in her browser — 8 seconds on her phone, the progress bar filling. She sends a verified letter to her council member about rent stabilization.
+Jane opens a campaign link from her tenant union's email. She enters her postal code. It resolves to her city council district. She scans her mDL. A ZK proof generates in her browser — 8 seconds on her phone, the progress bar filling. She sends a verified letter to her council member about rent stabilization.
 
 That's one event. One nullifier on-chain. One action.
 
@@ -198,7 +198,7 @@ The person layer and the org layer are not symmetric. They see different things,
 | **Identity** | Sovereign (mDL → ZK proof, wallet-agnostic) | Aggregate (sees counts, not people) |
 | **Action** | Takes verified action (owns nullifier) | Witnesses verified actions (sees packet grow) |
 | **Template** | Encounters and sends | Creates, endorses, or curates |
-| **Geography** | Proven via Postal Bubble → ZK circuit | Sees district distribution (no addresses) |
+| **Geography** | Proven via postal→district resolution → ZK circuit | Sees district distribution (no addresses) |
 | **Tier** | Earns through civic labor (on-chain) | Sees tier distribution (no individual tiers) |
 | **Dashboard** | Trust journey, action history, reputation | Verification packet, coordination integrity |
 | **Agency** | "I send" | "I ship the report" |
@@ -213,7 +213,7 @@ This asymmetry is the privacy invariant in perceptual form. The person is a full
 ### Person → Org (Supporter takes action on org campaign)
 
 1. Person clicks link in org email
-2. Person sees campaign page (person-layer experience: Postal Bubble, mDL, compose pane)
+2. Person sees campaign page (person-layer experience: postal→district resolution, mDL, compose pane)
 3. Person sends verified letter
 4. On-chain: nullifier recorded, action counted
 5. Org dashboard: +1 verified, identity/authorship fields update, audit metrics recompute

@@ -23,12 +23,12 @@
     {
       "id": "TR-3",
       "name": "Reach Extension",
-      "description": "State + local + special district officeholder data; CA/GB/AU rep-lookup wiring; mainnet DistrictRegistry; multi-jurisdiction routing at campaign layer; TIGER 2026 monitoring + DOGE/Census resilience; postal bubble disambiguation; per-district feed infrastructure.",
+      "description": "State + local + special district officeholder data; CA/GB/AU rep-lookup wiring; mainnet DistrictRegistry; multi-jurisdiction routing at campaign layer; TIGER 2026 monitoring + DOGE/Census resilience; per-district feed infrastructure.",
       "lead_capability_cluster": "C-reach",
       "secondary_clusters": ["C-data-sovereignty", "C-agentic"],
-      "task_count": 10,
+      "task_count": 9,
       "total_effort_days": "9-12 months full closure (state-leg via OpenStates is 2 weeks; international country lookup is 3 days each after hydration; mainnet contracts 1-2 weeks; multi-jurisdiction routing 4 weeks)",
-      "task_ids": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-9", "T3-10"]
+      "task_ids": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-10"]
     },
     {
       "id": "TR-4",

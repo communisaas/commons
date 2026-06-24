@@ -1,8 +1,7 @@
 /**
  * Location Inference Engine
  *
- * Signal-based location inference (legacy — Postal Bubble is the primary path).
- * Retained for AddressVerificationFlow compatibility.
+ * Signal-based location inference, retained for AddressVerificationFlow.
  *
  * Remaining signals:
  * 1. IP Geolocation (0.2) - VPN-vulnerable
@@ -406,7 +405,7 @@ export async function addBrowserGeolocationSignal(): Promise<LocationSignal | nu
 
 /**
  * Trigger behavioral location inference.
- * @deprecated Behavioral tracking removedby a follow-up cure (replaced by Postal Bubble).
+ * @deprecated Behavioral tracking removed by a follow-up cure.
  */
 export async function inferBehavioralLocation(): Promise<LocationSignal | null> {
 	return null;

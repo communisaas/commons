@@ -77,7 +77,7 @@ What ops/partnership/audit gates unblock the deferred tasks:
 - **CP-4 TEE Nitro Enclave** — delegation executor + AI panel + agent ZK + delegation UI (7 tasks)
 - **CP-5 Sentry on-call** — audit log + observability digests + agent trace alerts (3 tasks)
 - **Platform/RFP partnership outcome** — first selected platform-format sync runner (T1-3), OSDI namespace only where an adapter actually speaks OSDI (T9-4), state-bill ingestion (T6-6), then vendor-specific API runners beyond CSV export profiles
-- **Multi-state Phase 2 sprint** — OpenStates (T3-1), special districts (T3-2), TIGER monitoring (T3-7), multi-jurisdiction routing (T3-8), per-district feed (T3-10), Postal Bubble UX (T3-9), agentic monitoring (T4-4), per-supporter bill alerts (T4-3)
+- **Multi-state Phase 2 sprint** — OpenStates (T3-1), special districts (T3-2), TIGER monitoring (T3-7), multi-jurisdiction routing (T3-8), per-district feed (T3-10), agentic monitoring (T4-4), per-supporter bill alerts (T4-3)
 - **International Phase 2** — CA/GB/AU rep-lookup (T3-3/4/5), cross-border schema (T7-4), multi-country delivery (T7-6)
 - **Post-launch UX iteration** — DM enrichment chain (T8-1a/1b/5/7), white-label domain (T2-6), embed enhancements (T9-10), custom fields (T10-7), template library (T2-7), staffer dashboard (T8-1b)
 

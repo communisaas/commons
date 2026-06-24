@@ -113,7 +113,6 @@ The hasher executes the Noir `fixtures` / `sponge_helper` circuits internally, s
 | `src/lib/core/identity/mdl-verification.ts` | mDL flow, identity commitment derivation |
 | `src/lib/core/identity/shadow-atlas-handler.ts` | Tree 1 registration, Tree 3 engagement fetch |
 | `src/lib/core/zkp/prover-client.ts` | Three-tree proof generation |
-| `src/lib/core/zkp/community-field-client.ts` | Bubble membership proof (Phase 2) |
 | `src/lib/core/proof/witness-encryption.ts` | X25519 + XChaCha20 witness encryption |
 
 ---

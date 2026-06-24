@@ -1,7 +1,7 @@
 /**
  * POST /api/geographic/resolve — Resolve international postcode/postal code to district + representatives.
  * Public endpoint (no auth required). Rate limited 10 req/min per IP.
- * US resolution uses /api/shadow-atlas/bubble — this endpoint is for GB/CA/AU.
+ * US resolution runs through the address verification flow; this endpoint is for GB/CA/AU.
  */
 
 import { json } from '@sveltejs/kit';
@@ -30,7 +30,7 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	if (countryCode === 'US') {
 		return json(
-			{ error: 'US resolution uses /api/shadow-atlas/bubble endpoint' },
+			{ error: 'US resolution is handled by the address verification flow, not this endpoint.' },
 			{ status: 400 }
 		);
 	}

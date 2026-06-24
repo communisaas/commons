@@ -8,8 +8,7 @@
     ④ Position nullifier    (key + commitment + debate_id → H_PNL → ≡ nullifier)
 
   Cell ③ is distinctively flat (pure equality) — gives this circuit's
-  specimen a different silhouette from the hash-heavy three_tree /
-  bubble circuits.
+  specimen a different silhouette from the hash-heavy three_tree circuit.
 -->
 <script lang="ts">
 	// no props
