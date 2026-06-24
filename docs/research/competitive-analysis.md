@@ -895,7 +895,7 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 | **Official lookup** | Static database of ~500K officials (Cicero, Quorum, VoterVoice) | 3-phase agentic enrichment pipeline (identify → email enrich → validate) | More accurate for non-standard offices (water, transit, school board). Slower for standard offices — need caching. |
 | **Email campaigns** | WYSIWYG, A/B testing, scheduling, SES/Sendgrid | WYSIWYG, A/B, scheduling, SES. Segments by engagement tier + verified district. | Segments are mathematically provable. "Established-tier constituents in CA-12" is a cryptographic filter, not a self-reported tag. |
 | **Message personalization** | AI generates 100–300 variants (Quorum, CiviClick, VoterVoice SmartCheck) | Message Writer Agent: two-phase grounding-verified composition with citation validation | Every citation validated accessible. Content is grounding-verified AND sender is identity-verified. |
-| **Embeddable widgets** | iframe/JS drop-in (AN, Muster, One Click, Ujoin) | iframe + postMessage. Postal Bubble → verified action in browser. | Widget produces ZK-verified actions, not form submissions. |
+| **Embeddable widgets** | iframe/JS drop-in (AN, Muster, One Click, Ujoin) | iframe + postMessage. Postal→district resolution → verified action in browser. | Widget produces ZK-verified actions, not form submissions. |
 | **List management / CRM** | Email-keyed records, tags, self-reported geography, engagement scores | Email-keyed records, tags, identity commitment binding, engagement tiers (on-chain), district membership (24 types) | Tiers are non-fakeable. District membership is cryptographically proven, not self-reported. |
 | **Analytics** | Opens, clicks, bounces, geographic heatmaps, engagement scores | Opens, clicks, bounces + coordination integrity (GDS, ALD, temporal entropy, burst velocity) + tier distribution | Coordination integrity signals: the org can prove its campaign is grassroots. No competitor has this. |
 | **Advocate mapping** | District overlay on map (Muster, VoterVoice, Quorum). Typically federal + state legislative only. | Shadow Atlas: 24 boundary types per cell. H3-indexed. 94,166 districts. | Water districts, fire districts, school boards, transit authorities, judicial circuits — none of the competitors cover these. |
@@ -964,7 +964,7 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | Feature | Action Network | Commons |
 |---|---|---|
 | **Email** | WYSIWYG, A/B, SES. No identity context. Every recipient is an email address. | WYSIWYG, A/B, SES. Segments by engagement tier + verified district. Every send references verification state. An email to "Established-tier constituents in CA-12" is a fundamentally different object than an email to "people who typed 94607 into a form." |
-| **Letter campaigns** | Congress + state legislatures. District from self-reported ZIP. No way to verify the sender lives there. | Any of 24 district types — congressional through fire, water, transit, school, judicial. District from Postal Bubble + mDL. Letter carries a ZK proof. The letter is a verified civic instrument, not a form submission. |
+| **Letter campaigns** | Congress + state legislatures. District from self-reported ZIP. No way to verify the sender lives there. | Any of 24 district types — congressional through fire, water, transit, school, judicial. District from postal→district resolution + mDL. Letter carries a ZK proof. The letter is a verified civic instrument, not a form submission. |
 | **List management** | Tags, CSV import/export, self-reported geography. An org's list is a collection of unverified claims. | Tags, CSV import/export, engagement tiers (non-fakeable, on-chain), district membership across 24 boundary types. An org's list is a set of cryptographically attested relationships. |
 | **Analytics** | CSV export. Opens, clicks. No way to distinguish real constituents from bots or out-of-district signers. | Full dashboard. Opens, clicks, verified actions, tier distribution, GDS, ALD, temporal entropy. Analytics answer "who engaged" with mathematical certainty, not probabilistic guessing. |
 | **Identity** | Email + self-reported address. Platform stores full PII. | ZK proof of government credential. Platform stores commitment, not PII. Identity is a proof, not a record. |
@@ -985,7 +985,7 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | Feature | Status | Verification Context |
 |---|---|---|
 | Mass email (A/B, scheduling) | Upcoming | SES backend, MJML templates. Segments by tier + verified district, not just tags. |
-| Letter campaigns (Congress + state + 22 more types) | Built (Power Landscape) | CWC API, decision-maker resolution. Postal Bubble + mDL verification. Any public office, not just Congress. |
+| Letter campaigns (Congress + state + 22 more types) | Built (Power Landscape) | CWC API, decision-maker resolution. Postal→district resolution + mDL verification. Any public office, not just Congress. |
 | Events (RSVP, map) | Upcoming | Standard CRUD. Attendance verified against identity commitment. |
 | Fundraising (0% fee) | Upcoming | Stripe integration. Donation linked to verified supporter, not just email. |
 | List management / CRM | Upcoming | CSV import/export, tags, segments. Tier-aware. District membership across 24 boundary types. |
@@ -995,7 +995,7 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | Click-to-call | Upcoming | Twilio integration. Caller verified against district before connection. |
 | Debate markets | Built | LMSR + AI panel. sqrt(stake) * 2^tier. On-chain resolution with appeals. |
 | Engagement tiers | Built | New (0) through Pillar (4). Non-purchasable. Composite of action diversity, temporal consistency, debate participation. |
-| Postal Bubble (district resolution) | Built | Postal code to district without address verification. US/CA/UK/AU. Disambiguation UI. |
+| Postal→district resolution | Built | Postal code to district without address verification. US/CA/UK/AU. |
 | Shadow Atlas (district tree) | Built | 94,166 districts, 24 boundary types per cell, H3-indexed. |
 | ZK verification pipeline | Built | 5 circuits, 4 depths, mDL parsing, browser-side proof generation. |
 

@@ -72,7 +72,7 @@ Infrastructure that took years. Zero of this exists in any competitor's stack.
 
 | System | Status | Lines |
 |---|---|---|
-| Postal Bubble (postal code → district resolution) | Production | ~700 |
+| Postal→district resolution (postal code → district) | Production | ~700 |
 | Power Landscape (decision-maker targeting + composition) | Production | 1,572 |
 | AI agents (DM discovery, message writer, subject line, sources) | Production | 8,188 |
 | Identity verification (mDL, passkey, address, district credentials) | Production | 8,665 |
@@ -136,7 +136,7 @@ This loop already works in code. Phase 0 makes it launchable. (Historically this
 | Org onboarding flow | First-run: create org → name, slug, invite team | 1 week |
 | Org dashboard | Verification progress: imported/postal-resolved/verified, tier distribution, campaign list with live packet status | 1–2 weeks |
 | Billing (Stripe) | Subscription creation, plan selection, usage metering (verified actions + emails), webhook handlers for lifecycle events | 2 weeks |
-| Public campaign page | Supporter-facing action surface: enter postal code → Postal Bubble → optional mDL → take action. Verified count display. | 1–2 weeks |
+| Public campaign page | Supporter-facing action surface: enter postal code → district resolution → optional mDL → take action. Verified count display. | 1–2 weeks |
 
 **Don't build yet:**
 - A/B testing (ship single-variant email first)
@@ -164,7 +164,7 @@ Phase 0 proved the loop works. Phase 1 makes it self-serve and starts building t
 
 | Task | Why | Effort |
 |---|---|---|
-| Embeddable campaign widgets | Orgs embed action pages on their websites. iframe + postMessage. Postal Bubble → verified action in browser. This is AN's highest lock-in vector — we need the equivalent. | 2–3 weeks |
+| Embeddable campaign widgets | Orgs embed action pages on their websites. iframe + postMessage. Postal→district resolution → verified action in browser. This is AN's highest lock-in vector — we need the equivalent. | 2–3 weeks |
 | Public API (RESTful, free, no rate cap) | Every competitor gates or caps their API. Free API on all tiers is a structural differentiator. | 2 weeks |
 | Platform migration tools | The importer is built (CSV universal + AN connector). Package it: import landing page, guided walkthrough, parallel operation support. Target orgs frustrated with lock-in, pricing, or platform restrictions. | 1 week |
 | Email A/B testing | Two-variant split, winner selection, segment-aware. Table stakes for email. | 1–2 weeks |
@@ -254,7 +254,7 @@ Capabilities that no competitor can imagine, let alone build. Only possible beca
 
 ### Organization Onboarding (org-facing)
 
-Sign up → create org → import supporter CSV or connect AN API → create first campaign → set targets (auto-resolved from Postal Bubble geography across any district type) → publish → share campaign URL (embed widget in Phase 1) → supporters take action → dashboard shows verified counts, tier distribution, coordination signals from the first action.
+Sign up → create org → import supporter CSV or connect AN API → create first campaign → set targets (auto-resolved from postal→district geography across any district type) → publish → share campaign URL (embed widget in Phase 1) → supporters take action → dashboard shows verified counts, tier distribution, coordination signals from the first action.
 
 ### Decision-Maker Receives Constituent Report (org-facing → decision-maker)
 
@@ -262,7 +262,7 @@ Open email from org → normal campaign letter → footer: "248 verified constit
 
 ### Verified Letter (90 seconds, person-facing)
 
-Click campaign link → enter name, email, postal code → Postal Bubble renders district(s) → optional mDL scan (4-6s, browser-side ZK) → send → letter + proof delivered to decision-maker → "You're verified constituent #248 in CA-12." The verification is the action — not a separate step bolted onto a form submission. Works for any public office across all 24 boundary types.
+Click campaign link → enter name, email, postal code → district(s) resolved → optional mDL scan (4-6s, browser-side ZK) → send → letter + proof delivered to decision-maker → "You're verified constituent #248 in CA-12." The verification is the action — not a separate step bolted onto a form submission. Works for any public office across all 24 boundary types.
 
 ### Debate Market Spawns from Campaign (person-facing → org-facing)
 

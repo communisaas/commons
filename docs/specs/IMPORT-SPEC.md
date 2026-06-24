@@ -239,7 +239,7 @@ IMPORTED (tier null)
   │  Enters postal code on campaign page
   │
   ├─→ POSTAL-RESOLVED (tier 0: New)
-  │     Postal Bubble renders district(s)
+  │     Postal code resolves to district(s)
   │     identityCommitment: null
   │     Districts: resolved from postal code
   │
@@ -289,7 +289,7 @@ What imported history DOES provide:
 The moment an imported supporter takes their first verified action on Commons, they cross the bridge:
 
 1. Supporter clicks campaign link in org email
-2. Enters postal code → Postal Bubble renders district(s)
+2. Enters postal code → district(s) resolved
 3. Optionally scans mDL → identity commitment generated
 4. Sends verified letter → ZK proof → on-chain → nullifier recorded
 5. `Supporter.identityCommitment` set (links to ZK identity layer)
@@ -364,7 +364,7 @@ Embedded action pages are a major lock-in vector for platforms like Action Netwo
 ```
 
 The Commons embed provides:
-- Postal code entry → Postal Bubble district resolution
+- Postal code entry → district resolution
 - Optional mDL verification
 - Letter/petition/event action
 - Verified action count (ticking, spring physics, mono font)
@@ -529,7 +529,7 @@ The org's dashboard shows import health alongside verification progress. This is
 
 - `/embed/campaign/[slug]` route
 - iframe + postMessage API
-- Postal Bubble integration
+- Postal→district resolution integration
 - Verified action count display
 - Widget customization (colors, size)
 

@@ -24,7 +24,7 @@ The hard parts are built. This is the infrastructure no competitor can replicate
 | ZK proof generation (browser) | `src/lib/core/zkp/` | Production |
 | mDL verification (ISO 18013-5) | `src/lib/core/identity/` | Production (37 tests) |
 | IACA root certificates | `src/lib/core/identity/iaca-roots.ts` | 16 states static + 10 via VICAL |
-| Postal Bubble (district resolution) | `src/lib/components/bubble/` | Production (1,965 lines) |
+| Postal→district resolution | `src/lib/components/forms/AddressCollectionForm.svelte` + `resolveAddress` | Production |
 | Power Landscape (decision-maker targeting) | `src/lib/components/action/` | Production |
 | Spatial Browse (3 views) | `src/routes/browse/` | Production |
 | Chain abstraction (3 wallet paths) | `src/lib/core/wallet/` | Production |
@@ -89,7 +89,7 @@ Compose, district-resolve, verify, prove. The campaign lifecycle does not end at
 ```
 src/lib/server/campaigns/
 ├── types.ts           # Letter | Event | Form
-├── letter.ts          # Compose → Postal Bubble match → deliver with proof to any decision-maker
+├── letter.ts          # Compose → postal→district match → deliver with proof to any decision-maker
 ├── form.ts            # Custom field data collection
 ├── verification.ts    # Verification packet assembly (counts, tiers, GDS, ALD)
 └── widgets.ts         # Embeddable iframe + postMessage
@@ -208,7 +208,7 @@ campaigns: defineTable({
   title: v.string(),
   body: v.string(),
   status: v.string(),                         // 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
-  targets: v.optional(v.any()),               // resolved via Postal Bubble / Power Landscape
+  targets: v.optional(v.any()),               // resolved via postal→district lookup / Power Landscape
   debateId: v.optional(v.id("debates")),      // optional debate market attachment
 })
   .index("by_orgId", ["orgId"])
@@ -224,7 +224,7 @@ The `identityCommitment` on `supporters` is the bridge: it links the org's suppo
 ORG LAYER (this doc)                    PERSON LAYER (existing)
 ─────────────────────                   ───────────────────────
 Campaign created by org admin     →     Person sees campaign page
-Person takes action               ←     Postal Bubble resolves district
+Person takes action               ←     postal code resolves district
 Person optionally verifies        ←     mDL scan → ZK proof (browser)
 Proof registered on-chain         ←     Noir circuit → Scroll L2
 Verification packet assembled     →     verification.ts aggregates proofs

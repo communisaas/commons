@@ -66,7 +66,6 @@
     {"source": "NEW-T3-2", "target": "NEW-T3-8", "reason": "Multi-jurisdiction routing needs special-district data"},
     {"source": "NEW-T3-1", "target": "NEW-T3-10", "reason": "Per-district feed needs state-level signal"},
     {"source": "NEW-T3-2", "target": "NEW-T3-10", "reason": "Per-district feed needs special-district signal"},
-    {"source": "NEW-T3-1", "target": "NEW-T3-9", "reason": "Postal Bubble disambiguation needs state-level ground truth"},
     {"source": "NEW-T3-1", "target": "NEW-T4-4", "reason": "Agentic monitoring covers state bills"},
     {"source": "NEW-T3-2", "target": "NEW-T4-4", "reason": "Agentic monitoring covers special districts"},
     {"source": "NEW-T4-1", "target": "NEW-T4-4", "reason": "Monitoring uses delegation executor"},

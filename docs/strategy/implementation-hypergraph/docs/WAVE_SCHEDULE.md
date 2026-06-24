@@ -162,7 +162,6 @@ Independent of all code work. Software waves continue around it.
 | T3-4 | GB rep-lookup wiring | 3d | After hydration runs |
 | T3-5 | AU rep-lookup wiring | 3d | After hydration runs |
 | T3-7 | TIGER 2026 monitoring | 3d | Independent |
-| T3-9 | Postal Bubble disambiguation | 10d | Independent |
 
 ### Reader-side foundation
 

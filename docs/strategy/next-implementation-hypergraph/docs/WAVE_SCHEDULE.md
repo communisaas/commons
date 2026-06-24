@@ -51,7 +51,6 @@ Each wave gate is a hard barrier — predecessor wave's exit criteria MUST hold 
 **Exit criteria**:
 - [ ] OpenStates + special districts ingestion (NEW-T3-1, NEW-T3-2)
 - [ ] Multi-jurisdiction routing + per-district feeds (NEW-T3-8, NEW-T3-10)
-- [ ] Postal Bubble disambiguation UX (NEW-T3-9)
 - [ ] Agentic legislative monitoring across 24 boundary types (NEW-T4-4)
 - [ ] Platform API adapter + OSDI namespace (NEW-T1-3, NEW-T9-4)
 - [ ] TS + Python SDK publish pipelines (NEW-T9-1, NEW-T9-2)

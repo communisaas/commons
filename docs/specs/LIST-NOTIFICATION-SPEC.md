@@ -156,7 +156,7 @@ interface Segment {
 
 ### Geographic resolution
 
-Geography filters resolve against the supporter's postal code via the Postal Bubble engine. For verified supporters (`identityCommitment` set), district membership is cryptographically proven via the cell mapping tree. For postal-resolved supporters, district membership is inferred from postal code overlap with the 24 boundary types in the Shadow Atlas.
+Geography filters resolve against the supporter's postal code via the postal→district resolution engine. For verified supporters (`identityCommitment` set), district membership is cryptographically proven via the cell mapping tree. For postal-resolved supporters, district membership is inferred from postal code overlap with the 24 boundary types in the Shadow Atlas.
 
 The 24 boundary types available for geographic segmentation:
 
@@ -741,7 +741,7 @@ notificationRules: defineTable({
 ### Wave 2: Segmentation (P0)
 - Segment builder UI (5 filter dimensions)
 - Saved segments with cached counts
-- Geographic resolution via Postal Bubble
+- Geographic resolution via postal→district lookup
 - Tier resolution via Shadow Atlas API with daily cache
 
 ### Wave 3: Email Blast (P0)
