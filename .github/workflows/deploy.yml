@@ -103,15 +103,20 @@ jobs:
 
       - name: Resolve build environment
         run: |
+          # Per-branch Convex backend: production is isolated on its own deployment;
+          # staging and preview (main/*) share the non-prod deployment.
           case "${DEPLOY_BRANCH}" in
             production)
               echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
+              echo "PUBLIC_CONVEX_URL=https://quirky-chinchilla-352.convex.cloud" >> "$GITHUB_ENV"
               ;;
             staging)
               echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
+              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
               ;;
             *)
               echo "VITE_ENVIRONMENT=development" >> "$GITHUB_ENV"
+              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
               ;;
           esac
 
@@ -125,6 +130,7 @@ jobs:
             VITE_ATLAS_BASE_URL: process.env.VITE_ATLAS_BASE_URL,
             EXPECTED_CELL_MAP_ROOT: process.env.EXPECTED_CELL_MAP_ROOT,
             EXPECTED_CELL_MAP_DEPTH: process.env.EXPECTED_CELL_MAP_DEPTH,
+            PUBLIC_CONVEX_URL: process.env.PUBLIC_CONVEX_URL,
           };
 
           for (const [key, value] of Object.entries(updates)) {
@@ -176,7 +182,7 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          PUBLIC_CONVEX_URL: https://quirky-chinchilla-352.convex.cloud
+          PUBLIC_CONVEX_URL: ${{ env.PUBLIC_CONVEX_URL }}
           VITE_ENVIRONMENT: ${{ env.VITE_ENVIRONMENT }}
           VITE_ATLAS_BASE_URL: ${{ env.VITE_ATLAS_BASE_URL }}
           ATLAS_BASE_URL: ${{ env.ATLAS_BASE_URL }}
