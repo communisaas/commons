@@ -14,6 +14,7 @@
 -->
 <script lang="ts">
 	import { Check, Copy, Share2, ExternalLink, X } from '@lucide/svelte';
+	import { tryNativeShare } from '$lib/utils/web-share';
 
 	let {
 		recipientNames = [],
@@ -25,6 +26,8 @@
 		proofUrl = undefined,
 		/** Campaign URL for the share-forward. */
 		shareUrl,
+		/** Recruiting copy carried at the share moment — embeds the action URL; distinct from the email body. */
+		shareMessage = '',
 		/** Full message text for the copy fallback. */
 		messageText = '',
 		/** Called only on an explicit "Yes, it sent" — this is what marks contact. */
@@ -35,6 +38,7 @@
 		attestationLine?: string;
 		proofUrl?: string;
 		shareUrl: string;
+		shareMessage?: string;
 		messageText?: string;
 		onConfirmSent: () => void;
 		onClose: () => void;
@@ -79,16 +83,18 @@
 		}
 	}
 	async function share() {
+		const result = await tryNativeShare({ text: shareMessage || shareUrl });
+		if (result === 'shared') {
+			shared = true;
+			return;
+		}
+		if (result === 'dismissed') return;
+		// No native sheet: shareMessage already embeds the URL; fall back to bare URL.
 		try {
-			if (typeof navigator !== 'undefined' && navigator.share) {
-				await navigator.share({ url: shareUrl });
-				shared = true;
-			} else {
-				await navigator.clipboard.writeText(shareUrl);
-				shared = true;
-			}
+			await navigator.clipboard.writeText(shareMessage || shareUrl);
+			shared = true;
 		} catch {
-			/* user dismissed the share sheet / clipboard denied — no-op */
+			/* clipboard denied — no-op */
 		}
 	}
 

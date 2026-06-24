@@ -273,7 +273,8 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							organization: r.organization ?? ''
 						}))
 					: [],
-				resolvedForSubject: data.audience?.resolvedForSubject
+				resolvedForSubject: data.audience?.resolvedForSubject,
+				staleAckForSubject: data.audience?.staleAckForSubject
 			},
 			content: {
 				preview: data.content?.preview ?? '',
@@ -292,6 +293,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				aiGenerated: data.content?.aiGenerated ?? false,
 				edited: data.content?.edited ?? false,
 				generatedForSubject: data.content?.generatedForSubject,
+				staleAckForSubject: data.content?.staleAckForSubject,
 				activeMessageJob: data.content?.activeMessageJob ?? null,
 				draftOrigin: data.content?.draftOrigin
 					? {

@@ -11,7 +11,12 @@
 	import { guestState } from '$lib/stores/guestState.svelte';
 	import { analyzeEmailFlow, generatePersonalizedMailto } from '$lib/services/emailService';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
-	import { trackTemplateView, trackDeliveryAttempt } from '$lib/core/analytics/client';
+	import {
+		trackTemplateView,
+		trackDeliveryAttempt,
+		trackTemplateShare,
+		trackBaseRateRelation
+	} from '$lib/core/analytics/client';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
 	import ActionBar from '$lib/components/template-browser/parts/ActionBar.svelte';
 	// Proof footer lives inline in message preview (PreviewContent.svelte)
@@ -100,17 +105,29 @@
 		}
 		return parts.length > 0 ? parts.join('\n') : undefined;
 	}
-	// Simplified - no query parameters needed, default to direct-link
-	const source = 'direct-link';
-	const shareUrl = $derived(
-		(() => {
-			try {
-				return $page.url?.href ?? '';
-			} catch {
-				return '';
-			}
-		})()
-	);
+	// ?via= is a coarse, non-identifying share-channel tag (allowlist only).
+	// Never carries PII; anything off-allowlist collapses to 'direct-link'.
+	const source = $derived.by((): 'social-link' | 'direct-link' | 'share' => {
+		try {
+			const via = $page.url?.searchParams?.get('via');
+			if (via === 'share') return 'share';
+			if (via === 'social') return 'social-link';
+			return 'direct-link';
+		} catch {
+			return 'direct-link';
+		}
+	});
+	// Outbound share link is canonicalized to `?via=share` over a clean base —
+	// inbound query params (which could carry PII) are stripped before sharing.
+	const shareUrl = $derived.by(() => {
+		try {
+			const u = $page.url;
+			if (!u) return '';
+			return `${u.origin}${u.pathname}?via=share`;
+		} catch {
+			return '';
+		}
+	});
 
 	// Description with route-confirmation proof for Open Graph.
 	const socialProofDescription = $derived(
@@ -167,14 +184,19 @@
 		// Track template view (aggregated, no source tracking - that's surveillance)
 		trackTemplateView(template.id);
 
+		// Coarse base-rate relation (same/diff/unknown) compared server-side inside
+		// Convex — no district code leaves the server, and the event carries no
+		// template_id/session/geo. The relation is district-derived (an author's own
+		// view always resolves to 'same'), so it's coarse signal, not "anonymous".
+		// Fire once on mount when the server resolved a relation.
+		if (data.baseRateRelation) {
+			trackBaseRateRelation(data.baseRateRelation);
+		}
+
 		// Store template context for guest users
 		if (!data.user) {
 			const safeSlug = (template.slug ?? template.id) as string;
-			guestState.setTemplate(
-				safeSlug,
-				template.title,
-				source as 'social-link' | 'direct-link' | 'share'
-			);
+			guestState.setTemplate(safeSlug, template.title, source);
 			return;
 		}
 
@@ -355,6 +377,28 @@
 		}
 	}
 
+	/**
+	 * Find-your-representatives affordance. A guest never gets a direct
+	 * address-collection oracle: they must log in first, then enter their
+	 * address — the same authenticated flow as any user. Only once logged in
+	 * does this open the address modal directly.
+	 */
+	function handleFindYourReps() {
+		if (!data.user) {
+			// Route to login first (same entry the guest stance buttons use).
+			modalActions.openModal('template-modal', 'template_modal', { template, user: null });
+			return;
+		}
+		modalActions.openModal('address-modal', 'address', {
+			template,
+			source,
+			mode: 'collection',
+			onComplete: async (detail: AddressModalDetail) => {
+				await _handleAddressSubmit(detail);
+			}
+		});
+	}
+
 	// === Power Landscape state ===
 
 	// Access server data with proper types (PageData doesn't include PL fields yet)
@@ -369,12 +413,20 @@
 		};
 		engagementByDistrict?: EngagementData | null;
 		userDistrictCode?: string | null;
+		viewerIsConstituent?: boolean;
+		viewerIsAuthor?: boolean;
 	}
 	const pl = $derived(data as unknown as PowerLandscapeData);
 
-	// Landscape computation
+	// Landscape computation. `viewerIsConstituent` gates the possessive "YOUR
+	// REPRESENTATIVES" label: only the author or a viewer with a real
+	// verified/entered-address district may see targets framed as their own.
 	const landscape = $derived(
-		mergeLandscape(pl.recipientConfig?.decisionMakers ?? [], pl.districtOfficials ?? [])
+		mergeLandscape(
+			pl.recipientConfig?.decisionMakers ?? [],
+			pl.districtOfficials ?? [],
+			data.viewerIsConstituent ?? false
+		)
 	);
 
 	// UI state
@@ -881,6 +933,7 @@
 				message={shareMessage}
 				variant="secondary"
 				size="sm"
+				onShared={() => trackTemplateShare(template.id, 'share')}
 			/>
 			<Badge variant={isCongressional ? 'congressional' : 'direct'}>
 				{isCongressional ? `${labels.legislativeBody} Delivery` : 'Direct Outreach'}
@@ -994,7 +1047,7 @@
 								? '1 decision-maker'
 								: `${landscape.totalCount} decision-makers`
 						: isCongressional
-							? 'your representatives'
+							? 'representatives'
 							: 'decision-makers'}
 				<div class="space-y-3">
 					<p class="flex items-center gap-1.5 text-sm text-slate-600">
@@ -1067,19 +1120,7 @@
 									They only count messages from their district. No address = no impact.
 								</p>
 							</div>
-							<Button
-								variant="secondary"
-								onclick={() =>
-									modalActions.openModal('address-modal', 'address', {
-										template,
-										source,
-										mode: 'collection',
-										onComplete: async (detail: AddressModalDetail) => {
-											await _handleAddressSubmit(detail);
-										}
-									})}
-								classNames="ml-auto"
-							>
+							<Button variant="secondary" onclick={handleFindYourReps} classNames="ml-auto">
 								Add Address
 							</Button>
 						</div>
@@ -1124,16 +1165,7 @@
 							?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 					}}
 					onVerifyAddress={FEATURES.ADDRESS_SPECIFICITY === 'district'
-						? () => {
-								modalActions.openModal('address-modal', 'address', {
-									template,
-									source,
-									mode: 'collection',
-									onComplete: async (detail: AddressModalDetail) => {
-										await _handleAddressSubmit(detail);
-									}
-								});
-							}
+						? handleFindYourReps
 						: undefined}
 					onVerifyIdentity={data.user
 						? () => {
@@ -1181,18 +1213,8 @@
 					onWriteTo={handleWriteTo}
 					onBatchRegister={handleBatchRegister}
 					{isCongressional}
-					onVerifyAddress={addressRequired
-						? () => {
-								modalActions.openModal('address-modal', 'address', {
-									template,
-									source,
-									mode: 'collection',
-									onComplete: async (detail: AddressModalDetail) => {
-										await _handleAddressSubmit(detail);
-									}
-								});
-							}
-						: undefined}
+					viewerIsConstituent={data.viewerIsConstituent ?? false}
+					onVerifyAddress={addressRequired ? handleFindYourReps : undefined}
 					registrationState={batchRegistrationState}
 					{canReportBounce}
 					{reportedBounces}
@@ -1312,7 +1334,10 @@
 		proofUrl={(data.user?.trust_tier ?? 0) >= 2 && data.user?.credentialHash
 			? `/v/${data.user.credentialHash}`
 			: undefined}
-		shareUrl={browser ? `${window.location.origin}/s/${template.slug}` : `/s/${template.slug}`}
+		shareUrl={browser
+			? `${window.location.origin}/s/${template.slug}?via=share`
+			: `/s/${template.slug}?via=share`}
+		shareMessage={shareMessage}
 		messageText={sendConfirmation.messageText}
 		onConfirmSent={confirmSendContacted}
 		onClose={closeSendConfirmation}

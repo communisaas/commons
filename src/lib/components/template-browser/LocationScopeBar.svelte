@@ -56,6 +56,9 @@
 
 	const breadcrumbState = $derived.by(() => {
 		if (!scope || scope.type !== 'subnational' || !scope.subdivision) return null;
+		// Prefer the preserved subdivision name (e.g. "Johor"); the code → name table
+		// only covers US/CA/AU, so outside those a bare code like "01" would show.
+		if (scope.subdivisionName) return scope.subdivisionName;
 		const stateCode = scope.subdivision.split('-')[1];
 		if (!stateCode) return null;
 		return stateCodeToName(stateCode, scope.country) || stateCode;

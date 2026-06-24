@@ -5,6 +5,7 @@ import { api } from '$lib/convex';
 import { parseRecipientConfig } from '$lib/types/template';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
+import { env } from '$env/dynamic/private';
 import type { Id } from '$convex/_generated/dataModel';
 
 type DebateArgumentRow = {
@@ -107,6 +108,7 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	const parentData = await parent();
 
 	const templateId = parentData.template?.id;
+	const templateSlug = parentData.template?.slug;
 	const userId = locals.user?.id;
 	const userDistrictHash = locals.user?.district_hash;
 	const identityCommitment =
@@ -119,7 +121,8 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		debateResult,
 		positionCountsResult,
 		existingPositionResult,
-		userRepResult
+		userRepResult,
+		viewerAuthorResult
 	] = await Promise.all([
 		// District message aggregates via Convex
 		templateId
@@ -151,8 +154,35 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 		// User representative (for district code) via Convex
 		userId && userDistrictHash
-			? serverQuery(api.templatePage.getUserDmRelation, { userId: userId as Id<'users'> })
-					.catch(() => null)
+			? serverQuery(api.templatePage.getUserDmRelation, {
+					userId: userId as Id<'users'>,
+					_secret: env.INTERNAL_API_SECRET
+				})
+					.catch((err) => {
+						console.error(
+							'[recipient-page] getUserDmRelation failed (check INTERNAL_API_SECRET / Convex):',
+							err
+						);
+						return null;
+					})
+			: Promise.resolve(null),
+
+		// Viewer-vs-author relation (viewerIsAuthor + coarse base-rate), computed
+		// entirely inside Convex behind the internal-secret gate. The author's
+		// identity and district never cross the boundary — only the derived facts do.
+		templateSlug
+			? serverQuery(api.templatePage.getViewerAuthorRelation, {
+					slug: templateSlug,
+					viewerUserId: userId ? (userId as Id<'users'>) : undefined,
+					_secret: env.INTERNAL_API_SECRET
+				})
+					.catch((err) => {
+						console.error(
+							'[recipient-page] getViewerAuthorRelation failed (check INTERNAL_API_SECRET / Convex):',
+							err
+						);
+						return null;
+					})
 			: Promise.resolve(null)
 	]);
 
@@ -167,6 +197,18 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 	const userDistrictCode = userRepResult && typeof userRepResult === 'object' && 'districtCode' in userRepResult
 		? (userRepResult as { districtCode: string | null }).districtCode
 		: null;
+
+	// Viewer-vs-author facts come back already minimized from Convex: the
+	// author's identity and district never crossed the boundary — only these.
+	const viewerAuthorRel = viewerAuthorResult as
+		| { viewerIsAuthor: boolean; baseRateRelation: 'same' | 'diff' | 'unknown' }
+		| null;
+	const viewerIsAuthor = viewerAuthorRel?.viewerIsAuthor ?? false;
+	// A viewer may be framed possessively ("YOUR REPRESENTATIVES") only as the
+	// author or with a real verified/entered-address district.
+	const viewerIsConstituent = viewerIsAuthor || userDistrictCode != null;
+	const baseRateRelation = viewerAuthorRel?.baseRateRelation ?? 'unknown';
+
 	const positionCounts = positionCountsResult;
 
 	const existingPosition = existingPositionResult
@@ -291,6 +333,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 		existingPosition,
 		districtOfficials: districtOfficials as DistrictOfficialInput[],
 		recipientConfig,
-		engagementByDistrict
+		engagementByDistrict,
+		// Honesty gating + coarse relation. These derived, non-identifying flags
+		// are all that the guarded Convex query returns — no author id/district.
+		viewerIsAuthor,
+		viewerIsConstituent,
+		baseRateRelation
 	};
 };

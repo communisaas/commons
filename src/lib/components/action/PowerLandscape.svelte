@@ -19,6 +19,7 @@
 		onVerifyAddress,
 		registrationState = 'idle',
 		isCongressional = false,
+		viewerIsConstituent = false,
 		canReportBounce = false,
 		reportedBounces = new Set(),
 		reportingBounce = null,
@@ -34,13 +35,15 @@
 		onVerifyAddress?: () => void;
 		registrationState?: 'idle' | 'registering' | 'complete';
 		isCongressional?: boolean;
+		/** Author or real verified/entered-address district viewer — gates the possessive label. */
+		viewerIsConstituent?: boolean;
 		canReportBounce?: boolean;
 		reportedBounces?: Set<string>;
 		reportingBounce?: string | null;
 		onReportBounce?: (email: string) => void;
 	} = $props();
 
-	const landscape = $derived(mergeLandscape(decisionMakers, districtOfficials));
+	const landscape = $derived(mergeLandscape(decisionMakers, districtOfficials, viewerIsConstituent));
 	const isCwc = $derived(template.deliveryMethod === 'cwc' || isCongressional);
 
 	// Group by organization — the natural institutional link between decision-makers.
@@ -99,10 +102,11 @@
 	{#if landscape.totalCount === 0}
 		<!-- Empty state: contextual based on delivery method -->
 		{#if isCwc && onVerifyAddress}
-			<!-- CWC template without district — verify to reveal -->
+			<!-- CWC template without resolved district — find-your-reps affordance.
+			     Heading stays non-possessive until a real district is resolved. -->
 			<div class="py-4">
 				<h2 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-					Your representatives
+					{viewerIsConstituent ? 'Your representatives' : 'Representatives'}
 				</h2>
 				<p class="text-sm text-slate-500 leading-relaxed mb-4">
 					{labels.legislativeBody} offices prioritize messages from their own constituents. Verify your address to see who represents you.
@@ -118,10 +122,12 @@
 				</button>
 			</div>
 		{:else if isCwc}
-			<!-- Congressional template — guest -->
+			<!-- Congressional template — guest. Non-possessive heading: a guest has no
+			     resolved district, so these are not framed as "yours". The CTA routes
+			     to login -> enter address, the same authenticated flow as any user. -->
 			<div class="py-4">
 				<h2 class="font-mono text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
-					Your representatives
+					Representatives
 				</h2>
 				<p class="text-sm text-slate-500 leading-relaxed">
 					Sign in and verify your address to see who represents you.

@@ -27,7 +27,7 @@ jobs:
           node-version: '20'
       - name: Install CLI critics
         run: |
-          npm install -g @brutalist/mcp@1.15.0 \
+          npm install -g @brutalist/mcp@1.18.2 \
                          @anthropic-ai/claude-code@2.1.177 \
                          @openai/codex@0.139.0
           # NOTE: the agy installer is unpinned upstream (no published checksum) —
@@ -44,6 +44,10 @@ jobs:
         env:
           BRUTALIST_TIMEOUT: "900000"
           BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2100000"
+          # Disable agy's in-run self-update (it self-updates from a us-central1
+          # endpoint mid-run). NOTE: this does NOT pin the installed version —
+          # install.sh above fetches the latest; this only stops drift WITHIN a run.
+          AGY_CLI_DISABLE_AUTO_UPDATE: "1"
         with:
           github-token: ${{ github.token }}
           anthropic-oauth-token: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
