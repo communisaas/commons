@@ -41,8 +41,8 @@
     {
       "name": "W-3 reach extension parallel set",
       "wave": "W-3",
-      "task_ids": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-7", "T3-9"],
-      "note": "State legislator + special district data + country wirings + TIGER monitoring + postal bubble disambiguation can all parallelize. Country rep-lookups (T3-3/4/5) wait for their respective country hydration."
+      "task_ids": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-7"],
+      "note": "State legislator + special district data + country wirings + TIGER monitoring can all parallelize. Country rep-lookups (T3-3/4/5) wait for their respective country hydration."
     },
     {
       "name": "W-3 agentic stack parallel set",

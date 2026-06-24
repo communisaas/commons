@@ -1488,31 +1488,6 @@
       "revisit_when": "NEW-T3-1 + NEW-T3-2 land"
     },
     {
-      "id": "NEW-T3-9",
-      "slug": "postal-bubble-disambiguation",
-      "name": "Postal Bubble interactive disambiguation UX",
-      "track": "TR-C",
-      "clusters": [
-        "C-reach"
-      ],
-      "wave": "W-3",
-      "effort": {
-        "tier": "L",
-        "days": 10
-      },
-      "chokepoint": false,
-      "carryover_from": "T3-9",
-      "description": "Multi-district ambiguity resolution UX when one postal code spans multiple districts.",
-      "acceptance_criteria": "User with ambiguous ZIP picks correct district in <3 clicks.",
-      "depends_on": [
-        "NEW-T3-1"
-      ],
-      "status": "deferred",
-      "deferred_at": "2026-05-27T23:23:56Z",
-      "deferred_reason": "Postal Bubble interactive disambiguation UX \u2014 L tier 10d. Defer to post-launch UX iteration after first-org launch surfaces real friction.",
-      "revisit_when": "Post-launch friction-driven prioritization"
-    },
-    {
       "id": "NEW-T4-3",
       "slug": "per-supporter-bill-alerts",
       "name": "Per-supporter bill alerts",
@@ -1671,7 +1646,7 @@
     {
       "id": "NEW-T9-10",
       "slug": "embed-widget-enhancements",
-      "name": "Embed widget enhancements (postal-bubble + analytics)",
+      "name": "Embed widget enhancements (postal\u2192district lookup + analytics)",
       "track": "TR-C",
       "clusters": [
         "C-reach",
@@ -1684,12 +1659,12 @@
       },
       "chokepoint": false,
       "carryover_from": "T9-10",
-      "description": "Postal-bubble in widget + per-embed analytics + impression pings.",
+      "description": "Postal\u2192district lookup in widget + per-embed analytics + impression pings.",
       "acceptance_criteria": "Embed renders district name on postal entry; per-embed view/conversion stats available.",
       "depends_on": [],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:23:56Z",
-      "deferred_reason": "Embed widget enhancements (postal-bubble + per-embed analytics) \u2014 substantial cross-cutting work touching widget UI + shadow-atlas client + new impression/stats tables. Defer to post-launch embed-iteration sprint after first orgs adopt the widget.",
+      "deferred_reason": "Embed widget enhancements (postal\u2192district lookup + per-embed analytics) \u2014 substantial cross-cutting work touching widget UI + shadow-atlas client + new impression/stats tables. Defer to post-launch embed-iteration sprint after first orgs adopt the widget.",
       "revisit_when": "Post-launch embed-iteration sprint"
     },
     {

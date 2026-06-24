@@ -25,7 +25,7 @@
 >
 > **Canonical references for the shipped system:**
 > - Protocol: [`voter-protocol/specs/CRYPTOGRAPHY-SPEC.md`](../../../voter-protocol/specs/CRYPTOGRAPHY-SPEC.md)
-> - Client: `commons/src/lib/core/zkp/prover-client.ts` (three-tree), `community-field-client.ts` (bubble), `debate-weight-client.ts`, `position-note-client.ts`
+> - Client: `commons/src/lib/core/zkp/prover-client.ts` (three-tree), `debate-weight-client.ts`, `position-note-client.ts`
 > - UX entry point: `commons/src/lib/components/template/ProofGenerator.svelte`
 > - Public /spec page: [`commons/src/routes/spec/+page.svelte`](../../src/routes/spec/+page.svelte)
 

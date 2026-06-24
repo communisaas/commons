@@ -11,7 +11,6 @@
  * - commons-address (IndexedDB): Encrypted constituent address (6-month TTL)
  * - commons_location (IndexedDB): Location signals and inferred location
  * - commons_guest_template (localStorage): Guest state with address
- * - commons_bubble (localStorage): Postal bubble center/radius
  * - commons_location_scope (localStorage): Homepage scope filter
  */
 
@@ -32,7 +31,6 @@ const MESSAGE_JOB_RECOVERY_DB_NAME = 'commons-message-jobs';
 
 // localStorage keys
 const GUEST_STATE_KEY = 'commons_guest_template';
-const BUBBLE_KEY = 'commons_bubble';
 const SCOPE_KEY = 'commons_location_scope';
 
 // =============================================================================
@@ -52,7 +50,6 @@ const GuestStateSchema = z.object({
  * - Encrypted constituent address (IndexedDB, 6-month TTL)
  * - Session tree state with district (IndexedDB, 6-month TTL)
  * - Guest state address (localStorage)
- * - Bubble center/radius (localStorage)
  * - Location scope filter (localStorage)
  */
 export async function invalidateLocationCaches(userId?: string): Promise<void> {
@@ -113,14 +110,7 @@ export async function invalidateLocationCaches(userId?: string): Promise<void> {
 		console.error('[CacheInvalidation] Failed to clear guest state address:', error);
 	}
 
-	// 5. Bubble center/radius (localStorage)
-	try {
-		localStorage.removeItem(BUBBLE_KEY);
-	} catch (error) {
-		console.error('[CacheInvalidation] Failed to clear bubble state:', error);
-	}
-
-	// 6. Location scope filter (localStorage)
+	// 5. Location scope filter (localStorage)
 	try {
 		localStorage.removeItem(SCOPE_KEY);
 	} catch (error) {

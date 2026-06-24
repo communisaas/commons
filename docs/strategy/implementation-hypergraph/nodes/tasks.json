@@ -1034,34 +1034,6 @@
 			"revisit_when": "T3-1 + T3-2 land"
 		},
 		{
-			"id": "T3-9",
-			"slug": "postal-bubble-disambiguation",
-			"name": "Postal Bubble interactive disambiguation UX",
-			"track": "TR-3",
-			"clusters": ["C-reach"],
-			"wave": "W-3",
-			"effort": {
-				"tier": "L",
-				"days": 10
-			},
-			"chokepoint": false,
-			"description": "Detect postal ambiguity when ZIP spans multiple districts. Non-modal inline component shows boundary map with two tap targets. Resolve to H3 cell.",
-			"files_touch": [
-				"src/routes/api/location/resolve-address/+server.ts",
-				"src/lib/core/bubble/geometry.ts",
-				"src/lib/components/profile/GroundSpatialProof.svelte"
-			],
-			"files_create": ["src/lib/components/location/DistrictDisambiguator.svelte"],
-			"key_decisions": ["v1 non-modal disambiguation; full draggable-bubble UX deferred"],
-			"risks": [],
-			"acceptance_criteria": "User with ZIP spanning two CDs sees disambiguation UI; h3Cell reflects correct side after choice.",
-			"depends_on": [],
-			"status": "deferred",
-			"deferred_at": "2026-05-27T20:49:08Z",
-			"deferred_reason": "Postal Bubble interactive disambiguation UX \u2014 L tier 10d. Multi-district ambiguity resolution UX. Defer to post-launch iteration after first-org launch surfaces real friction.",
-			"revisit_when": "post-launch friction-driven prioritization"
-		},
-		{
 			"id": "T3-10",
 			"slug": "per-district-feeds",
 			"name": "Per-district feed infrastructure",
@@ -2846,7 +2818,7 @@
 		{
 			"id": "T9-10",
 			"slug": "embed-widget-enhancements",
-			"name": "Embed widget enhancements (postal-bubble + analytics)",
+			"name": "Embed widget enhancements (postal→district lookup + analytics)",
 			"track": "TR-9",
 			"clusters": ["C-reach", "C-coordination-integrity"],
 			"wave": "W-4",
@@ -2855,7 +2827,7 @@
 				"days": 1.5
 			},
 			"chokepoint": false,
-			"description": "10a postal-bubble in widget (lookupDistrictsByPostal client-side, H3 cell + districtHash in submission). 10b per-embed analytics (impression ping, view/conversion counter). 10c mDL in-frame deferred.",
+			"description": "10a postal→district lookup in widget (lookupDistrictsByPostal client-side, H3 cell + districtHash in submission). 10b per-embed analytics (impression ping, view/conversion counter). 10c mDL in-frame deferred.",
 			"files_touch": [
 				"src/routes/embed/campaign/[slug]/+page.svelte",
 				"convex/schema.ts",
@@ -2874,7 +2846,7 @@
 			"depends_on": [],
 			"status": "deferred",
 			"deferred_at": "2026-05-27T20:49:08Z",
-			"deferred_reason": "Embed widget enhancements \u2014 postal-bubble + per-embed analytics. Substantial cross-cutting work touching widget UI + shadow-atlas client + new impression/stats tables. Defer to post-launch embed-iteration sprint after first orgs adopt the widget.",
+			"deferred_reason": "Embed widget enhancements \u2014 postal\u2192district lookup + per-embed analytics. Substantial cross-cutting work touching widget UI + shadow-atlas client + new impression/stats tables. Defer to post-launch embed-iteration sprint after first orgs adopt the widget.",
 			"revisit_when": "post-launch embed-iteration sprint"
 		},
 		{

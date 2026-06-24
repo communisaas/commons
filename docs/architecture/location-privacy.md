@@ -233,5 +233,4 @@ Implementation: `src/lib/core/location/district-config.ts`
 | `src/routes/api/location/resolve-address/+server.ts` | Address resolution endpoint |
 | `docs/architecture/LOCATION-SIGNAL-ACCURACY-LIMITS.md` | Signal accuracy matrix |
 | `docs/specs/GEOGRAPHIC-IDENTITY-ROUTING.md` | Geographic routing architecture |
-| `docs/specs/POSTAL-BUBBLE-SPEC.md` | Postal bubble (spatial privacy) spec |
 | `docs/design/patterns/privacy-governance.md` | Privacy governance UX patterns |

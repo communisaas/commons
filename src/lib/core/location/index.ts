@@ -1,8 +1,9 @@
 /**
  * Client-Side Location Resolution Module
  *
- * Legacy signal-based inference — retained for AddressVerificationFlow.
- * Primary location path is now the Postal Bubble (see $lib/core/bubble).
+ * Signal-based location inference, used by AddressVerificationFlow.
+ * District resolution runs through the address-collection flow and Shadow
+ * Atlas static boundary chunks.
  */
 
 // ============================================================================

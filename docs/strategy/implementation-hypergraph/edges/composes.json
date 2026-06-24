@@ -37,7 +37,6 @@
     {"task": "T3-7", "cluster": "C-data-sovereignty", "contribution_type": "integration"},
     {"task": "T3-8", "cluster": "C-reach", "contribution_type": "integration"},
     {"task": "T3-8", "cluster": "C-composability", "contribution_type": "integration"},
-    {"task": "T3-9", "cluster": "C-reach", "contribution_type": "surface"},
     {"task": "T3-10", "cluster": "C-reach", "contribution_type": "substrate"},
     {"task": "T3-10", "cluster": "C-agentic", "contribution_type": "substrate"},
 

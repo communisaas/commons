@@ -62,7 +62,6 @@ Additionally, Tree 1 (user identity) Merkle roots go stale with every new regist
 | Debate arguments | three-tree (31 inputs) | DistrictGate on-chain | Verified |
 | Debate co-signs | three-tree (31 inputs) | DistrictGate on-chain | Verified |
 | Debate commit/reveal | debate-weight (2 inputs) | DebateMarket on-chain | Verified |
-| Community field | bubble-membership (5 inputs) | **NONE** | Proof forwarded unverified |
 | Position settlement | position-note (5 inputs) | On-chain (future) | Not yet wired |
 
 ### Three Root Staleness Problems

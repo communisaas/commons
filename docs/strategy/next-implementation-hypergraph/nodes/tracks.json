@@ -18,7 +18,7 @@
       "id": "TR-C",
       "slug": "phase-2-precision",
       "name": "Track C — Phase 2 precision",
-      "description": "ACS population layer + density-aware K-anonymity + SLDU/SLDL expansion + multi-state G3 measurement + Postal Bubble disambiguation + CT BAF/TIGER vintage shim. Post-launch, US-only expansion of measurement precision.",
+      "description": "ACS population layer + density-aware K-anonymity + SLDU/SLDL expansion + multi-state G3 measurement + CT BAF/TIGER vintage shim. Post-launch, US-only expansion of measurement precision.",
       "wave_ceiling": "W-3"
     },
     {

@@ -27,7 +27,7 @@
         "Federal congress-legislators data ingested"
       ],
       "completion_target": "State + local + special district officeholder data; CA/GB/AU rep-lookup live; mainnet DistrictRegistry; multi-jurisdiction routing at campaign layer",
-      "contributing_tasks": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-9", "T3-10"]
+      "contributing_tasks": ["T3-1", "T3-2", "T3-3", "T3-4", "T3-5", "T3-6", "T3-7", "T3-8", "T3-10"]
     },
     {
       "id": "C-composability",

@@ -2,8 +2,8 @@
  * Poseidon2 Merkle Tree Builder
  *
  * Constructs a complete binary Merkle tree from leaves using Poseidon2 hashing.
- * Used by BubbleMembershipProof to commit to a set of H3 cells via a single
- * Poseidon Merkle root (depth-4, up to 16 leaves).
+ * A generic depth-N tree builder for committing to an ordered set of field
+ * elements via a single Poseidon Merkle root.
  *
  * The existing `computeMerkleRoot` in poseidon.ts only verifies a path;
  * this module builds the tree from scratch and can extract paths.

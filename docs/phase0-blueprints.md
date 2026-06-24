@@ -1074,7 +1074,7 @@ STRIPE_PRICE_COALITION
 The roadmap describes a supporter-facing action surface. The existing embed widget (`src/routes/embed/campaign/[slug]/`) handles basic form submission but is designed for iframe embedding. A standalone public campaign page is needed at `/c/[slug]` that provides:
 
 1. Campaign info + verified action count display
-2. Postal code entry -> Postal Bubble resolution
+2. Postal code entry -> district resolution
 3. Optional mDL scan for higher verification
 4. Message compose (if letter campaign)
 5. Action submission
@@ -1169,7 +1169,7 @@ export const load: PageServerLoad = async ({ params }) => {
 
 ### Action Flow (Form Submission)
 
-The form action follows the pattern from `src/routes/embed/campaign/[slug]/+page.server.ts` but adds Postal Bubble integration:
+The form action follows the pattern from `src/routes/embed/campaign/[slug]/+page.server.ts` but adds postal→district resolution:
 
 ```typescript
 export const actions: Actions = {
@@ -1247,7 +1247,7 @@ export const actions: Actions = {
       data: {
         campaignId: campaign.id,
         supporterId: supporter.id,
-        verified: false, // Becomes true after Postal Bubble verification
+        verified: false, // Becomes true after district resolution / mDL verification
         engagementTier: 0,
         districtHash,
         messageHash,
@@ -1273,8 +1273,8 @@ Flow:
 2. Verified action count display (social proof bar)
 3. Form:
    a. Name + Email fields
-   b. Postal code field -> on blur, fetch Postal Bubble
-   c. Postal Bubble visualization (districts resolved)
+   b. Postal code field -> on blur, resolve districts
+   c. Resolved-district display (districts resolved)
    d. Optional: "Verify with mDL" button (trust tier upgrade)
    e. Message textarea (for LETTER type campaigns)
    f. Submit button
@@ -1288,7 +1288,7 @@ src/routes/c/[slug]/+page.svelte
   ├─ CampaignHeader.svelte            (NEW — org badge, title, description)
   ├─ SocialProofBar.svelte             (NEW — verified count, district count, tier sparkline)
   ├─ ActionForm.svelte                 (NEW — the multi-step form)
-  │    ├─ PostalBubbleInput.svelte     (NEW — postal code entry + bubble fetch)
+  │    ├─ PostalDistrictInput.svelte   (NEW — postal code entry + district resolution)
   │    └─ MessageCompose.svelte        (NEW — textarea for letter campaigns)
   └─ ProofCard.svelte                  (NEW — shareable success card)
 ```
@@ -1303,47 +1303,36 @@ src/routes/c/[slug]/+page.svelte
 | `src/lib/components/campaign/CampaignHeader.svelte` | Org badge + campaign info |
 | `src/lib/components/campaign/SocialProofBar.svelte` | Verified count display |
 | `src/lib/components/campaign/ActionForm.svelte` | The action form |
-| `src/lib/components/campaign/PostalBubbleInput.svelte` | Postal code -> bubble |
+| `src/lib/components/campaign/PostalDistrictInput.svelte` | Postal code -> district resolution |
 | `src/lib/components/campaign/ProofCard.svelte` | Shareable proof card |
 
-### Postal Bubble Integration
+### Postal → District Resolution
 
-When the user enters a postal code and blurs the field, the client fetches the Postal Bubble to resolve districts:
+When the user enters a postal code and blurs the field, the client resolves the matching districts:
 
 ```typescript
-// In PostalBubbleInput.svelte
+// In PostalDistrictInput.svelte
 
-async function resolveBubble(postalCode: string) {
+async function resolveDistricts(postalCode: string) {
   loading = true;
   try {
-    // First, geocode the postal code to lat/lng
-    // Use the existing shadow atlas bubble endpoint
-    const res = await fetch('/api/shadow-atlas/bubble', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        postal_code: postalCode,
-        center: { lat: 0, lng: 0 }, // Shadow Atlas resolves from postal_code
-        radius: 5000,
-        layers: ['congressional', 'state_upper', 'state_lower']
-      })
+    // Client-side lookup against the Shadow Atlas chunk for this postal code.
+    const result = await lookupDistrictsByPostal(postalCode, {
+      layers: ['congressional', 'state_upper', 'state_lower']
     });
-    if (res.ok) {
-      const data = await res.json();
-      districts = data.districts ?? [];
-      bubbleResolved = true;
-    }
-  } catch { /* graceful degradation — action still works without bubble */ }
+    districts = result?.districts ?? [];
+    districtsResolved = true;
+  } catch { /* graceful degradation — action still works without resolution */ }
   loading = false;
 }
 ```
 
-**Note:** The Postal Bubble endpoint (`src/routes/api/shadow-atlas/bubble/+server.ts`) requires a session (Tier 1+). For the public campaign page where users may not be logged in, we have two options:
+**Note:** Full district resolution can run entirely client-side from the Shadow Atlas chunk, so it does not require a session. For the public campaign page where users may not be logged in:
 
-1. **Preferred (Phase 0):** Accept postal code without bubble resolution for unauthenticated users. The postal code is stored on the supporter record. Resolution happens later when the org processes the campaign.
-2. **Phase 1:** Add an unauthenticated postal code geocoding endpoint with rate limiting (simpler than full bubble query).
+1. **Preferred (Phase 0):** Resolve districts client-side when the atlas chunk is available; otherwise accept the postal code unresolved. The postal code is stored on the supporter record; resolution can also happen later when the org processes the campaign.
+2. **Phase 1:** Add a server-side postal-code resolution endpoint with rate limiting as a fallback for clients that can't fetch the atlas chunk.
 
-For Phase 0, the postal code field is collected and stored. The Postal Bubble visual is shown only when the user is authenticated (has a session cookie).
+For Phase 0, the postal code field is collected and stored, and the resolved-district display is shown whenever resolution succeeds.
 
 ### Verified Count Real-Time Updates
 
@@ -1440,7 +1429,7 @@ Note: The public campaign page uses a **light theme** (white background) unlike 
 The `CampaignAction` model (schema lines 1486-1506) has:
 - `campaignId` — links to the Campaign
 - `supporterId` — links to the Supporter (nullable, set to the found/created supporter)
-- `verified` — starts `false`, becomes `true` after Postal Bubble verification or mDL
+- `verified` — starts `false`, becomes `true` after district resolution or mDL
 - `engagementTier` — starts `0` (New), updated by engagement tier calculation
 - `districtHash` — SHA-256 of resolved district, used for GDS calculation
 - `messageHash` — SHA-256 of message content, used for ALD calculation

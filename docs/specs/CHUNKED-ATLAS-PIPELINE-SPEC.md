@@ -1285,6 +1285,5 @@ Each regression vector has a corresponding automated check.
 | `SHADOW-ATLAS-SPEC.md` (voter-protocol) | Parent spec for Shadow Atlas data acquisition. This spec replaces its IPFS export infrastructure. |
 | `DISTRICT-TAXONOMY.md` (voter-protocol) | Canonical 24-slot definition. Slot 10 discrepancy noted in Section 13.1. |
 | `TWO-TREE-ARCHITECTURE-SPEC.md` (voter-protocol) | Tree 2 (Cell-District Mapping) is built from the same H3 data. Cell tree snapshot is included in the DAG. |
-| `POSTAL-BUBBLE-SPEC.md` (commons) | Postal code formats for international geocoding. Informs Section 6.4 postal regex. |
 | `GEOGRAPHIC-IDENTITY-ROUTING.md` (commons) | Downstream consumer of district lookup results. |
 | `zk-proof-integration.md` (commons) | Client-side Merkle proof computation. Consumes cell-tree-snapshot from the DAG. |

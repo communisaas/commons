@@ -22,7 +22,6 @@
 	import CircuitSpecimen from './CircuitSpecimen.svelte';
 	import CircuitPrimer from './CircuitPrimer.svelte';
 	import ThreeTreeGraph from './ThreeTreeGraph.svelte';
-	import BubbleGraph from './BubbleGraph.svelte';
 	import DebateWeightGraph from './DebateWeightGraph.svelte';
 	import PositionNoteGraph from './PositionNoteGraph.svelte';
 
@@ -170,8 +169,8 @@
 				<span class="hero-spec-sep" aria-hidden="true">·</span>
 				<Cite
 					form="whisper"
-					cite="three-tree membership · position note · debate weight · bubble membership"
-				><Datum value={4} class="hero-spec-datum" /> live circuits</Cite>
+					cite="three-tree membership · position note · debate weight"
+				><Datum value={3} class="hero-spec-datum" /> live circuits</Cite>
 			</p>
 			<a
 				class="hero-canonical"
@@ -567,22 +566,8 @@
 						visible={['24-district set', 'tier threshold', 'one-time action receipt', 'authority']}
 						depth="18 / 20 / 22 / 24"
 						source="packages/crypto/noir/three_tree_membership/src/main.nr"
-						relates="Sibling: <code>bubble_membership</code> reuses the same identity binding."
 					>
 						<ThreeTreeGraph />
-					</CircuitSpecimen>
-
-					<CircuitSpecimen
-						name="bubble_membership"
-						subtitle="identity ⟶ community field"
-						claim="I'm a verified person who lives in these specific map cells."
-						hidden={['identity', 'individual cell IDs', 'engagement details']}
-						visible={['cell_set_root', 'cell_count', 'epoch_nullifier']}
-						depth="20 · 4"
-						source="packages/crypto/noir/bubble_membership/src/main.nr"
-						relates="Shares identity binding with <code>three_tree_membership</code>."
-					>
-						<BubbleGraph />
 					</CircuitSpecimen>
 				</div>
 			</div>

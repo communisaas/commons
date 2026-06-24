@@ -196,8 +196,8 @@ No pre-send checklist, admin sign-off gate, accessibility checker, or alt-text e
 
 ### 4. Decision-maker + Power Landscape + letters
 
-**Postal Bubble** 🟠
-State machine + bubble client at `src/lib/core/bubble/bubble-state.svelte.ts`. Geometry module at `src/lib/core/bubble/geometry.ts`. `PrecisionLevel` type (none/postal/ambiguous/resolved). **Spec at `docs/specs/POSTAL-BUBBLE-SPEC.md` is explicitly marked "ASPIRATIONAL."** The interactive "pinch to resolve" UX, draggable bubble, district fence visualization don't exist as routes. Current production uses `AddressCollectionForm` + `resolveAddress` directly. Postal disambiguation when one ZIP spans multiple districts: data layer ready (`lookupAllDistricts`), no UI presents the choice.
+**Postal→district resolution** 🟠
+The interactive location subsystem (its state machine, draggable map client, geometry module, and district-fence visualization) was removed; it never shipped as routes. Current production resolves postal code → district through `AddressCollectionForm` + `resolveAddress` directly. Postal disambiguation when one ZIP spans multiple districts: data layer ready (`lookupAllDistricts`), no UI presents the choice.
 
 **Shadow Atlas integration** ✅ (read path)
 IPFS-native. `latLngToCell(lat, lng, 7)` → `getChunkForCell` fetches ~8 KB H3 res-3 parent chunk from R2 via `src/lib/core/shadow-atlas/ipfs-store.ts`. Zero runtime server calls. LRU cache 50 chunks, 7-day TTL. All 24 slots defined in `US_SLOT_NAMES`. Boundary GeoJSON served from `atlas.commons.email/source/{version}/us/cd/cd-{geoid}.geojson` (congressional only). Browser-direct fetch with 5s timeout + cache-poison guard. Write path 🟡: HTTP POST to `WRITE_RELAY_URL`; requires `SHADOW_ATLAS_API_URL` + `SHADOW_ATLAS_REGISTRATION_TOKEN` env vars.
@@ -395,8 +395,8 @@ SDK READMEs complete with quick-start, resource tables, pagination, error handli
 **Campaign widget** ✅
 Loads via `api.campaigns.getPublicAny`. Fields: name, email, postal, message, plus optional district-evidence address fields. Rate-limited 10/min per IP. Submits via `api.campaigns.submitAction` with `source: 'widget'`.
 
-**Postal Bubble in widget** 🔴
-No postal bubble component in `/src/routes/embed/`. The plain postal field stays postal-only, while the optional district-evidence drawer resolves full address through `POST /api/c/[slug]/verify-district` and submits `districtCode`, `h3Cell`, and `atlasVersion` when successful.
+**Postal→district lookup in widget** 🔴
+No client-side postal→district lookup in `/src/routes/embed/`. The plain postal field stays postal-only, while the optional district-evidence drawer resolves full address through `POST /api/c/[slug]/verify-district` and submits `districtCode`, `h3Cell`, and `atlasVersion` when successful.
 
 **Identity verification (mDL) in widget** 🔴 — Session-authenticated only. No cross-frame mDL protocol.
 
@@ -599,7 +599,7 @@ Tier 2. Manual address → Shadow Atlas Nominatim → H3 → district. `verifyAd
 Graduated routing: Tier-2 → `AddressVerificationFlow`, recovery → `IdentityRecoveryFlow`, Tier-4+ → `IdentityVerificationFlow` (mDL). `clampTier` defense (H-phase). Snapshot-driven auto-dismiss.
 
 **Circuits** ✅
-`three_tree_membership` (primary), `district_membership`, `two_tree_membership`, `bubble_membership`, `position_note`, `debate_weight`. Depths: 18/20/22/24.
+`three_tree_membership` (primary), `district_membership`, `two_tree_membership`, `position_note`, `debate_weight`. Depths: 18/20/22/24.
 
 **Browser-side proving** ✅ — `ThreeTreeNoirProver` WASM singleton. Depth-aware re-init. SA-006 cache-clear. `keccak: true` for Solidity-compatible HonkVerifier output.
 
@@ -638,8 +638,8 @@ Tiers 0-4 defined in circuit. **In practice**, derived from `users.reputationTie
 
 Transitions work via `Math.max(user.trustTier, N)` pattern. H5 cross-check flags inconsistent `cellAnchorMode = 'random-fallback'` with trustTier >= 3.
 
-**Postal Bubble in person flow** 🟡
-`Bubble.svelte` + `bubble-state.svelte.ts` + `community-field-contribution.ts`. **No org-embed API endpoint found.**
+**Postal→district resolution in person flow** 🟡
+Production person flow resolves postal code → district via `AddressCollectionForm` + `resolveAddress` (the prior interactive location subsystem was removed). **No org-embed API endpoint found.**
 
 **Letter send flow** ✅ (gated by `FEATURES.CONGRESSIONAL=false`)
 `src/routes/api/submissions/create/+server.ts` checks auth + flag + credential TTL + proof validation + range checks → Convex `submissions.create` (atomic insert + idempotency + nullifier dedup + background delivery + async on-chain anchor).
@@ -877,7 +877,7 @@ Organized by surface for completeness — see per-domain sections above for indi
 - The folded Power workspace (`LandscapeSpace`) and `/org/[slug]/representatives` both expose Power terrain through `buildPowerTerrainReadiness`. The folded workspace passes layout-loaded follows, watched bills, and score snapshots, leaves discoverable-official count null because discovery is route-local, and renders a compact terrain coverage readout from the shared summary. `/org/[slug]/representatives` passes route-local discover counts from `legislation.discoverDms`, keeps followed targets cited against `legislation.listOrgDmFollows`, and mirrors the shared Power rows for bills corpus, score snapshots, state/local/special-district terrain, international resolver wiring, reader-office response surfaces, and decision-maker/bill/scorecard joins. The target detail route maps its strip from `buildPowerTargetDetailRows`, keeping contact evidence and office workflow separate: absent public contact ground reads `read contact boundary`, while unarmed reader-office notification workflow reads `read office-workflow boundary`. Follow/discover records are usable target ground; wider terrain, office response, and joined-plane claims remain explicitly bounded.
 - 24 boundary types defined; only slot 0 populated
 - No Cicero/BallotReady/OpenStates integration
-- No interactive postal-bubble disambiguation UX (spec is aspirational)
+- No interactive multi-district disambiguation UX when one postal code spans several districts
 - `cwc_code` always null in officials file
 - No multi-jurisdiction routing at campaign layer
 - No predictive dialer / phone banking
@@ -908,7 +908,7 @@ Organized by surface for completeness — see per-domain sections above for indi
 - v1 activity feed and org event SSE exist, but developer onboarding examples and receiver/consumer UX remain thin
 - "No rate cap" claim contradicted by 100 req/min free tier
 - No "Building on Commons" developer portal
-- Embed widget shallow (no postal-bubble, no ZKP, no per-embed analytics)
+- Embed widget shallow (no client-side postal→district lookup, no ZKP, no per-embed analytics)
 
 ### Billing + dashboard
 

@@ -33,7 +33,7 @@ Schema is defined in `convex/schema.ts` using `defineTable({...}).index(...)` / 
 
 | Table | Purpose |
 |-------|---------|
-| `users` | Core user record. Graduated trust tiers (0-5), passkey/WebAuthn credentials, wallet bindings (EVM + NEAR), Sybil resistance fields (`identityHash`, `identityCommitment`), postal bubble location, profile fields. |
+| `users` | Core user record. Graduated trust tiers (0-5), passkey/WebAuthn credentials, wallet bindings (EVM + NEAR), Sybil resistance fields (`identityHash`, `identityCommitment`), postal/district location, profile fields. |
 | `sessions` | Authentication sessions, linked to user via `userId`. |
 | `accounts` | OAuth provider accounts (Google, Facebook, LinkedIn, Twitter, Discord). Tracks `emailVerified` for Sybil resistance. |
 | `verificationSessions` | Ephemeral sessions for identity verification flows. 5-minute expiration. |
@@ -100,7 +100,7 @@ Schema is defined in `convex/schema.ts` using `defineTable({...}).index(...)` / 
 | `debates` | Staked deliberation markets. LMSR pricing, AI resolution. |
 | `debateArguments` | Arguments with on-chain scoring, LMSR pricing, AI evaluation. |
 | `debateNullifiers` | ZK nullifier dedup — one action per identity per debate. |
-| `communityFieldContributions` | ZK-verified bubble density contributions per epoch. |
+| `communityFieldContributions` | ZK-verified community-field density contributions per epoch. |
 
 ### Analytics & Observability
 

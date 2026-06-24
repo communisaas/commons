@@ -43,7 +43,6 @@
     {"task": "NEW-T3-4", "cluster": "C-reach"},
     {"task": "NEW-T3-5", "cluster": "C-reach"},
     {"task": "NEW-T3-8", "cluster": "C-reach"},
-    {"task": "NEW-T3-9", "cluster": "C-reach"},
     {"task": "NEW-T3-10", "cluster": "C-reach"},
 
     {"task": "NEW-T5-2", "cluster": "C-quality-signaling"},

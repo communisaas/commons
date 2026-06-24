@@ -24,7 +24,7 @@
 
 Commons serves **people** and **organizations** through the same platform.
 
-**Person-facing** (verified civic speech): identity verification, spatial browse, postal bubble, power landscape, debate markets, proofs. A person uses commons.email to send a verified letter to their representative.
+**Person-facing** (verified civic speech): identity verification, spatial browse, postal→district resolution, power landscape, debate markets, proofs. A person uses commons.email to send a verified letter to their representative.
 
 **Org-facing** (advocacy infrastructure): mass email, campaigns, list management, analytics, billing, multi-tenancy. An organization uses commons.email to mobilize supporters and deliver verified constituent signals at scale.
 
@@ -101,7 +101,6 @@ Technical specifications and design docs.
 
 **Design specs (aspirational — not yet implemented):**
 - `progressive-template-sections.md` — Template sectioning UX
-- `POSTAL-BUBBLE-SPEC.md` — Postal bubble UI
 - `POWER-LANDSCAPE-SPEC.md` — Power landscape visualization
 - `SPATIAL-BROWSE-SPEC.md` — Spatial browsing interface
 - `interactive-location-breadcrumb.md` — Location filter breadcrumb UI
