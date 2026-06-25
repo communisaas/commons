@@ -27,7 +27,7 @@ jobs:
           node-version: '20'
       - name: Install CLI critics
         run: |
-          npm install -g @brutalist/mcp@1.18.2 \
+          npm install -g @brutalist/mcp@1.18.3 \
                          @anthropic-ai/claude-code@2.1.177 \
                          @openai/codex@0.139.0
           # NOTE: the agy installer is unpinned upstream (no published checksum) —
