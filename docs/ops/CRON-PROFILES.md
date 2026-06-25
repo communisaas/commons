@@ -173,9 +173,6 @@ printf 'CONVEX_DEPLOYMENT=dev:outstanding-firefly-831\n' > /tmp/cvx-np.env
 npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
 # (equivalent:)
 #   npx convex env set CRON_PROFILE essential --deployment outstanding-firefly-831
-
-# clean up the ephemeral files
-rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
 ```
 
 > **If gating = conditional registration, setting the env is not enough** — you
@@ -189,6 +186,9 @@ rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
 >
 > # non-prod backend: `convex deploy` only ever targets PROD, so use dev --once
 > npx convex dev --once --env-file /tmp/cvx-np.env
+>
+> # clean up the ephemeral env files — AFTER the redeploys above (they need them)
+> rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
 > ```
 >
 > Deploy from a **clean `origin/main` worktree** — `convex deploy` ships the

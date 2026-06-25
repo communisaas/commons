@@ -86,8 +86,17 @@ const PROFILE_TIERS: Record<string, ReadonlySet<CronTier>> = {
 // expensive config on a zero-user backend — the exact failure this gate exists
 // to prevent. 'essential' is by definition the always-safe set, so flooring to
 // it satisfies both the safety goal and the cost goal.
-const RESOLVED_PROFILE =
-  CRON_PROFILE in PROFILE_TIERS ? CRON_PROFILE : "essential";
+// Own-property check (NOT the `in` operator): `in` matches inherited keys
+// (`constructor`, `__proto__`, `toString`, …), which would resolve to a
+// non-Set value and throw at module init — breaking the deploy. hasOwnProperty
+// accepts only the three explicit profile keys; anything else floors to
+// 'essential'.
+const RESOLVED_PROFILE = Object.prototype.hasOwnProperty.call(
+  PROFILE_TIERS,
+  CRON_PROFILE
+)
+  ? CRON_PROFILE
+  : "essential";
 const activeTiers = PROFILE_TIERS[RESOLVED_PROFILE];
 const enabled = (tier: CronTier): boolean => activeTiers.has(tier);
 
