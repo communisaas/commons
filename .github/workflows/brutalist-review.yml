@@ -42,8 +42,8 @@ jobs:
         # move-tags automation) so this repo auto-updates to the latest action.
         uses: ejmockler/brutalist-mcp/packages/github-action@v1
         env:
-          BRUTALIST_TIMEOUT: "900000"
-          BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2100000"
+          BRUTALIST_TIMEOUT: "1800000"
+          BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2700000"
           # Disable agy's in-run self-update (it self-updates from a us-central1
           # endpoint mid-run). NOTE: this does NOT pin the installed version —
           # install.sh above fetches the latest; this only stops drift WITHIN a run.
