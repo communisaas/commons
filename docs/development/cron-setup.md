@@ -12,7 +12,7 @@ Jobs defined with `crons.daily(...)`, `crons.hourly(...)`, or `crons.cron("expr"
 
 ## Current Jobs
 
-31 scheduled jobs across three tiers (see **Cron Profiles** below for which
+29 scheduled jobs across three tiers (see **Cron Profiles** below for which
 register under each `CRON_PROFILE`). Highlights:
 
 | Job | Cadence | Target | Purpose |
@@ -131,8 +131,8 @@ npx convex env set CRON_PROFILE full --env-file <prod-env-file>
 ```
 
 > Note: `essential` crons still run on dev, which shares the free-plan quota.
-> 14 essential crons (mostly hourly/daily + `sweep-stuck-processing`@2m +
-> `reschedule-stuck-revocations`@15m) is far below the 31-cron full fleet but
+> 16 essential crons (mostly hourly/daily + `sweep-stuck-processing`@2m +
+> `reschedule-stuck-revocations`@15m) is far below the 29-cron full fleet but
 > not zero. If dev still overflows quota, an even thinner dev-only profile is a
 > follow-up lever (acceptable since dev has no real submissions to recover).
 

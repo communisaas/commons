@@ -23,8 +23,9 @@ overage source is the fleet itself running against empty tables, dominated by:
 
 The `CRON_PROFILE` env var (consumed by `convex/crons.ts` — owned by the gating
 fix) selects which crons run. `essential` runs only the ESSENTIAL tier; `full`
-runs everything. **Default (unset) = `full`** so absence of the var never breaks
-anything.
+runs everything. **Default (unset/unknown) = `essential`** — the cost-safe
+floor; you opt UP to `operational`/`full` explicitly, so a missing or typo'd var
+under-runs (cheap, recoverable) rather than silently running the full fleet.
 
 > See also: [[convex_deploy_gotcha]], [[deploy_pipeline_topology]],
 > [[bootstrapping_cost_posture]].
@@ -265,7 +266,7 @@ npx convex function-spec --deployment quirky-chinchilla-352 \
   fetch + embed (6h) being off.
 
 > **Expectation-setting:** `essential` REDUCES but does not zero the function-call
-> floor — 17 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
+> floor — 16 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
 > 720/day/backend alone). If you need to go lower, widen ESSENTIAL recovery-sweep
 > cadences (registration-time change, owned by the gating fix) — never disable
 > them.

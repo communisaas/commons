@@ -3281,41 +3281,44 @@ export const pruneBillsBatch = internalMutation({
  *   Dry run (default — count only, touches nothing):
  *     npx convex run legislation:pruneAllBills '{}'
  *   Live prune (explicit + confirmed):
- *     npx convex run legislation:pruneAllBills '{"dryRun":false,"confirm":"PRUNE_BILLS"}'
+ *     npx convex run legislation:pruneAllBills '{"dryRun":false,"confirm":"DELETE_BILLS_AND_DEPENDENTS"}'
  *
- * A live run is triple-guarded: dryRun defaults true; it requires
- * confirm:'PRUNE_BILLS'; and it REFUSES (PRUNE_REFUSED) if any ephemeral
- * DELETE-dependent table is non-empty unless force:true. Audit/forensic tables
- * (legislativeActions, accountabilityReceipts) are PRESERVED, never cleared.
- * Internal-only.
+ * A live run is hard-guarded: dryRun defaults true; it requires
+ * confirm:'DELETE_BILLS_AND_DEPENDENTS' (which names the blast radius); and it
+ * REFUSES outright if any ephemeral DELETE-dependent table is non-empty — there
+ * is NO force override, so it can never wipe real watch/alert data post-launch.
+ * Audit/forensic tables (legislativeActions, accountabilityReceipts) are
+ * PRESERVED, never cleared. Internal-only, pre-launch one-off.
  */
 export const pruneAllBills = internalAction({
 	args: {
 		dryRun: v.optional(v.boolean()),
 		batchSize: v.optional(v.number()),
-		force: v.optional(v.boolean()),
 		confirm: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		const dryRun = args.dryRun ?? true; // SAFE DEFAULT: a bare run only counts.
 		const batchSize = args.batchSize ?? 200;
-		const force = args.force ?? false;
 
-		// A live (destructive) run must be EXPLICIT and CONFIRMED. Defaulting to
-		// dryRun plus the confirm literal guards against an accidental
-		// `pruneAllBills '{"dryRun":false}'` from deploy tooling or a fat-finger.
-		if (!dryRun && args.confirm !== 'PRUNE_BILLS') {
+		// A live (destructive) run must be EXPLICIT and CONFIRMED, and the confirm
+		// literal NAMES THE BLAST RADIUS so an operator can't mistake this for a
+		// bills-only delete: a live prune also full-clears orgBillWatches /
+		// orgBillRelevances / legislativeAlerts and nulls campaign/delivery billId.
+		if (!dryRun && args.confirm !== 'DELETE_BILLS_AND_DEPENDENTS') {
 			throw new Error(
-				"PRUNE_REFUSED: a live prune requires confirm:'PRUNE_BILLS'. " +
+				"PRUNE_REFUSED: a live prune requires confirm:'DELETE_BILLS_AND_DEPENDENTS' " +
+					'(it clears watches/relevances/alerts too, not just bills). ' +
 					'Run with the default dryRun:true to inspect counts first.'
 			);
 		}
 
-		// Safety precondition: a live prune clears whole EPHEMERAL dependent
-		// tables (watches / relevances / alerts). That is only correct when they
-		// are EMPTY (pre-launch). Refuse a live run if any is non-empty unless
-		// force:true. (Audit/forensic tables are preserved, never in this set.)
-		if (!dryRun && !force) {
+		// HARD precondition (NO override): a live prune full-clears the ephemeral
+		// dependent tables (watches / relevances / alerts) table-wide. That is
+		// only ever correct PRE-LAUNCH when they are empty. If ANY is non-empty
+		// this refuses outright — there is deliberately no `force` escape hatch,
+		// so it can never wipe real user watch/alert data post-launch. (Audit/
+		// forensic tables are preserved — not in the delete set.)
+		if (!dryRun) {
 			for (const table of PRUNE_DELETE_DEPENDENT_TABLES) {
 				const probe = (await ctx.runMutation(pruneDependentTableBatchRef, {
 					table,
@@ -3325,9 +3328,8 @@ export const pruneAllBills = internalAction({
 				})) as { counted: number };
 				if (probe.counted > 0) {
 					throw new Error(
-						`PRUNE_REFUSED: dependent table '${table}' is non-empty — a live ` +
-							`prune would wipe it wholesale (incl. audit/receipt data). Re-run ` +
-							`with dryRun:true to inspect, or pass force:true to override.`
+						`PRUNE_REFUSED: dependent table '${table}' is non-empty (${probe.counted}+ rows) — ` +
+							'this is a pre-launch-only tool and will not wipe real data. Aborting.'
 					);
 				}
 			}

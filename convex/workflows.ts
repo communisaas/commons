@@ -785,6 +785,23 @@ export const claimExecution = internalMutation({
 		if (exec.status !== 'paused' && exec.status !== 'pending') {
 			return { ok: false, reason: `wrong_status:${exec.status}` };
 		}
+		// Pause-epoch guard against a STALE wake-up. The event-driven resume
+		// (`runAfter(delayMs, execute)`) and the 15-min safety-net sweep can both
+		// have a wake-up in flight for the same execution. If one left over from
+		// an EARLIER pause fires after the execution already advanced and re-paused
+		// on a LATER delay step, resuming now would run that step before its delay
+		// elapses. A paused execution whose `nextRunAt` is still in the future has
+		// not reached its due time, so this wake-up is stale — refuse it; the
+		// legitimate wake-up scheduled for `nextRunAt` resumes it on time. (1s skew
+		// tolerance so an on-time native wake-up isn't mis-rejected; the sweep
+		// clears `nextRunAt` before re-firing, so its recovery path is unaffected.)
+		if (
+			exec.status === 'paused' &&
+			exec.nextRunAt !== undefined &&
+			exec.nextRunAt > Date.now() + 1000
+		) {
+			return { ok: false, reason: 'premature_wakeup' };
+		}
 		await ctx.db.patch(executionId, { status: 'running' });
 		return { ok: true };
 	}
