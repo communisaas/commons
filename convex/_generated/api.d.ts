@@ -25,6 +25,7 @@ import type * as _internalAuth from "../_internalAuth.js";
 import type * as _orgHash from "../_orgHash.js";
 import type * as _orgKey from "../_orgKey.js";
 import type * as _orgKeyUnseal from "../_orgKeyUnseal.js";
+import type * as _policy from "../_policy.js";
 import type * as _rateLimit from "../_rateLimit.js";
 import type * as _segmentMatch from "../_segmentMatch.js";
 import type * as _sentry from "../_sentry.js";
@@ -106,6 +107,7 @@ declare const fullApi: ApiFromModules<{
   _orgHash: typeof _orgHash;
   _orgKey: typeof _orgKey;
   _orgKeyUnseal: typeof _orgKeyUnseal;
+  _policy: typeof _policy;
   _rateLimit: typeof _rateLimit;
   _segmentMatch: typeof _segmentMatch;
   _sentry: typeof _sentry;
