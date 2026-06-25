@@ -10,9 +10,10 @@ convex/crons.ts → Convex scheduler → internal.<module>.<function>
 
 Jobs defined with `crons.daily(...)`, `crons.hourly(...)`, or `crons.cron("expr", ...)` run inside Convex with normal `ctx` (db + actions). No auth secrets, no idempotency token, no external webhook.
 
-## Current Jobs (2026-04-23)
+## Current Jobs
 
-Approximately 15 scheduled jobs. Highlights:
+31 scheduled jobs across three tiers (see **Cron Profiles** below for which
+register under each `CRON_PROFILE`). Highlights:
 
 | Job | Cadence | Target | Purpose |
 |---|---|---|---|
@@ -54,6 +55,83 @@ export default crons;
 ```
 
 Declared jobs are registered on the next `npx convex dev` / `npx convex deploy`.
+
+## Cron Profiles (`CRON_PROFILE`) — overage control
+
+The Convex scheduler registers **exactly** the crons that `convex/crons.ts`
+produces when it is evaluated during a `convex deploy` / `convex dev` push.
+Skipping a `crons.X(...)` call means that cron is **never added to the
+deployment** — it incurs **zero** function-call ticks against the (shared,
+free-plan) quota. This is strictly cheaper than gating inside a handler (which
+still pays the per-tick invocation).
+
+`process.env.CRON_PROFILE` selects which **tiers** register on a deployment:
+
+| Profile | Registered tiers | Use |
+|---|---|---|
+| `full` (default) | essential + operational + speculative + poller | Legacy behavior — every cron. Set at launch. |
+| `operational` | essential + operational + poller | Live but no speculative ingest. |
+| `essential` | essential only | Dev + pre-launch prod (no users). |
+
+Unset (or an unrecognized value) resolves to **`full`** — a deliberate
+fail-open so an operator typo never silently drops an essential cron. The
+resolved profile is logged at module evaluation (visible in deploy logs); an
+unrecognized non-empty value emits a `console.warn`.
+
+### Tiers
+
+- **ESSENTIAL** — correctness / safety / privacy hygiene. Runs on every
+  deployment regardless of traffic: PII expiry (`cleanup-witness`), crashed-
+  worker recovery (`sweep-stuck-processing`), revocation reconcile/reschedule,
+  SMT-root drift detection, key/TTL hygiene (sealed keys, message-gen jobs,
+  agent-traces, org-events), the two stranded-row sweeps (placeholders +
+  donations), boundary-cell rate alarm, alert-pipe heartbeat, contact-cache
+  cleanup, intelligence cleanup. 14 crons.
+- **OPERATIONAL** — only meaningful with live traffic: bounce probes, anchor
+  retries, A/B winner, analytics snapshot (+ piggybacked rate-limit cleanup),
+  alert digest, debate resolution, webhook retry, reputation recompute,
+  relatedness calibration, tag-embedding backfill. 11 crons.
+- **SPECULATIVE** — no consumer yet / post-launch: `legislation-sync` (primary
+  pre-launch overage source), `vote-tracker`, `scorecard-compute`. 3 crons.
+- **POLLER** — the two minute-cadence pollers (`workflow-scheduler`,
+  `process-scheduled-blasts`). Gated with operational so dev / pre-launch
+  deployments don't run the 1-minute poll.
+
+### Deploy-time frozen — this is load-bearing
+
+`CRON_PROFILE` is read **once, at push/deploy time**. Setting the env var with
+`npx convex env set` does **nothing** until the next deploy re-registers the
+cron set. This matches documented Convex behavior — environment variables used
+in cron definitions are only reevaluated on deployment (Convex docs,
+"Environment Variables") — which is exactly the semantics we want: each
+deployment freezes its tier at push.
+
+```bash
+# dev (outstanding-firefly-831) — pre-launch
+npx convex env set CRON_PROFILE essential
+npx convex dev   # or a push — re-registers the trimmed cron set
+
+# prod (quirky-chinchilla-352) — pre-launch
+npx convex env set CRON_PROFILE essential --env-file <prod-env-file>
+# then redeploy prod so the cron set re-registers
+```
+
+### Launch checklist (hard item)
+
+At launch, flip prod to `full` (or `operational`) and **redeploy** — otherwise
+the operational maintenance paths (analytics snapshot + its rate-limit cleanup,
+reputation recompute, etc.) stay dark and the two pollers never fire:
+
+```bash
+npx convex env set CRON_PROFILE full --env-file <prod-env-file>
+# redeploy prod
+```
+
+> Note: `essential` crons still run on dev, which shares the free-plan quota.
+> 14 essential crons (mostly hourly/daily + `sweep-stuck-processing`@2m +
+> `reschedule-stuck-revocations`@15m) is far below the 31-cron full fleet but
+> not zero. If dev still overflows quota, an even thinner dev-only profile is a
+> follow-up lever (acceptable since dev has no real submissions to recover).
 
 ## Debate Resolution Pattern
 

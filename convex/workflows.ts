@@ -1164,8 +1164,14 @@ export const execute = internalAction({
 						nextRunAt
 					});
 
-					// Schedule resume
-					ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
+					// Schedule resume natively at the exact due time. This is the
+					// PRIMARY resume path — the `workflow-scheduler` cron is now a
+					// wide-cadence (15-min) safety net that only recovers rows
+					// whose `runAfter` job was lost to a Convex-scheduler restart
+					// (see `processScheduled`). Awaited (was fire-and-forget) so a
+					// scheduler-enqueue failure surfaces here rather than silently
+					// deferring the resume to the now-slower safety-net sweep.
+					await ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
 						executionId
 					});
 					return;
@@ -1292,8 +1298,16 @@ export const execute = internalAction({
 });
 
 /**
- * Resume paused workflows whose delay has elapsed.
- * Called by cron every minute.
+ * Wide-cadence orphan-recovery sweep for paused workflow executions.
+ *
+ * The PRIMARY resume path is the native `ctx.scheduler.runAfter(delayMs, …)`
+ * fired at the `delay`-step write-site in `execute`, which resumes each
+ * paused execution exactly when its delay elapses. This handler is the
+ * SAFETY NET (registered on a 15-min cron, not 1-min): it range-scans for
+ * `paused` rows whose `nextRunAt` has passed but whose scheduled `execute`
+ * job was lost to a Convex-scheduler restart, and re-fires them. Resuming a
+ * row the native path already resumed is harmless — `claimExecution` is an
+ * atomic CAS, so the second `execute` invocation no-ops.
  */
 export const processScheduled = internalAction({
 	args: {},

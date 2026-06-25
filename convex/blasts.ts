@@ -139,7 +139,55 @@ export const sealAndScheduleBlast = mutation({
 			await ctx.scheduler.runAfter(0, internal.blasts.triggerEnclaveSend, {
 				blastId: args.blastId
 			});
+		} else {
+			// Future-scheduled: fire EXACTLY at the due time via Convex's native
+			// scheduler instead of relying on a minute-cadence poll. `runAt`
+			// persists across this mutation's commit, so once the transaction
+			// succeeds the dispatch is durably enqueued for `scheduledAt`.
+			//
+			// `dispatchScheduledBlast` claims via `claimForBlastDispatch`
+			// (CAS scheduled→sending) before triggering the enclave, so this
+			// native firing and the wide-cadence `process-scheduled-blasts`
+			// safety-net sweep can never double-dispatch — whichever wins the
+			// claim sends; the loser is an idempotent no-op. The safety net
+			// only matters for the rare scheduler-restart orphan (a `runAt`
+			// job lost to a Convex-scheduler restart), mirroring the
+			// reschedule-stuck-revocations pattern.
+			//
+			// If the operator later cancels the blast, the `runAt` job still
+			// fires but `claimForBlastDispatch` requires status==='scheduled',
+			// so a cancelled/sent/draft blast is a no-op — no cleanup of the
+			// scheduled job is needed.
+			await ctx.scheduler.runAt(args.scheduledAt, internal.blasts.dispatchScheduledBlast, {
+				blastId: args.blastId
+			});
 		}
+	}
+});
+
+/**
+ * Native due-time entry point for a future-scheduled TEE-sealed blast.
+ *
+ * Enqueued by `sealAndScheduleBlast` via `ctx.scheduler.runAt(scheduledAt, …)`
+ * so the blast fires the instant it's due rather than waiting for the next
+ * wide-cadence sweep. Idempotent: `claimForBlastDispatch` is an atomic CAS
+ * (scheduled→sending); if the safety-net sweep already claimed this blast
+ * (scheduler-restart orphan recovery), the claim returns `{ ok: false }` and
+ * this action is a no-op. No double-send is possible.
+ */
+export const dispatchScheduledBlast = internalAction({
+	args: { blastId: v.id('emailBlasts') },
+	handler: async (ctx, { blastId }) => {
+		const claim: { ok: boolean } = await ctx.runMutation(
+			internal.blasts.claimForBlastDispatch,
+			{ blastId }
+		);
+		if (!claim.ok) {
+			// Already dispatched/cancelled/completed (or claimed by the
+			// safety-net sweep) — idempotent no-op.
+			return;
+		}
+		await ctx.runAction(internal.blasts.triggerEnclaveSend, { blastId });
 	}
 });
 
@@ -353,10 +401,17 @@ export const claimForBlastDispatch = internalMutation({
 });
 
 /**
- * Process scheduled blasts — called by cron every minute. Uses
- * `claimForBlastDispatch` to atomically transition `scheduled → sending`
- * before invoking the enclave, so concurrent cron firings cannot both
- * dispatch the same blast (and double-send the email).
+ * Wide-cadence orphan-recovery sweep for future-scheduled blasts.
+ *
+ * The PRIMARY firing path is now `ctx.scheduler.runAt(scheduledAt, …)` →
+ * `dispatchScheduledBlast`, enqueued at the `sealAndScheduleBlast` write-site,
+ * which fires each blast exactly when due. This handler is the SAFETY NET
+ * (registered on a 15-min cron, not 1-min): it re-scans for `scheduled` rows
+ * whose due `runAt` job was lost to a Convex-scheduler restart and dispatches
+ * them, mirroring `reschedule-stuck-revocations`. Uses `claimForBlastDispatch`
+ * to atomically transition `scheduled → sending` before invoking the enclave,
+ * so it can never double-dispatch a blast the native `runAt` path already
+ * claimed.
  */
 export const processScheduledBlasts = internalAction({
 	handler: async (ctx) => {
