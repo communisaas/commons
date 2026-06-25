@@ -51,9 +51,11 @@
  * reevaluated on deployment (Convex docs, "Environment Variables") — and is
  * exactly the semantics we want: each deployment freezes its tier at push.
  *
- * DEFAULT IS SAFE: unset (or unrecognized) CRON_PROFILE → 'full', i.e. the
- * legacy behavior with every cron registered. No silent loss of essential
- * crons on a typo. The resolved profile is logged at module evaluation so the
+ * COST-SAFE FLOOR: unset (or unrecognized) CRON_PROFILE → 'essential' — the
+ * always-run safety/PII/recovery crons. A typo (or a forgotten env var) can
+ * never silently run the most expensive 'full' fleet on a zero-user backend;
+ * it under-runs (cheap, recoverable) instead. Opt UP to 'operational'/'full'
+ * explicitly. The resolved profile is logged at module evaluation so the
  * effective set is visible in deploy logs.
  *
  * Posture: dev (outstanding-firefly-831) → 'essential'; prod
@@ -69,27 +71,32 @@ declare const process: { env: Record<string, string | undefined> };
 type CronTier = "essential" | "operational" | "speculative";
 
 const RAW_CRON_PROFILE = process.env.CRON_PROFILE;
-const CRON_PROFILE = (RAW_CRON_PROFILE ?? "full").toLowerCase();
+// Unset → 'essential' (cost-safe floor). Opt UP to operational/full explicitly.
+const CRON_PROFILE = (RAW_CRON_PROFILE ?? "essential").toLowerCase();
 
-// Profile → enabled tier set. Unknown / unset → 'full' (fail-open: never drop
-// an essential cron on an operator typo). 'full' is the legacy behavior.
+// Profile → enabled tier set.
 const PROFILE_TIERS: Record<string, ReadonlySet<CronTier>> = {
   full: new Set<CronTier>(["essential", "operational", "speculative"]),
   operational: new Set<CronTier>(["essential", "operational"]),
   essential: new Set<CronTier>(["essential"]),
 };
 
+// Unknown / typo'd profile → 'essential' (the safe-AND-cheap floor), NOT 'full'.
+// Failing open to the full fleet would let a single typo silently run the most
+// expensive config on a zero-user backend — the exact failure this gate exists
+// to prevent. 'essential' is by definition the always-safe set, so flooring to
+// it satisfies both the safety goal and the cost goal.
 const RESOLVED_PROFILE =
-  CRON_PROFILE in PROFILE_TIERS ? CRON_PROFILE : "full";
+  CRON_PROFILE in PROFILE_TIERS ? CRON_PROFILE : "essential";
 const activeTiers = PROFILE_TIERS[RESOLVED_PROFILE];
 const enabled = (tier: CronTier): boolean => activeTiers.has(tier);
 
 // Surface the effective profile in the deploy/push logs so a typo'd profile
-// (which fails open to 'full') is visible rather than silently running the
-// whole fleet.
+// (which floors to 'essential') is visible rather than silently differing from
+// what the operator typed.
 if (RAW_CRON_PROFILE !== undefined && RESOLVED_PROFILE !== CRON_PROFILE) {
   console.warn(
-    `[crons] Unrecognized CRON_PROFILE="${RAW_CRON_PROFILE}" — falling back to 'full' (all crons registered).`,
+    `[crons] Unrecognized CRON_PROFILE="${RAW_CRON_PROFILE}" — flooring to 'essential' (safety crons only).`,
   );
 } else {
   console.log(`[crons] CRON_PROFILE resolved to '${RESOLVED_PROFILE}'.`);

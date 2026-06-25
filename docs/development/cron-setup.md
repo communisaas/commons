@@ -69,14 +69,16 @@ still pays the per-tick invocation).
 
 | Profile | Registered tiers | Use |
 |---|---|---|
-| `full` (default) | essential + operational + speculative + poller | Legacy behavior — every cron. Set at launch. |
-| `operational` | essential + operational + poller | Live but no speculative ingest. |
-| `essential` | essential only | Dev + pre-launch prod (no users). |
+| `full` | essential + operational + speculative | Every cron. Set at launch. |
+| `operational` | essential + operational | Live but no speculative ingest. |
+| `essential` (default) | essential only | Dev + pre-launch prod (no users). The cost-safe floor. |
 
-Unset (or an unrecognized value) resolves to **`full`** — a deliberate
-fail-open so an operator typo never silently drops an essential cron. The
-resolved profile is logged at module evaluation (visible in deploy logs); an
-unrecognized non-empty value emits a `console.warn`.
+Unset (or an unrecognized value) resolves to **`essential`** — the cost-safe
+floor. Failing open to the cheapest always-safe set means a typo or a forgotten
+env var under-runs (cheap, recoverable) rather than silently running the most
+expensive `full` fleet on a zero-user backend. The resolved profile is logged at
+module evaluation (visible in deploy logs); an unrecognized non-empty value
+emits a `console.warn`.
 
 ### Tiers
 
@@ -86,16 +88,15 @@ unrecognized non-empty value emits a `console.warn`.
   SMT-root drift detection, key/TTL hygiene (sealed keys, message-gen jobs,
   agent-traces, org-events), the two stranded-row sweeps (placeholders +
   donations), boundary-cell rate alarm, alert-pipe heartbeat, contact-cache
-  cleanup, intelligence cleanup. 14 crons.
+  cleanup, intelligence cleanup, and the two event-driven backstops
+  (`workflow-scheduler`, `process-scheduled-blasts` — primary firing is native
+  `scheduler.runAfter`/`runAt`; a wide 15-min sweep recovers orphans). 16 crons.
 - **OPERATIONAL** — only meaningful with live traffic: bounce probes, anchor
-  retries, A/B winner, analytics snapshot (+ piggybacked rate-limit cleanup),
-  alert digest, debate resolution, webhook retry, reputation recompute,
-  relatedness calibration, tag-embedding backfill. 11 crons.
+  retries, A/B winner, analytics snapshot (`deleteAggregatesForDate`), alert
+  digest, debate resolution, webhook retry, reputation recompute, relatedness
+  calibration, tag-embedding backfill. 10 crons.
 - **SPECULATIVE** — no consumer yet / post-launch: `legislation-sync` (primary
   pre-launch overage source), `vote-tracker`, `scorecard-compute`. 3 crons.
-- **POLLER** — the two minute-cadence pollers (`workflow-scheduler`,
-  `process-scheduled-blasts`). Gated with operational so dev / pre-launch
-  deployments don't run the 1-minute poll.
 
 ### Deploy-time frozen — this is load-bearing
 
@@ -119,8 +120,10 @@ npx convex env set CRON_PROFILE essential --env-file <prod-env-file>
 ### Launch checklist (hard item)
 
 At launch, flip prod to `full` (or `operational`) and **redeploy** — otherwise
-the operational maintenance paths (analytics snapshot + its rate-limit cleanup,
-reputation recompute, etc.) stay dark and the two pollers never fire:
+the operational maintenance paths (bounce processing, webhook retries, analytics
+snapshot, reputation recompute, etc.) stay dark. (Workflow resume and
+scheduled-blast dispatch are unaffected — those two are now event-driven +
+ESSENTIAL, so they fire at every profile.)
 
 ```bash
 npx convex env set CRON_PROFILE full --env-file <prod-env-file>

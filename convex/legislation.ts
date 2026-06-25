@@ -3276,16 +3276,44 @@ export const pruneBillsBatch = internalMutation({
  *     npx convex run legislation:pruneAllBills '{}'
  *
  * Pre-launch the dependent tables are expected empty; the dry run confirms
- * this before any live delete. Internal-only.
+ * this, and a live run REFUSES (PRUNE_REFUSED) if any DELETE-dependent table is
+ * non-empty unless force:true — so it can never silently wipe real audit data
+ * (accountabilityReceipts / legislativeActions). Internal-only.
  */
 export const pruneAllBills = internalAction({
 	args: {
 		dryRun: v.optional(v.boolean()),
-		batchSize: v.optional(v.number())
+		batchSize: v.optional(v.number()),
+		force: v.optional(v.boolean())
 	},
 	handler: async (ctx, args) => {
 		const dryRun = args.dryRun ?? false;
 		const batchSize = args.batchSize ?? 200;
+		const force = args.force ?? false;
+
+		// Safety precondition: a live prune wipes whole dependent tables —
+		// including audit/forensic data (accountabilityReceipts) and
+		// legislativeActions — not just rows pointing at pruned bills. That is
+		// only correct when those tables are EMPTY (pre-launch). Refuse a live
+		// run if any DELETE-dependent table is non-empty unless force:true, so a
+		// later accidental run can't irreversibly destroy real audit data.
+		if (!dryRun && !force) {
+			for (const table of PRUNE_DELETE_DEPENDENT_TABLES) {
+				const probe = (await ctx.runMutation(pruneDependentTableBatchRef, {
+					table,
+					cursor: null,
+					batchSize: 1,
+					dryRun: true
+				})) as { counted: number };
+				if (probe.counted > 0) {
+					throw new Error(
+						`PRUNE_REFUSED: dependent table '${table}' is non-empty — a live ` +
+							`prune would wipe it wholesale (incl. audit/receipt data). Re-run ` +
+							`with dryRun:true to inspect, or pass force:true to override.`
+					);
+				}
+			}
+		}
 
 		const dependentsByTable: Record<string, { counted: number; deleted: number; cleared: number }> =
 			{};

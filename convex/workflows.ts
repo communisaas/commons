@@ -1147,7 +1147,14 @@ export const execute = internalAction({
 			try {
 				if (step.type === 'delay') {
 					// Schedule resume after delay
-					const delayMs = (step.delayMinutes ?? 1) * 60 * 1000;
+					// Clamp the delay defensively: finite, non-negative, capped at 30
+					// days so a malformed delayMinutes can't hot-loop the scheduler
+					// or park a resume job indefinitely.
+					const rawDelayMinutes = step.delayMinutes ?? 1;
+					const delayMinutes = Number.isFinite(rawDelayMinutes)
+						? Math.min(Math.max(rawDelayMinutes, 0), 43_200)
+						: 1;
+					const delayMs = delayMinutes * 60 * 1000;
 					const nextRunAt = Date.now() + delayMs;
 
 					await ctx.runMutation(internal.workflows.logAction, {
@@ -1168,12 +1175,23 @@ export const execute = internalAction({
 					// PRIMARY resume path — the `workflow-scheduler` cron is now a
 					// wide-cadence (15-min) safety net that only recovers rows
 					// whose `runAfter` job was lost to a Convex-scheduler restart
-					// (see `processScheduled`). Awaited (was fire-and-forget) so a
-					// scheduler-enqueue failure surfaces here rather than silently
-					// deferring the resume to the now-slower safety-net sweep.
-					await ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
-						executionId
-					});
+					// (see `processScheduled`). The enqueue is awaited so a failure
+					// is observed, but it must NOT propagate to the outer catch
+					// (which sets status:'failed') — the row is already 'paused'
+					// with nextRunAt, so a failed enqueue is recovered by the
+					// safety-net sweep. Letting it go fail-terminal here would
+					// defeat the orphan-recovery this design adds.
+					try {
+						await ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
+							executionId
+						});
+					} catch (enqueueErr) {
+						console.error(
+							`[workflow] delay-resume enqueue failed for execution ${executionId}; ` +
+								`row remains paused (nextRunAt set), safety-net sweep will recover it.`,
+							enqueueErr
+						);
+					}
 					return;
 				}
 

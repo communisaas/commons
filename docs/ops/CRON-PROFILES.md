@@ -5,8 +5,8 @@ free-plan quota.
 
 | Role          | Deployment name           | Pre-launch profile | Notes                                    |
 | ------------- | ------------------------- | ------------------ | ---------------------------------------- |
-| **prod**      | `quirky-chinchilla-352`   | `minimal`          | Flip to `full` on launch day.            |
-| **non-prod**  | `outstanding-firefly-831` | `minimal`          | Backs staging/preview; stays `minimal`.  |
+| **prod**      | `quirky-chinchilla-352`   | `essential`          | Flip to `full` on launch day.            |
+| **non-prod**  | `outstanding-firefly-831` | `essential`          | Backs staging/preview; stays `essential`.  |
 
 ## Why this exists
 
@@ -22,7 +22,7 @@ overage source is the fleet itself running against empty tables, dominated by:
 - `vote-tracker` (every 2h) — a confirmed no-op stub.
 
 The `CRON_PROFILE` env var (consumed by `convex/crons.ts` — owned by the gating
-fix) selects which crons run. `minimal` runs only the ESSENTIAL tier; `full`
+fix) selects which crons run. `essential` runs only the ESSENTIAL tier; `full`
 runs everything. **Default (unset) = `full`** so absence of the var never breaks
 anything.
 
@@ -39,7 +39,7 @@ cheap or event-gated; mostly no-op when their source tables are empty),
 to disable pre-launch, MUST be on at launch), **SPECULATIVE** (bulk speculative
 ingest or dead stub; off until a consumer/customer exists).
 
-`minimal` = ESSENTIAL only. `full` = all three tiers.
+`essential` = ESSENTIAL only. `full` = all three tiers.
 
 ### ESSENTIAL (16) — on in every profile (correctness / safety / privacy; cheap no-op at zero traffic)
 
@@ -144,7 +144,7 @@ launch-day flip works, depending on which strategy the gating fix shipped:
 
 ---
 
-## 3. Set the pre-launch profile (`minimal` on both backends)
+## 3. Set the pre-launch profile (`essential` on both backends)
 
 Per [[convex_deploy_gotcha]]: `.env.local` points Convex at LOCAL docker
 (`127.0.0.1:3210`), so a bare `convex env set` mutates the **LOCAL** backend, not
@@ -163,15 +163,15 @@ equivalent ways to target — pick one and be consistent:
 ```bash
 # --- prod (quirky-chinchilla-352) ---
 printf 'CONVEX_DEPLOYMENT=prod:quirky-chinchilla-352\n' > /tmp/cvx-prod.env
-npx convex env set CRON_PROFILE minimal --env-file /tmp/cvx-prod.env
+npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-prod.env
 # (equivalent, no temp file:)
-#   npx convex env set CRON_PROFILE minimal --deployment quirky-chinchilla-352
+#   npx convex env set CRON_PROFILE essential --deployment quirky-chinchilla-352
 
 # --- non-prod (outstanding-firefly-831) ---
 printf 'CONVEX_DEPLOYMENT=dev:outstanding-firefly-831\n' > /tmp/cvx-np.env
-npx convex env set CRON_PROFILE minimal --env-file /tmp/cvx-np.env
+npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
 # (equivalent:)
-#   npx convex env set CRON_PROFILE minimal --deployment outstanding-firefly-831
+#   npx convex env set CRON_PROFILE essential --deployment outstanding-firefly-831
 
 # clean up the ephemeral files
 rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
@@ -179,7 +179,7 @@ rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
 
 > **If gating = conditional registration, setting the env is not enough** — you
 > must also redeploy each backend once so `crons.ts` re-evaluates and drops the
-> excluded crons. Redeploy now (so the pre-launch state is actually `minimal`):
+> excluded crons. Redeploy now (so the pre-launch state is actually `essential`):
 >
 > ```bash
 > # prod redeploy (naming prod skips the confirm prompt; --dry-run previews)
@@ -227,11 +227,11 @@ rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
    > (b) + (5) only.
 5. **Verify** (section 5). Confirm all 29 crons are registered and `CRON_PROFILE`
    reads `full`.
-6. **Leave `outstanding-firefly-831` at `minimal`** — it backs staging/preview
+6. **Leave `outstanding-firefly-831` at `essential`** — it backs staging/preview
    with no real users. Only flip it to `full` for a deliberate full-fleet
    rehearsal, and then via `npx convex dev --once --env-file /tmp/cvx-np.env`
    (because `convex deploy` only ever targets prod).
-7. **ROLLBACK:** `env set CRON_PROFILE minimal` + redeploy (or `env set` only
+7. **ROLLBACK:** `env set CRON_PROFILE essential` + redeploy (or `env set` only
    under early-return) reverts to the pre-launch fleet.
 8. **Cleanup:** `rm -f /tmp/cvx-prod.env`.
 
@@ -240,31 +240,31 @@ rm -f /tmp/cvx-prod.env /tmp/cvx-np.env
 ## 5. Verification — confirm the active cron set per deployment
 
 ```bash
-# (1) Env value — expect `minimal` pre-launch, `full` post-flip.
+# (1) Env value — expect `essential` pre-launch, `full` post-flip.
 npx convex env get CRON_PROFILE --env-file /tmp/cvx-prod.env
 #   (or: npx convex env get CRON_PROFILE --deployment quirky-chinchilla-352)
 
 # (2) Registered cron set (AUTHORITATIVE under conditional registration).
 #     function-spec lists the deployment's registered functions/crons; the
-#     SPECULATIVE/OPERATIONAL names must be ABSENT at `minimal`, PRESENT at `full`.
+#     SPECULATIVE/OPERATIONAL names must be ABSENT at `essential`, PRESENT at `full`.
 npx convex function-spec --deployment quirky-chinchilla-352 \
   | grep -E 'legislation-sync|vote-tracker|scorecard-compute|webhook-retry|process-bounces'
-#     Expect: NO MATCHES at minimal (conditional registration); ALL at full.
+#     Expect: NO MATCHES at essential (conditional registration); ALL at full.
 ```
 
 - **Dashboard alternative:** Convex dashboard → the target deployment →
   Schedules / Crons tab. Under conditional registration, only ESSENTIAL crons
-  appear at `minimal` and all 29 at `full`. This is the authoritative
+  appear at `essential` and all 29 at `full`. This is the authoritative
   tick-elimination check.
 - **Under conditional registration, `env get` alone is NOT sufficient** — it
   confirms the value, not that registration actually dropped the crons. Always
   run the `function-spec`/dashboard check too.
-- **Spend confirmation:** after ~24h at `minimal`, the Convex usage dashboard
+- **Spend confirmation:** after ~24h at `essential`, the Convex usage dashboard
   function-call count for each backend should drop sharply. The big wins are
   `webhook-retry` (1m), `process-bounces` (5m), and `legislation-sync`'s external
   fetch + embed (6h) being off.
 
-> **Expectation-setting:** `minimal` REDUCES but does not zero the function-call
+> **Expectation-setting:** `essential` REDUCES but does not zero the function-call
 > floor — 17 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
 > 720/day/backend alone). If you need to go lower, widen ESSENTIAL recovery-sweep
 > cadences (registration-time change, owned by the gating fix) — never disable

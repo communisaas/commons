@@ -392,6 +392,13 @@ export const claimForBlastDispatch = internalMutation({
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return { ok: false };
 		if (blast.status !== 'scheduled') return { ok: false };
+		// Time guard: a stale `runAt` job for a blast that was later rescheduled
+		// must not dispatch early. Only claim once the blast's CURRENT scheduledAt
+		// is actually due. (No reschedule path exists today — sealAndScheduleBlast
+		// requires status='draft' — so this is defensive against a future one.)
+		if (blast.scheduledAt !== undefined && Date.now() < blast.scheduledAt) {
+			return { ok: false };
+		}
 		await ctx.db.patch(args.blastId, {
 			status: 'sending',
 			updatedAt: Date.now()
