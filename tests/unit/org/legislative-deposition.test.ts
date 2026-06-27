@@ -42,9 +42,11 @@ describe('legislative deposition', () => {
 	it('competitive-analysis prices no unbuilt Commons legislative capability', () => {
 		const row = read('docs/research/competitive-analysis.md')
 			.split('\n')
-			.find((l) => l.includes('**Legislative tracking / bill alerts**'));
+			.find((l) => l.includes('**Legislative intelligence (bills, votes, alerts)**'));
 		expect(row).toBeDefined();
-		expect(row).not.toMatch(/6\.50|Spec'd/);
-		expect(row).toMatch(/Not built/);
+		// Must not sell legislative intelligence as priced / spec'd / shipped-built.
+		expect(row).not.toMatch(/6\.50|Spec'd|\bBuilt\b/);
+		// Must read as an honest trail / substrate-stub, not a Commons strength.
+		expect(row).toMatch(/Trail|substrate\/stub|Commons trails|credibility floor/);
 	});
 });
