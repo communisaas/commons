@@ -313,6 +313,49 @@ A 12-month dependency cascade has reshaped what advocacy platforms can build on 
 
 **Structural pattern: AI for the org user, not for the action.** Every incumbent ships AI that makes orgs faster (drafting, prospecting, briefing). None verifies the identity behind the AI-assisted action. **"AI-on-action" — per-recipient grounding + verified authorship — is an unclaimed category.** Commons Phase 3 agentic delegation can frame as the only product where AI-assisted composition carries cryptographic provenance of authorship + district + identity.
 
+## Where Commons Wins and Where It Does Not
+
+This section is the honest positioning frame for everything below it. The deep competitor profiles, distress facts, and pricing tables that follow are grounded research; read them through this lens.
+
+### The wedge: authoring + reach + neutrality
+
+Commons is AI-native civic action infrastructure. Its competitive wedge is a three-part composition no incumbent matches:
+
+1. **AI-native authoring-to-delivery.** An end-to-end loop — intent → ground → author → resolve-targets → deliver → report — where source-grounded composition tailored to the resolved decision-maker set is shipped and config-gated-live (Gemini + Exa stratified search + Firecrawl fetch + adversarial-source-first ranking). Generation grounding is *disabled*, so citations draw only from a pre-verified pool — URL hallucination is impossible by construction. **Every incumbent ships AI for the org user, not for the action** (Quincy summarizes bills for a lobbyist, Que helps a fundraiser, SmartCheck tunes subject lines, ActionBot is admin chat-with-data, New/Mode varies message copy). None ships grounded AI on the constituent's action.
+
+2. **Owned local + special-district reach (Shadow Atlas).** 24 boundary types per H3 cell at $0 marginal cost — **21 boundary types with zero competitor coverage** — addressing the 39,555 special districts (water/fire/transit/school/library/hospital/judicial) governing ~84K elected officials that Quorum Local (cities ≥3K pop, 0 special districts), Cicero (~400 cities, the $0.03–0.04/lookup monopoly), and VoterVoice (>250K population only) structurally cannot reach. The civic-data API collapse strengthens this reach moat; it does not make Commons a legislative-intelligence competitor.
+
+3. **Neutrality + gate-at-delivery economics.** Universal-ideology access — no progressive-only ToS — roughly doubles the addressable market Action Network's ToS excludes ("no conservative equivalent of Action Network exists"). Paired with no free org tier and pay-to-deliver pricing: **$0 to author and preview, $10/mo Starter to send**, so the product reaches its aha before the paywall.
+
+**Durable vs. copyable.** The durable moat is the Shadow Atlas data layer (years to clone, narrow scope) welded to grounding *discipline*. The authoring *surface* is copyable in 2-3 quarters, so the real edge is **timing** — owning the abandoned sub-$7.5K and deplatformed-conservative market during the 2026–2027 incumbent-distress window. Sell the org on **aggregation and reach across a base** (the Constituent Report aggregate, mathematically undefined for N=1, is the org-distinct moat), never on authoring (the shared individual/org substrate). One honest limit: **per-person individualization at *send time* is a documented not-yet-shipped gap** — today the loop composes one source-grounded message for the resolved decision-maker set, not a distinct message per recipient. Posture: *out-author and out-cost today; out-account when the receipts writer ships.*
+
+### Verification is the watermark, not the letterhead
+
+Verification is demoted from front door to ambient credibility-tiebreaker. The category thesis — that a legislative office handles a verified packet differently than an unverified one — is **unproven and carries zero measured support**. The CMF research historically cited (the 2017 "92% of staffers value individualized communication" line) measures *personalization and constituency* — is this a real constituent, did they write it themselves — **never cryptography**. The realistic verification floor today (tier-2 address-verify) barely exceeds incumbents' heuristic ZIP→Cicero; the headline gov-ID/mDL proof is flag-off and 3-5 years out (Apple Business Connect enrollment + Noir pre-1.0). So verification is the watermark on every action, not the pitch — a trust signal that rides along for distrust-sensitive segments (science/health advocacy, astroturf-distrust contexts, EU verified-grassroots). It is the lowest-replicability moat and no competitor has started it, so do not discard it — but it earns the headline only after the receipts writer ships, the on-chain anchor is live, 10+ cross-validating coalitions exist, and at least one *measured* signal (a controlled CWC handling-difference experiment) shows an office treats a verified packet differently.
+
+### Where Commons trails (honest)
+
+- **Legislative intelligence (bills, roll-call votes, scorecards) — incumbent fortress.** This is Quorum/FiscalNote/CQ home turf, and Commons ships substrate/stub, not product: roll-call vote tracking is a hard stub/no-op (which hollows out scorecard alignment *and* the coalition proof-pressure that depend on it); bill embeddings are unwired — the live sync ingests bills without them (a rescore endpoint exists but isn't in the pipeline) — and per-supporter bill alerts are absent (legislativeAlerts is org-scoped only); scorecards are readerless (the GDS/ALD/CAI/responsiveness arithmetic exists, but no staffer UI consumes it). Frame this as a credibility *floor*, not the front door. FiscalNote's Apr 8 2026 PolicyNote District-Matching API — an incumbent in going-concern distress marketing "we own and maintain our district data infrastructure" — restates the Shadow Atlas *reach* thesis, validating reach, not bill data.
+- **Congressional delivery — dark today.** CWC congressional send is flag-off and transport-unarmed; own-rep routing is congressional-only and dark. Zero congressional deliveries today; the production send path is customer-signing-gated.
+- **Multi-channel send at scale + voter file / donation rails / 2-way CRM sync — ceded.** Bulk SMS/P2P (A2P 10DLC $10K floor; ActBlue Field Tools, Hustle, GetThru own this), NGP VAN voter file, ActBlue rails, and network effects (AN 55M letters, Mobilize graph) are strategy-ceded parity categories. Only the Action Network sync adapter is armed (read/import; nine others CSV-only). Parity posture, not build mandate.
+
+### Primary segment
+
+The abandoned sub-$7.5K local and regional market during the 2026–2027 incumbent-distress window: local/regional 501(c)(4)s, coalitions, school-parent and rate-hike/utility fights targeting **city councils, special districts (water/fire/transit/school-board/hospital), and agency heads — not Congress**; plus deplatformed-conservative orgs (the six named in the Senate Commerce 2024 report, and FreedomWorks RAC's orphaned libertarian-grassroots base after its May 2024 dissolution). These are buyers excluded by Action Network's progressive-only ToS or priced out of Quorum's ~$10K floor — an **add-to-Quorum at $75/mo, not a rip-and-replace**. Who does *not* pay: legislative-intelligence buyers (vote tracking stubbed), Congress-targeting orgs (CWC dark), verification-pitch buyers (thesis unproven), and orgs needing EveryAction/VAN/Salesforce 2-way sync (only the AN adapter is armed).
+
+### Axis scorecard
+
+| Axis | Verdict | Grounding |
+|---|---|---|
+| AI-native authoring-to-delivery (grounded, set-tailored) | **TRANSCEND** | Source-grounded generation shipped + config-gated-live (Gemini + Exa stratified search + Firecrawl + adversarial-source-first ranking; grounding DISABLED so citations draw only from a pre-verified pool). No incumbent fetches + credibility-ranks external sources; all ship AI for the org user, not the action. |
+| Local + special-district reach (Shadow Atlas) | **TRANSCEND** | 24 boundary types per H3 cell, 21 with zero competitor coverage, $0 marginal cost; 39,555 special districts / ~84K officials addressable. Cicero monopoly $0.03–0.04/lookup post-API-collapse; Quorum Local 0 special districts. |
+| Neutrality + gate-at-delivery economics | **TRANSCEND** | Universal-ideology access (~doubles AN's ToS-excluded market; no conservative equivalent of AN exists — Senate Commerce 2024 primary source); no free org tier, $0-author / $10-to-send conversion at peak intent. |
+| Coordination-integrity / anti-astroturf signal | **PARITY+ (substrate-real, surface thin)** | GDS/ALD/temporal-entropy/burst-velocity/CAI computed + rendered; no incumbent publishes credibility math, but it is a back-office signal, not a sold wedge. |
+| Cryptographic verification packet | **PARITY (ambient, unproven)** | Lowest-replicability moat, no competitor started it — but category thesis has ZERO measured support (CMF measures personalization/constituency, not cryptography); mDL flag-off, 3-5yr out. Watermark, not letterhead. |
+| Multi-channel send at scale (SMS/P2P/bulk email) | **TRAIL / CEDE** | Production send path customer-signing-gated; A2P 10DLC $10K-floor; managed-P2P (ActBlue Field Tools, Hustle, GetThru) own this. Parity posture, not build-mandate. |
+| Voter file / donation rails / CRM 2-way sync | **TRAIL / CEDE** | NGP VAN voter file, ActBlue rails, network effects (AN 55M letters, Mobilize graph) not claimable; only Action Network sync adapter armed (read/import), 9 others CSV-only. |
+| Legislative intelligence (bills, roll-call votes, scorecards) | **TRAIL (incumbent fortress)** | Vote-tracker is a no-op stub; bill embeddings unwired in the sync path; scorecards readerless; CWC flag-off/unarmed. Quorum/FiscalNote/CQ own deep bill/vote intelligence. Credibility-floor, not front door. |
+
 ---
 
 ## Market Overview
@@ -328,7 +371,7 @@ Sources vary by methodology:
 
 ### The Structural Gap
 
-No platform in the advocacy software market verifies constituent identity. Every platform — Action Network, Quorum, EveryAction, Muster, VoterVoice, NationBuilder — relies on self-reported addresses fed through third-party geocoding (Cicero API, formerly Google Civic Info). This is not a missing feature. It is an architectural impossibility to retrofit: verification requires ZK circuits, on-chain nullifiers, government credential parsing, and a hierarchical district resolution system mapping every public boundary type (congressional through fire, water, transit, school, judicial — 24 slots per cell). Years of infrastructure work, not a sprint.
+The structural gap that leads is reach, authoring, and access — not verification. No platform combines (1) grounded AI *on the constituent's action* (incumbents ship AI for the org user only), (2) owned local + special-district reach across 24 boundary types per cell — 21 with zero competitor coverage, addressing the 39,555 special districts that Quorum Local, Cicero (~400 cities), and VoterVoice (>250K pop only) structurally cannot reach — and (3) universal-ideology, gate-at-delivery access. Underneath that wedge sits an ambient credibility layer: no platform verifies constituent identity. Every platform — Action Network, Quorum, EveryAction, Muster, VoterVoice, NationBuilder — relies on self-reported addresses fed through third-party geocoding (Cicero API, formerly Google Civic Info). That verification layer is the lowest-replicability moat and no competitor has started it, but it is the watermark, not the headline: the category thesis that an office handles a verified packet differently is unproven, and the realistic floor today barely exceeds incumbents' heuristic ZIP→Cicero. Treat it as an ambient tiebreaker for distrust-sensitive segments, not the front door.
 
 The astroturfing problem is worsening. AI-generated fake constituent messages at scale are now a documented threat ([Causes.com, 2025](https://www.causes.com/articles/55009-securing-advocacy-ai-world-understanding-authentication)). Washington state documented hundreds of phantom signatures inflating opposition to a tax bill ([WebProNews, 2025](https://www.webpronews.com/phantom-signatures-and-political-theatrics-how-fake-sign-ins-may-have-inflated-opposition-to-washington-states-millionaires-tax/)). Issue campaigns now account for 75–85% of incoming congressional mail — and offices have no tool to distinguish authentic grassroots from manufactured volume ([Congressional Management Foundation](https://www.congressfoundation.org/resources-for-congress/office-toolkit/improve-mail-operations-menu-item-new/writing-mail-home/terms/summary)).
 
@@ -368,7 +411,7 @@ The result is structural: **form emails are deleted in bulk without being read.*
 
 **The AI threat is escalating.** The FCC net neutrality proceeding (2017) revealed that **nearly 18 million of 22 million comments were fake**, with **8.5 million impersonating real people**. Lead generation firms fabricated **500,000+ fake letters to Congress** and **3.5M fake digital signatures**. The NY AG secured $615,000 in penalties. These same firms reportedly work with **40% of Fortune 500 companies**. AI-generated text makes detection orders of magnitude harder — and every advocacy platform sends unverified text from unverified identities.
 
-Commons doesn't optimize signal-to-noise. It eliminates the noise floor entirely. A verification packet proves: these are real people, in your district, with earned engagement history, and the campaign shows no coordination anomalies. That's a different category of communication.
+Commons answers the noise crisis the way the CMF data says offices actually weight mail: individualized, source-grounded messages authored to the *correct* official. The lead is AI-native authoring (source-grounded composition tailored to the resolved decision-maker set, citation validation) plus reach across 24 boundary types so the message lands on the right decision-maker — exactly the personalization (92%) and right-constituent signal staffers reward, against the 3-51% form-mail floor. Riding along underneath, as an ambient watermark, is the proof that these are real people in-district with earned engagement history and no coordination anomalies — the "and it's provably real, not manufactured" tiebreaker, not the headline category claim.
 
 **Sources:** [CMF Citizen-Centric Advocacy 2017](https://www.congressfoundation.org/revitalizing-congress/communicating-with-congress/citizen-centric-advocacy-2017), [Fireside CRM](https://www.fireside21.com/), [NY AG FCC Fake Comments Report](https://ag.ny.gov/sites/default/files/reports/oag-fakecommentsreport.pdf), [Bipartisan Policy Center: Listening Is Governing](https://bipartisanpolicy.org/article/listening-is-governing-modernizing-congresss-public-interface/)
 
@@ -893,7 +936,7 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 |---|---|---|---|
 | **District matching** | Full street address → Cicero API (~$0.03/lookup) | Postal code → Shadow Atlas (94,166 districts, 24 types, <50ms) | Zero marginal cost. No third-party dependency. 24 boundary types vs. competitors' ~3 (federal, state upper, state lower). |
 | **Official lookup** | Static database of ~500K officials (Cicero, Quorum, VoterVoice) | 3-phase agentic enrichment pipeline (identify → email enrich → validate) | More accurate for non-standard offices (water, transit, school board). Slower for standard offices — need caching. |
-| **Email campaigns** | WYSIWYG, A/B testing, scheduling, SES/Sendgrid | WYSIWYG, A/B, scheduling, SES. Segments by engagement tier + verified district. | Segments are mathematically provable. "Established-tier constituents in CA-12" is a cryptographic filter, not a self-reported tag. |
+| **Email campaigns** | WYSIWYG, A/B testing, scheduling, SES/Sendgrid | WYSIWYG, A/B, scheduling, SES. Grounded, set-tailored composition with citation validation; segmentable by engagement tier + district. | Lead advantage is authoring quality: grounding-verified content with every citation validated accessible. Verified-district segmentation rides along as an ambient credibility note ("Established-tier constituents in CA-12" is a provable filter), not the headline. |
 | **Message personalization** | AI generates 100–300 variants (Quorum, CiviClick, VoterVoice SmartCheck) | Message Writer Agent: two-phase grounding-verified composition with citation validation | Every citation validated accessible. Content is grounding-verified AND sender is identity-verified. |
 | **Embeddable widgets** | iframe/JS drop-in (AN, Muster, One Click, Ujoin) | iframe + postMessage. Postal→district resolution → verified action in browser. | Widget produces ZK-verified actions, not form submissions. |
 | **List management / CRM** | Email-keyed records, tags, self-reported geography, engagement scores | Email-keyed records, tags, identity commitment binding, engagement tiers (on-chain), district membership (24 types) | Tiers are non-fakeable. District membership is cryptographically proven, not self-reported. |
@@ -906,7 +949,7 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 |---|---|---|---|
 | **Patch-through calling** | Capitol Canary, CallHub, One Click | Not spec'd | P2 — Twilio extension. **Verified caller district** is a differentiator no one else has. |
 | **Web form navigation** | Quorum, Capitol Canary, VoterVoice (99.6% deliverability) | Not planned | Skip — fragile (forms change constantly). Verification packet sent directly is more impactful. |
-| **Legislative tracking / bill alerts** | Quorum, FiscalNote, FastDemocracy, PolicyEngage | Not built — deferred | Bill search + watch are live; vote-alignment scoring, relevance ranking, and alerts are not built (incumbent home turf; depends on the unreliable Congress.gov feed). |
+| **Legislative intelligence (bills, votes, alerts)** | Quorum, FiscalNote, CQ, FastDemocracy, PolicyEngage | Trail — substrate/stub only | **Incumbent fortress; Commons trails here.** Bill search + watch are live, but roll-call vote tracking is a no-op stub, bill embeddings are unwired in the sync path, and per-supporter bill alerts are absent (legislativeAlerts is org-scoped only). Quorum/FiscalNote/CQ own deep bill/vote/committee intelligence. This is a credibility floor, not the front door. |
 | **Legislator scorecards** | Quorum, FastDemocracy, Legislative Scorecard | Not spec'd | P2 — Natural extension of campaign delivery + response tracking. |
 | **Video messages to officials** | CiviClick, One Click | Not planned | Skip — niche, low ROI. |
 | **Social media advocacy** | Quorum, Capitol Canary, CiviClick, Ujoin | Not planned | Skip — low ROI relative to engineering cost. |
@@ -914,8 +957,8 @@ Conservative orgs that need affordable advocacy tooling (email + petitions + let
 | **SMS campaigns** | Most platforms | Spec'd (Phase 3, Twilio) | P2/P3 |
 | **Gamification** | CiviClick | Not planned | Skip — engagement tiers are structural, not gamified. |
 | **Debate / quality signals** | Nobody | **Built** (LMSR + AI panel, 193 tests) | Structural advantage — no competitor has any mechanism for quality. |
-| **Coordination integrity** | Nobody | **Built** (GDS, ALD, temporal entropy, burst velocity) | Structural advantage — anti-astroturf proof that ships with every campaign. |
-| **Verified identity** | Nobody | **Built** (5 circuits, 4 depths, mDL parsing, browser ZK) | Structural advantage — years of infrastructure, zero marginal cost. |
+| **Coordination integrity** | Nobody | Built (GDS, ALD, temporal entropy, burst velocity) | Ambient credibility tiebreaker — anti-astroturf signal that ships with every campaign. Back-office substrate, not a sold wedge. |
+| **Verified identity** | Nobody | Built (5 circuits, 4 depths, mDL parsing, browser ZK) | Ambient credibility tiebreaker — lowest-replicability moat, no competitor started it, but the category thesis (an office weights a verified packet differently) is unproven and mDL is flag-off / 3-5yr out. Watermark, not letterhead. |
 | **Portable reputation** | Nobody | **Built** (engagement tiers 0–4, on-chain, cross-org) | Structural advantage — protocol-level, not app-level. |
 
 ---
@@ -931,9 +974,9 @@ Every major platform is shipping AI in 2025–2026. None of them verify the iden
 | **VoterVoice** | SmartCheck (ChatGPT) | 2024 | Subject line optimization, CTA tuning, message personalization. | **None** |
 | **CiviClick** | CiviClick Amplified | 2024 | AI-personalized outreach across channels, real-time analytics optimization. | **None** |
 | **Action Network** | None | — | No AI features. | **None** |
-| **Commons** | Message Writer, Subject Line, Decision-Maker Discovery agents + agentic delegation (spec'd) | Production (agents), spec'd (delegation) | Grounding-verified message composition, multi-turn subject line refinement, 3-phase decision-maker resolution. **Agentic delegation**: agents act on behalf of verified constituents, tier-gated authority, ZK proof on every action, privacy-preserving memory. | **ZK proof on every agent action** |
+| **Commons** | Message Writer, Subject Line, Decision-Maker Discovery agents + agentic delegation (spec'd) | Production (agents), spec'd (delegation) | **Grounded AI on the action**: source-grounded composition tailored to the resolved decision-maker set (citations from a pre-verified pool, hallucination impossible by construction), multi-turn subject line refinement, 3-phase decision-maker resolution to the correct official across 24 boundary types. Agentic delegation (spec'd): tier-gated authority, privacy-preserving memory. | Ambient — ZK provenance on every action |
 
-The structural difference: Bonterra Que helps an org raise money faster. Quorum Quincy helps a lobbyist analyze bills faster. Commons agents help a verified constituent participate in democracy with the same ZK proof whether they act manually or delegate to an agent. The identity verification is on the action, not the platform.
+The structural difference: Bonterra Que helps an org raise money faster. Quorum Quincy helps a lobbyist analyze bills faster. Every incumbent ships AI *for the org user*. Commons puts grounded AI *on the constituent's action* — source-grounded authoring tailored to the resolved decision-maker set, addressed to the correct official — the unclaimed "AI-on-action" category. ZK provenance rides along as the ambient guarantee that the action is real, whether composed manually or via a delegated agent; it is the watermark, not the wedge.
 
 ---
 
@@ -941,13 +984,24 @@ The structural difference: Bonterra Que helps an org raise money faster. Quorum 
 
 Congressional staffers process 75–85% of incoming mail as form-generated advocacy campaigns. Personalized messages are 7x more effective than form letters. 90% of staff say individualized messages have "a lot of positive influence" on undecided Members; form messages score significantly lower ([Congressional Management Foundation](https://www.congressfoundation.org/blog/917-its-not-how-you-send-it-its-whats-inside)).
 
+The section's own fact — personalization is 7x more effective, valued by 90% of staff — says the lead is *message quality and reaching the right official*. So the comparison leads with authoring and reach; the identity/coordination rows below cluster as the ambient "and it's provably real" tiebreaker, not the headline.
+
+**Lead — authoring + reach (what moves offices):**
+
 | Signal | Current Platforms | Commons |
 |---|---|---|
-| Count | "847 people emailed" | "847 verified constituents in CA-12" |
-| Identity | Email address (self-reported) | ZK proof of government credential |
-| District | Self-reported ZIP → Cicero lookup (often wrong; 15–20% of ZIP codes span multiple CDs) | Merkle proof against hierarchical district tree (24 boundary types) |
+| Message quality | Form text or 100-300 AI variants, no grounding | Source-grounded composition tailored to the resolved decision-maker set; every citation validated accessible |
+| Right official | Self-reported ZIP → Cicero (federal + state only; often wrong, 15–20% of ZIPs span multiple CDs) | Resolved to the correct decision-maker across 24 boundary types — including water, fire, transit, school, judicial — that competitors do not have |
+| Quality signal | None (Quorum: 300 AI variants, no quality signal) | Debate market signal (62% AMEND, market depth $247) |
+
+**Ambient — and it's provably real (credibility tiebreaker):**
+
+| Signal | Current Platforms | Commons |
+|---|---|---|
+| Count | "847 people emailed" | "847 constituents in CA-12" (verified) |
+| Identity | Email address (self-reported) | ZK proof of government credential (ambient watermark) |
+| District proof | None | Merkle proof against hierarchical district tree (24 boundary types) |
 | Credibility | None | Engagement tier distribution (89 Pillars, 112 Established) |
-| Quality | None (Quorum: 300 AI message variants, but no quality signal) | Debate market signal (62% AMEND, market depth $247) |
 | Authenticity | None | GDS 0.91, ALD 0.87, temporal entropy 0.93 |
 | Privacy | Org has full PII, can be compelled to disclose | ZK — platform cannot link proof to person |
 
@@ -957,13 +1011,13 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 **What they are:** SaaS advocacy toolkit for progressive orgs. 12,000+ orgs, 55M+ letters sent, ~14 years in market. OSDI API v1.1.1 (capped at 4 req/s on paid plans, unavailable on free).
 
-**What Commons is:** Not Action Network with verification bolted on. A different thing. Every feature — email, letters, list management, analytics — works differently when built on verified identity, because the atom of the system is a cryptographic proof, not an email address.
+**What Commons is:** Not Action Network with verification bolted on. A different thing. The atom of the system is a *verified-yet-AI-authored civic action* — and what leads is authoring-to-delivery: grounded composition tailored to the resolved decision-maker set, addressed to the correct official across 24 boundary types, sold to orgs as aggregation and reach across a base. Every feature — email, letters, list management, analytics — works differently because of that authoring + reach spine. Verification is the ambient property that makes the action trustworthy, not the headline.
 
 ### Unified Feature Comparison
 
 | Feature | Action Network | Commons |
 |---|---|---|
-| **Email** | WYSIWYG, A/B, SES. No identity context. Every recipient is an email address. | WYSIWYG, A/B, SES. Segments by engagement tier + verified district. Every send references verification state. An email to "Established-tier constituents in CA-12" is a fundamentally different object than an email to "people who typed 94607 into a form." |
+| **Email** | WYSIWYG, A/B, SES. No grounding, no set-tailored authoring. Every recipient is an email address. | WYSIWYG, A/B, SES, plus source-grounded composition tailored to the resolved decision-maker set (citations from a pre-verified pool) — the authoring leap AN's reporting-side Boost/ActionBot AI does not attempt. Segmentable by engagement tier + district as an ambient credibility layer; an email to "Established-tier constituents in CA-12" is a different object than "people who typed 94607 into a form," but the lead difference is what's *in* the message, not just who it's to. |
 | **Letter campaigns** | Congress + state legislatures. District from self-reported ZIP. No way to verify the sender lives there. | Any of 24 district types — congressional through fire, water, transit, school, judicial. District from postal→district resolution + mDL. Letter carries a ZK proof. The letter is a verified civic instrument, not a form submission. |
 | **List management** | Tags, CSV import/export, self-reported geography. An org's list is a collection of unverified claims. | Tags, CSV import/export, engagement tiers (non-fakeable, on-chain), district membership across 24 boundary types. An org's list is a set of cryptographically attested relationships. |
 | **Analytics** | CSV export. Opens, clicks. No way to distinguish real constituents from bots or out-of-district signers. | Full dashboard. Opens, clicks, verified actions, tier distribution, GDS, ALD, temporal entropy. Analytics answer "who engaged" with mathematical certainty, not probabilistic guessing. |
@@ -982,10 +1036,13 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 ### Feature Build Status
 
-| Feature | Status | Verification Context |
+| Feature | Status | Authoring & delivery context |
 |---|---|---|
-| Mass email (A/B, scheduling) | Upcoming | SES backend, MJML templates. Segments by tier + verified district, not just tags. |
-| Letter campaigns (Congress + state + 22 more types) | Built (Power Landscape) | CWC API, decision-maker resolution. Postal→district resolution + mDL verification. Any public office, not just Congress. |
+| Message authoring (grounded, set-tailored) | Built | Source-grounded composition tailored to the resolved decision-maker set: Exa stratified search + Firecrawl fetch + adversarial-source-first ranking; generation grounding disabled so citations draw only from a pre-verified pool. The shipped wedge. |
+| Letter campaigns / Power Landscape (Congress + state + 22 more types) | Built | Decision-maker resolution to the correct official across 24 boundary types — including special districts competitors don't have. The reach spine. |
+| Legislative tracking / bill alerts | Trail — substrate/stub only | Bill search + watch live; roll-call vote tracking is a no-op stub, bill embeddings unwired in the sync path, per-supporter alerts absent. Incumbent fortress — intentionally not built to parity. |
+| Mass email (A/B, scheduling) | Upcoming | SES backend, MJML templates. Segmentable by tier + district. |
+| ZK verification pipeline / tiers / debate markets | Built (ambient substrate) | 5 circuits, 4 depths, mDL parsing, browser-side proofs; engagement tiers; LMSR + AI panel. Ambient credibility layer beneath the authoring + reach spine, not the headline. Note: CWC congressional send is flag-off / transport-unarmed today. |
 | Events (RSVP, map) | Upcoming | Standard CRUD. Attendance verified against identity commitment. |
 | Fundraising (0% fee) | Upcoming | Stripe integration. Donation linked to verified supporter, not just email. |
 | List management / CRM | Upcoming | CSV import/export, tags, segments. Tier-aware. District membership across 24 boundary types. |
@@ -997,7 +1054,6 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 | Engagement tiers | Built | New (0) through Pillar (4). Non-purchasable. Composite of action diversity, temporal consistency, debate participation. |
 | Postal→district resolution | Built | Postal code to district without address verification. US/CA/UK/AU. |
 | Shadow Atlas (district tree) | Built | 94,166 districts, 24 boundary types per cell, H3-indexed. |
-| ZK verification pipeline | Built | 5 circuits, 4 depths, mDL parsing, browser-side proof generation. |
 
 ---
 
@@ -1017,12 +1073,11 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 | Moat | Description | Replicability |
 |---|---|---|
-| **Cryptographic verification** | 5 circuits, 4 depths, 13 contracts, 7 audit rounds. Years of infrastructure. | **Very low** — requires deep expertise in ZK, mDL parsing, government credential standards, circuit design. No competitor has started. |
-| **Shadow Atlas (district layer)** | 94,166 districts, 24 boundary types, R-tree spatial index. Owned data, zero marginal cost. | **Low** — Cicero charges per lookup; Google shut down. Building a competing district layer at this scope is a multi-year effort. |
-| **Zero marginal cost verification** | ZK proofs generate in user's browser (noir_js + bb.js). Server cost: $0. | **Very low** — browser-side ZK proof generation is cutting-edge. Requires Noir circuit design, WASM compilation, mDL credential parsing. |
+| **AI-native authoring-to-delivery spine** | End-to-end intent → ground → author → resolve-targets → deliver → report. Source-grounded composition tailored to the resolved decision-maker set (Exa + Firecrawl + adversarial-source-first ranking; grounding disabled so citations draw from a pre-verified pool). | **Medium / timing-bound** — the surface is copyable in 2-3 quarters. The durable part is grounding *discipline* welded to owned Shadow Atlas data; the real edge is owning the abandoned market during the 2026–2027 distress window first. |
+| **Shadow Atlas (district layer)** | 94,166 districts, 24 boundary types, 21 with zero competitor coverage, R-tree spatial index. Owned data, zero marginal cost; addresses 39,555 special districts / ~84K officials. | **Low** — Cicero charges $0.03–0.04/lookup; Google Civic shut down; the civic-data API collapse strengthens this. Building a competing district layer at this scope is a multi-year effort. The durable moat. |
+| **Political neutrality** | Universal-ideology access; no progressive-only ToS. Roughly 2x addressable market vs. AN's ToS-excluded segment ("no conservative equivalent of AN exists"). | **Medium** — any new platform could be neutral, but incumbents' brand/ecosystem associations are hard to shed. |
 | **Protocol composability** | Identity portable, reputation portable, network effects at protocol layer not app layer. | **Low** — requires on-chain infrastructure. App-layer competitors can't retrofit protocol-layer identity. |
-| **Political neutrality** | Verification is orthogonal to ideology. 2x addressable market vs. progressive-only competitors. | **Medium** — any new platform could be neutral, but incumbents' brand/ecosystem associations are hard to shed. |
-| **Anti-astroturf signals** | GDS, ALD, temporal entropy, burst velocity computed automatically from on-chain action data. Ships with every campaign. | **Low** — requires verified identity to be meaningful. Without ZK proof, these signals can be gamed. |
+| **Verification credibility layer (ambient)** | ZK identity (5 circuits, 4 depths, browser-side, $0 server cost) + coordination-integrity signals (GDS, ALD, temporal entropy, burst velocity). | **Very low** — no competitor has started it. But the category thesis (an office weights a verified packet differently) is unproven and mDL is flag-off / 3-5yr out. A tiebreaker watermark, not a decisive moat — earns the headline only after a measured handling-difference signal. |
 
 ---
 
@@ -1049,10 +1104,10 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 ### Beachhead segments (Year 1–2)
 
-1. **Science/health advocacy** — credibility over volume. ALI, disease foundations, research coalitions. These orgs need staffers to *believe* the signers are real. Verification is the product.
-2. **Nonpartisan/conservative groups** — structurally excluded from AN (progressive-only ToS) and priced out of enterprise platforms (Quorum, VoterVoice at $10K+). Underserved market with no good tooling at the $10–$200/mo price point.
-3. **Small orgs** — author free, Starter $10/month to deliver vs AN's $15/month minimum. Full uncapped API access. No paywall on analytics.
-4. **Local government advocacy** — school boards, water districts, transit authorities, fire districts, judicial circuits. 21 of 24 Shadow Atlas boundary types have **zero** coverage from any competitor. Shadow Atlas resolves districts that Quorum and VoterVoice literally don't have in their databases.
+1. **Small orgs** — the cost + authoring wedge. Author free, Starter $10/month to deliver vs AN's $15/month minimum, full uncapped API, no paywall on analytics, and grounded set-tailored authoring no $10-tier competitor offers. $0 to author and preview; $10 to send.
+2. **Nonpartisan/conservative groups** — the neutrality wedge. Structurally excluded from AN (progressive-only ToS) and priced out of enterprise platforms (Quorum, VoterVoice at $10K+). "No conservative equivalent of Action Network exists" — nothing structurally-safe and affordable at the $10–$200/mo point (the six Senate Commerce 2024 deplatformed orgs; FreedomWorks RAC's orphaned base).
+3. **Local-government / special-district advocacy** — the reach wedge. School boards, water districts, transit authorities, fire districts, judicial circuits. 21 of 24 Shadow Atlas boundary types have **zero** coverage from any competitor; Shadow Atlas resolves districts Quorum and VoterVoice literally don't have. An add-to-Quorum at $75, not a switch.
+4. **Science/health advocacy** — credibility over volume. ALI, disease foundations, research coalitions, low-volume high-stakes asks where the lead is grounded, credible *authoring*. Here the ambient verification watermark is the tiebreaker that makes the counts believable — not "verification is the product."
 
 ### Expansion (Year 2–4)
 
@@ -1063,12 +1118,12 @@ Congressional staffers process 75–85% of incoming mail as form-generated advoc
 
 | Segment | What they need | What competitors offer | What Commons offers |
 |---|---|---|---|
-| Science/health | Credible constituent proof | Unverified email counts | ZK-verified counts + tier distribution + coordination integrity |
-| Conservative/nonpartisan | Affordable advocacy tooling | Nothing at <$7,500/yr | Full platform at $10–$200/mo (author free, $10 Starter to deliver) |
-| Small orgs | Free/cheap, easy setup | AN $15/mo (no API), NationBuilder $29/mo | Author free, $10 Starter to deliver, full uncapped API |
-| Local government | Sub-state district targeting | Federal + state legislative only | 24 boundary types including school, water, fire, transit, judicial |
-| Progressive orgs | Better response rates from offices | Volume-based, unverified | Verified + unverified side-by-side. Migration tool. |
-| Corporate/trade | Legislative tracking + advocacy | Quorum/VoterVoice at $10K+/yr | $75/mo Organization tier + agentic bill monitoring (Phase 3) |
+| Small orgs | Free/cheap, easy setup + good copy | AN $15/mo (no API), NationBuilder $29/mo | Author free, $10 Starter to deliver, full uncapped API, grounded set-tailored authoring |
+| Conservative/nonpartisan | Affordable, structurally-safe tooling | Nothing at <$7,500/yr; "no conservative equivalent of AN" | Full platform at $10–$200/mo (author free, $10 Starter to deliver); universal-ideology access |
+| Local government | Sub-state + special-district targeting | Federal + state legislative only | 24 boundary types including school, water, fire, transit, judicial — 21 with zero competitor coverage |
+| Science/health | Credible, well-authored low-volume asks | Unverified email counts | Grounded credible authoring (citation-validated); ambient verified counts + tier distribution as the tiebreaker |
+| Progressive orgs | Better response rates from offices | Volume-based, unverified | Grounded authoring + ambient proof side-by-side. AN sync adapter (armed) for migration. |
+| Corporate/trade | Legislative tracking + advocacy | Quorum/VoterVoice at $10K+/yr | $75/mo Organization tier (add-to-Quorum). Note: legislative intelligence is incumbent turf — Commons trails there. |
 
 ---
 
