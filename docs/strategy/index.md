@@ -47,7 +47,7 @@ Why individuals are free, why orgs pay, LLM rate limit rationale, research-backe
 
 ### [competitive-analysis.md](../research/competitive-analysis.md) — Market Landscape
 
-$191M grassroots segment. The wedge is three-part: (1) AI-native per-recipient authoring + grounding, (2) owned local-government reach (Shadow Atlas, 24 boundary types), and (3) political neutrality plus a full uncapped API. Verification is a tiebreaker for distrust segments, not the headline. Timing: the 2026-2027 incumbent-distress window (FiscalNote going-concern, Bonterra ActionKit deprecated, NGP VAN → TMC migration).
+$191M grassroots segment. The wedge is three-part: (1) AI-native per-recipient authoring + grounding, (2) the owned 24-slot H3 boundary architecture (Shadow Atlas) built to host every level down to special districts — congressional reach is live today (district + house rep + two senators, served at $0 from free public data: congress-legislators + TIGER); the remaining slots (state/local through special districts 11-23) are un-ingested, a latent architectural + API-collapse-timing moat with a path-to-$0 on ingestion, not a present coverage edge and not a present per-lookup cost edge (state/local resolves today via a paid agentic pipeline), and (3) political neutrality plus a full uncapped API. Verification is a tiebreaker for distrust segments, not the headline. Timing: the 2026-2027 incumbent-distress window (FiscalNote going-concern, Bonterra ActionKit deprecated, NGP VAN → TMC migration).
 
 ---
 
@@ -57,13 +57,13 @@ Commons serves **two audiences** through a shared authoring-to-delivery spine (v
 
 **Org Layer** — AI-native authoring-to-delivery for advocacy
 - Front door is Studio (authoring): intent → ground → author per-recipient → resolve targets → deliver → aggregate. Every incumbent ships AI for the org *user*; Commons ships it for the *action*.
-- Owned local-government reach (Shadow Atlas, 24 boundary types) + politically neutral + full uncapped API
+- Owned 24-slot boundary architecture (Shadow Atlas) — congressional reach live today (served at $0 from free public data: congress-legislators + TIGER, available to anyone, so not a structural cost moat); the remaining 23 slots, through special districts 11-23, are the un-ingested latent moat (only platform architected to host them, path-to-$0 on ingestion; state/local resolves today via a paid agentic pipeline) + politically neutral + full uncapped API
 - Output is the Constituent Report — leads with constituents, individually-composed authorship, and response; verification packet signals (constituent counts, tier distribution, coordination integrity) ride along as an ambient credibility watermark
 - Replaces the entire landscape: AN ($15/mo for less), Quorum ($10K+/yr for less), VoterVoice (enterprise for less), the conservative void (nothing), the local government void (nothing), the citizen-tool graveyard (dead or dying)
 - Described in: `product-roadmap.md`, `economics.md`
 
 **Person Layer** — Individual verified civic action
-- Send verified letters to decision-makers at any level of government (federal through school board, water district, transit authority — 24 boundary types)
+- Send verified letters to your members of Congress today (congressional reach live — district + house rep + two senators); the owned 24-slot architecture is built to extend to every level (school board, water district, transit authority — slots 11-23) as those slots are ingested
 - Identity verification via mDL (browser-side ZK, zero server cost)
 - Engagement tiers (New → Pillar) through participation, portable across orgs
 - Works internationally as boundary data expands (UK, Canada, Australia, EU)

@@ -1,6 +1,6 @@
 # List Management & Notification Layer
 
-> **STATUS: SHIPPED** — Supporter list management and notifications operational.
+> **STATUS: SHIPPED** — Supporter list management and notifications operational. Geographic segmentation is live for congressional districts (Shadow Atlas slot 0, served at $0 from free public data); slots 1-23 (state, local, special districts) are owned, provisioned architecture that is not yet ingested — latent, not present coverage.
 
 **Status:** Shipped
 **Author:** Architecture
@@ -156,19 +156,21 @@ interface Segment {
 
 ### Geographic resolution
 
-Geography filters resolve against the supporter's postal code via the postal→district resolution engine. For verified supporters (`identityCommitment` set), district membership is cryptographically proven via the cell mapping tree. For postal-resolved supporters, district membership is inferred from postal code overlap with the 24 boundary types in the Shadow Atlas.
+Geography filters resolve against the supporter's postal code via the postal→district resolution engine. For verified supporters (`identityCommitment` set), district membership is cryptographically proven via the cell mapping tree. For postal-resolved supporters, district membership is inferred from postal code overlap with the congressional boundary type (slot 0), which is ingested and live today, served at $0 from free public data (congress-legislators + TIGER). The remaining 23 boundary slots (state, local, special districts) are architecturally provisioned in the owned 24-slot H3 architecture but not yet ingested; when targeted, state/local/special-district officials resolve via a paid agentic pipeline, not a present free-data overlap.
 
-The 24 boundary types available for geographic segmentation:
+The owned 24-slot boundary architecture. Only congressional (slot 0) is ingested and segmentable today; slots 1-23 are provisioned but un-ingested (latent):
 
-| Slot | Type | Example |
-|---|---|---|
-| 0 | Congressional district | CA-12 |
-| 1 | State senate | CA-SD-11 |
-| 2 | State house | CA-AD-17 |
-| 3 | County | San Francisco County |
-| 4 | Municipality | City of Oakland |
-| 5 | School board | SFUSD |
-| 6-23 | Judicial, water, transit, tribal, etc. | (see Shadow Atlas spec) |
+| Slot | Type | Example | Status |
+|---|---|---|---|
+| 0 | Congressional district | CA-12 | Live — ingested, $0 from free public data (congress-legislators + TIGER) |
+| 1 | State senate | CA-SD-11 | Architecture only — not yet ingested |
+| 2 | State house | CA-AD-17 | Architecture only — not yet ingested |
+| 3 | County | San Francisco County | Architecture only — not yet ingested |
+| 4 | Municipality | City of Oakland | Architecture only — not yet ingested |
+| 5 | School board | SFUSD | Architecture only — not yet ingested |
+| 6-23 | Judicial, water, transit, tribal, etc. | (see Shadow Atlas spec) | Architecture only — not yet ingested | Architecture only — not yet ingested |
+
+Slot 0 is live today. Slots 1-23 are owned, provisioned H3 architecture that is empty/un-ingested; when targeted, state / local / special-district officials resolve via a paid agentic pipeline (Gemini + Exa + Firecrawl). The moat is the owned architecture, API-collapse timing, and the path to $0 on ingestion — not present special-district coverage.
 
 ### Tier resolution pipeline
 
