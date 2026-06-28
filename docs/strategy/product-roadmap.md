@@ -155,7 +155,7 @@ This loop already works in code. Phase 0 makes it launchable. (Historically this
 **Launch to:**
 - 5–10 orgs in beachhead segments, by invitation
 - Science/health advocacy (credibility over volume)
-- Local government advocacy (school boards, water districts — the owned 24-slot architecture is built to host 21 boundary types no competitor covers; those slots are ingest-pending today and resolve via a paid agentic pipeline, congressional is the live floor)
+- Local government advocacy (school boards, water districts — the owned 24-slot architecture is built to host the special-district boundary types no competitor covers; those slots are ingest-pending today and resolve via a paid agentic pipeline, congressional is the live floor)
 - Nonpartisan groups excluded from AN
 
 **Success metric:** One org authors and delivers a campaign in Studio and gets a Constituent Report back. (Hypothesis to test, not yet measured: an office responds differently to a verified packet than to unverified advocacy mail. Treat this as the verification proof point we are *trying* to establish — it is unproven; do not state it as fact.)

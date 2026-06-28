@@ -59,7 +59,7 @@ Every incumbent — Bonterra Que, Quorum Quincy, AdvocacyAI — ships AI for the
 
 Every advocacy platform adding AI in 2026 — Bonterra Que, Quorum Quincy, AdvocacyAI — layers AI on top of unverified identity. Commons specifies something structurally different: AI agents act on behalf of cryptographically verified constituents, within delegated bounds, with privacy-preserving memory. This is a designed capability, not yet shipped (`FEATURES.DELEGATION = false`).
 
-A constituent delegates authority to an agent: "monitor school board agendas, draft responses matching my positions, notify me before sending." The agent monitors legislation across all 24 district types — not just federal. It drafts grounding-verified messages. It pre-resolves decision-makers. Every action it takes carries the same ZK proof as a manual action.
+A constituent delegates authority to an agent: "monitor school board agendas, draft responses matching my positions, notify me before sending." The agent is designed to monitor legislation across all 24 district types as they are ingested — congressional today, the rest latent until their boundary slots fill. It drafts grounding-verified messages. It pre-resolves decision-makers. Every action it takes carries the same ZK proof as a manual action.
 
 As specified, delegation is gated to Trust Tier 3+ (identity-verified) constituents and bounded by per-grant scope, a max-actions-per-day cap, and a review threshold above which actions queue for human review. The on-chain nullifier system prevents an agent from exceeding its delegation. Revocation is instant.
 
@@ -121,7 +121,7 @@ Commons is not a US federal advocacy tool that might expand someday. It is civic
 
 **Any country.** voter-protocol uses H3 hexagonal indexing (global), country-code-keyed district registries, and a 24-slot model that accommodates any governance hierarchy. Canada's federal ridings and provincial constituencies, the UK's Westminster constituencies and devolved assemblies, Australia's federal and state electorates — all fit within the existing architecture. Boundary data ingestion is the only work required per country. One protocol, one app, many district trees.
 
-**The business implication:** The addressable market is not $191M (US grassroots advocacy). It is every organization in every democracy that wants to reach the right decision-makers with individually-composed, grounded messages across every level of government. That is a market no competitor has conceived of, because none pairs AI-native per-recipient authoring with an owned local-government reach architecture (Shadow Atlas's 24-slot boundary model — congressional live today, the other 23 slots owned and being ingested) and a neutral, uncapped API. Verification rides along as the credibility tiebreaker for the segments that demand it.
+**The business implication:** The addressable market is not $191M (US grassroots advocacy). It is every organization in every democracy that wants to reach the right decision-makers with individually-composed, grounded messages across every level of government. That is a market no competitor has conceived of, because none pairs AI-native per-recipient authoring with an owned local-government reach architecture (Shadow Atlas's 24-slot boundary model — congressional live today, the other 23 slots owned but un-ingested/latent) and a neutral, uncapped API. Verification rides along as the credibility tiebreaker for the segments that demand it.
 
 ## Why "Commons"
 

@@ -112,7 +112,7 @@ Spans the 24 owned boundary-type slots (Lens 1 synthesis) to show the architectu
 - Seattle Community Police Commission
 
 **Stat footer:**
-> *"24 owned boundary-type slots spanning all 90,887 local government entities — the only platform architected to host special districts. Congressional is live today; the other slots are built and being ingested as the civic-data APIs collapse and incumbents turn brittle."*
+> *"24 owned boundary-type slots spanning all 90,887 local government entities — the only platform architected to host special districts. Congressional is live today; the other slots are built but un-ingested (latent), to be filled as the civic-data APIs collapse and incumbents turn brittle."*
 
 This number anchors the addressable market and the breadth of the owned slot architecture — not present live coverage. The honest local claim is: the only platform built to host all 24 boundary types (special districts included), with congressional live today and a path-to-$0 on ingestion as the civic-data APIs collapse. It's drawn from US Census Bureau *Census of Governments* (2022); the `/org` page copy should carry the same latent-moat correction.
 

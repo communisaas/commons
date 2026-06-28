@@ -168,7 +168,7 @@ The owned 24-slot boundary architecture. Only congressional (slot 0) is ingested
 | 3 | County | San Francisco County | Architecture only — not yet ingested |
 | 4 | Municipality | City of Oakland | Architecture only — not yet ingested |
 | 5 | School board | SFUSD | Architecture only — not yet ingested |
-| 6-23 | Judicial, water, transit, tribal, etc. | (see Shadow Atlas spec) | Architecture only — not yet ingested | Architecture only — not yet ingested |
+| 6-23 | Judicial, water, transit, tribal, etc. | (see Shadow Atlas spec) | Architecture only — not yet ingested |
 
 Slot 0 is live today. Slots 1-23 are owned, provisioned H3 architecture that is empty/un-ingested; when targeted, state / local / special-district officials resolve via a paid agentic pipeline (Gemini + Exa + Firecrawl). The moat is the owned architecture, API-collapse timing, and the path to $0 on ingestion — not present special-district coverage.
 
