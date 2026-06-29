@@ -23,8 +23,13 @@
 > - **"Proximate-impact H3 overlay" geography** is not in the schema.
 >   Shadow Atlas resolves congressional districts, not agency
 >   comment-period impact zones.
-> - **"24 boundary types"** figure applies to Shadow Atlas
->   (congressional/local boundary resolution), not agency dockets.
+> - **"24 boundary types"** is the owned Shadow Atlas slot
+>   architecture, not agency dockets. Only congressional (slot 0)
+>   is currently ingested/live — served at $0 from free public
+>   data (congress-legislators + TIGER). The remaining 23 slots
+>   (local / special-district, slots 11-23) are latent and
+>   un-ingested; the architecture is built to host them, not
+>   resolving them today.
 > - **No `FEATURES.*` gate** exists for agency rulemaking — the
 >   landing page renders unconditionally.
 > - **Seed data contains one agency-context message** (USCIS H-1B
@@ -94,7 +99,7 @@ CRYPTOGRAPHIC AUDIT TRAIL · INDEPENDENTLY VERIFIABLE
 
 **Why these fields:** Rulemaking-specific evidence the docket officer actually weights.
 
-- **Proximate-impact geography** — CMF equivalent for rulemaking is "affected community." Commons proves commenters live near oil/gas operations, refineries, aquifers, etc. (via H3 overlay on the impact geography the agency itself defined).
+- **Proximate-impact geography** — CMF equivalent for rulemaking is "affected community." The design goal is to prove commenters live near oil/gas operations, refineries, aquifers, etc. via an H3 overlay on the impact geography the agency itself defined — leveraging the owned Shadow Atlas slot architecture. Today only congressional boundaries are ingested (slot 0, free public data); impact-zone overlays are a latent, un-ingested, on-roadmap slot, not a live capability.
 - **Technical citations** — distinguishes commenters who cite specific rule sections from generic-support comments. This is the signal GW Regulatory Studies Center identified as weighted.
 - **Shared templates disclosed honestly** — 816 shared templates acknowledged, but each attached to a verified individual. The bucket test fails (not identical-body form mail), even though the org organized around shared framing.
 

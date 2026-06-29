@@ -64,7 +64,7 @@ Additional structural debts:
 
 - **Slot index mismatch.** Commons' `US_SLOT_NAMES` (client.ts:267-292) diverges from voter-protocol's canonical `CIRCUIT_SLOT_NAMES` (authority-mapper.ts:276-301) at slots 10-21. This is a correctness bug — proof verification will fail if slot semantics differ between proof generation and district lookup.
 - **US-only address schema.** `ConstituentAddress` has no `country_code` field. The resolve-address endpoint hardcodes `z.enum(['US', 'CA'])`. International providers exist in voter-protocol (Canada, UK, Australia, NZ) but have no consumption path.
-- **14 of 24 slots unpopulated.** Only slots 0-5 have nationwide US coverage. Slots 6-23 are sparse or empty, but the monolithic architecture makes it impossible to incrementally add layers.
+- **14 of 24 slots unpopulated.** Only slots 0-5 have nationwide US *boundary-geometry* coverage in the atlas data (slots 6-23 sparse or empty). Note this is atlas data, not live Commons coverage: the live client serves congressional (slot 0) only, and officials are ingested for congressional only — non-congressional targets resolve via the paid agentic pipeline. The monolithic architecture makes it impossible to incrementally add layers.
 - **Deprecated code persists.** `ingest-legislators.ts` is marked `@deprecated` but not removed. `convertV1CellDistricts()` handles a dead format. The HTTP fallback in `getOfficials()` is dead code.
 
 This specification defines a replacement that eliminates all of the above.

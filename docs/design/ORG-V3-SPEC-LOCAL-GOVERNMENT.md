@@ -27,7 +27,7 @@
 > - **"Commons covers all [24 boundary types]"** (~line 86)
 >   overstates: boundary types are *defined* in Shadow Atlas; a
 >   delivery system for local officials does not exist. Reframe as
->   "Shadow Atlas resolves all 24 boundary types; delivery to
+>   "only congressional (slot 0) of Shadow Atlas's 24-slot schema is ingested/resolved today — state/local/special-district officials resolve via a paid agentic pipeline; delivery to
 >   local-government officials is Phase 3+."
 > - **`deliveryMethod` enum on campaigns is `'cwc' | 'email' |
 >   'recorded'`** (`convex/schema.ts:~311,874`) — no local-gov-specific
@@ -46,7 +46,7 @@ Advocacy orgs whose decision-makers sit on **city councils, county boards of sup
 - **Planning commissions** — land use, environmental review (CEQA, NEPA local), housing element compliance.
 - **Transit authorities** — service cuts, fare policy, station siting.
 
-TAM anchor (Lens 1 synthesis): **90,887 local government entities in the US**. 24 boundary types. Most have no dedicated constituent-email tool; intake is email-to-clerk plus a PDF public-comment packet assembled before each meeting.
+TAM anchor (Lens 1 synthesis): **90,887 local government entities in the US**, spanning the 24 owned Shadow Atlas boundary-type slots. This figure anchors the addressable market and the breadth of the owned slot architecture — not present live coverage: today only congressional officials (slot 0) resolve live; the special-district and local slots are built to host these entities but are not yet ingested. Most have no dedicated constituent-email tool; intake is email-to-clerk plus a PDF public-comment packet assembled before each meeting.
 
 ## Hero seed + rationale
 
@@ -98,7 +98,7 @@ CRYPTOGRAPHIC AUDIT TRAIL · INDEPENDENTLY VERIFIABLE
 
 ## Anchor boundary list
 
-Mix across the 24 boundary types (Lens 1 synthesis). Feel real:
+Spans the 24 owned boundary-type slots (Lens 1 synthesis) to show the architecture's intended breadth. Today only congressional officials resolve live; the special-district and local targets below (water, transit, oversight, school boards) are slots Commons is built to host but has not yet ingested — state/local/special-district officials resolve via a paid agentic pipeline (Gemini + Exa + Firecrawl), not a present cost edge. Architecture, not present coverage:
 
 - Austin City Council District 5
 - Oakland Unified School Board
@@ -112,9 +112,9 @@ Mix across the 24 boundary types (Lens 1 synthesis). Feel real:
 - Seattle Community Police Commission
 
 **Stat footer:**
-> *"24 boundary types. 90,887 local government entities. Commons covers all of them."*
+> *"24 owned boundary-type slots spanning all 90,887 local government entities — the only platform architected to host special districts. Congressional is live today; the other slots are built but un-ingested (latent), to be filled as the civic-data APIs collapse and incumbents turn brittle."*
 
-This number is already load-bearing on the current `/org` page — it's the strongest local-coverage claim Commons can make. It's drawn from US Census Bureau *Census of Governments* (2022), cross-checked against the `/org` page's existing copy.
+This number anchors the addressable market and the breadth of the owned slot architecture — not present live coverage. The honest local claim is: the only platform built to host all 24 boundary types (special districts included), with congressional live today and a path-to-$0 on ingestion as the civic-data APIs collapse. It's drawn from US Census Bureau *Census of Governments* (2022); the `/org` page copy should carry the same latent-moat correction.
 
 ## Category displacement seed
 
@@ -141,7 +141,7 @@ Grounding the copy to research (`ADVOCACY-WORLD-SYNTHESIS.md`):
 - Same component skeleton as `/org-v3/state-legislature`.
 - **Gap artifact visually differs**: a rendered PDF page, not an inbox. Same typographic register — white artifact card, hairline rules, mono metadata.
 - **Specimen has three extra fields** vs state-leg: `Neighborhood associations`, `Census tracts`, `Agenda-linked`. These are the local-decision-maker's weighted evidence types.
-- Anchor list is heterogeneous by design — city council, school board, water district, planning commission, transit authority — to demonstrate coverage breadth (24 boundary types).
+- Anchor list is heterogeneous by design — city council, school board, water district, planning commission, transit authority — to demonstrate the breadth of the owned 24-slot architecture (built to host all 24 boundary types). It is not a present-coverage claim: congressional is the only slot live today; the special-district and local slots are latent (un-ingested).
 - Same pricing block. Same friction line. Same CTA to `/org`.
 
 ## What this surface does NOT solve (honest gap)
