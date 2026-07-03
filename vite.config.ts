@@ -53,6 +53,9 @@ const pinoShimPath = fileURLToPath(new URL('./src/lib/core/proof/pino-shim.ts', 
 const voterProtocolStubPath = fileURLToPath(
 	new URL('./src/lib/core/crypto/voter-protocol-stub.ts', import.meta.url)
 );
+const undiciShimPath = fileURLToPath(
+	new URL('./src/lib/server/shims/undici-workerd-shim.ts', import.meta.url)
+);
 
 export default defineConfig({
 	plugins: [
@@ -76,6 +79,22 @@ export default defineConfig({
 			resolveId(source, _importer, options) {
 				if (source === '@voter-protocol/noir-prover' && options?.ssr) {
 					return voterProtocolStubPath;
+				}
+				return null;
+			}
+		},
+		// Shim undici ONLY during SSR: firecrawl-js (inlined via ssr.noExternal)
+		// lazily imports it as a Node-only WebSocket fallback that is dead code on
+		// workerd — but Cloudflare's wrangler-3 uploader would otherwise follow the
+		// import into real undici, whose `node:sqlite` reference breaks the Pages
+		// Functions bundling. See src/lib/server/shims/undici-workerd-shim.ts.
+		{
+			name: 'undici-workerd-shim',
+			// 'pre' so this wins before vite:resolve externalizes the bare specifier.
+			enforce: 'pre',
+			resolveId(source, _importer, options) {
+				if (source === 'undici' && options?.ssr) {
+					return undiciShimPath;
 				}
 				return null;
 			}
@@ -139,7 +158,14 @@ export default defineConfig({
 	// Enable WASM support
 	assetsInclude: ['**/*.wasm'],
 
-	ssr: {},
+	ssr: {
+		// Inline firecrawl-js into the SSR bundle so its lazy `import("undici")`
+		// goes through the undici-workerd-shim plugin above. Left external, the
+		// bare specifier would survive into the server chunks and Cloudflare's
+		// wrangler-3 uploader would bundle REAL undici → `node:sqlite` → build
+		// failure ("Failed building Pages Functions").
+		noExternal: ['@mendable/firecrawl-js']
+	},
 
 	worker: {
 		format: 'es',
