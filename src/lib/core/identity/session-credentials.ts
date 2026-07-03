@@ -100,9 +100,9 @@ export interface IdentitySecrets {
  * (e.g. 'registry-attested' from G7r) is one edit, not five.
  *
  *   'address-resolved'  — T3+ flow: cellId comes from postal_code+city+state
- *                          via Nominatim → H3. Honest name (NOT 'mdl-derived' —
- *                          the wallet provides the address fields, but the
- *                          cell is geocoder-derived).
+ *                          via the atlas-native geocoder → H3. Honest name
+ *                          (NOT 'mdl-derived' — the wallet provides the
+ *                          address fields, but the cell is geocoder-derived).
  *   'random-fallback'   — T0 flow: random cell in the verified district.
  *                          No constituency anchor; preserves anonymity at the
  *                          cost of audit signal.
@@ -312,7 +312,8 @@ export interface SessionCredential {
 	 *
 	 * G8r honesty correction: the value formerly named 'mdl-derived' is
 	 * 'address-resolved' — the cellId comes from postal_code+city+state
-	 * via Nominatim+H3, not from any wallet-attested coordinate.
+	 * via the atlas-native geocoder + H3, not from any wallet-attested
+	 * coordinate.
 	 */
 	cellAnchorMode?: CellAnchorMode;
 	/**

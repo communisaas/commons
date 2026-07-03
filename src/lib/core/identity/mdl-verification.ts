@@ -416,7 +416,8 @@ async function processMdocResponse(
 		const birthYear = extractBirthYear(birthDateRaw);
 
 		// Step 6: Resolve district + cellId from postal code + city + state via Shadow Atlas.
-		// Uses the self-hosted Nominatim + H3 pipeline — ZIP alone is insufficient because
+		// Uses the atlas-native geocoder + H3 pipeline (our own published address-index
+		// artifacts; no external geocoding call) — ZIP alone is insufficient because
 		// ~94% of Americans live in multi-district states where ZIP crosses district lines.
 		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used.
 		const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
@@ -1441,10 +1442,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Resolve congressional district AND cell ID from (postalCode, city, state) via Shadow Atlas.
  *
  * Fully sovereign pipeline:
- *   1. Self-hosted Nominatim geocode (city, state, zip → coordinates)
+ *   1. Atlas-native geocode (city, state, zip → coordinates, matched against
+ *      our own published R2 address-index artifacts)
  *   2. H3 + IPFS district lookup (coordinates → district + cell_id)
  *
- * PRIVACY: city/state/zip sent to self-hosted Nominatim (our infrastructure, not a third party).
+ * PRIVACY: the address fields never leave infrastructure we control — geocoding is an
+ * in-process match over our own artifacts; there is no external geocoding call.
  *
  * This is the primary resolver for both mDL verification (postal_code + city + state from
  * the credential) and manual address entry (street geocoded separately via resolveAddress).
@@ -1507,7 +1510,7 @@ async function resolveLocationFromAddress(
  * Resolve cell ID from address via Shadow Atlas geocoding.
  *
  * Exported for backward compatibility and direct use by tests.
- * Delegates to Shadow Atlas's sovereign Nominatim + H3 pipeline.
+ * Delegates to Shadow Atlas's sovereign atlas-native geocoder + H3 pipeline.
  *
  * Non-fatal: returns null on any failure. Shadow Atlas registration is deferred.
  */

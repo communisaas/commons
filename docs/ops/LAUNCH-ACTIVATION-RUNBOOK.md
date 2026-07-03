@@ -22,13 +22,15 @@ step done on prose alone.
 
 ---
 
-## Step 1 — R0: commit, PR, merge (both repos)
+## Step 1 — R0: push, PR, merge (both repos)
 
-The entire arc is working-tree only on one machine: commons branch `p0-resolution-build`
-(~55 files) and voter-protocol branch `p0-freshness-producers` (~10 files) have zero commits
-ahead of `main`. Commit both, open PRs, and land them. **A human lands the push/merge** —
-commons `main` requires the `test` CI check before merge. All voter-protocol commands use
-**npm** (never pnpm).
+The arc is committed locally but unpushed on one machine: commons branch
+`p0-resolution-build` carries 7 commits ahead of `main` and voter-protocol branch
+`p0-freshness-producers` carries 4. What remains of R0 is push → PR → merge. **A human lands
+the push/merge** — commons `main` requires the `test` CI check before merge. All
+voter-protocol commands use **npm** (never pnpm). Note the voter-protocol root
+`package.json` has no `test:unit` script — the shadow-atlas suite runs from
+`packages/shadow-atlas` (`cd packages/shadow-atlas && npm run test:unit`).
 
 Merging alone activates nothing in prod (NOOP-MAP "Honest surface": prod
 `/api/v1/resolve-address` stays a plain 404 until the deploys below).
@@ -91,7 +93,7 @@ Expected: first command prints >= 32; the two hashes are identical.
 
 Ships the metering functions and the `usageRecords` / `usagePeriodTotals` tables to prod.
 Until this lands, every resolve returns the typed 502 `METERING_UNAVAILABLE`
-(`src/routes/api/v1/resolve-address/+server.ts:135`) — fail-closed, never a silent free
+(`src/routes/api/v1/resolve-address/+server.ts:142`) — fail-closed, never a silent free
 resolve.
 
 ```bash
@@ -145,7 +147,8 @@ routes are deployed.
 ## Step 6 — A2: refresh the officials clock, publish the source snapshot
 
 The chunked build stamps `officialsGenerated` from the officials DB's `ingestion_log`
-(voter-protocol `packages/shadow-atlas/scripts/build-chunked-mapping.ts:216-245`). The live
+(voter-protocol `packages/shadow-atlas/scripts/build-chunked-mapping.ts:208-245`, stamp at
+`:285`). The live
 DB's only success row is months old — dispatching A1 without a fresh ingest debuts the
 "fresh clocks" feature showing stale officials. Run in voter-protocol (npm):
 
@@ -173,14 +176,24 @@ Expected: the timestamp of the ingest just performed (today), not a months-old d
 
 Dispatch `shadow-atlas-quarterly.yml` with a real vintage and the manifest SHA from step 6.
 Confirm the Ed25519 manifest-signing public key pin is configured in the repo before
-dispatching (the download-verification step prefers signature verification when the public
-key is set — `shadow-atlas-quarterly.yml:134`); never bypass verification with
-`allow_unverified`.
+dispatching (the manifest-resolution step prefers Ed25519 signature verification when the
+public key is set — `shadow-atlas-quarterly.yml:154-155`, enforcement at `:267-289`); never
+bypass verification with `allow_unverified`.
+
+This dispatch also builds and publishes the **address index** (the `build-address-index`
+job, `shadow-atlas-quarterly.yml:742-814`, feeds `validate-build` → `upload-r2` — the
+atlas-native geocoder's data plane; see step 10). Its vintage inputs default to `unknown`,
+which **fails the build by design** — set real values: `nad_vintage` (NAD release compile
+date, `YYYY-MM-DD`), `addrfeat_vintage` (`TIGER20YY`). `nad_url` defaults to the current DOT
+NAD text-release zip (empty skips NAD and builds a ranges-only index); `address_states`
+empty means all states.
 
 ```bash
 gh workflow run shadow-atlas-quarterly.yml --repo communisaas/voter-protocol \
   -f tiger_vintage=TIGER2024 \
-  -f expected_manifest_sha256=<sha256 emitted by publish:source in step 6>
+  -f expected_manifest_sha256=<sha256 emitted by publish:source in step 6> \
+  -f nad_vintage=<YYYY-MM-DD of the NAD release> \
+  -f addrfeat_vintage=TIGER2025
 ```
 
 Verify: run green, then the published manifest actually carries both freshness clocks
@@ -207,10 +220,10 @@ clamped to 0.4 confidence with "boundary vintage unknown"
 ## Step 8 — A3: point prod at the new atlas version (env pins)
 
 When step 7 was dispatched with `push_cids=true` (the default,
-`shadow-atlas-quarterly.yml:47`), the workflow's `push-cids` job (`:854-935`) **pushes
-`ATLAS_BASE_URL`, `VITE_ATLAS_BASE_URL`, `EXPECTED_CELL_MAP_ROOT`, and
-`EXPECTED_CELL_MAP_DEPTH` to the CF Pages project automatically** and prints all four to the
-run summary — this step is then *verify-in-summary*, not a hand-bump. Hand-edit the CF Pages
+`shadow-atlas-quarterly.yml:47-53`), the workflow's `push-cids` job (`:958`, config-push
+step `:995-1040`) **pushes `ATLAS_BASE_URL`, `VITE_ATLAS_BASE_URL`,
+`EXPECTED_CELL_MAP_ROOT`, and `EXPECTED_CELL_MAP_DEPTH` to the CF Pages project
+automatically** and prints all four to the run summary — this step is then *verify-in-summary*, not a hand-bump. Hand-edit the CF Pages
 env vars only if `push_cids=false` was chosen or the job failed, and remember a CF Pages env
 change takes effect on the next deployment.
 
@@ -230,14 +243,14 @@ Expected: `"baseUrl"` ends in the new `/vYYYYMMDD`, and `configured`, `rootPinne
 
 Ordering note for steps 9-10: NOOP-MAP's cascade lists F1 ninth and E1/E2 tenth. The two are
 order-independent (no dependency edge between them); this runbook puts schedule enablement
-first because it needs only the step-1 merge, while the geocoder waits on a provisioning
-decision.
+first because it needs only the step-1 merge, while the geocoder activation (step 10) is
+verified against the atlas published by the step-7 dispatch.
 
 ## Step 9 — E1 + E2: schedule enablement
 
 **E1 — quarterly staleness alarm.** The cron `0 2 1 1,4,7,10 *`
-(`shadow-atlas-quarterly.yml:77`) registers only once the workflow is on the default branch
-(after step 1). Its semantics, verbatim from the workflow's own comment (`yml:68-76`): on a
+(`shadow-atlas-quarterly.yml:97`) registers only once the workflow is on the default branch
+(after step 1). Its semantics, verbatim from the workflow's own comment (`yml:88-96`): on a
 `schedule` event the `inputs` context is empty, so `tiger_vintage` resolves to `'unknown'`
 and the build **fails fast before any manifest is written** — "This is intentional and
 fail-closed: a silent stale publish is impossible. A RED quarterly run means 'time to
@@ -267,45 +280,69 @@ Expected: both shadow-atlas workflows listed `active`; R2 secret names listed; t
 change-check run `completed`/`success` (a fresh-DB first run reporting everything new is
 expected exactly once).
 
-## Step 10 — F1: live geocoder (PLACEHOLDER — pending the geocoder decision)
+## Step 10 — F1: atlas-native geocoder activation (rides the step-7 publish)
 
-**This step cannot be executed from this runbook yet.** No geocoding backend exists
-anywhere: the resolver defaults `NOMINATIM_URL` to `${SHADOW_ATLAS_URL}/nominatim`
-(`src/lib/core/shadow-atlas/client.ts:1210`) and `SHADOW_ATLAS_URL` to `localhost:3000`
-(`client.ts:43`); no deployed environment sets either to a live host.
+**There is nothing to provision.** The geocoder is atlas-native and already committed: the
+resolver normalizes the street line, fetches the ZIP5 chunk from our own R2 artifacts, and
+runs the deterministic match ladder entirely in-process
+(`src/lib/core/shadow-atlas/geocoder.ts`; `resolveAddress` calls it at
+`src/lib/core/shadow-atlas/client.ts:1236`, provenance source `atlas-address-index` at
+`:1309`). The founder decision rejected the self-hosted-Nominatim bridge outright
+(`docs/design/GEOCODER-OPTIONS.md:273` — atlas-native straight, 2026-07-03); `NOMINATIM_URL`
+has ZERO references anywhere in committed `src/` + `convex/`. The raw user address never
+leaves infrastructure we control — there is no external geocoding call to configure. (The
+unrelated `/api/location/search` autocomplete proxy is a separate, open founder decision —
+see NOOP-MAP.)
 
-Consequence, stated plainly: with every step above complete, **every resolve — paid v1 and
-person-layer alike — still returns a 502**: `METERING_UNAVAILABLE`
-(`+server.ts:135`) until step 4 lands, then `RESOLVE_FAILED` (`+server.ts:228`) on every
-request forever after. The flagship endpoint stays 100% dead until this step closes.
+**The activation lever is the step-7 quarterly dispatch**: its `build-address-index` job
+publishes the ZIP5 address chunks, `normalization.json`, `chunk-index.json`, and the
+manifest's `addressIndex` section + `addressIndexGenerated` third clock into the versioned
+atlas that step 8 pins. Until that manifest section exists at the pinned `ATLAS_BASE_URL`,
+every resolve fails closed as the typed 502 `RESOLVE_FAILED` (`+server.ts:235`, via the
+store's `AddressIndexSchemaError` "index not yet published" guard, `ipfs-store.ts:942-947`)
+— the dependency is the step-7 publish + step-8 pin, **not** any step-10 provisioning.
+(`RATE_LIMITER_ALLOW_MEMORY=1` must still be present on the CF Pages env — on a fresh env
+without it every resolve is a typed 502 `RATE_LIMITER_UNAVAILABLE`, `+server.ts:77-83`.)
 
-Defer to the geocoder decision brief at `docs/design/GEOCODER-OPTIONS.md` for the
-provisioning path (decided direction: a **self-hosted** Nominatim instance first — the exact
-contract the resolver already speaks — with an atlas-native address layer to retire the
-dependency later). **Hard constraint: only self-hosted, infrastructure-we-control geocoding
-is permissible. The raw user address must never leave infrastructure we operate; no hosted
-geocoding service may be substituted, whatever the provisioning friction.**
-
-When a backend is provisioned: set `NOMINATIM_URL` on the CF Pages project (plus
-`RATE_LIMITER_ALLOW_MEMORY=1` — NOOP-MAP F16: the resolve route's rate-limit call sits
-outside any try and throws a raw 500 on a fresh env without it) and redeploy.
-
-Verify: backend alive, then one real end-to-end resolve:
+Verify 10a — the live pinned manifest carries the address index:
 
 ```bash
-curl -s "$NOMINATIM_URL/status"
+curl -s "https://atlas.commons.email/v<YYYYMMDD>/US/manifest.json" \
+  | jq '{schemaVersion: .addressIndex.schemaVersion,
+         addressIndexGenerated,
+         normTableSha256: .addressIndex.normTable.sha256,
+         totalChunks: .addressIndex.totalChunks}'
 ```
 
-Expected: HTTP 200 with body `OK` (Nominatim status endpoint).
+Expected: `schemaVersion` is exactly `1`, `addressIndexGenerated` is a non-null ISO-8601
+timestamp, `normTableSha256` is a 64-char hex sha256, `totalChunks` > 0.
+
+Verify 10b — publish the DE/RI/DC sample, then rerun the §6 source-population gate against
+it. The sample tree exists in voter-protocol
+(`packages/shadow-atlas/sample/address-index/`) with the upload procedure in its README
+(`sample/address-index/README.md` — `upload-to-r2.ts --directory sample --prefix sample`,
+including the known false-FAILURE exit of the script's final URL probe). **The documented
+sample URL `https://atlas.commons.email/sample/address-index/v1/…` currently returns 404**
+— the upload is a real operator step, not already done. Then, in commons:
+
+```bash
+SAMPLE_ATLAS_BASE_URL=https://atlas.commons.email/sample/address-index/v1 \
+  npx vitest run tests/integration/shadow-atlas/geocoder-sample-gate.test.ts
+```
+
+Expected: the suite RUNS (it skips loudly when `SAMPLE_ATLAS_BASE_URL` is unset — a skipped
+gate never counts as a pass) and all six §6 checks pass against the real published artifact.
+
+Verify 10c — one real end-to-end resolve:
 
 ```bash
 curl -s -X POST https://commons.email/api/v1/resolve-address \
   -H "Authorization: Bearer $API_KEY" -H 'content-type: application/json' \
-  -d '{"address":"1600 Pennsylvania Ave NW, Washington, DC 20500"}' | jq '.'
+  -d '{"street":"1600 Pennsylvania Ave NW","city":"Washington","state":"DC","zip":"20500"}' | jq '.'
 ```
 
-Expected: a resolved district payload with provenance — not
-`{"error":{"code":"RESOLVE_FAILED"}}`.
+Expected: a resolved district payload with `provenance.source: "atlas-address-index"` and
+both `asOf` clocks — not `{"error":{"code":"RESOLVE_FAILED"}}`.
 
 ---
 
@@ -319,26 +356,27 @@ correct pre-customer posture.
 +------------------------------------------------------------------------------+
 | SILENT REVENUE WRITE-OFF (D2/D3): the noop drain PERMANENTLY consumes usage  |
 | rows. The noop path stamps reportedToProvider: true with a noop:<requestId>  |
-| event id (convex/metering.ts:392 via the markReported stamp at :241-243),    |
+| event id (convex/metering.ts:394 via the markReported stamp at :243-246),    |
 | and the drain only ever selects rows still at undefined                      |
-| (convex/metering.ts:207). Flip C1 while D1 is still noop (D2) — or half-flip |
+| (convex/metering.ts:209). Flip C1 while D1 is still noop (D2) — or half-flip |
 | Convex=noop / Pages=stripe (D3) — and every accumulated usage row is stamped |
 | reported without ever reaching Stripe: revenue written off silently and      |
 | permanently, with no error anywhere. The Stripe drain rejects noop: ids      |
-| (metering.ts:337) but nothing guards the reverse direction.                  |
+| (metering.ts:339) but nothing guards the reverse direction.                  |
 |                                                                              |
 | D BEFORE / WITH C. NEVER C ALONE.                                            |
 +------------------------------------------------------------------------------+
 ```
 
 The quota gate is unaffected by C1 timing — the per-period counter is written
-in-transaction at record time (`convex/metering.ts:91-104`), so the 402 at plan cap holds
+in-transaction at record time (`convex/metering.ts:93-110`), so the 402 at plan cap holds
 whether or not the drain cron is running. Only *reporting to the provider* is at stake here.
 
 ### D4 — provision Stripe Meters + `STRIPE_SECRET_KEY`
 
 In the Stripe dashboard, create a billing Meter whose **event name equals each billable
-meter enum value** — `resolve_address` (`convex/schema.ts:2250-2251`); the adapter posts
+meter enum value** — `resolve_address` (`convex/schema.ts:2250-2251`, on `usageRecords`);
+the adapter posts
 meter events under exactly that name
 (`src/lib/server/billing/providers/stripe-adapter.ts:31-32`, `event_name: r.meter`).
 Flipping D1 without Meters means every meter-event create rejects, rows stay unreported, and
@@ -357,11 +395,11 @@ Expected: output includes `resolve_address`.
 
 The provider is selected independently on each side: CF Pages reads it lazily in
 `getBillingProvider()` (`src/lib/server/billing/providers/index.ts:16-21`); Convex reads it
-inline in `providerName()` (`convex/metering.ts:374-376`). Flip **both** — a half-flip is
+inline in `providerName()` (`convex/metering.ts:376-378`). Flip **both** — a half-flip is
 the D3 write-off above.
 
 B5: the Convex Stripe-drain branch defaults `PUBLIC_BASE_URL` to `https://commons.email`
-(`convex/metering.ts:286`). Any stripe-flipped non-prod Convex deployment would therefore
+(`convex/metering.ts:288`). Any stripe-flipped non-prod Convex deployment would therefore
 POST **prod's** report-usage endpoint with the wrong secret (a 403 loop — fail-closed but
 cross-env). Set `PUBLIC_BASE_URL` explicitly on every Convex deployment that ever flips to
 stripe.

@@ -90,7 +90,7 @@
 	let retryDisabled = $state(false);
 	let savedDistrict = $state<string | null>(null);
 	// G1: H3 cellId from verify-mdl (server-derived from postal+city+state via
-	// Nominatim). Saved alongside savedDistrict so retry preserves the
+	// the atlas-native geocoder). Saved alongside savedDistrict so retry preserves the
 	// constituency anchor — without this, retry would fall back to the random-
 	// cell path and silently downgrade the user. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
 	let savedCellId = $state<string | null>(null);
@@ -271,7 +271,7 @@
 			if (isT3Plus) {
 				if (!verifiedCellId) {
 					// Hard-fail: T3+ requires the constituency anchor. The geocoder
-					// returned null (Nominatim degradation, mDL postal_code missing,
+					// returned null (atlas address-index degradation, mDL postal_code missing,
 					// or address resolution failure). User-actionable: retry, or
 					// re-verify after the geocoder recovers.
 					throw new Error(
@@ -280,7 +280,7 @@
 					);
 				}
 				cellData = await getFullCellDataFromBrowser({ cellId: verifiedCellId });
-				// G8r honesty: the cellId is Nominatim/H3-derived from postal_code+
+				// G8r honesty: the cellId is atlas-geocoder/H3-derived from postal_code+
 				// city+state. The wallet provides the address fields, NOT the cell.
 				cellAnchorMode = 'address-resolved';
 			} else {

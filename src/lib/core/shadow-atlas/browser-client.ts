@@ -92,7 +92,8 @@ export interface ClientCellProofResult {
  *
  * **CellId path (T3+ recommended, post-G1):**
  *   Caller already has the user's H3 cell — typically derived server-side from
- *   the mDL's postal+city+state via Nominatim and returned to the client. The
+ *   the mDL's postal+city+state via the atlas-native geocoder and returned to
+ *   the client. The
  *   leaf binds to the user's actual ZIP-derived cell, not a random one.
  *   See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
  *

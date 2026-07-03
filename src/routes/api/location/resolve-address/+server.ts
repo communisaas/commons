@@ -8,9 +8,11 @@ import { issueAddressResolutionToken } from '$lib/server/auth/address-resolution
 /**
  * POST /api/location/resolve-address
  *
- * Authenticated proxy to Shadow Atlas's self-hosted address resolution.
+ * Authenticated proxy to Shadow Atlas's sovereign address resolution.
  * All geocoding, district lookup, and officials resolution happens server-side
- * in Shadow Atlas (Nominatim + R-tree + SQLite). Zero external government API calls.
+ * in Shadow Atlas (atlas-native geocoder over our published address-index
+ * artifacts + H3 district lookup). Zero external API calls — the address never
+ * leaves infrastructure we control.
  *
  * PRIVACY:
  * - Logs NOTHING about the address itself.
@@ -157,9 +159,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 /**
  * Parse matched address into components without trusting comma position.
  *
- * Shadow Atlas can return either a compact canonical address:
+ * Shadow Atlas returns a compact canonical address:
  *   "12 MINT PLZ, SAN FRANCISCO, CA, 94103"
- * or a Nominatim display_name:
+ * but this parser also survives a verbose display_name (Nominatim-era format,
+ * kept as a defensive parse):
  *   "12, Mint Plaza, Tenderloin, San Francisco, California, 94103, United States"
  *
  * The latter includes neighborhoods between street and city, so positional

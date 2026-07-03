@@ -28,15 +28,16 @@ confidence via `format=jsonv2`; G6 redraw guard full-ISO conservative compare; G
 endpoint contract (infra→502 unbilled, payload-bound injective Idempotency-Key,
 CA→400, typed auth outage, OpenAPI matches the handler).
 Deferred by design: 24-slot multi-district (capability build; contract honest today);
-quota TOCTOU (bounded soft-overshoot); cwc_code null (trivial). Known caveat: Convex
-drain-side unit tests are honest disclosed mirrors (`convex-test` not wired).
+quota TOCTOU (bounded soft-overshoot); cwc_code null (trivial). The former convex-test
+caveat is closed: `convex/metering.convex.test.ts` now runs the real metering handlers
+under `convex-test` (no mock-ledger mirror).
 
 ## Operator axis (ops — human only)
 
 - [ ] **Operator-dispatch the quarterly Shadow Atlas publish** — BLOCKER, the only freshness path.
   Run `Shadow Atlas Quarterly Update` via `workflow_dispatch` with a real `tiger_vintage` (TIGER20YY), operator-pasted `expected_manifest_sha256`, and the Ed25519 trust-pin set.
-  WHERE: `voter-protocol/.github/workflows/shadow-atlas-quarterly.yml` (inputs ~L16-67); needs provisioned R2 keys + `CLOUDFLARE_ACCOUNT_ID`, `MANIFEST_SIGNING_PUBLIC_KEY`, `CLOUDFLARE_API_TOKEN` + `COMMONS_DEPLOY_TOKEN`, `DEPLOYER_PRIVATE_KEY` + `SCROLL_RPC_URL` + `SNAPSHOT_ANCHOR_ADDRESS`.
-  WHY: only path that republishes fresh boundaries/officials to R2 + anchors on-chain. `officialsAsOf`/`boundaryAsOf` stay `null` until a republish. A `schedule` event leaves inputs empty → vintage `'unknown'` → throws (fail-closed by design). Fix the FRESH-A2 argv guard (impl) first.
+  WHERE: `voter-protocol/.github/workflows/shadow-atlas-quarterly.yml` (inputs ~L16-87, now incl. the address-index inputs `nad_vintage`/`addrfeat_vintage`/`nad_url`/`address_states`); needs provisioned R2 keys + `CLOUDFLARE_ACCOUNT_ID`, `MANIFEST_SIGNING_PUBLIC_KEY`, `CLOUDFLARE_API_TOKEN` + `COMMONS_DEPLOY_TOKEN`, `DEPLOYER_PRIVATE_KEY` + `SCROLL_RPC_URL` + `SNAPSHOT_ANCHOR_ADDRESS`.
+  WHY: only path that republishes fresh boundaries/officials to R2 + anchors on-chain — and, since the NAD commit, the address index the atlas-native geocoder reads. `officialsAsOf`/`boundaryAsOf` stay `null` until a republish. A `schedule` event leaves inputs empty → vintage `'unknown'` → throws (fail-closed by design). The FRESH-A2 argv guard is landed (impl axis — `resolveOutputDir`, `build-chunked-mapping.ts:201-204`).
 
 - [ ] **`convex deploy` the new schema + metering functions to prod** — BLOCKER, metering 500s without it.
   WHERE: `commons/convex/schema.ts` (`usageRecords` table + 4 indexes; `districtCredentials` provenance fields) + `commons/convex/metering.ts` (`recordUsage`/`getUsageForPeriod`/`drainUsageToProvider`).
@@ -49,7 +50,7 @@ drain-side unit tests are honest disclosed mirrors (`convex-test` not wired).
   WHERE: `commons/convex/crons.ts` (`drain-usage` gated `if (enabled("operational"))`; prod frozen at `'essential'`). Cron passes `_secret: INTERNAL_API_SECRET` — that secret must match on prod Convex. Do AFTER the deploy (table must exist before drain runs).
 
 - [ ] **Provision Stripe account/keys when metering goes live** — posture-gated: do NOT provision until a paying metering customer closes.
-  WHERE: `commons/src/lib/server/billing/providers/`. Necessary-but-insufficient — the Convex drain's Stripe branch is unimplemented (see impl "Wire Stripe drain branch"). Sequence: land the code, then flip `BILLING_PROVIDER=stripe`.
+  WHERE: `commons/src/lib/server/billing/providers/`. The code side is DONE (the drain's Stripe branch is wired — see impl axis); what remains is purely provisioning: Stripe Meters + `STRIPE_SECRET_KEY`, then flip `BILLING_PROVIDER=stripe` on BOTH sides (Pages `providers/index.ts:16-21`; Convex `metering.ts:376-378`) — never C1 alone (NOOP-MAP D2).
 
 - [ ] **Enable the quarterly `schedule:` trigger on the default branch** — LOW, alarm/reminder only.
   WHERE: same workflow file (`schedule: - cron: '0 2 1 1,4,7,10 *'`). GitHub registers scheduled workflows only from the default branch; auto-disables after 60d inactivity. A scheduled run only fails loud ("time to republish"); value is purely the reminder.
@@ -82,13 +83,12 @@ Confirmed DONE: B1 officials-clock read; A2 officials producer stamp; B3 `/v/[ha
 
 ## Sequencing
 
-**Critical path → "freshness serves fresh data in prod" (2):**
-1. Land the FRESH-A2 argv guard (impl, tiny).
-2. Operator-dispatch the quarterly publish with real vintage + SHA + trust pins (provisioned R2/Ed25519/Scroll secrets). The single load-bearing act — it flips `officialsAsOf`/`boundaryAsOf` from `null` to real. The `schedule:` trigger, `check-changes` scheduler, and `REDRAW_SIGNAL` feed are alarming/automation, NOT on this path.
+**Critical path → "freshness serves fresh data in prod" (1):**
+1. Operator-dispatch the quarterly publish with real vintages + SHA + trust pins (provisioned R2/Ed25519/Scroll secrets). The single load-bearing act — it flips `officialsAsOf`/`boundaryAsOf` from `null` to real AND publishes the address index that takes the geocoder live (the FRESH-A2 argv guard is already landed). The `schedule:` trigger, `check-changes` scheduler, and `REDRAW_SIGNAL` feed are alarming/automation, NOT on this path.
 
 **Critical path → "metering bills a real customer" (3):**
 1. Disambiguate the local Convex env (ops, tiny) — gates the deploy.
 2. `convex deploy` the schema + `metering.ts` to prod — without `usageRecords`, `recordUsage` 500s.
-3. Wire the Stripe drain branch + org→customer mapping (impl, medium). Then the flip-switches: `CRON_PROFILE→operational` + redeploy, and Stripe provisioning — per bootstrapping posture, only once a paying metering customer closes.
+3. The Stripe drain branch + org→customer mapping is CODE-DONE (impl axis). What remains is the flip-switches: `CRON_PROFILE→operational` + redeploy, and Stripe provisioning (Meters + key + `BILLING_PROVIDER=stripe` both sides) — per bootstrapping posture, only once a paying metering customer closes.
 
 The two P0 error-labeling nits are cheap and live on the metering route but only misbehave during a Convex outage — fix alongside the Stripe wiring, not ahead of the load-bearing deploy.

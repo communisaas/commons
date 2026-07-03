@@ -1072,12 +1072,16 @@ export async function getAddressChunk(
  * Fetch the shipped §3 normalization tables at
  * `{country}/addresses/normalization.json`.
  *
- * The consumer NEVER vendors its own copy — the tables are artifact data,
- * sha256-pinned in the manifest. `normVersion` is hard-asserted to 1 on both
- * the manifest section and the fetched table (the algorithm-version
- * handshake): skew fails loudly with AddressIndexSchemaError. A 404 is also
- * fail-closed — an index without its tables is an unusable index, never a
- * silent fallback.
+ * The consumer NEVER vendors its own copy — the tables are artifact data.
+ * The manifest's `normTable.sha256`/`bytes` pins are PUBLISH/AUDIT artifacts:
+ * this reader does NOT re-hash the fetched body per-fetch. Pin verification
+ * happens in the §6 source-population gate (geocoder-sample-gate.test.ts
+ * check 2), which byte-hashes the published table (and every chunk against
+ * chunk-index.json) against the manifest pins. What IS enforced here per
+ * fetch: `normVersion` is hard-asserted to 1 on both the manifest section and
+ * the fetched table (the algorithm-version handshake) — skew fails loudly
+ * with AddressIndexSchemaError. A 404 is also fail-closed — an index without
+ * its tables is an unusable index, never a silent fallback.
  */
 export async function getNormalizationTable(country = 'US'): Promise<NormalizationTable> {
 	const safeCountry = sanitizePathSegment(country);

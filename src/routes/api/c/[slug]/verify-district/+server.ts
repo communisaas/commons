@@ -1,5 +1,6 @@
-// CONVEX: Keep SvelteKit — Shadow Atlas proxy (resolveAddress: self-hosted Nominatim geocoding
-// + R-tree district lookup), rate limiting (IP-based), address validation (zod).
+// CONVEX: Keep SvelteKit — Shadow Atlas proxy (resolveAddress: atlas-native geocoding
+// over our published address-index artifacts + H3 district lookup), rate limiting
+// (IP-based), address validation (zod).
 import { json } from '@sveltejs/kit';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -79,7 +80,7 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 
 		const { street, city, state, zip } = parseResult.data;
 
-		// Shadow Atlas: self-hosted Nominatim geocoding + R-tree district lookup
+		// Shadow Atlas: atlas-native geocoding + H3 district lookup (no external call)
 		const result = await resolveAddress({ street, city, state, zip });
 
 		const districtCode = result.officials?.district_code ?? result.district?.id ?? null;
