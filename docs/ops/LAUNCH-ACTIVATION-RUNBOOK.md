@@ -222,9 +222,19 @@ clamped to 0.4 confidence with "boundary vintage unknown"
 When step 7 was dispatched with `push_cids=true` (the default,
 `shadow-atlas-quarterly.yml:47-53`), the workflow's `push-cids` job (`:958`, config-push
 step `:995-1040`) **pushes `ATLAS_BASE_URL`, `VITE_ATLAS_BASE_URL`,
-`EXPECTED_CELL_MAP_ROOT`, and `EXPECTED_CELL_MAP_DEPTH` to the CF Pages project
-automatically** and prints all four to the run summary — this step is then *verify-in-summary*, not a hand-bump. Hand-edit the CF Pages
-env vars only if `push_cids=false` was chosen or the job failed, and remember a CF Pages env
+`EXPECTED_CELL_MAP_ROOT`, and `EXPECTED_CELL_MAP_DEPTH` to the CF Pages project**
+and prints all four to the run summary.
+
+> **⚠️ WRANGLER.TOML IS THE SOURCE OF TRUTH — the API push alone is NOT durable.**
+> Because commons' `wrangler.toml` carries `pages_build_output_dir`, every git
+> deploy of the site REWRITES the project's plain-text env vars to exactly its
+> `[vars]` block — the push-cids API update (and any dashboard edit) is silently
+> reverted by the NEXT production deploy. After every republish, land the four
+> new values in `wrangler.toml [vars]` via a commit (this is what makes the pin
+> survive). Learned 2026-07: a deploy deleted both `EXPECTED_CELL_MAP_*` pins
+> and degraded /api/health + snapshot validation until they were restored.
+
+Hand-edit the CF Pages env vars only as a stopgap if the job failed; a CF Pages env
 change takes effect on the next deployment.
 
 This is a **recurring ritual**: every future republish must re-point the version-pinned path
