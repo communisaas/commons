@@ -55,14 +55,15 @@ export const load: PageServerLoad = async ({ params }) => {
 				},
 				location: {
 					verified: false,
-					method: null as 'civic_api' | 'mdl' | 'postal' | null,
 					state: null as string | null,
 					districts: [] as { slot: number; label: string; value: string }[]
 				},
 				govCredential: false,
 				composition: null as 'individual' | 'template' | 'mixed' | null,
 				verifiedAt: Date.now(),
-				topic: null as string | null,
+				// LATENT (2026-07-03): participantCount is currently unrendered (the
+				// page reads cohort size from campaignContext.verified); kept as data
+				// for a future message-level surface.
 				participantCount: stats.verifiedActions,
 				campaignContext: {
 					verified: stats.verifiedActions,
@@ -117,14 +118,22 @@ export const load: PageServerLoad = async ({ params }) => {
 				},
 				location: {
 					verified: districts.length > 0,
-					method: credential.verificationMethod as 'civic_api' | 'mdl' | 'postal' | null,
 					state: credential.congressionalDistrict?.split('-')[0] ?? null,
-					districts
+					districts,
+					// B3 — freshness provenance. Two INDEPENDENT clocks rendered
+					// separately on the certificate; each is `null` when the
+					// credential carries no real value (legacy row or honestly-
+					// unknown at issuance). tigerVintage labels the boundary clock;
+					// resolutionConfidence annotates the mapping. Never copy one
+					// clock's value into the other.
+					boundaryAsOf: credential.boundaryAsOf ?? null,
+					officialsAsOf: credential.officialsAsOf ?? null,
+					tigerVintage: credential.tigerVintage ?? null,
+					resolutionConfidence: credential.resolutionConfidence ?? null
 				},
 				govCredential: credential.trustTier >= 3,
 				composition: 'individual' as 'individual' | 'template' | 'mixed',
 				verifiedAt: credential.issuedAt,
-				topic: null as string | null,
 				participantCount: null as number | null,
 				campaignContext: null
 			};

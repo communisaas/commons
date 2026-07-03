@@ -51,6 +51,15 @@
 			state?: string;
 			address?: { street: string; city: string; state: string; zip: string };
 			cell_id?: string;
+			/**
+			 * Resolver freshness metadata passed through from verify-mdl (NOT raw
+			 * address data). Two independent clocks: null = honestly-unknown,
+			 * absent = resolver reported nothing. Never fabricated client-side.
+			 */
+			boundaryAsOf?: string | null;
+			officialsAsOf?: string | null;
+			tigerVintage?: string;
+			resolutionConfidence?: number;
 			providerData?: {
 				provider: 'digital-credentials-api';
 				credentialHash: string;
@@ -182,6 +191,12 @@
 				district: verification.district,
 				state: verification.state,
 				cell_id: verification.cellId ?? undefined,
+				// Resolver freshness clocks — verbatim from the verify response.
+				// null survives, absent (dropped from the JSON) stays undefined.
+				boundaryAsOf: verification.boundaryAsOf,
+				officialsAsOf: verification.officialsAsOf,
+				tigerVintage: verification.tigerVintage,
+				resolutionConfidence: verification.resolutionConfidence,
 				providerData: {
 					provider: 'digital-credentials-api',
 					credentialHash: verification.credentialHash,

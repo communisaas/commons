@@ -1055,6 +1055,84 @@ export const openApiSpec = {
 				}
 			}
 		},
+		'/resolve-address': {
+			post: {
+				operationId: 'resolveAddress',
+				summary: 'Resolve a US street address to district + officials',
+				description:
+					'Resolve a street address to its district, officials, and two independent freshness clocks (boundary geometry vs. officials sync). Requires read scope and a Bearer ck_live_ key. POST is metered and rate-capped per plan; inactive/no-plan keys receive a finite free-trial quota, not recurring free volume. Retries WITHOUT an Idempotency-Key re-bill under a fresh requestId; resupplying the same key WITH THE SAME address payload bills once (the key is bound to the payload — the same key with a different address is a distinct billable request, not an error).',
+				parameters: [
+					{
+						name: 'Idempotency-Key',
+						in: 'header',
+						required: false,
+						schema: { type: 'string', pattern: '^[A-Za-z0-9_.:-]{8,64}$' },
+						description:
+							'Optional client idempotency key (8-64 chars of [A-Za-z0-9_.:-]), namespaced to your org AND bound to the request payload. A retry with the SAME key and SAME address re-executes the resolve but bills exactly once; the same key with a DIFFERENT address is treated as a new billable request (not rejected). The effective ledger requestId is echoed in meta.requestId.'
+					}
+				],
+				requestBody: {
+					required: true,
+					content: {
+						'application/json': {
+							schema: { $ref: '#/components/schemas/ResolveAddressInput' }
+						}
+					}
+				},
+				responses: {
+					'200': {
+						description:
+							'Resolved address. district may be null when the address is outside coverage — an honest empty result, not an error.',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: { $ref: '#/components/schemas/ResolveAddressResult' },
+										meta: {
+											type: 'object',
+											properties: {
+												requestId: { type: 'string' }
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					'400': { $ref: '#/components/responses/BadRequest' },
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'402': { $ref: '#/components/responses/PaymentRequired' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'404': {
+						description: 'Address could not be geocoded (GEOCODE_MISS)',
+						content: {
+							'application/json': {
+								schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+								example: {
+									data: null,
+									error: { code: 'GEOCODE_MISS', message: 'Address not found' }
+								}
+							}
+						}
+					},
+					'429': { $ref: '#/components/responses/TooManyRequests' },
+					'502': {
+						description:
+							'Upstream/infrastructure failure — typed, never billed. error.code is one of: ATLAS_UNAVAILABLE (atlas data source down), METERING_UNAVAILABLE (usage-ledger read failed; no resolve, no meter), METERING_WRITE_FAILED (resolution succeeded but the billable row never landed), AUTH_UNAVAILABLE (authentication backend outage), RATE_LIMITER_UNAVAILABLE (rate-limiter outage; no resolve, no meter), RESOLVE_FAILED (other resolver failure).',
+						content: {
+							'application/json': {
+								schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+								example: {
+									data: null,
+									error: { code: 'ATLAS_UNAVAILABLE', message: 'Atlas data source unavailable' }
+								}
+							}
+						}
+					}
+				}
+			}
+		},
 		'/networks': {
 			get: {
 				operationId: 'listNetworks',
@@ -1970,6 +2048,91 @@ export const openApiSpec = {
 					description: { type: 'string', maxLength: 500 }
 				}
 			},
+			ResolutionProvenance: {
+				type: 'object',
+				description:
+					'Lineage of the resolved boundary/officials data. Mirrors the upstream resolver provenance by value. The emitted property set is exactly {source, tigerVintage} — no other fields are ever returned.',
+				properties: {
+					source: { type: 'string', description: 'Resolver/data source identifier' },
+					tigerVintage: {
+						type: 'string',
+						description: 'Census TIGER boundary vintage used for the district match',
+						example: 'TIGER2024'
+					}
+				},
+				required: ['source']
+			},
+			ResolveAddressInput: {
+				type: 'object',
+				required: ['street', 'city', 'state', 'zip'],
+				properties: {
+					street: { type: 'string', description: 'Street address line' },
+					city: { type: 'string' },
+					state: {
+						type: 'string',
+						description: 'Two-letter state/province code',
+						minLength: 2,
+						maxLength: 2
+					},
+					zip: { type: 'string', description: 'US ZIP (5 or 5+4 digits) only' },
+					country: {
+						type: 'string',
+						enum: ['US', 'CA'],
+						description:
+							'Optional country code; defaults to US. CA is rejected with 400 UNSUPPORTED_COUNTRY — only US addresses are resolvable.'
+					}
+				}
+			},
+			ResolveAddressResult: {
+				type: 'object',
+				properties: {
+							district: {
+								type: ['object', 'null'],
+								description:
+									'Resolved district object. null means the address is outside coverage — a valid result, NOT an error.',
+								properties: {
+									id: { type: 'string', description: 'District id, e.g. "CA-12"' },
+									name: { type: 'string', description: 'Human-readable district name' },
+									jurisdiction: { type: 'string' },
+									district_type: { type: 'string', description: 'e.g. "congressional"' }
+								}
+							},
+							provenance: { $ref: '#/components/schemas/ResolutionProvenance' },
+							confidence: {
+								type: 'number',
+								minimum: 0,
+								maximum: 1,
+								description: 'Match confidence; degraded results lower this rather than throwing'
+							},
+							asOf: {
+								type: 'object',
+								description:
+									'Two independent freshness clocks, kept as distinct keys and never collapsed into one.',
+								properties: {
+									boundaryAsOf: {
+										type: ['string', 'null'],
+										description:
+											'Boundary-geometry vintage. null = degraded/unknown vintage (honest, never fabricated).'
+									},
+									officialsAsOf: {
+										type: ['string', 'null'],
+										description:
+											'Officials-sync timestamp. null = degraded/unknown vintage (honest, never fabricated).'
+									}
+								}
+							},
+							officials: {
+								type: 'array',
+								items: { type: 'object' },
+								description: 'Officials for the resolved district (empty when outside coverage)'
+							},
+							warning: {
+								type: ['string', 'null'],
+								description:
+									'Degraded-but-resolved guard. Its own field — never borrows either asOf clock.'
+							}
+				}
+			},
 			ErrorEnvelope: {
 				type: 'object',
 				properties: {
@@ -1992,6 +2155,33 @@ export const openApiSpec = {
 					'application/json': {
 						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
 						example: { data: null, error: { code: 'BAD_REQUEST', message: 'Invalid JSON body' } }
+					}
+				}
+			},
+			PaymentRequired: {
+				description: 'Plan resolve quota exhausted',
+				content: {
+					'application/json': {
+						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+						example: {
+							data: null,
+							error: {
+								code: 'RESOLVE_QUOTA_EXCEEDED',
+								message: 'Resolve quota exhausted for this plan period'
+							}
+						}
+					}
+				}
+			},
+			TooManyRequests: {
+				description: 'Rate limit exceeded',
+				content: {
+					'application/json': {
+						schema: { $ref: '#/components/schemas/ErrorEnvelope' },
+						example: {
+							data: null,
+							error: { code: 'RATE_LIMITED', message: 'API rate limit exceeded' }
+						}
 					}
 				}
 			},

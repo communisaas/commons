@@ -27,7 +27,11 @@ describe('resolveCellIdFromAddress', () => {
 			district: { id: 'CO-01', name: 'Congressional District 1', jurisdiction: 'US', district_type: 'cd' },
 			officials: { district_code: 'CO-01', state: 'CO', officials: [], special_status: null, cached: true, source: 'congress-legislators' },
 			cell_id: '08031000100',
-			vintage: 'shadow-atlas-nominatim'
+			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
+			confidence: 1.0,
+			boundaryAsOf: null,
+			officialsAsOf: null,
+			warning: null
 		});
 
 		const result = await resolveCellIdFromAddress('80202', 'Denver', 'CO');
@@ -40,7 +44,11 @@ describe('resolveCellIdFromAddress', () => {
 			district: { id: 'CA-11', name: 'Congressional District 11', jurisdiction: 'US', district_type: 'cd' },
 			officials: null,
 			cell_id: '06075017601',
-			vintage: 'shadow-atlas-nominatim'
+			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
+			confidence: 1.0,
+			boundaryAsOf: null,
+			officialsAsOf: null,
+			warning: null
 		});
 
 		await resolveCellIdFromAddress('94103', 'San Francisco', 'CA');
@@ -73,7 +81,11 @@ describe('resolveCellIdFromAddress', () => {
 			district: { id: 'CO-01', name: 'Congressional District 1', jurisdiction: 'US', district_type: 'cd' },
 			officials: null,
 			cell_id: null,
-			vintage: 'shadow-atlas-nominatim'
+			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
+			confidence: 1.0,
+			boundaryAsOf: null,
+			officialsAsOf: null,
+			warning: null
 		});
 
 		const result = await resolveCellIdFromAddress('80202', 'Denver', 'CO');
@@ -93,7 +105,11 @@ describe('resolveCellIdFromAddress', () => {
 			district: { id: 'DC-AL', name: 'At-Large Congressional District', jurisdiction: 'US', district_type: 'cd' },
 			officials: { district_code: 'DC-AL', state: 'DC', officials: [], special_status: { type: 'dc', message: 'DC residents have a non-voting delegate', has_senators: false, has_voting_representative: false }, cached: true, source: 'congress-legislators' },
 			cell_id: '11001000101',
-			vintage: 'shadow-atlas-nominatim'
+			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
+			confidence: 1.0,
+			boundaryAsOf: null,
+			officialsAsOf: null,
+			warning: null
 		});
 
 		const result = await resolveCellIdFromAddress('20001', 'Washington', 'DC');

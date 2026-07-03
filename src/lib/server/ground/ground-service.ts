@@ -47,6 +47,13 @@ export interface GroundVerificationInput {
 	// (atlas_version above already serves H1's atlas-rotation field.)
 	cell_straddles?: boolean;
 	cell_anchor_mode?: string;
+	// B3 — district-resolution freshness provenance from the resolve step.
+	// `null` is meaningful (resolver had no clock); `undefined` means legacy
+	// caller omitted it. boundary and officials are two independent clocks.
+	boundary_as_of?: string | null;
+	officials_as_of?: string | null;
+	tiger_vintage?: string;
+	resolution_confidence?: number;
 }
 
 export interface GroundCredentialResult {
@@ -210,7 +217,14 @@ export async function issueGroundCredential(
 		// credential row (the H0r-required "unknown" semantics).
 		cellStraddles: input.cell_straddles,
 		cellAnchorMode: input.cell_anchor_mode,
-		atlasVersion: input.atlas_version
+		atlasVersion: input.atlas_version,
+		// B3 — freshness provenance pass-through. Convex's validator drops
+		// `undefined` (legacy callers preserve the "unknown" semantics), while a
+		// `null` from the resolver is forwarded verbatim as "honestly unknown".
+		boundaryAsOf: input.boundary_as_of,
+		officialsAsOf: input.officials_as_of,
+		tigerVintage: input.tiger_vintage,
+		resolutionConfidence: input.resolution_confidence
 	});
 	const districtCredentialId = extractDistrictCredentialId(verified);
 	if (!districtCredentialId) {

@@ -310,7 +310,7 @@ interface ReconcileInput {
  * and return the authoritative district code derived from that cellId.
  *
  * Derives (cellId, district) from the typed address via Shadow Atlas (same pipeline
- * used for verification-time district resolution: Nominatim geocode → H3 cell →
+ * used for verification-time district resolution: atlas-native geocode → H3 cell →
  * district). Compares H3-to-H3 with the witness's h3Cell field (G7).
  *
  * Mismatch means the user proved residency in cell X and typed a delivery

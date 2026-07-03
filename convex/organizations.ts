@@ -12,6 +12,7 @@ import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
 import {
 	effectivePlan,
+	effectivePlanWithGrace,
 	decideAccentWrite,
 	logoWriteAllowed,
 	whiteLabelWriteAllowed
@@ -1509,7 +1510,11 @@ export const getUserOrgPlan = query({
 		return {
 			orgId: org._id,
 			orgSlug: org.slug,
-			plan: sub?.plan ?? 'inactive'
+			// EFFECTIVE plan, status-gated like every other plan read: a canceled
+			// or lapsed subscription floors to 'inactive' (past_due keeps its plan
+			// through the 7-day grace). A raw `sub?.plan` here would leak the paid
+			// slug for churned orgs to any future caller of this query.
+			plan: effectivePlanWithGrace(sub, Date.now())
 		};
 	}
 });

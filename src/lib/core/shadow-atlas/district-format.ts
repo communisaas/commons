@@ -145,9 +145,34 @@ export function normalizeDistrictCode(code: string): string {
 /**
  * Two-letter postal abbreviation to FIPS state codes (reverse of FIPS_TO_STATE).
  */
-const STATE_TO_FIPS: Record<string, string> = Object.fromEntries(
+export const STATE_TO_FIPS: Record<string, string> = Object.fromEntries(
 	Object.entries(FIPS_TO_STATE).map(([fips, state]) => [state, fips])
 );
+
+/**
+ * Derive the 2-digit state FIPS from a resolved district id, reusing the single
+ * FIPS↔postal table above (no duplicate mapping anywhere downstream).
+ *
+ * Accepts both id shapes that flow through the resolver:
+ *   - display form "CA-01" / "VT-AL" → postal prefix → STATE_TO_FIPS
+ *   - substrate form "cd-0601"       → embedded 2-digit FIPS prefix
+ *
+ * Returns null when the id is malformed or the state is unknown.
+ */
+export function districtIdToFips(districtId: string | null | undefined): string | null {
+	if (!districtId || typeof districtId !== 'string') return null;
+	// Substrate form: "cd-{2-digit FIPS}{2-digit district}" — FIPS is the embedded prefix.
+	const substrate = districtId.match(/^cd-(\d{2})\d{2}$/);
+	if (substrate) {
+		return FIPS_TO_STATE[substrate[1]] ? substrate[1] : null;
+	}
+	// Display form: "{postal}-{district}" — map the postal prefix back to FIPS.
+	const display = districtId.match(/^([A-Za-z]{2})-/);
+	if (display) {
+		return STATE_TO_FIPS[display[1].toUpperCase()] ?? null;
+	}
+	return null;
+}
 
 /**
  * Non-voting delegate jurisdictions: DC + the five inhabited territories.

@@ -58,6 +58,7 @@ import type * as legislation from "../legislation.js";
 import type * as lib_relatedness from "../lib/relatedness.js";
 import type * as lib_tag_concepts from "../lib/tag_concepts.js";
 import type * as messageJobs from "../messageJobs.js";
+import type * as metering from "../metering.js";
 import type * as networks from "../networks.js";
 import type * as observability from "../observability.js";
 import type * as orgWebhooks from "../orgWebhooks.js";
@@ -140,6 +141,7 @@ declare const fullApi: ApiFromModules<{
   "lib/relatedness": typeof lib_relatedness;
   "lib/tag_concepts": typeof lib_tag_concepts;
   messageJobs: typeof messageJobs;
+  metering: typeof metering;
   networks: typeof networks;
   observability: typeof observability;
   orgWebhooks: typeof orgWebhooks;
