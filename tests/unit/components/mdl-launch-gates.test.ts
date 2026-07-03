@@ -221,6 +221,59 @@ describe('mDL launch gates', () => {
 		expect(continueButton).toContain('oncomplete?.');
 	});
 
+	it('threads resolver freshness clocks from verification data into every ThreeTree request', () => {
+		const verify = source('src/lib/components/auth/IdentityVerificationFlow.svelte');
+		const recovery = source('src/lib/components/auth/IdentityRecoveryFlow.svelte');
+		const credential = source('src/lib/components/auth/GovernmentCredentialVerification.svelte');
+
+		// GovernmentCredentialVerification sources the clocks from the parsed
+		// verify-mdl response — never fabricated client-side.
+		expect(credential).toContain('boundaryAsOf: verification.boundaryAsOf');
+		expect(credential).toContain('officialsAsOf: verification.officialsAsOf');
+		expect(credential).toContain('tigerVintage: verification.tigerVintage');
+		expect(credential).toContain('resolutionConfidence: verification.resolutionConfidence');
+
+		// Both flows forward the clocks from the oncomplete verification data.
+		for (const src of [verify, recovery]) {
+			expect(src).toContain('boundaryAsOf: data.boundaryAsOf');
+			expect(src).toContain('officialsAsOf: data.officialsAsOf');
+			expect(src).toContain('tigerVintage: data.tigerVintage');
+			expect(src).toContain('resolutionConfidence: data.resolutionConfidence');
+		}
+
+		// All three ThreeTree request literals (register, recovery-pivot, explicit
+		// recovery) carry the four clock fields sourced from the threaded clocks.
+		const registerReq = verify.slice(
+			verify.indexOf('await registerThreeTree({'),
+			verify.indexOf('if (result.success)')
+		);
+		const pivotReq = verify.slice(
+			verify.indexOf('await recoverThreeTree({'),
+			verify.indexOf('if (recoveryResult.success)')
+		);
+		const recoveryReq = recovery.slice(
+			recovery.indexOf('await recoverThreeTree({'),
+			recovery.indexOf('if (result.success)')
+		);
+		for (const req of [registerReq, pivotReq, recoveryReq]) {
+			expect(req).toContain('boundaryAsOf: resolutionClocks?.boundaryAsOf');
+			expect(req).toContain('officialsAsOf: resolutionClocks?.officialsAsOf');
+			expect(req).toContain('tigerVintage: resolutionClocks?.tigerVintage');
+			expect(req).toContain('resolutionConfidence: resolutionClocks?.resolutionConfidence');
+		}
+
+		// Retry preserves the clocks alongside savedDistrict/savedCellId (G1 parity —
+		// a retried registration/recovery must not silently drop provenance).
+		expect(verify).toContain('savedResolutionClocks = resolutionClocks');
+		expect(verify).toMatch(
+			/triggerShadowAtlasRegistration\(\s*savedDistrict!,\s*savedCellId,\s*savedResolutionClocks\s*\)/
+		);
+		expect(recovery).toContain('savedResolutionClocks = resolutionClocks');
+		expect(recovery).toMatch(
+			/triggerRecovery\(savedDistrict!, savedCellId, savedResolutionClocks\)/
+		);
+	});
+
 	it('VerificationGate hardens tier props with defense-in-depth clamp + snapshot-based auto-dismiss', () => {
 		const gate = source('src/lib/components/auth/VerificationGate.svelte');
 

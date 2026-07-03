@@ -125,7 +125,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			special_status: result.officials?.special_status ?? null,
 			cell_id: result.cell_id,
 			zk_eligible: result.cell_id != null,
-			county_fips: null
+			county_fips: null,
+			// Resolution freshness provenance — verbatim from resolveAddress.
+			// boundary_as_of and officials_as_of are TWO INDEPENDENT clocks; one
+			// is never copied into or defaulted from the other. `null` means
+			// honestly-unknown and passes through as JSON null — never replaced
+			// with a fabricated timestamp. The 'unknown' tigerVintage sentinel is
+			// externalized as null, never as the literal string 'unknown'.
+			boundary_as_of: result.boundaryAsOf,
+			officials_as_of: result.officialsAsOf,
+			resolution_confidence: result.confidence,
+			tiger_vintage:
+				result.provenance.tigerVintage === 'unknown' ? null : result.provenance.tigerVintage
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';

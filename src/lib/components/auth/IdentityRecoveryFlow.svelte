@@ -18,6 +18,20 @@
 	import GovernmentCredentialVerification from './GovernmentCredentialVerification.svelte';
 	import { isAnyMdlProtocolEnabled } from '$lib/config/features';
 
+	/**
+	 * Resolver freshness clocks threaded VERBATIM from verify-mdl (via
+	 * GovernmentCredentialVerification's oncomplete data) into the ThreeTree
+	 * recovery request. Metadata about the resolution, never raw address data.
+	 * Two independent clocks: null = honestly-unknown, absent = resolver
+	 * reported nothing. Never fabricated client-side.
+	 */
+	interface ResolutionClocks {
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		resolutionConfidence?: number;
+	}
+
 	let {
 		userId,
 		userEmail,
@@ -48,6 +62,10 @@
 	// G1 parity: preserve cellId across retry so recovery doesn't regress
 	// to random-cell anchor. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
 	let savedCellId = $state<string | null>(null);
+	// Same G1-parity rationale: preserve the resolver freshness clocks across
+	// retry so a retried recovery carries the same provenance instead of
+	// silently dropping it.
+	let savedResolutionClocks = $state<ResolutionClocks | undefined>(undefined);
 	let retryDisabled = $state(false);
 
 	/**
@@ -61,6 +79,10 @@
 		state?: string;
 		address?: { street: string; city: string; state: string; zip: string };
 		cell_id?: string;
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		resolutionConfidence?: number;
 		providerData?: {
 			provider: 'digital-credentials-api';
 			credentialHash: string;
@@ -74,7 +96,14 @@
 				typeof data.cell_id === 'string' && data.cell_id.trim() !== ''
 					? data.cell_id.trim()
 					: null;
-			await triggerRecovery(data.district, normalizedCellId);
+			// Thread the resolver freshness clocks verbatim into the recovery
+			// request — sourced from the verification data, never fabricated here.
+			await triggerRecovery(data.district, normalizedCellId, {
+				boundaryAsOf: data.boundaryAsOf,
+				officialsAsOf: data.officialsAsOf,
+				tigerVintage: data.tigerVintage,
+				resolutionConfidence: data.resolutionConfidence
+			});
 		} else {
 			recoveryError = 'No district returned from verification. Please try again.';
 			currentStep = 'explain';
@@ -109,11 +138,16 @@
 	 * here — the handler owns that step so every post-recovery credential has
 	 * a v2-compatible districtCommitment without callers needing to know.
 	 */
-	async function triggerRecovery(verifiedDistrict: string, verifiedCellId: string | null) {
+	async function triggerRecovery(
+		verifiedDistrict: string,
+		verifiedCellId: string | null,
+		resolutionClocks?: ResolutionClocks
+	) {
 		currentStep = 'recovering';
 		recoveryError = null;
 		savedDistrict = verifiedDistrict;
 		savedCellId = verifiedCellId;
+		savedResolutionClocks = resolutionClocks;
 
 		try {
 			const { findDistrictHex, getFullCellDataFromBrowser } =
@@ -229,6 +263,13 @@
 				// atlas rotation. Distinct from 'recovery-pivot' (already-registered
 				// detection in the verify flow).
 				cellAnchorMode: 'recovery-explicit',
+				// B3: resolver freshness clocks, verbatim from the verification data.
+				// Two independent clocks — the handler copies them onto the
+				// SessionCredential without synthesizing anything.
+				boundaryAsOf: resolutionClocks?.boundaryAsOf,
+				officialsAsOf: resolutionClocks?.officialsAsOf,
+				tigerVintage: resolutionClocks?.tigerVintage,
+				resolutionConfidence: resolutionClocks?.resolutionConfidence,
 				tree2: {
 					cellMapRoot: cellData.cellMapRoot,
 					cellMapPath: cellData.cellMapPath,
@@ -394,8 +435,9 @@
 										setTimeout(() => {
 											retryDisabled = false;
 										}, 3000);
-										// G1: preserve constituency anchor across retry
-										triggerRecovery(savedDistrict!, savedCellId);
+										// G1: preserve constituency anchor across retry — the
+										// saved resolution clocks ride along for the same reason.
+										triggerRecovery(savedDistrict!, savedCellId, savedResolutionClocks);
 									}}
 									disabled={retryDisabled}
 									class="mt-2 rounded-md border border-red-300 bg-red-100 px-3 py-1.5 text-sm font-medium text-red-800 transition-colors hover:bg-red-200 disabled:opacity-50"

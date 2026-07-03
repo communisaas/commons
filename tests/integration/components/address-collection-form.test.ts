@@ -73,7 +73,10 @@ interface ResolveOverrides {
 	districtType?: string;
 	officials?: AddressResolutionResult['officials'];
 	cellId?: string | null;
-	vintage?: string;
+	provenance?: AddressResolutionResult['provenance'];
+	boundaryAsOf?: string | null;
+	officialsAsOf?: string | null;
+	warning?: string | null;
 }
 
 function shadowAtlasResponse(overrides: ResolveOverrides = {}): AddressResolutionResult {
@@ -127,7 +130,10 @@ function shadowAtlasResponse(overrides: ResolveOverrides = {}): AddressResolutio
 			cached: true
 		},
 		cellId = '872a10000ffffff',
-		vintage = 'shadow-atlas-nominatim'
+		provenance = { source: 'nominatim', tigerVintage: 'unknown' },
+		boundaryAsOf = null,
+		officialsAsOf = null,
+		warning = null
 	} = overrides;
 
 	return {
@@ -146,7 +152,11 @@ function shadowAtlasResponse(overrides: ResolveOverrides = {}): AddressResolutio
 		},
 		officials,
 		cell_id: cellId,
-		vintage
+		provenance,
+		confidence: 1.0,
+		boundaryAsOf,
+		officialsAsOf,
+		warning
 	};
 }
 

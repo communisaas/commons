@@ -9,6 +9,21 @@
 
 	const labels = getJurisdictionLabels();
 
+	/**
+	 * Resolver freshness clocks threaded VERBATIM from verify-mdl (via
+	 * GovernmentCredentialVerification's oncomplete data) into the ThreeTree
+	 * registration/recovery requests. Metadata about the resolution, never raw
+	 * address data. boundaryAsOf and officialsAsOf are TWO INDEPENDENT clocks:
+	 * null = honestly-unknown, absent = resolver reported nothing. Never
+	 * fabricated client-side.
+	 */
+	interface ResolutionClocks {
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		resolutionConfidence?: number;
+	}
+
 	interface Props {
 		userId: string;
 		/** User email for parent flow display; bridge labels are derived server-side. */
@@ -37,6 +52,10 @@
 			state?: string;
 			address?: { street: string; city: string; state: string; zip: string };
 			cell_id?: string;
+			boundaryAsOf?: string | null;
+			officialsAsOf?: string | null;
+			tigerVintage?: string;
+			resolutionConfidence?: number;
 			providerData?: {
 				provider: 'digital-credentials-api';
 				credentialHash: string;
@@ -75,6 +94,10 @@
 	// constituency anchor — without this, retry would fall back to the random-
 	// cell path and silently downgrade the user. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
 	let savedCellId = $state<string | null>(null);
+	// Same G1-parity rationale: preserve the resolver freshness clocks across
+	// retry so a retried registration carries the same provenance instead of
+	// silently dropping (or worse, refabricating) it.
+	let savedResolutionClocks = $state<ResolutionClocks | undefined>(undefined);
 	let verificationData = $state<{
 		verified: boolean;
 		method: string;
@@ -82,6 +105,10 @@
 		state?: string;
 		address?: { street: string; city: string; state: string; zip: string };
 		cell_id?: string;
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		resolutionConfidence?: number;
 		providerData?: {
 			provider: 'digital-credentials-api';
 			credentialHash: string;
@@ -104,6 +131,10 @@
 		state?: string;
 		address?: { street: string; city: string; state: string; zip: string };
 		cell_id?: string;
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		resolutionConfidence?: number;
 		providerData?: {
 			provider: 'digital-credentials-api';
 			credentialHash: string;
@@ -142,7 +173,14 @@
 				typeof data.cell_id === 'string' && data.cell_id.trim() !== ''
 					? data.cell_id.trim()
 					: null;
-			await triggerShadowAtlasRegistration(data.district, normalizedCellId);
+			// Thread the resolver freshness clocks verbatim into the ThreeTree
+			// request — sourced from the verification data, never fabricated here.
+			await triggerShadowAtlasRegistration(data.district, normalizedCellId, {
+				boundaryAsOf: data.boundaryAsOf,
+				officialsAsOf: data.officialsAsOf,
+				tigerVintage: data.tigerVintage,
+				resolutionConfidence: data.resolutionConfidence
+			});
 
 			// If registration succeeded, fire oncomplete immediately
 			if (registrationComplete) {
@@ -178,17 +216,23 @@
 	 *                          or null when not available. When non-null, the leaf binds
 	 *                          to the user's actual ZIP-derived cell instead of a random
 	 *                          cell in the district. See specs/CONSTITUENCY-PROOF-SEMANTICS.md §4 G1.
+	 * @param resolutionClocks - Resolver freshness clocks from the verification data,
+	 *                          copied verbatim onto the ThreeTree request. Optional —
+	 *                          absent stays absent all the way to the credential.
 	 */
 	async function triggerShadowAtlasRegistration(
 		verifiedDistrict: string,
-		verifiedCellId: string | null
+		verifiedCellId: string | null,
+		resolutionClocks?: ResolutionClocks
 	) {
 		registrationInProgress = true;
 		registrationError = null;
-		// Save both for retry — without cellId, retry would silently downgrade
-		// to the random-cell path even though we have a real cellId in hand.
+		// Save all three for retry — without cellId, retry would silently downgrade
+		// to the random-cell path even though we have a real cellId in hand; without
+		// the clocks, retry would drop the resolution provenance.
 		savedDistrict = verifiedDistrict;
 		savedCellId = verifiedCellId;
+		savedResolutionClocks = resolutionClocks;
 
 		try {
 			const { findDistrictHex, getFullCellDataFromBrowser } =
@@ -359,6 +403,13 @@
 				cellStraddles,
 				atlasVersion,
 				cellAnchorMode,
+				// B3: resolver freshness clocks, verbatim from the verification data.
+				// Two independent clocks — the handler copies them onto the
+				// SessionCredential without synthesizing anything.
+				boundaryAsOf: resolutionClocks?.boundaryAsOf,
+				officialsAsOf: resolutionClocks?.officialsAsOf,
+				tigerVintage: resolutionClocks?.tigerVintage,
+				resolutionConfidence: resolutionClocks?.resolutionConfidence,
 				tree2: {
 					cellMapRoot: cellData.cellMapRoot,
 					cellMapPath: cellData.cellMapPath,
@@ -399,6 +450,11 @@
 					// registered." Distinct from explicit IdentityRecoveryFlow
 					// (device-loss): this is multi-device, race, or UX defect.
 					cellAnchorMode: 'recovery-pivot',
+					// B3: same verbatim clock pass-through as the registration request.
+					boundaryAsOf: resolutionClocks?.boundaryAsOf,
+					officialsAsOf: resolutionClocks?.officialsAsOf,
+					tigerVintage: resolutionClocks?.tigerVintage,
+					resolutionConfidence: resolutionClocks?.resolutionConfidence,
 					tree2: {
 						cellMapRoot: cellData.cellMapRoot,
 						cellMapPath: cellData.cellMapPath,
@@ -573,8 +629,13 @@
 										retryDisabled = false;
 									}, 3000);
 									// G1: preserve the constituency anchor across retry —
-									// pass the saved cellId, not just the district.
-									triggerShadowAtlasRegistration(savedDistrict!, savedCellId);
+									// pass the saved cellId, not just the district. The saved
+									// resolution clocks ride along for the same reason.
+									triggerShadowAtlasRegistration(
+										savedDistrict!,
+										savedCellId,
+										savedResolutionClocks
+									);
 								}}
 								disabled={registrationInProgress || retryDisabled}
 								class="mt-2 rounded-md border border-amber-300 bg-amber-100 px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-200 disabled:opacity-50"

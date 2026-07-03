@@ -94,6 +94,14 @@ interface VerifyAddressInput {
 	//                   handler — duplicate validation here would drift).
 	cell_straddles?: boolean;
 	cell_anchor_mode?: string;
+	// B3 — district-resolution freshness provenance, forwarded from the resolve
+	// step. `null` is a meaningful value ("resolver had no clock"), distinct from
+	// `undefined` ("client omitted it"). boundary and officials are two
+	// independent clocks; tiger_vintage labels the boundary clock.
+	boundary_as_of?: string | null;
+	officials_as_of?: string | null;
+	tiger_vintage?: string;
+	resolution_confidence?: number;
 }
 
 function validateInput(body: unknown): VerifyAddressInput {
@@ -235,6 +243,26 @@ function validateInput(body: unknown): VerifyAddressInput {
 		return value;
 	};
 
+	// B3 — freshness-clock variant of checkCap that PRESERVES an explicit `null`.
+	// Unlike checkCap, a client-sent `null` is forwarded verbatim because it
+	// carries meaning here ("resolver had no clock at issuance" — honestly
+	// unknown), which is distinct from `undefined` ("client omitted the field").
+	const checkCapNullable = (
+		value: unknown,
+		maxLen: number,
+		fieldName: string
+	): string | null | undefined => {
+		if (value === undefined) return undefined;
+		if (value === null) return null;
+		if (typeof value !== 'string') {
+			throw new Error(`${fieldName} must be a string or null`);
+		}
+		if (value.length > maxLen) {
+			throw new Error(`${fieldName} must be ${maxLen} characters or fewer`);
+		}
+		return value;
+	};
+
 	return {
 		district,
 		state_senate_district: checkCap(b.state_senate_district, 64, 'state_senate_district'),
@@ -271,6 +299,22 @@ function validateInput(body: unknown): VerifyAddressInput {
 		cell_anchor_mode:
 			typeof b.cell_anchor_mode === 'string' && b.cell_anchor_mode.length <= 64
 				? b.cell_anchor_mode
+				: undefined,
+		// B3 — district-resolution freshness provenance. The two clocks accept a
+		// real ISO timestamp OR an explicit `null` ("resolver had no clock"),
+		// capped at 64 like atlas_version. tiger_vintage is a short publisher
+		// label (capped string, dropped if not a string). resolution_confidence
+		// is a finite number in [0,1]; anything else is dropped to undefined.
+		// We never fabricate a clock here and never copy one clock into the other.
+		boundary_as_of: checkCapNullable(b.boundary_as_of, 64, 'boundary_as_of'),
+		officials_as_of: checkCapNullable(b.officials_as_of, 64, 'officials_as_of'),
+		tiger_vintage: checkCap(b.tiger_vintage, 64, 'tiger_vintage'),
+		resolution_confidence:
+			typeof b.resolution_confidence === 'number' &&
+			Number.isFinite(b.resolution_confidence) &&
+			b.resolution_confidence >= 0 &&
+			b.resolution_confidence <= 1
+				? b.resolution_confidence
 				: undefined
 	};
 }

@@ -207,6 +207,17 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			credentialHash: result.credentialHash,
 			// Census tract GEOID for Shadow Atlas Tree 2 registration
 			cellId: result.cellId ?? null,
+			// Resolver freshness clocks — verbatim pass-through from the privacy
+			// boundary (metadata about the resolution, never raw address data).
+			// boundaryAsOf/officialsAsOf: null survives JSON (honestly-unknown);
+			// tigerVintage/resolutionConfidence spread only-when-present so absent
+			// stays absent across the HTTP hop. Nothing is fabricated here.
+			boundaryAsOf: result.boundaryAsOf,
+			officialsAsOf: result.officialsAsOf,
+			...(result.tigerVintage !== undefined && { tigerVintage: result.tigerVintage }),
+			...(result.resolutionConfidence !== undefined && {
+				resolutionConfidence: result.resolutionConfidence
+			}),
 			// Signal to client whether Shadow Atlas registration can proceed
 			identityCommitmentBound: true,
 			// F-R3-13: Signal client to re-authenticate when session references deleted user
