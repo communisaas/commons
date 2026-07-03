@@ -12,6 +12,7 @@ import { internal } from './_generated/api';
 import { campaignType } from './_validators';
 import { resolveDmAndCanonical } from './legislation';
 import { requireInternalSecret } from './_internalAuth';
+import { effectivePlanWithGrace } from './_brandingGate';
 import { assertPiiTripleCreate } from './_orgHash';
 import { applySupporterStatsDelta } from './_supporterStats';
 import { WEBHOOK_EVENT_SET } from './_webhookEvents';
@@ -52,7 +53,11 @@ export const authenticateApiKey = query({
 			keyId: apiKey._id,
 			orgId: apiKey.orgId,
 			scopes: apiKey.scopes,
-			planSlug: sub?.plan ?? 'inactive'
+			// Status-aware plan resolution: a canceled/lapsed subscription row
+			// floors to 'inactive' rather than presenting its stale plan; a
+			// past_due org keeps its plan through the 7-day grace runway. The
+			// grace arithmetic lives ONLY in _brandingGate.effectivePlanWithGrace.
+			planSlug: effectivePlanWithGrace(sub, Date.now())
 		};
 	}
 });

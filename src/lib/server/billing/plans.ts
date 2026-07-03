@@ -10,6 +10,14 @@
  * (email/SMS, verified-action submission) and scale (seats, volume) are gated to
  * zero until they subscribe. `inactive` is NOT in PLAN_ORDER — it never renders
  * as a tier in the plan grid; it is only the fallback floor.
+ *
+ * `maxResolvesMonth` is the ONE exception to the "inactive = everything zeroed"
+ * rule: it is a SUBSTRATE-SALE allowance (keyed /api/v1/resolve-address calls),
+ * NOT a delivery quota. The inactive floor carries a FINITE trial credit (1,000
+ * resolves/month — mirrors Cicero's 1,000-lookup tier; NOT unlimited, NOT a
+ * recurring-free cap) so an org can evaluate the Shadow Atlas substrate before
+ * subscribing. It does NOT unlock email/SMS/seat/verified-action quotas — those
+ * stay zeroed for inactive. Paid tiers raise only the resolve allowance.
  */
 
 export interface PlanLimits {
@@ -22,6 +30,12 @@ export interface PlanLimits {
 	maxSms: number;
 	maxSeats: number;
 	maxTemplatesMonth: number;
+	/**
+	 * Metered address-resolution allowance per billing period (keyed
+	 * /api/v1/resolve-address). Substrate-sale credit, separate from delivery
+	 * quotas. FINITE on every plan including inactive (the trial floor).
+	 */
+	maxResolvesMonth: number;
 }
 
 export const PLANS: Record<string, PlanLimits> = {
@@ -37,7 +51,10 @@ export const PLANS: Record<string, PlanLimits> = {
 		maxEmails: 0,
 		maxSms: 0,
 		maxSeats: 1,
-		maxTemplatesMonth: 2
+		maxTemplatesMonth: 2,
+		// Finite substrate trial credit — mirrors Cicero's 1,000-lookup tier.
+		// Delivery/scale stay zeroed above; only resolve is allowed to evaluate.
+		maxResolvesMonth: 1_000
 	},
 	starter: {
 		slug: 'starter',
@@ -50,7 +67,8 @@ export const PLANS: Record<string, PlanLimits> = {
 		maxEmails: 20_000,
 		maxSms: 1_000,
 		maxSeats: 5,
-		maxTemplatesMonth: 100
+		maxTemplatesMonth: 100,
+		maxResolvesMonth: 25_000
 	},
 	organization: {
 		slug: 'organization',
@@ -63,7 +81,8 @@ export const PLANS: Record<string, PlanLimits> = {
 		maxEmails: 100_000,
 		maxSms: 10_000,
 		maxSeats: 10,
-		maxTemplatesMonth: 500
+		maxTemplatesMonth: 500,
+		maxResolvesMonth: 150_000
 	},
 	coalition: {
 		slug: 'coalition',
@@ -76,7 +95,8 @@ export const PLANS: Record<string, PlanLimits> = {
 		maxEmails: 250_000,
 		maxSms: 50_000,
 		maxSeats: 25,
-		maxTemplatesMonth: 1_000
+		maxTemplatesMonth: 1_000,
+		maxResolvesMonth: 500_000
 	}
 };
 
@@ -95,6 +115,18 @@ export const PLAN_ORDER = ['starter', 'organization', 'coalition'] as const;
 export function getPlanForOrg(subscription: { plan: string } | null): PlanLimits {
 	if (!subscription) return PLANS.inactive;
 	return PLANS[subscription.plan] ?? PLANS.inactive;
+}
+
+/**
+ * Metered resolve allowance for a plan slug. Falls back to the inactive floor
+ * (1,000) when the slug is unknown, empty, or leaked — mirrors `getPlanForOrg`'s
+ * inactive-floor fallback so an unrecognized slug can never grant more than the
+ * trial credit. Substrate-sale credit only; reads `maxResolvesMonth`, never a
+ * delivery quota.
+ */
+export function resolveAllowanceForPlan(slug: string | null | undefined): number {
+	if (!slug) return PLANS.inactive.maxResolvesMonth;
+	return PLANS[slug]?.maxResolvesMonth ?? PLANS.inactive.maxResolvesMonth;
 }
 
 // ===========================================================================
