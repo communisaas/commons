@@ -557,4 +557,21 @@ if (enabled("operational")) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// 29. Drain usage to billing provider — reports unreported usageRecords rows to
+//     the configured provider (Noop default → truthful no-op) and stamps each
+//     row reportedToProvider + providerEventId. Bounded per tick; the cadence
+//     drains the backlog. The ledger owns truth — this is the only provider
+//     touchpoint and is decoupled from the metered request path.
+//     OPERATIONAL: nothing to report without metered API traffic.
+// ---------------------------------------------------------------------------
+if (enabled("operational")) {
+  crons.interval(
+    "drain-usage",
+    { minutes: 15 },
+    internal.metering.drainUsageToProvider,
+    { _secret: process.env.INTERNAL_API_SECRET ?? "" },
+  );
+}
+
 export default crons;

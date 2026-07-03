@@ -94,7 +94,10 @@ emits a `console.warn`.
 - **OPERATIONAL** — only meaningful with live traffic: bounce probes, anchor
   retries, A/B winner, analytics snapshot (`deleteAggregatesForDate`), alert
   digest, debate resolution, webhook retry, reputation recompute, relatedness
-  calibration, tag-embedding backfill. 10 crons.
+  calibration, tag-embedding backfill, `drain-usage` (reports metered
+  `usageRecords` to the billing provider). 11 crons. Note: `drain-usage` will
+  not register until `CRON_PROFILE` flips to `full`/`operational` at launch +
+  redeploy (both backends are pinned `essential` pre-launch).
 - **SPECULATIVE** — no consumer yet / post-launch: `legislation-sync` (primary
   pre-launch overage source), `vote-tracker`, `scorecard-compute`. 3 crons.
 
