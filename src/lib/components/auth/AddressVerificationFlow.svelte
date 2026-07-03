@@ -168,6 +168,16 @@
 	// to the geocoded address.
 	let addressResolutionToken = $state<string | null>(null);
 	let addressResolutionHash = $state<string | null>(null);
+	// District-resolution freshness provenance captured from
+	// /api/location/resolve-address. boundary_as_of and officials_as_of are TWO
+	// INDEPENDENT clocks — never conflated, never defaulted from each other.
+	// `null` is a real captured value ("resolver honestly had no clock");
+	// `undefined` means the server omitted the field and the key is omitted
+	// downstream (no layer ever synthesizes a date, vintage, or confidence).
+	let resolvedBoundaryAsOf = $state<string | null | undefined>(undefined);
+	let resolvedOfficialsAsOf = $state<string | null | undefined>(undefined);
+	let resolvedTigerVintage = $state<string | null | undefined>(undefined);
+	let resolvedResolutionConfidence = $state<number | undefined>(undefined);
 	let clientCellProof = $state<ClientCellProofResult | null>(null);
 
 	// B-3: Client-side district resolution (when SHADOW_ATLAS_VERIFICATION enabled)
@@ -394,6 +404,28 @@
 				addressResolutionHash = data.addressHash;
 			}
 
+			// Capture resolution freshness provenance BEFORE the client-side
+			// early-return below (that branch never reaches processResolveResponse,
+			// so a later capture would lose these). `null` is forwarded verbatim
+			// (honestly-unknown); a field the server omitted stays undefined.
+			if (typeof data.boundary_as_of === 'string' || data.boundary_as_of === null) {
+				resolvedBoundaryAsOf = data.boundary_as_of;
+			}
+			if (typeof data.officials_as_of === 'string' || data.officials_as_of === null) {
+				resolvedOfficialsAsOf = data.officials_as_of;
+			}
+			if (typeof data.tiger_vintage === 'string' || data.tiger_vintage === null) {
+				resolvedTigerVintage = data.tiger_vintage;
+			}
+			if (
+				typeof data.resolution_confidence === 'number' &&
+				Number.isFinite(data.resolution_confidence) &&
+				data.resolution_confidence >= 0 &&
+				data.resolution_confidence <= 1
+			) {
+				resolvedResolutionConfidence = data.resolution_confidence;
+			}
+
 			// B-3: Use server-geocoded coordinates for client-side district resolution
 			if (clientSideEnabled && data.coordinates?.lat != null && data.coordinates?.lng != null) {
 				correctedAddress = data.address?.matched || '';
@@ -446,11 +478,29 @@
 		}
 
 		try {
-			// H1 — pull trust-context (cellStraddles / cellAnchorMode / atlasVersion)
-			// from the session credential so the districtCredentials row can capture
-			// it at issuance. Helper guarantees H0r-compliant semantics (missing
-			// fields stay missing; never defaulted).
+			// H1/B3 — pull trust-context (cellStraddles / cellAnchorMode /
+			// atlasVersion) plus district-resolution freshness provenance
+			// (boundary_as_of / officials_as_of / tiger_vintage /
+			// resolution_confidence) from the session credential so the
+			// districtCredentials row can snapshot it at issuance. Helper guarantees
+			// H0r-compliant semantics (missing fields stay missing; never defaulted;
+			// a real `null` clock is forwarded verbatim).
 			const h1TrustContext = await readH1TrustContext(userId);
+
+			// Freshly captured resolver clocks from this session's resolve-address
+			// call. Spread AFTER ...h1TrustContext so fresh values override the
+			// stale stored-credential snapshot. Keys whose value was never captured
+			// (undefined) are omitted; captured `null` is forwarded verbatim.
+			const freshResolutionProvenance: Record<string, unknown> = {
+				...(resolvedBoundaryAsOf !== undefined ? { boundary_as_of: resolvedBoundaryAsOf } : {}),
+				...(resolvedOfficialsAsOf !== undefined
+					? { officials_as_of: resolvedOfficialsAsOf }
+					: {}),
+				...(resolvedTigerVintage !== undefined ? { tiger_vintage: resolvedTigerVintage } : {}),
+				...(resolvedResolutionConfidence !== undefined
+					? { resolution_confidence: resolvedResolutionConfidence }
+					: {})
+			};
 
 			// Compute Poseidon2 commitment over 24 district slots (client-side ZKP)
 			// Server never sees which districts the user belongs to — only the commitment
@@ -476,7 +526,8 @@
 								...(addressResolutionHash ? { address_hash: addressResolutionHash } : {})
 							}
 						: {}),
-					...h1TrustContext
+					...h1TrustContext,
+					...freshResolutionProvenance
 				};
 			} else {
 				// Fallback: no IPFS data available (client-side resolution failed)
@@ -486,7 +537,8 @@
 					state_assembly_district: verifiedStateAssembly || undefined,
 					verification_method: 'civic_api',
 					officials: representatives,
-					...h1TrustContext
+					...h1TrustContext,
+					...freshResolutionProvenance
 				};
 			}
 

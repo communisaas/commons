@@ -70,6 +70,20 @@ export type MdlVerificationResult =
 			 * INSIDE the privacy boundary. Null if geocoding failed (non-fatal).
 			 */
 			cellId?: string;
+			/**
+			 * Resolver freshness metadata, NOT raw address fields — the privacy
+			 * boundary is unchanged (postal_code/city/state still never leave
+			 * processCredentialResponse). Copied VERBATIM from the Shadow Atlas
+			 * resolver: boundaryAsOf and officialsAsOf are TWO INDEPENDENT clocks
+			 * (never borrowed from each other); null = the resolver honestly had
+			 * no clock; absent = resolution failed or reported nothing. Never
+			 * fabricated here — no now()-derived defaults, and tigerVintage's
+			 * 'unknown' sentinel never propagates (mapped to absent).
+			 */
+			boundaryAsOf?: string | null;
+			officialsAsOf?: string | null;
+			tigerVintage?: string;
+			resolutionConfidence?: number;
 	  }
 	| {
 			success: false;
@@ -402,7 +416,8 @@ async function processMdocResponse(
 		const birthYear = extractBirthYear(birthDateRaw);
 
 		// Step 6: Resolve district + cellId from postal code + city + state via Shadow Atlas.
-		// Uses the self-hosted Nominatim + H3 pipeline — ZIP alone is insufficient because
+		// Uses the atlas-native geocoder + H3 pipeline (our own published address-index
+		// artifacts; no external geocoding call) — ZIP alone is insufficient because
 		// ~94% of Americans live in multi-district states where ZIP crosses district lines.
 		// PRIVACY BOUNDARY: After this point, raw address fields are no longer used.
 		const location = await resolveLocationFromAddress(postalCode, city ?? '', state);
@@ -453,7 +468,10 @@ async function processMdocResponse(
 		}
 
 		// documentNumber, birthYear, postalCode, city go out of scope here — DISCARDED.
-		// Only district, cellId, credentialHash, and the hashed identityCommitment are returned.
+		// Only district, cellId, credentialHash, the hashed identityCommitment, and the
+		// resolver's freshness clocks (metadata about the resolution, not address data)
+		// are returned. Clock fields spread only-when-present: absent stays absent,
+		// null (honestly-unknown) survives verbatim, nothing is fabricated here.
 		return {
 			success: true,
 			district,
@@ -461,7 +479,13 @@ async function processMdocResponse(
 			credentialHash,
 			verificationMethod: 'mdl',
 			identityCommitment,
-			cellId: cellId ?? undefined
+			cellId: cellId ?? undefined,
+			...(location.boundaryAsOf !== undefined && { boundaryAsOf: location.boundaryAsOf }),
+			...(location.officialsAsOf !== undefined && { officialsAsOf: location.officialsAsOf }),
+			...(location.tigerVintage !== undefined && { tigerVintage: location.tigerVintage }),
+			...(location.resolutionConfidence !== undefined && {
+				resolutionConfidence: location.resolutionConfidence
+			})
 		};
 	} catch (err) {
 		console.error('[mDL] mdoc processing error:', err);
@@ -1028,6 +1052,8 @@ async function deriveMdlResultFromFields(
 		};
 	}
 
+	// Resolver freshness clocks spread only-when-present — same semantics as the
+	// mdoc path: absent stays absent, null survives, nothing fabricated.
 	return {
 		success: true,
 		district: location.district,
@@ -1035,7 +1061,13 @@ async function deriveMdlResultFromFields(
 		credentialHash,
 		verificationMethod: 'mdl',
 		identityCommitment,
-		cellId: location.cellId ?? undefined
+		cellId: location.cellId ?? undefined,
+		...(location.boundaryAsOf !== undefined && { boundaryAsOf: location.boundaryAsOf }),
+		...(location.officialsAsOf !== undefined && { officialsAsOf: location.officialsAsOf }),
+		...(location.tigerVintage !== undefined && { tigerVintage: location.tigerVintage }),
+		...(location.resolutionConfidence !== undefined && {
+			resolutionConfidence: location.resolutionConfidence
+		})
 	};
 }
 
@@ -1410,10 +1442,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * Resolve congressional district AND cell ID from (postalCode, city, state) via Shadow Atlas.
  *
  * Fully sovereign pipeline:
- *   1. Self-hosted Nominatim geocode (city, state, zip → coordinates)
+ *   1. Atlas-native geocode (city, state, zip → coordinates, matched against
+ *      our own published R2 address-index artifacts)
  *   2. H3 + IPFS district lookup (coordinates → district + cell_id)
  *
- * PRIVACY: city/state/zip sent to self-hosted Nominatim (our infrastructure, not a third party).
+ * PRIVACY: the address fields never leave infrastructure we control — geocoding is an
+ * in-process match over our own artifacts; there is no external geocoding call.
  *
  * This is the primary resolver for both mDL verification (postal_code + city + state from
  * the credential) and manual address entry (street geocoded separately via resolveAddress).
@@ -1424,7 +1458,14 @@ async function resolveLocationFromAddress(
 	postalCode: string,
 	city: string,
 	state: string
-): Promise<{ district: string | null; cellId: string | null }> {
+): Promise<{
+	district: string | null;
+	cellId: string | null;
+	boundaryAsOf?: string | null;
+	officialsAsOf?: string | null;
+	tigerVintage?: string;
+	resolutionConfidence?: number;
+}> {
 	try {
 		const { resolveAddress } = await import('$lib/core/shadow-atlas/client');
 		const result = await resolveAddress({
@@ -1437,12 +1478,30 @@ async function resolveLocationFromAddress(
 		const district = result.officials?.district_code ?? result.district?.id ?? null;
 		const cellId = result.cell_id ?? null;
 
+		// Resolver freshness clocks, read VERBATIM from the resolver result —
+		// never fabricated here. boundaryAsOf and officialsAsOf are TWO
+		// INDEPENDENT clocks (never borrowed from each other); null is a real
+		// value meaning honestly-unknown and is preserved as null. The
+		// tigerVintage 'unknown' sentinel maps to absent so the sentinel
+		// string never propagates downstream.
+		const rawVintage = result.provenance?.tigerVintage;
+		const tigerVintage = rawVintage && rawVintage !== 'unknown' ? rawVintage : undefined;
+
 		// No silent XX-AL fallback: returning an at-large code for users in multi-district
 		// states is the same bug that state-first-match encoded. If Shadow Atlas can't place
 		// the address, fail and let the caller prompt the user to correct their address.
-		return { district, cellId };
+		return {
+			district,
+			cellId,
+			boundaryAsOf: result.boundaryAsOf,
+			officialsAsOf: result.officialsAsOf,
+			tigerVintage,
+			resolutionConfidence: result.confidence
+		};
 	} catch (err) {
 		console.error('[mDL] Location resolution failed:', err instanceof Error ? err.message : err);
+		// All four freshness fields stay ABSENT — the resolver failed, so there
+		// is no clock to report and none is synthesized.
 		return { district: null, cellId: null };
 	}
 }
@@ -1451,7 +1510,7 @@ async function resolveLocationFromAddress(
  * Resolve cell ID from address via Shadow Atlas geocoding.
  *
  * Exported for backward compatibility and direct use by tests.
- * Delegates to Shadow Atlas's sovereign Nominatim + H3 pipeline.
+ * Delegates to Shadow Atlas's sovereign atlas-native geocoder + H3 pipeline.
  *
  * Non-fatal: returns null on any failure. Shadow Atlas registration is deferred.
  */

@@ -79,6 +79,15 @@ export interface ThreeTreeRegistrationRequest {
 	 *  Without this field, post-G1 registrations are bit-identical between
 	 *  mdl-derived and random-fallback modes; G3 metrics would be unmeasurable. */
 	cellAnchorMode?: CellAnchorMode;
+	/** B3: district-resolution freshness provenance, copied verbatim onto the
+	 *  SessionCredential. boundaryAsOf and officialsAsOf are TWO INDEPENDENT
+	 *  clocks — never conflated, never defaulted from each other. `null` means
+	 *  the resolver honestly had no clock; an absent field stays absent on the
+	 *  credential. This handler NEVER synthesizes a date, vintage, or confidence. */
+	boundaryAsOf?: string | null;
+	officialsAsOf?: string | null;
+	tigerVintage?: string;
+	resolutionConfidence?: number;
 	/** Pre-resolved Tree 2 proof data from IPFS.
 	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
 	tree2: {
@@ -120,6 +129,12 @@ export interface ThreeTreeRecoveryRequest {
 	atlasVersion?: string;
 	/** G8: cell-anchor provenance — for recovery, typically 'recovery-derived'. */
 	cellAnchorMode?: CellAnchorMode;
+	/** B3: same freshness-provenance pass-through as registration — two
+	 *  independent clocks, verbatim copy, absent stays absent, never synthesized. */
+	boundaryAsOf?: string | null;
+	officialsAsOf?: string | null;
+	tigerVintage?: string;
+	resolutionConfidence?: number;
 	/** Pre-resolved Tree 2 proof data from IPFS.
 	 *  Must be resolved via getFullCellDataFromBrowser() before calling. */
 	tree2: {
@@ -386,6 +401,14 @@ export async function registerThreeTree(
 			cellAnchorMode: isCellAnchorMode(request.cellAnchorMode)
 				? request.cellAnchorMode
 				: undefined,
+			// B3: freshness-provenance pass-through — verbatim from the request.
+			// Two independent clocks (boundary vs officials); `null` = honestly
+			// unknown; absent request field => absent credential field. Never
+			// synthesized here.
+			boundaryAsOf: request.boundaryAsOf,
+			officialsAsOf: request.officialsAsOf,
+			tigerVintage: request.tigerVintage,
+			resolutionConfidence: request.resolutionConfidence,
 			cellMapRoot: tree2Data.cellMapRoot,
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,
@@ -529,6 +552,12 @@ export async function recoverThreeTree(
 			atlasVersion: request.atlasVersion,
 			// G8 parity: persist cell-anchor provenance.
 			cellAnchorMode: request.cellAnchorMode,
+			// B3 parity with registration: verbatim freshness-provenance
+			// pass-through — two independent clocks, absent stays absent.
+			boundaryAsOf: request.boundaryAsOf,
+			officialsAsOf: request.officialsAsOf,
+			tigerVintage: request.tigerVintage,
+			resolutionConfidence: request.resolutionConfidence,
 			cellMapRoot: tree2Data.cellMapRoot,
 			cellMapPath: tree2Data.cellMapPath,
 			cellMapPathBits: tree2Data.cellMapPathBits,

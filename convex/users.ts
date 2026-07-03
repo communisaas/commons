@@ -615,7 +615,16 @@ export const verifyAddress = mutation({
 		// the corresponding fields stay undefined on the credential row.
 		cellStraddles: v.optional(v.boolean()),
 		cellAnchorMode: v.optional(v.string()),
-		atlasVersion: v.optional(v.string())
+		atlasVersion: v.optional(v.string()),
+		// B3 — district-resolution freshness provenance, pass-through-when-known.
+		// All optional. `null` is a legitimate value meaning "resolver had no
+		// clock" (honestly-unknown) and is DISTINCT from undefined ("legacy caller
+		// omitted the field"). boundaryAsOf and officialsAsOf are two independent
+		// clocks; never copy one into the other.
+		boundaryAsOf: v.optional(v.union(v.string(), v.null())),
+		officialsAsOf: v.optional(v.union(v.string(), v.null())),
+		tigerVintage: v.optional(v.string()),
+		resolutionConfidence: v.optional(v.float64())
 	},
 	handler: async (ctx, args) => {
 		// Trust gate: only SvelteKit's `/api/identity/verify-address` route
@@ -832,7 +841,18 @@ export const verifyAddress = mutation({
 			trustTier: effectiveTrustTier,
 			...(args.cellStraddles !== undefined ? { cellStraddles: args.cellStraddles } : {}),
 			...(args.cellAnchorMode !== undefined ? { cellAnchorMode: args.cellAnchorMode } : {}),
-			...(args.atlasVersion !== undefined ? { atlasVersion: args.atlasVersion } : {})
+			...(args.atlasVersion !== undefined ? { atlasVersion: args.atlasVersion } : {}),
+			// B3 freshness provenance — persisted VERBATIM. The `!== undefined`
+			// guard keeps absent args as undefined ("pre-dates field"), while a
+			// client-supplied `null` ("honestly unknown") is written through as a
+			// real value. We never fabricate a date and never copy boundaryAsOf
+			// into officialsAsOf (or vice versa).
+			...(args.boundaryAsOf !== undefined ? { boundaryAsOf: args.boundaryAsOf } : {}),
+			...(args.officialsAsOf !== undefined ? { officialsAsOf: args.officialsAsOf } : {}),
+			...(args.tigerVintage !== undefined ? { tigerVintage: args.tigerVintage } : {}),
+			...(args.resolutionConfidence !== undefined
+				? { resolutionConfidence: args.resolutionConfidence }
+				: {})
 		});
 
 		// Update user
@@ -1129,7 +1149,17 @@ export const resolveCredentialHash = query({
 			stateAssemblyDistrict: credential.stateAssemblyDistrict ?? null,
 			issuedAt: credential.issuedAt,
 			expiresAt: credential.expiresAt,
-			hasDistrictCommitment: !!credential.districtCommitment
+			hasDistrictCommitment: !!credential.districtCommitment,
+			// B3 — freshness provenance for the public certificate. `?? null`
+			// collapses BOTH "field absent on the row" (legacy pre-B3 credential)
+			// and a stored `null` to the same public value: the surface renders
+			// the clock only when it carries a real value, so collapsing here is
+			// honest (we never invent a date). boundaryAsOf and officialsAsOf
+			// remain independent — neither is derived from the other.
+			boundaryAsOf: credential.boundaryAsOf ?? null,
+			officialsAsOf: credential.officialsAsOf ?? null,
+			tigerVintage: credential.tigerVintage ?? null,
+			resolutionConfidence: credential.resolutionConfidence ?? null
 		};
 	}
 });

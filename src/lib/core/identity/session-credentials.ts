@@ -100,9 +100,9 @@ export interface IdentitySecrets {
  * (e.g. 'registry-attested' from G7r) is one edit, not five.
  *
  *   'address-resolved'  — T3+ flow: cellId comes from postal_code+city+state
- *                          via Nominatim → H3. Honest name (NOT 'mdl-derived' —
- *                          the wallet provides the address fields, but the
- *                          cell is geocoder-derived).
+ *                          via the atlas-native geocoder → H3. Honest name
+ *                          (NOT 'mdl-derived' — the wallet provides the
+ *                          address fields, but the cell is geocoder-derived).
  *   'random-fallback'   — T0 flow: random cell in the verified district.
  *                          No constituency anchor; preserves anonymity at the
  *                          cost of audit signal.
@@ -312,9 +312,28 @@ export interface SessionCredential {
 	 *
 	 * G8r honesty correction: the value formerly named 'mdl-derived' is
 	 * 'address-resolved' — the cellId comes from postal_code+city+state
-	 * via Nominatim+H3, not from any wallet-attested coordinate.
+	 * via the atlas-native geocoder + H3, not from any wallet-attested
+	 * coordinate.
 	 */
 	cellAnchorMode?: CellAnchorMode;
+	/**
+	 * B3: district-resolution freshness provenance, captured at resolve time and
+	 * carried to /api/identity/verify-address (via {@link readH1TrustContext}) so
+	 * the issued credential snapshots the data vintage it was resolved against.
+	 *
+	 * boundaryAsOf and officialsAsOf are TWO INDEPENDENT clocks. `null` is a real,
+	 * meaningful value ("the resolver had no clock for this dimension" — e.g. the
+	 * published manifest carries no officials freshness yet) and is distinct from
+	 * `undefined` ("this pre-B3 credential never carried the field"). NEVER
+	 * fabricate a date and NEVER copy one clock's value into the other.
+	 *
+	 * tigerVintage labels the BOUNDARY clock (the Census TIGER edition the
+	 * geometry derives from). resolutionConfidence (0..1) annotates the mapping.
+	 */
+	boundaryAsOf?: string | null;
+	officialsAsOf?: string | null;
+	tigerVintage?: string;
+	resolutionConfidence?: number;
 	cellMapRoot?: string;
 	cellMapPath?: string[];
 	cellMapPathBits?: number[];
@@ -1098,14 +1117,40 @@ export async function readH1TrustContext(userId: string): Promise<{
 	cell_straddles?: boolean;
 	cell_anchor_mode?: string;
 	atlas_version?: string;
+	// B3 — district-resolution freshness provenance. Same omit-when-absent
+	// discipline: a field is only forwarded when the session credential actually
+	// carries it. `null` is meaningful ("resolver had no clock at resolve time")
+	// and forwarded verbatim; undefined means "field absent on this credential"
+	// and is omitted so the verify-address row stays undefined ("unknown").
+	// boundary and officials are two independent clocks — never copy one to the
+	// other here.
+	boundary_as_of?: string | null;
+	officials_as_of?: string | null;
+	tiger_vintage?: string;
+	resolution_confidence?: number;
 }> {
 	try {
 		const session = await getSessionCredential(userId);
 		if (!session) return {};
-		const out: { cell_straddles?: boolean; cell_anchor_mode?: string; atlas_version?: string } = {};
+		const out: {
+			cell_straddles?: boolean;
+			cell_anchor_mode?: string;
+			atlas_version?: string;
+			boundary_as_of?: string | null;
+			officials_as_of?: string | null;
+			tiger_vintage?: string;
+			resolution_confidence?: number;
+		} = {};
 		if (typeof session.cellStraddles === 'boolean') out.cell_straddles = session.cellStraddles;
 		if (typeof session.cellAnchorMode === 'string') out.cell_anchor_mode = session.cellAnchorMode;
 		if (typeof session.atlasVersion === 'string') out.atlas_version = session.atlasVersion;
+		// B3 — forward the freshness clocks when present. `null` is a real value
+		// (honestly-unknown) so we test against `undefined`, not falsiness.
+		if (session.boundaryAsOf !== undefined) out.boundary_as_of = session.boundaryAsOf;
+		if (session.officialsAsOf !== undefined) out.officials_as_of = session.officialsAsOf;
+		if (typeof session.tigerVintage === 'string') out.tiger_vintage = session.tigerVintage;
+		if (typeof session.resolutionConfidence === 'number')
+			out.resolution_confidence = session.resolutionConfidence;
 		return out;
 	} catch (err) {
 		console.warn('[session-credentials] readH1TrustContext failed:', err);

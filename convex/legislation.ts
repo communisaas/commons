@@ -44,6 +44,24 @@ const requireRescoreBillsAuthRef = makeFunctionReference<'query'>(
 	'legislation:requireRescoreBillsAuth'
 ) as unknown as FunctionReference<'query', 'internal', { slug: string }, { ok: true }>;
 
+// One-off bill-prune function references (see PRUNE section at EOF).
+const pruneBillsBatchRef = makeFunctionReference<'mutation'>(
+	'legislation:pruneBillsBatch'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ cursor?: string | null; batchSize?: number; dryRun?: boolean },
+	{ counted: number; deleted: number; continueCursor: string; isDone: boolean }
+>;
+const pruneDependentTableBatchRef = makeFunctionReference<'mutation'>(
+	'legislation:pruneDependentTableBatch'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ table: string; cursor?: string | null; batchSize?: number; dryRun?: boolean },
+	{ counted: number; deleted: number; cleared: number; continueCursor: string; isDone: boolean }
+>;
+
 // =============================================================================
 // QUERIES
 // =============================================================================
@@ -3096,6 +3114,287 @@ export const rescoreBills = action({
 			billsScored: billIds.length,
 			rowsUpserted,
 			errors: errors.length > 0 ? errors : undefined
+		};
+	}
+});
+
+// =============================================================================
+// ONE-OFF BILL PRUNE (operational)
+// =============================================================================
+//
+// The `legislation-sync` cron speculatively ingests Congress.gov bills on a
+// 6-hour cadence. With no consumer wired to drive watches/relevances, those
+// rows accumulate indefinitely on every backend the cron runs on. These
+// functions clear the accumulated `bills` rows and their dependent rows in a
+// single operator-driven pass, runnable via `npx convex run`.
+//
+// This is a ONE-OFF operational prune, NOT a cron and NOT a retention policy:
+//   - It does NOT stop re-accumulation. The cron must be stopped/widened
+//     separately, or `bills` regrow on the next sync tick.
+//   - In live mode it FULL-CLEARS the dependent tables below (it does not
+//     selectively keep referenced rows), so it is only safe to run when no
+//     org actually watches bills — i.e. pre-launch, with zero users. A
+//     post-launch cleanup needs a retention-bound variant (keep referenced +
+//     recent-N) and per-bill targeting, which the org-keyed dependent tables
+//     lack indexes for today.
+//   - It is idempotent: re-running against an empty `bills` table is a no-op
+//     that returns zero counts. Always run with `dryRun: true` FIRST and
+//     eyeball the per-table counts before a live pass.
+//
+// Pagination is mandatory: `bills` rows can carry a 768-float topicEmbedding
+// (~6 KB each), so a single-transaction `.collect()` over thousands of rows
+// would blow the Convex per-transaction read cap. Each batch reads/deletes a
+// bounded page (default 200) well within limits.
+
+// Bill-only EPHEMERAL dependents — an org watch / relevance score / alert about
+// a deleted bill is meaningless, so the whole table is cleared.
+//
+// DELIBERATELY ABSENT (preserved, never touched by a prune): legislativeActions
+// and accountabilityReceipts are audit/forensic records — accountabilityReceipts
+// is the off-chain half of on-chain-anchored proofs (attestationDigest,
+// anchorCid, anchorRoot, proofWeight). A bills prune must NOT erase them; their
+// billId may dangle to a deleted bill afterward (readers null-guard), but the
+// forensic row survives. Mirrors `sweep-stranded-donations` ("money moved,
+// audit trail must survive").
+const PRUNE_DELETE_DEPENDENT_TABLES = [
+	'orgBillWatches',
+	'orgBillRelevances',
+	'legislativeAlerts'
+] as const;
+
+// Tables that carry an OPTIONAL billId on rows that have independent meaning
+// (campaigns, deliveries) — the row is kept, only the dangling billId is
+// nulled so no reference points at a deleted bill.
+const PRUNE_CLEAR_BILLID_TABLES = ['campaigns', 'campaignDeliveries'] as const;
+
+const PRUNE_ALL_DEPENDENT_TABLES = [
+	...PRUNE_DELETE_DEPENDENT_TABLES,
+	...PRUNE_CLEAR_BILLID_TABLES
+] as const;
+
+type PruneDependentTable = (typeof PRUNE_ALL_DEPENDENT_TABLES)[number];
+
+/**
+ * Process one page of a single bill-dependent table.
+ *
+ * For delete-tables, every row is deleted. For the billId-clear tables
+ * (campaigns / campaignDeliveries) the row is kept and any set `billId` is
+ * patched to undefined. `dryRun` only counts rows that WOULD be touched.
+ *
+ * Internal-only; driven by `pruneAllBills`.
+ */
+export const pruneDependentTableBatch = internalMutation({
+	args: {
+		table: v.string(),
+		cursor: v.optional(v.union(v.string(), v.null())),
+		batchSize: v.optional(v.number()),
+		dryRun: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const table = args.table as PruneDependentTable;
+		if (!PRUNE_ALL_DEPENDENT_TABLES.includes(table)) {
+			throw new Error(`UNKNOWN_DEPENDENT_TABLE: ${args.table}`);
+		}
+
+		const page = await ctx.db
+			.query(table)
+			.paginate({ numItems: args.batchSize ?? 200, cursor: args.cursor ?? null });
+
+		let counted = 0;
+		let deleted = 0;
+		let cleared = 0;
+
+		const isClearTable = (PRUNE_CLEAR_BILLID_TABLES as readonly string[]).includes(table);
+
+		for (const row of page.page) {
+			if (isClearTable) {
+				// Only rows with a set billId are relevant.
+				if ((row as { billId?: unknown }).billId == null) continue;
+				counted++;
+				if (!args.dryRun) {
+					await ctx.db.patch(row._id, { billId: undefined });
+					cleared++;
+				}
+			} else {
+				counted++;
+				if (!args.dryRun) {
+					await ctx.db.delete(row._id);
+					deleted++;
+				}
+			}
+		}
+
+		return {
+			counted,
+			deleted,
+			cleared,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone
+		};
+	}
+});
+
+/**
+ * Process one page of the `bills` table.
+ *
+ * `dryRun` counts the page; live mode deletes each row in the page. Run
+ * `pruneAllBills` (which clears dependents first) rather than calling this
+ * directly. Internal-only.
+ */
+export const pruneBillsBatch = internalMutation({
+	args: {
+		cursor: v.optional(v.union(v.string(), v.null())),
+		batchSize: v.optional(v.number()),
+		dryRun: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const page = await ctx.db
+			.query('bills')
+			.paginate({ numItems: args.batchSize ?? 200, cursor: args.cursor ?? null });
+
+		let deleted = 0;
+		if (!args.dryRun) {
+			for (const bill of page.page) {
+				await ctx.db.delete(bill._id);
+				deleted++;
+			}
+		}
+
+		return {
+			counted: page.page.length,
+			deleted,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone
+		};
+	}
+});
+
+/**
+ * One-off driver: clears all bill-dependent rows, then all bills.
+ *
+ * Loops the paginated batch mutations until each table is exhausted, so a
+ * single `npx convex run legislation:pruneAllBills` does the whole job within
+ * one action budget and prints a per-table summary.
+ *
+ * SAFE BY DEFAULT — a bare run only counts (dryRun defaults true):
+ *
+ *   Dry run (default — count only, touches nothing):
+ *     npx convex run legislation:pruneAllBills '{}'
+ *   Live prune (explicit + confirmed):
+ *     npx convex run legislation:pruneAllBills '{"dryRun":false,"confirm":"DELETE_BILLS_AND_DEPENDENTS"}'
+ *
+ * A live run is hard-guarded: dryRun defaults true; it requires
+ * confirm:'DELETE_BILLS_AND_DEPENDENTS' (which names the blast radius); and it
+ * REFUSES outright if any ephemeral DELETE-dependent table is non-empty — there
+ * is NO force override, so it can never wipe real watch/alert data post-launch.
+ * Audit/forensic tables (legislativeActions, accountabilityReceipts) are
+ * PRESERVED, never cleared. Internal-only, pre-launch one-off.
+ */
+export const pruneAllBills = internalAction({
+	args: {
+		dryRun: v.optional(v.boolean()),
+		batchSize: v.optional(v.number()),
+		confirm: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		const dryRun = args.dryRun ?? true; // SAFE DEFAULT: a bare run only counts.
+		const batchSize = args.batchSize ?? 200;
+
+		// A live (destructive) run must be EXPLICIT and CONFIRMED, and the confirm
+		// literal NAMES THE BLAST RADIUS so an operator can't mistake this for a
+		// bills-only delete: a live prune also full-clears orgBillWatches /
+		// orgBillRelevances / legislativeAlerts and nulls campaign/delivery billId.
+		if (!dryRun && args.confirm !== 'DELETE_BILLS_AND_DEPENDENTS') {
+			throw new Error(
+				"PRUNE_REFUSED: a live prune requires confirm:'DELETE_BILLS_AND_DEPENDENTS' " +
+					'(it clears watches/relevances/alerts too, not just bills). ' +
+					'Run with the default dryRun:true to inspect counts first.'
+			);
+		}
+
+		// HARD precondition (NO override): a live prune full-clears the ephemeral
+		// dependent tables (watches / relevances / alerts) table-wide. That is
+		// only ever correct PRE-LAUNCH when they are empty. If ANY is non-empty
+		// this refuses outright — there is deliberately no `force` escape hatch,
+		// so it can never wipe real user watch/alert data post-launch. (Audit/
+		// forensic tables are preserved — not in the delete set.)
+		if (!dryRun) {
+			for (const table of PRUNE_DELETE_DEPENDENT_TABLES) {
+				const probe = (await ctx.runMutation(pruneDependentTableBatchRef, {
+					table,
+					cursor: null,
+					batchSize: 1,
+					dryRun: true
+				})) as { counted: number };
+				if (probe.counted > 0) {
+					throw new Error(
+						`PRUNE_REFUSED: dependent table '${table}' is non-empty (${probe.counted}+ rows) — ` +
+							'this is a pre-launch-only tool and will not wipe real data. Aborting.'
+					);
+				}
+			}
+		}
+
+		const dependentsByTable: Record<string, { counted: number; deleted: number; cleared: number }> =
+			{};
+
+		// Clear (or count) every dependent table first so no row is left
+		// pointing at a bill we are about to delete.
+		for (const table of PRUNE_ALL_DEPENDENT_TABLES) {
+			let counted = 0;
+			let deleted = 0;
+			let cleared = 0;
+			let cursor: string | null = null;
+			let isDone = false;
+			while (!isDone) {
+				const result: {
+					counted: number;
+					deleted: number;
+					cleared: number;
+					continueCursor: string;
+					isDone: boolean;
+				} = await ctx.runMutation(pruneDependentTableBatchRef, {
+					table,
+					cursor,
+					batchSize,
+					dryRun
+				});
+				counted += result.counted;
+				deleted += result.deleted;
+				cleared += result.cleared;
+				cursor = result.continueCursor;
+				isDone = result.isDone;
+			}
+			dependentsByTable[table] = { counted, deleted, cleared };
+		}
+
+		// Then prune the bills themselves.
+		let billsCounted = 0;
+		let billsDeleted = 0;
+		let billsCursor: string | null = null;
+		let billsDone = false;
+		while (!billsDone) {
+			const result: {
+				counted: number;
+				deleted: number;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runMutation(pruneBillsBatchRef, {
+				cursor: billsCursor,
+				batchSize,
+				dryRun
+			});
+			billsCounted += result.counted;
+			billsDeleted += result.deleted;
+			billsCursor = result.continueCursor;
+			billsDone = result.isDone;
+		}
+
+		return {
+			dryRun,
+			billsCounted,
+			billsDeleted,
+			dependentsByTable
 		};
 	}
 });

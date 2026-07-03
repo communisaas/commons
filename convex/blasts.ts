@@ -139,7 +139,55 @@ export const sealAndScheduleBlast = mutation({
 			await ctx.scheduler.runAfter(0, internal.blasts.triggerEnclaveSend, {
 				blastId: args.blastId
 			});
+		} else {
+			// Future-scheduled: fire EXACTLY at the due time via Convex's native
+			// scheduler instead of relying on a minute-cadence poll. `runAt`
+			// persists across this mutation's commit, so once the transaction
+			// succeeds the dispatch is durably enqueued for `scheduledAt`.
+			//
+			// `dispatchScheduledBlast` claims via `claimForBlastDispatch`
+			// (CAS scheduled→sending) before triggering the enclave, so this
+			// native firing and the wide-cadence `process-scheduled-blasts`
+			// safety-net sweep can never double-dispatch — whichever wins the
+			// claim sends; the loser is an idempotent no-op. The safety net
+			// only matters for the rare scheduler-restart orphan (a `runAt`
+			// job lost to a Convex-scheduler restart), mirroring the
+			// reschedule-stuck-revocations pattern.
+			//
+			// If the operator later cancels the blast, the `runAt` job still
+			// fires but `claimForBlastDispatch` requires status==='scheduled',
+			// so a cancelled/sent/draft blast is a no-op — no cleanup of the
+			// scheduled job is needed.
+			await ctx.scheduler.runAt(args.scheduledAt, internal.blasts.dispatchScheduledBlast, {
+				blastId: args.blastId
+			});
 		}
+	}
+});
+
+/**
+ * Native due-time entry point for a future-scheduled TEE-sealed blast.
+ *
+ * Enqueued by `sealAndScheduleBlast` via `ctx.scheduler.runAt(scheduledAt, …)`
+ * so the blast fires the instant it's due rather than waiting for the next
+ * wide-cadence sweep. Idempotent: `claimForBlastDispatch` is an atomic CAS
+ * (scheduled→sending); if the safety-net sweep already claimed this blast
+ * (scheduler-restart orphan recovery), the claim returns `{ ok: false }` and
+ * this action is a no-op. No double-send is possible.
+ */
+export const dispatchScheduledBlast = internalAction({
+	args: { blastId: v.id('emailBlasts') },
+	handler: async (ctx, { blastId }) => {
+		const claim: { ok: boolean } = await ctx.runMutation(
+			internal.blasts.claimForBlastDispatch,
+			{ blastId }
+		);
+		if (!claim.ok) {
+			// Already dispatched/cancelled/completed (or claimed by the
+			// safety-net sweep) — idempotent no-op.
+			return;
+		}
+		await ctx.runAction(internal.blasts.triggerEnclaveSend, { blastId });
 	}
 });
 
@@ -344,6 +392,13 @@ export const claimForBlastDispatch = internalMutation({
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return { ok: false };
 		if (blast.status !== 'scheduled') return { ok: false };
+		// Time guard: a stale `runAt` job for a blast that was later rescheduled
+		// must not dispatch early. Only claim once the blast's CURRENT scheduledAt
+		// is actually due. (No reschedule path exists today — sealAndScheduleBlast
+		// requires status='draft' — so this is defensive against a future one.)
+		if (blast.scheduledAt !== undefined && Date.now() < blast.scheduledAt) {
+			return { ok: false };
+		}
 		await ctx.db.patch(args.blastId, {
 			status: 'sending',
 			updatedAt: Date.now()
@@ -353,13 +408,30 @@ export const claimForBlastDispatch = internalMutation({
 });
 
 /**
- * Process scheduled blasts — called by cron every minute. Uses
- * `claimForBlastDispatch` to atomically transition `scheduled → sending`
- * before invoking the enclave, so concurrent cron firings cannot both
- * dispatch the same blast (and double-send the email).
+ * Wide-cadence (15-min) blast-dispatch recovery sweep. Two jobs:
+ *
+ * (a) ORPHANED SCHEDULED blasts — the PRIMARY firing path is
+ *     `ctx.scheduler.runAt(scheduledAt, …)` → `dispatchScheduledBlast`, enqueued
+ *     at the `sealAndScheduleBlast` write-site. This re-scans for `scheduled`
+ *     rows whose due `runAt` job was lost to a Convex-scheduler restart and
+ *     dispatches them via `claimForBlastDispatch` (so it can never double-
+ *     dispatch one the native path already claimed). Mirrors
+ *     `reschedule-stuck-revocations`.
+ *
+ * (b) ORPHANED SENDING blasts — every `triggerEnclaveSend` code path terminates
+ *     in `sent`/`failed`, so a row left in `sending` past the threshold means
+ *     the dispatch action was evicted mid-flight. We mark it `failed` so it
+ *     stops reading as perpetually in-flight and becomes operator-visible. We do
+ *     NOT auto-resend: the enclave POST IS the send and carries no Convex-visible
+ *     dedup, so a retry could double-send (the enclave may have sent before the
+ *     action died). At-most-once with a visible terminal state is the correct
+ *     posture for a non-idempotent send — re-send is a deliberate operator act.
  */
 export const processScheduledBlasts = internalAction({
 	handler: async (ctx) => {
+		const now = Date.now();
+
+		// (a) Recover orphaned SCHEDULED blasts.
 		const ready = await ctx.runQuery(internal.blasts.getReadyBlasts);
 		for (const blast of ready) {
 			const claim = await ctx.runMutation(internal.blasts.claimForBlastDispatch, {
@@ -373,6 +445,63 @@ export const processScheduledBlasts = internalAction({
 				blastId: blast._id
 			});
 		}
+
+		// (b) Recover orphaned SENDING blasts (dispatch action evicted mid-flight).
+		// Threshold exceeds the 60s enclave fetch timeout + any reasonable action
+		// time, so a live send is never misclassified as stuck.
+		const STUCK_SENDING_MS = 15 * 60 * 1000;
+		const stuck = await ctx.runQuery(internal.blasts.getStuckSendingBlasts, {
+			stuckBeforeMs: now - STUCK_SENDING_MS
+		});
+		for (const blast of stuck) {
+			const r = await ctx.runMutation(internal.blasts.failStuckSendingBlast, {
+				blastId: blast._id,
+				stuckBeforeMs: now - STUCK_SENDING_MS
+			});
+			if (r.failed) {
+				console.error(
+					`[processScheduledBlasts] Blast ${blast._id} was stuck in 'sending' ` +
+						`>15m (dispatch action evicted) — marked 'failed'. Verify against the ` +
+						`enclave/SES whether it actually sent before re-sending.`
+				);
+			}
+		}
+	}
+});
+
+/**
+ * Internal query: blasts stuck in `sending` since before `stuckBeforeMs`.
+ * Used by `processScheduledBlasts` to recover dispatch-action-evicted orphans.
+ */
+export const getStuckSendingBlasts = internalQuery({
+	args: { stuckBeforeMs: v.number() },
+	handler: async (ctx, { stuckBeforeMs }) => {
+		return await ctx.db
+			.query('emailBlasts')
+			.withIndex('by_status', (q) => q.eq('status', 'sending'))
+			.filter((q) => q.lt(q.field('updatedAt'), stuckBeforeMs))
+			.collect();
+	}
+});
+
+/**
+ * Internal mutation: mark a blast `failed` IFF it is still stuck in `sending`.
+ * Re-checks under the serializable transaction so a blast that completed between
+ * the sweep's query and this call is left untouched. Clears the sealed org key.
+ * Never resends (the enclave send is non-idempotent — see processScheduledBlasts).
+ */
+export const failStuckSendingBlast = internalMutation({
+	args: { blastId: v.id('emailBlasts'), stuckBeforeMs: v.number() },
+	handler: async (ctx, { blastId, stuckBeforeMs }) => {
+		const blast = await ctx.db.get(blastId);
+		if (!blast || blast.status !== 'sending') return { failed: false };
+		if ((blast.updatedAt ?? 0) >= stuckBeforeMs) return { failed: false };
+		await ctx.db.patch(blastId, {
+			status: 'failed',
+			sealedOrgKey: undefined,
+			updatedAt: Date.now()
+		});
+		return { failed: true };
 	}
 });
 

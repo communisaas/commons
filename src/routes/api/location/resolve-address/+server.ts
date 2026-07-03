@@ -8,9 +8,11 @@ import { issueAddressResolutionToken } from '$lib/server/auth/address-resolution
 /**
  * POST /api/location/resolve-address
  *
- * Authenticated proxy to Shadow Atlas's self-hosted address resolution.
+ * Authenticated proxy to Shadow Atlas's sovereign address resolution.
  * All geocoding, district lookup, and officials resolution happens server-side
- * in Shadow Atlas (Nominatim + R-tree + SQLite). Zero external government API calls.
+ * in Shadow Atlas (atlas-native geocoder over our published address-index
+ * artifacts + H3 district lookup). Zero external API calls — the address never
+ * leaves infrastructure we control.
  *
  * PRIVACY:
  * - Logs NOTHING about the address itself.
@@ -125,7 +127,18 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			special_status: result.officials?.special_status ?? null,
 			cell_id: result.cell_id,
 			zk_eligible: result.cell_id != null,
-			county_fips: null
+			county_fips: null,
+			// Resolution freshness provenance — verbatim from resolveAddress.
+			// boundary_as_of and officials_as_of are TWO INDEPENDENT clocks; one
+			// is never copied into or defaulted from the other. `null` means
+			// honestly-unknown and passes through as JSON null — never replaced
+			// with a fabricated timestamp. The 'unknown' tigerVintage sentinel is
+			// externalized as null, never as the literal string 'unknown'.
+			boundary_as_of: result.boundaryAsOf,
+			officials_as_of: result.officialsAsOf,
+			resolution_confidence: result.confidence,
+			tiger_vintage:
+				result.provenance.tigerVintage === 'unknown' ? null : result.provenance.tigerVintage
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : 'Unknown error';
@@ -146,9 +159,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 /**
  * Parse matched address into components without trusting comma position.
  *
- * Shadow Atlas can return either a compact canonical address:
+ * Shadow Atlas returns a compact canonical address:
  *   "12 MINT PLZ, SAN FRANCISCO, CA, 94103"
- * or a Nominatim display_name:
+ * but this parser also survives a verbose display_name (Nominatim-era format,
+ * kept as a defensive parse):
  *   "12, Mint Plaza, Tenderloin, San Francisco, California, 94103, United States"
  *
  * The latter includes neighborhoods between street and city, so positional

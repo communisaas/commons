@@ -59,15 +59,31 @@ beforeEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Mock a successful Shadow Atlas resolveAddress() returning a district + cell_id */
-function mockShadowAtlasSuccess(state: string, cd: string) {
+/**
+ * Mock a successful Shadow Atlas resolveAddress() returning a district + cell_id.
+ * `clocks` overrides the resolver freshness metadata (defaults mirror an
+ * honestly-unknown resolver: null clocks + 'unknown' TIGER vintage sentinel).
+ */
+function mockShadowAtlasSuccess(
+	state: string,
+	cd: string,
+	clocks?: {
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		confidence?: number;
+	}
+) {
 	const districtCode = cd === '00' ? `${state.toUpperCase()}-AL` : `${state.toUpperCase()}-${cd.padStart(2, '0')}`;
 	mockResolveAddress.mockResolvedValueOnce({
 		geocode: { lat: 34.0522, lng: -118.2437, matched_address: 'MATCHED ADDRESS', confidence: 0.95, country: 'US' },
 		district: { id: districtCode, name: `District ${districtCode}`, jurisdiction: 'congressional', district_type: 'congressional' },
 		officials: { district_code: districtCode, state: state.toUpperCase(), officials: [], special_status: null, source: 'congress-legislators', cached: true },
 		cell_id: '872830828ffffff',
-		vintage: 'shadow-atlas-nominatim'
+		provenance: { source: 'nominatim', tigerVintage: clocks?.tigerVintage ?? 'unknown' },
+		confidence: clocks?.confidence ?? 1.0,
+		boundaryAsOf: clocks?.boundaryAsOf ?? null,
+		officialsAsOf: clocks?.officialsAsOf ?? null
 	});
 }
 
@@ -661,6 +677,184 @@ describe('mDL mdoc verification', () => {
 			// We only assert the gate-specific error did NOT fire.
 			if (!result.success) {
 				expect(result.error).not.toBe('replay_protection_missing');
+			}
+		});
+	});
+
+	// =========================================================================
+	// Resolver freshness clock threading (B3)
+	// The success result carries the resolver's clocks VERBATIM: two independent
+	// clocks (never borrowed from each other), null preserved as null, absent
+	// stays absent, the 'unknown' TIGER-vintage sentinel never propagates, and
+	// no value is ever fabricated from now().
+	// =========================================================================
+
+	describe('resolver freshness clock threading', () => {
+		const CLOCK_FIELDS = ['boundaryAsOf', 'officialsAsOf', 'tigerVintage', 'resolutionConfidence'];
+
+		function buildFullMdocResponse() {
+			return buildMdocResponse({
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D1234567',
+				birth_date: '1990-05-15'
+			});
+		}
+
+		it('threads all four resolver clocks verbatim onto the success result', async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasSuccess('ca', '12', {
+				boundaryAsOf: '2024-09-14T00:00:00Z',
+				officialsAsOf: '2025-06-02T00:00:00Z',
+				tigerVintage: 'TIGER2024',
+				confidence: 0.85
+			});
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-verbatim'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				expect(result.boundaryAsOf).toBe('2024-09-14T00:00:00Z');
+				expect(result.officialsAsOf).toBe('2025-06-02T00:00:00Z');
+				expect(result.tigerVintage).toBe('TIGER2024');
+				expect(result.resolutionConfidence).toBe(0.85);
+			}
+		});
+
+		it("maps the 'unknown' tigerVintage sentinel to an ABSENT field, never the sentinel string", async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasSuccess('ca', '12'); // defaults: tigerVintage 'unknown'
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-unknown-vintage'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				expect(result.tigerVintage).toBeUndefined();
+				expect(result).not.toHaveProperty('tigerVintage');
+				expect(JSON.stringify(result)).not.toContain('unknown');
+			}
+		});
+
+		it('preserves null clocks as null — officialsAsOf never borrowed from boundaryAsOf', async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasSuccess('ca', '12', {
+				boundaryAsOf: '2024-09-14T00:00:00Z',
+				officialsAsOf: null
+			});
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-officials-null'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				expect(result.boundaryAsOf).toBe('2024-09-14T00:00:00Z');
+				// null, NOT the boundary clock's value — the two clocks are independent.
+				expect(result.officialsAsOf).toBeNull();
+			}
+		});
+
+		it('preserves null clocks as null — boundaryAsOf never borrowed from officialsAsOf', async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasSuccess('ca', '12', {
+				boundaryAsOf: null,
+				officialsAsOf: '2025-06-02T00:00:00Z'
+			});
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-boundary-null'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				// null, NOT the officials clock's value — the two clocks are independent.
+				expect(result.boundaryAsOf).toBeNull();
+				expect(result.officialsAsOf).toBe('2025-06-02T00:00:00Z');
+			}
+		});
+
+		it('never fabricates a now()-derived clock when the resolver reports null clocks', async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasSuccess('ca', '12'); // defaults: both clocks null
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-no-fabrication'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				expect(result.boundaryAsOf).toBeNull();
+				expect(result.officialsAsOf).toBeNull();
+				// No freshly-minted timestamp anywhere in the result: today's date
+				// must not appear (the only date-shaped values are the mock's).
+				expect(JSON.stringify(result)).not.toContain(new Date().toISOString().slice(0, 10));
+			}
+		});
+
+		it('keeps clock fields ABSENT when the resolver result carries none', async () => {
+			const mdocData = await buildFullMdocResponse();
+			// Raw mock WITHOUT the clock/provenance fields — pre-clock resolver shape.
+			mockResolveAddress.mockResolvedValueOnce({
+				geocode: { lat: 34.0522, lng: -118.2437, matched_address: 'MATCHED ADDRESS', confidence: 0.95, country: 'US' },
+				district: { id: 'CA-12', name: 'District CA-12', jurisdiction: 'congressional', district_type: 'congressional' },
+				officials: { district_code: 'CA-12', state: 'CA', officials: [], special_status: null, source: 'congress-legislators', cached: true },
+				cell_id: '872830828ffffff'
+			});
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-absent'
+			);
+
+			expect(result.success).toBe(true);
+			if (result.success) {
+				for (const field of CLOCK_FIELDS) {
+					expect(result).not.toHaveProperty(field);
+				}
+			}
+		});
+
+		it('carries NO clock fields on the resolver-throw path (all four absent)', async () => {
+			const mdocData = await buildFullMdocResponse();
+			mockShadowAtlasFailure();
+
+			const result = await processCredentialResponse(
+				mdocData,
+				'org-iso-mdoc',
+				ephemeralKey,
+				'nonce-clocks-resolver-throw'
+			);
+
+			expect(result.success).toBe(false);
+			if (!result.success) {
+				expect(result.error).toBe('district_lookup_failed');
+			}
+			const resultJson = JSON.stringify(result);
+			for (const field of CLOCK_FIELDS) {
+				expect(result).not.toHaveProperty(field);
+				expect(resultJson).not.toContain(field);
 			}
 		});
 	});

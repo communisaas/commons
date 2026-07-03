@@ -93,6 +93,35 @@
 	const showShield = $derived(
 		data.mode === 'campaign' ? attestationHash !== null : data.trustTier >= 1
 	);
+
+	// B3 — district-resolution freshness. Two INDEPENDENT clocks: the BOUNDARY
+	// clock (when the district geometry was generated, labeled by its TIGER
+	// vintage) and the OFFICIALS clock (when the roster was generated). Each is
+	// shown ONLY when the credential carries a real value — `null` means honestly
+	// unknown at issuance and renders nothing. We never copy one clock's value
+	// into the other and make no comparative "fresher than X" claim. Campaign
+	// mode has no per-credential freshness, so these resolve to null there.
+	function formatClock(value: string | null | undefined): string | null {
+		if (!value) return null;
+		const parsed = new Date(value);
+		if (Number.isNaN(parsed.getTime())) return value; // show the raw label if not a date
+		return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+	}
+	const boundaryClock = $derived(
+		data.mode === 'individual' ? formatClock(data.location.boundaryAsOf) : null
+	);
+	const officialsClock = $derived(
+		data.mode === 'individual' ? formatClock(data.location.officialsAsOf) : null
+	);
+	const tigerVintage = $derived(
+		data.mode === 'individual' ? data.location.tigerVintage ?? null : null
+	);
+	const resolutionConfidence = $derived(
+		data.mode === 'individual' ? data.location.resolutionConfidence ?? null : null
+	);
+	const confidencePct = $derived(
+		resolutionConfidence !== null ? Math.round(resolutionConfidence * 100) : null
+	);
 </script>
 
 <svelte:head>
@@ -133,19 +162,6 @@
 			{lead}
 		</p>
 
-		<!-- Topic (when message-level data exists) -->
-		{#if data.topic}
-			<div class="mb-5 sm:ml-[54px] text-[15px] verify-stagger" style="--stagger: 2">
-				<span class="text-text-quaternary">Topic:</span>
-				<span class="font-brand text-text-primary font-medium ml-1">{data.topic}</span>
-				{#if data.participantCount && data.participantCount > 1}
-					<span class="text-text-quaternary ml-1">
-						({data.participantCount} verified senders)
-					</span>
-				{/if}
-			</div>
-		{/if}
-
 		<!-- Jurisdictions: the strong center -->
 		{#if data.location.verified && data.location.districts.length > 0}
 			<div class="rounded-participation-lg border border-surface-border bg-surface-raised shadow-atmospheric-card px-5 py-4 mb-2 verify-stagger" style="--stagger: 2">
@@ -168,6 +184,35 @@
 			<div class="mb-8 px-1 verify-stagger" style="--stagger: 2">
 				<span class="text-sm text-text-quaternary">State:</span>
 				<span class="font-mono text-sm font-medium text-text-secondary ml-1">{data.location.state}</span>
+			</div>
+		{/if}
+
+		<!-- B3 — district-resolution freshness: two SEPARATE labeled clocks.
+		     Boundary (when the district geometry was generated; TIGER vintage
+		     labels it) and Officials (when the roster was generated) are distinct
+		     and shown only when the credential carries a real value. No comparative
+		     "fresher than X" claim — these are this credential's own provenance. -->
+		{#if boundaryClock || officialsClock || confidencePct !== null}
+			<div class="mb-8 px-1 verify-stagger" style="--stagger: 3">
+				<p class="font-mono text-[11px] font-medium text-text-quaternary uppercase tracking-widest mb-2">
+					Resolution freshness
+				</p>
+				<div class="grid grid-cols-[auto_1fr] gap-x-8 gap-y-1.5 text-[13px]">
+					{#if boundaryClock}
+						<span class="text-text-quaternary">
+							District boundary{tigerVintage ? ` (${tigerVintage})` : ''}
+						</span>
+						<span class="font-mono text-text-secondary text-right">{boundaryClock}</span>
+					{/if}
+					{#if officialsClock}
+						<span class="text-text-quaternary">Officials roster</span>
+						<span class="font-mono text-text-secondary text-right">{officialsClock}</span>
+					{/if}
+					{#if confidencePct !== null}
+						<span class="text-text-quaternary">Match confidence</span>
+						<span class="font-mono text-text-secondary text-right">{confidencePct}%</span>
+					{/if}
+				</div>
 			</div>
 		{/if}
 

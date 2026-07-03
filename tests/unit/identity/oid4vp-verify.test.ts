@@ -528,15 +528,31 @@ function encodeCborHeadForMdocTest(majorType: number, length: number): Uint8Arra
 	]);
 }
 
-/** Mock a successful Shadow Atlas resolveAddress() returning a district + cell_id */
-function mockShadowAtlasSuccess(state: string, cd: string) {
+/**
+ * Mock a successful Shadow Atlas resolveAddress() returning a district + cell_id.
+ * `clocks` overrides the resolver freshness metadata (defaults mirror an
+ * honestly-unknown resolver: null clocks + 'unknown' TIGER vintage sentinel).
+ */
+function mockShadowAtlasSuccess(
+	state: string,
+	cd: string,
+	clocks?: {
+		boundaryAsOf?: string | null;
+		officialsAsOf?: string | null;
+		tigerVintage?: string;
+		confidence?: number;
+	}
+) {
 	const districtCode = `${state.toUpperCase()}-${cd.padStart(2, '0')}`;
 	mockResolveAddress.mockResolvedValueOnce({
 		geocode: { lat: 34.0522, lng: -118.2437, matched_address: 'MATCHED ADDRESS', confidence: 0.95, country: 'US' },
 		district: { id: districtCode, name: `District ${districtCode}`, jurisdiction: 'congressional', district_type: 'congressional' },
 		officials: { district_code: districtCode, state: state.toUpperCase(), officials: [], special_status: null, source: 'congress-legislators', cached: true },
 		cell_id: '872830828ffffff',
-		vintage: 'shadow-atlas-nominatim'
+		provenance: { source: 'nominatim', tigerVintage: clocks?.tigerVintage ?? 'unknown' },
+		confidence: clocks?.confidence ?? 1.0,
+		boundaryAsOf: clocks?.boundaryAsOf ?? null,
+		officialsAsOf: clocks?.officialsAsOf ?? null
 	});
 }
 
@@ -1038,6 +1054,67 @@ describe('OpenID4VP response processing', () => {
 			expect(result.credentialHash).toMatch(/^[0-9a-f]{64}$/);
 			expect(result.identityCommitment).toMatch(/^[0-9a-f]{64}$/);
 			expect(result.cellId).toBe('872830828ffffff');
+		}
+	});
+
+	it('threads resolver freshness clocks verbatim through the OpenID4VP success path', async () => {
+		const nonce = 'test-nonce-mso-mdoc-clocks-verbatim';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777780',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce }
+		);
+
+		mockShadowAtlasSuccess('ca', '12', {
+			boundaryAsOf: '2024-09-14T00:00:00Z',
+			officialsAsOf: '2025-06-02T00:00:00Z',
+			tigerVintage: 'TIGER2024',
+			confidence: 0.85
+		});
+
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			// Verbatim copies — two independent clocks, never borrowed or fabricated.
+			expect(result.boundaryAsOf).toBe('2024-09-14T00:00:00Z');
+			expect(result.officialsAsOf).toBe('2025-06-02T00:00:00Z');
+			expect(result.tigerVintage).toBe('TIGER2024');
+			expect(result.resolutionConfidence).toBe(0.85);
+		}
+	});
+
+	it("keeps the 'unknown' tigerVintage sentinel out of the OpenID4VP success result and preserves null clocks", async () => {
+		const nonce = 'test-nonce-mso-mdoc-clocks-unknown';
+		const origin = 'https://verifier.example';
+		const deviceResponse = await buildOpenId4VpMsoMdocResponse(
+			{
+				resident_postal_code: '94110',
+				resident_city: 'San Francisco',
+				resident_state: 'CA',
+				document_number: 'D7777781',
+				birth_date: '1990-05-17'
+			},
+			{ origin, nonce }
+		);
+
+		mockShadowAtlasSuccess('ca', '12'); // defaults: null clocks + 'unknown' sentinel
+
+		const result = await processSignedMsoMdocResponse(deviceResponse, nonce, origin);
+
+		expect(result.success).toBe(true);
+		if (result.success) {
+			expect(result).not.toHaveProperty('tigerVintage');
+			expect(result.boundaryAsOf).toBeNull();
+			expect(result.officialsAsOf).toBeNull();
+			// No fabricated now()-derived clock appears anywhere in the result.
+			expect(JSON.stringify(result)).not.toContain(new Date().toISOString().slice(0, 10));
 		}
 	});
 

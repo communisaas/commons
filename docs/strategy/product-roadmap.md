@@ -26,7 +26,15 @@
 > free, pay to deliver**, not "free tier wins by default." The GTM tables below
 > still describe a "$0 free tier" in places — those lines are superseded by this
 > banner and the re-sequenced sections; the wedge (neutrality, full uncapped API,
-> 24 boundary types, verification packets) holds, only the price entry changes.
+> the owned 24-slot boundary architecture, verification packets) holds, only the
+> price entry changes. **Shadow Atlas reach caveat:** congressional resolution
+> (district + house rep + two senators) is live today, served at $0 from free
+> public data (congress-legislators + TIGER) that anyone — Cicero included — can
+> use, so it is not a cost moat. The owned 24-slot H3 architecture is built to
+> host state / local / special-district officials (slots 1–23), but those slots
+> are empty/un-ingested today and resolve via a paid agentic pipeline (Gemini +
+> Exa + Firecrawl). The moat is owned architecture + API-collapse timing +
+> path-to-$0-on-ingestion — latent, not present coverage.
 > Recorded 2026-06-02 / 2026-06-14; merged through PR #34.
 
 ---
@@ -43,7 +51,7 @@
 
 ## Design Thesis
 
-The core is the AI-native authoring-to-delivery loop: intent → ground → author (per-recipient) → resolve-targets (owned local-gov reach across 24 boundary types) → deliver → aggregate. Every incumbent ships AI for the org user; Commons ships it for the action — grounded, per-recipient authorship that resolves to the right office at any level of government. That loop is the only differentiated, shipped-and-live capability, and it is the product.
+The core is the AI-native authoring-to-delivery loop: intent → ground → author (per-recipient) → resolve-targets (congressional reach live today; the owned 24-slot architecture is built to host state/local/special-district reach, latent until ingested) → deliver → aggregate. Every incumbent ships AI for the org user; Commons ships it for the action — grounded, per-recipient authorship that resolves to the congressional office today and is architected to reach any level of government as boundary data is ingested. That loop is the only differentiated, shipped-and-live capability, and it is the product.
 
 Verification rides along as an ambient credibility watermark — woven into the surface so the product is indistinguishable from existing advocacy tools for someone who has never heard of zero-knowledge proofs. It is the lowest-replicability moat (the substrate can't be retrofitted to app-layer competitors), but the claim that an office *weights* a verified packet differently is an untested hypothesis, not a measured result. Keep it; do not lead with it.
 
@@ -61,7 +69,7 @@ Infrastructure that took years. Zero of this exists in any competitor's stack.
 |---|---|---|
 | ZK proof generation (browser-side, noir_js + bb.js) | Production | 5 circuits, 4 depths |
 | mDL verification (ISO 18013-5) | Production | 8,665 lines, 37 tests |
-| Shadow Atlas (hierarchical district tree) | Production | 94,166 districts, 24 boundary types, R-tree <50ms p95 |
+| Shadow Atlas (hierarchical district tree) | Congressional live (slot 0); slots 1–23 ingest-pending | 94,166-district / 24-boundary-type architecture (data count, not live-targetable coverage); congressional resolved at $0 from free public data, state/local/special-district via paid agentic pipeline once ingested; R-tree <50ms p95 |
 | Smart contracts | Production | 13 contracts, 897 tests |
 | DebateMarket (LMSR + AI panel) | Production | 193 tests |
 | Noir prover (browser WASM) | Production | Client-side, zero server cost |
@@ -123,7 +131,7 @@ This is not a spec. The core org loop works: create org → import supporters �
 The authoring-to-delivery loop is the product. Not email. Not CRM. Not petitions. The loop:
 
 ```
-Org states intent → AI grounds + authors a per-recipient draft → targets resolve across 24 boundary types →
+Org states intent → AI grounds + authors a per-recipient draft → targets resolve (congressional live; the 24-slot architecture is built to host state/local/special-district targets, latent until ingested) →
 supporters take action → org delivers to decision-maker → Constituent Report aggregates (verification packet rides along)
 ```
 
@@ -147,7 +155,7 @@ This loop already works in code. Phase 0 makes it launchable. (Historically this
 **Launch to:**
 - 5–10 orgs in beachhead segments, by invitation
 - Science/health advocacy (credibility over volume)
-- Local government advocacy (school boards, water districts — 21 of 24 Shadow Atlas boundary types have zero competitor coverage)
+- Local government advocacy (school boards, water districts — the owned 24-slot architecture is built to host the special-district boundary types no competitor covers; those slots are ingest-pending today and resolve via a paid agentic pipeline, congressional is the live floor)
 - Nonpartisan groups excluded from AN
 
 **Success metric:** One org authors and delivers a campaign in Studio and gets a Constituent Report back. (Hypothesis to test, not yet measured: an office responds differently to a verified packet than to unverified advocacy mail. Treat this as the verification proof point we are *trying* to establish — it is unproven; do not state it as fact.)
@@ -195,9 +203,9 @@ Phase 1 built the self-serve org base. Phase 2 makes Commons the platform every 
 | Patch-through calling (Twilio) | Verified caller district before connection. No competitor has this. A staffer picks up and hears: "Connecting you with a verified constituent from your district." Capitol Canary (Quorum) connects calls without district verification. |
 | SMS campaigns (Twilio) | Segmentation by tier + district. Every SMS campaign is verifiable. |
 | Multi-org networks (Coalition tier) | Parent org, child orgs, shared supporter pools with portable reputation, cross-org coordination. Coalition verification aggregation: "12 organizations, 4,847 verified constituents across 3 states." |
-| Local government boundary ingestion | State-by-state LAFCO data ingestion for special districts (water, fire, transit, parks, hospitals). Each ingested boundary type unlocks an entirely unserved market. |
+| Local government boundary ingestion | State-by-state LAFCO data ingestion fills the latent special-district slots (water, fire, transit, parks, hospitals) — empty/un-ingested today, currently resolved via a paid agentic pipeline (Gemini + Exa + Firecrawl). Each ingested boundary type moves that slot from paid-agentic toward the $0 free-public-data floor and unlocks an entirely unserved market. |
 | International boundary support | Canada (338 federal ridings + provincial), UK (650 constituencies + devolved assemblies + parish councils), Australia (federal + state electorates). Shadow Atlas architecture already supports country-code-keyed registries. |
-| Public API + SDK | RESTful, free, uncapped on all tiers. OpenAPI spec, generated TypeScript/Python SDKs, "Building on Commons" developer guide. AN gates API behind paid tiers and caps at 4 req/s. Quorum charges separately for API access. |
+| Public API + SDK | RESTful, free, uncapped on all tiers. OpenAPI spec, generated TypeScript/Python SDKs, "Building on Commons" developer guide. AN gates API behind paid tiers and caps at 4 req/s. Quorum charges separately for API access. (Note: 'free, uncapped API' is a pricing-policy differentiator, not a per-lookup cost moat — congressional resolution is $0 from free public data anyone can use; latent slots carry paid agentic cost until ingested.) |
 
 **Migration accelerators (all platforms, not just AN):**
 - AN API sync tool (built) + parallel operation mode (shadow → split → primary)
@@ -227,7 +235,7 @@ Capabilities that no competitor can imagine, let alone build. Only possible beca
 | Task | Why |
 |---|---|
 | Debate markets on campaigns | Campaign reaches traction → verified participants stake SUPPORT/OPPOSE/AMEND → LMSR pricing → 5-model AI panel scores argument quality. sqrt(stake) * 2^tier. Quality of reasoning, not just count. The contracts and AI evaluator are built (193 tests). Need campaign integration. A school board advocacy group can surface genuine community consensus on a bond measure. A water district accountability org can prove its members actually disagree on implementation details. Quality signal, not just volume. |
-| Verified agentic delegation | Agents act for verified constituents. Monitor legislation across all 24 district types — from Congress to the local water board. Draft grounding-verified messages. Participate in debates. ZK proof on every action. Tier-gated authority, revocable, private memory. Agent infrastructure is built (8,188 lines). Need delegation contract + UI. A constituent tells their agent: "Watch every school board agenda for items about budget cuts. Draft a response matching my positions. Notify me before sending." The agent does this across every relevant jurisdiction, at ~$6.50/org/month. Quorum charges $10K+/year for legislative monitoring that only covers federal and state — and has no verification. |
+| Verified agentic delegation | Agents act for verified constituents. Monitor legislation across the 24-slot architecture as it is ingested — congressional today, from Congress to the local water board once the latent slots fill. Draft grounding-verified messages. Participate in debates. ZK proof on every action. Tier-gated authority, revocable, private memory. Agent infrastructure is built (8,188 lines). Need delegation contract + UI. A constituent tells their agent: "Watch every school board agenda for items about budget cuts. Draft a response matching my positions. Notify me before sending." The agent does this across every relevant jurisdiction, at ~$6.50/org/month. Quorum charges $10K+/year for legislative monitoring that only covers federal and state — and has no verification. |
 | Agentic legislative monitoring | Agent queries Shadow Atlas for constituent's districts → monitors bills across all covered jurisdictions → alerts constituent. Personalized to verified districts, not keyword-based. Works internationally as boundary data expands (Canadian ridings, UK constituencies, etc.). |
 | Legislator scorecards | Track campaign delivery → official response across every level of government. "This school board member received 147 verified constituent messages on the bond measure and voted No." "This MP received 891 verified constituent contacts on NHS funding and didn't respond." Accountability that works for Congress, city council, and everything between. |
 | Cross-border coalition campaigns | A climate coalition runs a verified campaign targeting legislators in the US, UK, and Canada simultaneously. Each constituent is verified against their own country's district tree. The coalition report aggregates across jurisdictions: "4,200 verified constituents across 3 countries." Protocol-level identity makes this possible. App-level platforms can't compose across borders. |
@@ -262,7 +270,7 @@ Open email from org → normal campaign letter → footer: "248 verified constit
 
 ### Verified Letter (90 seconds, person-facing)
 
-Click campaign link → enter name, email, postal code → district(s) resolved → optional mDL scan (4-6s, browser-side ZK) → send → letter + proof delivered to decision-maker → "You're verified constituent #248 in CA-12." The verification is the action — not a separate step bolted onto a form submission. Works for any public office across all 24 boundary types.
+Click campaign link → enter name, email, postal code → congressional district(s) resolved → optional mDL scan (4-6s, browser-side ZK) → send → letter + proof delivered to decision-maker → "You're verified constituent #248 in CA-12." The verification is the action — not a separate step bolted onto a form submission. Live today for the congressional office; the owned 24-slot architecture is built to extend this to any public office as the latent slots are ingested.
 
 ### Debate Market Spawns from Campaign (person-facing → org-facing)
 
@@ -276,14 +284,14 @@ The positioning is **capability composition**, not feature parity or single-axis
 
 The nine capability clusters:
 1. **Verification** — mDL Android OID4VP production + three-tree ZK + Cross-Device Bridge + 858 contract tests
-2. **Reach** — 24 boundary types per H3 cell + country-code-keyed registries + $0 marginal per lookup (independent of the dying Cicero/Google Civic/ProPublica API layer)
+2. **Reach** — owned 24-slot-per-H3-cell architecture (congressional live at the $0 free-public-data floor; state/local/special-district slots latent/ingest-pending, resolved via a paid agentic pipeline until ingested) + country-code-keyed registries. The moat is owned architecture + API-collapse timing + path-to-$0-on-ingestion, not present coverage or a present $0-per-lookup edge over the dying Cicero/Google Civic/ProPublica API layer.
 3. **Composability** — Protocol-level identity portability + coalition aggregation + cross-border composition
 4. **Agentic systems** — DM resolution + message writer + subject line + AI panel for debates; Phase 3 verified delegation + agentic legislative monitoring + agent-as-civic-actor pricing inversion
 5. **Quality signaling** — DebateMarket (LMSR + AI panel + EIP-712) + position privacy + AI verdicts that are themselves verifiable
 6. **Accountability** — Receipts with attestation hash + legislator scorecards + Merkle anchoring (substrate live on Sepolia; pipeline pending)
 7. **Coordination integrity** — GDS + ALD + temporal entropy + burst velocity + CAI implemented; anti-astroturf math
 8. **Reader-side UX** — Verification packet for the staffer + /v/[hash] independent verification + future reader dashboard
-9. **Data sovereignty** — Owned Shadow Atlas + PII-free architecture + outside the PE rollup cycle
+9. **Data sovereignty** — Owned Shadow Atlas architecture (the durable asset is ownership + API-collapse timing + path-to-$0-on-ingestion, latent today beyond congressional) + PII-free architecture + outside the PE rollup cycle
 
 ```
                   Multi-cluster capability composition
@@ -304,17 +312,17 @@ Commons occupies the composition quadrant no incumbent can reach. The substrate 
 
 The transcendent reframing: **civic action as cryptographic primitive, with agentic systems as the compose layer.** Every existing advocacy modality (email/SMS/calling/petitions/events/donations/debate/monitoring) gets reinstantiated on top of the capability composition. Each becomes a categorically different artifact than the unverified equivalent the union of incumbents produces.
 
-**Against Quorum ($10K-$30K+/yr, 9 modules, Quincy AI):** Don't compete on legislative intelligence breadth. Compete on output — what the staffer receives. Quorum helps a lobbyist analyze bills. Commons helps verified constituents prove they exist. A trade association paying Quorum $30K/yr for grassroots advocacy gets AI-generated message variants from unverified senders. Commons Organization tier at $75/mo gets verification packets with ZK proof of identity, district membership across 24 boundary types, and coordination integrity scores. 10-30x cheaper. Structurally more credible.
+**Against Quorum ($10K-$30K+/yr, 9 modules, Quincy AI):** Don't compete on legislative intelligence breadth. Compete on output — what the staffer receives. Quorum helps a lobbyist analyze bills. Commons helps verified constituents prove they exist. A trade association paying Quorum $30K/yr for grassroots advocacy gets AI-generated message variants from unverified senders. Commons Organization tier at $75/mo gets verification packets with ZK proof of identity, congressional district membership today (with the owned 24-slot architecture built to extend that proof to state/local/special-district officials as the latent slots are ingested), and coordination integrity scores. 10-30x cheaper. Structurally more credible.
 
 **Against Bonterra/EveryAction (20K+ orgs, 69.5% market share):** Don't compete on CRM. Complement it. Use EveryAction for donor management, Commons for advocacy. But know this: Bonterra deplatformed conservative nonprofits (documented, Senate investigation), has "appalling" post-acquisition support, and its Que AI is fundraising-focused. When advocacy campaigns on Commons consistently outperform Bonterra's unverified advocacy module, the conversation shifts.
 
-**Against VoterVoice/FiscalNote (publicly traded, enterprise):** Don't compete on mobilization speed. Compete on credibility. SmartCheck uses ChatGPT to make messages sound authentic. Commons makes messages be authentic — the sender is cryptographically verified. VoterVoice only matches officials in areas >250K population; Commons resolves 24 boundary types down to water districts and school boards.
+**Against VoterVoice/FiscalNote (publicly traded, enterprise):** Don't compete on mobilization speed. Compete on credibility. SmartCheck uses ChatGPT to make messages sound authentic. Commons makes messages be authentic — the sender is cryptographically verified. VoterVoice only matches officials in areas >250K population; Commons resolves congressional offices today and owns the 24-slot architecture built to reach down to water districts and school boards as those latent slots are ingested.
 
-**Against Action Network (12K+ orgs, progressive-only):** Compete directly. Same market (grassroots advocacy orgs), comparable entry price (Starter $10/mo vs AN's $15/mo minimum; orgs author free and pay to deliver), stronger product (AI-native per-recipient authoring + owned local-gov reach — verification is the ambient watermark on top), wider market (political neutrality), wider scope (24 district types vs ~3). Migration pipeline built and spec'd. AN's API is capped at 4 req/s on paid tiers; Commons' API is full and uncapped.
+**Against Action Network (12K+ orgs, progressive-only):** Compete directly. Same market (grassroots advocacy orgs), comparable entry price (Starter $10/mo vs AN's $15/mo minimum; orgs author free and pay to deliver), stronger product (AI-native per-recipient authoring + the owned 24-slot reach architecture, congressional live today and built to host local-gov reach as latent slots ingest — verification is the ambient watermark on top), wider market (political neutrality), wider scope (owned 24-slot architecture vs AN's ~3, latent beyond congressional today). Migration pipeline built and spec'd. AN's API is capped at 4 req/s on paid tiers; Commons' API is full and uncapped.
 
 **Against the conservative void:** Fill a vacuum. Bonterra deplatformed conservative nonprofits. AN rejects them at the front door. Quorum prices them out. The conservative advocacy market has no affordable, integrated advocacy platform. Commons wins this market on price + neutrality: Starter at $10/mo (10-30x under Quorum) with a full uncapped API and no ideology check at the door — author free, pay to deliver, no free-tier dependency.
 
-**Against the local government void:** Create a market. 90,887 local government entities, 500,396 elected officials, zero affordable advocacy tools. School parent coalitions, water district accountability groups, transit equity orgs, fire safety advocates — they use Mailchimp and Google Forms today. Commons with 24 boundary types is the only platform that can target these officials at any price. Orgs author free (2 campaigns on the `inactive` floor) and pay only to deliver — Starter at $10/mo undercuts every incumbent.
+**Against the local government void:** Create a market. 90,887 local government entities, 500,396 elected officials, zero affordable advocacy tools. School parent coalitions, water district accountability groups, transit equity orgs, fire safety advocates — they use Mailchimp and Google Forms today. Commons owns the 24-slot architecture built to target these local officials — congressional is live today and the latent local slots resolve via a paid agentic pipeline until ingested, a reach no incumbent owns at any price. Orgs author free (2 campaigns on the `inactive` floor) and pay only to deliver — Starter at $10/mo undercuts every incumbent.
 
 **Against the international void:** Extend the protocol. voter-protocol's 24-slot district model and country-code-keyed registries are designed for global expansion. No competitor operates at protocol level across borders. A UK environmental org, a Canadian healthcare coalition, an Australian transit advocacy group — same verification infrastructure, same proof guarantees.
 
@@ -332,7 +340,7 @@ The platform serves whoever has constituents and cares enough to prove it. Not "
 
 | Segment | Why First | Acquisition |
 |---|---|---|
-| **Domain-obsessed local groups** | School parent coalitions, water district accountability, transit equity, fire safety. 90,887 local government entities, 500,396 elected officials, **zero** affordable advocacy tools. These orgs use Google Forms and Mailchimp because nothing else exists. Commons with 24 boundary types is the only platform that can target their officials — at any price. Author free (2 campaigns), pay to deliver; Starter $10/mo wins by default. | Partner with local government transparency orgs (Sunshine Foundation, OpenGov orgs, League of Women Voters chapters). Content: "Finally, a tool for school board advocacy." |
+| **Domain-obsessed local groups** | School parent coalitions, water district accountability, transit equity, fire safety. 90,887 local government entities, 500,396 elected officials, **zero** affordable advocacy tools. These orgs use Google Forms and Mailchimp because nothing else exists. Commons owns the 24-slot architecture built to target their officials — congressional live today, local slots latent/ingest-pending (resolved via a paid agentic pipeline until ingested), a reach no incumbent owns at any price. Author free (2 campaigns), pay to deliver; Starter $10/mo wins by default. | Partner with local government transparency orgs (Sunshine Foundation, OpenGov orgs, League of Women Voters chapters). Content: "Finally, a tool for school board advocacy." |
 | **Science/health advocacy** | Credibility IS the product. "847 verified constituents in your district support NIH funding" changes how a committee staffer reads testimony. Disease foundations, research coalitions, scientific societies — they've been sending unverified form emails and watching them get deleted. | Direct outreach to 10–20 foundations/coalitions. Show them the verification packet. One demo closes. |
 | **Conservative/nonpartisan groups** | Deplatformed by Bonterra, rejected by AN's front door, priced out of Quorum. No affordable tooling exists. Author-free + $10/mo Starter is immediately the best they've ever had. Second Amendment orgs, faith-based advocacy, fiscal policy groups, pro-life organizations — all underserved. | Content marketing: "The advocacy platform that doesn't check your politics." Outreach to Startup Caucus network, conservative think tanks, faith-based coalitions. |
 | **Single-issue orgs across spectrum** | Environmental justice. Immigration reform. Criminal justice reform. Homeschool advocacy. Agricultural policy. Veterans affairs. These orgs are domain-obsessed — they don't care about platform politics, they care about whether their campaign reaches the right official with proof that their supporters are real. | SEO: "[issue] advocacy tools." Product-led growth from template discovery. |

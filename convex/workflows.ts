@@ -785,6 +785,23 @@ export const claimExecution = internalMutation({
 		if (exec.status !== 'paused' && exec.status !== 'pending') {
 			return { ok: false, reason: `wrong_status:${exec.status}` };
 		}
+		// Pause-epoch guard against a STALE wake-up. The event-driven resume
+		// (`runAfter(delayMs, execute)`) and the 15-min safety-net sweep can both
+		// have a wake-up in flight for the same execution. If one left over from
+		// an EARLIER pause fires after the execution already advanced and re-paused
+		// on a LATER delay step, resuming now would run that step before its delay
+		// elapses. A paused execution whose `nextRunAt` is still in the future has
+		// not reached its due time, so this wake-up is stale — refuse it; the
+		// legitimate wake-up scheduled for `nextRunAt` resumes it on time. (1s skew
+		// tolerance so an on-time native wake-up isn't mis-rejected; the sweep
+		// clears `nextRunAt` before re-firing, so its recovery path is unaffected.)
+		if (
+			exec.status === 'paused' &&
+			exec.nextRunAt !== undefined &&
+			exec.nextRunAt > Date.now() + 1000
+		) {
+			return { ok: false, reason: 'premature_wakeup' };
+		}
 		await ctx.db.patch(executionId, { status: 'running' });
 		return { ok: true };
 	}
@@ -1147,7 +1164,14 @@ export const execute = internalAction({
 			try {
 				if (step.type === 'delay') {
 					// Schedule resume after delay
-					const delayMs = (step.delayMinutes ?? 1) * 60 * 1000;
+					// Clamp the delay defensively: finite, non-negative, capped at 30
+					// days so a malformed delayMinutes can't hot-loop the scheduler
+					// or park a resume job indefinitely.
+					const rawDelayMinutes = step.delayMinutes ?? 1;
+					const delayMinutes = Number.isFinite(rawDelayMinutes)
+						? Math.min(Math.max(rawDelayMinutes, 0), 43_200)
+						: 1;
+					const delayMs = delayMinutes * 60 * 1000;
 					const nextRunAt = Date.now() + delayMs;
 
 					await ctx.runMutation(internal.workflows.logAction, {
@@ -1164,10 +1188,27 @@ export const execute = internalAction({
 						nextRunAt
 					});
 
-					// Schedule resume
-					ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
-						executionId
-					});
+					// Schedule resume natively at the exact due time. This is the
+					// PRIMARY resume path — the `workflow-scheduler` cron is now a
+					// wide-cadence (15-min) safety net that only recovers rows
+					// whose `runAfter` job was lost to a Convex-scheduler restart
+					// (see `processScheduled`). The enqueue is awaited so a failure
+					// is observed, but it must NOT propagate to the outer catch
+					// (which sets status:'failed') — the row is already 'paused'
+					// with nextRunAt, so a failed enqueue is recovered by the
+					// safety-net sweep. Letting it go fail-terminal here would
+					// defeat the orphan-recovery this design adds.
+					try {
+						await ctx.scheduler.runAfter(delayMs, internal.workflows.execute, {
+							executionId
+						});
+					} catch (enqueueErr) {
+						console.error(
+							`[workflow] delay-resume enqueue failed for execution ${executionId}; ` +
+								`row remains paused (nextRunAt set), safety-net sweep will recover it.`,
+							enqueueErr
+						);
+					}
 					return;
 				}
 
@@ -1292,8 +1333,16 @@ export const execute = internalAction({
 });
 
 /**
- * Resume paused workflows whose delay has elapsed.
- * Called by cron every minute.
+ * Wide-cadence orphan-recovery sweep for paused workflow executions.
+ *
+ * The PRIMARY resume path is the native `ctx.scheduler.runAfter(delayMs, …)`
+ * fired at the `delay`-step write-site in `execute`, which resumes each
+ * paused execution exactly when its delay elapses. This handler is the
+ * SAFETY NET (registered on a 15-min cron, not 1-min): it range-scans for
+ * `paused` rows whose `nextRunAt` has passed but whose scheduled `execute`
+ * job was lost to a Convex-scheduler restart, and re-fires them. Resuming a
+ * row the native path already resumed is harmless — `claimExecution` is an
+ * atomic CAS, so the second `execute` invocation no-ops.
  */
 export const processScheduled = internalAction({
 	args: {},

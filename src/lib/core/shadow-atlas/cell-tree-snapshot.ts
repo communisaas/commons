@@ -296,6 +296,11 @@ export async function validateSnapshotRoot(
 	// When DistrictRegistry goes on-chain, replace this with a contract read.
 	try {
 		// Dynamic import to avoid circular dependency (client.ts imports us)
+		// LATENT (2026-07-03): self-referential loop — this imports client.ts
+		// getCellProof, whose snapshot validation calls back into THIS function,
+		// and merkle-snapshot.json is not published on the live atlas (the fetch
+		// 404s). Going live requires publishing merkle-snapshot.json and passing
+		// an on-chain trustedRoot above instead of this fallback.
 		const { getCellProof: fetchLiveProof } = await import('./client');
 		// Use the first cell in our snapshot as a probe
 		const firstCell = tree.cellMeta.keys().next();

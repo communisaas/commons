@@ -97,7 +97,7 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 | Encrypted delivery (XChaCha20-Poly1305, X25519) | Production (TEE decryption Planned — `LocalConstituentResolver` active) |
 | Trust tier computation (6 tiers, 0-5) | Production (Congressional submission requires Tier 4+; legacy Tier 4 passport label is unreachable in `deriveAuthorityLevel`) |
 | Engagement tiers (0-4, on-chain portable) | Production |
-| Shadow Atlas (94,166 districts, chunked IPFS) | Production (pinning on Storacha — sunsetting 2026-05-31) |
+| Shadow Atlas (24-slot owned H3 architecture; chunked IPFS) | Congressional slot live (district + house rep + two senators), served at $0 from free public data (congress-legislators + TIGER — not a present cost moat); slots 1-23 (state/local/special-district, incl. all 94,166 boundaries) ingest-pending. The 94,166-district figure is an owned boundary-DATA corpus, not live-targetable coverage. Moat is latent: owned architecture + API-collapse timing + path-to-$0-on-ingestion. (pinning migrated off Storacha) |
 | OAuth (Google, Facebook, LinkedIn, Coinbase) | Production |
 | Template system (create, share, browse, moderate) | Production |
 | AI agents (DM discovery, message writer, subject line) | Production |
@@ -129,7 +129,7 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 | Multi-org networks (parent/child, shared pools) | Production |
 | Embeddable campaign widgets (iframe + postMessage) | Production |
 | Billing (Stripe subscriptions, usage metering) | Production |
-| Geographic targeting (24 boundary types) | Production |
+| Geographic targeting (24 boundary-type slots; congressional live, slots 1-23 ingest-pending) | Congressional Production (district + house rep + two senators from free public data); state/local/special-district officials resolve via paid agentic pipeline (Gemini + Exa + Firecrawl — not a present cost edge), with the owned 24-slot architecture built to host them latently |
 | Onboarding checklist (guided first-run) | Production |
 | Campaign SSE stream (real-time verification updates) | Production |
 | Email deliverability verification (Reacher pipeline) | Production |
@@ -241,7 +241,7 @@ Core platform: identity tiers, wallet integration, org management, billing, laun
 2. Fundraising (Stripe, 0% platform fee)
 3. Automation (trigger→delay→condition→action workflows)
 4. SMS + Calling (Twilio campaigns, patch-through)
-5. Geographic (24 boundary types, cross-border stubs)
+5. Geographic (24 boundary-type slots scaffolded — congressional populated/live, slots 1-23 un-ingested; cross-border stubs)
 6. Public API + SDK (RESTful v1, bearer auth)
 7. Networks (parent/child orgs, shared pools)
 

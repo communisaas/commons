@@ -38,7 +38,7 @@ The hard parts are built. This is the infrastructure no competitor can replicate
 | System | Location | Status |
 |---|---|---|
 | Smart contracts (13 core) | `contracts/src/` | 897 tests, 0 failures |
-| Shadow Atlas (94,166+ districts, 24 boundary types) | `packages/shadow-atlas/` | Production |
+| Shadow Atlas (owned 24-slot H3 boundary architecture; 94,166-district boundary dataset) | `packages/shadow-atlas/` | Congressional slot live (district + house rep + 2 senators, served at $0 from free public data); slots 1-23 (state/local/special districts) ingest-pending |
 | AI Evaluator (5-model panel) | `packages/ai-evaluator/` | 66 tests |
 | Noir circuits (5 circuits, 4 depths) | `packages/crypto/noir/` | Production |
 | Noir prover (browser WASM) | `packages/noir-prover/` | Production |
@@ -71,7 +71,7 @@ src/lib/server/email/
 
 ### List Management (P0)
 
-Supporter management where every record carries identity commitment binding. A supporter is not just an email address — it is optionally linked to a ZK identity layer, which means the org can segment by engagement tier (non-fakeable, on-chain), verification status, and district membership across all 24 boundary types. Traditional platforms segment on tags and self-reported geography. Commons segments on cryptographic proof.
+Supporter management where every record carries identity commitment binding. A supporter is not just an email address — it is optionally linked to a ZK identity layer, which means the org can segment today by engagement tier (non-fakeable, on-chain), verification status, and congressional district membership — with the owned 24-slot boundary architecture in place to extend to state/local/special districts as each slot is ingested (slots 1-23 are ingest-pending). Traditional platforms segment on tags and self-reported geography. Commons segments on cryptographic proof.
 
 ```
 src/lib/server/lists/

@@ -74,11 +74,11 @@ The specimen answers the three staffer intake filters from CMF research (see VER
 
 ### Beat 3: The Coverage
 
-24 boundary types. This is the single fact that eliminates every competitor for local-government groups.
+A 24-slot boundary architecture — congressional live today; state, local, and special-district slots are the build-out path no competitor's data model can host. Congressional is the currently targetable layer (district resolution + house rep + two senators, served at $0 from free public data). The other 23 slots — including the special districts (water, school, transit) at slots 11-23 — are owned architecture, not yet ingested.
 
-Not as a number buried in a paragraph. As a visible list or structured display that triggers recognition: "Wait — they cover water districts? School boards? Transit authorities?" The moment a local-government org sees their boundary type listed is the moment they realize this tool was built for them.
+Not as a number buried in a paragraph. As a visible list or structured display that triggers recognition: "Wait — they have a slot for water districts? School boards? Transit authorities?" The moment a local-government org sees a dedicated place for their boundary type — congressional marked live, their special-district slot marked as the roadmap the architecture is built to host — is the moment they realize this tool was built for them. The recognition lands on "built to reach you," not "already covers you."
 
-Action Network covers ~3 boundary types (federal, state, county). Quorum covers federal + state. Nobody covers the 90,887 local government entities. This isn't a feature comparison — it's a market existence proof.
+Action Network covers ~3 boundary types (federal, state, county). Quorum covers federal + state. No incumbent's data model can address the ~90,887 local government entities. Commons is the only architecture built to hold all of them — congressional ingested now, the rest on the ingestion path. This isn't a feature comparison — it's a market existence proof: we're the only one whose model can, and we're filling it in.
 
 ### Beat 4: The Price as Punchline
 
@@ -131,7 +131,7 @@ The acquisition register (defined in voice.md) applies here. The key distinction
 
 - "What a staffer receives from your current platform:" → the weak version
 - "What a staffer receives from Commons:" → the specimen
-- "24 boundary types." Then the list.
+- "24-slot boundary architecture — congressional live, the rest building." Then a list that distinguishes the live slot from the roadmap slots.
 - "Author free, $10/mo to send." Then the tiers.
 
 ### What we don't say
@@ -160,12 +160,12 @@ The four beachhead segments (from product-roadmap.md) have different recognition
 
 | Segment | Recognition Moment |
 |---------|-------------------|
-| Domain-obsessed local groups | See their boundary type in the coverage list (water districts, school boards, transit authorities) |
+| Domain-obsessed local groups | See a dedicated slot for their boundary type in the 24-slot model (water/school/transit) — the only platform whose architecture has a place for it; congressional live today, their slot on the ingestion path |
 | Science/health advocacy | See "government ID verified" in the specimen — credibility IS their product |
 | Conservative/nonpartisan groups | See "author free, $10/mo to send" + no ideological gatekeeping — the pricing section implicitly includes them |
 | Single-issue orgs | See the specimen framing their issue domain (the example should rotate or be parameterizable) |
 
-The current page uses one specimen example (water district). Consider whether the specimen should be parameterizable by URL parameter (e.g., `/org?domain=education` renders a school board specimen) or whether one well-chosen example serves all segments.
+The headline specimen should use the live, defensible example — a congressional-district specimen — until special-district ingestion lands; a water-district or school-board specimen depends on special-district slot ingestion (slots 11-23) that is not yet shipped, so it can only resolve via the paid agentic pipeline, not the live Shadow Atlas path. Keep domain-specific variants (water district, school board) as clearly-labeled roadmap illustrations. Consider whether the specimen should be parameterizable by URL parameter (e.g., `/org?domain=education` renders a school board specimen, tied to the live slot to avoid implying special-district targetability today) or whether one well-chosen example serves all segments.
 
 ---
 

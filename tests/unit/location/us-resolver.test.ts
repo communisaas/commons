@@ -29,7 +29,6 @@ vi.mock('h3-js', () => ({
 
 vi.mock('$lib/core/shadow-atlas/ipfs-store', () => ({
 	getMerkleSnapshot: vi.fn(),
-	checkIPFSHealth: vi.fn(),
 	isIPFSConfigured: (...args: unknown[]) => mockIsIPFSConfigured(...args),
 	getChunkForCell: (...args: unknown[]) => mockGetChunkForCell(...args),
 	getOfficialsForDistrict: (...args: unknown[]) => mockGetOfficialsForDistrict(...args),

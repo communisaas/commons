@@ -120,14 +120,14 @@ The org thinks in plain language. The system does geospatial work.
 | Org says | System resolves |
 |----------|-----------------|
 | "California State Assembly" | 80 Assembly districts, 80 decision-makers via enrichment pipeline |
-| "SF Board of Supervisors" | 11 supervisorial districts, 11 supervisors |
+| "SF Board of Supervisors" | 11 supervisors via the agentic enrichment pipeline (boundary slot un-ingested) |
 | "My congressperson" | Single CD from org's postal code |
-| "All water districts in LA County" | Subset of 94,166 Shadow Atlas districts matching `water-*` + county FIPS |
+| "All water districts in LA County" | (Latent) Shadow Atlas's owned 24-slot H3 architecture reserves slots 11-23 for special districts (the 94,166 figure is a boundary-DATA count, not live-targetable coverage). Today only congressional (slot 0) is ingested, so water-district targets resolve via the paid agentic decision-maker pipeline (Gemini + Exa + Firecrawl), not an Atlas `water-*` boundary lookup. Full special-district ingestion is the gap-to-close. |
 
 **Resolution chain:**
 
-1. **Geographic scope** — state, county, city, or postal code. Backed by Shadow Atlas 24-boundary-type lookup.
-2. **Office type** — congressional, state legislative upper/lower, county, municipal, school board, judicial, water, transit. Maps to Shadow Atlas `boundaryType`.
+1. **Geographic scope** — state, county, city, or postal code. Backed by the Shadow Atlas 24-boundary-type schema. Congressional (slot 0) is ingested and served live today — district resolution + house rep + two senators, at $0 from free public data (congress-legislators + TIGER). The other 23 slots are owned-but-empty (latent); non-congressional scopes resolve decision-makers via the paid agentic pipeline today. The moat is owned architecture + API-collapse timing + path-to-$0-on-ingestion, not present coverage.
+2. **Office type** — congressional, state legislative upper/lower, county, municipal, school board, judicial, water, transit. Each maps to a Shadow Atlas `boundaryType` slot in the schema. Only the congressional slot is ingested today; the state/county/municipal/school-board/judicial/water/transit slots are owned-but-empty (latent) and currently resolve via the paid agentic decision-maker pipeline rather than a live Atlas boundary lookup.
 3. **Decision-maker enrichment** — Three-phase agentic pipeline (identification, email enrichment, validation). Results write to org DM cache (`OrgResolvedContact`, configurable TTL). See `decision-maker-enrichment-pipeline.md`.
 
 The resolved targets render immediately as the org narrows scope. Spring-animated count shows how many decision-makers are resolved, how many are still in-flight.
@@ -137,7 +137,7 @@ interface CampaignTarget {
   boundaryType: BoundaryType;       // from 24-slot enum
   jurisdiction: string;             // "CA", "SF", "LA-COUNTY"
   districts: {
-    districtId: string;             // R-tree ID: "sldl-CA015", "water-06037-MWD"
+    districtId: string;             // R-tree ID, e.g. congressional "cd-CA11" (live); "sldl-CA015"/"water-06037-MWD" forms reserved for owned-but-un-ingested state/special slots
     decisionMaker?: ResolvedContact;
     resolutionStatus: 'resolved' | 'resolving' | 'failed';
   }[];

@@ -48,7 +48,7 @@ Together they form a system where every civic action carries a cryptographic pro
 - **CWC API Integration** — Congressional message delivery (planned to run inside TEE; currently via `LocalConstituentResolver`)
 - **ERC-8004 Reputation** — On-chain reputation tracking with time decay
 - **Smart Contracts** — DistrictGate, VerifierRegistry, UserRootRegistry, CellMapRegistry, NullifierRegistry, DistrictRegistry, CampaignRegistry
-- **Shadow Atlas** — 94,166 districts, 24 boundary types, chunked IPFS (977 H3 chunks)
+- **Shadow Atlas** — owned 24-slot H3 boundary architecture (94,166 districts of boundary data, 977 H3 chunks on R2). Congressional (slot 0) is ingested and live-served today — district resolution + house rep + two senators, served at $0 from free public data (congress-legislators + TIGER, available to anyone). The remaining 23 slots, including special districts (slots 11-23), are un-ingested; state/local/special-district officials resolve via a paid agentic pipeline (Gemini + Exa + Firecrawl). The moat is owned architecture + API-collapse timing + path-to-$0-on-ingestion — a latent bet, not present full coverage and not a present cost edge.
 
 ### What stays where
 
@@ -230,10 +230,15 @@ VERIFICATION PACKET:
 ┌─────────────────────────────────────────────────────────────────┐
 │ VOTER-PROTOCOL SERVICES                                          │
 ├─────────────────────────────────────────────────────────────────┤
-│ • Shadow Atlas (94,166 districts, chunked IPFS, 24 boundary      │
-│   types, R-tree <50ms p95)                                       │
+│ • Shadow Atlas (owned 24-slot H3 architecture; slot 0 congres-   │
+│   sional ingested/live-served, R-tree <50ms p95; slots 1-23      │
+│   incl. special districts ingest-pending — 94,166-district       │
+│   boundary data + 977 H3 chunks staged on R2)                    │
 │ • Geocoding (Census Bureau + Geocodio)                           │
-│ • District resolution (any level: federal → water district)      │
+│ • District resolution (congressional live today; architecture    │
+│   built to target any level down to water districts once slots   │
+│   1-23 are ingested — state/local/special officials currently    │
+│   resolve via the paid agentic pipeline, not Atlas boundaries)   │
 │ • Merkle tree registration + proof generation                    │
 └─────────────────────────────────────────────────────────────────┘
                             ↓

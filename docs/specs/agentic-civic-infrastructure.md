@@ -175,8 +175,13 @@ The agent queries Shadow Atlas for district matching, not at the identity level:
 LEGISLATIVE MONITORING (per-constituent, no ZK needed):
   Constituent's districts resolved from postal code or prior proof
   → Shadow Atlas /v1/lookup?lat=X&lng=Y (from geocoded postal code)
-  → Returns: DistrictBoundary[] across all 24 BoundaryType slots
-  → Agent matches: "Bill SB-1234 affects your state legislative district (CA sldl-22)"
+  → Returns: DistrictBoundary[] keyed by the 24 BoundaryType slots —
+    congressional (slot 0) is ingested and live today; slots 1-23 are the
+    owned-but-empty architecture (special districts are slots 11-23)
+  → Agent matches (congressional, live): "Bill HR-1234 affects your
+    congressional district (CA-12)". The state-legislative match shown below
+    is the post-ingestion target, not a live return:
+    "Bill SB-1234 affects your state legislative district (CA sldl-22)"
   → Alert delivered to constituent via in-app notification or email digest
 
 DECISION-MAKER RESOLUTION (per-campaign):
@@ -342,9 +347,9 @@ This uses existing `BoundaryType` for district matching. Could live in Shadow At
 
 ### 1. Continuous Legislative Intelligence
 
-**What it is:** A constituent-level agent that monitors legislation, regulatory actions, and public meetings across every district type where the constituent lives — school board agendas, water district rate hearings, transit authority proposals, city council ordinances. The constituent delegates monitoring authority and configures interest areas. Org campaigns are one activation path, but the agent independently surfaces relevant legislation based on the constituent's configured interests, even when no org has created a campaign around it.
+**What it is:** A constituent-level agent that monitors legislation, regulatory actions, and public meetings across every district type where the constituent lives — school board agendas, water district rate hearings, transit authority proposals, city council ordinances (congressional is the live floor today; the non-congressional slots are owned-but-un-ingested, so that monitoring runs through the paid agentic pipeline until those boundaries are ingested). The constituent delegates monitoring authority and configures interest areas. Org campaigns are one activation path, but the agent independently surfaces relevant legislation based on the constituent's configured interests, even when no org has created a campaign around it.
 
-**Why this transcends:** Quorum charges $10K+/year for AI bill tracking at federal and state level only. Commons monitors across all 24 district types. The constituent's agent watches their districts. The infrastructure screens efficiently through shared scanning — bills are screened once per topic cluster, not per person.
+**Why this transcends:** Quorum charges $10K+/year for AI bill tracking at federal and state level only. Commons is architected to monitor all 24 district types — congressional is live today; state/local/special-district monitoring is the path the owned 24-slot atlas + agentic resolution opens as ingestion fills slots 1-23 in (the feed-ingestion service is Gap 2, not yet built). The constituent's agent watches their congressional district today and is built to watch the rest as the atlas fills. The infrastructure screens efficiently through shared scanning — bills are screened once per topic cluster, not per person.
 
 **Architecture:**
 
@@ -355,7 +360,10 @@ CONSTITUENT LAYER (per-person):
   delegation.topics[]                   // constituent's configured interests
   delegation.districtTypes[]            // which of 24 boundary types to monitor
   constituent.districts                 // from ZK proof or postal code resolution
-                                        // e.g., { cd: CA-12, sldl: CA-22, school: SFUSD, ... }
+                                        // e.g., { cd: CA-12 (live, slot 0),
+                                        //         sldl: CA-22, school: SFUSD
+                                        //         (target slots 1-23, populated
+                                        //          as atlas ingestion fills in) }
 
 SHARED SCANNING LAYER (infrastructure):
   Legislation screened once per topic cluster, shared across all constituents
@@ -736,7 +744,7 @@ BENEFIT:
 | Capability | AN | Quorum | Bonterra Que | AdvocacyAI | **Commons** |
 |---|---|---|---|---|---|
 | AI content generation | No | Drafts | Emails/forms | Ads/pages | **Grounding-verified** |
-| AI legislative analysis | No | Federal+state ($10K+) | No | No | **All 24 district types (free)** |
+| AI legislative analysis | No | Federal+state ($10K+) | No | No | **Congressional live (free public data); 24-slot atlas architected for all district types — state/local/special via agentic resolution as ingestion fills in** |
 | Agentic workflows | No | No | Fundraising | No | **Verified delegation** |
 | Agent identity | No | No | No | No | **ZK-bound to mDL** |
 | Agent reasoning proofs | No | No | No | No | **ZKML (future)** |
