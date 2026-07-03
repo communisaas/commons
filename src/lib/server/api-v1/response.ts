@@ -15,6 +15,9 @@ export interface ApiEnvelope<T = unknown> {
 		// only the scanned window rather than the complete set of matching records.
 		truncated?: boolean;
 		scanLimit?: number;
+		// Idempotency key of the metered usage ledger row written for this
+		// request (echoed so a caller can correlate the billed row).
+		requestId?: string;
 	};
 	error?: undefined;
 }
