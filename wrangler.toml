@@ -4,11 +4,24 @@ compatibility_flags = ["nodejs_compat", "nodejs_als"]
 pages_build_output_dir = ".svelte-kit/cloudflare"
 
 
+# NOTE (source of truth): because this file carries `pages_build_output_dir`,
+# Cloudflare treats it as the Pages project configuration — every git deploy
+# REWRITES the project's plain-text env vars to exactly this [vars] block, and
+# dashboard/API-set plain-text vars NOT listed here are DROPPED (secrets are
+# unaffected). Consequence: any release that bumps ATLAS_BASE_URL or the
+# cell-map trust pins (the quarterly publish's push-cids step) MUST land the
+# new values HERE via a commit — an API/dashboard update alone is reverted by
+# the next git deploy. Learned 2026-07: a deploy silently deleted the two
+# EXPECTED_CELL_MAP_* pins and degraded /api/health + snapshot validation.
 [vars]
 PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
 PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
 ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
 VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
+# Cell-map trust pins (public values; paired with the atlas version above and
+# updated together at each publish — see docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md).
+EXPECTED_CELL_MAP_ROOT = "0x14a6fc8eb8f8643bf420290e9d65059006b194ee335ab1cc1664838e5bc56cd3"
+EXPECTED_CELL_MAP_DEPTH = "22"
 # IDENTITY_SIGNING_KEY = "set in Cloudflare dashboard (openssl rand -hex 32)"
 
 # Contract addresses (override for mainnet deployment):
