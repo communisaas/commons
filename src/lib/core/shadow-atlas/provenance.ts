@@ -18,6 +18,9 @@ import type { District } from './client';
 export interface ResolutionProvenance {
 	source: string;
 	tigerVintage: string;
+	// LATENT (2026-07-03): never emitted by client.ts today; the public OpenAPI
+	// spec intentionally omits them. Kept as optional slots to preserve the
+	// upstream ProvenanceRecord mirror contract.
 	authorityLevel?: number;
 	dataVersion?: string;
 }
