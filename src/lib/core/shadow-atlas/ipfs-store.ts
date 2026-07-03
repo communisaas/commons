@@ -252,6 +252,18 @@ export interface MerkleSnapshotData {
 export interface ChunkManifest {
 	version: number;
 	generated: string;
+	/**
+	 * Boundary-geometry vintage string ("TIGER2024"), stamped producer-side.
+	 * Optional: older R2 manifests predate this field. An absent or "unknown"
+	 * vintage MUST map to a null asOf downstream, never a fabricated or borrowed timestamp.
+	 */
+	tigerVintage?: string;
+	/**
+	 * Officials-sync vintage (ISO-8601 string), stamped producer-side (A2) into US/manifest.json.
+	 * Optional: older R2 manifests predate this field. An absent or "unknown"
+	 * value MUST map to a null asOf downstream, never a fabricated or borrowed timestamp.
+	 */
+	officialsGenerated?: string;
 	country: string;
 	totalCells: number;
 	totalChunks: number;
@@ -438,7 +450,7 @@ function getConfigKey(): string {
 // ============================================================================
 
 /** Sentinel error class for "file not found" (all sources returned 404). */
-class ContentNotFoundError extends Error {
+export class ContentNotFoundError extends Error {
 	constructor(path: string) {
 		super(`Content not found: ${path}`);
 		this.name = 'ContentNotFoundError';
@@ -619,6 +631,45 @@ export async function getManifest(country = 'US'): Promise<ChunkManifest> {
 }
 
 /**
+ * Read the manifest's freshness clocks without exposing the full payload.
+ *
+ * Two clocks stay distinct (never collapsed into one `asOf`): boundary-geometry
+ * vintage moves quarterly, officials data on its own cadence. A daily officials
+ * sync must not make a quarter-stale boundary look fresh.
+ *
+ * tigerVintage degrades to null when absent or "unknown" — null is honestly-unknown
+ * (degraded), never a fabricated or borrowed timestamp. officialsGenerated now reads the
+ * manifest's own officials clock (manifest.officialsGenerated) and degrades to null when
+ * absent, "" or "unknown" exactly like tigerVintage — it is never sourced from or collapsed
+ * into the boundary clock, preserving the boundary-vs-officials distinction (no single asOf).
+ *
+ * Rides the existing getManifest memory cache — no second manifest fetch path.
+ */
+export async function getManifestVintage(
+	country = 'US',
+): Promise<{ tigerVintage: string | null; generated: string | null; officialsGenerated: string | null }> {
+	const manifest = await getManifest(country);
+
+	const rawVintage = manifest.tigerVintage;
+	const tigerVintage =
+		typeof rawVintage === 'string' && rawVintage.trim() !== '' && rawVintage.trim() !== 'unknown'
+			? rawVintage
+			: null;
+
+	const generated =
+		typeof manifest.generated === 'string' && manifest.generated !== '' ? manifest.generated : null;
+
+	const officialsGenerated =
+		typeof manifest.officialsGenerated === 'string' &&
+		manifest.officialsGenerated.trim() !== '' &&
+		manifest.officialsGenerated.trim() !== 'unknown'
+			? manifest.officialsGenerated
+			: null;
+
+	return { tigerVintage, generated, officialsGenerated };
+}
+
+/**
  * Fetch district data for a specific H3 cell from the chunked store.
  *
  * 1. Compute cellToParent(cellIndex, 3) to find the parent cell
@@ -776,32 +827,8 @@ export async function getCellChunkByParent(
 }
 
 // ============================================================================
-// Health & Maintenance
+// Maintenance
 // ============================================================================
-
-/**
- * Check primary content source reachability.
- * Uses a lightweight HEAD request.
- */
-export async function checkHealth(): Promise<boolean> {
-	try {
-		const url = CONTENT_CONFIG.atlasBaseUrl || (
-			CONTENT_CONFIG.ipfsGateways.length > 0 ? CONTENT_CONFIG.ipfsGateways[0] : null
-		);
-		if (!url) return false;
-
-		const response = await fetch(url, {
-			method: 'HEAD',
-			signal: AbortSignal.timeout(5_000),
-		});
-		return response.ok || response.status === 400;
-	} catch {
-		return false;
-	}
-}
-
-/** @deprecated Use checkHealth() instead. */
-export const checkIPFSHealth = checkHealth;
 
 /**
  * Clear all cached data. Forces re-fetch on next access.

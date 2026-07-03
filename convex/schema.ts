@@ -873,6 +873,23 @@ export default defineSchema({
 		cellAnchorMode: v.optional(v.string()),
 		atlasVersion: v.optional(v.string()),
 
+		// B3 — district-resolution freshness provenance, snapshotted at issuance.
+		// STRICTLY OPTIONAL, NEVER backfilled. `undefined` = the credential pre-dates
+		// the field (NOT a synonym for fresh/stale). `null` is a real, distinct value:
+		// "honestly unknown freshness at issuance" — NEVER fabricate a now()/borrowed
+		// date, and NEVER copy one clock's value into the other.
+		// boundaryAsOf:  when the BOUNDARY geometry was generated (atlas/TIGER publish
+		//                time). null = resolver had no boundary clock.
+		// officialsAsOf: when the OFFICIALS roster was generated — a distinct clock
+		//                (elections vs census). null = manifest carried no officials
+		//                freshness (today's degraded-but-honest state; A2 republish fills).
+		// tigerVintage:  labels the BOUNDARY clock (e.g. "TIGER2024"); undefined when unknown.
+		// resolutionConfidence: 0..1 confidence the resolver assigned at issuance.
+		boundaryAsOf: v.optional(v.union(v.string(), v.null())),
+		officialsAsOf: v.optional(v.union(v.string(), v.null())),
+		tigerVintage: v.optional(v.string()),
+		resolutionConfidence: v.optional(v.float64()),
+
 		// F1 closure (Stage 5) — on-chain revocation propagation state.
 		// Orthogonal to `revokedAt`: revokedAt marks the credential inactive for
 		// submissions (Stage 1 server gate); revocationStatus tracks whether the
@@ -2226,6 +2243,44 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_keyHash', ['keyHash']),
+
+	usageRecords: defineTable({
+		orgId: v.id('organizations'),
+		keyId: v.optional(v.id('apiKeys')),
+		meter: v.union(
+			v.literal('resolve_address'),
+			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
+			v.literal('resolve_district'),
+			v.literal('resolve_officials')
+		),
+		quantity: v.number(),
+		occurredAt: v.number(),
+		requestId: v.string(), // idempotency key
+		billingPeriodStart: v.number(),
+		reportedToProvider: v.optional(v.boolean()),
+		providerEventId: v.optional(v.string())
+	})
+		.index('by_requestId', ['requestId'])
+		.index('by_reportedToProvider', ['reportedToProvider']),
+
+	// O(1) running counter per (org, meter, billingPeriodStart). Maintained
+	// transactionally alongside the `usageRecords` ledger insert in
+	// `metering.recordUsage`, so the substrate-sale quota gate can read the
+	// period total in a single document read rather than scanning the ledger —
+	// the resolve allowances (up to 500,000/period) exceed Convex's 32,000-doc
+	// transaction scan limit, so a `take(allowance+1)` count is impossible. The
+	// ledger above remains the billing source of truth; this is a derived index.
+	usagePeriodTotals: defineTable({
+		orgId: v.id('organizations'),
+		meter: v.union(
+			v.literal('resolve_address'),
+			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
+			v.literal('resolve_district'),
+			v.literal('resolve_officials')
+		),
+		billingPeriodStart: v.number(),
+		count: v.number()
+	}).index('by_orgId_meter_period', ['orgId', 'meter', 'billingPeriodStart']),
 
 	// ===========================================================================
 	// EVENTS

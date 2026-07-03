@@ -19,14 +19,16 @@ import { env } from '$env/dynamic/private';
 import { latLngToCell } from 'h3-js';
 import {
 	getMerkleSnapshot,
-	checkIPFSHealth,
 	isIPFSConfigured,
 	getChunkForCell,
 	getOfficialsForDistrict,
+	getManifestVintage,
 	clearCache,
+	ContentNotFoundError,
 	type CellDistricts,
 	type OfficialsFileIPFS,
 } from './ipfs-store';
+import type { ResolutionProvenance } from './provenance';
 import {
 	deserializeCellTreeSnapshot,
 	computeClientCellProof,
@@ -34,6 +36,7 @@ import {
 	type CellTreeSnapshot,
 	type CellTreeSnapshotWire,
 } from './cell-tree-snapshot';
+import { applyStalenessGuard } from './redraw-guard';
 
 // Server config (used by engagement reads)
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
@@ -357,6 +360,21 @@ function cellDistrictsToDistrict(cellDistricts: CellDistricts): District {
 }
 
 /**
+ * Infrastructure fault in the atlas content store (R2/IPFS 5xx, timeout, DNS, …).
+ *
+ * Distinct from a genuine coverage miss (clean all-404 → null chunk): an infra fault
+ * means the store could not answer, so the caller must NOT record a district miss —
+ * and in metered contexts must never bill the lookup as a served resolution. Extends
+ * Error, so existing generic `catch` sites keep catching it unchanged.
+ */
+export class AtlasInfraError extends Error {
+	constructor(message: string, options?: ErrorOptions) {
+		super(message, options);
+		this.name = 'AtlasInfraError';
+	}
+}
+
+/**
  * Lookup district and Merkle proof for a given latitude/longitude.
  *
  * IPFS-native: resolves district locally via H3 cell index + cached mapping.
@@ -365,7 +383,8 @@ function cellDistrictsToDistrict(cellDistricts: CellDistricts): District {
  * @param lat - Latitude (-90 to 90)
  * @param lng - Longitude (-180 to 180)
  * @returns District information and Merkle proof (proof is null until cipher integrates)
- * @throws Error if lookup fails or coordinates are invalid
+ * @throws AtlasInfraError when the chunk store fails for infrastructure reasons
+ * @throws Error if lookup otherwise fails or coordinates are invalid
  */
 export async function lookupDistrict(lat: number, lng: number): Promise<DistrictLookupResult> {
 	if (lat < -90 || lat > 90) {
@@ -380,8 +399,25 @@ export async function lookupDistrict(lat: number, lng: number): Promise<District
 
 		let cellDistricts: CellDistricts | undefined;
 
-		// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent
-		const slots = await getChunkForCell(cellIndex);
+		// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent.
+		// getChunkForCell already converts a clean all-404 (ContentNotFoundError) to null —
+		// the honest coverage miss handled below. Any other rejection is an infrastructure
+		// fault (5xx, timeout, DNS), classified as AtlasInfraError so callers never convert
+		// an outage into a district miss.
+		let slots: (string | null)[] | null;
+		try {
+			slots = await getChunkForCell(cellIndex);
+		} catch (err) {
+			if (err instanceof ContentNotFoundError) {
+				slots = null;
+			} else {
+				throw new AtlasInfraError(
+					`Atlas chunk fetch failed for cell ${cellIndex}: ` +
+						(err instanceof Error ? err.message : String(err)),
+					{ cause: err },
+				);
+			}
+		}
 		if (slots) {
 			cellDistricts = { slots };
 		}
@@ -401,6 +437,10 @@ export async function lookupDistrict(lat: number, lng: number): Promise<District
 			cell_id: cellIndex,
 		};
 	} catch (error) {
+		// Infra faults propagate unwrapped so callers can discriminate them from misses.
+		if (error instanceof AtlasInfraError) {
+			throw error;
+		}
 		if (error instanceof Error) {
 			throw new Error(`District lookup failed: ${error.message}`);
 		}
@@ -653,6 +693,14 @@ export function clearCachedTree(): void {
  *
  * IPFS-native: fetches Merkle snapshot from IPFS, deserializes via cipher's
  * cell-tree-snapshot module, then computes path locally. No server call.
+ *
+ * LATENT (2026-07-03): zero external callers — the only consumer is
+ * cell-tree-snapshot.ts validateSnapshotRoot's no-trustedRoot fallback, which
+ * dynamically imports THIS function (a self-referential validation loop), and
+ * merkle-snapshot.json is not published on the live atlas (the fetch 404s).
+ * Going live requires publishing merkle-snapshot.json and anchoring an
+ * on-chain trustedRoot for validateSnapshotRoot. Kept: exported client API
+ * surface.
  *
  * @param cellId - Census tract FIPS code (numeric string or hex)
  * @returns Cell proof with districts
@@ -963,79 +1011,53 @@ export interface OfficialsResponse {
 /**
  * Get federal officials for a congressional district.
  *
- * Dual-path architecture:
- * 1. IPFS chunked (primary): per-district officials file (~2-5 KB). Zero runtime calls.
- * 2. Shadow Atlas HTTP (fallback): when IPFS CIDs are not yet published.
+ * Single-path: the chunked content source (R2/IPFS) serves a per-district
+ * officials file (~2-5 KB), zero runtime server calls. There is deliberately
+ * no HTTP fallback — the officials path fails loud when no content source is
+ * configured or the lookup fails, never silently degrading.
  *
  * @param districtCode - District code like "CA-12", "VT-AL", "DC-00"
  * @returns Officials response with house rep + senators
- * @throws Error if district not found or data unavailable
+ * @throws Error if no content source is configured, district not found, or data unavailable
  */
 export async function getOfficials(districtCode: string): Promise<OfficialsResponse> {
-	// Primary: IPFS chunked (when root CID is published)
-	if (isIPFSConfigured()) {
-		try {
-			const officialsFile = await getOfficialsForDistrict(districtCode);
-			if (!officialsFile) {
-				throw new Error(`No officials data for district ${districtCode}`);
-			}
-
-			return {
-				officials: officialsFile.officials.map(o => ({
-					bioguide_id: o.id,
-					name: o.name,
-					party: o.party,
-					chamber: o.chamber as 'house' | 'senate',
-					state: o.state,
-					district: o.district,
-					office: `${o.chamber === 'senate' ? 'Senator' : 'Representative'}, ${o.state}`,
-					phone: o.phone,
-					contact_form_url: o.contact_form_url,
-					website_url: o.website_url,
-					cwc_code: null,
-					is_voting: o.is_voting,
-					delegate_type: o.delegate_type,
-				})),
-				district_code: districtCode,
-				state: districtCode.split('-')[0],
-				special_status: null,
-				source: 'congress-legislators',
-				cached: true,
-			};
-		} catch (error) {
-			if (error instanceof Error) {
-				throw new Error(`Officials lookup failed [IPFS]: ${error.message}`);
-			}
-			throw new Error('Officials lookup failed with unknown error');
-		}
+	if (!isIPFSConfigured()) {
+		throw new Error(
+			'Officials lookup failed: no atlas content source configured (atlasBaseUrl or ipfsCid)'
+		);
 	}
 
-	// Fallback: Shadow Atlas HTTP (pre-IPFS deployment)
 	try {
-		const url = `${SHADOW_ATLAS_URL}/v1/officials?district=${encodeURIComponent(districtCode)}`;
-		const response = await fetch(url, {
-			headers: { Accept: 'application/json' },
-			signal: AbortSignal.timeout(10_000),
-		});
-
-		if (!response.ok) {
-			throw new Error(`Shadow Atlas officials returned ${response.status}`);
+		const officialsFile = await getOfficialsForDistrict(districtCode);
+		if (!officialsFile) {
+			throw new Error(`No officials data for district ${districtCode}`);
 		}
 
-		const json = await response.json();
-		const data = json.data ?? json;
-
 		return {
-			officials: (data.officials ?? []) as Official[],
-			district_code: data.district_code ?? districtCode,
-			state: data.state ?? districtCode.split('-')[0],
-			special_status: data.special_status ?? null,
+			officials: officialsFile.officials.map(o => ({
+				bioguide_id: o.id,
+				name: o.name,
+				party: o.party,
+				chamber: o.chamber as 'house' | 'senate',
+				state: o.state,
+				district: o.district,
+				office: `${o.chamber === 'senate' ? 'Senator' : 'Representative'}, ${o.state}`,
+				phone: o.phone,
+				contact_form_url: o.contact_form_url,
+				website_url: o.website_url,
+				cwc_code: null,
+				is_voting: o.is_voting,
+				delegate_type: o.delegate_type,
+			})),
+			district_code: districtCode,
+			state: districtCode.split('-')[0],
+			special_status: null,
 			source: 'congress-legislators',
-			cached: data.cached ?? false,
+			cached: true,
 		};
 	} catch (error) {
 		if (error instanceof Error) {
-			throw new Error(`Officials lookup failed [HTTP fallback]: ${error.message}`);
+			throw new Error(`Officials lookup failed [IPFS]: ${error.message}`);
 		}
 		throw new Error('Officials lookup failed with unknown error');
 	}
@@ -1101,7 +1123,87 @@ export interface AddressResolutionResult {
 	} | null;
 	officials: OfficialsResponse | null;
 	cell_id: string | null;
-	vintage: string;
+	/** Resolution provenance — source + boundary-geometry vintage (mirrors upstream ProvenanceRecord). */
+	provenance: ResolutionProvenance;
+	/**
+	 * Confidence in the resolved district. On a clean district hit: boundary-version
+	 * confidence (1.0 enacted) capped by the geocode's place_rank precision (1.0
+	 * housenumber-grade, 0.85 street, 0.6 locality/absent). 0 on a district miss
+	 * (geocode-only, no district). Staleness guards may lower it downstream.
+	 */
+	confidence: number;
+	/**
+	 * Boundary-geometry freshness clock (TIGER vintage's generated date).
+	 * null = honestly-unknown — never a fabricated or borrowed timestamp.
+	 */
+	boundaryAsOf: string | null;
+	/**
+	 * Officials-data freshness clock — independent of boundaryAsOf (two clocks never
+	 * collapsed into one asOf). null = honestly-unknown; never reuses the boundary clock.
+	 */
+	officialsAsOf: string | null;
+	/**
+	 * Loud staleness/miss signal layered by the redraw-staleness guard. null when the
+	 * district is a fresh, confident hit; a human-readable string when the boundary
+	 * vintage is unknown, the controlling map was redrawn after the atlas vintage, or
+	 * the district lookup missed. Confidence is lowered in lockstep — the warning never
+	 * stands alone over a confidence-1.0 result.
+	 */
+	warning: string | null;
+}
+
+/**
+ * Boundary-version status, mirrored locally from the upstream temporal-versioning
+ * BoundaryVersionStatus (NO cross-repo import — coordinated via the R2 manifest).
+ */
+type BoundaryVersionStatus = 'enacted' | 'challenged' | 'enjoined' | 'superseded';
+
+/**
+ * Confidence for a resolved district given its boundary-version status.
+ *
+ * Mirrors voter-protocol's getVersionConfidence semantics (coordinated, never imported):
+ * a clean/enacted boundary is fully trusted (1.0), an actively-challenged map is degraded
+ * (0.4), and an enjoined or superseded boundary is not effective (0.0).
+ *
+ * The manifest currently carries no challenge state, so a clean district hit defaults to
+ * 'enacted' → 1.0. The helper exists so downstream staleness guards can lower confidence
+ * once the manifest surfaces a version status.
+ */
+function districtConfidence(status: BoundaryVersionStatus = 'enacted'): number {
+	switch (status) {
+		case 'enacted':
+			return 1.0;
+		case 'challenged':
+			return 0.4;
+		case 'enjoined':
+		case 'superseded':
+			return 0.0;
+		default:
+			return 1.0;
+	}
+}
+
+/**
+ * Geocode-precision factor from Nominatim's address rank (`place_rank`).
+ *
+ * Nominatim's `place_rank` encodes how PRECISE the matched object is:
+ *   30    = house / building / POI (rooftop-grade)
+ *   28-29 = interpolated housenumber along a street
+ *   26-27 = street / road centroid
+ *   <=25  = locality (city/suburb/postcode) and coarser
+ * (`importance` is prominence/popularity of the match — NOT precision — and never
+ * gates district confidence.)
+ *
+ * Curve: rank >= 28 → 1.0 (housenumber-grade, safely inside a district);
+ * 26-27 → 0.85 (street centroid can sit near a boundary); <= 25 or absent → 0.6
+ * (locality-level matches can straddle district lines; an absent rank maps to the
+ * conservative floor, never a fabricated 1.0).
+ */
+function geocodePrecision(place_rank?: number): number {
+	if (typeof place_rank !== 'number' || !Number.isFinite(place_rank)) return 0.6;
+	if (place_rank >= 28) return 1.0;
+	if (place_rank >= 26) return 0.85;
+	return 0.6;
 }
 
 /** Nominatim geocoding URL — uses Shadow Atlas's self-hosted Nominatim instance */
@@ -1138,7 +1240,12 @@ export async function resolveAddress(address: {
 	searchUrl.searchParams.set('state', state);
 	searchUrl.searchParams.set('postalcode', zip);
 	searchUrl.searchParams.set('countrycodes', countryCode.toLowerCase());
-	searchUrl.searchParams.set('format', 'json');
+	// jsonv2, NOT json: place_rank (the precision signal geocodePrecision keys
+	// on) is only present in the jsonv2 response shape — under plain json it is
+	// absent and every resolution would flatten to the 0.6 unknown-precision
+	// floor. Fields we read (lat/lon/display_name/importance/place_rank) are all
+	// jsonv2-stable; the class->category rename does not touch us.
+	searchUrl.searchParams.set('format', 'jsonv2');
 	searchUrl.searchParams.set('limit', '1');
 	searchUrl.searchParams.set('addressdetails', '1');
 
@@ -1171,6 +1278,7 @@ export async function resolveAddress(address: {
 	// Step 2: District lookup via H3 + IPFS (local, no server call)
 	let district: AddressResolutionResult['district'] = null;
 	let cellId: string | null = null;
+	let districtMissed = false;
 
 	try {
 		const lookupResult = await lookupDistrict(lat, lng);
@@ -1181,9 +1289,14 @@ export async function resolveAddress(address: {
 			district_type: lookupResult.district.districtType,
 		};
 		cellId = lookupResult.cell_id;
-	} catch {
+	} catch (err) {
+		// An atlas infrastructure fault (R2/IPFS outage, timeout) is NOT a coverage miss —
+		// it must never be converted into a districtMissed (billable) result. Propagate it.
+		if (err instanceof AtlasInfraError) throw err;
 		// District lookup failed — coordinates may be outside coverage.
-		// Return geocode result without district (non-fatal).
+		// Return geocode result without district (non-fatal, but a loud miss:
+		// confidence drops to 0 below — this is not a confident geocode-only success).
+		districtMissed = true;
 	}
 
 	// Step 3: Officials via IPFS dataset (local, no server call)
@@ -1196,7 +1309,45 @@ export async function resolveAddress(address: {
 		}
 	}
 
-	return {
+	// Step 4: Provenance + freshness clocks from the R2 manifest.
+	// Two clocks stay distinct — boundary geometry and officials sync move on different
+	// cadences and are never collapsed into one asOf.
+	// Best-effort: a transient R2/IPFS manifest failure DEGRADES the freshness clocks to
+	// null (boundaryAsOf/officialsAsOf null, tigerVintage 'unknown') — it must NEVER throw.
+	// Only geocoding failure throws; a fully-resolved address is not discarded over a clock.
+	let manifest: Awaited<ReturnType<typeof getManifestVintage>> | null = null;
+	try {
+		manifest = await getManifestVintage(countryCode);
+	} catch {
+		manifest = null;
+	}
+	const tigerVintage = manifest?.tigerVintage ?? null;
+	// boundaryAsOf is the boundary-geometry clock: present only when the manifest carries a
+	// real TIGER vintage. null when tigerVintage is null/'unknown'/absent — never fabricated
+	// or borrowed from another clock.
+	const boundaryAsOf = tigerVintage ? (manifest?.generated ?? null) : null;
+	// officialsAsOf is the officials-data clock, independent of boundaryAsOf. It reads the
+	// producer-stamped manifest.officialsGenerated (degraded to null when absent/'unknown'),
+	// stays honestly null when the manifest carries none — NEVER reuse boundaryAsOf for it.
+	const officialsAsOf = manifest?.officialsGenerated ?? null;
+
+	// source names the geocoder (Nominatim); the boundary store is named separately by
+	// tigerVintage. The old overloaded single-string vintage tag is retired — provenance is
+	// structured, not a single conflated tag.
+	const provenance: ResolutionProvenance = {
+		source: 'nominatim',
+		tigerVintage: tigerVintage ?? 'unknown',
+	};
+
+	// A clean district hit is trusted to the geocode's PRECISION: boundary-version
+	// confidence (1.0 enacted) capped by the Nominatim place_rank precision curve — a
+	// street- or locality-grade match can straddle a district line, so it never claims
+	// 1.0. A district miss stays a loud, low-confidence (0) geocode-only result.
+	const confidence = districtMissed
+		? 0
+		: Math.min(districtConfidence(), geocodePrecision(match.place_rank));
+
+	const base: AddressResolutionResult = {
 		geocode: {
 			lat,
 			lng,
@@ -1207,43 +1358,17 @@ export async function resolveAddress(address: {
 		district,
 		officials,
 		cell_id: cellId,
-		vintage: 'shadow-atlas-nominatim',
+		provenance,
+		confidence,
+		boundaryAsOf,
+		officialsAsOf,
+		warning: null,
 	};
+
+	// Redraw/staleness guard — layers a loud warning + lowers confidence when the atlas
+	// boundary is stale (vintage unknown, or a controlling map redrawn after the vintage)
+	// or the district lookup missed. Total/best-effort: it never throws and never discards
+	// the resolved address. Reuses the already-fetched manifest (no second fetch).
+	return applyStalenessGuard(base, manifest, { state });
 }
 
-// ============================================================================
-// Health
-// ============================================================================
-
-/**
- * Health check for the IPFS-based data layer.
- *
- * Checks:
- * 1. IPFS CIDs are configured
- * 2. IPFS gateway is reachable
- * 3. Shadow Atlas relay is reachable (for write operations)
- *
- * @returns true if data layer is operational
- */
-export async function healthCheck(): Promise<boolean> {
-	try {
-		// Check IPFS layer (read operations)
-		if (isIPFSConfigured()) {
-			const ipfsOk = await checkIPFSHealth();
-			if (!ipfsOk) return false;
-		}
-
-		// Check write relay health
-		if (WRITE_RELAY_URL && WRITE_RELAY_URL !== 'http://localhost:3000') {
-			const relayResponse = await fetch(`${WRITE_RELAY_URL}/v1/health`, {
-				headers: { Accept: 'application/json' },
-				signal: AbortSignal.timeout(5_000),
-			});
-			return relayResponse.ok;
-		}
-
-		return true;
-	} catch {
-		return false;
-	}
-}

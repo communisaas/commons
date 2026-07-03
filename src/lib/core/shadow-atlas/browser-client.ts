@@ -286,6 +286,10 @@ async function findCellByLocation(
  * Look up available districts for a given slot from the district index.
  * Returns a list of { hex, label } pairs the browser can display.
  *
+ * LATENT (2026-07-03): 24-slot read path by design; zero consumers today (all
+ * reads hit slot 0). First caller must add ContentNotFoundError→AtlasInfraError
+ * classification (see docs/design/NOOP-MAP.md F7).
+ *
  * @param slot - Slot number (0=congressional, 2=state senate, etc.)
  * @param country - ISO 3166-1 alpha-2 (default: "US")
  */
