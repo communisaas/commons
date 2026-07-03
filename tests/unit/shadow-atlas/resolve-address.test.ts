@@ -8,13 +8,15 @@
  *   - an absent/'unknown' TIGER vintage yields boundaryAsOf null — never a fabricated,
  *     borrowed, or current-time date
  *   - a district miss is a loud, low-confidence (0) geocode-only success: district null
+ *   - the geocode step is atlas-native: the address-index chunk fetch (mocked ipfs-store)
+ *     feeds the real §2 match ladder — no third-party geocoding call exists to mock
  *
- * Pure unit test: h3-js, the IPFS store, the cell-tree snapshot, and Nominatim's HTTP call
- * are all mocked. No real h3 / IPFS / crypto-WASM runs.
+ * Pure unit test: h3-js, the IPFS store (district chunks AND address-index chunks), and
+ * the cell-tree snapshot are all mocked. No real h3 / IPFS / crypto-WASM runs.
  *
- * NOTE ON CONFIG: this file lives under src/, which the default vitest.config.ts does NOT
- * include (it scans tests/** + convex/**). Run it under the config whose include is src/**:
- *   npx vitest run --config vite.config.ts src/lib/core/shadow-atlas/resolve-address.test.ts
+ * NOTE ON CONFIG: this file lives under tests/, covered by the default vitest.config.ts
+ * include (tests/** + convex/**):
+ *   npx vitest run tests/unit/shadow-atlas/resolve-address.test.ts
  */
 
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -24,17 +26,22 @@ const {
 	mockGetChunkForCell,
 	mockGetOfficialsForDistrict,
 	mockGetManifestVintage,
+	mockGetAddressChunk,
+	mockGetNormalizationTable,
 	mockIsIPFSConfigured
 } = vi.hoisted(() => ({
 	mockLatLngToCell: vi.fn(),
 	mockGetChunkForCell: vi.fn(),
 	mockGetOfficialsForDistrict: vi.fn(),
 	mockGetManifestVintage: vi.fn(),
+	mockGetAddressChunk: vi.fn(),
+	mockGetNormalizationTable: vi.fn(),
 	mockIsIPFSConfigured: vi.fn()
 }));
 
-// Empty private env → NOMINATIM_URL falls back to the localhost default; we never hit it
-// because global fetch is mocked below.
+// Empty private env → SHADOW_ATLAS_API_URL falls back to its localhost default; nothing
+// here performs network I/O — every atlas store read (district chunks, address-index
+// chunks, normalization table, manifest clocks) is mocked below.
 vi.mock('$env/dynamic/private', () => ({
 	env: {}
 }));
@@ -44,16 +51,19 @@ vi.mock('h3-js', () => ({
 }));
 
 vi.mock('$lib/core/shadow-atlas/ipfs-store', async (importOriginal) => {
-	// Re-export the REAL ContentNotFoundError: client.ts's infra-vs-miss classifier
-	// discriminates on it with `instanceof`, so the mock must preserve class identity.
+	// Re-export the REAL error classes: client.ts's infra-vs-miss-vs-schema classifier
+	// discriminates on them with `instanceof`, so the mock must preserve class identity.
 	const actual = await importOriginal<typeof import('$lib/core/shadow-atlas/ipfs-store')>();
 	return {
 		ContentNotFoundError: actual.ContentNotFoundError,
+		AddressIndexSchemaError: actual.AddressIndexSchemaError,
 		getMerkleSnapshot: vi.fn(),
 		isIPFSConfigured: (...args: unknown[]) => mockIsIPFSConfigured(...args),
 		getChunkForCell: (...args: unknown[]) => mockGetChunkForCell(...args),
 		getOfficialsForDistrict: (...args: unknown[]) => mockGetOfficialsForDistrict(...args),
 		getManifestVintage: (...args: unknown[]) => mockGetManifestVintage(...args),
+		getAddressChunk: (...args: unknown[]) => mockGetAddressChunk(...args),
+		getNormalizationTable: (...args: unknown[]) => mockGetNormalizationTable(...args),
 		clearCache: vi.fn()
 	};
 });
@@ -65,6 +75,10 @@ vi.mock('$lib/core/shadow-atlas/cell-tree-snapshot', () => ({
 }));
 
 const { resolveAddress, AtlasInfraError } = await import('$lib/core/shadow-atlas/client');
+const { AddressIndexSchemaError } = await import('$lib/core/shadow-atlas/ipfs-store');
+const { setMatchOutcomeSink, ADDRESS_NOT_FOUND_MESSAGE } = await import(
+	'$lib/core/shadow-atlas/geocoder'
+);
 
 const ADDRESS = {
 	street: '1 Civic Center Plaza',
@@ -74,41 +88,37 @@ const ADDRESS = {
 	country: 'US' as const
 };
 
+/** §3 tables (shipped-data shape) — enough for the fixture streets below. */
+const NORM_TABLE = {
+	normVersion: 1,
+	directionals: { NORTH: 'N', N: 'N', NORTHWEST: 'NW', NW: 'NW' },
+	suffixes: { PLAZA: 'PLZ', PLZ: 'PLZ', STREET: 'ST', ST: 'ST', AVENUE: 'AVE', AVE: 'AVE' },
+	units: ['APT', 'STE', 'UNIT', '#'],
+	unitsWithoutValue: ['REAR', 'BSMT']
+};
+
 /**
- * Stub Nominatim's /search response with a single geocoded match.
- *
- * `place_rank` defaults to 30 (house/rooftop-grade). Pass `{}` to simulate an
- * instance that omits the field entirely (must map to the conservative floor).
- *
- * SOURCE-POPULATION PIN: the stub REFUSES a request that does not carry
- * `format=jsonv2`. Nominatim only emits `place_rank` under jsonv2 — under
- * plain `json` the field is absent in prod and every resolution flattens to
- * the 0.6 floor while a permissive fixture (supplying place_rank regardless)
- * stays green. Reverting the format therefore fails these tests loudly.
+ * §2 address chunk for ZIP 94102:
+ *  - '1 Civic Center Plaza' → exact point (matchClass point, factor 1.0)
+ *  - '1450 Market Street'   → parity range  (matchClass range, factor 0.85)
+ *  - any other street       → zipCentroid   (matchClass zip,   factor 0.6)
  */
-function mockNominatimHit(opts: { place_rank?: number } = { place_rank: 30 }): void {
-	globalThis.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
-		const url = String(input);
-		if (url.includes('/search') && !url.includes('format=jsonv2')) {
-			throw new Error(
-				`Nominatim stub: expected format=jsonv2 (place_rank is absent under plain json), got: ${url}`
-			);
+const ADDRESS_CHUNK = {
+	version: 1,
+	schema: 'atlas-address-index',
+	country: 'US',
+	zip: '94102',
+	state: 'CA',
+	zipCentroid: [37.77926, -122.41924],
+	streets: {
+		'CIVIC CENTER PLZ': {
+			p: { '1': [37.7793, -122.4193, 0] }
+		},
+		'MARKET ST': {
+			r: [[1400, 1498, 'E', 37.7793, -122.4193, 37.7751, -122.4172]]
 		}
-		return {
-			ok: true,
-			status: 200,
-			json: async () => [
-				{
-					lat: '37.7793',
-					lon: '-122.4193',
-					display_name: 'San Francisco, CA, 94102',
-					importance: 0.9,
-					...(opts.place_rank !== undefined ? { place_rank: opts.place_rank } : {})
-				}
-			]
-		} as unknown as Response;
-	});
-}
+	}
+};
 
 const OFFICIALS_FILE = {
 	officials: [
@@ -134,10 +144,14 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 		mockLatLngToCell.mockReturnValue('872830828ffffff');
 		mockIsIPFSConfigured.mockReturnValue(true);
 		mockGetOfficialsForDistrict.mockResolvedValue(OFFICIALS_FILE);
-		mockNominatimHit();
+		mockGetNormalizationTable.mockResolvedValue(NORM_TABLE);
+		mockGetAddressChunk.mockResolvedValue(ADDRESS_CHUNK);
+		// Silence the (hash-only) match-outcome metric in test output.
+		setMatchOutcomeSink(() => {});
 	});
 
 	afterEach(() => {
+		setMatchOutcomeSink(null);
 		vi.restoreAllMocks();
 	});
 
@@ -158,7 +172,7 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 			district_type: 'congressional'
 		});
 		expect(result.provenance).toEqual({
-			source: 'nominatim',
+			source: 'atlas-address-index',
 			tigerVintage: 'TIGER2024'
 		});
 		expect(result.confidence).toBe(1.0);
@@ -280,7 +294,7 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 		expect(result.geocode.lat).toBeCloseTo(37.7793);
 	});
 
-	it('(h) headline confidence follows Nominatim place_rank precision on clean hits: 30→1.0, 26→0.85, absent→0.6', async () => {
+	it('(h) headline confidence follows the geocode matchClass precision on clean hits: point→1.0, range→0.85, zip→0.6', async () => {
 		mockGetChunkForCell.mockResolvedValue(['cd-0601']);
 		mockGetManifestVintage.mockResolvedValue({
 			tigerVintage: 'TIGER2024',
@@ -288,21 +302,24 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 			officialsGenerated: null
 		});
 
-		mockNominatimHit({ place_rank: 30 }); // house/rooftop-grade
+		// Exact house-number point (housenumber-grade).
 		expect((await resolveAddress(ADDRESS)).confidence).toBe(1.0);
 
-		mockNominatimHit({ place_rank: 26 }); // street centroid
-		expect((await resolveAddress(ADDRESS)).confidence).toBe(0.85);
+		// Parity-matched range interpolation (street-grade).
+		const range = await resolveAddress({ ...ADDRESS, street: '1450 Market Street' });
+		expect(range.confidence).toBe(0.85);
 
-		mockNominatimHit({}); // rank absent → conservative floor, never a fabricated 1.0
-		const absent = await resolveAddress(ADDRESS);
-		expect(absent.confidence).toBe(0.6);
-		// geocode.confidence stays the prominence-based `importance` value — the
-		// precision curve gates the headline confidence only.
-		expect(absent.geocode.confidence).toBe(0.9);
+		// Street unknown to the index → honest ZIP centroid (locality floor,
+		// never a fabricated 1.0).
+		const zipGrade = await resolveAddress({ ...ADDRESS, street: '9999 Nonexistent Way' });
+		expect(zipGrade.confidence).toBe(0.6);
+		// geocode.confidence carries the SAME precision factor — the geocode's
+		// own placement grade, not a prominence score.
+		expect(zipGrade.geocode.confidence).toBe(0.6);
+		expect(zipGrade.geocode.lat).toBeCloseTo(37.77926);
 	});
 
-	it('(i) staleness guard composes AFTER the precision curve: place_rank 30 + resolved manifest with unknown vintage → 0.4 clamp', async () => {
+	it('(i) staleness guard composes AFTER the precision factor: point-grade geocode + resolved manifest with unknown vintage → 0.4 clamp', async () => {
 		mockGetChunkForCell.mockResolvedValue(['cd-0601']);
 		// Manifest RESOLVED but carries no usable vintage — the genuine known-unknown.
 		mockGetManifestVintage.mockResolvedValue({
@@ -311,11 +328,55 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 			officialsGenerated: null
 		});
 
-		const result = await resolveAddress(ADDRESS); // place_rank 30 via beforeEach default
+		const result = await resolveAddress(ADDRESS); // exact point hit → factor 1.0
 
-		// Curve gives min(1.0, 1.0) = 1.0; the guard then clamps min(1.0, 0.4) = 0.4.
+		// Factor gives min(1.0, 1.0) = 1.0; the guard then clamps min(1.0, 0.4) = 0.4.
 		expect(result.confidence).toBe(0.4);
 		expect(result.warning).toBe('boundary vintage unknown');
 		expect(result.district?.id).toBe('CA-01'); // resolved address never discarded
+	});
+
+	it('(j) a geocode miss (no address chunk for the ZIP) throws the EXACT GEOCODE_MISS message — never a fabricated coordinate', async () => {
+		mockGetAddressChunk.mockResolvedValue(null);
+
+		await expect(resolveAddress(ADDRESS)).rejects.toThrow(ADDRESS_NOT_FOUND_MESSAGE);
+		// Byte-exact: src/routes/api/v1/resolve-address/+server.ts keys its 404
+		// GEOCODE_MISS mapping on this string.
+		const err = await resolveAddress(ADDRESS).catch((e) => e);
+		expect((err as Error).message).toBe('Address not found. Please check your address and try again.');
+		expect(err).not.toBeInstanceOf(AtlasInfraError);
+	});
+
+	it('(k) an address-index infra fault (5xx/timeout) surfaces as AtlasInfraError — never billed as a miss', async () => {
+		mockGetAddressChunk.mockRejectedValue(new Error('All content sources failed for US/addresses/94102.json: r2 returned 503'));
+
+		await expect(resolveAddress(ADDRESS)).rejects.toThrow(AtlasInfraError);
+	});
+
+	it('(l) an address-index schema mismatch propagates as a plain fail-closed error — neither an outage nor a miss', async () => {
+		mockGetAddressChunk.mockRejectedValue(
+			new AddressIndexSchemaError('Address chunk 94102 schema mismatch: version=2 schema=atlas-address-index')
+		);
+
+		const err = await resolveAddress(ADDRESS).catch((e) => e);
+		expect(err).toBeInstanceOf(AddressIndexSchemaError);
+		expect(err).not.toBeInstanceOf(AtlasInfraError);
+		expect((err as Error).message).not.toContain('Address not found');
+	});
+
+	it("(m) the person-layer street:'' postal path resolves zip-grade (0.6 factor) without a street match", async () => {
+		mockGetChunkForCell.mockResolvedValue(['cd-0601']);
+		mockGetManifestVintage.mockResolvedValue({
+			tigerVintage: 'TIGER2024',
+			generated: '2024-09-01T00:00:00.000Z',
+			officialsGenerated: null
+		});
+
+		const result = await resolveAddress({ ...ADDRESS, street: '' });
+
+		expect(result.geocode.lat).toBeCloseTo(37.77926);
+		expect(result.geocode.confidence).toBe(0.6);
+		expect(result.confidence).toBe(0.6); // min(districtConfidence 1.0, zip factor 0.6)
+		expect(result.district?.id).toBe('CA-01');
 	});
 });

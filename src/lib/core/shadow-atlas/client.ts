@@ -29,6 +29,13 @@ import {
 	type OfficialsFileIPFS,
 } from './ipfs-store';
 import type { ResolutionProvenance } from './provenance';
+import { AddressIndexSchemaError } from './ipfs-store';
+import {
+	geocodeAddress,
+	matchClassPrecision,
+	ADDRESS_NOT_FOUND_MESSAGE,
+	type GeocodeResult,
+} from './geocoder';
 import {
 	deserializeCellTreeSnapshot,
 	computeClientCellProof,
@@ -1100,7 +1107,7 @@ export async function resolveLocation(
 }
 
 // ============================================================================
-// Address Resolution — Nominatim geocoding + H3 district + officials
+// Address Resolution — atlas-native geocoding + H3 district + officials
 // ============================================================================
 
 /**
@@ -1127,8 +1134,8 @@ export interface AddressResolutionResult {
 	provenance: ResolutionProvenance;
 	/**
 	 * Confidence in the resolved district. On a clean district hit: boundary-version
-	 * confidence (1.0 enacted) capped by the geocode's place_rank precision (1.0
-	 * housenumber-grade, 0.85 street, 0.6 locality/absent). 0 on a district miss
+	 * confidence (1.0 enacted) capped by the geocode's matchClass precision (1.0
+	 * exact point, 0.85 range interpolation, 0.6 ZIP centroid). 0 on a district miss
 	 * (geocode-only, no district). Staleness guards may lower it downstream.
 	 */
 	confidence: number;
@@ -1184,44 +1191,25 @@ function districtConfidence(status: BoundaryVersionStatus = 'enacted'): number {
 }
 
 /**
- * Geocode-precision factor from Nominatim's address rank (`place_rank`).
- *
- * Nominatim's `place_rank` encodes how PRECISE the matched object is:
- *   30    = house / building / POI (rooftop-grade)
- *   28-29 = interpolated housenumber along a street
- *   26-27 = street / road centroid
- *   <=25  = locality (city/suburb/postcode) and coarser
- * (`importance` is prominence/popularity of the match — NOT precision — and never
- * gates district confidence.)
- *
- * Curve: rank >= 28 → 1.0 (housenumber-grade, safely inside a district);
- * 26-27 → 0.85 (street centroid can sit near a boundary); <= 25 or absent → 0.6
- * (locality-level matches can straddle district lines; an absent rank maps to the
- * conservative floor, never a fabricated 1.0).
- */
-function geocodePrecision(place_rank?: number): number {
-	if (typeof place_rank !== 'number' || !Number.isFinite(place_rank)) return 0.6;
-	if (place_rank >= 28) return 1.0;
-	if (place_rank >= 26) return 0.85;
-	return 0.6;
-}
-
-/** Nominatim geocoding URL — uses Shadow Atlas's self-hosted Nominatim instance */
-const NOMINATIM_URL = env.NOMINATIM_URL || `${SHADOW_ATLAS_URL}/nominatim`;
-
-/**
  * Resolve a structured address to coordinates + district + officials.
  *
- * Fully sovereign pipeline:
- *   1. Nominatim (self-hosted): address → coordinates
- *   2. H3 + IPFS: coordinates → district (local, no server call)
- *   3. IPFS officials dataset: district → representatives (local)
+ * Fully sovereign pipeline — the address never leaves infrastructure we control:
+ *   1. Atlas address index (R2): normalize street (§3) → ZIP5 chunk →
+ *      point/range/centroid match ladder (§2) → coordinates
+ *   2. H3 + atlas chunks: coordinates → district (local, no server call)
+ *   3. Atlas officials dataset: district → representatives (local)
  *
- * Zero external government API calls.
+ * Zero external government API calls, zero third-party geocoding calls.
+ *
+ * Geocode precision is honest: an exact house-number point is 1.0, a
+ * parity-matched range interpolation 0.85, a ZIP-centroid fallback 0.6 — and
+ * a miss THROWS ('Address not found…'), never a fabricated coordinate.
  *
  * @param address - Structured address with street, city, state, zip
  * @returns Geocode + district + officials + cell_id
- * @throws Error if geocoding or district lookup fails
+ * @throws Error with the exact 'Address not found…' message on a geocode miss
+ * @throws AtlasInfraError when the atlas content store fails for infrastructure reasons
+ * @throws AddressIndexSchemaError (plain Error) fail-closed on an address-index schema mismatch
  */
 export async function resolveAddress(address: {
 	street: string;
@@ -1233,47 +1221,30 @@ export async function resolveAddress(address: {
 	const { street, city, state, zip, country } = address;
 	const countryCode = country ?? 'US';
 
-	// Step 1: Geocode via Nominatim
-	const searchUrl = new URL(`${NOMINATIM_URL}/search`);
-	searchUrl.searchParams.set('street', street);
-	searchUrl.searchParams.set('city', city);
-	searchUrl.searchParams.set('state', state);
-	searchUrl.searchParams.set('postalcode', zip);
-	searchUrl.searchParams.set('countrycodes', countryCode.toLowerCase());
-	// jsonv2, NOT json: place_rank (the precision signal geocodePrecision keys
-	// on) is only present in the jsonv2 response shape — under plain json it is
-	// absent and every resolution would flatten to the 0.6 unknown-precision
-	// floor. Fields we read (lat/lon/display_name/importance/place_rank) are all
-	// jsonv2-stable; the class->category rename does not touch us.
-	searchUrl.searchParams.set('format', 'jsonv2');
-	searchUrl.searchParams.set('limit', '1');
-	searchUrl.searchParams.set('addressdetails', '1');
-
-	const geocodeRes = await fetch(searchUrl.toString(), {
-		headers: { 'User-Agent': 'commons/1.0' },
-		signal: AbortSignal.timeout(15_000),
-	});
-
-	if (!geocodeRes.ok) {
-		throw new Error(`Nominatim geocoding returned ${geocodeRes.status}`);
+	// Step 1: Geocode from the atlas address index (normalize → ZIP5 chunk →
+	// §2 match ladder). The error taxonomy mirrors the district-chunk path:
+	//   - the EXACT 'Address not found…' miss message propagates untouched
+	//     (API layers key their 404 GEOCODE_MISS on it);
+	//   - a fail-closed schema mismatch (AddressIndexSchemaError) propagates
+	//     as a plain Error — a producer bug is never an outage and NEVER a
+	//     silent fallback;
+	//   - anything else from the store is an infrastructure fault (5xx,
+	//     timeout, DNS), classified as AtlasInfraError so callers never
+	//     convert an outage into a billable miss.
+	let geocoded: GeocodeResult;
+	try {
+		geocoded = await geocodeAddress({ street, city, state, zip, country: countryCode });
+	} catch (err) {
+		if (err instanceof AddressIndexSchemaError) throw err;
+		if (err instanceof Error && err.message === ADDRESS_NOT_FOUND_MESSAGE) throw err;
+		throw new AtlasInfraError(
+			`Atlas address-index fetch failed: ${err instanceof Error ? err.message : String(err)}`,
+			{ cause: err },
+		);
 	}
 
-	const geocodeResults = await geocodeRes.json();
-
-	if (!Array.isArray(geocodeResults) || geocodeResults.length === 0) {
-		throw new Error('Address not found. Please check your address and try again.');
-	}
-
-	const match = geocodeResults[0];
-	const lat = parseFloat(match.lat);
-	const lng = parseFloat(match.lon);
-
-	if (isNaN(lat) || isNaN(lng)) {
-		throw new Error('Geocoding returned invalid coordinates');
-	}
-
-	// Build matched address from Nominatim display_name
-	const matchedAddress = match.display_name || `${street}, ${city}, ${state}, ${zip}`;
+	const { lat, lng, matchedAddress } = geocoded;
+	const precisionFactor = matchClassPrecision(geocoded.matchClass);
 
 	// Step 2: District lookup via H3 + IPFS (local, no server call)
 	let district: AddressResolutionResult['district'] = null;
@@ -1331,28 +1302,30 @@ export async function resolveAddress(address: {
 	// stays honestly null when the manifest carries none — NEVER reuse boundaryAsOf for it.
 	const officialsAsOf = manifest?.officialsGenerated ?? null;
 
-	// source names the geocoder (Nominatim); the boundary store is named separately by
-	// tigerVintage. The old overloaded single-string vintage tag is retired — provenance is
-	// structured, not a single conflated tag.
+	// source names the geocoder (the atlas address index); the boundary store is named
+	// separately by tigerVintage. The old overloaded single-string vintage tag is retired —
+	// provenance is structured, not a single conflated tag.
 	const provenance: ResolutionProvenance = {
-		source: 'nominatim',
+		source: 'atlas-address-index',
 		tigerVintage: tigerVintage ?? 'unknown',
 	};
 
 	// A clean district hit is trusted to the geocode's PRECISION: boundary-version
-	// confidence (1.0 enacted) capped by the Nominatim place_rank precision curve — a
-	// street- or locality-grade match can straddle a district line, so it never claims
-	// 1.0. A district miss stays a loud, low-confidence (0) geocode-only result.
+	// confidence (1.0 enacted) capped by the matchClass precision factor — a range- or
+	// ZIP-grade match can straddle a district line, so it never claims 1.0. A district
+	// miss stays a loud, low-confidence (0) geocode-only result.
 	const confidence = districtMissed
 		? 0
-		: Math.min(districtConfidence(), geocodePrecision(match.place_rank));
+		: Math.min(districtConfidence(), precisionFactor);
 
 	const base: AddressResolutionResult = {
 		geocode: {
 			lat,
 			lng,
 			matched_address: matchedAddress,
-			confidence: match.importance ?? 0.8,
+			// The matchClass precision factor IS the geocode confidence — precision
+			// of the placement, not prominence of the match.
+			confidence: precisionFactor,
 			country: countryCode,
 		},
 		district,

@@ -278,6 +278,28 @@ export interface ChunkManifest {
 		totalChunks: number;
 		chunks: Record<string, { path: string; cellCount: number }>;
 	};
+	/**
+	 * Address-index freshness clock (SEAM-CONTRACT §4) — a THIRD clock,
+	 * distinct from `generated` (boundary) and `officialsGenerated`
+	 * (officials); never collapsed, never borrowed. Same degrade-to-null
+	 * discipline: absent / "" / "unknown" → null, never fabricated.
+	 */
+	addressIndexGenerated?: string;
+	/** Address-index seam version (§4). Consumer hard-asserts === 1 on read. */
+	addressIndexVersion?: number;
+	/** Address-index section (§4). Absent = index not yet published (fail-closed). */
+	addressIndex?: {
+		schemaVersion: number;
+		normVersion: number;
+		normTable: { path: string; sha256: string; bytes: number };
+		nadVintage?: string;
+		addrfeatVintage?: string;
+		totalChunks: number;
+		totalStreets: number;
+		totalPoints: number;
+		totalRanges: number;
+		chunkIndex: { path: string; sha256: string; bytes: number };
+	};
 }
 
 /** A single chunk file from the chunked pipeline */
@@ -372,6 +394,60 @@ export interface DistrictIndex {
 }
 
 // ============================================================================
+// Address Index Types (SEAM-CONTRACT v1 — atlas-address-index)
+// ============================================================================
+
+/**
+ * Fail-closed schema violation in the address index (SEAM-CONTRACT §4):
+ * wrong chunk `version`/`schema`, wrong manifest `addressIndexVersion`/
+ * `addressIndex.schemaVersion`/`normVersion`, or an addressIndex that is not
+ * published at all. Deliberately a PLAIN Error subclass (never an infra
+ * fault): callers surface it as a typed 502 RESOLVE_FAILED, never a silent
+ * ZIP fallback and never an ATLAS_UNAVAILABLE outage.
+ */
+export class AddressIndexSchemaError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'AddressIndexSchemaError';
+	}
+}
+
+/**
+ * Street record inside a ZIP5 address chunk (§2).
+ * - `p`: house-number string key → [lat, lng, src] (src: 0 = NAD, 1 = TIGER)
+ * - `r`: [fromHn, toHn, parity, fromLat, fromLng, toLat, toLng]
+ */
+export interface AddressStreetRecord {
+	p?: Record<string, [number, number, number]>;
+	r?: [number, number, 'E' | 'O' | 'B', number, number, number, number][];
+}
+
+/** ZIP5 address chunk published at `{country}/addresses/{zip5}.json` (§2). */
+export interface AddressChunkFile {
+	version: 1;
+	schema: 'atlas-address-index';
+	country: string;
+	zip: string;
+	state: string;
+	zipCentroid: [number, number];
+	streets: Record<string, AddressStreetRecord>;
+}
+
+/**
+ * Normalization tables published at `{country}/addresses/normalization.json`
+ * (§3): shipped DATA the consumer fetches — never a vendored copy. The
+ * algorithm lives in geocoder.ts; `normVersion` is the handshake between the
+ * two (table skew impossible by construction; algorithm skew fails loudly).
+ */
+export interface NormalizationTable {
+	normVersion: number;
+	directionals: Record<string, string>;
+	suffixes: Record<string, string>;
+	units: string[];
+	unitsWithoutValue: string[];
+}
+
+// ============================================================================
 // In-Memory Cache (CF Workers — per-isolate, cleared on redeploy)
 // ============================================================================
 
@@ -429,6 +505,12 @@ const cellChunkCache = new LRUCache<CellChunkFile>(50, CACHE_TTL_MS);
 
 /** District index cache — one per country, ~50-200 KB */
 const districtIndexCache = new LRUCache<DistrictIndex>(5, CACHE_TTL_MS);
+
+/** Address chunk cache: ~100 KB raw per ZIP5 chunk, max 50 = ~5 MB/isolate */
+const addressChunkCache = new LRUCache<AddressChunkFile>(50, CACHE_TTL_MS);
+
+/** Normalization table cache — one table per artifact epoch, ~10 KB */
+const normalizationTableCache = new LRUCache<NormalizationTable>(1, CACHE_TTL_MS);
 
 /** Manifest cache — keyed by country code, refreshed when config changes or TTL expires */
 const manifestCacheMap = new Map<string, { configKey: string; data: ChunkManifest; fetchedAt: number }>();
@@ -827,6 +909,216 @@ export async function getCellChunkByParent(
 }
 
 // ============================================================================
+// Address Index API (SEAM-CONTRACT v1 — normalize → ZIP5 chunk → match)
+// ============================================================================
+
+/** Round-trip check for the contract's 5-decimal-place coordinate pin (§2). */
+function isFiveDpNumber(v: unknown): v is number {
+	return typeof v === 'number' && Number.isFinite(v) && Math.round(v * 1e5) / 1e5 === v;
+}
+
+/**
+ * Hard-assert the manifest's address-index seam version (§4). Fail-closed:
+ * an absent addressIndex section, or any version other than 1, throws
+ * AddressIndexSchemaError — never a silent ZIP fallback, never treated as
+ * a coverage miss. A 404 on the manifest itself means the atlas (and so the
+ * index) is not published at this source: the same fail-closed path.
+ */
+async function assertAddressIndexPublished(
+	country: string,
+): Promise<NonNullable<ChunkManifest['addressIndex']>> {
+	let manifest: ChunkManifest;
+	try {
+		manifest = await getManifest(country);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) {
+			throw new AddressIndexSchemaError(
+				`Atlas manifest not found for ${country} — address index unavailable`,
+			);
+		}
+		throw err;
+	}
+
+	const section = manifest.addressIndex;
+	if (!section) {
+		throw new AddressIndexSchemaError(
+			`Manifest for ${country} has no addressIndex — index not yet published`,
+		);
+	}
+	if (manifest.addressIndexVersion !== 1) {
+		throw new AddressIndexSchemaError(
+			`Unsupported addressIndexVersion ${String(manifest.addressIndexVersion)} (expected 1)`,
+		);
+	}
+	if (section.schemaVersion !== 1) {
+		throw new AddressIndexSchemaError(
+			`Unsupported addressIndex.schemaVersion ${String(section.schemaVersion)} (expected 1)`,
+		);
+	}
+	if (section.normVersion !== 1) {
+		throw new AddressIndexSchemaError(
+			`Unsupported addressIndex.normVersion ${String(section.normVersion)} (expected 1)`,
+		);
+	}
+	return section;
+}
+
+/**
+ * Validate an address chunk against the §2 record shape. Fail-closed: any
+ * violation is an AddressIndexSchemaError (producer bug / wrong artifact),
+ * never a silent fallback. Runs once per fetch (cache hits skip it).
+ */
+function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
+	if (chunk.version !== 1 || chunk.schema !== 'atlas-address-index') {
+		throw new AddressIndexSchemaError(
+			`Address chunk ${zip5} schema mismatch: version=${String(chunk.version)} schema=${String(chunk.schema)}`,
+		);
+	}
+	if (chunk.zip !== zip5) {
+		throw new AddressIndexSchemaError(
+			`Address chunk key mismatch: requested ${zip5}, chunk says ${String(chunk.zip)}`,
+		);
+	}
+	if (
+		!Array.isArray(chunk.zipCentroid) ||
+		chunk.zipCentroid.length !== 2 ||
+		!isFiveDpNumber(chunk.zipCentroid[0]) ||
+		!isFiveDpNumber(chunk.zipCentroid[1])
+	) {
+		throw new AddressIndexSchemaError(`Address chunk ${zip5} has an invalid zipCentroid`);
+	}
+	if (typeof chunk.streets !== 'object' || chunk.streets === null || Array.isArray(chunk.streets)) {
+		throw new AddressIndexSchemaError(`Address chunk ${zip5} has an invalid streets map`);
+	}
+	for (const [street, rec] of Object.entries(chunk.streets)) {
+		if (rec.p !== undefined) {
+			for (const [hn, point] of Object.entries(rec.p)) {
+				if (
+					!Array.isArray(point) ||
+					point.length !== 3 ||
+					!isFiveDpNumber(point[0]) ||
+					!isFiveDpNumber(point[1]) ||
+					(point[2] !== 0 && point[2] !== 1)
+				) {
+					throw new AddressIndexSchemaError(
+						`Address chunk ${zip5} street "${street}" point "${hn}" violates §2`,
+					);
+				}
+			}
+		}
+		if (rec.r !== undefined) {
+			for (const range of rec.r) {
+				const [fromHn, toHn, parity, fromLat, fromLng, toLat, toLng] = range;
+				if (
+					!Array.isArray(range) ||
+					range.length !== 7 ||
+					!Number.isInteger(fromHn) ||
+					!Number.isInteger(toHn) ||
+					fromHn > toHn ||
+					(parity !== 'E' && parity !== 'O' && parity !== 'B') ||
+					!isFiveDpNumber(fromLat) ||
+					!isFiveDpNumber(fromLng) ||
+					!isFiveDpNumber(toLat) ||
+					!isFiveDpNumber(toLng)
+				) {
+					throw new AddressIndexSchemaError(
+						`Address chunk ${zip5} street "${street}" range violates §2`,
+					);
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Fetch the ZIP5 address chunk at `{country}/addresses/{zip5}.json`.
+ *
+ * - zip5 is asserted against `^\d{5}$` BEFORE any path is built.
+ * - HTTP 404 on the chunk → null (an honest coverage MISS signal, not infra).
+ * - Schema violations (§4 manifest handshake, §2 chunk shape) → fail-closed
+ *   AddressIndexSchemaError.
+ * - Network/5xx/timeout → generic Error, exactly as existing chunk fetches;
+ *   callers classify those as infrastructure faults, never as misses.
+ */
+export async function getAddressChunk(
+	zip5: string,
+	country = 'US',
+): Promise<AddressChunkFile | null> {
+	if (!/^\d{5}$/.test(zip5)) {
+		throw new Error(`Address chunk key must be a 5-digit ZIP, got "${String(zip5).slice(0, 20)}"`);
+	}
+	const safeCountry = sanitizePathSegment(country);
+
+	await assertAddressIndexPublished(safeCountry);
+
+	const cacheKey = `addr:${safeCountry}/${zip5}`;
+	const cached = addressChunkCache.get(cacheKey);
+	if (cached) return cached;
+
+	let chunk: AddressChunkFile;
+	try {
+		chunk = await fetchContent<AddressChunkFile>(`${safeCountry}/addresses/${zip5}.json`);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) return null;
+		throw err;
+	}
+
+	validateAddressChunk(chunk, zip5);
+	addressChunkCache.set(cacheKey, chunk);
+	return chunk;
+}
+
+/**
+ * Fetch the shipped §3 normalization tables at
+ * `{country}/addresses/normalization.json`.
+ *
+ * The consumer NEVER vendors its own copy — the tables are artifact data,
+ * sha256-pinned in the manifest. `normVersion` is hard-asserted to 1 on both
+ * the manifest section and the fetched table (the algorithm-version
+ * handshake): skew fails loudly with AddressIndexSchemaError. A 404 is also
+ * fail-closed — an index without its tables is an unusable index, never a
+ * silent fallback.
+ */
+export async function getNormalizationTable(country = 'US'): Promise<NormalizationTable> {
+	const safeCountry = sanitizePathSegment(country);
+
+	await assertAddressIndexPublished(safeCountry);
+
+	const cacheKey = `norm:${safeCountry}`;
+	const cached = normalizationTableCache.get(cacheKey);
+	if (cached) return cached;
+
+	let table: NormalizationTable;
+	try {
+		table = await fetchContent<NormalizationTable>(`${safeCountry}/addresses/normalization.json`);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) {
+			throw new AddressIndexSchemaError(
+				`normalization.json not found for ${safeCountry} — address index unusable`,
+			);
+		}
+		throw err;
+	}
+
+	if (table.normVersion !== 1) {
+		throw new AddressIndexSchemaError(
+			`Unsupported normVersion ${String(table.normVersion)} in normalization.json (expected 1)`,
+		);
+	}
+	if (
+		typeof table.directionals !== 'object' || table.directionals === null ||
+		typeof table.suffixes !== 'object' || table.suffixes === null ||
+		!Array.isArray(table.units) ||
+		!Array.isArray(table.unitsWithoutValue)
+	) {
+		throw new AddressIndexSchemaError('normalization.json is missing required tables');
+	}
+
+	normalizationTableCache.set(cacheKey, table);
+	return table;
+}
+
+// ============================================================================
 // Maintenance
 // ============================================================================
 
@@ -839,6 +1131,8 @@ export async function clearCache(): Promise<void> {
 	officialsFileCache.clear();
 	cellChunkCache.clear();
 	districtIndexCache.clear();
+	addressChunkCache.clear();
+	normalizationTableCache.clear();
 	manifestCacheMap.clear();
 }
 
