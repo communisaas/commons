@@ -4,6 +4,7 @@ import type { FunctionReference } from "convex/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
+import { requireInternalSecret } from "./_internalAuth";
 import {
   startOfMonthUTC,
   decideIndividualAuthoring,
@@ -1137,8 +1138,9 @@ export const findByContentHash = query({
  * Find template by slug (uniqueness check).
  */
 export const findBySlug = query({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
+  args: { slug: v.string(), _secret: v.string() },
+  handler: async (ctx, { slug, _secret }) => {
+    requireInternalSecret(_secret);
     return await ctx.db
       .query("templates")
       .withIndex("by_slug", (q) => q.eq("slug", slug))
@@ -1376,6 +1378,11 @@ export const patchMetadata = mutation({
     topics: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
+    const { userId } = await requireAuth(ctx);
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
+    if (template.userId !== userId) throw new Error("Unauthorized");
+
     await ctx.db.patch(args.templateId, {
       updatedAt: Date.now(),
       ...(args.domain !== undefined ? { domain: args.domain } : {}),

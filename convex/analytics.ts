@@ -10,6 +10,7 @@ import { mutation, internalMutation, internalQuery, internalAction } from "./_ge
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { requireInternalSecret } from "./_internalAuth";
 
 // =============================================================================
 // DP CONSTANTS — mirrors src/lib/types/analytics/metrics.ts PRIVACY object
@@ -111,6 +112,7 @@ type AnalyticsInternalApi = {
 // Rate limiting + validation happens in the SvelteKit endpoint; this just writes.
 export const incrementBatch = mutation({
   args: {
+    _secret: v.string(),
     increments: v.array(
       v.object({
         metric: v.string(),
@@ -123,6 +125,7 @@ export const incrementBatch = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     // Defense-in-depth: validate even if SvelteKit endpoint already checked
     const batch = args.increments.slice(0, MAX_BATCH_SIZE);
     const now = Date.now();

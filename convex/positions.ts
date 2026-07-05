@@ -6,6 +6,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { requireInternalSecret } from "./_internalAuth";
 
 /**
  * Get aggregate position counts for a template. K-floor at 5 on stance counts,
@@ -225,12 +226,14 @@ export const getEngagementByDistrict = query({
  */
 export const register = mutation({
   args: {
+    _secret: v.string(),
     templateId: v.id("templates"),
     identityCommitment: v.string(),
     stance: v.string(),
     districtCode: v.optional(v.string()),
   },
-  handler: async (ctx, { templateId, identityCommitment, stance, districtCode }) => {
+  handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
+    requireInternalSecret(_secret);
     // Check template exists
     const template = await ctx.db.get(templateId);
     if (!template) throw new Error("Template not found");

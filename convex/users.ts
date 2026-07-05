@@ -1091,6 +1091,8 @@ export const getActiveCredentialHash = query({
 export const getIdentityForAtlas = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);
 		if (!user) return null;
 		// Derive authority from trustTier so leaf computation matches client-side value.
@@ -1112,6 +1114,8 @@ export const getIdentityForAtlas = query({
 export const getIdentityForEngagement = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);
 		if (!user) return null;
 		return {

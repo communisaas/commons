@@ -2869,11 +2869,19 @@ export const getPastDeliveries = query({
 export const getCampaignByDebateId = query({
 	args: { debateId: v.id('debates') },
 	handler: async (ctx, { debateId }) => {
+		const { userId } = await requireAuth(ctx);
 		const campaign = await ctx.db
 			.query('campaigns')
 			.withIndex('by_debateId', (idx) => idx.eq('debateId', debateId))
 			.first();
 		if (!campaign) return null;
+		const membership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) =>
+				q.eq('userId', userId).eq('orgId', campaign.orgId),
+			)
+			.first();
+		if (!membership) return null;
 		return {
 			_id: campaign._id,
 			orgId: campaign.orgId,

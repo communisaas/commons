@@ -7,6 +7,7 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
 import { verifyCronSecret } from '$lib/server/cron-auth';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { FEATURES } from '$lib/config/features';
 
 // ── Rate limiting ────────────────────────────────────────────────────────
@@ -243,6 +244,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 		// Update per-argument AI scores via Convex
 		await serverMutation(api.debates.updateArgumentScores, {
+			_secret: getInternalSecret(),
 			debateId: debateId as Id<'debates'>,
 			scores: evaluationResult.aggregatedScores.map((agg) => ({
 				argumentIndex: agg.argumentIndex,

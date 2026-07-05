@@ -1024,6 +1024,7 @@ export const findNullifier = query({
  */
 export const updateArgumentScores = mutation({
   args: {
+    _secret: v.string(),
     debateId: v.id("debates"),
     scores: v.array(v.object({
       argumentIndex: v.number(),
@@ -1033,7 +1034,8 @@ export const updateArgumentScores = mutation({
       modelAgreement: v.float64(),
     })),
   },
-  handler: async (ctx, { debateId, scores }) => {
+  handler: async (ctx, { _secret, debateId, scores }) => {
+    requireInternalSecret(_secret);
     for (const score of scores) {
       const arg = await ctx.db
         .query("debateArguments")
