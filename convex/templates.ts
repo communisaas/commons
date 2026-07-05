@@ -92,31 +92,23 @@ function normalizeTags(topics: unknown): string[] {
   return Array.from(seen).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/**
- * Strip the server-only embedding vectors from a template document before it
- * crosses the client boundary. The 768-dim `topicEmbedding` / `locationEmbedding`
- * and the per-tag `tagEmbeddings` are consumed only server-side (relatedness +
- * concept edges, vector search); they are never part of a client-returned
- * template. Every other field is preserved.
- */
-function stripEmbeddings<T extends Record<string, unknown>>(
-  doc: T,
-): Omit<T, "topicEmbedding" | "locationEmbedding" | "tagEmbeddings"> {
-  const { topicEmbedding, locationEmbedding, tagEmbeddings, ...rest } = doc;
-  return rest;
-}
-
-function stripInternal<T extends Record<string, unknown>>(doc: T) {
-  const {
-    userId,
-    contentHash,
-    reputationDelta,
-    flaggedByModeration,
-    consensusApproved,
-    verificationStatus,
-    ...rest
-  } = stripEmbeddings(doc);
-  return rest;
+function toPublicTemplate(t: Doc<"templates">, score?: number | null) {
+  const projected = {
+    _id: t._id,
+    slug: t.slug,
+    title: t.title,
+    description: t.description,
+    domain: resolveDomain(t),
+    domainHue: t.domainHue ?? undefined,
+    type: t.type,
+    deliveryMethod: t.deliveryMethod,
+    status: t.status,
+    isPublic: t.isPublic,
+    verifiedSends: t.verifiedSends < 5 ? null : t.verifiedSends,
+    uniqueDistricts: t.uniqueDistricts < 3 ? null : t.uniqueDistricts,
+    createdAt: new Date(t._creationTime).toISOString(),
+  };
+  return score === undefined ? projected : { ...projected, _score: score };
 }
 
 /**
@@ -142,21 +134,7 @@ export const list = query({
       });
     return {
       ...result,
-      page: result.page.map((template) => ({
-        _id: template._id,
-        slug: template.slug,
-        title: template.title,
-        description: template.description,
-        domain: resolveDomain(template),
-        domainHue: template.domainHue ?? undefined,
-        type: template.type,
-        deliveryMethod: template.deliveryMethod,
-        status: template.status,
-        isPublic: template.isPublic,
-        verifiedSends: template.verifiedSends < 5 ? null : template.verifiedSends,
-        uniqueDistricts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-        createdAt: new Date(template._creationTime).toISOString(),
-      })),
+      page: result.page.map((template) => toPublicTemplate(template)),
     };
   },
 });
@@ -850,6 +828,7 @@ export const search = action({
       // for multi-field AND that VectorFilterBuilder can't express natively.
       const scored = templates
         .filter((t): t is NonNullable<typeof t> => t != null)
+        .filter((t) => t.status === "published" && t.isPublic)
         .filter((t) =>
           secondaryFilter ? t[secondaryFilter[0]] === secondaryFilter[1] : true,
         )
@@ -867,7 +846,7 @@ export const search = action({
         .slice(0, limit);
 
       return {
-        templates: scored.map(stripInternal),
+        templates: scored.map((t) => toPublicTemplate(t, t._score)),
         method: "semantic" as const,
       };
     } catch {
@@ -880,7 +859,7 @@ export const search = action({
       }) as Doc<"templates">[];
 
       return {
-        templates: textResults.map((t) => stripInternal({ ...t, _score: null })),
+        templates: textResults.map((t) => toPublicTemplate(t, null)),
         method: "keyword" as const,
       };
     }
@@ -908,8 +887,10 @@ export const textSearch = internalQuery({
         return search;
       });
 
-    const results = await q.take(args.limit);
-    return results;
+    const results = await q.take(Math.min(args.limit + 20, 50));
+    return results
+      .filter((t) => t.status === "published" && t.isPublic)
+      .slice(0, args.limit);
   },
 });
 

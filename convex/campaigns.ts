@@ -2593,17 +2593,7 @@ export const getDeliveryMetrics = query({
 		const { userId } = await requireAuth(ctx);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) {
-			return {
-				sent: 0,
-				delivered: 0,
-				opened: 0,
-				clicked: 0,
-				bounced: 0,
-				deliveryRate: 0,
-				openRate: 0,
-				clickRate: 0,
-				bounceRate: 0
-			};
+			throw new Error('You are not a member of this organization');
 		}
 		await requireOrgMembership(ctx, campaign.orgId, userId);
 

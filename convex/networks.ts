@@ -644,7 +644,7 @@ export const remove = mutation({
  * Check if an org is an active member of a network (for public API stats).
  */
 export const checkMembership = query({
-	args: { networkId: v.id('orgNetworks'), orgId: v.id('organizations'), _secret: v.optional(v.string()) },
+	args: { networkId: v.id('orgNetworks'), orgId: v.id('organizations'), _secret: v.string() },
 	handler: async (ctx, { networkId, orgId, _secret }) => {
 		requireInternalSecret(_secret);
 		const member = await ctx.db

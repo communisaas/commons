@@ -144,23 +144,6 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			});
 		}
 
-		// Backfill tokenIdentifier for sessions created before the fix.
-		// Backfill failure leaves the user without a tokenIdentifier, which
-		// the Convex helpers fall back to email lookup for — degraded but
-		// not broken. Worth logging so an operator sees if the backfill
-		// itself is stuck (would surface as 100% backfill-call rate vs
-		// expected one-shot decay as legacy users get migrated).
-		if (!user.tokenIdentifier) {
-			serverMutation(api.authOps.backfillTokenIdentifier, {}).catch((err) => {
-				console.warn(
-					'[hooks.server] tokenIdentifier backfill failed for user=' +
-						(user._id as string).slice(0, 8) +
-						'...:',
-					err instanceof Error ? err.message : String(err)
-				);
-			});
-		}
-
 		event.locals.user = {
 			id: user._id as string,
 			email: userEmail,
@@ -222,6 +205,16 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 				const token = await mintConvexToken(event.locals.user);
 				if (token) {
 					event.locals.convexToken = token;
+					if (!user.tokenIdentifier) {
+						serverMutation(api.authOps.backfillTokenIdentifier, {}).catch((err) => {
+							console.warn(
+								'[hooks.server] tokenIdentifier backfill failed for user=' +
+									(user._id as string).slice(0, 8) +
+									'...:',
+								err instanceof Error ? err.message : String(err)
+							);
+						});
+					}
 				}
 			} catch (err) {
 				console.warn(
