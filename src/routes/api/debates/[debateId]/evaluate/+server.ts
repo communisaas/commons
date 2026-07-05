@@ -131,6 +131,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			const escResult = await escalateToGovernance(debate.debateIdOnchain);
 
 			await serverMutation(api.debates.updateStatus, {
+				_secret: getInternalSecret(),
 				debateId: debateId as Id<'debates'>,
 				status: 'awaiting_governance',
 				aiResolution: {
@@ -220,6 +221,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 		// Update debate status via Convex
 		await serverMutation(api.debates.updateStatus, {
+			_secret: getInternalSecret(),
 			debateId: debateId as Id<'debates'>,
 			status: 'resolved',
 			aiResolution: {

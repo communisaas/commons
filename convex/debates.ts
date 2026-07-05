@@ -607,6 +607,7 @@ export const cosign = mutation({
  */
 export const updateStatus = mutation({
   args: {
+    _secret: v.string(),
     debateId: v.id("debates"),
     status: v.string(),
     winningStance: v.optional(v.string()),
@@ -619,21 +620,28 @@ export const updateStatus = mutation({
     appealDeadline: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
+    requireInternalSecret(args._secret);
 
     const debate = await ctx.db.get(args.debateId);
     if (!debate) throw new Error("Debate not found");
 
-    // Verify caller has org editor/owner role if debate is tied to a template with an org
+    // Defense-in-depth for org-tied debates: when the caller carries a user
+    // identity (the resolve/settle user-session routes) require org
+    // editor/owner. The operator CRON routes carry no identity and are gated
+    // by CRON_SECRET plus the internal secret above.
     if (debate.templateId) {
       const template = await ctx.db.get(debate.templateId);
       const templateOrgId = template?.orgId;
       if (templateOrgId) {
-        const membership = await ctx.db.query("orgMemberships")
-          .withIndex("by_userId_orgId", (q) => q.eq("userId", user.userId).eq("orgId", templateOrgId))
-          .unique();
-        if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
-          throw new Error("Only org editors/owners can change debate status");
+        const identity = await ctx.auth.getUserIdentity();
+        if (identity) {
+          const { userId } = await requireAuth(ctx);
+          const membership = await ctx.db.query("orgMemberships")
+            .withIndex("by_userId_orgId", (q) => q.eq("userId", userId).eq("orgId", templateOrgId))
+            .unique();
+          if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
+            throw new Error("Only org editors/owners can change debate status");
+          }
         }
       }
     }
