@@ -12,6 +12,7 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { campaignType, campaignStatus } from './_validators';
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import type { Doc, Id } from './_generated/dataModel';
 import {
 	computeOrgScopedEmailHash,
@@ -1493,6 +1494,7 @@ export const createCampaignAction = internalMutation({
  */
 export const submitAction = action({
 	args: {
+		_secret: v.string(),
 		campaignId: v.string(),
 		email: v.string(),
 		name: v.string(),
@@ -1509,6 +1511,7 @@ export const submitAction = action({
 		atlasVersion: v.optional(v.string())
 	},
 	handler: async (ctx, args): Promise<SubmitActionResult> => {
+		requireInternalSecret(args._secret);
 		// Validate early
 		if (!args.email) throw new Error('Email is required');
 		if (!args.name) throw new Error('Name is required');
@@ -2587,6 +2590,23 @@ export const updateDeliveryStatus = internalMutation({
 export const getDeliveryMetrics = query({
 	args: { campaignId: v.id('campaigns') },
 	handler: async (ctx, { campaignId }) => {
+		const { userId } = await requireAuth(ctx);
+		const campaign = await ctx.db.get(campaignId);
+		if (!campaign) {
+			return {
+				sent: 0,
+				delivered: 0,
+				opened: 0,
+				clicked: 0,
+				bounced: 0,
+				deliveryRate: 0,
+				openRate: 0,
+				clickRate: 0,
+				bounceRate: 0
+			};
+		}
+		await requireOrgMembership(ctx, campaign.orgId, userId);
+
 		const deliveries = await ctx.db
 			.query('campaignDeliveries')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))

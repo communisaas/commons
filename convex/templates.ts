@@ -106,6 +106,19 @@ function stripEmbeddings<T extends Record<string, unknown>>(
   return rest;
 }
 
+function stripInternal<T extends Record<string, unknown>>(doc: T) {
+  const {
+    userId,
+    contentHash,
+    reputationDelta,
+    flaggedByModeration,
+    consensusApproved,
+    verificationStatus,
+    ...rest
+  } = stripEmbeddings(doc);
+  return rest;
+}
+
 /**
  * Public: List published templates, ordered by creation time (newest first).
  * Paginated via Convex's built-in pagination. Embedding vectors are stripped —
@@ -127,7 +140,24 @@ export const list = query({
         numItems: Math.min(args.paginationOpts.numItems, 50),
         cursor: args.paginationOpts.cursor ?? null,
       });
-    return { ...result, page: result.page.map(stripEmbeddings) };
+    return {
+      ...result,
+      page: result.page.map((template) => ({
+        _id: template._id,
+        slug: template.slug,
+        title: template.title,
+        description: template.description,
+        domain: resolveDomain(template),
+        domainHue: template.domainHue ?? undefined,
+        type: template.type,
+        deliveryMethod: template.deliveryMethod,
+        status: template.status,
+        isPublic: template.isPublic,
+        verifiedSends: template.verifiedSends < 5 ? null : template.verifiedSends,
+        uniqueDistricts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
+        createdAt: new Date(template._creationTime).toISOString(),
+      })),
+    };
   },
 });
 
@@ -149,8 +179,13 @@ export const getBySlug = query({
       return null;
     }
 
-    // Strip the server-only embedding vectors before returning to the client.
-    return stripEmbeddings(template);
+    return {
+      id: template._id,
+      slug: template.slug,
+      title: template.title,
+      status: template.status,
+      isPublic: template.isPublic,
+    };
   },
 });
 
@@ -832,7 +867,7 @@ export const search = action({
         .slice(0, limit);
 
       return {
-        templates: scored,
+        templates: scored.map(stripInternal),
         method: "semantic" as const,
       };
     } catch {
@@ -845,7 +880,7 @@ export const search = action({
       }) as Doc<"templates">[];
 
       return {
-        templates: textResults.map((t) => ({ ...t, _score: null })),
+        templates: textResults.map((t) => stripInternal({ ...t, _score: null })),
         method: "keyword" as const,
       };
     }
@@ -926,7 +961,7 @@ export const listByUser = query({
 export const listByOrg = query({
   args: { slug: v.string() },
   handler: async (ctx, { slug }) => {
-    const org = await loadOrg(ctx, slug);
+    const { org } = await requireOrgRole(ctx, slug, "member");
 
     const templates = await ctx.db
       .query("templates")
@@ -1120,12 +1155,13 @@ export const updateEmbeddings = mutation({
  */
 export const findByContentHash = query({
   args: { userId: v.string(), contentHash: v.string() },
-  handler: async (ctx, { userId, contentHash }) => {
+  handler: async (ctx, { contentHash }) => {
+    const { userId: authUserId } = await requireAuth(ctx);
     const templates = await ctx.db
       .query("templates")
       .filter((q) =>
         q.and(
-          q.eq(q.field("userId"), userId),
+          q.eq(q.field("userId"), authUserId),
           q.eq(q.field("contentHash"), contentHash),
         ),
       )
@@ -1141,17 +1177,18 @@ export const findBySlug = query({
   args: { slug: v.string(), _secret: v.string() },
   handler: async (ctx, { slug, _secret }) => {
     requireInternalSecret(_secret);
-    return await ctx.db
+    const template = await ctx.db
       .query("templates")
       .withIndex("by_slug", (q) => q.eq("slug", slug))
       .first();
+    return template ? { _id: template._id } : null;
   },
 });
 
 /**
  * Get user's org membership (for quota check).
  */
-export const getUserOrgId = query({
+export const getUserOrgId = internalQuery({
   args: { userId: v.string() },
   handler: async (ctx, { userId }) => {
     const membership = await ctx.db

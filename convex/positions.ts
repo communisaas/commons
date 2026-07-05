@@ -3,7 +3,7 @@
  * Used by: src/routes/s/[slug]/+page.server.ts (Power Landscape)
  */
 
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireInternalSecret } from "./_internalAuth";
@@ -45,10 +45,12 @@ export const getCounts = query({
  */
 export const getExisting = query({
   args: {
+    _secret: v.string(),
     templateId: v.id("templates"),
     identityCommitment: v.string(),
   },
-  handler: async (ctx, { templateId, identityCommitment }) => {
+  handler: async (ctx, { _secret, templateId, identityCommitment }) => {
+    requireInternalSecret(_secret);
     const reg = await ctx.db
       .query("positionRegistrations")
       .withIndex("by_templateId_identityCommitment", (idx) =>
@@ -68,7 +70,7 @@ export const getExisting = query({
 /**
  * Get position deliveries for a registration.
  */
-export const getDeliveries = query({
+export const getDeliveries = internalQuery({
   args: {
     registrationId: v.id("positionRegistrations"),
     deliveryMethod: v.optional(v.string()),
@@ -99,7 +101,7 @@ export const getDeliveries = query({
  * identityCommitment (optional) covers the tier-3+ stance-linked path used
  * when DEBATE market mechanics apply.
  */
-export const getUserDeliveries = query({
+export const getUserDeliveries = internalQuery({
   args: {
     templateId: v.id("templates"),
     pseudonymousId: v.string(),
@@ -267,12 +269,14 @@ export const register = mutation({
  */
 export const confirmMailtoSend = mutation({
   args: {
+    _secret: v.string(),
     templateId: v.id("templates"),
     identityCommitment: v.string(),
     districtCode: v.optional(v.string()),
     templateTitle: v.optional(v.string()),
   },
-  handler: async (ctx, { templateId, identityCommitment, districtCode, templateTitle }) => {
+  handler: async (ctx, { _secret, templateId, identityCommitment, districtCode, templateTitle }) => {
+    requireInternalSecret(_secret);
     // Upsert position (support implied by sending)
     const existing = await ctx.db
       .query("positionRegistrations")
@@ -314,6 +318,7 @@ export const confirmMailtoSend = mutation({
  */
 export const batchRegisterDeliveries = mutation({
   args: {
+    _secret: v.string(),
     registrationId: v.id("positionRegistrations"),
     identityCommitment: v.string(),
     recipients: v.array(v.object({
@@ -326,7 +331,8 @@ export const batchRegisterDeliveries = mutation({
       encryptedRecipientName: v.optional(v.string()),
     })),
   },
-  handler: async (ctx, { registrationId, identityCommitment, recipients }) => {
+  handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
+    requireInternalSecret(_secret);
     // Verify registration exists and belongs to caller
     const reg = await ctx.db.get(registrationId);
     if (!reg || reg.identityCommitment !== identityCommitment) {
@@ -380,6 +386,7 @@ function slugify(s: string): string {
  */
 export const recordDirectDeliveries = mutation({
   args: {
+    _secret: v.string(),
     pseudonymousId: v.string(),
     templateId: v.id("templates"),
     districtCode: v.optional(v.string()),
@@ -393,7 +400,8 @@ export const recordDirectDeliveries = mutation({
       encryptedRecipientName: v.optional(v.string()),
     })),
   },
-  handler: async (ctx, { pseudonymousId, templateId, districtCode, recipients }) => {
+  handler: async (ctx, { _secret, pseudonymousId, templateId, districtCode, recipients }) => {
+    requireInternalSecret(_secret);
     const now = Date.now();
     // Pre-fetch the user's existing deliveries for this template to deduplicate
     const existing = await ctx.db

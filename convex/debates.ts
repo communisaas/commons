@@ -27,6 +27,14 @@ declare const process: { env: Record<string, string | undefined> };
 
 const insertDebateRef = makeFunctionReference<"mutation">("debates:insertDebate") as unknown as FunctionReference<"mutation", "internal">;
 const getCallerTrustTierRef = makeFunctionReference<"query">("debates:_getCallerTrustTier") as unknown as FunctionReference<"query", "internal", { tokenIdentifier: string }, number>;
+const getCampaignEditorRoleRef = makeFunctionReference<"query">(
+  "debates:_getCampaignEditorRoleForCaller",
+) as unknown as FunctionReference<
+  "query",
+  "internal",
+  { campaignId: Id<"campaigns"> },
+  "owner" | "editor" | "member" | null
+>;
 // Re-imported here so the listPublic args validator can reference the
 // closed union — declared inline because debates.ts already manages
 // many makeFunctionReference helpers and centralizing imports keeps
@@ -1116,6 +1124,7 @@ export const getCampaignForDebate = query({
 export const listAwaitingGovernance = query({
   args: {},
   handler: async (ctx) => {
+    await requireAuth(ctx);
     const debates = await ctx.db
       .query("debates")
       .filter((q) => q.eq(q.field("status"), "awaiting_governance"))
@@ -1271,6 +1280,13 @@ export const forceSpawnDebateForCampaign = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
+    const memberRole = await ctx.runQuery(getCampaignEditorRoleRef, {
+      campaignId: args.campaignId,
+    });
+    if (memberRole !== "owner" && memberRole !== "editor") {
+      throw new Error("Only org editors/owners can spawn debates for a campaign");
+    }
+
     const campaign: {
       _id: Id<"campaigns">;
       title: string;
@@ -1371,6 +1387,22 @@ export const _getCampaignForSpawn = internalQuery({
       debateId: c.debateId ?? null,
       verifiedActionCount: c.verifiedActionCount ?? 0,
     };
+  },
+});
+
+export const _getCampaignEditorRoleForCaller = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const { userId } = await requireAuth(ctx);
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_userId_orgId", (q) =>
+        q.eq("userId", userId).eq("orgId", campaign.orgId),
+      )
+      .first();
+    return membership?.role ?? null;
   },
 });
 

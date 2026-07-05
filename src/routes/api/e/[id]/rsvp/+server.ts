@@ -5,6 +5,7 @@
  * POST /api/e/[id]/rsvp — Public RSVP to an event
  */
 
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { json, error } from '@sveltejs/kit';
 import { serverAction } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -70,6 +71,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	try {
 		// Convex action handles: event validation, capacity claiming, PII encryption, upsert dedup, rsvpCount
 		const result = await serverAction(api.events.createRsvp, {
+			_secret: getInternalSecret(),
 			eventId: params.id as Id<'events'>,
 			email: email.toLowerCase(),
 			name: name.trim(),

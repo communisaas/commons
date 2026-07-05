@@ -15,6 +15,7 @@ import * as Sentry from '@sentry/sveltekit';
 import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { api } from '$lib/convex';
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
@@ -92,7 +93,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			return resolve(event);
 		}
 
-		const result = await serverQuery(api.authOps.validateSession, { sessionId });
+		const result = await serverQuery(api.authOps.validateSession, { _secret: getInternalSecret(), sessionId });
 
 		if (!result) {
 			event.cookies.delete(SESSION_COOKIE, { path: '/' });
@@ -150,9 +151,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 		// itself is stuck (would surface as 100% backfill-call rate vs
 		// expected one-shot decay as legacy users get migrated).
 		if (!user.tokenIdentifier) {
-			serverMutation(api.authOps.backfillTokenIdentifier, {
-				userId: user._id as string
-			}).catch((err) => {
+			serverMutation(api.authOps.backfillTokenIdentifier, {}).catch((err) => {
 				console.warn(
 					'[hooks.server] tokenIdentifier backfill failed for user=' +
 						(user._id as string).slice(0, 8) +
