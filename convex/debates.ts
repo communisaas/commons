@@ -1132,6 +1132,12 @@ export const getCampaignForDebate = query({
 export const listAwaitingGovernance = query({
   args: {},
   handler: async (ctx) => {
+    // Deliberately community-visible (any authenticated user), NOT operator-only:
+    // this is the participatory-governance queue. Safe because the return below is
+    // an explicit allowlist projection (no userId/PII/internal fields) and
+    // participation counts (argumentCount, uniqueParticipants) are K-floored to null
+    // below 5. The debate propositions, arguments, and AI resolutions are public
+    // deliberative content by design.
     await requireAuth(ctx);
     const debates = await ctx.db
       .query("debates")
