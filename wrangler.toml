@@ -16,8 +16,8 @@ pages_build_output_dir = ".svelte-kit/cloudflare"
 [vars]
 PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
 PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
-ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
-VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260418"
+ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
+VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
 # Cell-map trust pins (public values; paired with the atlas version above and
 # updated together at each publish — see docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md).
 EXPECTED_CELL_MAP_ROOT = "0x14a6fc8eb8f8643bf420290e9d65059006b194ee335ab1cc1664838e5bc56cd3"
