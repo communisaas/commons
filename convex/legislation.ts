@@ -12,6 +12,7 @@ import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
 import type { Doc, Id } from './_generated/dataModel';
 import { requireAuth, requireOrgRole } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import { upsertExternalId } from './_externalIds';
 
 declare const process: { env: Record<string, string | undefined> };
@@ -3017,11 +3018,12 @@ async function hashScorecardSnapshot(
 
 /**
  * Get pending alerts for an org (used by SSE alert stream).
- * Takes orgId directly — auth is handled by the SvelteKit route.
+ * Callable only by trusted server code that holds INTERNAL_API_SECRET.
  */
 export const getPendingAlertsByOrgId = query({
-	args: { orgId: v.id('organizations'), limit: v.optional(v.number()) },
+	args: { _secret: v.string(), orgId: v.id('organizations'), limit: v.optional(v.number()) },
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		const limit = args.limit ?? 10;
 		const alerts = await ctx.db
 			.query('legislativeAlerts')

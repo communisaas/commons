@@ -27,6 +27,14 @@ declare const process: { env: Record<string, string | undefined> };
 
 const insertDebateRef = makeFunctionReference<"mutation">("debates:insertDebate") as unknown as FunctionReference<"mutation", "internal">;
 const getCallerTrustTierRef = makeFunctionReference<"query">("debates:_getCallerTrustTier") as unknown as FunctionReference<"query", "internal", { tokenIdentifier: string }, number>;
+const getCampaignEditorRoleRef = makeFunctionReference<"query">(
+  "debates:_getCampaignEditorRoleForCaller",
+) as unknown as FunctionReference<
+  "query",
+  "internal",
+  { campaignId: Id<"campaigns"> },
+  "owner" | "editor" | "member" | null
+>;
 // Re-imported here so the listPublic args validator can reference the
 // closed union — declared inline because debates.ts already manages
 // many makeFunctionReference helpers and centralizing imports keeps
@@ -599,6 +607,7 @@ export const cosign = mutation({
  */
 export const updateStatus = mutation({
   args: {
+    _secret: v.string(),
     debateId: v.id("debates"),
     status: v.string(),
     winningStance: v.optional(v.string()),
@@ -611,21 +620,28 @@ export const updateStatus = mutation({
     appealDeadline: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
+    requireInternalSecret(args._secret);
 
     const debate = await ctx.db.get(args.debateId);
     if (!debate) throw new Error("Debate not found");
 
-    // Verify caller has org editor/owner role if debate is tied to a template with an org
+    // Defense-in-depth for org-tied debates: when the caller carries a user
+    // identity (the resolve/settle user-session routes) require org
+    // editor/owner. The operator CRON routes carry no identity and are gated
+    // by CRON_SECRET plus the internal secret above.
     if (debate.templateId) {
       const template = await ctx.db.get(debate.templateId);
       const templateOrgId = template?.orgId;
       if (templateOrgId) {
-        const membership = await ctx.db.query("orgMemberships")
-          .withIndex("by_userId_orgId", (q) => q.eq("userId", user.userId).eq("orgId", templateOrgId))
-          .unique();
-        if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
-          throw new Error("Only org editors/owners can change debate status");
+        const identity = await ctx.auth.getUserIdentity();
+        if (identity) {
+          const { userId } = await requireAuth(ctx);
+          const membership = await ctx.db.query("orgMemberships")
+            .withIndex("by_userId_orgId", (q) => q.eq("userId", userId).eq("orgId", templateOrgId))
+            .unique();
+          if (!membership || (membership.role !== "owner" && membership.role !== "editor")) {
+            throw new Error("Only org editors/owners can change debate status");
+          }
         }
       }
     }
@@ -1024,6 +1040,7 @@ export const findNullifier = query({
  */
 export const updateArgumentScores = mutation({
   args: {
+    _secret: v.string(),
     debateId: v.id("debates"),
     scores: v.array(v.object({
       argumentIndex: v.number(),
@@ -1033,7 +1050,8 @@ export const updateArgumentScores = mutation({
       modelAgreement: v.float64(),
     })),
   },
-  handler: async (ctx, { debateId, scores }) => {
+  handler: async (ctx, { _secret, debateId, scores }) => {
+    requireInternalSecret(_secret);
     for (const score of scores) {
       const arg = await ctx.db
         .query("debateArguments")
@@ -1114,6 +1132,13 @@ export const getCampaignForDebate = query({
 export const listAwaitingGovernance = query({
   args: {},
   handler: async (ctx) => {
+    // Deliberately community-visible (any authenticated user), NOT operator-only:
+    // this is the participatory-governance queue. Safe because the return below is
+    // an explicit allowlist projection (no userId/PII/internal fields) and
+    // participation counts (argumentCount, uniqueParticipants) are K-floored to null
+    // below 5. The debate propositions, arguments, and AI resolutions are public
+    // deliberative content by design.
+    await requireAuth(ctx);
     const debates = await ctx.db
       .query("debates")
       .filter((q) => q.eq(q.field("status"), "awaiting_governance"))
@@ -1269,6 +1294,13 @@ export const forceSpawnDebateForCampaign = action({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new Error("Not authenticated");
 
+    const memberRole = await ctx.runQuery(getCampaignEditorRoleRef, {
+      campaignId: args.campaignId,
+    });
+    if (memberRole !== "owner" && memberRole !== "editor") {
+      throw new Error("Only org editors/owners can spawn debates for a campaign");
+    }
+
     const campaign: {
       _id: Id<"campaigns">;
       title: string;
@@ -1369,6 +1401,22 @@ export const _getCampaignForSpawn = internalQuery({
       debateId: c.debateId ?? null,
       verifiedActionCount: c.verifiedActionCount ?? 0,
     };
+  },
+});
+
+export const _getCampaignEditorRoleForCaller = internalQuery({
+  args: { campaignId: v.id("campaigns") },
+  handler: async (ctx, { campaignId }) => {
+    const { userId } = await requireAuth(ctx);
+    const campaign = await ctx.db.get(campaignId);
+    if (!campaign) return null;
+    const membership = await ctx.db
+      .query("orgMemberships")
+      .withIndex("by_userId_orgId", (q) =>
+        q.eq("userId", userId).eq("orgId", campaign.orgId),
+      )
+      .first();
+    return membership?.role ?? null;
   },
 });
 

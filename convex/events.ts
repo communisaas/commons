@@ -516,6 +516,7 @@ export const patchRsvpEmail = internalMutation({
  */
 export const createRsvp = action({
 	args: {
+		_secret: v.string(),
 		eventId: v.id('events'),
 		email: v.string(),
 		name: v.string(),
@@ -527,6 +528,7 @@ export const createRsvp = action({
 		supporterId: v.optional(v.id('supporters'))
 	},
 	handler: async (ctx, args): Promise<InsertRsvpResult> => {
+		requireInternalSecret(args._secret);
 		// Action-boundary length caps. The SvelteKit `/api/e/[id]/rsvp`
 		// route enforces these too, but Convex actions are directly
 		// callable from any authenticated client.
@@ -699,6 +701,7 @@ export const checkIn = mutation({
  */
 export const publicCheckIn = mutation({
 	args: {
+		_secret: v.string(),
 		eventId: v.id('events'),
 		// Optional checkin code. The mutation derives `verifiedTrust`
 		// server-side via constant-time compare against `event.checkinCode`;
@@ -721,6 +724,7 @@ export const publicCheckIn = mutation({
 		identityCommitment: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		if (!args.emailHash || args.emailHash.length === 0 || args.emailHash.length > 128) {
 			throw new Error('EMAIL_HASH_INVALID');
 		}

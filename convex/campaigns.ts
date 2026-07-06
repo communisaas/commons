@@ -12,6 +12,7 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { campaignType, campaignStatus } from './_validators';
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import type { Doc, Id } from './_generated/dataModel';
 import {
 	computeOrgScopedEmailHash,
@@ -1493,6 +1494,7 @@ export const createCampaignAction = internalMutation({
  */
 export const submitAction = action({
 	args: {
+		_secret: v.string(),
 		campaignId: v.string(),
 		email: v.string(),
 		name: v.string(),
@@ -1509,6 +1511,7 @@ export const submitAction = action({
 		atlasVersion: v.optional(v.string())
 	},
 	handler: async (ctx, args): Promise<SubmitActionResult> => {
+		requireInternalSecret(args._secret);
 		// Validate early
 		if (!args.email) throw new Error('Email is required');
 		if (!args.name) throw new Error('Name is required');
@@ -2587,6 +2590,13 @@ export const updateDeliveryStatus = internalMutation({
 export const getDeliveryMetrics = query({
 	args: { campaignId: v.id('campaigns') },
 	handler: async (ctx, { campaignId }) => {
+		const { userId } = await requireAuth(ctx);
+		const campaign = await ctx.db.get(campaignId);
+		if (!campaign) {
+			throw new Error('You are not a member of this organization');
+		}
+		await requireOrgMembership(ctx, campaign.orgId, userId);
+
 		const deliveries = await ctx.db
 			.query('campaignDeliveries')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
@@ -2869,11 +2879,19 @@ export const getPastDeliveries = query({
 export const getCampaignByDebateId = query({
 	args: { debateId: v.id('debates') },
 	handler: async (ctx, { debateId }) => {
+		const { userId } = await requireAuth(ctx);
 		const campaign = await ctx.db
 			.query('campaigns')
 			.withIndex('by_debateId', (idx) => idx.eq('debateId', debateId))
 			.first();
 		if (!campaign) return null;
+		const membership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) =>
+				q.eq('userId', userId).eq('orgId', campaign.orgId),
+			)
+			.first();
+		if (!membership) return null;
 		return {
 			_id: campaign._id,
 			orgId: campaign.orgId,

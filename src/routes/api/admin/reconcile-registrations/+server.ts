@@ -21,6 +21,7 @@ import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
 const SHADOW_ATLAS_REGISTRATION_TOKEN = env.SHADOW_ATLAS_REGISTRATION_TOKEN || '';
@@ -77,6 +78,7 @@ export const POST: RequestHandler = async (event) => {
 					};
 
 					await serverMutation(api.users.upsertRegistration, {
+						_secret: getInternalSecret(),
 						userId: data.userId as Id<'users'>,
 						identityCommitment: data.identityCommitment,
 						leafIndex: data.atlasResult.leafIndex,
@@ -116,7 +118,9 @@ export const POST: RequestHandler = async (event) => {
 
 		if (treeInfoResponse.ok) {
 			const treeInfo = await treeInfoResponse.json() as { treeSize: number };
-			const pgCount = await serverQuery(api.users.countRegistrations, {});
+			const pgCount = await serverQuery(api.users.countRegistrations, {
+				_secret: getInternalSecret()
+			});
 
 			// Tree size >= pg count is expected (tree has padding/replaced zeros).
 			// pg count > tree size is a bug.
@@ -130,6 +134,7 @@ export const POST: RequestHandler = async (event) => {
 
 			// Spot-check a sample of recent registrations (max 50 per run)
 			const recentRegistrations = await serverQuery(api.users.listRecentRegistrations, {
+				_secret: getInternalSecret(),
 				limit: 50
 			});
 

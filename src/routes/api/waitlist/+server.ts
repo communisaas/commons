@@ -10,6 +10,7 @@ import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import crypto from 'node:crypto';
 import type { RequestHandler } from './$types';
 
@@ -52,6 +53,7 @@ export const POST: RequestHandler = async ({ locals, request, getClientAddress }
 	const normalized = email.toLowerCase().trim();
 
 	await serverMutation(api.waitlist.join, {
+		_secret: getInternalSecret(),
 		email: normalized,
 		emailHash: hashEmail(normalized),
 		userId: userId as Id<'users'> | undefined,

@@ -2332,7 +2332,7 @@ export const cleanupExpiredWitnesses = internalMutation({
  * Get submission by ID (public query — used for retry ownership check).
  * Returns minimal fields only.
  */
-export const getPublicById = query({
+export const getPublicById = internalQuery({
 	args: { submissionId: v.id('submissions') },
 	handler: async (ctx, { submissionId }) => {
 		const sub = await ctx.db.get(submissionId);

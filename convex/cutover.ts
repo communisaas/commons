@@ -8,7 +8,7 @@
  * specs/CIRCUIT-REVISION-MIGRATION.md.
  */
 
-import { query, internalMutation } from "./_generated/server";
+import { internalQuery, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
@@ -17,11 +17,11 @@ import { internal } from "./_generated/api";
  * one-shot cutover script to enumerate candidates.
  *
  * Scope: rows where revokedAt is undefined AND expiresAt is in the future.
- * The script runs in admin mode (CONVEX_ADMIN_KEY); the query is exposed as
- * `query` not `internalQuery` because HTTP client calls cannot target
- * internal functions directly.
+ * This is an internal query reachable only from the admin-authenticated ops
+ * script via `internal.cutover.listActiveCredentials`, keeping the verified-user
+ * roster off the public data plane.
  */
-export const listActiveCredentials = query({
+export const listActiveCredentials = internalQuery({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();

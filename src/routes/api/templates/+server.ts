@@ -5,6 +5,7 @@ import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
 	createApiError,
 	createValidationError,
@@ -425,7 +426,10 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 							.substring(0, 100);
 
 				// Slug uniqueness check via Convex
-				const existingTemplate = await serverQuery(api.templates.findBySlug, { slug });
+				const existingTemplate = await serverQuery(api.templates.findBySlug, {
+					slug,
+					_secret: getInternalSecret()
+				});
 
 				if (existingTemplate) {
 					const response: StructuredApiResponse = {

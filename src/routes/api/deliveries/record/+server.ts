@@ -23,6 +23,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
@@ -79,6 +80,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const districtCode = atlas?.congressionalDistrict ?? undefined;
 
 		const result = await serverMutation(api.positions.recordDirectDeliveries, {
+			_secret: getInternalSecret(),
 			pseudonymousId,
 			templateId: templateId as Id<'templates'>,
 			districtCode,

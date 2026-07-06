@@ -52,6 +52,7 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// `event.checkinCode` and ignores the caller-supplied `verified`
 	// flag for the verifiedAttendees counter.
 	const result = await serverMutation(api.events.publicCheckIn, {
+		_secret: getInternalSecret(),
 		eventId: params.id as Id<'events'>,
 		checkinCode: typeof checkinCode === 'string' ? checkinCode : undefined,
 		emailHash,

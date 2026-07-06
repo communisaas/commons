@@ -28,6 +28,7 @@ import {
 import { createHash } from 'crypto';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 // ============================================================================
 // In-Memory Rate Limiting
@@ -101,6 +102,7 @@ async function persistBatch(
 ): Promise<{ written: number }> {
 	try {
 		const result = await serverMutation(api.analytics.incrementBatch, {
+			_secret: getInternalSecret(),
 			increments: increments.map((inc) => ({
 				metric: inc.metric,
 				templateId: inc.dimensions?.template_id as string | undefined,

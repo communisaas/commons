@@ -482,8 +482,9 @@ const MAX_SESSION_LIFETIME_MS = 90 * DAY_MS;
  * Handles session renewal (extends expiry when within 15 days of expiration).
  */
 export const validateSession = query({
-  args: { sessionId: v.string() },
-  handler: async (ctx: any, { sessionId }): Promise<ValidateSessionResult> => {
+  args: { _secret: v.string(), sessionId: v.string() },
+  handler: async (ctx: any, { _secret, sessionId }): Promise<ValidateSessionResult> => {
+    requireInternalSecret(_secret);
     const db = authOpsDb(ctx);
     const normalizedSessionId = db.normalizeId("sessions", sessionId);
     const session = normalizedSessionId ? await db.get(normalizedSessionId) : null;
@@ -527,12 +528,12 @@ export const validateSession = query({
  * but the user doc has no tokenIdentifier.
  */
 export const backfillTokenIdentifier = mutation({
-  args: { userId: v.string() },
+  args: {},
   returns: v.null(),
-  handler: async (ctx: any, args): Promise<null> => {
+  handler: async (ctx: any): Promise<null> => {
     const db = authOpsDb(ctx);
-    const userId = db.normalizeId("users", args.userId);
-    const user = userId ? await db.get(userId) : null;
+    const { userId } = await requireAuth(ctx);
+    const user = await db.get(userId);
     if (user && !user.tokenIdentifier) {
       await db.patch(user._id, {
         tokenIdentifier: `${ISSUER_PREFIX}|${user._id}`,

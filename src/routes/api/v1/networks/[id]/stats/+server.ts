@@ -46,7 +46,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	// Verify the requesting org is an active member
 	const membership = await serverQuery(api.networks.checkMembership, {
 		networkId: params.id as Id<'orgNetworks'>,
-		orgId: auth.orgId as Id<'organizations'>
+		orgId: auth.orgId as Id<'organizations'>,
+		_secret: getInternalSecret()
 	});
 
 	if (!membership) {

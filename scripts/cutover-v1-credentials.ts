@@ -62,7 +62,7 @@ async function main() {
   // script we rely on the backing query to return manageable volumes; if the
   // eventual candidate list exceeds ~10K rows, split by userId ranges.
   const candidates = await client.query(
-    (api as unknown as { cutover: { listActiveCredentials: unknown } }).cutover
+    (internal as unknown as { cutover: { listActiveCredentials: unknown } }).cutover
       .listActiveCredentials,
     {},
   );

@@ -613,7 +613,7 @@ export const getRevocationHaltStatus = query({
  * Read recent halt audit log entries for forensic review. Limited to the most
  * recent 100 records — paginate if needed for older incidents.
  */
-export const getRevocationHaltAuditLog = query({
+export const getRevocationHaltAuditLog = internalQuery({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const limit = args.limit ?? 100;

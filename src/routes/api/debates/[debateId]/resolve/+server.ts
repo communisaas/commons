@@ -9,6 +9,7 @@ import {
 } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * POST /api/debates/[debateId]/resolve
@@ -109,6 +110,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 
 	try {
 		await serverMutation(api.debates.updateStatus, {
+			_secret: getInternalSecret(),
 			debateId: debate._id,
 			status: 'resolved',
 			winningArgumentIndex: winningIndex,
