@@ -29,17 +29,12 @@ import type { Doc, Id } from './_generated/dataModel';
 // =============================================================================
 
 /**
- * Public query: load org by slug. No auth required.
+ * Load org by slug for organization workspace pages.
  */
 export const getBySlug = query({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
-		const org = await ctx.db
-			.query('organizations')
-			.withIndex('by_slug', (q) => q.eq('slug', slug))
-			.first();
-
-		if (!org) return null;
+		const { org } = await requireOrgRole(ctx, slug, 'member');
 
 		return {
 			_id: org._id,
@@ -54,6 +49,21 @@ export const getBySlug = query({
 			countryCode: org.countryCode,
 			_creationTime: org._creationTime
 		};
+	}
+});
+
+/**
+ * Authenticated slug availability check for organization creation.
+ */
+export const slugExists = query({
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		await requireAuth(ctx);
+		const org = await ctx.db
+			.query('organizations')
+			.withIndex('by_slug', (q) => q.eq('slug', slug))
+			.first();
+		return !!org;
 	}
 });
 

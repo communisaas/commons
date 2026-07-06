@@ -14,6 +14,6 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 		return json({ available: false });
 	}
 
-	const existing = await serverQuery(api.organizations.getBySlug, { slug });
-	return json({ available: !existing });
+	const exists = await serverQuery(api.organizations.slugExists, { slug });
+	return json({ available: !exists });
 };

@@ -265,10 +265,9 @@ export default defineSchema({
 
 		// Semantic embeddings (768-dim Gemini vectors). All three are SERVER-ONLY:
 		// consumed for vector search, relatedness twins, concept edges, and hue
-		// projection. The public template queries that return raw documents
-		// (`getBySlug`, `list`) run them through `stripEmbeddings` so these fields
-		// never cross the client boundary; the enriched queries (`listPublic`,
-		// `getBySlugPublic`) project explicit field sets that omit them.
+		// projection. Public template queries (`list`, `search`, `listPublic`,
+		// `getBySlugPublic`) return explicit allowlist projections that omit them,
+		// so these fields never cross the client boundary.
 		locationEmbedding: v.optional(v.array(v.float64())),
 		topicEmbedding: v.optional(v.array(v.float64())),
 		// Per-tag embeddings, generated the same way as topicEmbedding (one Gemini

@@ -15,6 +15,7 @@ import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -51,6 +52,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Register position (upsert — duplicates return existing)
 		const registration = await serverMutation(api.positions.register, {
+			_secret: getInternalSecret(),
 			templateId: templateId as Id<'templates'>,
 			identityCommitment,
 			stance,

@@ -6,6 +6,7 @@ import type { Id } from '$convex/_generated/dataModel';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { FEATURES } from '$lib/config/features';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * POST /api/debates/[debateId]/governance-resolve
@@ -51,6 +52,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	const appealDeadlineMs = Date.now() + 7 * 24 * 60 * 60 * 1000;
 
 	await serverMutation(api.debates.updateStatus, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>,
 		status: 'resolved',
 		winningStance: winnerArg.stance,

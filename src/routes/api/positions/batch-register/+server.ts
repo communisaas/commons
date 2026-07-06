@@ -15,6 +15,7 @@ import type { RequestHandler } from './$types';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -59,6 +60,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Create delivery records (mutation verifies ownership via identityCommitment)
 		const result = await serverMutation(api.positions.batchRegisterDeliveries, {
+			_secret: getInternalSecret(),
 			registrationId: registrationId as Id<'positionRegistrations'>,
 			identityCommitment,
 			recipients: recipients.map((r: { name: string; email?: string; deliveryMethod: string }) => ({

@@ -1,14 +1,17 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireInternalSecret } from "./_internalAuth";
 
 export const join = mutation({
   args: {
+    _secret: v.string(),
     email: v.string(),
     emailHash: v.string(),
     userId: v.optional(v.id("users")),
     source: v.string(),
   },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const existing = await ctx.db
       .query("waitlist")
       .withIndex("by_emailHash", (q) => q.eq("emailHash", args.emailHash))
@@ -22,7 +25,7 @@ export const join = mutation({
           updatedAt: Date.now(),
         });
       }
-      return { status: "exists" as const };
+      return { success: true as const };
     }
 
     await ctx.db.insert("waitlist", {
@@ -34,6 +37,6 @@ export const join = mutation({
       updatedAt: Date.now(),
     });
 
-    return { status: "created" as const };
+    return { success: true as const };
   },
 });

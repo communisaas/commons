@@ -968,6 +968,8 @@ export const verifyAddress = mutation({
 export const getDidKey = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);
 		if (!user) return null;
 		return { didKey: user.didKey ?? null };
@@ -1091,6 +1093,8 @@ export const getActiveCredentialHash = query({
 export const getIdentityForAtlas = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);
 		if (!user) return null;
 		// Derive authority from trustTier so leaf computation matches client-side value.
@@ -1112,6 +1116,8 @@ export const getIdentityForAtlas = query({
 export const getIdentityForEngagement = query({
 	args: { userId: v.id('users') },
 	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		const user = await ctx.db.get(args.userId);
 		if (!user) return null;
 		return {
@@ -1289,8 +1295,9 @@ export const updateShadowAtlasRegistration = mutation({
  * cheaper than the migration risk of introducing a counter.
  */
 export const countRegistrations = query({
-	args: {},
-	handler: async (ctx) => {
+	args: { _secret: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		let count = 0;
 		let cursor: string | null = null;
 		// 1024-row page size; loop until isDone. Each page is well under the
@@ -1312,8 +1319,9 @@ export const countRegistrations = query({
  * List recent shadow atlas registrations (for spot-check reconciliation).
  */
 export const listRecentRegistrations = query({
-	args: { limit: v.optional(v.number()) },
-	handler: async (ctx, { limit }) => {
+	args: { _secret: v.string(), limit: v.optional(v.number()) },
+	handler: async (ctx, { _secret, limit }) => {
+		requireInternalSecret(_secret);
 		const max = Math.min(limit ?? 50, 100);
 		const regs = await ctx.db.query('shadowAtlasRegistrations').order('desc').take(max);
 		return regs.map((r) => ({
@@ -1334,7 +1342,7 @@ export const listRecentRegistrations = query({
  * If another user already has this commitment, merges accounts
  * (returns the canonical userId). Otherwise patches the current user.
  */
-export const bindIdentityCommitment = mutation({
+export const bindIdentityCommitment = internalMutation({
 	args: {
 		userId: v.id('users'),
 		identityCommitment: v.string(),
@@ -1342,8 +1350,6 @@ export const bindIdentityCommitment = mutation({
 		documentType: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		const { userId: authUserId } = await requireAuth(ctx);
-		if (args.userId !== authUserId) throw new Error('Unauthorized');
 		// Check if commitment already bound to another user (Sybil / account merge)
 		const existing = await ctx.db
 			.query('users')
@@ -1383,6 +1389,7 @@ export const bindIdentityCommitment = mutation({
 
 export const upsertRegistration = mutation({
 	args: {
+		_secret: v.string(),
 		userId: v.id('users'),
 		identityCommitment: v.string(),
 		leafIndex: v.number(),
@@ -1393,8 +1400,7 @@ export const upsertRegistration = mutation({
 		queuedAt: v.string()
 	},
 	handler: async (ctx, args) => {
-		const { userId: authUserId } = await requireAuth(ctx);
-		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		requireInternalSecret(args._secret);
 		const existing = await ctx.db
 			.query('shadowAtlasRegistrations')
 			.withIndex('by_userId', (q) => q.eq('userId', args.userId))

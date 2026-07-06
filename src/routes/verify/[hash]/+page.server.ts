@@ -3,6 +3,7 @@ import type { PageServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { formatTierDisplay } from '$lib/core/identity/tier-display';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * Privacy-preserving verification endpoint.
@@ -55,7 +56,10 @@ export const load: PageServerLoad = async ({ params }) => {
 		}
 
 		// Fall back to legacy credential hash verification
-		const credential = await serverQuery(api.verify.getCredentialByHash, { credentialHash: hash });
+		const credential = await serverQuery(api.verify.getCredentialByHash, {
+			credentialHash: hash,
+			_secret: getInternalSecret()
+		});
 
 		if (!credential) {
 			return { credential: null, delivery: null, error: 'Credential not found' };

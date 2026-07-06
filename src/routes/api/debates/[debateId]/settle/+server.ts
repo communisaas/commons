@@ -4,6 +4,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * POST /api/debates/[debateId]/settle
@@ -76,6 +77,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const winningArgumentIndex = stanceResult?.arguments?.[0]?.argumentIndex ?? undefined;
 
 	await serverMutation(api.debates.updateStatus, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>,
 		status: 'resolved',
 		winningStance,

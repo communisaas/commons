@@ -3,6 +3,7 @@ import { error, fail } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad, Actions } from './$types';
 
 import { serverQuery, serverAction } from 'convex-sveltekit';
@@ -108,6 +109,7 @@ export const actions: Actions = {
 
 		try {
 			const result = await serverAction(api.campaigns.submitAction, {
+				_secret: getInternalSecret(),
 				campaignId: params.slug,
 				email,
 				name,

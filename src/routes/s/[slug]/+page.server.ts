@@ -7,6 +7,7 @@ import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 import { env } from '$env/dynamic/private';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 type DebateArgumentRow = {
 	_id: string;
@@ -148,7 +149,11 @@ export const load: PageServerLoad = async ({ locals, parent }) => {
 
 		// Existing user position via Convex
 		templateId && identityCommitment
-			? serverQuery(api.positions.getExisting, { templateId, identityCommitment })
+			? serverQuery(api.positions.getExisting, {
+					_secret: getInternalSecret(),
+					templateId,
+					identityCommitment
+				})
 					.catch(() => null)
 			: Promise.resolve(null),
 

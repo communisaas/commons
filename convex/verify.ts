@@ -5,6 +5,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { requireInternalSecret } from "./_internalAuth";
 
 /**
  * Get campaign delivery by ID for verification page.
@@ -50,11 +51,14 @@ export const getCampaignForVerify = query({
  * `undefined` and the UI must render "unknown" rather than a default.
  */
 export const getCredentialByHash = query({
-  args: { credentialHash: v.string() },
-  handler: async (ctx, { credentialHash }) => {
+  args: { credentialHash: v.string(), _secret: v.string() },
+  handler: async (ctx, { credentialHash, _secret }) => {
+    requireInternalSecret(_secret);
+    const trimmedHash = credentialHash.trim();
+    if (!trimmedHash) throw new Error("Invalid credential hash");
     const cred = await ctx.db
       .query("districtCredentials")
-      .filter((q) => q.eq(q.field("credentialHash"), credentialHash))
+      .withIndex("by_credentialHash", (q) => q.eq("credentialHash", trimmedHash))
       .first();
     if (!cred) return null;
     return {
