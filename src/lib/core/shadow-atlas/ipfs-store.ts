@@ -1263,6 +1263,24 @@ export async function getAddressChunk(
 	if (result.kind === 'chunk') return result.chunk;
 
 	const { stub } = result;
+
+	// No street key → no shard can be the right one. Return the chunk shape
+	// with an EMPTY street map instead of hashing '' into an arbitrary shard:
+	// the ZIP-centroid path needs only zipCentroid, and a legacy caller that
+	// omits normalizedStreet gets an honestly-empty map rather than one
+	// shard's partial streets masquerading as the whole ZIP.
+	if (normalizedStreet === '') {
+		return {
+			version: 1,
+			schema: 'atlas-address-index',
+			country: stub.country,
+			zip: stub.zip,
+			state: stub.state,
+			zipCentroid: stub.zipCentroid,
+			streets: {},
+		};
+	}
+
 	const shardIdx = stableStreetShard(normalizedStreet, stub.shards);
 	const shard = await fetchAddressChunkShard(safeCountry, zip5, shardIdx, stub.shards);
 

@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
 	configure,
 	clearCache,
+	getAddressChunk,
 	AddressIndexSchemaError,
 	type NormalizationTable,
 } from '$lib/core/shadow-atlas/ipfs-store';
@@ -230,6 +231,19 @@ describe('oversized ZIP5 split (§1 v2) — consumer resolution', () => {
 		).rejects.toBeInstanceOf(AddressIndexSchemaError);
 		// A schema fault is never counted as a match-outcome miss.
 		expect(events).toEqual([]);
+	});
+
+	it('no street key on a split ZIP → empty street map, ZERO shard fetches (never an arbitrary shard)', async () => {
+		mockFetchRoutes(splitRoutes());
+		// Legacy 2-arg call form: a caller with no street must NOT receive one
+		// arbitrary shard's partial streets masquerading as the whole ZIP.
+		const chunk = await getAddressChunk('94999', 'US');
+		expect(chunk).not.toBeNull();
+		expect(chunk!.zip).toBe('94999');
+		expect(chunk!.zipCentroid).toEqual(STUB_94999.zipCentroid);
+		expect(chunk!.streets).toEqual({});
+		const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+		expect(calls.filter((u) => /94999\.\d+\.json$/.test(u))).toEqual([]);
 	});
 
 	it('a stub with NO shardHashes fails closed — unpinned shards are never fetched', async () => {
