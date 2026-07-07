@@ -53,6 +53,7 @@ describe('redraw-signal.data', () => {
 				jurisdiction: 'congressional',
 				district_type: 'congressional',
 			},
+			districts: [],
 			officials: null,
 			cell_id: '8748a8a8effffff',
 			provenance: { source: 'nominatim', tigerVintage: 'TIGER2022' },

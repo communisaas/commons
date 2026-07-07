@@ -38,6 +38,7 @@ function baseResult(
 			jurisdiction: 'congressional',
 			district_type: 'congressional',
 		},
+		districts: [],
 		officials: null,
 		cell_id: '8744d8a8effffff',
 		provenance: { source: 'nominatim', tigerVintage: 'TIGER2022' },
