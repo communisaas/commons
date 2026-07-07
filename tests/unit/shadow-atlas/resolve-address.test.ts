@@ -249,6 +249,8 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 
 		expect(result.district).toBeNull();
 		expect(result.confidence).toBe(0);
+		// The multi-type view misses in lockstep: no chunk → no boundary types.
+		expect(result.districts).toEqual([]);
 		// Geocode still succeeded — a degraded resolution is a SUCCESS, not a throw.
 		expect(result.geocode.lat).toBeCloseTo(37.7793);
 		expect(result.officials).toBeNull();
@@ -267,6 +269,8 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 		expect(result.officialsAsOf).toBeNull();
 		expect(result.provenance.tigerVintage).toBe('unknown');
 		expect(result.confidence).toBe(1.0); // a clean district hit stays trusted
+		// The staleness guard passes districts through untouched — never drops or mutates it.
+		expect(result.districts.length).toBe(1);
 	});
 
 	it('(f) a non-404 chunk-fetch failure (infra fault) propagates as AtlasInfraError — never converted into a district miss', async () => {
@@ -290,6 +294,8 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 
 		expect(result.district).toBeNull();
 		expect(result.confidence).toBe(0);
+		// The multi-type view misses in lockstep on a clean coverage miss.
+		expect(result.districts).toEqual([]);
 		// Geocode still succeeded — a degraded resolution is a SUCCESS, not a throw.
 		expect(result.geocode.lat).toBeCloseTo(37.7793);
 	});
@@ -378,5 +384,122 @@ describe('resolveAddress return shape — provenance + two-clock honesty', () =>
 		expect(result.geocode.confidence).toBe(0.6);
 		expect(result.confidence).toBe(0.6); // min(districtConfidence 1.0, zip factor 0.6)
 		expect(result.district?.id).toBe('CA-01');
+	});
+
+	it('(n) a multi-slot chunk projects EVERY populated served type into districts, slot-ordered, congressional first', async () => {
+		// Realistic 24-slot chunk: congressional + state senate/house + county +
+		// unified school + township populated (rural-MN shape), everything else empty.
+		const slots: (string | null)[] = new Array(24).fill(null);
+		slots[0] = 'cd-2708';
+		slots[2] = 'sldu-27011';
+		slots[3] = 'sldl-2711B';
+		slots[4] = 'county-27115';
+		slots[7] = 'unsd-2742750';
+		slots[20] = 'cousub-2711532984';
+		mockGetChunkForCell.mockResolvedValue(slots);
+		mockGetManifestVintage.mockResolvedValue({
+			tigerVintage: 'TIGER2024',
+			generated: '2024-09-01T00:00:00.000Z',
+			officialsGenerated: null
+		});
+
+		const result = await resolveAddress(ADDRESS);
+
+		expect(result.districts).toHaveLength(6);
+		// Canonical slot order, congressional first.
+		expect(result.districts.map((d) => d.district_type)).toEqual([
+			'congressional',
+			'state-senate',
+			'state-house',
+			'county',
+			'unified-school',
+			'township'
+		]);
+		// Congressional wire entry uses the DISPLAY code — identical id to the legacy field.
+		expect(result.districts[0]).toEqual({
+			id: 'MN-08',
+			geoid: '2708',
+			name: "Minnesota's 8th Congressional District",
+			jurisdiction: 'congressional',
+			district_type: 'congressional'
+		});
+		expect(result.districts[0].id).toBe(result.district?.id);
+		// Non-congressional entries keep the substrate id + stripped GEOID + label-based name.
+		expect(result.districts[1]).toEqual({
+			id: 'sldu-27011',
+			geoid: '27011',
+			name: 'State Senate 27011',
+			jurisdiction: 'state-senate',
+			district_type: 'state-senate'
+		});
+		// Alphanumeric TIGER GEOIDs survive the prefix strip intact.
+		expect(result.districts[2].geoid).toBe('2711B');
+		expect(result.districts[2].name).toBe('State House/Assembly 2711B');
+	});
+
+	it('(o) a populated slot OUTSIDE the served allowlist is never emitted — disclosure gates the wire', async () => {
+		const slots: (string | null)[] = new Array(24).fill(null);
+		slots[0] = 'cd-0601';
+		slots[11] = 'water-9999999'; // defined type, zero live coverage → not served
+		mockGetChunkForCell.mockResolvedValue(slots);
+		mockGetManifestVintage.mockResolvedValue({
+			tigerVintage: 'TIGER2024',
+			generated: '2024-09-01T00:00:00.000Z',
+			officialsGenerated: null
+		});
+
+		const result = await resolveAddress(ADDRESS);
+
+		// Only the congressional entry surfaces; the unserved type cannot reach the
+		// wire before the coverage table discloses it.
+		expect(result.districts).toHaveLength(1);
+		expect(result.districts[0].district_type).toBe('congressional');
+	});
+
+	it('(q) chunk present but slot 0 empty: primary-miss semantics unchanged while non-congressional types still surface', async () => {
+		mockGetChunkForCell.mockResolvedValue([null, null, 'sldu-27011']);
+		mockGetManifestVintage.mockResolvedValue({
+			tigerVintage: 'TIGER2024',
+			generated: '2024-09-01T00:00:00.000Z',
+			officialsGenerated: null
+		});
+
+		const result = await resolveAddress(ADDRESS);
+
+		// The PRIMARY miss stays keyed to slot 0: district null, confidence 0, loud warning.
+		expect(result.district).toBeNull();
+		expect(result.confidence).toBe(0);
+		expect(result.warning).toBe('district lookup miss');
+		// ...while the populated state-senate boundary still surfaces honestly.
+		expect(result.districts).toEqual([
+			{
+				id: 'sldu-27011',
+				geoid: '27011',
+				name: 'State Senate 27011',
+				jurisdiction: 'state-senate',
+				district_type: 'state-senate'
+			}
+		]);
+	});
+
+	it('(s) a single-element legacy chunk emits exactly one districts entry mirroring the legacy district', async () => {
+		mockGetChunkForCell.mockResolvedValue(['cd-0601']);
+		mockGetManifestVintage.mockResolvedValue({
+			tigerVintage: 'TIGER2024',
+			generated: '2024-09-01T00:00:00.000Z',
+			officialsGenerated: null
+		});
+
+		const result = await resolveAddress(ADDRESS);
+
+		expect(result.districts).toEqual([
+			{
+				id: 'CA-01',
+				geoid: '0601',
+				name: "California's 1st Congressional District",
+				jurisdiction: 'congressional',
+				district_type: 'congressional'
+			}
+		]);
 	});
 });

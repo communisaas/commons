@@ -40,6 +40,42 @@ const FIPS_TO_STATE: Record<string, string> = {
 export const CONGRESSIONAL_SLOT_INDEX = 0;
 
 /**
+ * Canonical slot → jurisdiction mapping for the 24-slot districts[] array
+ * stored in atlas chunks and proof public inputs.
+ *
+ * MUST match voter-protocol CIRCUIT_SLOT_NAMES (authority-mapper.ts) and
+ * US_JURISDICTION (jurisdiction.ts). Any divergence is a correctness bug.
+ * The `jurisdiction` slugs are the public, stable district_type identifiers
+ * emitted on the wire — never renamed or reused; new types may be added.
+ */
+export const US_SLOT_NAMES: ReadonlyArray<{ jurisdiction: string; label: string }> = [
+	/* 0  */ { jurisdiction: 'congressional', label: 'Congressional District' },
+	/* 1  */ { jurisdiction: 'federal-senate', label: 'Federal Senate' },
+	/* 2  */ { jurisdiction: 'state-senate', label: 'State Senate' },
+	/* 3  */ { jurisdiction: 'state-house', label: 'State House/Assembly' },
+	/* 4  */ { jurisdiction: 'county', label: 'County' },
+	/* 5  */ { jurisdiction: 'city', label: 'City/Municipality' },
+	/* 6  */ { jurisdiction: 'city-council', label: 'City Council Ward' },
+	/* 7  */ { jurisdiction: 'unified-school', label: 'Unified School District' },
+	/* 8  */ { jurisdiction: 'elementary-school', label: 'Elementary School District' },
+	/* 9  */ { jurisdiction: 'secondary-school', label: 'Secondary School District' },
+	/* 10 */ { jurisdiction: 'community-college', label: 'Community College District' },
+	/* 11 */ { jurisdiction: 'water-sewer', label: 'Water/Sewer District' },
+	/* 12 */ { jurisdiction: 'fire', label: 'Fire/EMS District' },
+	/* 13 */ { jurisdiction: 'transit', label: 'Transit District' },
+	/* 14 */ { jurisdiction: 'hospital', label: 'Hospital District' },
+	/* 15 */ { jurisdiction: 'library', label: 'Library District' },
+	/* 16 */ { jurisdiction: 'park', label: 'Parks/Recreation District' },
+	/* 17 */ { jurisdiction: 'conservation', label: 'Conservation District' },
+	/* 18 */ { jurisdiction: 'utility', label: 'Utility District' },
+	/* 19 */ { jurisdiction: 'judicial', label: 'Judicial District' },
+	/* 20 */ { jurisdiction: 'township', label: 'Township/MCD' },
+	/* 21 */ { jurisdiction: 'precinct', label: 'Voting Precinct' },
+	/* 22 */ { jurisdiction: 'tribal', label: 'Tribal/Native Area' },
+	/* 23 */ { jurisdiction: 'overflow', label: 'Other Special District' },
+];
+
+/**
  * Compare two BN254 field hex strings by numeric value, not string equality.
  *
  * `0x1`, `0x01`, `0x0001` all represent the same field element but compare

@@ -8,7 +8,7 @@ export const openApiSpec = {
 	openapi: '3.1.0',
 	info: {
 		title: 'Commons Public API',
-		version: '1.0.0',
+		version: '1.1.0',
 		description:
 			'Public REST API for Commons — campaign management, supporter CRM, and verified civic action. All endpoints require Bearer token authentication via API key (prefix ck_live_). Rate limited to 100 requests per minute per key.'
 	},
@@ -1060,7 +1060,7 @@ export const openApiSpec = {
 				operationId: 'resolveAddress',
 				summary: 'Resolve a US street address to district + officials',
 				description:
-					'Resolve a street address to its district, officials, and two independent freshness clocks (boundary geometry vs. officials sync). Requires read scope and a Bearer ck_live_ key. POST is metered and rate-capped per plan; inactive/no-plan keys receive a finite free-trial quota, not recurring free volume. Retries WITHOUT an Idempotency-Key re-bill under a fresh requestId; resupplying the same key WITH THE SAME address payload bills once (the key is bound to the payload — the same key with a different address is a distinct billable request, not an error).',
+					'Resolve a street address to its district, officials, and two independent freshness clocks (boundary geometry vs. officials sync). Requires read scope and a Bearer ck_live_ key. POST is metered and rate-capped per plan; inactive/no-plan keys receive a finite free-trial quota, not recurring free volume. Retries WITHOUT an Idempotency-Key re-bill under a fresh requestId; resupplying the same key WITH THE SAME address payload bills once (the key is bound to the payload — the same key with a different address is a distinct billable request, not an error). Returns the congressional district (`district`, unchanged) plus `districts`, an array of every boundary type the atlas serves at that address (state legislative, county, city, school, township, tribal — see `coverage.boundaryTypes` for the honest per-type coverage class). Officials rosters exist for congressional districts only (`coverage.officialsTypes`); other entries carry boundary identity without officials. Billing is per resolution call, never per district type returned.',
 				parameters: [
 					{
 						name: 'Idempotency-Key',
@@ -2094,9 +2094,27 @@ export const openApiSpec = {
 									id: { type: 'string', description: 'District id, e.g. "CA-12"' },
 									name: { type: 'string', description: 'Human-readable district name' },
 									jurisdiction: { type: 'string' },
-									district_type: { type: 'string', description: 'e.g. "congressional"' }
+									district_type: {
+										type: 'string',
+										enum: ['congressional'],
+										description:
+											"Always 'congressional' — this field is the congressional district. See districts[] for all boundary types."
+									}
 								}
 							},
+							districts: {
+								type: 'array',
+								items: { $ref: '#/components/schemas/ResolvedDistrict' },
+								description:
+									'All boundary types served at this address, ordered by broadest federal first ' +
+									'(congressional, then state legislative, county, city, school, township, tribal). ' +
+									'Includes the congressional entry (same id as district) when present. Empty when outside coverage; may be non-empty with district null if only non-congressional types resolve. ' +
+									'Only types listed in coverage.boundaryTypes can appear; absence of a listed type means ' +
+									'either no such district exists at this address or the data is partial for that type — ' +
+									'consult its coverage class. district_type is an open set: new types may be added, ' +
+									'existing values are never renamed.'
+							},
+							coverage: { $ref: '#/components/schemas/ResolveCoverage' },
 							provenance: { $ref: '#/components/schemas/ResolutionProvenance' },
 							confidence: {
 								type: 'number',
@@ -2131,6 +2149,62 @@ export const openApiSpec = {
 								description:
 									'Degraded-but-resolved guard. Its own field — never borrows either asOf clock.'
 							}
+				}
+			},
+			ResolvedDistrict: {
+				type: 'object',
+				required: ['id', 'geoid', 'name', 'jurisdiction', 'district_type'],
+				properties: {
+					id: {
+						type: 'string',
+						description:
+							'Stable district id. Congressional: display code ("MN-08"); other types: "{type-alias}-{TIGER GEOID}" ("sldu-27011").'
+					},
+					geoid: {
+						type: 'string',
+						description:
+							'Raw TIGER/Census GEOID ("27011", "2711B") — joinable against Census data products.'
+					},
+					name: { type: 'string' },
+					jurisdiction: { type: 'string', description: 'Same value as district_type.' },
+					district_type: {
+						type: 'string',
+						description:
+							'Stable boundary-type identifier. Currently served: congressional, state-senate, ' +
+							'state-house, county, city, unified-school, elementary-school, secondary-school, ' +
+							'township, tribal. Open set — clients must tolerate new values.'
+					}
+				}
+			},
+			ResolveCoverage: {
+				type: 'object',
+				required: ['boundaryTypes', 'officialsTypes'],
+				properties: {
+					boundaryTypes: {
+						type: 'object',
+						description:
+							'Per-district-type coverage disclosure, keyed by district_type. A type ABSENT from ' +
+							'this map is not served at all. "national": present wherever that district type ' +
+							'exists in US governance. "partial": known regional/structural limits or build gaps ' +
+							'— absence of that type in districts[] is not evidence no such district exists.',
+						additionalProperties: {
+							type: 'object',
+							required: ['coverage'],
+							properties: {
+								coverage: { type: 'string', enum: ['national', 'partial'] },
+								note: {
+									type: 'string',
+									description: 'Factual scope note (governance structure or known data gap).'
+								}
+							}
+						}
+					},
+					officialsTypes: {
+						type: 'array',
+						items: { type: 'string' },
+						description:
+							'District types with officials rosters. Currently ["congressional"] — all other entries carry boundary identity without officials.'
+					}
 				}
 			},
 			ErrorEnvelope: {

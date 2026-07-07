@@ -150,6 +150,7 @@ function shadowAtlasResponse(overrides: ResolveOverrides = {}): AddressResolutio
 			jurisdiction: districtJurisdiction,
 			district_type: districtType
 		},
+		districts: [],
 		officials,
 		cell_id: cellId,
 		provenance,
