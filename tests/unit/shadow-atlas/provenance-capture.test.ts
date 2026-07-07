@@ -163,6 +163,7 @@ function shadowAtlasResponse(overrides: ResolveOverrides = {}): AddressResolutio
 			jurisdiction: 'congressional',
 			district_type: 'congressional'
 		},
+		districts: [],
 		officials,
 		cell_id: cellId,
 		provenance,

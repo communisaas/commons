@@ -25,6 +25,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 39.7392, lng: -104.9903, matched_address: 'Denver, CO 80202', confidence: 0.9, country: 'US' },
 			district: { id: 'CO-01', name: 'Congressional District 1', jurisdiction: 'US', district_type: 'cd' },
+			districts: [],
 			officials: { district_code: 'CO-01', state: 'CO', officials: [], special_status: null, cached: true, source: 'congress-legislators' },
 			cell_id: '08031000100',
 			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
@@ -42,6 +43,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 37.7749, lng: -122.4194, matched_address: 'San Francisco, CA 94103', confidence: 0.9, country: 'US' },
 			district: { id: 'CA-11', name: 'Congressional District 11', jurisdiction: 'US', district_type: 'cd' },
+			districts: [],
 			officials: null,
 			cell_id: '06075017601',
 			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
@@ -79,6 +81,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 39.7392, lng: -104.9903, matched_address: 'Denver, CO 80202', confidence: 0.9, country: 'US' },
 			district: { id: 'CO-01', name: 'Congressional District 1', jurisdiction: 'US', district_type: 'cd' },
+			districts: [],
 			officials: null,
 			cell_id: null,
 			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
@@ -103,6 +106,7 @@ describe('resolveCellIdFromAddress', () => {
 		mockResolveAddress.mockResolvedValue({
 			geocode: { lat: 38.9072, lng: -77.0369, matched_address: 'Washington, DC 20001', confidence: 0.9, country: 'US' },
 			district: { id: 'DC-AL', name: 'At-Large Congressional District', jurisdiction: 'US', district_type: 'cd' },
+			districts: [],
 			officials: { district_code: 'DC-AL', state: 'DC', officials: [], special_status: { type: 'dc', message: 'DC residents have a non-voting delegate', has_senators: false, has_voting_representative: false }, cached: true, source: 'congress-legislators' },
 			cell_id: '11001000101',
 			provenance: { source: 'nominatim', tigerVintage: 'unknown' },
