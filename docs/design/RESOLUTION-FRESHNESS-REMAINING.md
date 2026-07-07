@@ -58,7 +58,7 @@ under `convex-test` (no mock-ledger mirror).
 - [ ] **Schedule `check-changes.ts`** — LOW/latent, needs a durable-DB decision.
   WHERE: `voter-protocol/packages/shadow-atlas/src/scripts/check-changes.ts` (no invoker in `.github/`). Detector is real but never fires autonomously. Durable checksum-DB location is the cost-posture blocker (CI SQLite is ephemeral).
 
-- [ ] **Provision a real `REDRAW_SIGNAL` feed source** — LOW / by-design-manual.
+- [ ] **Provision a real `REDRAW_SIGNAL` feed source** — ELEVATED (was LOW) per the verified Cicero comparison 2026-07-04: their 2023-26 mid-decade record is a public black box, making published effective-dates + fail-loud downgrades our most benchmarkable freshness win after the first publish. Still posture-gated on feed-source cost.
   WHERE: `commons/src/lib/core/shadow-atlas/redraw-guard.ts` (6 hand-curated states; no feed/cron wired). Mid-cycle redraws beyond the 6 coded states go undetected.
 
 Operator-adjacent (not launch blockers): `INTERNAL_API_SECRET` must match on CF Pages + prod Convex (unverified against live prod env); orgs need issued `apiKeys` rows to call the resolve API (customer onboarding).
