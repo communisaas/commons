@@ -375,7 +375,10 @@ function slotsToResolvedDistricts(slots: (string | null)[]): ResolvedDistrictEnt
 		if (!raw || typeof raw !== 'string' || !SERVED_SLOT_SET.has(i)) continue;
 		const meta = US_SLOT_NAMES[i];
 		const jurisdiction = meta?.jurisdiction ?? `slot-${i}`;
-		const geoid = raw.replace(/^[a-z]+-/, '');
+		// Strip through the FIRST hyphen whatever the alias prefix contains
+		// (letters today; digits/underscores must not break geoid derivation).
+		const sep = raw.indexOf('-');
+		const geoid = sep > 0 ? raw.slice(sep + 1) : raw;
 		if (i === CONGRESSIONAL_SLOT_INDEX) {
 			const code = convertDistrictId(raw);
 			out.push({
