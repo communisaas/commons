@@ -14,6 +14,8 @@
  * This module has NO server-only imports ($env/dynamic/private).
  */
 
+import { stableStreetShard } from './street-shard';
+
 // BN254 validation — inlined here to keep this module browser-safe.
 // client.ts imports $env/dynamic/private and cannot be imported from browser code.
 const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -289,6 +291,7 @@ export interface ChunkManifest {
 	addressIndexVersion?: number;
 	/** Address-index section (§4). Absent = index not yet published (fail-closed). */
 	addressIndex?: {
+		/** 1 = all chunks unsplit; 2 = §1 v2 split scheme may be present. Consumer accepts both. */
 		schemaVersion: number;
 		normVersion: number;
 		normTable: { path: string; sha256: string; bytes: number };
@@ -394,7 +397,7 @@ export interface DistrictIndex {
 }
 
 // ============================================================================
-// Address Index Types (SEAM-CONTRACT v1 — atlas-address-index)
+// Address Index Types (SEAM-CONTRACT v2 — atlas-address-index)
 // ============================================================================
 
 /**
@@ -422,7 +425,7 @@ export interface AddressStreetRecord {
 	r?: [number, number, 'E' | 'O' | 'B', number, number, number, number][];
 }
 
-/** ZIP5 address chunk published at `{country}/addresses/{zip5}.json` (§2). */
+/** ZIP5 address chunk published at `{country}/addresses/{zip5}.json` (§2, unsplit v1 shape). */
 export interface AddressChunkFile {
 	version: 1;
 	schema: 'atlas-address-index';
@@ -430,6 +433,40 @@ export interface AddressChunkFile {
 	zip: string;
 	state: string;
 	zipCentroid: [number, number];
+	streets: Record<string, AddressStreetRecord>;
+}
+
+/**
+ * §1 v2: tiny stub published at `{country}/addresses/{zip5}.json` in place of
+ * an oversized v1 chunk. `shards` streets subsets live in separate files at
+ * `{country}/addresses/{zip5}.{shard}.json` — see `stableStreetShard` in
+ * street-shard.ts (byte-identical to the producer's copy) for which shard a
+ * given normalized street lives in.
+ */
+export interface AddressChunkStubV2 {
+	v: 2;
+	schema: 'atlas-address-index';
+	country: string;
+	zip: string;
+	state: string;
+	zipCentroid: [number, number];
+	shards: number;
+	/**
+	 * Per-shard integrity pins, index-aligned with shard files 0..shards-1.
+	 * The runtime reader validates SHAPE fail-closed (exactly `shards` entries,
+	 * each a positive byte count + 64-hex sha256); byte-verification against
+	 * these pins happens in the §6 source-population gate, same posture as the
+	 * manifest's normTable/chunk pins.
+	 */
+	shardHashes: { bytes: number; sha256: string }[];
+}
+
+/** One shard file at `{country}/addresses/{zip5}.{shard}.json` (§1 v2). */
+export interface AddressChunkShardV2 {
+	v: 2;
+	zip: string;
+	shard: number;
+	shards: number;
 	streets: Record<string, AddressStreetRecord>;
 }
 
@@ -909,7 +946,7 @@ export async function getCellChunkByParent(
 }
 
 // ============================================================================
-// Address Index API (SEAM-CONTRACT v1 — normalize → ZIP5 chunk → match)
+// Address Index API (SEAM-CONTRACT v2 — normalize → ZIP5 stub/chunk → match)
 // ============================================================================
 
 /** Round-trip check for the contract's 5-decimal-place coordinate pin (§2). */
@@ -917,12 +954,18 @@ function isFiveDpNumber(v: unknown): v is number {
 	return typeof v === 'number' && Number.isFinite(v) && Math.round(v * 1e5) / 1e5 === v;
 }
 
+/** §1 v2 split scheme: addressIndex.schemaVersion values this consumer accepts. */
+const SUPPORTED_ADDRESS_INDEX_SCHEMA_VERSIONS = new Set([1, 2]);
+
 /**
  * Hard-assert the manifest's address-index seam version (§4). Fail-closed:
- * an absent addressIndex section, or any version other than 1, throws
+ * an absent addressIndex section, or an unrecognized version, throws
  * AddressIndexSchemaError — never a silent ZIP fallback, never treated as
  * a coverage miss. A 404 on the manifest itself means the atlas (and so the
  * index) is not published at this source: the same fail-closed path.
+ *
+ * `schemaVersion` accepts 1 (every chunk unsplit) AND 2 (the §1 v2 split
+ * scheme may be present) — both shapes are handled by getAddressChunk below.
  */
 async function assertAddressIndexPublished(
 	country: string,
@@ -950,9 +993,9 @@ async function assertAddressIndexPublished(
 			`Unsupported addressIndexVersion ${String(manifest.addressIndexVersion)} (expected 1)`,
 		);
 	}
-	if (section.schemaVersion !== 1) {
+	if (!SUPPORTED_ADDRESS_INDEX_SCHEMA_VERSIONS.has(section.schemaVersion)) {
 		throw new AddressIndexSchemaError(
-			`Unsupported addressIndex.schemaVersion ${String(section.schemaVersion)} (expected 1)`,
+			`Unsupported addressIndex.schemaVersion ${String(section.schemaVersion)} (expected 1 or 2)`,
 		);
 	}
 	if (section.normVersion !== 1) {
@@ -964,33 +1007,20 @@ async function assertAddressIndexPublished(
 }
 
 /**
- * Validate an address chunk against the §2 record shape. Fail-closed: any
- * violation is an AddressIndexSchemaError (producer bug / wrong artifact),
- * never a silent fallback. Runs once per fetch (cache hits skip it).
+ * Validate a `streets` map against the §2 record shape, shared by the v1
+ * unsplit chunk and every v2 shard file. Fail-closed: any violation is an
+ * AddressIndexSchemaError (producer bug / wrong artifact), never a silent
+ * fallback.
  */
-function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
-	if (chunk.version !== 1 || chunk.schema !== 'atlas-address-index') {
-		throw new AddressIndexSchemaError(
-			`Address chunk ${zip5} schema mismatch: version=${String(chunk.version)} schema=${String(chunk.schema)}`,
-		);
+function validateStreetsMap(
+	streets: unknown,
+	zip5: string,
+	label: string,
+): asserts streets is Record<string, AddressStreetRecord> {
+	if (typeof streets !== 'object' || streets === null || Array.isArray(streets)) {
+		throw new AddressIndexSchemaError(`Address ${label} ${zip5} has an invalid streets map`);
 	}
-	if (chunk.zip !== zip5) {
-		throw new AddressIndexSchemaError(
-			`Address chunk key mismatch: requested ${zip5}, chunk says ${String(chunk.zip)}`,
-		);
-	}
-	if (
-		!Array.isArray(chunk.zipCentroid) ||
-		chunk.zipCentroid.length !== 2 ||
-		!isFiveDpNumber(chunk.zipCentroid[0]) ||
-		!isFiveDpNumber(chunk.zipCentroid[1])
-	) {
-		throw new AddressIndexSchemaError(`Address chunk ${zip5} has an invalid zipCentroid`);
-	}
-	if (typeof chunk.streets !== 'object' || chunk.streets === null || Array.isArray(chunk.streets)) {
-		throw new AddressIndexSchemaError(`Address chunk ${zip5} has an invalid streets map`);
-	}
-	for (const [street, rec] of Object.entries(chunk.streets)) {
+	for (const [street, rec] of Object.entries(streets as Record<string, AddressStreetRecord>)) {
 		if (rec.p !== undefined) {
 			for (const [hn, point] of Object.entries(rec.p)) {
 				if (
@@ -1001,7 +1031,7 @@ function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
 					(point[2] !== 0 && point[2] !== 1)
 				) {
 					throw new AddressIndexSchemaError(
-						`Address chunk ${zip5} street "${street}" point "${hn}" violates §2`,
+						`Address ${label} ${zip5} street "${street}" point "${hn}" violates §2`,
 					);
 				}
 			}
@@ -1022,12 +1052,179 @@ function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
 					!isFiveDpNumber(toLng)
 				) {
 					throw new AddressIndexSchemaError(
-						`Address chunk ${zip5} street "${street}" range violates §2`,
+						`Address ${label} ${zip5} street "${street}" range violates §2`,
 					);
 				}
 			}
 		}
 	}
+}
+
+/**
+ * Validate an unsplit v1 address chunk against the §2 record shape.
+ * Fail-closed: any violation is an AddressIndexSchemaError (producer bug /
+ * wrong artifact), never a silent fallback. Runs once per fetch (cache hits
+ * skip it).
+ */
+function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
+	if (chunk.version !== 1 || chunk.schema !== 'atlas-address-index') {
+		throw new AddressIndexSchemaError(
+			`Address chunk ${zip5} schema mismatch: version=${String(chunk.version)} schema=${String(chunk.schema)}`,
+		);
+	}
+	if (chunk.zip !== zip5) {
+		throw new AddressIndexSchemaError(
+			`Address chunk key mismatch: requested ${zip5}, chunk says ${String(chunk.zip)}`,
+		);
+	}
+	if (
+		!Array.isArray(chunk.zipCentroid) ||
+		chunk.zipCentroid.length !== 2 ||
+		!isFiveDpNumber(chunk.zipCentroid[0]) ||
+		!isFiveDpNumber(chunk.zipCentroid[1])
+	) {
+		throw new AddressIndexSchemaError(`Address chunk ${zip5} has an invalid zipCentroid`);
+	}
+	validateStreetsMap(chunk.streets, zip5, 'chunk');
+}
+
+/**
+ * Validate a §1 v2 stub (`{v:2, shards:N, ...}`, no `streets`). Fail-closed:
+ * any violation is an AddressIndexSchemaError.
+ */
+function validateAddressChunkStubV2(stub: AddressChunkStubV2, zip5: string): void {
+	if (stub.v !== 2 || stub.schema !== 'atlas-address-index') {
+		throw new AddressIndexSchemaError(
+			`Address chunk stub ${zip5} schema mismatch: v=${String(stub.v)} schema=${String(stub.schema)}`,
+		);
+	}
+	if (stub.zip !== zip5) {
+		throw new AddressIndexSchemaError(
+			`Address chunk stub key mismatch: requested ${zip5}, stub says ${String(stub.zip)}`,
+		);
+	}
+	if (
+		!Array.isArray(stub.zipCentroid) ||
+		stub.zipCentroid.length !== 2 ||
+		!isFiveDpNumber(stub.zipCentroid[0]) ||
+		!isFiveDpNumber(stub.zipCentroid[1])
+	) {
+		throw new AddressIndexSchemaError(`Address chunk stub ${zip5} has an invalid zipCentroid`);
+	}
+	if (!Number.isInteger(stub.shards) || stub.shards < 1) {
+		throw new AddressIndexSchemaError(
+			`Address chunk stub ${zip5} has an invalid shards count: ${String(stub.shards)}`,
+		);
+	}
+	if (!Array.isArray(stub.shardHashes) || stub.shardHashes.length !== stub.shards) {
+		throw new AddressIndexSchemaError(
+			`Address chunk stub ${zip5} must pin exactly ${String(stub.shards)} shards in shardHashes, got ${
+				Array.isArray(stub.shardHashes) ? String(stub.shardHashes.length) : typeof stub.shardHashes
+			}`,
+		);
+	}
+	for (const [i, pin] of stub.shardHashes.entries()) {
+		if (
+			pin === null ||
+			typeof pin !== 'object' ||
+			!Number.isInteger(pin.bytes) ||
+			pin.bytes < 1 ||
+			typeof pin.sha256 !== 'string' ||
+			!/^[0-9a-f]{64}$/.test(pin.sha256)
+		) {
+			throw new AddressIndexSchemaError(
+				`Address chunk stub ${zip5} shardHashes[${i}] is malformed: need a positive bytes count and a 64-hex sha256`,
+			);
+		}
+	}
+}
+
+/** Validate a §1 v2 shard file against the shard the stub said to fetch. */
+function validateAddressChunkShardV2(
+	shard: AddressChunkShardV2,
+	zip5: string,
+	expectedShardIdx: number,
+	expectedShards: number,
+): void {
+	if (shard.v !== 2 || shard.zip !== zip5) {
+		throw new AddressIndexSchemaError(
+			`Address chunk shard ${zip5}.${expectedShardIdx} schema mismatch: v=${String(shard.v)} zip=${String(shard.zip)}`,
+		);
+	}
+	if (shard.shard !== expectedShardIdx || shard.shards !== expectedShards) {
+		throw new AddressIndexSchemaError(
+			`Address chunk shard ${zip5}.${expectedShardIdx} index mismatch: shard=${String(shard.shard)} shards=${String(shard.shards)} (expected ${expectedShardIdx}/${expectedShards})`,
+		);
+	}
+	validateStreetsMap(shard.streets, zip5, `shard ${expectedShardIdx}`);
+}
+
+/** §1 v2 stubs: tiny (~100 B each), max 200 = ~20 KB/isolate. */
+const addressChunkStubCache = new LRUCache<AddressChunkStubV2>(200, CACHE_TTL_MS);
+
+/** §1 v2 shard files: ~same size budget as the p95 chunk target, max 100 = ~25 MB/isolate. */
+const addressChunkShardCache = new LRUCache<AddressChunkShardV2>(100, CACHE_TTL_MS);
+
+/** Fetch + validate the stub OR unsplit chunk at `{country}/addresses/{zip5}.json`, using its own cache. */
+async function fetchAddressChunkOrStub(
+	safeCountry: string,
+	zip5: string,
+): Promise<{ kind: 'chunk'; chunk: AddressChunkFile } | { kind: 'stub'; stub: AddressChunkStubV2 } | null> {
+	const chunkCacheKey = `addr:${safeCountry}/${zip5}`;
+	const cachedChunk = addressChunkCache.get(chunkCacheKey);
+	if (cachedChunk) return { kind: 'chunk', chunk: cachedChunk };
+
+	const stubCacheKey = `addr-stub:${safeCountry}/${zip5}`;
+	const cachedStub = addressChunkStubCache.get(stubCacheKey);
+	if (cachedStub) return { kind: 'stub', stub: cachedStub };
+
+	let body: AddressChunkFile | AddressChunkStubV2;
+	try {
+		body = await fetchContent<AddressChunkFile | AddressChunkStubV2>(
+			`${safeCountry}/addresses/${zip5}.json`,
+		);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) return null;
+		throw err;
+	}
+
+	if ((body as AddressChunkStubV2).v === 2) {
+		const stub = body as AddressChunkStubV2;
+		validateAddressChunkStubV2(stub, zip5);
+		addressChunkStubCache.set(stubCacheKey, stub);
+		return { kind: 'stub', stub };
+	}
+	const chunk = body as AddressChunkFile;
+	validateAddressChunk(chunk, zip5);
+	addressChunkCache.set(chunkCacheKey, chunk);
+	return { kind: 'chunk', chunk };
+}
+
+/** Fetch + validate one §1 v2 shard file, using its own cache. */
+async function fetchAddressChunkShard(
+	safeCountry: string,
+	zip5: string,
+	shardIdx: number,
+	shards: number,
+): Promise<AddressChunkShardV2> {
+	const shardCacheKey = `addr-shard:${safeCountry}/${zip5}/${shardIdx}`;
+	const cached = addressChunkShardCache.get(shardCacheKey);
+	if (cached) return cached;
+
+	let shard: AddressChunkShardV2;
+	try {
+		shard = await fetchContent<AddressChunkShardV2>(`${safeCountry}/addresses/${zip5}.${shardIdx}.json`);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) {
+			throw new AddressIndexSchemaError(
+				`Address chunk stub ${zip5} names ${shards} shards but shard ${shardIdx} is missing`,
+			);
+		}
+		throw err;
+	}
+	validateAddressChunkShardV2(shard, zip5, shardIdx, shards);
+	addressChunkShardCache.set(shardCacheKey, shard);
+	return shard;
 }
 
 /**
@@ -1039,10 +1236,20 @@ function validateAddressChunk(chunk: AddressChunkFile, zip5: string): void {
  *   AddressIndexSchemaError.
  * - Network/5xx/timeout → generic Error, exactly as existing chunk fetches;
  *   callers classify those as infrastructure faults, never as misses.
+ *
+ * §1 v2 split: when the fetched artifact is a stub (`v:2`), `normalizedStreet`
+ * picks which shard to fetch via `stableStreetShard` — the SAME hash the
+ * producer used to assign that street at emit time. This is the only extra
+ * fetch the split scheme costs, and only for oversized ZIPs: an unsplit v1
+ * chunk still resolves in one fetch (its own cache entry, never touching the
+ * stub/shard caches). The returned shape is always the v1 `AddressChunkFile`
+ * shape regardless of which path served it — `runMatchLadder` in geocoder.ts
+ * needs no v2 awareness at all.
  */
 export async function getAddressChunk(
 	zip5: string,
 	country = 'US',
+	normalizedStreet = '',
 ): Promise<AddressChunkFile | null> {
 	if (!/^\d{5}$/.test(zip5)) {
 		throw new Error(`Address chunk key must be a 5-digit ZIP, got "${String(zip5).slice(0, 20)}"`);
@@ -1051,21 +1258,23 @@ export async function getAddressChunk(
 
 	await assertAddressIndexPublished(safeCountry);
 
-	const cacheKey = `addr:${safeCountry}/${zip5}`;
-	const cached = addressChunkCache.get(cacheKey);
-	if (cached) return cached;
+	const result = await fetchAddressChunkOrStub(safeCountry, zip5);
+	if (result === null) return null;
+	if (result.kind === 'chunk') return result.chunk;
 
-	let chunk: AddressChunkFile;
-	try {
-		chunk = await fetchContent<AddressChunkFile>(`${safeCountry}/addresses/${zip5}.json`);
-	} catch (err) {
-		if (err instanceof ContentNotFoundError) return null;
-		throw err;
-	}
+	const { stub } = result;
+	const shardIdx = stableStreetShard(normalizedStreet, stub.shards);
+	const shard = await fetchAddressChunkShard(safeCountry, zip5, shardIdx, stub.shards);
 
-	validateAddressChunk(chunk, zip5);
-	addressChunkCache.set(cacheKey, chunk);
-	return chunk;
+	return {
+		version: 1,
+		schema: 'atlas-address-index',
+		country: stub.country,
+		zip: stub.zip,
+		state: stub.state,
+		zipCentroid: stub.zipCentroid,
+		streets: shard.streets,
+	};
 }
 
 /**
@@ -1136,6 +1345,8 @@ export async function clearCache(): Promise<void> {
 	cellChunkCache.clear();
 	districtIndexCache.clear();
 	addressChunkCache.clear();
+	addressChunkStubCache.clear();
+	addressChunkShardCache.clear();
 	normalizationTableCache.clear();
 	manifestCacheMap.clear();
 }

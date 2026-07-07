@@ -1,8 +1,9 @@
 /**
- * Atlas-native geocoder (SEAM-CONTRACT v1 — atlas-address-index).
+ * Atlas-native geocoder (SEAM-CONTRACT v2 — atlas-address-index).
  *
  * Resolves a structured US address to coordinates entirely from our own R2
- * artifacts: normalize the street line (§3), fetch the ZIP5 chunk (§1), then
+ * artifacts: normalize the street line (§3), fetch the ZIP5 chunk (§1 — a
+ * tiny stub + one shard fetch for oversized ZIPs, one fetch otherwise), then
  * run the deterministic match ladder (§2):
  *
  *   exact point → parity-matched range interpolation → ZIP centroid
@@ -363,7 +364,10 @@ export async function geocodeAddress(address: {
 
 	const normHash = await hashNormalizedInput(normalizedStreet, zip5);
 
-	const chunk = await getAddressChunk(zip5, country);
+	// normalizedStreet threads through for SEAM-CONTRACT v2 §1: it is only
+	// consulted when the fetched artifact is an oversized-ZIP stub, to pick
+	// the one shard file that street lives in.
+	const chunk = await getAddressChunk(zip5, country, normalizedStreet);
 	if (chunk === null) {
 		// Clean 404: the index has no chunk for this ZIP — an honest miss
 		// (MISS signal), categorically distinct from an infra fault.
