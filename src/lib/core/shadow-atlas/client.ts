@@ -30,6 +30,8 @@ import {
 } from './ipfs-store';
 import type { ResolutionProvenance } from './provenance';
 import { AddressIndexSchemaError } from './ipfs-store';
+import { US_SLOT_NAMES, CONGRESSIONAL_SLOT_INDEX } from './district-format';
+import { SERVED_SLOT_SET } from './coverage';
 import {
 	geocodeAddress,
 	matchClassPrecision,
@@ -249,40 +251,11 @@ export interface ShadowAtlasResponse {
 // ============================================================================
 
 /**
- * Slot index → jurisdiction metadata.
- * Inline from voter-protocol jurisdiction.ts (will import after cross-repo exports P0).
+ * Slot index → jurisdiction metadata: US_SLOT_NAMES, imported from
+ * ./district-format (shared server/browser module) alongside
+ * CONGRESSIONAL_SLOT_INDEX. The served-slot allowlist gating which slots
+ * reach the public wire lives in ./coverage (SERVED_SLOT_SET).
  */
-/**
- * Canonical slot → jurisdiction mapping.
- * MUST match voter-protocol CIRCUIT_SLOT_NAMES (authority-mapper.ts)
- * and US_JURISDICTION (jurisdiction.ts). Any divergence is a correctness bug.
- */
-const US_SLOT_NAMES: ReadonlyArray<{ jurisdiction: string; label: string }> = [
-	/* 0  */ { jurisdiction: 'congressional', label: 'Congressional District' },
-	/* 1  */ { jurisdiction: 'federal-senate', label: 'Federal Senate' },
-	/* 2  */ { jurisdiction: 'state-senate', label: 'State Senate' },
-	/* 3  */ { jurisdiction: 'state-house', label: 'State House/Assembly' },
-	/* 4  */ { jurisdiction: 'county', label: 'County' },
-	/* 5  */ { jurisdiction: 'city', label: 'City/Municipality' },
-	/* 6  */ { jurisdiction: 'city-council', label: 'City Council Ward' },
-	/* 7  */ { jurisdiction: 'unified-school', label: 'Unified School District' },
-	/* 8  */ { jurisdiction: 'elementary-school', label: 'Elementary School District' },
-	/* 9  */ { jurisdiction: 'secondary-school', label: 'Secondary School District' },
-	/* 10 */ { jurisdiction: 'community-college', label: 'Community College District' },
-	/* 11 */ { jurisdiction: 'water-sewer', label: 'Water/Sewer District' },
-	/* 12 */ { jurisdiction: 'fire', label: 'Fire/EMS District' },
-	/* 13 */ { jurisdiction: 'transit', label: 'Transit District' },
-	/* 14 */ { jurisdiction: 'hospital', label: 'Hospital District' },
-	/* 15 */ { jurisdiction: 'library', label: 'Library District' },
-	/* 16 */ { jurisdiction: 'park', label: 'Parks/Recreation District' },
-	/* 17 */ { jurisdiction: 'conservation', label: 'Conservation District' },
-	/* 18 */ { jurisdiction: 'utility', label: 'Utility District' },
-	/* 19 */ { jurisdiction: 'judicial', label: 'Judicial District' },
-	/* 20 */ { jurisdiction: 'township', label: 'Township/MCD' },
-	/* 21 */ { jurisdiction: 'precinct', label: 'Voting Precinct' },
-	/* 22 */ { jurisdiction: 'tribal', label: 'Tribal/Native Area' },
-	/* 23 */ { jurisdiction: 'overflow', label: 'Other Special District' },
-];
 
 /**
  * Result of a multi-district lookup across all 24 jurisdiction slots.
@@ -309,7 +282,7 @@ function slotToDistrict(slotValue: string, slotIndex: number): District {
 	const jurisdiction = meta?.jurisdiction ?? `slot-${slotIndex}`;
 
 	// Congressional district (slot 0): convert substrate ID format
-	if (slotIndex === 0) {
+	if (slotIndex === CONGRESSIONAL_SLOT_INDEX) {
 		const districtCode = convertDistrictId(slotValue);
 		return {
 			id: districtCode,
@@ -352,7 +325,7 @@ function cellDistrictsToMulti(cellDistricts: CellDistricts): MultiDistrictResult
  * Returns the congressional district (slot 0).
  */
 function cellDistrictsToDistrict(cellDistricts: CellDistricts): District {
-	const cdRaw = cellDistricts.slots[0];
+	const cdRaw = cellDistricts.slots[CONGRESSIONAL_SLOT_INDEX];
 	if (!cdRaw) {
 		throw new Error('Cell has no congressional district assignment');
 	}
@@ -364,6 +337,65 @@ function cellDistrictsToDistrict(cellDistricts: CellDistricts): District {
 		jurisdiction: 'congressional',
 		districtType: 'congressional',
 	};
+}
+
+/**
+ * One resolved boundary entry in the multi-type districts array.
+ * Wire-shape (snake_case district_type) for parity with the legacy district field.
+ */
+export interface ResolvedDistrictEntry {
+	/**
+	 * Stable district identifier.
+	 * - congressional: display code "MN-08" / "VT-AL" (identical to the legacy district.id)
+	 * - all other types: atlas id "{type-alias}-{TIGER GEOID}", e.g. "sldu-27011"
+	 */
+	id: string;
+	/** Raw TIGER/Census GEOID with the alias prefix stripped, e.g. "27011", "2711B", "2708". */
+	geoid: string;
+	/** Human-readable name, e.g. "Minnesota's 8th Congressional District", "State Senate 27011". */
+	name: string;
+	/** Public district-type slug (see US_SLOT_NAMES) — same value as district_type. */
+	jurisdiction: string;
+	/** Public district-type slug, e.g. "congressional", "state-senate", "county". */
+	district_type: string;
+}
+
+/**
+ * Project a cell's slot array onto the public multi-type wire shape.
+ * Emits ONLY slots in the served allowlist (SERVED_SLOT_SET) — a type never
+ * reaches the wire unless the coverage disclosure describes it. Ordered by
+ * canonical slot index ascending.
+ */
+function slotsToResolvedDistricts(slots: (string | null)[]): ResolvedDistrictEntry[] {
+	const out: ResolvedDistrictEntry[] = [];
+	for (let i = 0; i < slots.length; i++) {
+		const raw = slots[i];
+		// typeof guard: a malformed publish putting a non-string in ANY served
+		// slot must skip that slot, never take down the whole resolution.
+		if (!raw || typeof raw !== 'string' || !SERVED_SLOT_SET.has(i)) continue;
+		const meta = US_SLOT_NAMES[i];
+		const jurisdiction = meta?.jurisdiction ?? `slot-${i}`;
+		const geoid = raw.replace(/^[a-z]+-/, '');
+		if (i === CONGRESSIONAL_SLOT_INDEX) {
+			const code = convertDistrictId(raw);
+			out.push({
+				id: code,
+				geoid,
+				name: buildDistrictName(code),
+				jurisdiction,
+				district_type: jurisdiction,
+			});
+		} else {
+			out.push({
+				id: raw,
+				geoid,
+				name: `${meta?.label ?? jurisdiction} ${geoid}`,
+				jurisdiction,
+				district_type: jurisdiction,
+			});
+		}
+	}
+	return out;
 }
 
 /**
@@ -379,6 +411,58 @@ export class AtlasInfraError extends Error {
 		super(message, options);
 		this.name = 'AtlasInfraError';
 	}
+}
+
+/**
+ * Fetch the 24-slot district array for a coordinate. Single source of the
+ * chunk-fetch + infra-classification logic shared by the single- and
+ * multi-type views (lookupDistrict and resolveAddress).
+ *
+ * @throws AtlasInfraError on a store infrastructure fault (never a coverage miss)
+ * @throws Error('No district data…') on an honest outside-coverage miss
+ * @throws Error on invalid coordinates
+ */
+async function lookupCellSlots(
+	lat: number,
+	lng: number,
+): Promise<{ cellIndex: string; slots: (string | null)[] }> {
+	if (lat < -90 || lat > 90) {
+		throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90.`);
+	}
+	if (lng < -180 || lng > 180) {
+		throw new Error(`Invalid longitude: ${lng}. Must be between -180 and 180.`);
+	}
+
+	const cellIndex = latLngToCell(lat, lng, H3_RESOLUTION);
+
+	// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent.
+	// getChunkForCell already converts a clean all-404 (ContentNotFoundError) to null —
+	// the honest coverage miss handled below. Any other rejection is an infrastructure
+	// fault (5xx, timeout, DNS), classified as AtlasInfraError so callers never convert
+	// an outage into a district miss.
+	let slots: (string | null)[] | null;
+	try {
+		slots = await getChunkForCell(cellIndex);
+	} catch (err) {
+		if (err instanceof ContentNotFoundError) {
+			slots = null;
+		} else {
+			throw new AtlasInfraError(
+				`Atlas chunk fetch failed for cell ${cellIndex}: ` +
+					(err instanceof Error ? err.message : String(err)),
+				{ cause: err },
+			);
+		}
+	}
+
+	if (!slots) {
+		throw new Error(
+			`No district data for H3 cell ${cellIndex} at (${lat.toFixed(4)}, ${lng.toFixed(4)}). ` +
+			'Location may be outside US coverage area.'
+		);
+	}
+
+	return { cellIndex, slots };
 }
 
 /**
@@ -402,42 +486,10 @@ export async function lookupDistrict(lat: number, lng: number): Promise<District
 	}
 
 	try {
-		const cellIndex = latLngToCell(lat, lng, H3_RESOLUTION);
-
-		let cellDistricts: CellDistricts | undefined;
-
-		// Fetch only the ~8 KB chunk for this cell's H3 res-3 parent.
-		// getChunkForCell already converts a clean all-404 (ContentNotFoundError) to null —
-		// the honest coverage miss handled below. Any other rejection is an infrastructure
-		// fault (5xx, timeout, DNS), classified as AtlasInfraError so callers never convert
-		// an outage into a district miss.
-		let slots: (string | null)[] | null;
-		try {
-			slots = await getChunkForCell(cellIndex);
-		} catch (err) {
-			if (err instanceof ContentNotFoundError) {
-				slots = null;
-			} else {
-				throw new AtlasInfraError(
-					`Atlas chunk fetch failed for cell ${cellIndex}: ` +
-						(err instanceof Error ? err.message : String(err)),
-					{ cause: err },
-				);
-			}
-		}
-		if (slots) {
-			cellDistricts = { slots };
-		}
-
-		if (!cellDistricts) {
-			throw new Error(
-				`No district data for H3 cell ${cellIndex} at (${lat.toFixed(4)}, ${lng.toFixed(4)}). ` +
-				'Location may be outside US coverage area.'
-			);
-		}
+		const { cellIndex, slots } = await lookupCellSlots(lat, lng);
 
 		return {
-			district: cellDistrictsToDistrict(cellDistricts),
+			district: cellDistrictsToDistrict({ slots }),
 			// Merkle proof: null until cipher integrates client-side path computation.
 			// Callers already handle null proof (serve-only mode).
 			merkleProof: null,
@@ -1128,6 +1180,14 @@ export interface AddressResolutionResult {
 		jurisdiction: string;
 		district_type: string;
 	} | null;
+	/**
+	 * ALL populated, served boundary types for the resolved cell, ordered by canonical
+	 * slot index ascending (congressional first when present). Includes the congressional
+	 * entry (same id as `district`). [] when the cell is outside coverage. Only types in
+	 * the served-slot allowlist are emitted — a type never appears here unless the
+	 * coverage disclosure describes it.
+	 */
+	districts: ResolvedDistrictEntry[];
 	officials: OfficialsResponse | null;
 	cell_id: string | null;
 	/** Resolution provenance — source + boundary-geometry vintage (mirrors upstream ProvenanceRecord). */
@@ -1246,20 +1306,32 @@ export async function resolveAddress(address: {
 	const { lat, lng, matchedAddress } = geocoded;
 	const precisionFactor = matchClassPrecision(geocoded.matchClass);
 
-	// Step 2: District lookup via H3 + IPFS (local, no server call)
+	// Step 2: District lookup via H3 + atlas chunk (local, no server call).
+	// ONE chunk fetch feeds both views: the legacy slot-0 district (back-compat,
+	// confidence semantics unchanged) and the multi-type districts array.
 	let district: AddressResolutionResult['district'] = null;
+	let districts: ResolvedDistrictEntry[] = [];
 	let cellId: string | null = null;
 	let districtMissed = false;
 
 	try {
-		const lookupResult = await lookupDistrict(lat, lng);
-		district = {
-			id: lookupResult.district.id,
-			name: lookupResult.district.name,
-			jurisdiction: lookupResult.district.jurisdiction,
-			district_type: lookupResult.district.districtType,
-		};
-		cellId = lookupResult.cell_id;
+		const { cellIndex, slots } = await lookupCellSlots(lat, lng);
+		cellId = cellIndex;
+		districts = slotsToResolvedDistricts(slots);
+		const primary = districts.find((d) => d.district_type === 'congressional') ?? null;
+		if (primary) {
+			district = {
+				id: primary.id,
+				name: primary.name,
+				jurisdiction: primary.jurisdiction,
+				district_type: primary.district_type,
+			};
+		} else {
+			// Chunk exists but carries no congressional assignment: the PRIMARY miss
+			// semantics stay keyed to slot 0 exactly as before (confidence 0 + warning),
+			// while any populated non-congressional boundaries still surface honestly.
+			districtMissed = true;
+		}
 	} catch (err) {
 		// An atlas infrastructure fault (R2/IPFS outage, timeout) is NOT a coverage miss —
 		// it must never be converted into a districtMissed (billable) result. Propagate it.
@@ -1329,6 +1401,7 @@ export async function resolveAddress(address: {
 			country: countryCode,
 		},
 		district,
+		districts,
 		officials,
 		cell_id: cellId,
 		provenance,

@@ -14,6 +14,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { resolveAddress, AtlasInfraError } from '$lib/core/shadow-atlas/client';
+import { DISTRICT_COVERAGE } from '$lib/core/shadow-atlas/coverage';
 import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { resolveAllowanceForPlan } from '$lib/server/billing/plans';
@@ -152,6 +153,15 @@ export const POST: RequestHandler = async ({ request }) => {
 		// The two freshness clocks are surfaced as DISTINCT keys, never collapsed.
 		const data = {
 			district: r.district,
+			// Additive multi-type view: every populated, served boundary type for the
+			// resolved cell (congressional included, same id as `district`). [] on an
+			// outside-coverage miss. Billing is UNCHANGED — one resolution is one metered
+			// event regardless of how many boundary types return (quantity: 1 below).
+			districts: r.districts ?? [],
+			// Static machine-readable coverage disclosure: which boundary types this API
+			// serves, each with an honest national/partial class, plus which types carry
+			// officials rosters (congressional only). Absent type = not served at all.
+			coverage: DISTRICT_COVERAGE,
 			provenance: r.provenance,
 			confidence: r.confidence,
 			asOf: {

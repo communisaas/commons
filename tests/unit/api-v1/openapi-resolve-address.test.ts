@@ -10,6 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { openApiSpec } from '$lib/server/api-v1/openapi';
+import { DISTRICT_COVERAGE } from '$lib/core/shadow-atlas/coverage';
 
 // JSON round-trip to assert the spec is a plain serializable object (as served).
 const spec = JSON.parse(JSON.stringify(openApiSpec));
@@ -79,6 +80,46 @@ describe('OpenAPI: /resolve-address', () => {
 			'district_type'
 		]);
 		expect(district.description.toLowerCase()).toContain('outside coverage');
+	});
+
+	it("pins the legacy district.district_type to exactly ['congressional'] — no implied multi-type promise", () => {
+		const districtType =
+			spec.components.schemas.ResolveAddressResult.properties.district.properties.district_type;
+		expect(districtType.enum).toEqual(['congressional']);
+	});
+
+	it('documents districts as an array of ResolvedDistrict with the exact required wire fields', () => {
+		const districts = spec.components.schemas.ResolveAddressResult.properties.districts;
+		expect(districts).toBeDefined();
+		expect(districts.type).toBe('array');
+		expect(districts.items.$ref).toBe('#/components/schemas/ResolvedDistrict');
+
+		const resolved = spec.components.schemas.ResolvedDistrict;
+		expect(resolved.required).toEqual(['id', 'geoid', 'name', 'jurisdiction', 'district_type']);
+	});
+
+	it('documents coverage as ResolveCoverage with required disclosure keys and the exact class enum', () => {
+		const coverage = spec.components.schemas.ResolveAddressResult.properties.coverage;
+		expect(coverage.$ref).toBe('#/components/schemas/ResolveCoverage');
+
+		const resolveCoverage = spec.components.schemas.ResolveCoverage;
+		expect(resolveCoverage.required).toEqual(['boundaryTypes', 'officialsTypes']);
+		expect(
+			resolveCoverage.properties.boundaryTypes.additionalProperties.properties.coverage.enum
+		).toEqual(['national', 'partial']);
+	});
+
+	it('names every served district_type from the live coverage table in the spec (anti-drift)', () => {
+		// Mirrors the zod-schema-match pattern above: the ResolvedDistrict
+		// district_type description enumerates the served types, so serving a new
+		// slot without updating the published contract fails red here.
+		const description: string =
+			spec.components.schemas.ResolvedDistrict.properties.district_type.description;
+		for (const districtType of Object.keys(DISTRICT_COVERAGE.boundaryTypes)) {
+			expect(description, `spec missing served district_type ${districtType}`).toContain(
+				districtType
+			);
+		}
 	});
 
 	it('matches the live zod addressSchema for ResolveAddressInput', () => {

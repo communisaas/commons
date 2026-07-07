@@ -97,6 +97,9 @@ const { POST: resolveAddressHandler } = await import(
 // Routed through the mock above, which re-exports the actual class — so
 // instances constructed here are the SAME class the handler checks against.
 const { AtlasInfraError } = await import('$lib/core/shadow-atlas/client');
+// The REAL coverage module (only the client module is mocked): the handler embeds
+// this exact static disclosure object in every response.
+const { DISTRICT_COVERAGE } = await import('$lib/core/shadow-atlas/coverage');
 
 // =============================================================================
 // HELPERS
@@ -126,6 +129,11 @@ const ENRICHED_RESULT = {
 		country: 'US'
 	},
 	district: { id: 'CA-12', name: 'California 12th', jurisdiction: 'US', district_type: 'congressional' },
+	districts: [
+		{ id: 'CA-12', geoid: '0612', name: 'California 12th', jurisdiction: 'congressional', district_type: 'congressional' },
+		{ id: 'sldu-06011', geoid: '06011', name: 'State Senate 06011', jurisdiction: 'state-senate', district_type: 'state-senate' },
+		{ id: 'county-06075', geoid: '06075', name: 'County 06075', jurisdiction: 'county', district_type: 'county' }
+	],
 	officials: {
 		officials: [
 			{ name: 'Rep. Example', party: 'D', chamber: 'house', state: 'CA', district: '12', office: 'Representative, CA' }
@@ -230,6 +238,13 @@ describe('POST /api/v1/resolve-address', () => {
 
 		expect(res.status).toBe(200);
 		expect(body.data.district).toEqual(ENRICHED_RESULT.district);
+		// The multi-type view passes through verbatim (congressional entry included).
+		expect(body.data.districts).toEqual(ENRICHED_RESULT.districts);
+		// The static coverage disclosure is embedded in every response, and it is the
+		// REAL module object — which boundary types are served, at what honesty class,
+		// and that officials rosters are congressional-only.
+		expect(body.data.coverage).toEqual(JSON.parse(JSON.stringify(DISTRICT_COVERAGE)));
+		expect(body.data.coverage.officialsTypes).toEqual(['congressional']);
 		expect(body.data.provenance).toEqual({ source: 'nominatim', tigerVintage: '2023' });
 		expect(body.data.confidence).toBe(1.0);
 		expect(body.data.officials).toHaveLength(1);
@@ -262,6 +277,7 @@ describe('POST /api/v1/resolve-address', () => {
 		mockResolveAddress.mockResolvedValue({
 			...ENRICHED_RESULT,
 			district: null,
+			districts: [],
 			officials: null,
 			confidence: 0,
 			boundaryAsOf: null,
@@ -273,9 +289,47 @@ describe('POST /api/v1/resolve-address', () => {
 
 		expect(res.status).toBe(200);
 		expect(body.data.district).toBeNull();
+		// The multi-type view round-trips the honest empty array.
+		expect(body.data.districts).toEqual([]);
 		// The substrate ran → exactly one metered row, requestId echoed.
 		expect(mockServerMutation).toHaveBeenCalledTimes(1);
 		expect(body.meta.requestId).toBe(mockServerMutation.mock.calls[0][1].requestId);
+	});
+
+	it('(d5) billing is invariant in the number of district types returned — a 6-type result still meters quantity 1', async () => {
+		mockResolveAddress.mockResolvedValue({
+			...ENRICHED_RESULT,
+			districts: [
+				{ id: 'MN-08', geoid: '2708', name: "Minnesota's 8th Congressional District", jurisdiction: 'congressional', district_type: 'congressional' },
+				{ id: 'sldu-27011', geoid: '27011', name: 'State Senate 27011', jurisdiction: 'state-senate', district_type: 'state-senate' },
+				{ id: 'sldl-2711B', geoid: '2711B', name: 'State House/Assembly 2711B', jurisdiction: 'state-house', district_type: 'state-house' },
+				{ id: 'county-27115', geoid: '27115', name: 'County 27115', jurisdiction: 'county', district_type: 'county' },
+				{ id: 'unsd-2742750', geoid: '2742750', name: 'Unified School District 2742750', jurisdiction: 'unified-school', district_type: 'unified-school' },
+				{ id: 'cousub-2711532984', geoid: '2711532984', name: 'Township/MCD 2711532984', jurisdiction: 'township', district_type: 'township' }
+			]
+		});
+
+		const res = await resolveAddressHandler({ request: makeRequest() } as any);
+		const body = await res.json();
+
+		expect(res.status).toBe(200);
+		expect(body.data.districts).toHaveLength(6);
+		// One resolution = one meter event, regardless of how many types returned.
+		expect(mockServerMutation).toHaveBeenCalledTimes(1);
+		const [, meterArgs] = mockServerMutation.mock.calls[0];
+		expect(meterArgs.meter).toBe('resolve_address');
+		expect(meterArgs.quantity).toBe(1);
+	});
+
+	it('(d6) a resolver result WITHOUT a districts field still yields data.districts === [] (never undefined)', async () => {
+		const { districts: _omit, ...legacyShape } = ENRICHED_RESULT;
+		mockResolveAddress.mockResolvedValue(legacyShape);
+
+		const res = await resolveAddressHandler({ request: makeRequest() } as any);
+		const body = await res.json();
+
+		expect(res.status).toBe(200);
+		expect(body.data.districts).toEqual([]);
 	});
 
 	it('(d3) the metering write is AWAITED + fail-closed — a rejected ledger write yields a non-200, never a billed-but-unrecorded 200', async () => {
@@ -370,6 +424,7 @@ describe('POST /api/v1/resolve-address', () => {
 		mockResolveAddress.mockResolvedValue({
 			...ENRICHED_RESULT,
 			district: null,
+			districts: [],
 			officials: null,
 			confidence: 0,
 			boundaryAsOf: null,
@@ -380,6 +435,7 @@ describe('POST /api/v1/resolve-address', () => {
 		const body = await res.json();
 		expect(res.status).toBe(200);
 		expect(body.data.district).toBeNull();
+		expect(body.data.districts).toEqual([]);
 		expect(body.data.officials).toEqual([]);
 		expect(body.error).toBeUndefined();
 	});
