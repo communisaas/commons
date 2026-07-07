@@ -128,6 +128,12 @@ gate('§6 source-population gate — real producer sample artifact', () => {
 			for (const zip5 of Object.keys(chunkIndex)) {
 				// getAddressChunk hard-validates §2 (shape, 5-dp coords,
 				// fromHn ≤ toHn, parity enum, src enum) and throws on violation.
+				// NOTE (§1 v2): a call with no normalizedStreet only fetches the
+				// ONE shard '' hashes into for a SPLIT ZIP, so the streetCount
+				// equality below assumes every chunk in this sample is unsplit —
+				// true for the small DE/RI/DC sample this gate targets, but not a
+				// general invariant once a national build's split ZIPs are
+				// published under this gate's BASE.
 				const chunk = await getAddressChunk(zip5, 'US');
 				expect(chunk, `chunk ${zip5} missing despite chunk-index entry`).not.toBeNull();
 				expect(chunk!.zip).toBe(zip5);
@@ -146,6 +152,29 @@ gate('§6 source-population gate — real producer sample artifact', () => {
 				const bytes = await res.arrayBuffer();
 				expect(bytes.byteLength, `chunk ${zip5} byte length`).toBe(entry.bytes);
 				expect(await sha256Hex(bytes), `chunk ${zip5} sha256`).toBe(entry.sha256);
+
+				// §1 v2: for a SPLIT ZIP the index entry above pins the stub;
+				// each shard file must byte-match the stub's own shardHashes pins.
+				const body = JSON.parse(new TextDecoder().decode(bytes)) as {
+					v?: number;
+					shards?: number;
+					shardHashes?: { bytes: number; sha256: string }[];
+				};
+				if (body.v === 2) {
+					expect(
+						body.shardHashes?.length,
+						`stub ${zip5} shardHashes count`,
+					).toBe(body.shards);
+					for (const [idx, pin] of (body.shardHashes ?? []).entries()) {
+						const shardRes = await fetch(`${BASE}/US/addresses/${zip5}.${idx}.json`);
+						expect(shardRes.ok, `raw fetch of shard ${zip5}.${idx} failed (${shardRes.status})`).toBe(
+							true,
+						);
+						const shardBytes = await shardRes.arrayBuffer();
+						expect(shardBytes.byteLength, `shard ${zip5}.${idx} byte length`).toBe(pin.bytes);
+						expect(await sha256Hex(shardBytes), `shard ${zip5}.${idx} sha256`).toBe(pin.sha256);
+					}
+				}
 			}
 
 			const normRes = await fetch(`${BASE}/US/${addressIndex.normTable.path}`);
