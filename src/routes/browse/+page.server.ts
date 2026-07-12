@@ -1,13 +1,13 @@
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { getCachedPublicTemplates } from '$lib/server/public-template-queries';
 
-export const load: PageServerLoad = async () => {
-	const templates = await serverQuery(api.templates.listPublic, {
+export const load: PageServerLoad = async ({ url, platform }) => {
+	const templates = await getCachedPublicTemplates(
+		{ url, platform },
 		// Keep CWC templates out of public discovery until congressional launch.
-		excludeCwc: !FEATURES.CONGRESSIONAL
-	});
+		!FEATURES.CONGRESSIONAL
+	);
 
 	return { templates };
 };

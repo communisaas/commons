@@ -1,7 +1,7 @@
-import { query, mutation, action, internalAction, internalQuery, internalMutation } from "./_generated/server";
+import { query, mutation, action, internalAction, internalQuery, internalMutation, type MutationCtx } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
-import { v } from "convex/values";
+import { getConvexSize, v, type Value } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
@@ -26,6 +26,7 @@ const listMissingTagEmbeddingsRef = makeFunctionReference<"query">("templates:li
 const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchTagEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
 const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
 const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
+const rebuildHomepageSnapshotsRef = makeFunctionReference<"mutation">("templates:rebuildHomepageSnapshots") as unknown as FunctionReference<"mutation", "internal">;
 
 // ── Domain hue projection (cosine similarity → circular hue interpolation) ──
 
@@ -167,198 +168,176 @@ export const getBySlug = query({
   },
 });
 
+type PublicTemplateSnapshotKey = "all" | "excludeCwc";
+const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
+const RELATION_SNAPSHOT_SCAN_CAP = 50;
+const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
+
 /**
- * Public: List public templates with enriched data for the homepage.
- * Returns org endorsement info, debate summary, scopes, and computed metrics.
+ * Build the existing `listPublic` projection over a bounded, already-selected
+ * source set. This helper is mutation-only: public requests must read the
+ * materialized payload and never call it.
  */
-export const listPublic = query({
-  args: {
-    excludeCwc: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    // Fetch all published public templates
-    let templates = await ctx.db
-      .query("templates")
-      .withIndex("by_status", (q) => q.eq("status", "published"))
-      .order("desc")
-      .collect();
+async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates">[]) {
+  const templateIds = templates.map((t) => t._id);
 
-    // Filter to public only + optional CWC exclusion
-    templates = templates.filter((t) => {
-      if (!t.isPublic) return false;
-      if (args.excludeCwc && t.deliveryMethod === "cwc") return false;
-      return true;
-    });
-
-    // Cap at 50 for homepage
-    templates = templates.slice(0, 50);
-
-    const templateIds = templates.map((t) => t._id);
-
-    // Batch-fetch related data in parallel
-    const [allDebates, allEndorsements, orgMap] = await Promise.all([
-      // Debates for these templates
-      Promise.all(
-        templateIds.map((tid) =>
-          ctx.db
-            .query("debates")
-            .withIndex("by_templateId", (q) => q.eq("templateId", tid))
-            .order("desc")
-            .first()
-        )
+  // Batch-fetch related data in parallel
+  const [allDebates, allEndorsements, orgMap] = await Promise.all([
+    // Debates for these templates
+    Promise.all(
+      templateIds.map((tid) =>
+        ctx.db
+          .query("debates")
+          .withIndex("by_templateId", (q) => q.eq("templateId", tid))
+          .order("desc")
+          .first(),
       ),
-      // Endorsements for these templates
-      Promise.all(
-        templateIds.map((tid) =>
-          ctx.db
-            .query("templateEndorsements")
-            .withIndex("by_templateId", (q) => q.eq("templateId", tid))
-            .collect()
-        )
+    ),
+    // Endorsements for these templates
+    Promise.all(
+      templateIds.map((tid) =>
+        ctx.db
+          .query("templateEndorsements")
+          .withIndex("by_templateId", (q) => q.eq("templateId", tid))
+          .collect(),
       ),
-      // Collect unique orgIds and batch-fetch orgs
-      (async () => {
-        const orgIds = new Set<Id<"organizations">>();
-        for (const t of templates) {
-          if (t.orgId) orgIds.add(t.orgId);
-        }
-        const orgs = await Promise.all(
-          [...orgIds].map((id) => ctx.db.get(id))
-        );
-        const map = new Map<string, { name: string; slug: string; avatar: string | null }>();
-        for (const org of orgs) {
-          if (org) {
-            map.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
-          }
-        }
-        return map;
-      })(),
-    ]);
-
-    // Also fetch orgs from endorsements
-    const endorsementOrgIds = new Set<Id<"organizations">>();
-    for (const endorsements of allEndorsements) {
-      for (const e of endorsements) {
-        endorsementOrgIds.add(e.orgId);
+    ),
+    // Collect unique orgIds and batch-fetch orgs
+    (async () => {
+      const orgIds = new Set<Id<"organizations">>();
+      for (const t of templates) {
+        if (t.orgId) orgIds.add(t.orgId);
       }
-    }
-    // Remove already-fetched orgIds
-    for (const key of orgMap.keys()) {
-      endorsementOrgIds.delete(key as Id<"organizations">);
-    }
-    // Fetch remaining endorsement orgs
-    const extraOrgs = await Promise.all(
-      [...endorsementOrgIds].map((id) => ctx.db.get(id))
-    );
-    for (const org of extraOrgs) {
-      if (org) {
-        orgMap.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+      const orgs = await Promise.all([...orgIds].map((id) => ctx.db.get(id)));
+      const map = new Map<string, { name: string; slug: string; avatar: string | null }>();
+      for (const org of orgs) {
+        if (org) {
+          map.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+        }
       }
+      return map;
+    })(),
+  ]);
+
+  // Also fetch orgs from endorsements
+  const endorsementOrgIds = new Set<Id<"organizations">>();
+  for (const endorsements of allEndorsements) {
+    for (const e of endorsements) {
+      endorsementOrgIds.add(e.orgId);
     }
+  }
+  // Remove already-fetched orgIds
+  for (const key of orgMap.keys()) {
+    endorsementOrgIds.delete(key as Id<"organizations">);
+  }
+  // Fetch remaining endorsement orgs
+  const extraOrgs = await Promise.all([...endorsementOrgIds].map((id) => ctx.db.get(id)));
+  for (const org of extraOrgs) {
+    if (org) {
+      orgMap.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+    }
+  }
 
-    // Build enriched results
-    return templates.map((template, i) => {
-      const debate = allDebates[i];
-      const endorsements = allEndorsements[i] ?? [];
+  // Build enriched results
+  return templates.map((template, i) => {
+    const debate = allDebates[i];
+    const endorsements = allEndorsements[i] ?? [];
 
-      // Endorsing org (template owner)
-      const endorsingOrg = template.orgId ? orgMap.get(template.orgId) ?? null : null;
+    // Endorsing org (template owner)
+    const endorsingOrg = template.orgId ? (orgMap.get(template.orgId) ?? null) : null;
 
-      // Additional endorsing orgs (excluding the template owner)
-      const endorsingOrgs = endorsements
-        .filter((e) => e.orgId !== template.orgId)
-        .map((e) => orgMap.get(e.orgId))
-        .filter((o): o is NonNullable<typeof o> => o != null);
+    // Additional endorsing orgs (excluding the template owner)
+    const endorsingOrgs = endorsements
+      .filter((e) => e.orgId !== template.orgId)
+      .map((e) => orgMap.get(e.orgId))
+      .filter((o): o is NonNullable<typeof o> => o != null);
 
-      // Debate summary
-      const hasActiveDebate = debate?.status === "active";
-      // debate.status was tightened to a closed union; the prior
-      // `!== "cancelled"` defensive check is now dead (the validator
-      // would reject any row with that value at write time). Keep the
-      // null-guard on `debate` itself; drop the obsolete value check.
-      const debateSummary = debate
-        ? {
-            status: debate.status,
-            winningStance: debate.winningStance ?? undefined,
-            uniqueParticipants: (debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
-            argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
-            deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined,
-          }
-        : undefined;
+    // Debate summary
+    const hasActiveDebate = debate?.status === "active";
+    // debate.status was tightened to a closed union; the prior
+    // `!== "cancelled"` defensive check is now dead (the validator
+    // would reject any row with that value at write time). Keep the
+    // null-guard on `debate` itself; drop the obsolete value check.
+    const debateSummary = debate
+      ? {
+          status: debate.status,
+          winningStance: debate.winningStance ?? undefined,
+          uniqueParticipants: (debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
+          argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
+          deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined,
+        }
+      : undefined;
 
-      // Coordination scale
-      const sendCount = template.verifiedSends || 0;
-      const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
-      const creationTime = template._creationTime;
-      const daysSinceCreation = (Date.now() - creationTime) / (1000 * 60 * 60 * 24);
-      const isNew = daysSinceCreation <= 7;
+    // Coordination scale
+    const sendCount = template.verifiedSends || 0;
+    const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
+    const creationTime = template._creationTime;
+    const daysSinceCreation = (Date.now() - creationTime) / (1000 * 60 * 60 * 24);
+    const isNew = daysSinceCreation <= 7;
 
-      return {
-        id: template._id,
-        slug: template.slug,
-        title: template.title,
-        description: template.description,
-        domain: resolveDomain(template),
-        domainHue: template.domainHue ?? undefined,
-        topics: template.topics ?? [],
-        type: template.type,
-        deliveryMethod: template.deliveryMethod,
-        subject: template.title,
-        message_body: template.messageBody,
-        preview: template.preview,
-        endorsingOrg,
-        endorsingOrgs,
-        coordinationScale,
-        isNew,
-        hasActiveDebate,
-        debateSummary,
-        // Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
-        // sizes name specific submitters. Above the floor, counts are exact —
-        // template visibility is the product. daily_arrivals zeroes sub-K days
-        // so a singleton-day doesn't reveal the day's only sender.
-        verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
-        unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-        send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-        daily_arrivals: (template.dailyArrivals ?? []).map((c: number) => (c < 5 ? 0 : c)),
-        // K-anon at trust boundary: filter districts with count < 5 out of
-        // the public payload, zero tier counts below the same threshold.
-        // Consumers still see the visible-shape but not the thin-cohort
-        // contributions. earlier hero work applied this; the per-template path
-        // mirrors it so all consumers (org pages, share cards, public API,
-        // future surfaces) inherit the floor without re-implementing.
-        district_counts: (template.districtCounts ?? []).filter(
-          (d: { code: string; count: number }) => d.count >= 5,
-        ),
-        tier_counts: (template.tierCounts ?? []).map((c: number) =>
-          c < 5 ? 0 : c,
-        ),
-        delivery_config: template.deliveryConfig,
-        cwc_config: template.cwcConfig ?? null,
-        recipient_config: template.recipientConfig,
-        campaign_id: template.campaignId ?? null,
-        status: template.status,
-        is_public: template.isPublic,
-        jurisdictions: (template.jurisdictions ?? []).map((j, ji) => ({
-          id: template._id + "_j" + ji,
-          template_id: template._id,
-          jurisdiction_type: j.jurisdictionType,
-          congressional_district: j.congressionalDistrict ?? null,
-          senate_class: j.senateClass ?? null,
-          state_code: j.stateCode ?? null,
-          state_senate_district: j.stateSenateDistrict ?? null,
-          state_house_district: j.stateHouseDistrict ?? null,
-          county_fips: j.countyFips ?? null,
-          county_name: j.countyName ?? null,
-          city_name: j.cityName ?? null,
-          city_fips: j.cityFips ?? null,
-          school_district_id: j.schoolDistrictId ?? null,
-          school_district_name: j.schoolDistrictName ?? null,
-          latitude: j.latitude ?? null,
-          longitude: j.longitude ?? null,
-          estimated_population: j.estimatedPopulation ?? null,
-          coverage_notes: j.coverageNotes ?? null,
-        })),
-        scope: (template.scopes ?? []).length > 0
+    return {
+      id: template._id,
+      slug: template.slug,
+      title: template.title,
+      description: template.description,
+      domain: resolveDomain(template),
+      domainHue: template.domainHue ?? undefined,
+      topics: template.topics ?? [],
+      type: template.type,
+      deliveryMethod: template.deliveryMethod,
+      subject: template.title,
+      message_body: template.messageBody,
+      preview: template.preview,
+      endorsingOrg,
+      endorsingOrgs,
+      coordinationScale,
+      isNew,
+      hasActiveDebate,
+      debateSummary,
+      // Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
+      // sizes name specific submitters. Above the floor, counts are exact —
+      // template visibility is the product. daily_arrivals zeroes sub-K days
+      // so a singleton-day doesn't reveal the day's only sender.
+      verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
+      unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
+      send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
+      daily_arrivals: (template.dailyArrivals ?? []).map((c: number) => (c < 5 ? 0 : c)),
+      // K-anon at trust boundary: filter districts with count < 5 out of
+      // the public payload, zero tier counts below the same threshold.
+      // Consumers still see the visible-shape but not the thin-cohort
+      // contributions. earlier hero work applied this; the per-template path
+      // mirrors it so all consumers (org pages, share cards, public API,
+      // future surfaces) inherit the floor without re-implementing.
+      district_counts: (template.districtCounts ?? []).filter((d: { code: string; count: number }) => d.count >= 5),
+      tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
+      delivery_config: template.deliveryConfig,
+      cwc_config: template.cwcConfig ?? null,
+      recipient_config: template.recipientConfig,
+      campaign_id: template.campaignId ?? null,
+      status: template.status,
+      is_public: template.isPublic,
+      jurisdictions: (template.jurisdictions ?? []).map((j, ji) => ({
+        id: template._id + "_j" + ji,
+        template_id: template._id,
+        jurisdiction_type: j.jurisdictionType,
+        congressional_district: j.congressionalDistrict ?? null,
+        senate_class: j.senateClass ?? null,
+        state_code: j.stateCode ?? null,
+        state_senate_district: j.stateSenateDistrict ?? null,
+        state_house_district: j.stateHouseDistrict ?? null,
+        county_fips: j.countyFips ?? null,
+        county_name: j.countyName ?? null,
+        city_name: j.cityName ?? null,
+        city_fips: j.cityFips ?? null,
+        school_district_id: j.schoolDistrictId ?? null,
+        school_district_name: j.schoolDistrictName ?? null,
+        latitude: j.latitude ?? null,
+        longitude: j.longitude ?? null,
+        estimated_population: j.estimatedPopulation ?? null,
+        coverage_notes: j.coverageNotes ?? null,
+      })),
+      scope:
+        (template.scopes ?? []).length > 0
           ? {
               id: template._id + "_s0",
               template_id: template._id,
@@ -372,84 +351,181 @@ export const listPublic = query({
               extraction_method: template.scopes![0].extractionMethod,
             }
           : null,
-        scopes: (template.scopes ?? []).map((s, si) => ({
-          id: template._id + "_s" + si,
-          template_id: template._id,
-          country_code: s.countryCode,
-          region_code: s.regionCode ?? null,
-          locality_code: s.localityCode ?? null,
-          district_code: s.districtCode ?? null,
-          display_text: s.displayText,
-          scope_level: s.scopeLevel,
-          confidence: s.confidence,
-          extraction_method: s.extractionMethod,
-        })),
-        recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
-        createdAt: new Date(creationTime).toISOString(),
-      };
-    });
+      scopes: (template.scopes ?? []).map((s, si) => ({
+        id: template._id + "_s" + si,
+        template_id: template._id,
+        country_code: s.countryCode,
+        region_code: s.regionCode ?? null,
+        locality_code: s.localityCode ?? null,
+        district_code: s.districtCode ?? null,
+        display_text: s.displayText,
+        scope_level: s.scopeLevel,
+        confidence: s.confidence,
+        extraction_method: s.extractionMethod,
+      })),
+      recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+      createdAt: new Date(creationTime).toISOString(),
+    };
+  });
+}
+
+type PublicTemplatePayload = Awaited<ReturnType<typeof enrichPublicTemplates>>[number];
+
+/**
+ * Public: List public templates with enriched data for the homepage.
+ *
+ * Signature and payload are unchanged, but the request path reads one compact
+ * singleton selected by `excludeCwc`. A missing snapshot returns an honest empty
+ * list. There is deliberately no live-scan fallback.
+ */
+export const listPublic = query({
+  args: {
+    excludeCwc: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<PublicTemplatePayload[]> => {
+    const key: PublicTemplateSnapshotKey = args.excludeCwc ? "excludeCwc" : "all";
+    const snapshot = await ctx.db
+      .query("publicTemplateSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    return Array.isArray(snapshot?.templates) ? (snapshot.templates as PublicTemplatePayload[]) : [];
   },
 });
+
+type PublicTemplateSnapshotRebuildResult = {
+  sourceCap: number;
+  scannedCount: number;
+  allCount: number;
+  excludeCwcCount: number;
+  allSnapshotBytes: number;
+  excludeCwcSnapshotBytes: number;
+};
+
+/**
+ * Build and atomically upsert both `listPublic` materializations.
+ *
+ * The exact `(published, public)` index removes drafts/private rows before any
+ * document hydration. The descending source scan is hard-capped at 250 rows:
+ * `all` is therefore the exact newest 50, while `excludeCwc` is the newest 50
+ * non-CWC rows found inside that explicit I/O budget. The two selected sets are
+ * de-duplicated before enrichment so their overlapping debate/endorsement/org
+ * joins are paid only once.
+ */
+async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<PublicTemplateSnapshotRebuildResult> {
+  const candidates = await ctx.db
+    .query("templates")
+    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
+    .order("desc")
+    .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+
+  const allSources = candidates.slice(0, 50);
+  const excludeCwcSources = candidates.filter((template) => template.deliveryMethod !== "cwc").slice(0, 50);
+
+  const selectedIds = new Set([...allSources.map((template) => template._id), ...excludeCwcSources.map((template) => template._id)]);
+  const selectedSources = candidates.filter((template) => selectedIds.has(template._id));
+  const enriched = await enrichPublicTemplates(ctx, selectedSources);
+  const enrichedById = new Map(enriched.map((template) => [template.id, template]));
+  const allTemplates = allSources.map((template) => enrichedById.get(template._id)!);
+  const excludeCwcTemplates = excludeCwcSources.map((template) => enrichedById.get(template._id)!);
+
+  const updatedAt = Date.now();
+  const rows: Array<{
+    key: PublicTemplateSnapshotKey;
+    templates: PublicTemplatePayload[];
+    sourceCount: number;
+    updatedAt: number;
+  }> = [
+    {
+      key: "all",
+      templates: allTemplates,
+      sourceCount: allSources.length,
+      updatedAt,
+    },
+    {
+      key: "excludeCwc",
+      templates: excludeCwcTemplates,
+      sourceCount: excludeCwcSources.length,
+      updatedAt,
+    },
+  ];
+
+  // Validate BOTH payloads before either upsert. A too-large rebuild therefore
+  // writes nothing and preserves both last-good rows as a matched pair.
+  const rowSizes = new Map<PublicTemplateSnapshotKey, number>();
+  for (const row of rows) {
+    const bytes = getConvexSize(row as unknown as Value);
+    if (bytes > MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES) {
+      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:${row.key}:${bytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
+    }
+    rowSizes.set(row.key, bytes);
+  }
+
+  for (const row of rows) {
+    const existing = await ctx.db
+      .query("publicTemplateSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", row.key))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, row);
+    } else {
+      await ctx.db.insert("publicTemplateSnapshots", row);
+    }
+  }
+
+  return {
+    sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
+    scannedCount: candidates.length,
+    allCount: allTemplates.length,
+    excludeCwcCount: excludeCwcTemplates.length,
+    allSnapshotBytes: rowSizes.get("all")!,
+    excludeCwcSnapshotBytes: rowSizes.get("excludeCwc")!,
+  };
+}
+
+/** Internal/operator entry point for the low-cost public-list materialization. */
+export const rebuildPublicTemplateSnapshots = internalMutation({
+  args: {},
+  handler: rebuildPublicTemplateSnapshotsImpl,
+});
+
+/**
+ * Singleton selectors for the public-corpus normalization and its materialized
+ * relation result. They intentionally share the same key but live in separate
+ * tables: the calibration row contains a 768-dimension centroid needed only by
+ * the nightly rebuild, while request-path reads touch only the compact snapshot.
+ */
+const RELATEDNESS_CALIBRATION_KEY = "public";
+const RELATION_SNAPSHOT_KEY = "public";
+
+/** Leave headroom for Convex document system fields below the 1 MiB value cap. */
+const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
 
 /**
  * Public: measured-twin relatedness edges over the public template set.
  *
- * Loads only the published public templates that carry a topic embedding,
- * computes mean-centered (common-mode-removed) pairwise cosine, and returns the
- * pairs that clear the calibrated threshold and survive the leave-one-out
- * robustness check. The embeddings stay on the server — the payload is ONLY
- * edge tuples ({a, b, score, kind}) keyed by template id, never any vector.
+ * Request-path invariant: this query reads exactly one compact materialized row
+ * and never hydrates `templates` or the calibration centroid. The nightly
+ * `rebuildRelationSnapshot` mutation owns all embedding-heavy computation.
  *
- * Templates without an embedding simply contribute no twin edges (not an
- * error), so the surface stays honest about a sparse, partly-isolated corpus.
+ * A missing snapshot is the honest cold-start state: return no edges. There is
+ * deliberately no live-scan fallback, because a fallback would reintroduce the
+ * database-I/O failure mode this materialization exists to remove.
  */
 export const relatednessEdges = query({
   args: {},
   handler: async (ctx): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
-    const templates = await ctx.db
-      .query("templates")
-      .withIndex("by_status", (q) => q.eq("status", "published"))
-      .collect();
-
-    // Public templates that actually have a topic embedding. Missing embeddings
-    // contribute nothing (they are not an error). The 768-dim vectors are read
-    // here and consumed only inside the pure helper — they never leave.
-    const items = templates
-      .filter((t) => t.isPublic && Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
-      .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
-
-    // Prefer the persisted, daily-refreshed normalization (centroid + the
-    // threshold calibrated against it). Falling back to inline compute when no
-    // calibration row exists yet — the cold-start path before the first cron
-    // run, and the only path needed if the schedule is ever paused. Stale
-    // calibration is harmless: it only shifts the common-mode subtracted before
-    // scoring, and the daily refit keeps it tracking the corpus.
-    const calibration = await ctx.db
-      .query("relatednessCalibration")
-      .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
+    const snapshot = await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
       .unique();
-
-    // The stored centroid only applies if it was fit in the same dimensionality
-    // as today's embeddings; otherwise let the helper recompute it inline.
-    const dim = items[0]?.embedding.length;
-    const centroid =
-      calibration && calibration.dim === dim ? calibration.centroid : undefined;
-
-    return computeTwinEdges(items, {
-      centroid,
-      threshold: calibration?.threshold,
-    });
+    return snapshot?.twinEdges ?? [];
   },
 });
 
 /**
- * Singleton selector for the persisted relatedness normalization. One canonical
- * row keyed by this string (the smtRoots/treeId singleton idiom).
- */
-const RELATEDNESS_CALIBRATION_KEY = "public";
-
-/**
- * Refit the persisted relatedness normalization over the live public corpus.
+ * Refit the persisted relatedness normalization over the bounded homepage
+ * corpus (the newest 50 published+public templates). This cap is intentionally
+ * lower than the list candidate cap because `computeTwinEdges` is O(n^3*d).
  *
  * Recomputes the corpus centroid (the genre common-mode removed before scoring
  * template twins) + the calibrated threshold via the same pure helper the edge
@@ -464,16 +540,15 @@ const RELATEDNESS_CALIBRATION_KEY = "public";
  */
 export const recomputeRelatednessCalibration = internalMutation({
   args: {},
-  handler: async (
-    ctx,
-  ): Promise<{ updated: boolean; count: number; dim: number }> => {
+  handler: async (ctx): Promise<{ updated: boolean; count: number; dim: number }> => {
     const templates = await ctx.db
       .query("templates")
-      .withIndex("by_status", (q) => q.eq("status", "published"))
-      .collect();
+      .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
+      .order("desc")
+      .take(RELATION_SNAPSHOT_SCAN_CAP);
 
     const items = templates
-      .filter((t) => t.isPublic && Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+      .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
       .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
     const calibration = computeCalibration(items);
@@ -510,11 +585,9 @@ export const recomputeRelatednessCalibration = internalMutation({
  * Public: tag-concept relations over the public template set.
  *
  * Raw tag strings barely overlap and read as register noise, so they carry no
- * relation on their own. This query pools every public template's per-tag
- * embeddings (server-only 768-dim vectors), mean-centers them, and clusters the
- * tag vocabulary into CONCEPTS in centered space — folding synonyms together
- * while genre-only proximity falls below the tightness bar. From those tight
- * concepts it returns:
+ * relation on their own. The nightly snapshot rebuild pools and clusters the
+ * server-only per-tag embeddings; this request-path query reads only the compact
+ * materialized result. From those tight concepts it returns:
  *
  *   - `conceptMap`: raw tag -> canonical concept label, for consistent display
  *     (so "libraries" and "library card" show as one topic, not two).
@@ -526,8 +599,9 @@ export const recomputeRelatednessCalibration = internalMutation({
  * grounds the edges, so a concept formed by raw-string match or register-level
  * proximity yields neither a fold nor an edge. If the corpus is too sparse to
  * form any tight cross-template concept — the honest state at the seed — the
- * `edges` array is empty. The vectors are consumed here and NEVER leave; only
- * the concept labels and `{a,b,concept,kind}` tuples cross the boundary.
+ * `edges` array is empty. A missing snapshot also returns that same honest empty
+ * shape, with no live-scan fallback. Vectors are consumed only by the rebuild and
+ * NEVER leave; only labels and `{a,b,concept,kind}` tuples cross the boundary.
  */
 export const conceptRelations = query({
   args: {},
@@ -537,43 +611,164 @@ export const conceptRelations = query({
     edges: Array<{ a: string; b: string; concept: string; kind: "concept" }>;
     conceptMap: Record<string, string>;
   }> => {
-    const templates = await ctx.db
-      .query("templates")
-      .withIndex("by_status", (q) => q.eq("status", "published"))
-      .collect();
+    const snapshot = await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
+      .unique();
+    if (!snapshot) return { edges: [], conceptMap: {} };
 
-    const publicTemplates = templates.filter((t) => t.isPublic);
+    return {
+      edges: snapshot.conceptEdges,
+      conceptMap: Object.fromEntries(snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept])),
+    };
+  },
+});
 
-    // Pool the tag vocabulary across the corpus: one embedding per distinct tag
-    // (the clusterer de-dupes, but pooling here keeps the centroid honest — a
-    // concept is a property of the whole tag space, not of one template).
-    const tagVectors: Array<{ tag: string; embedding: number[] }> = [];
-    const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
-    const seenTag = new Set<string>();
+/**
+ * Nightly materialization for both public relation queries.
+ *
+ * This is the ONLY request-independent path that reads the embedding-heavy
+ * public template corpus. It preserves the former scoring and filtering rules
+ * over an explicitly bounded discovery corpus:
+ *
+ * - the corpus is the newest 50 templates where
+ *   `status === "published" && isPublic === true`, matching the bounded homepage
+ *   discovery source; the graph consumes only edges whose endpoints are among
+ *   its displayed top-50 nodes;
+ * - twin edges use the persisted calibration when its dimensionality matches,
+ *   otherwise `computeTwinEdges` derives the centroid inline;
+ * - concept clustering pools one vector per distinct raw tag across that same
+ *   corpus, then relates all tagged templates against the resulting concepts.
+ *
+ * The compact result is published atomically as one singleton. If computation
+ * or the size guard fails, the mutation writes nothing and the last good
+ * snapshot remains available. Public queries never fall back to this scan.
+ */
+type RelationSnapshotRebuildResult = {
+  sourceCap: number;
+  sourceTemplateCount: number;
+  embeddedTemplateCount: number;
+  tagVectorCount: number;
+  twinEdgeCount: number;
+  conceptEdgeCount: number;
+  snapshotBytes: number;
+};
 
-    for (const t of publicTemplates) {
-      const tags = normalizeTags(t.topics);
-      taggedTemplates.push({ id: t._id as string, tags });
-      const tagEmbeddings = Array.isArray(t.tagEmbeddings) ? t.tagEmbeddings : [];
-      for (const te of tagEmbeddings) {
-        if (
-          te &&
-          typeof te.tag === "string" &&
-          Array.isArray(te.embedding) &&
-          te.embedding.length > 0 &&
-          !seenTag.has(te.tag)
-        ) {
-          seenTag.add(te.tag);
-          tagVectors.push({ tag: te.tag, embedding: te.embedding });
-        }
+async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSnapshotRebuildResult> {
+  const templates = await ctx.db
+    .query("templates")
+    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
+    .order("desc")
+    .take(RELATION_SNAPSHOT_SCAN_CAP);
+
+  // Measured twins: missing embeddings contribute no edge, exactly as before.
+  const items = templates
+    .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+    .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
+
+  const calibration = await ctx.db
+    .query("relatednessCalibration")
+    .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
+    .unique();
+  const dim = items[0]?.embedding.length;
+  const centroid = calibration && calibration.dim === dim ? calibration.centroid : undefined;
+  const twinEdges = computeTwinEdges(items, {
+    centroid,
+    threshold: calibration?.threshold,
+  });
+
+  // Tag concepts: retain the former first-occurrence de-duplication and stable
+  // template/tag traversal order so a rebuild is byte-for-byte deterministic
+  // for an unchanged corpus (apart from the audit timestamp).
+  const tagVectors: Array<{ tag: string; embedding: number[] }> = [];
+  const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
+  const seenTag = new Set<string>();
+  for (const template of templates) {
+    taggedTemplates.push({
+      id: template._id as string,
+      tags: normalizeTags(template.topics),
+    });
+    const tagEmbeddings = Array.isArray(template.tagEmbeddings) ? template.tagEmbeddings : [];
+    for (const tagEmbedding of tagEmbeddings) {
+      if (
+        tagEmbedding &&
+        typeof tagEmbedding.tag === "string" &&
+        Array.isArray(tagEmbedding.embedding) &&
+        tagEmbedding.embedding.length > 0 &&
+        !seenTag.has(tagEmbedding.tag)
+      ) {
+        seenTag.add(tagEmbedding.tag);
+        tagVectors.push({
+          tag: tagEmbedding.tag,
+          embedding: tagEmbedding.embedding,
+        });
       }
     }
+  }
 
-    const concepts = clusterTagConcepts(tagVectors);
-    return {
-      edges: conceptEdges(taggedTemplates, concepts),
-      conceptMap: tagConceptMap(concepts),
-    };
+  const concepts = clusterTagConcepts(tagVectors);
+  const conceptEdgesResult = conceptEdges(taggedTemplates, concepts);
+  const conceptEntries = Object.entries(tagConceptMap(concepts)).map(([tag, concept]) => ({
+    tag,
+    concept,
+  }));
+
+  const snapshot = {
+    key: RELATION_SNAPSHOT_KEY,
+    twinEdges,
+    conceptEdges: conceptEdgesResult,
+    conceptEntries,
+    sourceCap: RELATION_SNAPSHOT_SCAN_CAP,
+    sourceTemplateCount: templates.length,
+    embeddedTemplateCount: items.length,
+    tagVectorCount: tagVectors.length,
+    updatedAt: Date.now(),
+  };
+  // RelationEdge/ConceptEdge are nominal interfaces without Value's index
+  // signature, but every field above is a concrete Convex value.
+  const snapshotBytes = getConvexSize(snapshot as unknown as Value);
+  if (snapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
+    throw new Error(`RELATION_SNAPSHOT_TOO_LARGE:${snapshotBytes}>${MAX_RELATION_SNAPSHOT_BYTES}`);
+  }
+
+  const existing = await ctx.db
+    .query("templateRelationSnapshots")
+    .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
+    .unique();
+  if (existing) {
+    await ctx.db.patch(existing._id, snapshot);
+  } else {
+    await ctx.db.insert("templateRelationSnapshots", snapshot);
+  }
+
+  return {
+    sourceCap: RELATION_SNAPSHOT_SCAN_CAP,
+    sourceTemplateCount: templates.length,
+    embeddedTemplateCount: items.length,
+    tagVectorCount: tagVectors.length,
+    twinEdgeCount: twinEdges.length,
+    conceptEdgeCount: conceptEdgesResult.length,
+    snapshotBytes,
+  };
+}
+
+/** Internal/operator entry point for relation-only refreshes and the cron. */
+export const rebuildRelationSnapshot = internalMutation({
+  args: {},
+  handler: rebuildRelationSnapshotImpl,
+});
+
+/**
+ * One-shot activation and post-authoring refresh for every homepage snapshot.
+ * Both materializations publish in one transaction, so callers can never
+ * observe a freshly rebuilt list paired with relations from a failed rebuild.
+ */
+export const rebuildHomepageSnapshots = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const list = await rebuildPublicTemplateSnapshotsImpl(ctx);
+    const relations = await rebuildRelationSnapshotImpl(ctx);
+    return { list, relations };
   },
 });
 
@@ -1121,6 +1316,12 @@ export const updateEmbeddings = mutation({
   },
   handler: async (ctx, args) => {
     await requireAuth(ctx);
+    const template = await ctx.db.get(args.templateId);
+    const shouldRebuildHomepage =
+      template?.status === "published" &&
+      template.isPublic &&
+      template.embeddingsUpdatedAt === undefined;
+
     await ctx.db.patch(args.templateId, {
       locationEmbedding: args.locationEmbedding,
       topicEmbedding: args.topicEmbedding,
@@ -1128,6 +1329,14 @@ export const updateEmbeddings = mutation({
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     });
+
+    // Public creation defers embeddings/hue until its final step. Rebuild once,
+    // after the first embedding patch, so retries or later re-embeddings cannot
+    // turn this public mutation into an unbounded snapshot-rebuild trigger.
+    // High-frequency reach-counter writes intentionally do not schedule it.
+    if (shouldRebuildHomepage) {
+      await ctx.scheduler.runAfter(0, rebuildHomepageSnapshotsRef, {});
+    }
   },
 });
 

@@ -558,6 +558,42 @@ if (enabled("operational")) {
 }
 
 // ---------------------------------------------------------------------------
+// 28a. Public template list snapshots — refresh the two bounded `listPublic`
+//      payloads once daily even on the cost-safe ESSENTIAL profile. The rebuild
+//      scans at most 250 exact published+public rows and is the low-cost freshness
+//      backstop for reach, debate, endorsement, and `isNew` changes. New authored
+//      templates also schedule the composite rebuild after embeddings complete.
+//      04:07 UTC avoids the UTC-hour boundary and precedes the relation refresh.
+// ---------------------------------------------------------------------------
+if (enabled("essential")) {
+  crons.daily(
+    "public-template-snapshot-rebuild",
+    { hourUTC: 4, minuteUTC: 7 },
+    internal.templates.rebuildPublicTemplateSnapshots,
+    {},
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 28b. Public template relation snapshot — materialize measured-twin edges and
+//      tag-concept relations after the nightly calibration + tag-embedding jobs.
+//      Homepage requests read only this compact singleton and never scan the
+//      embedding-heavy template corpus. A missing snapshot is served honestly as
+//      no edges until this job (or an operator-triggered rebuild) succeeds.
+//      04:17 UTC leaves the tag backfill 36 minutes to finish while avoiding the
+//      existing UTC-hour boundaries.
+//      OPERATIONAL: the rebuild is useful only when a public corpus exists.
+// ---------------------------------------------------------------------------
+if (enabled("operational")) {
+  crons.daily(
+    "template-relation-snapshot-rebuild",
+    { hourUTC: 4, minuteUTC: 17 },
+    internal.templates.rebuildRelationSnapshot,
+    {},
+  );
+}
+
+// ---------------------------------------------------------------------------
 // 29. Drain usage to billing provider — reports unreported usageRecords rows to
 //     the configured provider (Noop default → truthful no-op) and stamps each
 //     row reportedToProvider + providerEventId. Bounded per tick; the cadence

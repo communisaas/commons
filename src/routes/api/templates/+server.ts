@@ -4,6 +4,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { getCachedPublicTemplates } from '$lib/server/public-template-queries';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
@@ -199,8 +200,11 @@ function validateTemplateData(data: unknown): {
 }
 
 // GET fully migrated to Convex
-export const GET: RequestHandler = async () => {
-	const templates = await serverQuery(api.templates.listPublic, {});
+export const GET: RequestHandler = async ({ url, platform, setHeaders }) => {
+	const templates = await getCachedPublicTemplates({ url, platform }, false);
+	setHeaders({
+		'Cache-Control': 'public, max-age=300, s-maxage=21600, stale-if-error=604800'
+	});
 	const response: StructuredApiResponse = { success: true, data: templates };
 	return json(response);
 };

@@ -29,7 +29,7 @@
  *   - Update the constant if multi-state launch shifts the baseline.
  */
 
-import { internalAction, internalQuery, type ActionCtx } from './_generated/server';
+import { internalAction, internalQuery, query, type ActionCtx } from './_generated/server';
 import { makeFunctionReference, type FunctionReference } from 'convex/server';
 import { captureToSentry } from './_sentry';
 
@@ -84,6 +84,19 @@ const MIN_DENOMINATOR_FOR_ALERT = 50;
  * the bias and document.
  */
 const COVERAGE_FLOOR = 0.5;
+
+/**
+ * Public service-liveness probe.
+ *
+ * Reaching and executing this function proves that the deployment is enabled
+ * without reading any database document. Keep this deliberately constant: an
+ * uptime monitor must not turn one embedding-bearing application row into
+ * continuous database I/O.
+ */
+export const servicePing = query({
+	args: {},
+	handler: () => ({ ok: true as const }),
+});
 
 export const getBoundaryCellRate24h = internalQuery({
 	args: {},

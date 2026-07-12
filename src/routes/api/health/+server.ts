@@ -12,18 +12,14 @@ type HealthEnv = {
 };
 
 export const GET: RequestHandler = async ({ platform }) => {
-	let convex = false;
-	const atlas = await checkAtlas(platform?.env as HealthEnv | undefined);
-
-	try {
-		// Ping Convex with a lightweight paginated query (1 item, no data needed)
-		await serverQuery(api.templates.list, {
-			paginationOpts: { numItems: 1, cursor: null }
-		});
-		convex = true;
-	} catch {
-		// If Convex is unreachable, convex stays false
-	}
+	const [atlas, convex] = await Promise.all([
+		checkAtlas(platform?.env as HealthEnv | undefined),
+		// Executing a constant query proves Convex is enabled without hydrating an
+		// embedding-bearing application row on every uptime probe.
+		serverQuery(api.observability.servicePing, {})
+			.then(() => true)
+			.catch(() => false)
+	]);
 
 	const healthy = convex && atlas.status === 'ok';
 	const status = healthy ? 'ok' : 'down';

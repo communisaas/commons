@@ -364,6 +364,11 @@ export default defineSchema({
 		.index('by_countryCode', ['countryCode'])
 		.index('by_userId_contentHash', ['userId', 'contentHash'])
 		.index('by_status', ['status'])
+		// Exact public-corpus selector used by the off-request relation snapshot
+		// rebuild. Keeping both predicates in the index avoids hydrating drafts or
+		// private templates (including their embedding-heavy fields) during the
+		// nightly materialization pass.
+		.index('by_status_isPublic', ['status', 'isPublic'])
 		.searchIndex('search_templates', {
 			searchField: 'title',
 			filterFields: ['domain', 'status', 'countryCode']
@@ -3128,6 +3133,53 @@ export default defineSchema({
 		threshold: v.float64(),
 		count: v.number(), // usable (embedded) templates the centroid was fit over
 		dim: v.number(), // embedding dimensionality
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Materialized public relation result. Homepage reads must never hydrate the
+	// embedding-heavy templates table: both public relation queries read this one
+	// compact row and return honest empty shapes until the first rebuild publishes
+	// it. `conceptEntries` is an array instead of an object keyed by raw author tags
+	// so arbitrary tag strings never become stored Convex field names.
+	templateRelationSnapshots: defineTable({
+		key: v.string(), // singleton selector — always 'public'
+		twinEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				score: v.float64(),
+				kind: v.literal('twin')
+			})
+		),
+		conceptEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				concept: v.string(),
+				kind: v.literal('concept')
+			})
+		),
+		conceptEntries: v.array(
+			v.object({
+				tag: v.string(),
+				concept: v.string()
+			})
+		),
+		sourceCap: v.number(),
+		sourceTemplateCount: v.number(),
+		embeddedTemplateCount: v.number(),
+		tagVectorCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Materialized `templates.listPublic` payloads. One row retains the normal
+	// public top-50 and one retains the feature-gated non-CWC top-50. Payloads are
+	// already projected/enriched, so request-path reads never hydrate source
+	// templates (and therefore never pay to read their server-only embeddings).
+	publicTemplateSnapshots: defineTable({
+		key: v.union(v.literal('all'), v.literal('excludeCwc')),
+		templates: v.any(),
+		sourceCount: v.number(),
 		updatedAt: v.number()
 	}).index('by_key', ['key'])
 });
