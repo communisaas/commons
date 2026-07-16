@@ -3,10 +3,16 @@
 **Status:** operational policy for the two Convex backends that share one team
 free-plan quota.
 
-| Role          | Deployment name           | Pre-launch profile | Notes                                    |
-| ------------- | ------------------------- | ------------------ | ---------------------------------------- |
-| **prod**      | `quirky-chinchilla-352`   | `essential`          | Flip to `full` on launch day.            |
-| **non-prod**  | `outstanding-firefly-831` | `essential`          | Backs staging/preview; stays `essential`.  |
+| Role         | Deployment name           | Pre-launch profile | Notes                                                                 |
+| ------------ | ------------------------- | ------------------ | --------------------------------------------------------------------- |
+| **prod**     | `quirky-chinchilla-352`   | `essential`        | Move to `operational` only through the provider-activation gate.      |
+| **non-prod** | `outstanding-firefly-831` | `essential`        | Backs staging/preview; stays `essential` outside a bounded rehearsal. |
+
+`operational` registers the usage drain. Never enable it while either the
+Convex or Pages billing provider is still `noop`: the noop path can permanently
+mark usage rows reported without billing them. Follow the atomic D4 → D1+B5 →
+C1 sequence in `docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md`. `full` additionally
+enables speculative workloads and is not the default launch profile.
 
 ## Why this exists
 
@@ -22,27 +28,30 @@ overage source is the fleet itself running against empty tables, dominated by:
 - `vote-tracker` (every 2h) — a confirmed no-op stub.
 
 The `CRON_PROFILE` env var (consumed by `convex/crons.ts` — owned by the gating
-fix) selects which crons run. `essential` runs only the ESSENTIAL tier; `full`
-runs everything. **Default (unset/unknown) = `essential`** — the cost-safe
-floor; you opt UP to `operational`/`full` explicitly, so a missing or typo'd var
-under-runs (cheap, recoverable) rather than silently running the full fleet.
+fix) selects which crons run. `essential` runs only the ESSENTIAL tier,
+`operational` runs ESSENTIAL + OPERATIONAL, and `full` runs everything.
+**Default (unset/unknown) = `essential`** — the cost-safe floor; you opt UP
+explicitly, so a missing or typo'd var under-runs (cheap, recoverable) rather
+than silently running the full fleet.
 
 > See also: [[convex_deploy_gotcha]], [[deploy_pipeline_topology]],
 > [[bootstrapping_cost_posture]].
 
 ---
 
-## 1. Tier classification (29 crons)
+## 1. Tier classification (32 crons)
 
 Tiers are: **ESSENTIAL** (always on — correctness / recovery / data-integrity;
 cheap or event-gated; mostly no-op when their source tables are empty),
-**OPERATIONAL** (needed only once real send/blast/workflow traffic exists; safe
-to disable pre-launch, MUST be on at launch), **SPECULATIVE** (bulk speculative
-ingest or dead stub; off until a consumer/customer exists).
+**OPERATIONAL** (needed only once the corresponding public, send, blast,
+workflow, or billing dependency is active; safe to disable pre-launch and armed
+only after its gate), **SPECULATIVE** (bulk speculative ingest or dead stub; off
+until a consumer/customer exists).
 
-`essential` = ESSENTIAL only. `full` = all three tiers.
+`essential` = ESSENTIAL only. `operational` = ESSENTIAL + OPERATIONAL. `full` =
+all three tiers.
 
-### ESSENTIAL (16) — on in every profile (correctness / safety / privacy; cheap no-op at zero traffic)
+### ESSENTIAL (18) — on in every profile (correctness / safety / privacy; cheap no-op at zero traffic)
 
 | Cron                              | Cadence     | Rationale                                                              |
 | --------------------------------- | ----------- | --------------------------------------------------------------------- |
@@ -62,6 +71,8 @@ ingest or dead stub; off until a consumer/customer exists).
 | `sweep-stranded-donations`        | :23,:53     | Money-audit recovery. No-op with no donations.                     |
 | `agent-traces-expire`             | hourly :37  | Trace TTL. Writer off-by-default → usually empty.                  |
 | `org-events-expire`               | hourly :47  | SSE event TTL.                                                     |
+| `public-template-snapshot-rebuild` | daily 04:07 | Bounded top-50 public-list freshness; hard-capped at 250 source rows. |
+| `template-relation-snapshot-rebuild` | daily 04:17 | Bounded graph freshness after calibration/tag maintenance; hard-capped at 50 source rows. |
 
 **Do NOT disable ESSENTIAL crons.** Disabling a recovery sweep
 (`sweep-stuck-processing`, `sweep-stranded-*`, `reschedule-stuck-revocations`, or
@@ -75,7 +86,7 @@ cadence for tick-reduction but must not be turned off. `sweep-stuck-processing`
 > the canary is never silently dropped; if Sentry alerting is not yet wired you
 > may widen/disable it, but record the choice: **DECISION: ____ (date / who).**
 
-### OPERATIONAL (10) — off pre-launch, MUST be on at launch
+### OPERATIONAL (11) — off pre-launch; enable only after each dependency gate
 
 | Cron                                 | Cadence     | Why off pre-launch                                              |
 | ------------------------------------ | ----------- | -------------------------------------------------------------- |
@@ -89,6 +100,7 @@ cadence for tick-reduction but must not be turned off. `sweep-stuck-processing`
 | `reputation-recompute`               | daily 03:11 | Nightly recompute — no users to score.                      |
 | `relatedness-calibration-recompute`  | daily 03:23 | Nightly recompute on public corpus — cheap, deferrable.     |
 | `tag-concept-embedding-backfill`     | daily 03:41 | Embeds NEW tags — near-zero pre-launch.                      |
+| `drain-usage`                        | every 15m   | Reports metered rows. **Never register while either provider is `noop`; follow the atomic billing activation gate.** |
 
 ### SPECULATIVE (3) — off until a consumer/customer exists
 
@@ -117,18 +129,18 @@ users yet.
 reflecting the target deployment's env vars (proof in-repo:
 `convex/auth.config.ts:17` reads `process.env.CONVEX_AUTH_ISSUER` at top-level
 module eval and the deployed provider config reflects it). This forks how the
-launch-day flip works, depending on which strategy the gating fix shipped:
+profile change works, depending on which strategy the gating fix shipped:
 
-- **If gating = CONDITIONAL REGISTRATION** (`if (process.env.CRON_PROFILE ===
-  'full') crons.interval(...)`): excluded crons are *not registered at all* →
+- **If gating = CONDITIONAL REGISTRATION** (`if (enabled('operational'))
+  crons.interval(...)`): excluded crons are *not registered at all* →
   their tick **vanishes entirely** (best for the free-plan function-call quota).
   **Flipping the profile requires `env set` THEN a redeploy** — `env set` alone
   changes nothing until the next push re-evaluates `crons.ts`. This is the
-  classic trap: an operator who runs only `env set CRON_PROFILE full` and skips
-  the redeploy will see **nothing change** and may believe launch failed.
+  classic trap: an operator who changes `CRON_PROFILE` and skips the redeploy
+  will see **nothing change** and may believe activation failed.
 
-- **If gating = HANDLER EARLY-RETURN** (`if (process.env.CRON_PROFILE !==
-  'full') return;` at the top of each gated handler): the tick still fires (costs
+- **If gating = HANDLER EARLY-RETURN** (`if (!enabled('operational')) return;`
+  at the top of each gated handler): the tick still fires (costs
   1 function call) but the env is read at *execution* time, so **`env set`
   alone** takes effect on the next tick **with no redeploy** — only the expensive
   work is suppressed.
@@ -138,7 +150,7 @@ launch-day flip works, depending on which strategy the gating fix shipped:
 
 > **CANONICAL BRANCH:** This runbook assumes the gating fix ships **conditional
 > registration** (the only strategy that eliminates the tick, which is the actual
-> overage source on a zero-user backend). The launch-day flip below therefore
+> overage source on a zero-user backend). The activation change below therefore
 > includes the **redeploy** step. **If the gating fix instead ships handler
 > early-return, drop the redeploy step** (do step b + verify only) — that branch
 > is flagged inline.
@@ -199,10 +211,13 @@ npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
 
 ---
 
-## 4. Launch-day flip to `full` (prod only)
+## 4. Activation profile change to `operational` (prod only)
 
-> Canonical branch = conditional registration (env set + redeploy). The
-> early-return branch (env set only, no redeploy) is flagged at step (c).
+This is step C1 of the atomic provider-activation sequence in
+`LAUNCH-ACTIVATION-RUNBOOK.md`, not a generic launch-day switch. Complete its D4
+Stripe-meter proof and D1+B5 provider configuration first. Canonical branch =
+conditional registration (env set + redeploy). The early-return branch (env set
+only, no redeploy) is flagged at step (c).
 
 1. **Pre-flight.** Check out a clean `origin/main` and confirm the gating fix is
    merged into the `convex/crons.ts` you're about to deploy:
@@ -216,9 +231,9 @@ npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
    ```
 3. **(b) Set the env on prod:**
    ```bash
-   npx convex env set CRON_PROFILE full --env-file /tmp/cvx-prod.env
+   npx convex env set CRON_PROFILE operational --env-file /tmp/cvx-prod.env
    ```
-4. **(c) REDEPLOY prod** so `crons.ts` re-registers the full fleet:
+4. **(c) REDEPLOY prod** so `crons.ts` registers the operational fleet:
    ```bash
    npx convex deploy --env-file /tmp/cvx-prod.env --dry-run   # preview the cron diff
    npx convex deploy --env-file /tmp/cvx-prod.env             # apply
@@ -226,10 +241,11 @@ npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
    > **EARLY-RETURN BRANCH:** if the gating fix uses handler early-return, **skip
    > step (c)** — the `env set` in (b) takes effect on the next tick. Do steps
    > (b) + (5) only.
-5. **Verify** (section 5). Confirm all 29 crons are registered and `CRON_PROFILE`
-   reads `full`.
+5. **Verify** (section 5). Confirm 29 crons are registered and `CRON_PROFILE`
+   reads `operational`. Verify a real drain result reports provider `stripe` as
+   required by the launch-activation runbook.
 6. **Leave `outstanding-firefly-831` at `essential`** — it backs staging/preview
-   with no real users. Only flip it to `full` for a deliberate full-fleet
+   with no real users. Only flip it to `operational` for a deliberate fleet
    rehearsal, and then via `npx convex dev --once --env-file /tmp/cvx-np.env`
    (because `convex deploy` only ever targets prod).
 7. **ROLLBACK:** `env set CRON_PROFILE essential` + redeploy (or `env set` only
@@ -241,22 +257,24 @@ npx convex env set CRON_PROFILE essential --env-file /tmp/cvx-np.env
 ## 5. Verification — confirm the active cron set per deployment
 
 ```bash
-# (1) Env value — expect `essential` pre-launch, `full` post-flip.
+# (1) Env value — expect `essential` pre-activation, `operational` after C1.
 npx convex env get CRON_PROFILE --env-file /tmp/cvx-prod.env
 #   (or: npx convex env get CRON_PROFILE --deployment quirky-chinchilla-352)
 
 # (2) Registered cron set (AUTHORITATIVE under conditional registration).
-#     function-spec lists the deployment's registered functions/crons; the
-#     SPECULATIVE/OPERATIONAL names must be ABSENT at `essential`, PRESENT at `full`.
+#     function-spec lists the deployment's registered functions/crons. These
+#     representatives distinguish essential, operational, and speculative tiers.
 npx convex function-spec --deployment quirky-chinchilla-352 \
-  | grep -E 'legislation-sync|vote-tracker|scorecard-compute|webhook-retry|process-bounces'
-#     Expect: NO MATCHES at essential (conditional registration); ALL at full.
+  | grep -E 'public-template-snapshot-rebuild|template-relation-snapshot-rebuild|drain-usage|legislation-sync|vote-tracker|scorecard-compute|webhook-retry|process-bounces'
+#     At essential: both snapshot-rebuild names match.
+#     At operational: drain, webhook retry, and process-bounces also match; the
+#     three speculative names remain absent.
 ```
 
 - **Dashboard alternative:** Convex dashboard → the target deployment →
   Schedules / Crons tab. Under conditional registration, only ESSENTIAL crons
-  appear at `essential` and all 29 at `full`. This is the authoritative
-  tick-elimination check.
+  appear at `essential`, 29 at `operational`, and all 32 at `full`. This is the
+  authoritative tick-elimination check.
 - **Under conditional registration, `env get` alone is NOT sufficient** — it
   confirms the value, not that registration actually dropped the crons. Always
   run the `function-spec`/dashboard check too.
@@ -266,7 +284,7 @@ npx convex function-spec --deployment quirky-chinchilla-352 \
   fetch + embed (6h) being off.
 
 > **Expectation-setting:** `essential` REDUCES but does not zero the function-call
-> floor — 16 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
+> floor — 18 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
 > 720/day/backend alone). If you need to go lower, widen ESSENTIAL recovery-sweep
 > cadences (registration-time change, owned by the gating fix) — never disable
 > them.

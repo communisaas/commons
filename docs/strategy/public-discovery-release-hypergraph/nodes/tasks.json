@@ -1,0 +1,104 @@
+{
+  "type": "tasks",
+  "tasks": [
+    {
+      "id": "PD-00",
+      "type": "gate",
+      "name": "Convex platform reactivation",
+      "status": "blocked_external",
+      "owner": "team billing administrator",
+      "description": "Upgrade or reactivate the shared Convex team after the database-I/O quota suspension, disable the root-page uptime probe, and establish enough I/O headroom for one bounded rebuild.",
+      "acceptance": "Production deploys and zero-read servicePing calls succeed; the monitor no longer requests `/`; quota/billing state is active."
+    },
+    {
+      "id": "PD-10",
+      "type": "gate",
+      "name": "Exact-SHA verification",
+      "status": "ready",
+      "owner": "GitHub Actions",
+      "description": "Pin one SHA contained in the production branch and run the static Convex query-efficiency guardrail, focused public-discovery checks, full test suite, application checks, and Convex type checks.",
+      "acceptance": "Every verification command passes for the exact SHA recorded as the deploy input."
+    },
+    {
+      "id": "PD-20",
+      "type": "action",
+      "name": "Deploy snapshot-safe Convex producer",
+      "status": "operator_gate",
+      "owner": "release operator",
+      "description": "From the clean verified SHA, preview and deploy the Convex schema/functions to quirky-chinchilla-352 before approving any frontend deployment.",
+      "acceptance": "Convex dry-run and deploy succeed; publicDiscoveryList and publicDiscoveryRelations resolve through bounded versioned snapshot reads."
+    },
+    {
+      "id": "PD-30",
+      "type": "gate",
+      "name": "Rebuild and prove snapshot readiness",
+      "status": "operator_gate",
+      "owner": "release operator",
+      "description": "Run the composite homepage snapshot rebuild and verify the public manifest reports both list and relations ready at nonzero revisions.",
+      "acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; list sourceCap is 250, relation sourceCap is 50, expected corpus counts are nonzero, every snapshot is below 900000 bytes, and both manifest families are ready."
+    },
+    {
+      "id": "PD-40",
+      "type": "gate",
+      "name": "Backend read-path smoke",
+      "status": "operator_gate",
+      "owner": "release operator",
+      "description": "Call the manifest and versioned public-discovery payload queries directly, then inspect Convex logs/usage for singleton snapshot reads rather than templates-corpus scans.",
+      "acceptance": "Each one-read payload revision equals its corresponding ready manifest revision, content is populated as expected, no vectors are returned, and request reads do not grow with the embedding-bearing corpus."
+    },
+    {
+      "id": "PD-50",
+      "type": "action",
+      "name": "Approve and deploy frontend consumer",
+      "status": "operator_gate",
+      "owner": "production environment reviewer",
+      "description": "Approve the protected GitHub production Environment only after PD-30 and PD-40, then deploy the same verified SHA to Cloudflare Pages.",
+      "acceptance": "The immutable Pages deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed."
+    },
+    {
+      "id": "PD-60",
+      "type": "action",
+      "name": "Invalidate and warm edge generations",
+      "status": "operator_gate",
+      "owner": "release operator",
+      "description": "Let materialization revisions replace the origin-scoped Cache API + PUBLIC_DISCOVERY_KV envelopes; use the production purge as defense in depth and warm list, graph, and API paths at the custom origin.",
+      "acceptance": "The custom origin serves the new generation without a cold-start empty payload or one Convex payload refresh per Cloudflare location."
+    },
+    {
+      "id": "PD-70",
+      "type": "gate",
+      "name": "Live smoke and observation",
+      "status": "operator_gate",
+      "owner": "release operator",
+      "description": "Verify list, graph, API cache headers, zero-read health, and post-warm Convex I/O, then move the uptime monitor to `/api/health`.",
+      "acceptance": "Public paths render, health returns 200/ok, only snapshot tables appear in public-query reads, and database I/O stays flat relative to page requests."
+    },
+    {
+      "id": "RB-10",
+      "type": "rollback",
+      "name": "Roll back Pages only",
+      "status": "recovery_only",
+      "owner": "release operator",
+      "description": "Restore the prior immutable Pages deployment while leaving the snapshot-safe Convex backend in place.",
+      "acceptance": "The previous frontend is healthy and still consumes bounded snapshot queries."
+    },
+    {
+      "id": "RB-20",
+      "type": "rollback",
+      "name": "Repair snapshot and cache generation",
+      "status": "recovery_only",
+      "owner": "release operator",
+      "description": "Correct source/code, rerun the atomic rebuild, then refresh the revision-aware cache payload; use a schema-version bump only when an urgent explicit namespace cutover is needed.",
+      "acceptance": "A corrected ready revision is published and warmed without deleting the last-known-good payload first."
+    },
+    {
+      "id": "RB-30",
+      "type": "rollback",
+      "name": "Forward-deploy known snapshot-safe backend",
+      "status": "recovery_only",
+      "owner": "release operator",
+      "description": "Redeploy known-good bounded-read Convex code and rebuild. Never restore a version where public requests collect embedding-bearing templates.",
+      "acceptance": "All public discovery functions retain indexed/capped snapshot reads; data restore is handled separately if a logically bad successful rebuild replaced a singleton."
+    }
+  ]
+}

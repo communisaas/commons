@@ -27,13 +27,103 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  manual-verify:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      NODE_ENV: test
+      CI: true
+      PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
+      OAUTH_REDIRECT_BASE_URL: http://localhost:5173
+      GOOGLE_CLIENT_ID: test-google-client-id
+      GOOGLE_CLIENT_SECRET: test-google-client-secret
+      FACEBOOK_CLIENT_ID: test-facebook-client-id
+      FACEBOOK_CLIENT_SECRET: test-facebook-client-secret
+      DISCORD_CLIENT_ID: test-discord-client-id
+      DISCORD_CLIENT_SECRET: test-discord-client-secret
+      LINKEDIN_CLIENT_ID: test-linkedin-client-id
+      LINKEDIN_CLIENT_SECRET: test-linkedin-client-secret
+      TWITTER_CLIENT_ID: test-twitter-client-id
+      TWITTER_CLIENT_SECRET: test-twitter-client-secret
+      INTERNAL_API_SECRET: ci-test-internal-api-secret-padding-32b
+      INTERNAL_API_SECRET_PREVIOUS: ci-test-internal-api-secret-previous-32b
+      UNSUBSCRIBE_SECRET: ci-test-unsubscribe-secret-padding-32-bytes
+      ADDRESS_RESOLUTION_TOKEN_SECRET: ci-test-address-resolution-token-32b-pad
+      SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
+      BLAST_DISPATCH_SECRET: ci-test-blast-dispatch-secret-32b-padding-x
+      BLAST_RECEIPTS_SECRET: ci-test-blast-receipts-secret-32b-padding-x
+    outputs:
+      verified_sha: ${{ steps.resolve-sha.outputs.sha }}
+    steps:
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || inputs.branch }}
+          fetch-depth: 0
+
+      - name: Resolve and validate requested SHA
+        id: resolve-sha
+        env:
+          DEPLOY_BRANCH: ${{ inputs.branch }}
+        run: |
+          verified_sha=$(git rev-parse HEAD)
+          git fetch --no-tags origin "${DEPLOY_BRANCH}"
+          if ! git merge-base --is-ancestor "${verified_sha}" "origin/${DEPLOY_BRANCH}"; then
+            echo "::error::Requested ref ${verified_sha} is not contained in origin/${DEPLOY_BRANCH}."
+            exit 1
+          fi
+          echo "sha=${verified_sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Enforce Convex query-efficiency guardrail
+        run: npm run check:convex-queries
+
+      - name: Run public-discovery focused verification
+        run: |
+          npx vitest --run \
+            convex/templates-read-budget.convex.test.ts \
+            convex/templates-snapshots.convex.test.ts \
+            convex/observability-service-ping.convex.test.ts \
+            convex/lib/relatedness.test.ts \
+            convex/lib/tag_concepts.test.ts \
+            tests/unit/server/public-discovery-cache.test.ts \
+            tests/unit/routes/home-page-load.test.ts \
+            --config=vitest.config.ts
+
+      - name: Run full test suite
+        run: npm run test:run
+        timeout-minutes: 10
+
+      - name: Run application type checks
+        run: npm run check
+
+      - name: Run Convex type checks
+        run: npx tsc --noEmit -p convex/tsconfig.json
+
   deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    needs: manual-verify
+    if: >-
+      always() &&
+      ((github.event_name == 'workflow_dispatch' && needs.manual-verify.result == 'success') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
     env:
       DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
-      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.branch) || github.event.workflow_run.head_sha }}
+      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && needs.manual-verify.outputs.verified_sha || github.event.workflow_run.head_sha }}
     permissions:
       contents: read
       deployments: write

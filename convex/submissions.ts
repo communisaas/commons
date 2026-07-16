@@ -14,6 +14,7 @@ import { requireInternalSecret } from './_internalAuth';
 import { CWCXmlGenerator } from './_cwcXml';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from './_policy';
+import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
@@ -2043,6 +2044,9 @@ export const incrementTemplateReach = internalMutation({
 					}
 				: {})
 		});
+		if (template.status === 'published' && template.isPublic) {
+			await markPublicDiscoveryListDirty(ctx);
+		}
 	}
 });
 
@@ -2707,6 +2711,9 @@ export const _backfillOneTemplate = internalMutation({
 			districtCounts,
 			tierCounts
 		});
+		if (template.status === 'published' && template.isPublic) {
+			await markPublicDiscoveryListDirty(ctx);
+		}
 
 		return { patched: true };
 	}

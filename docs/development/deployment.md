@@ -10,11 +10,12 @@
 
 ```bash
 # Backend (Convex)
-npx convex deploy --env-file .env.production
+npx convex deploy --env-file .env.production --dry-run --typecheck enable
+npx convex deploy --env-file .env.production --typecheck enable
 
 # Frontend (SvelteKit on Cloudflare Pages)
 git push origin main:staging       # staging deploy after CI passes
-git push origin main:production    # production deploy after CI passes
+git push origin main:production    # production deploy after CI + Environment approval
 ```
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
@@ -112,16 +113,39 @@ Convex is declarative and code-driven: there are no migration files. Schema diff
 ### Standard Deploy
 
 ```bash
-# 1. Deploy Convex backend
-npx convex deploy --env-file .env.production
+# 1. Pin the release and deploy the backend producer from this clean SHA.
+RELEASE_SHA=$(git rev-parse HEAD)
+npx convex deploy --env-file .env.production --dry-run --typecheck enable
+npx convex deploy --env-file .env.production --typecheck enable
 
-# 2. Push the frontend branch. GitHub Actions runs CI, then deploys if CI passes.
-git push origin main:production
+# 2. Materialize public discovery before the frontend consumer receives traffic.
+npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
+npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
+
+# 3. Push the exact frontend SHA. CI runs, then production waits for approval.
+git push origin "$RELEASE_SHA":refs/heads/production
 ```
 
 Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
 The normal deploy path is the GitHub Actions workflow so CI, immutable Pages health, and
-deployment health gates are recorded together.
+deployment health gates are recorded together. Configure required reviewers on the
+repository's GitHub `production` Environment. Approve that Environment only after the
+backend manifest reports list and relations ready at revisions that match the persisted
+snapshots.
+
+For a manual redeploy, the requested ref must already be contained in the selected branch:
+
+```bash
+gh workflow run deploy.yml --ref production \
+  -f branch=production \
+  -f ref="$RELEASE_SHA"
+```
+
+The manual path resolves an exact SHA and cannot bypass the static Convex query-efficiency
+guardrail, focused public-discovery checks, full test suite, application checks, or Convex
+type checks. The backend remains an explicit operator step because the Pages workflow has
+no established Convex deploy credential. See `docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
+`docs/strategy/public-discovery-release-hypergraph/` for the go/no-go evidence.
 
 ### Preview Deploy (non-production branch)
 
@@ -133,11 +157,14 @@ npx wrangler pages deploy .svelte-kit/cloudflare \
 ### Staging Smoke
 
 `staging.commons.email` is the Cloudflare Pages branch deployment for `staging` in the
-`communique-site` project. Today it is not a fully isolated environment: the repo-visible
-configuration points branch builds at the same Convex URL and KV bindings as production.
-Until separate staging Convex and KV resources are provisioned, treat real-device credential
-smoke on staging as controlled production-backed smoke with test accounts and no live
-congressional delivery paths.
+`communique-site` project. It is only partially isolated: the deploy workflow points staging
+and preview builds at the non-production Convex deployment
+`outstanding-firefly-831`, while production uses `quirky-chinchilla-352`. The repo-visible
+Wrangler configuration still shares KV namespace bindings (and the same Pages project) across
+branches. Until separate staging KV resources and branch-scoped runtime secrets are
+provisioned, treat real-device credential smoke on staging as controlled smoke with test
+accounts and no live congressional delivery paths; do not describe it as production-Convex
+backed.
 
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
 `wrangler pages deploy`. Custom domains are validated during release smoke because
@@ -205,7 +232,17 @@ Real-device browser-mediated credential smoke should cover:
 
 ### Rollback
 
-Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each deploy is immutable and instantly revertible. For Convex, `npx convex deploy` supports rollback to previous deployment versions via the dashboard.
+Use the Cloudflare Pages dashboard to roll back to a previous immutable deployment first.
+For public discovery, leave the snapshot-safe Convex producer in place: the prior frontend
+query shapes remain compatible with it. If snapshot content is wrong, repair and rerun the
+atomic composite rebuild so the manifest advances to a corrected revision. Failed rebuilds
+preserve the last committed singleton rows; a logically bad successful rebuild may require a
+restore from the recorded pre-rebuild backup/export before republishing.
+
+Never restore a Convex version where public homepage queries collect the embedding-bearing
+published-template corpus. If backend code recovery is necessary, forward-deploy a known
+snapshot-safe commit and rebuild. This bounded-read invariant takes precedence over matching
+an old frontend/backend pair exactly.
 
 For the browser-mediated mDL lane, the kill switch is currently a code flag, not a
 runtime env var. To disable it, set `MDL_ANDROID_OID4VP` to `false` in

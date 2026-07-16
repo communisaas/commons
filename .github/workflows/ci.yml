@@ -54,6 +54,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Convex query efficiency guardrail
+        run: npm run check:convex-queries
+
       - name: Run tests with coverage
         run: npm run test:coverage
         timeout-minutes: 10

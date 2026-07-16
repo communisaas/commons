@@ -3,9 +3,8 @@ import { FEATURES } from '$lib/config/features';
 
 import { selectLandingSurface } from '$lib/core/topic/landing-surface';
 import {
-	getCachedConceptRelations,
-	getCachedPublicTemplates,
-	getCachedRelatednessEdges
+	getCachedPublicRelations,
+	getCachedPublicTemplates
 } from '$lib/server/public-template-queries';
 
 export const load: PageServerLoad = async ({ depends, url, platform }) => {
@@ -29,23 +28,8 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 		return [];
 	});
 
-	// The measured-twin relatedness edges over the public set. The server-only
-	// embeddings stay server-only — this returns ONLY {a, b, score, kind} tuples
-	// keyed by template id, never a vector. Guarded the same way as the templates
-	// load so a transient Convex timeout degrades to a no-edge map (every template
-	// honestly alone), never a hard 500.
-	const relationEdgesPromise = showGraph
-		? getCachedRelatednessEdges(cacheContext).catch((err) => {
-				console.error(
-					'[Page] templates.relatednessEdges failed (transient):',
-					err instanceof Error ? err.message : String(err)
-				);
-				return [];
-			})
-		: Promise.resolve([]);
-
-	// The shared-concept relations over the same public set: tags that cluster
-	// tightly in mean-centered space fold into one concept, and templates sharing
+	// One materialized relation read over the public set: measured twins plus tags
+	// that cluster tightly in mean-centered space fold into one concept, and templates sharing
 	// a tight concept get a subordinate `kind:'concept'` edge. The server-only tag
 	// vectors are consumed there and never cross — only `{a,b,concept,kind}` tuples
 	// and a tag→concept label map do. Guarded the same way as the edges above so a
@@ -54,24 +38,29 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	// cross-template concept — the honest state at the seed, before tag embeddings
 	// are backfilled — `edges` is simply empty, and the graph's concept legend item
 	// stays hidden. That empty result is expected, not a failure.
-	const conceptRelationsPromise = showGraph
-		? getCachedConceptRelations(cacheContext).catch((err) => {
+	const relationsPromise = showGraph
+		? getCachedPublicRelations(cacheContext).catch((err) => {
 				console.error(
-					'[Page] templates.conceptRelations failed (transient):',
+					'[Page] templates.publicDiscoveryRelations failed (transient):',
 					err instanceof Error ? err.message : String(err)
 				);
-				return { edges: [], conceptMap: {} };
+				return {
+					twinEdges: [],
+					conceptRelations: { edges: [], conceptMap: {} }
+				};
 			})
-		: Promise.resolve({ edges: [], conceptMap: {} });
+		: Promise.resolve({
+				twinEdges: [],
+				conceptRelations: { edges: [], conceptMap: {} }
+			});
 
-	// The graph's three independent reads share one latency window. List and
-	// spectrum requests resolve only the template read; their graph defaults keep
-	// the page-data contract stable without touching the embedding-heavy queries.
-	const [templates, relationEdges, conceptRelations] = await Promise.all([
-		templatesPromise,
-		relationEdgesPromise,
-		conceptRelationsPromise
-	]);
+	// The list and combined-relation reads share one latency window. List and
+	// spectrum surfaces skip the relation read entirely.
+	const [templates, relations] = await Promise.all([templatesPromise, relationsPromise]);
 
-	return { templates, relationEdges, conceptRelations };
+	return {
+		templates,
+		relationEdges: relations.twinEdges,
+		conceptRelations: relations.conceptRelations
+	};
 };

@@ -22,6 +22,7 @@ import { debateStatus as debateStatusV } from "./_validators";
 import { requireAuth } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import { hashTextToBytes32, offchainDebateId, offchainActionDomain } from "./_actionDomain";
+import { markPublicDiscoveryListDirty } from "./lib/publicDiscovery";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -516,6 +517,12 @@ export const createArgument = mutation({
       totalStake: debate.totalStake + stakeAmount,
       updatedAt: Date.now(),
     });
+    if (debate.templateId) {
+      // Avoid re-reading the embedding-heavy template on this participation
+      // path. A private template may cause a harmless coalesced dirty mark, but
+      // the six-hour rebuild guard bounds that cost.
+      await markPublicDiscoveryListDirty(ctx);
+    }
 
     return argId;
   },
@@ -597,6 +604,9 @@ export const cosign = mutation({
       totalStake: debate.totalStake + stakeAmount,
       updatedAt: Date.now(),
     });
+    if (debate.templateId) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
 
     return { success: true };
   },
@@ -681,6 +691,9 @@ export const updateStatus = mutation({
       patch.appealDeadline = args.appealDeadline;
 
     await ctx.db.patch(args.debateId, patch);
+    if (debate.templateId) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
     return { success: true };
   },
 });
@@ -852,7 +865,7 @@ export const insertDebate = internalMutation({
 
     const now = Date.now();
 
-    return await ctx.db.insert("debates", {
+    const debateId = await ctx.db.insert("debates", {
       templateId: args.templateId,
       debateIdOnchain: args.debateIdOnchain,
       actionDomain: args.actionDomain,
@@ -872,6 +885,10 @@ export const insertDebate = internalMutation({
       currentEpoch: 0,
       updatedAt: now,
     });
+    if (template.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
+    return debateId;
   },
 });
 
@@ -1383,6 +1400,7 @@ export const _spawnDebateIfEligibleForce = internalMutation({
       debateId,
       updatedAt: now,
     });
+    await markPublicDiscoveryListDirty(ctx);
     return { spawned: true as const, debateId };
   },
 });
@@ -1463,6 +1481,7 @@ export const _spawnDebateIfEligible = internalMutation({
       debateId,
       updatedAt: now,
     });
+    await markPublicDiscoveryListDirty(ctx);
     return { spawned: true as const, debateId };
   },
 });

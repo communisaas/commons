@@ -4,9 +4,9 @@ const { mockServerQuery, api } = vi.hoisted(() => ({
 	mockServerQuery: vi.fn(),
 	api: {
 		templates: {
-			listPublic: 'templates.listPublic',
-			relatednessEdges: 'templates.relatednessEdges',
-			conceptRelations: 'templates.conceptRelations'
+			publicDiscoveryManifest: 'templates.publicDiscoveryManifest',
+			publicDiscoveryList: 'templates.publicDiscoveryList',
+			publicDiscoveryRelations: 'templates.publicDiscoveryRelations'
 		}
 	}
 }));
@@ -29,14 +29,35 @@ describe('home page load', () => {
 		clearPublicDiscoveryCache();
 		mockServerQuery.mockReset();
 		mockServerQuery.mockImplementation(async (ref: string) => {
-			if (ref === api.templates.listPublic) return [{ id: 'template_1' }];
-			if (ref === api.templates.relatednessEdges) {
-				return [{ a: 'template_1', b: 'template_2', score: 0.9, kind: 'twin' }];
-			}
-			if (ref === api.templates.conceptRelations) {
+			if (ref === api.templates.publicDiscoveryManifest) {
 				return {
-					edges: [{ a: 'template_1', b: 'template_2', concept: 'libraries', kind: 'concept' }],
-					conceptMap: { 'library card': 'libraries' }
+					list: { ready: true, revision: 4, updatedAt: 1_800_000_000_000 },
+					relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_000 }
+				};
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					revision: 4,
+					updatedAt: 1_800_000_000_000,
+					templates: [{ id: 'template_1' }]
+				};
+			}
+			if (ref === api.templates.publicDiscoveryRelations) {
+				return {
+					revision: 9,
+					updatedAt: 1_800_000_000_000,
+					twinEdges: [{ a: 'template_1', b: 'template_2', score: 0.9, kind: 'twin' }],
+					conceptRelations: {
+						edges: [
+							{
+								a: 'template_1',
+								b: 'template_2',
+								concept: 'libraries',
+								kind: 'concept'
+							}
+						],
+						conceptMap: { 'library card': 'libraries' }
+					}
 				};
 			}
 			throw new Error(`Unexpected query: ${ref}`);
@@ -48,8 +69,15 @@ describe('home page load', () => {
 		async (href) => {
 			const result = (await load(loadEvent(href))) as Awaited<ReturnType<typeof load>>;
 
-			expect(mockServerQuery).toHaveBeenCalledTimes(1);
-			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.listPublic, expect.any(Object));
+			expect(mockServerQuery).toHaveBeenCalledTimes(2);
+				expect(mockServerQuery).toHaveBeenCalledWith(
+					api.templates.publicDiscoveryManifest,
+					{}
+				);
+			expect(mockServerQuery).toHaveBeenCalledWith(
+				api.templates.publicDiscoveryList,
+				expect.any(Object)
+			);
 			expect(result).toMatchObject({
 				templates: [{ id: 'template_1' }],
 				relationEdges: [],
@@ -65,8 +93,7 @@ describe('home page load', () => {
 		await vi.waitFor(() => expect(mockServerQuery).toHaveBeenCalledTimes(3));
 		const result = (await pending) as Awaited<ReturnType<typeof load>>;
 
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.relatednessEdges, {});
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.conceptRelations, {});
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {});
 		expect(result).toMatchObject({
 			templates: [{ id: 'template_1' }],
 			relationEdges: [{ kind: 'twin', score: 0.9 }],
@@ -83,12 +110,33 @@ describe('home page load', () => {
 
 		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
 
-		expect(mockServerQuery).toHaveBeenCalledTimes(3);
+		expect(mockServerQuery).toHaveBeenCalledTimes(1);
 		expect(result).toEqual({
 			templates: [],
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
-		expect(consoleError).toHaveBeenCalledTimes(3);
+		expect(consoleError).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not read or cache a payload before its manifest says the snapshot is ready', async () => {
+		mockServerQuery.mockResolvedValue({
+			list: { ready: false, revision: 0, updatedAt: null },
+			relations: { ready: false, revision: 0, updatedAt: null }
+		});
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const first = await load(loadEvent('/'));
+		const second = await load(loadEvent('/'));
+
+		expect(first).toMatchObject({ templates: [] });
+		expect(second).toMatchObject({ templates: [] });
+		expect(mockServerQuery).toHaveBeenCalledTimes(1);
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+		expect(mockServerQuery).not.toHaveBeenCalledWith(
+			api.templates.publicDiscoveryList,
+			expect.anything()
+		);
+		expect(consoleError).toHaveBeenCalledTimes(2);
 	});
 });

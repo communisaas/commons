@@ -3143,6 +3143,10 @@ export default defineSchema({
 	// so arbitrary tag strings never become stored Convex field names.
 	templateRelationSnapshots: defineTable({
 		key: v.string(), // singleton selector — always 'public'
+		// Publication revision shared with `publicDiscoveryManifest`. Optional so
+		// the first deploy can migrate existing snapshot rows in place; every new
+		// rebuild writes it before marking relations ready.
+		revision: v.optional(v.number()),
 		twinEdges: v.array(
 			v.object({
 				a: v.string(),
@@ -3178,8 +3182,31 @@ export default defineSchema({
 	// templates (and therefore never pay to read their server-only embeddings).
 	publicTemplateSnapshots: defineTable({
 		key: v.union(v.literal('all'), v.literal('excludeCwc')),
+		// Both list variants receive the same revision in one transaction. Keep
+		// optional during the live-row migration; every rebuild supplies it.
+		revision: v.optional(v.number()),
 		templates: v.any(),
 		sourceCount: v.number(),
 		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Small control-plane singleton for public discovery. Payloads remain in the
+	// two bounded snapshot tables above; this row only states whether each family
+	// has ever published successfully, which monotonically increasing revision is
+	// current, and the coalescing state for low-frequency list refreshes.
+	//
+	// No row is the explicit cold-start state (`ready:false`, revision 0). A
+	// successful rebuild over a legitimately empty corpus creates/updates this row
+	// with `ready:true`, so consumers never have to infer readiness from `[]`.
+	publicDiscoveryManifest: defineTable({
+		key: v.literal('public'),
+		listReady: v.boolean(),
+		relationsReady: v.boolean(),
+		listRevision: v.number(),
+		relationsRevision: v.number(),
+		listUpdatedAt: v.optional(v.number()),
+		relationsUpdatedAt: v.optional(v.number()),
+		listDirtyAt: v.optional(v.number()),
+		listRefreshScheduledAt: v.optional(v.number())
 	}).index('by_key', ['key'])
 });

@@ -14,6 +14,17 @@ import {
 import anchorsData from "./domain-anchors.json";
 import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
 import { clusterTagConcepts, conceptEdges, tagConceptMap } from "./lib/tag_concepts";
+import {
+  PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+  commitPublicDiscoveryListPublication,
+  commitPublicDiscoveryRelationsPublication,
+  getPublicDiscoveryManifestRow,
+  markPublicDiscoveryListDirty,
+  preparePublicDiscoveryListPublication,
+  preparePublicDiscoveryRelationsPublication,
+  reschedulePublicDiscoveryListRefresh,
+  toPublicDiscoveryManifestPayload,
+} from "./lib/publicDiscovery";
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -372,6 +383,24 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
 type PublicTemplatePayload = Awaited<ReturnType<typeof enrichPublicTemplates>>[number];
 
 /**
+ * Tiny public control plane for edge versioning and honest cold starts.
+ *
+ * No manifest row means neither snapshot family has ever published. That is
+ * intentionally distinct from a successful rebuild over an empty corpus,
+ * which returns `ready:true` with revision 1 and an empty payload.
+ */
+export const publicDiscoveryManifest = query({
+  args: {},
+  handler: async (ctx) => {
+    const manifest = await ctx.db
+      .query("publicDiscoveryManifest")
+      .withIndex("by_key", (q) => q.eq("key", "public"))
+      .unique();
+    return toPublicDiscoveryManifestPayload(manifest);
+  },
+});
+
+/**
  * Public: List public templates with enriched data for the homepage.
  *
  * Signature and payload are unchanged, but the request path reads one compact
@@ -388,7 +417,33 @@ export const listPublic = query({
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
       .unique();
-    return Array.isArray(snapshot?.templates) ? (snapshot.templates as PublicTemplatePayload[]) : [];
+    return Array.isArray(snapshot?.templates)
+      ? (snapshot.templates as PublicTemplatePayload[])
+      : [];
+  },
+});
+
+/**
+ * Versioned list payload for edge consumers. Consumers compare this row's
+ * revision with `publicDiscoveryManifest.list.revision` and cache only a match.
+ * The manifest owns readiness, which distinguishes cold start from a valid
+ * empty-corpus snapshot without adding a redundant manifest read here.
+ */
+export const publicDiscoveryList = query({
+  args: { excludeCwc: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const key: PublicTemplateSnapshotKey = args.excludeCwc ? "excludeCwc" : "all";
+    const snapshot = await ctx.db
+      .query("publicTemplateSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .unique();
+    return {
+      revision: snapshot?.revision ?? 0,
+      updatedAt: snapshot?.updatedAt ?? null,
+      templates: Array.isArray(snapshot?.templates)
+        ? (snapshot.templates as PublicTemplatePayload[])
+        : [],
+    };
   },
 });
 
@@ -412,6 +467,9 @@ type PublicTemplateSnapshotRebuildResult = {
  * joins are paid only once.
  */
 async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<PublicTemplateSnapshotRebuildResult> {
+  // Reserve the revision without mutating the manifest. It becomes visible only
+  // after BOTH list rows have passed their size guards and been upserted.
+  const publication = await preparePublicDiscoveryListPublication(ctx);
   const candidates = await ctx.db
     .query("templates")
     .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
@@ -428,24 +486,26 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   const allTemplates = allSources.map((template) => enrichedById.get(template._id)!);
   const excludeCwcTemplates = excludeCwcSources.map((template) => enrichedById.get(template._id)!);
 
-  const updatedAt = Date.now();
   const rows: Array<{
     key: PublicTemplateSnapshotKey;
+    revision: number;
     templates: PublicTemplatePayload[];
     sourceCount: number;
     updatedAt: number;
   }> = [
     {
       key: "all",
+      revision: publication.revision,
       templates: allTemplates,
       sourceCount: allSources.length,
-      updatedAt,
+      updatedAt: publication.updatedAt,
     },
     {
       key: "excludeCwc",
+      revision: publication.revision,
       templates: excludeCwcTemplates,
       sourceCount: excludeCwcSources.length,
-      updatedAt,
+      updatedAt: publication.updatedAt,
     },
   ];
 
@@ -472,6 +532,10 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
     }
   }
 
+  // The manifest revision is the commit marker. Convex mutation atomicity means
+  // a later failure in the composite list+relations rebuild rolls this back too.
+  await commitPublicDiscoveryListPublication(ctx, publication);
+
   return {
     sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
     scannedCount: candidates.length,
@@ -486,6 +550,75 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
 export const rebuildPublicTemplateSnapshots = internalMutation({
   args: {},
   handler: rebuildPublicTemplateSnapshotsImpl,
+});
+
+/** Internal entry point used by tests/operators and future write modules. */
+export const requestPublicTemplateSnapshotRefresh = internalMutation({
+  args: {},
+  handler: async (ctx) => markPublicDiscoveryListDirty(ctx),
+});
+
+/**
+ * Coalesced write-driven list refresh.
+ *
+ * The first dirty write schedules one job after 60 seconds. Further writes
+ * share that token. If a successful list publish happened less than six hours
+ * ago, the same token is moved to the first permitted instant instead of
+ * repeatedly paying the bounded enrichment joins.
+ */
+export const flushScheduledPublicTemplateRefresh = internalMutation({
+  args: { scheduledAt: v.number() },
+  handler: async (ctx, { scheduledAt }) => {
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!manifest || manifest.listRefreshScheduledAt !== scheduledAt) {
+      return { status: "superseded" as const };
+    }
+
+    if (manifest.listDirtyAt === undefined) {
+      await ctx.db.patch(manifest._id, { listRefreshScheduledAt: undefined });
+      return { status: "clean" as const };
+    }
+
+    const now = Date.now();
+    const nextAllowedAt =
+      (manifest.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
+    if (now < nextAllowedAt) {
+      const nextScheduledAt = await reschedulePublicDiscoveryListRefresh(
+        ctx,
+        manifest,
+        now,
+        nextAllowedAt,
+      );
+      return { status: "deferred" as const, scheduledAt: nextScheduledAt };
+    }
+
+    try {
+      const rebuilt = await rebuildPublicTemplateSnapshotsImpl(ctx);
+      const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
+      if (publishedManifest?.listRefreshScheduledAt === scheduledAt) {
+        await ctx.db.patch(publishedManifest._id, { listRefreshScheduledAt: undefined });
+      }
+      return { status: "rebuilt" as const, rebuilt };
+    } catch (error) {
+      // Oversize is detected before either snapshot row is written. Retain the
+      // dirty marker and retry only after another six-hour cost window. Unknown
+      // database/runtime failures are rethrown so Convex rolls the transaction
+      // back atomically; the next dirty write treats the elapsed token as stale.
+      if (!(error instanceof Error) || !error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:")) {
+        throw error;
+      }
+      const current = await getPublicDiscoveryManifestRow(ctx);
+      if (!current) throw error;
+      const retryAt = await reschedulePublicDiscoveryListRefresh(
+        ctx,
+        current,
+        now,
+        now + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+      );
+      console.error(`[public-discovery] list snapshot remains last-good; retry scheduled at ${retryAt}: ${error.message}`);
+      return { status: "oversize" as const, scheduledAt: retryAt };
+    }
+  },
 });
 
 /**
@@ -625,6 +758,41 @@ export const conceptRelations = query({
 });
 
 /**
+ * One-call relation payload for the edge cache. The legacy split queries stay
+ * available during rollout, but new consumers should use this shape so twin and
+ * concept data can never come from different cache generations.
+ */
+export const publicDiscoveryRelations = query({
+  args: {},
+  handler: async (ctx) => {
+    const snapshot = await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
+      .unique();
+    if (!snapshot) {
+      return {
+        revision: 0,
+        updatedAt: null,
+        twinEdges: [],
+        conceptRelations: { edges: [], conceptMap: {} },
+      };
+    }
+
+    return {
+      revision: snapshot.revision ?? 0,
+      updatedAt: snapshot.updatedAt,
+      twinEdges: snapshot.twinEdges,
+      conceptRelations: {
+        edges: snapshot.conceptEdges,
+        conceptMap: Object.fromEntries(
+          snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept]),
+        ),
+      },
+    };
+  },
+});
+
+/**
  * Nightly materialization for both public relation queries.
  *
  * This is the ONLY request-independent path that reads the embedding-heavy
@@ -655,6 +823,9 @@ type RelationSnapshotRebuildResult = {
 };
 
 async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSnapshotRebuildResult> {
+  // Reserve without advancing the manifest. The relation row becomes the new
+  // revision only after its size guard and upsert both succeed.
+  const publication = await preparePublicDiscoveryRelationsPublication(ctx);
   const templates = await ctx.db
     .query("templates")
     .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
@@ -715,6 +886,7 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
 
   const snapshot = {
     key: RELATION_SNAPSHOT_KEY,
+    revision: publication.revision,
     twinEdges,
     conceptEdges: conceptEdgesResult,
     conceptEntries,
@@ -722,7 +894,7 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
     sourceTemplateCount: templates.length,
     embeddedTemplateCount: items.length,
     tagVectorCount: tagVectors.length,
-    updatedAt: Date.now(),
+    updatedAt: publication.updatedAt,
   };
   // RelationEdge/ConceptEdge are nominal interfaces without Value's index
   // signature, but every field above is a concrete Convex value.
@@ -740,6 +912,8 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
   } else {
     await ctx.db.insert("templateRelationSnapshots", snapshot);
   }
+
+  await commitPublicDiscoveryRelationsPublication(ctx, publication);
 
   return {
     sourceCap: RELATION_SNAPSHOT_SCAN_CAP,
@@ -1199,6 +1373,10 @@ export const endorse = mutation({
       endorsementCount: currentCount + 1,
     });
 
+    if (template.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
+
     return { id };
   },
 });
@@ -1231,6 +1409,9 @@ export const removeEndorsement = mutation({
         await ctx.db.patch(args.templateId, {
           endorsementCount: Math.max(0, currentCount - 1),
         });
+        if (template.status === "published" && template.isPublic) {
+          await markPublicDiscoveryListDirty(ctx);
+        }
       }
     }
 
@@ -1329,6 +1510,10 @@ export const updateEmbeddings = mutation({
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     });
+
+    if (template?.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
 
     // Public creation defers embeddings/hue until its final step. Rebuild once,
     // after the first embedding patch, so retries or later re-embeddings cannot
@@ -1581,6 +1766,13 @@ export const createTemplate = mutation({
       });
     }
 
+    // Do not make public-list publication depend on the external embedding call:
+    // Gemini failure still gets a bounded list refresh. The first successful
+    // embedding patch below retains its immediate composite rebuild.
+    if (args.status === "published" && args.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
+
     const template = await ctx.db.get(templateId);
     return template;
   },
@@ -1590,7 +1782,11 @@ export const createTemplate = mutation({
 export const deleteTemplate = internalMutation({
   args: { templateId: v.id("templates") },
   handler: async (ctx, { templateId }) => {
+    const template = await ctx.db.get(templateId);
     await ctx.db.delete(templateId);
+    if (template?.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
   },
 });
 
@@ -1615,6 +1811,9 @@ export const patchMetadata = mutation({
       ...(args.domain !== undefined ? { domain: args.domain } : {}),
       ...(args.topics !== undefined ? { topics: args.topics } : {}),
     });
+    if (template.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
   },
 });
 
@@ -1722,6 +1921,7 @@ export const patchEmbeddings = internalMutation({
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    const template = await ctx.db.get(args.templateId);
     await ctx.db.patch(args.templateId, {
       locationEmbedding: args.locationEmbedding,
       topicEmbedding: args.topicEmbedding,
@@ -1729,6 +1929,9 @@ export const patchEmbeddings = internalMutation({
       embeddingsUpdatedAt: Date.now(),
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     });
+    if (template?.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
   },
 });
 
@@ -1963,6 +2166,10 @@ export const _patchDomainHue = internalMutation({
     domainHue: v.float64(),
   },
   handler: async (ctx, args) => {
+    const template = await ctx.db.get(args.templateId);
     await ctx.db.patch(args.templateId, { domainHue: args.domainHue });
+    if (template?.status === "published" && template.isPublic) {
+      await markPublicDiscoveryListDirty(ctx);
+    }
   },
 });

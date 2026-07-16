@@ -582,9 +582,13 @@ if (enabled("essential")) {
 //      no edges until this job (or an operator-triggered rebuild) succeeds.
 //      04:17 UTC leaves the tag backfill 36 minutes to finish while avoiding the
 //      existing UTC-hour boundaries.
-//      OPERATIONAL: the rebuild is useful only when a public corpus exists.
+//      ESSENTIAL: this is the bounded freshness backstop for topic edits,
+//      re-embeddings, deletes, and any missed write-driven composite refresh.
+//      Production intentionally runs the cost-safe ESSENTIAL profile before
+//      launch, so leaving this operational would make relation freshness depend
+//      entirely on successful first-embedding events or manual intervention.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
+if (enabled("essential")) {
   crons.daily(
     "template-relation-snapshot-rebuild",
     { hourUTC: 4, minuteUTC: 17 },

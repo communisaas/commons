@@ -24,15 +24,19 @@ declare global {
 			options?: { expiration?: number; expirationTtl?: number; metadata?: unknown }
 		): Promise<void>;
 		delete(key: Key): Promise<void>;
-		list?(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<
-			KVNamespaceListResult<unknown, Key>
-		>;
+		list?(options?: {
+			prefix?: string;
+			limit?: number;
+			cursor?: string;
+		}): Promise<KVNamespaceListResult<unknown, Key>>;
 	}
 
 	interface KVNamespaceWithList<Key extends string = string> extends KVNamespace<Key> {
-		list(options?: { prefix?: string; limit?: number; cursor?: string }): Promise<
-			KVNamespaceListResult<unknown, Key>
-		>;
+		list(options?: {
+			prefix?: string;
+			limit?: number;
+			cursor?: string;
+		}): Promise<KVNamespaceListResult<unknown, Key>>;
 	}
 
 	namespace App {
@@ -106,6 +110,7 @@ declare global {
 		interface PageState {}
 		interface Platform {
 			env?: {
+				PUBLIC_DISCOVERY_KV?: KVNamespace;
 				DC_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespaceWithList;
 				REJECTION_MONITOR_KV?: KVNamespace;

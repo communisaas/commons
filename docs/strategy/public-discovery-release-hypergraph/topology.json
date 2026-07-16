@@ -1,0 +1,45 @@
+{
+  "version": "1.0.0",
+  "name": "public-discovery-release-hypergraph",
+  "scope": "One production release path for the bounded Convex public-discovery snapshots and the Cloudflare edge consumer.",
+  "invariant": "The snapshot-safe Convex producer is deployed and both snapshot families are ready before the frontend consumer is approved; rollback never restores the embedding-heavy request path.",
+  "node_types": [
+    {
+      "id": "gate",
+      "description": "A release condition that must be proven before downstream work starts."
+    },
+    {
+      "id": "action",
+      "description": "A bounded operator or automation action."
+    },
+    {
+      "id": "rollback",
+      "description": "A recovery action that preserves the bounded-read invariant."
+    }
+  ],
+  "edge_types": [
+    {
+      "id": "blocks",
+      "description": "The source must close successfully before the target starts."
+    },
+    {
+      "id": "requires",
+      "description": "The target depends on evidence produced by the source."
+    },
+    {
+      "id": "rollback",
+      "description": "A failure at the source activates the target recovery action."
+    }
+  ],
+  "statuses": ["blocked_external", "ready", "operator_gate", "recovery_only"],
+  "statistics": {
+    "nodes": 11,
+    "release_nodes": 8,
+    "rollback_nodes": 3,
+    "blocks_edges": 7,
+    "requires_edges": 8,
+    "rollback_edges": 7
+  },
+  "entrypoint": "docs/WORKFLOW.md",
+  "created_at": "2026-07-16"
+}

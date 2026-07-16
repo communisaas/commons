@@ -45,6 +45,29 @@ function installEdgeCache() {
 	return { entries, match, put };
 }
 
+function installKv() {
+	const entries = new Map<string, string>();
+	const get = vi.fn(async (key: string) => {
+		const value = entries.get(key);
+		return value === undefined ? null : JSON.parse(value);
+	});
+	const put = vi.fn(async (key: string, value: string) => {
+		entries.set(key, value);
+	});
+	return {
+		entries,
+		get,
+		put,
+		delete: vi.fn(async (key: string) => {
+			entries.delete(key);
+		})
+	} as unknown as KVNamespace & {
+		entries: Map<string, string>;
+		get: ReturnType<typeof vi.fn>;
+		put: ReturnType<typeof vi.fn>;
+	};
+}
+
 describe('public discovery cache', () => {
 	beforeEach(() => {
 		clearPublicDiscoveryCache();
@@ -105,6 +128,41 @@ describe('public discovery cache', () => {
 		expect(relationLoader).toHaveBeenCalledTimes(1);
 	});
 
+	it('reuses a matching materialization revision and refreshes immediately when it changes', async () => {
+		const loader = vi.fn().mockResolvedValueOnce(['revision-1']).mockResolvedValueOnce(['revision-2']);
+
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, revision: 1 }, loader)
+		).resolves.toEqual(['revision-1']);
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, revision: 1 }, loader)
+		).resolves.toEqual(['revision-1']);
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, revision: 2 }, loader)
+		).resolves.toEqual(['revision-2']);
+
+		expect(loader).toHaveBeenCalledTimes(2);
+	});
+
+	it('keeps the prior revision when a generation transition cannot load', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await getCachedPublicData('templates', { url: TEST_URL, revision: 1 }, async () => ['stable']);
+		const loader = vi.fn().mockRejectedValue(new Error('new snapshot unavailable'));
+
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, revision: 2 }, loader)
+		).resolves.toEqual(['stable']);
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, revision: 2 }, loader)
+		).resolves.toEqual(['stable']);
+
+		expect(loader).toHaveBeenCalledTimes(1);
+		expect(warn).toHaveBeenCalledWith(
+			'[public-discovery-cache] revision refresh failed:',
+			'new snapshot unavailable'
+		);
+	});
+
 	it('serves stale data immediately, coalesces refreshes, then publishes the refresh', async () => {
 		const pending: Promise<unknown>[] = [];
 		const platform = platformCapturingWaits(pending);
@@ -126,6 +184,24 @@ describe('public discovery cache', () => {
 		await expect(
 			getCachedPublicData('templates', { url: TEST_URL, platform }, loader)
 		).resolves.toEqual(['new']);
+	});
+
+	it('can block on a stale control-plane value so the first request sees a new revision', async () => {
+		await getCachedPublicData('manifest', { url: TEST_URL, freshForMs: 60_000 }, async () => ({
+			revision: 1
+		}));
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		const loader = vi.fn().mockResolvedValue({ revision: 2 });
+
+		await expect(
+			getCachedPublicData(
+				'manifest',
+				{ url: TEST_URL, freshForMs: 60_000, refreshMode: 'blocking' },
+				loader
+			)
+		).resolves.toEqual({ revision: 2 });
+
+		expect(loader).toHaveBeenCalledTimes(1);
 	});
 
 	it('keeps the last-known-good value when a stale background refresh fails', async () => {
@@ -171,6 +247,26 @@ describe('public discovery cache', () => {
 		).resolves.toEqual({ conceptMap: { library: 'libraries' } });
 
 		expect(edge.match).toHaveBeenCalledTimes(2);
+		expect(loader).toHaveBeenCalledTimes(1);
+	});
+
+	it('uses Workers KV as a global shield after a local edge cache miss', async () => {
+		const kv = installKv();
+		const platform = { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform;
+		const loader = vi.fn().mockResolvedValue({ templates: ['global'] });
+
+		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, loader);
+		expect(kv.put).toHaveBeenCalledTimes(1);
+
+		clearPublicDiscoveryCache();
+		installEdgeCache();
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, () =>
+				Promise.reject(new Error('KV should satisfy this cold location'))
+			)
+		).resolves.toEqual({ templates: ['global'] });
+
+		expect(kv.get).toHaveBeenCalledTimes(2);
 		expect(loader).toHaveBeenCalledTimes(1);
 	});
 

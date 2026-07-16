@@ -149,22 +149,46 @@ function validateTemplateData(data: unknown): {
 	// enum-like (downstream Convex validates the actual values); cap length
 	// here for defense-in-depth.
 	if (typeof templateData.type === 'string' && templateData.type.length > 64) {
-		errors.push(createValidationError('type', 'VALIDATION_TOO_LONG', 'type must be ≤64 characters'));
+		errors.push(
+			createValidationError('type', 'VALIDATION_TOO_LONG', 'type must be ≤64 characters')
+		);
 	}
 	if (typeof templateData.deliveryMethod === 'string' && templateData.deliveryMethod.length > 64) {
-		errors.push(createValidationError('deliveryMethod', 'VALIDATION_TOO_LONG', 'deliveryMethod must be ≤64 characters'));
+		errors.push(
+			createValidationError(
+				'deliveryMethod',
+				'VALIDATION_TOO_LONG',
+				'deliveryMethod must be ≤64 characters'
+			)
+		);
 	}
 	if (typeof templateData.description === 'string' && templateData.description.length > 1000) {
-		errors.push(createValidationError('description', 'VALIDATION_TOO_LONG', 'description must be ≤1,000 characters'));
+		errors.push(
+			createValidationError(
+				'description',
+				'VALIDATION_TOO_LONG',
+				'description must be ≤1,000 characters'
+			)
+		);
 	}
 	if (typeof templateData.domain === 'string' && templateData.domain.length > 200) {
-		errors.push(createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters'));
+		errors.push(
+			createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters')
+		);
 	}
 	if (Array.isArray(templateData.sources) && templateData.sources.length > 50) {
-		errors.push(createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries'));
+		errors.push(
+			createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries')
+		);
 	}
 	if (Array.isArray(templateData.research_log) && templateData.research_log.length > 200) {
-		errors.push(createValidationError('research_log', 'VALIDATION_TOO_LONG', 'research_log must have ≤200 entries'));
+		errors.push(
+			createValidationError(
+				'research_log',
+				'VALIDATION_TOO_LONG',
+				'research_log must have ≤200 entries'
+			)
+		);
 	}
 
 	if (errors.length > 0) {
@@ -203,7 +227,11 @@ function validateTemplateData(data: unknown): {
 export const GET: RequestHandler = async ({ url, platform, setHeaders }) => {
 	const templates = await getCachedPublicTemplates({ url, platform }, false);
 	setHeaders({
-		'Cache-Control': 'public, max-age=300, s-maxage=21600, stale-if-error=604800'
+		// The payload itself is revision-cached in Cache API + KV. Keep the outer
+		// HTTP response on the same one-minute freshness bound as the manifest so
+		// the CDN cannot hide a newly published revision for another six hours.
+		'Cache-Control':
+			'public, max-age=60, s-maxage=60, stale-while-revalidate=30, stale-if-error=604800'
 	});
 	const response: StructuredApiResponse = { success: true, data: templates };
 	return json(response);

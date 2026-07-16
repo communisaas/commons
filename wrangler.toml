@@ -102,3 +102,10 @@ id = "c59a1c7ec019425095b848a054f0b252"
 [[kv_namespaces]]
 binding = "REGISTRATION_RETRY_KV"
 id = "90772b3f79d945d5b5f0df3d6d2ca732"
+
+# PUBLIC_DISCOVERY_KV: global source shield + last-known-good store for the
+# anonymous homepage/API snapshot payloads. The per-location Cache API remains
+# the hot layer; this namespace prevents one Convex cold fill per Cloudflare PoP.
+[[kv_namespaces]]
+binding = "PUBLIC_DISCOVERY_KV"
+id = "4517015752384e0f8628b85142c69221"

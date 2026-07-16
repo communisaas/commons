@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { convexTest, type TestConvex } from 'convex-test';
 
 import schema from './schema';
@@ -49,6 +49,146 @@ function embedding(head: number[]): number[] {
 }
 
 describe('templates materialized public snapshots', () => {
+	it('publishes explicit ready revisions atomically and distinguishes a valid empty corpus from cold start', async () => {
+		const t = newHarness();
+
+		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual({
+			list: { ready: false, revision: 0, updatedAt: null },
+			relations: { ready: false, revision: 0, updatedAt: null }
+		});
+		expect(await t.query(api.templates.publicDiscoveryList, {})).toEqual({
+			revision: 0,
+			updatedAt: null,
+			templates: []
+		});
+		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toEqual({
+			revision: 0,
+			updatedAt: null,
+			twinEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+
+		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+		const afterList = await t.query(api.templates.publicDiscoveryManifest, {});
+		expect(afterList.list).toMatchObject({ ready: true, revision: 1 });
+		expect(afterList.relations).toEqual({ ready: false, revision: 0, updatedAt: null });
+		expect(await t.query(api.templates.publicDiscoveryList, {})).toMatchObject({
+			revision: 1,
+			templates: []
+		});
+
+		await t.mutation(internal.templates.rebuildRelationSnapshot, {});
+		const afterRelations = await t.query(api.templates.publicDiscoveryManifest, {});
+		expect(afterRelations.relations).toMatchObject({ ready: true, revision: 1 });
+		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toMatchObject({
+			revision: 1,
+			twinEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+
+		// A failed composite publication must advance neither family. The list size
+		// guard fires before any row/manifest write and Convex rolls the mutation back.
+		await t.run(async (ctx) => {
+			for (let index = 0; index < 50; index++) {
+				await ctx.db.insert(
+					'templates',
+					templateValue(5_000 + index, { messageBody: 'x'.repeat(22_000) })
+				);
+			}
+		});
+		await expect(t.mutation(internal.templates.rebuildHomepageSnapshots, {})).rejects.toThrow(
+			/PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all/
+		);
+		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual(afterRelations);
+
+		// Even if a legacy/manual row edit creates a mismatch, the payload exposes
+		// its own revision so the edge can reject it against manifest revision 1.
+		await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query('publicTemplateSnapshots')
+				.withIndex('by_key', (q) => q.eq('key', 'all'))
+				.unique();
+			if (!row) throw new Error('missing list snapshot');
+			await ctx.db.patch(row._id, { revision: 999 });
+		});
+		expect(await t.query(api.templates.publicDiscoveryList, {})).toMatchObject({
+			revision: 999,
+			templates: []
+		});
+
+		await t.run(async (ctx) => {
+			const row = await ctx.db
+				.query('templateRelationSnapshots')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			if (!row) throw new Error('missing relation snapshot');
+			await ctx.db.patch(row._id, { revision: 999 });
+		});
+		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toMatchObject({
+			revision: 999,
+			twinEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+	});
+
+	it('coalesces dirty writes for 60 seconds and enforces six hours between scheduled list rebuilds', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		try {
+			const t = newHarness();
+			const firstDirtyAt = Date.now();
+			const first = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			vi.advanceTimersByTime(1_000);
+			const duplicate = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			expect(first.scheduled).toBe(true);
+			expect(duplicate).toEqual({ scheduled: false, scheduledAt: first.scheduledAt });
+			const coalescedRow = await t.run(async (ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			// The duplicate did not patch the singleton's dirty timestamp.
+			expect(coalescedRow?.listDirtyAt).toBe(firstDirtyAt);
+
+			vi.advanceTimersByTime(58_999);
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list.revision).toBe(0);
+			vi.advanceTimersByTime(1);
+			await t.finishInProgressScheduledFunctions();
+			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {});
+			expect(firstPublish.list).toMatchObject({ ready: true, revision: 1 });
+
+			const next = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			const nextDuplicate = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			expect(next.scheduled).toBe(true);
+			expect(nextDuplicate).toEqual({ scheduled: false, scheduledAt: next.scheduledAt });
+			expect(next.scheduledAt).toBe(firstPublish.list.updatedAt! + 6 * 60 * 60 * 1000);
+
+			vi.advanceTimersByTime(6 * 60 * 60 * 1000 - 1);
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list.revision).toBe(1);
+			vi.advanceTimersByTime(1);
+			await t.finishInProgressScheduledFunctions();
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list).toMatchObject({
+				ready: true,
+				revision: 2
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('rebuilds both bounded list variants once, preserves order, and retains last-good rows on oversize', async () => {
 		const t = newHarness();
 
