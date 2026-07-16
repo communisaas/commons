@@ -270,6 +270,37 @@ describe('public discovery cache', () => {
 		expect(loader).toHaveBeenCalledTimes(1);
 	});
 
+	it('does not rewrite KV for every unchanged manifest revalidation', async () => {
+		const kv = installKv();
+		const platform = { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform;
+		const manifest = { list: { ready: true, revision: 3 } };
+
+		await getCachedPublicData(
+			'manifest',
+			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
+			async () => manifest
+		);
+		expect(kv.put).toHaveBeenCalledTimes(1);
+
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		await getCachedPublicData(
+			'manifest',
+			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
+			async () => manifest
+		);
+		expect(kv.put).toHaveBeenCalledTimes(1);
+
+		// Renew the global LKG once per day so a healthy, unchanged manifest does
+		// not age out of the seven-day outage window.
+		vi.mocked(Date.now).mockReturnValue(NOW + 24 * 60 * 60 * 1000 + 1);
+		await getCachedPublicData(
+			'manifest',
+			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
+			async () => manifest
+		);
+		expect(kv.put).toHaveBeenCalledTimes(2);
+	});
+
 	it('degrades to the loader when edge reads and writes fail', async () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 		const match = vi.fn().mockRejectedValue(new Error('edge read unavailable'));

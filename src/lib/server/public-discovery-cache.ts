@@ -26,11 +26,15 @@ export const PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
 /** Keep a last-known-good value through a multi-day Convex outage. */
 const PUBLIC_DISCOVERY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Renew an unchanged global last-known-good envelope at most once per day. */
+const PUBLIC_DISCOVERY_KV_REVALIDATE_MS = 24 * 60 * 60 * 1000;
+
 /** Do not retry a failed stale or revision refresh on every anonymous request. */
 const PUBLIC_DISCOVERY_RETRY_MS = 15 * 60 * 1000;
 
 type CacheEnvelope<T> = {
 	cachedAt: number;
+	globalCachedAt?: number;
 	retryAfter?: number;
 	revision?: string;
 	value: T;
@@ -76,6 +80,9 @@ function parseEnvelope<T>(raw: unknown): CacheEnvelope<T> | null {
 	if (!raw || typeof raw !== 'object') return null;
 	const candidate = raw as Partial<CacheEnvelope<T>>;
 	if (typeof candidate.cachedAt !== 'number' || !('value' in candidate)) return null;
+	if (candidate.globalCachedAt !== undefined && typeof candidate.globalCachedAt !== 'number') {
+		return null;
+	}
 	if (candidate.revision !== undefined && typeof candidate.revision !== 'string') return null;
 	return candidate as CacheEnvelope<T>;
 }
@@ -154,13 +161,16 @@ function persistEnvelope<T>(
 	edgeKey: Request,
 	kvKey: string,
 	envelope: CacheEnvelope<T>,
-	platform?: App.Platform
+	platform?: App.Platform,
+	writeKv = true
 ): Promise<void> {
-	if (!defaultCloudflareCache() && !publicDiscoveryKv(platform)) return Promise.resolve();
+	if (!defaultCloudflareCache() && (!writeKv || !publicDiscoveryKv(platform))) {
+		return Promise.resolve();
+	}
 
 	const write = Promise.all([
 		persistEdge(edgeKey, envelope),
-		persistKv(kvKey, envelope, platform)
+		writeKv ? persistKv(kvKey, envelope, platform) : Promise.resolve()
 	]).then(() => undefined);
 
 	if (platform?.context?.waitUntil) {
@@ -210,7 +220,8 @@ function loadAndCache<T>(
 	kvKey: string,
 	platform: App.Platform | undefined,
 	revision: string | undefined,
-	loader: () => Promise<T>
+	loader: () => Promise<T>,
+	previousEnvelope?: CacheEnvelope<T>
 ): Promise<T> {
 	const flightKey = `${identity}@${revision ?? 'unversioned'}`;
 	const existing = inFlight.get(flightKey) as Promise<T> | undefined;
@@ -218,9 +229,29 @@ function loadAndCache<T>(
 
 	const pending = loader()
 		.then(async (value) => {
-			const envelope: CacheEnvelope<T> = { cachedAt: Date.now(), revision, value };
+			const now = Date.now();
+			const valueUnchanged =
+				previousEnvelope !== undefined &&
+				previousEnvelope.revision === revision &&
+				JSON.stringify(previousEnvelope.value) === JSON.stringify(value);
+			// Older v2 envelopes predate `globalCachedAt`; their `cachedAt` is the
+			// best conservative approximation of the last successful KV write.
+			const lastGlobalWrite = previousEnvelope?.globalCachedAt ?? previousEnvelope?.cachedAt ?? 0;
+			const writeKv =
+				publicDiscoveryKv(platform) !== undefined &&
+				(!valueUnchanged || now - lastGlobalWrite >= PUBLIC_DISCOVERY_KV_REVALIDATE_MS);
+			const envelope: CacheEnvelope<T> = {
+				cachedAt: now,
+				...(writeKv
+					? { globalCachedAt: now }
+					: previousEnvelope?.globalCachedAt !== undefined
+						? { globalCachedAt: previousEnvelope.globalCachedAt }
+						: {}),
+				revision,
+				value
+			};
 			memoryCache.set(identity, envelope);
-			await persistEnvelope(edgeKey, kvKey, envelope, platform);
+			await persistEnvelope(edgeKey, kvKey, envelope, platform, writeKv);
 			return value;
 		})
 		.finally(() => {
@@ -245,7 +276,9 @@ async function backOffEnvelope<T>(
 		retryAfter: Date.now() + PUBLIC_DISCOVERY_RETRY_MS
 	};
 	memoryCache.set(identity, backedOff);
-	await persistEnvelope(edgeKey, kvKey, backedOff, platform);
+	// A local retry backoff must not overwrite the global last-known-good value
+	// or consume one KV write per Cloudflare location during an origin outage.
+	await persistEnvelope(edgeKey, kvKey, backedOff, platform, false);
 	console.warn(
 		`[public-discovery-cache] ${reason} failed:`,
 		error instanceof Error ? error.message : String(error)
@@ -261,17 +294,16 @@ function refreshInBackground<T>(
 	staleEnvelope: CacheEnvelope<T>,
 	loader: () => Promise<T>
 ): void {
-	const refresh = loadAndCache(identity, edgeKey, kvKey, platform, revision, loader).catch(
-		(error) =>
-			backOffEnvelope(
-				identity,
-				edgeKey,
-				kvKey,
-				platform,
-				staleEnvelope,
-				error,
-				'background refresh'
-			)
+	const refresh = loadAndCache(
+		identity,
+		edgeKey,
+		kvKey,
+		platform,
+		revision,
+		loader,
+		staleEnvelope
+	).catch((error) =>
+		backOffEnvelope(identity, edgeKey, kvKey, platform, staleEnvelope, error, 'background refresh')
 	);
 	platform?.context?.waitUntil(refresh);
 }
@@ -318,7 +350,15 @@ export async function getCachedPublicData<T>(
 
 			if (!revisionMatches) {
 				try {
-					return await loadAndCache(identity, edgeKey, kvKey, context.platform, revision, loader);
+					return await loadAndCache(
+						identity,
+						edgeKey,
+						kvKey,
+						context.platform,
+						revision,
+						loader,
+						envelope
+					);
 				} catch (error) {
 					await backOffEnvelope(
 						identity,
@@ -335,7 +375,15 @@ export async function getCachedPublicData<T>(
 
 			if (context.refreshMode === 'blocking') {
 				try {
-					return await loadAndCache(identity, edgeKey, kvKey, context.platform, revision, loader);
+					return await loadAndCache(
+						identity,
+						edgeKey,
+						kvKey,
+						context.platform,
+						revision,
+						loader,
+						envelope
+					);
 				} catch (error) {
 					await backOffEnvelope(
 						identity,
