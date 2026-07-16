@@ -25,8 +25,8 @@
       "name": "Deploy snapshot-safe Convex producer",
       "status": "operator_gate",
       "owner": "release operator",
-      "description": "From the clean verified SHA, preview and deploy the Convex schema/functions to quirky-chinchilla-352 before approving any frontend deployment.",
-      "acceptance": "Convex dry-run and deploy succeed; publicDiscoveryList and publicDiscoveryRelations resolve through bounded versioned snapshot reads."
+      "description": "From the clean verified SHA, preview and deploy the Convex schema/functions to quirky-chinchilla-352, then perform the one-time bounded legacy topic-marker cutover before any embedding repair or frontend deployment.",
+      "acceptance": "Convex dry-run and deploy succeed; topicEmbeddingMarkerMigrationStatus reports complete after all self-paged work without Gemini; publicDiscoveryList and publicDiscoveryRelations resolve through bounded versioned snapshot reads."
     },
     {
       "id": "PD-30",
@@ -35,7 +35,7 @@
       "status": "operator_gate",
       "owner": "release operator",
       "description": "Run the composite homepage snapshot rebuild and verify the public manifest reports both list and relations ready at nonzero revisions.",
-      "acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; list sourceCap is 250, relation sourceCap is 50, expected corpus counts are nonzero, every snapshot is below 900000 bytes, and both manifest families are ready."
+      "acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; list sourceCap is 250, relation sourceCap is 50, expected corpus counts are nonzero, every snapshot is below 900000 bytes, and both manifest families are ready at timestamps no more than 26 hours old."
     },
     {
       "id": "PD-40",
@@ -49,11 +49,11 @@
     {
       "id": "PD-50",
       "type": "action",
-      "name": "Approve and deploy frontend consumer",
+      "name": "Gate and deploy frontend consumer",
       "status": "operator_gate",
-      "owner": "production environment reviewer",
-      "description": "Approve the protected GitHub production Environment only after PD-30 and PD-40, then deploy the same verified SHA to Cloudflare Pages.",
-      "acceptance": "The immutable Pages deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed."
+      "owner": "release operator and GitHub Actions",
+      "description": "Keep native Cloudflare Git production deployment disabled and use the gated Wrangler workflow to deploy the same verified SHA only after PD-30 and PD-40.",
+      "acceptance": "The Pages source config reports production_deployments_enabled=false, and the immutable workflow deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed."
     },
     {
       "id": "PD-60",
@@ -61,7 +61,7 @@
       "name": "Invalidate and warm edge generations",
       "status": "operator_gate",
       "owner": "release operator",
-      "description": "Let materialization revisions replace the origin-scoped Cache API + PUBLIC_DISCOVERY_KV envelopes; use the production purge as defense in depth and warm list, graph, and API paths at the custom origin.",
+      "description": "Let materialization revision:updatedAt generations replace origin-local Cache API entries and backend-scoped PUBLIC_DISCOVERY_KV envelopes; use the production purge as defense in depth and warm list, graph, and API paths at the custom origin.",
       "acceptance": "The custom origin serves the new generation without a cold-start empty payload or one Convex payload refresh per Cloudflare location."
     },
     {

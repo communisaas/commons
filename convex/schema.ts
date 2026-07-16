@@ -281,6 +281,10 @@ export default defineSchema({
 		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
+		// Topic-vector completion is tracked independently from tag-vector writes.
+		// A shared timestamp let a tag-only backfill hide a still-missing topic
+		// vector from the indexed repair queue.
+		topicEmbeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
 
 		// Status & tracking
@@ -369,6 +373,14 @@ export default defineSchema({
 		// private templates (including their embedding-heavy fields) during the
 		// nightly materialization pass.
 		.index('by_status_isPublic', ['status', 'isPublic'])
+		// Bounded embedding-repair batches select only public documents that have
+		// never completed an embedding write. This keeps the admin/backfill path
+		// off the full embedding-bearing public corpus.
+		.index('by_status_isPublic_topicEmbeddingsUpdatedAt', [
+			'status',
+			'isPublic',
+			'topicEmbeddingsUpdatedAt'
+		])
 		.searchIndex('search_templates', {
 			searchField: 'title',
 			filterFields: ['domain', 'status', 'countryCode']
@@ -3207,6 +3219,13 @@ export default defineSchema({
 		listUpdatedAt: v.optional(v.number()),
 		relationsUpdatedAt: v.optional(v.number()),
 		listDirtyAt: v.optional(v.number()),
-		listRefreshScheduledAt: v.optional(v.number())
+		listRefreshScheduledAt: v.optional(v.number()),
+		// One-time cutover progress for stamping valid legacy topic vectors with
+		// the dedicated repair marker. Keeping this on the existing singleton
+		// makes self-paging completion observable without another table or scan.
+		topicEmbeddingMarkerMigrationStartedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationCompletedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationScanned: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationMarked: v.optional(v.number())
 	}).index('by_key', ['key'])
 });

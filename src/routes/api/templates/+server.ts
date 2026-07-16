@@ -225,20 +225,47 @@ function validateTemplateData(data: unknown): {
 
 // GET fully migrated to Convex
 export const GET: RequestHandler = async ({ url, platform, setHeaders }) => {
-	const templates = await getCachedPublicTemplates({ url, platform }, false);
 	setHeaders({
 		// The payload itself is revision-cached in Cache API + KV. Keep the outer
 		// HTTP response on the same one-minute freshness bound as the manifest so
 		// the CDN cannot hide a newly published revision for another six hours.
+		// Do not use s-maxage here: it implies proxy-revalidate and disables both
+		// stale-while-revalidate and stale-if-error at Cloudflare. Set this before
+		// the loader so a 5xx revalidation can use a previously cached good body.
 		'Cache-Control':
-			'public, max-age=60, s-maxage=60, stale-while-revalidate=30, stale-if-error=604800'
+			'public, max-age=60, stale-while-revalidate=30, stale-if-error=604800'
 	});
+	const templates = await getCachedPublicTemplates({ url, platform }, false);
 	const response: StructuredApiResponse = { success: true, data: templates };
 	return json(response);
 };
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	try {
+		// Reject before parsing or invoking the two-provider moderation pipeline.
+		// The global hook already caps this mutating route at 10 requests/day;
+		// this early account/trust gate prevents distributed anonymous traffic from
+		// turning even those rejected requests into external AI work.
+		const requestUser = locals.user;
+		if (!requestUser) {
+			const response: StructuredApiResponse = {
+				success: false,
+				error: createApiError('auth', 'AUTH_REQUIRED', 'Authentication required to create templates')
+			};
+			return json(response, { status: 401 });
+		}
+		if (requestUser.is_verified !== true && (requestUser.trust_score ?? 0) < 100) {
+			const response: StructuredApiResponse = {
+				success: false,
+				error: createApiError(
+					'auth',
+					'INSUFFICIENT_TRUST',
+					'Template creation requires account verification. Please complete identity verification to create templates.'
+				)
+			};
+			return json(response, { status: 403 });
+		}
+
 		// Parse request body
 		let requestData: unknown;
 		try {
@@ -477,6 +504,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				// Create template via Convex (includes quota check + geographic scope)
 				const newTemplate = await serverMutation(api.templates.createTemplate, {
+					_secret: getInternalSecret(),
 					userId: user.id as Id<'users'>,
 					title: validData.title,
 					slug,
@@ -544,7 +572,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 									templateId: templateId as Id<'templates'>,
 									locationEmbedding: embeddings[0],
 									topicEmbedding: embeddings[1],
-									domainHue
+									domainHue,
+									_secret: getInternalSecret()
 								});
 
 								console.log(

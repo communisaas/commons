@@ -1,4 +1,4 @@
-import { query, mutation, action, internalAction, internalQuery, internalMutation, type MutationCtx } from "./_generated/server";
+import { query, mutation, action, internalAction, internalQuery, internalMutation, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { getConvexSize, v, type Value } from "convex/values";
@@ -31,8 +31,9 @@ declare const process: { env: Record<string, string | undefined> };
 const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal">;
 const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unknown as FunctionReference<"query", "internal">;
 const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
-const listMissingEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingEmbeddings") as unknown as FunctionReference<"query", "internal">;
+const listMissingEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingEmbeddingsInternal") as unknown as FunctionReference<"query", "internal">;
 const patchEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
+const migrateTopicEmbeddingMarkersRef = makeFunctionReference<"mutation">("templates:migrateTopicEmbeddingMarkers") as unknown as FunctionReference<"mutation", "internal">;
 const listMissingTagEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingTagEmbeddings") as unknown as FunctionReference<"query", "internal">;
 const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchTagEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
 const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
@@ -181,8 +182,43 @@ export const getBySlug = query({
 
 type PublicTemplateSnapshotKey = "all" | "excludeCwc";
 const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
+// TemplateCard renders three avatars. Read the newest six endorsement rows so
+// filtering a possible owner endorsement still leaves a bounded display sample.
+// Across the at-most 100 unique list sources this permits <=600 endorsement
+// rows and <=600 endorsement-org gets. The authoritative counter travels
+// separately; this array is never a total.
+const PUBLIC_TEMPLATE_ENDORSEMENT_CAP = 6;
 const RELATION_SNAPSHOT_SCAN_CAP = 50;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
+const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Align a stored oldest-first rolling arrival window with the materialization
+ * day without mutating the source template. Arrival writes shift the window
+ * when traffic resumes; this projection also ages it on quiet templates so an
+ * old final bucket cannot continue to look like today's activity indefinitely.
+ * Legacy rows without dailyArrivalsLastDay retain their existing shape because
+ * there is no truthful anchor from which to infer elapsed days.
+ */
+function normalizeDailyArrivalsForSnapshot(
+  arrivals: number[] | undefined,
+  lastDay: number | undefined,
+  materializedAt: number,
+): number[] {
+  if (!arrivals || arrivals.length === 0) return [];
+  if (lastDay === undefined || !Number.isFinite(lastDay)) return [...arrivals];
+
+  const currentDay = Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
+  const anchoredDay = Math.floor(lastDay / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
+  const elapsedDays = Math.floor((currentDay - anchoredDay) / DAILY_ARRIVALS_DAY_MS);
+  if (elapsedDays <= 0) return [...arrivals];
+  if (elapsedDays >= arrivals.length) return new Array<number>(arrivals.length).fill(0);
+
+  return [
+    ...arrivals.slice(elapsedDays),
+    ...new Array<number>(elapsedDays).fill(0),
+  ];
+}
 
 /**
  * Build the existing `listPublic` projection over a bounded, already-selected
@@ -210,7 +246,8 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
         ctx.db
           .query("templateEndorsements")
           .withIndex("by_templateId", (q) => q.eq("templateId", tid))
-          .collect(),
+          .order("desc")
+          .take(PUBLIC_TEMPLATE_ENDORSEMENT_CAP),
       ),
     ),
     // Collect unique orgIds and batch-fetch orgs
@@ -250,9 +287,11 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
   }
 
   // Build enriched results
+  const materializedAt = Date.now();
   return templates.map((template, i) => {
     const debate = allDebates[i];
     const endorsements = allEndorsements[i] ?? [];
+    const endorsementCount = template.endorsementCount ?? endorsements.length;
 
     // Endorsing org (template owner)
     const endorsingOrg = template.orgId ? (orgMap.get(template.orgId) ?? null) : null;
@@ -283,8 +322,13 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
     const sendCount = template.verifiedSends || 0;
     const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
     const creationTime = template._creationTime;
-    const daysSinceCreation = (Date.now() - creationTime) / (1000 * 60 * 60 * 24);
+    const daysSinceCreation = (materializedAt - creationTime) / (1000 * 60 * 60 * 24);
     const isNew = daysSinceCreation <= 7;
+    const dailyArrivals = normalizeDailyArrivalsForSnapshot(
+      template.dailyArrivals,
+      template.dailyArrivalsLastDay,
+      materializedAt,
+    );
 
     return {
       id: template._id,
@@ -301,6 +345,7 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       preview: template.preview,
       endorsingOrg,
       endorsingOrgs,
+      endorsementCount,
       coordinationScale,
       isNew,
       hasActiveDebate,
@@ -312,7 +357,7 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
       unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
       send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-      daily_arrivals: (template.dailyArrivals ?? []).map((c: number) => (c < 5 ? 0 : c)),
+      daily_arrivals: dailyArrivals.map((c: number) => (c < 5 ? 0 : c)),
       // K-anon at trust boundary: filter districts with count < 5 out of
       // the public payload, zero tier counts below the same threshold.
       // Consumers still see the visible-shape but not the thin-cohort
@@ -662,8 +707,9 @@ export const relatednessEdges = query({
  *
  * Recomputes the corpus centroid (the genre common-mode removed before scoring
  * template twins) + the calibrated threshold via the same pure helper the edge
- * query uses, and upserts the singleton row. Run daily by cron so the
- * normalization tracks the corpus as templates accumulate or churn.
+ * query uses, and upserts the optional operator-observability singleton. The
+ * relation snapshot computes its matched calibration inline, so correctness
+ * and recurring freshness do not depend on this maintenance function.
  *
  * Idempotent and side-effect-free beyond the single singleton write: same
  * corpus → same centroid → same row. Guards the tiny-corpus floor — fewer than
@@ -803,8 +849,8 @@ export const publicDiscoveryRelations = query({
  *   `status === "published" && isPublic === true`, matching the bounded homepage
  *   discovery source; the graph consumes only edges whose endpoints are among
  *   its displayed top-50 nodes;
- * - twin edges use the persisted calibration when its dimensionality matches,
- *   otherwise `computeTwinEdges` derives the centroid inline;
+ * - twin edges fit their calibration from this exact bounded generation, so a
+ *   stale optional maintenance row cannot skew a newly published snapshot;
  * - concept clustering pools one vector per distinct raw tag across that same
  *   corpus, then relates all tagged templates against the resulting concepts.
  *
@@ -837,16 +883,17 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
     .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
     .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
-  const calibration = await ctx.db
-    .query("relatednessCalibration")
-    .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
-    .unique();
-  const dim = items[0]?.embedding.length;
-  const centroid = calibration && calibration.dim === dim ? calibration.centroid : undefined;
-  const twinEdges = computeTwinEdges(items, {
-    centroid,
-    threshold: calibration?.threshold,
-  });
+  // Fit the matched centroid/threshold from the exact snapshot generation.
+  // This is bounded pure compute over <=50 rows and saves a database read; the
+  // optional operational calibration job remains useful as observability, but
+  // correctness never depends on its cadence.
+  const calibration = computeCalibration(items);
+  const twinEdges = computeTwinEdges(
+    items,
+    calibration
+      ? { centroid: calibration.centroid, threshold: calibration.threshold }
+      : undefined,
+  );
 
   // Tag concepts: retain the former first-occurrence de-duplication and stable
   // template/tag traversal order so a rebuild is byte-for-byte deterministic
@@ -855,15 +902,18 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
   const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
   const seenTag = new Set<string>();
   for (const template of templates) {
+    const currentTags = normalizeTags(template.topics);
+    const currentTagSet = new Set(currentTags);
     taggedTemplates.push({
       id: template._id as string,
-      tags: normalizeTags(template.topics),
+      tags: currentTags,
     });
     const tagEmbeddings = Array.isArray(template.tagEmbeddings) ? template.tagEmbeddings : [];
     for (const tagEmbedding of tagEmbeddings) {
       if (
         tagEmbedding &&
         typeof tagEmbedding.tag === "string" &&
+        currentTagSet.has(tagEmbedding.tag) &&
         Array.isArray(tagEmbedding.embedding) &&
         tagEmbedding.embedding.length > 0 &&
         !seenTag.has(tagEmbedding.tag)
@@ -1456,32 +1506,200 @@ export const updateSourceCache = mutation({
   },
 });
 
-/**
- * List published templates missing embeddings (for backfill).
- */
+const EMBEDDING_BACKFILL_BATCH_LIMIT = 100;
+const EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT = 100;
+
+function embeddingBackfillLimit(limit: number | undefined): number {
+  if (limit === undefined) return EMBEDDING_BACKFILL_BATCH_LIMIT;
+  return Math.max(1, Math.min(EMBEDDING_BACKFILL_BATCH_LIMIT, Math.floor(limit)));
+}
+
+async function listMissingEmbeddingsImpl(ctx: QueryCtx, requestedLimit?: number) {
+  const templates = await ctx.db
+    .query("templates")
+    .withIndex("by_status_isPublic_topicEmbeddingsUpdatedAt", (q) =>
+      q.eq("status", "published").eq("isPublic", true).eq("topicEmbeddingsUpdatedAt", undefined),
+    )
+    .order("desc")
+    .take(embeddingBackfillLimit(requestedLimit));
+
+  return templates.map((t) => ({
+    _id: t._id,
+    title: t.title,
+    description: t.description ?? null,
+    domain: resolveDomain(t),
+    messageBody: t.messageBody,
+  }));
+}
+
+/** Server-only bounded batch used by the authenticated SvelteKit admin route. */
 export const listMissingEmbeddings = query({
+  args: { _secret: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    return await listMissingEmbeddingsImpl(ctx, args.limit);
+  },
+});
+
+/** Internal bounded batch used by the Convex-native backfill action. */
+export const listMissingEmbeddingsInternal = internalQuery({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, args) => await listMissingEmbeddingsImpl(ctx, args.limit),
+});
+
+/**
+ * One-time bounded migration for rows created before the topic-specific marker.
+ * It never calls Gemini: already-valid vectors inherit their existing update
+ * timestamp, while genuinely missing/wrong-dimension rows remain in the exact
+ * repair index. Each transaction scans at most 100 stable creation-order rows
+ * and schedules the next page, avoiding one oversized migration transaction.
+ * Progress lives on the public-discovery singleton so operators can prove every
+ * scheduled page finished; once complete, an accidental rerun is a no-op.
+ */
+export const migrateTopicEmbeddingMarkers = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    scanned: v.optional(v.number()),
+    marked: v.optional(v.number()),
+    restart: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const isContinuation = args.startedAt !== undefined;
+    if (
+      !isContinuation &&
+      (args.cursor !== undefined || args.scanned !== undefined || args.marked !== undefined)
+    ) {
+      throw new Error("TOPIC_EMBEDDING_MARKER_MIGRATION_INVALID_CONTINUATION");
+    }
+
+    let manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!isContinuation && !args.restart) {
+      if (manifest?.topicEmbeddingMarkerMigrationCompletedAt !== undefined) {
+        return {
+          status: "already-complete" as const,
+          scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+          marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+          isDone: true,
+          startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt ?? null,
+          completedAt: manifest.topicEmbeddingMarkerMigrationCompletedAt,
+        };
+      }
+      if (manifest?.topicEmbeddingMarkerMigrationStartedAt !== undefined) {
+        return {
+          status: "already-running" as const,
+          scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+          marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+          isDone: false,
+          startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt,
+          completedAt: null,
+        };
+      }
+    }
+
+    const startedAt = args.startedAt ?? Date.now();
+    let manifestId = manifest?._id;
+    if (!isContinuation) {
+      const progress = {
+        topicEmbeddingMarkerMigrationStartedAt: startedAt,
+        topicEmbeddingMarkerMigrationCompletedAt: undefined,
+        topicEmbeddingMarkerMigrationScanned: 0,
+        topicEmbeddingMarkerMigrationMarked: 0,
+      };
+      if (manifestId) {
+        await ctx.db.patch(manifestId, progress);
+      } else {
+        manifestId = await ctx.db.insert("publicDiscoveryManifest", {
+          key: "public",
+          listReady: false,
+          relationsReady: false,
+          listRevision: 0,
+          relationsRevision: 0,
+          ...progress,
+        });
+      }
+    } else if (
+      !manifestId ||
+      manifest?.topicEmbeddingMarkerMigrationStartedAt !== startedAt ||
+      manifest.topicEmbeddingMarkerMigrationCompletedAt !== undefined
+    ) {
+      return {
+        status: "superseded" as const,
+        scanned: args.scanned ?? 0,
+        marked: args.marked ?? 0,
+        isDone: false,
+        startedAt,
+        completedAt: null,
+      };
+    }
+
+    const page = await ctx.db.query("templates").order("asc").paginate({
+      cursor: args.cursor ?? null,
+      numItems: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT,
+    });
+    let pageMarked = 0;
+    for (const template of page.page) {
+      if (
+        template.topicEmbeddingsUpdatedAt === undefined &&
+        Array.isArray(template.topicEmbedding) &&
+        template.topicEmbedding.length === 768
+      ) {
+        await ctx.db.patch(template._id, {
+          topicEmbeddingsUpdatedAt: template.embeddingsUpdatedAt ?? template.updatedAt,
+        });
+        pageMarked += 1;
+      }
+    }
+
+    const scanned = (args.scanned ?? 0) + page.page.length;
+    const marked = (args.marked ?? 0) + pageMarked;
+    const completedAt = page.isDone ? Date.now() : undefined;
+    await ctx.db.patch(manifestId, {
+      topicEmbeddingMarkerMigrationScanned: scanned,
+      topicEmbeddingMarkerMigrationMarked: marked,
+      topicEmbeddingMarkerMigrationCompletedAt: completedAt,
+    });
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, migrateTopicEmbeddingMarkersRef, {
+        cursor: page.continueCursor,
+        startedAt,
+        scanned,
+        marked,
+      });
+    }
+
+    return {
+      status: page.isDone ? ("complete" as const) : ("running" as const),
+      pageScanned: page.page.length,
+      pageMarked,
+      scanned,
+      marked,
+      isDone: page.isDone,
+      startedAt,
+      completedAt: completedAt ?? null,
+      ...(page.isDone ? {} : { continueCursor: page.continueCursor }),
+    };
+  },
+});
+
+/** Observable completion proof for the one-time marker-migration cutover. */
+export const topicEmbeddingMarkerMigrationStatus = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const templates = await ctx.db
-      .query("templates")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("isPublic"), true),
-          q.eq(q.field("status"), "published"),
-        ),
-      )
-      .collect();
-    // Filter to those without topic_embedding
-    return templates
-      .filter((t) => !t.topicEmbedding)
-      .sort((a, b) => b._creationTime - a._creationTime)
-      .map((t) => ({
-        _id: t._id,
-        title: t.title,
-        description: t.description ?? null,
-        domain: resolveDomain(t),
-        messageBody: t.messageBody,
-      }));
+    const manifest = await ctx.db
+      .query("publicDiscoveryManifest")
+      .withIndex("by_key", (q) => q.eq("key", "public"))
+      .unique();
+    const startedAt = manifest?.topicEmbeddingMarkerMigrationStartedAt ?? null;
+    const completedAt = manifest?.topicEmbeddingMarkerMigrationCompletedAt ?? null;
+    return {
+      status: completedAt !== null ? "complete" : startedAt !== null ? "running" : "not-started",
+      startedAt,
+      completedAt,
+      scanned: manifest?.topicEmbeddingMarkerMigrationScanned ?? 0,
+      marked: manifest?.topicEmbeddingMarkerMigrationMarked ?? 0,
+    };
   },
 });
 
@@ -1494,24 +1712,38 @@ export const updateEmbeddings = mutation({
     locationEmbedding: v.array(v.float64()),
     topicEmbedding: v.array(v.float64()),
     domainHue: v.optional(v.float64()),
+    _secret: v.string(),
+    deferHomepageRebuild: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    requireInternalSecret(args._secret);
+    if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
+      throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
+    }
     const template = await ctx.db.get(args.templateId);
-    const shouldRebuildHomepage =
-      template?.status === "published" &&
-      template.isPublic &&
-      template.embeddingsUpdatedAt === undefined;
+    if (!template) throw new Error("Template not found");
 
+    if (!args.deferHomepageRebuild) {
+      const { userId } = await requireAuth(ctx);
+      if (template.userId !== userId) throw new Error("Unauthorized");
+    }
+
+    const shouldRebuildHomepage =
+      template.status === "published" &&
+      template.isPublic &&
+      template.topicEmbeddingsUpdatedAt === undefined;
+
+    const embeddingsUpdatedAt = Date.now();
     await ctx.db.patch(args.templateId, {
       locationEmbedding: args.locationEmbedding,
       topicEmbedding: args.topicEmbedding,
       embeddingVersion: "v1",
-      embeddingsUpdatedAt: Date.now(),
+      embeddingsUpdatedAt,
+      topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     });
 
-    if (template?.status === "published" && template.isPublic) {
+    if (template.status === "published" && template.isPublic) {
       await markPublicDiscoveryListDirty(ctx);
     }
 
@@ -1519,9 +1751,20 @@ export const updateEmbeddings = mutation({
     // after the first embedding patch, so retries or later re-embeddings cannot
     // turn this public mutation into an unbounded snapshot-rebuild trigger.
     // High-frequency reach-counter writes intentionally do not schedule it.
-    if (shouldRebuildHomepage) {
+    if (shouldRebuildHomepage && !args.deferHomepageRebuild) {
       await ctx.scheduler.runAfter(0, rebuildHomepageSnapshotsRef, {});
     }
+  },
+});
+
+/** Publish exactly once after a server-side embedding repair batch. */
+export const rebuildHomepageSnapshotsAfterBackfill = mutation({
+  args: { _secret: v.string() },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    const list = await rebuildPublicTemplateSnapshotsImpl(ctx);
+    const relations = await rebuildRelationSnapshotImpl(ctx);
+    return { list, relations };
   },
 });
 
@@ -1579,6 +1822,7 @@ export const getUserOrgId = internalQuery({
  */
 export const createTemplate = mutation({
   args: {
+    _secret: v.string(),
     userId: v.id("users"),
     title: v.string(),
     slug: v.string(),
@@ -1602,17 +1846,13 @@ export const createTemplate = mutation({
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
-    // Require auth + force-match `args.userId` to the auth identity.
-    // Without this, the mutation would trust `userId`, `consensusApproved`,
-    // and `status` from the caller. The SvelteKit route at
-    // `src/routes/api/templates/+server.ts:441` populates `userId` from
-    // the authenticated `user.id`, but Convex public mutations are
-    // callable directly — a caller could (a) impersonate another user
-    // as template author, (b) self-approve via `consensusApproved: true`
-    // to bypass the LLM moderation gate, (c) write arbitrary `status`
-    // strings to poison downstream invariants. The `consensusApproved`
-    // + `status` trust gaps remain pending a moderation-via-Convex
-    // refactor; impersonation is the worst leg and is closed here.
+    // Moderation, publication state, and public visibility are derived by the
+    // SvelteKit server. Convex functions are internet-callable, so require the
+    // server credential before trusting any of those fields.
+    requireInternalSecret(args._secret);
+    // Also force-match the authenticated identity. The credential closes the
+    // server-derived moderation/publication boundary; this identity check keeps
+    // a server request from accidentally attributing content to another user.
     const { userId: authUserId } = await requireAuth(ctx);
     if (String(authUserId) !== String(args.userId)) {
       throw new Error("Authenticated user does not match args.userId");
@@ -1844,7 +2084,9 @@ export const setCwcVerification = mutation({
 export const backfillEmbeddings = internalAction({
   args: {},
   handler: async (ctx) => {
-    const missing = await ctx.runQuery(listMissingEmbeddingsRef);
+    const missing = await ctx.runQuery(listMissingEmbeddingsRef, {
+      limit: EMBEDDING_BACKFILL_BATCH_LIMIT,
+    });
 
     if (missing.length === 0) {
       console.log("[backfill] All templates have embeddings.");
@@ -1905,8 +2147,12 @@ export const backfillEmbeddings = internalAction({
       }
     }
 
+    if (processed > 0) {
+      await ctx.runMutation(rebuildHomepageSnapshotsRef, {});
+    }
+
     console.log(`[backfill] Done: ${processed}/${missing.length} templates embedded.`);
-    return { processed, total: missing.length };
+    return { processed, total: missing.length, cappedAt: EMBEDDING_BACKFILL_BATCH_LIMIT };
   },
 });
 
@@ -1921,12 +2167,17 @@ export const patchEmbeddings = internalMutation({
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
+    if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
+      throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
+    }
     const template = await ctx.db.get(args.templateId);
+    const embeddingsUpdatedAt = Date.now();
     await ctx.db.patch(args.templateId, {
       locationEmbedding: args.locationEmbedding,
       topicEmbedding: args.topicEmbedding,
       embeddingVersion: "gemini-001-768",
-      embeddingsUpdatedAt: Date.now(),
+      embeddingsUpdatedAt,
+      topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
       ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
     });
     if (template?.status === "published" && template.isPublic) {
@@ -1952,13 +2203,14 @@ export const listMissingTagEmbeddings = internalQuery({
   handler: async (ctx) => {
     const templates = await ctx.db
       .query("templates")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("isPublic"), true),
-          q.eq(q.field("status"), "published"),
-        ),
+      .withIndex("by_status_isPublic", (q) =>
+        q.eq("status", "published").eq("isPublic", true),
       )
-      .collect();
+      .order("desc")
+      // Only this newest bounded corpus can enter the landing-page relation
+      // snapshot. Older rows need no Gemini work until the product deliberately
+      // expands that materialization cap.
+      .take(RELATION_SNAPSHOT_SCAN_CAP);
 
     return templates
       .map((t) => ({ doc: t, tags: normalizeTags(t.topics) }))
@@ -1972,7 +2224,6 @@ export const listMissingTagEmbeddings = internalQuery({
         // Re-embed only when some current tag has no embedding yet.
         return tags.some((tag) => !covered.has(tag));
       })
-      .sort((a, b) => b.doc._creationTime - a.doc._creationTime)
       .map(({ doc, tags }) => ({ _id: doc._id, tags }));
   },
 });

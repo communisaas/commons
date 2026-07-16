@@ -137,10 +137,7 @@ describe('templates materialized public snapshots', () => {
 		try {
 			const t = newHarness();
 			const firstDirtyAt = Date.now();
-			const first = await t.mutation(
-				internal.templates.requestPublicTemplateSnapshotRefresh,
-				{}
-			);
+			const first = await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
 			vi.advanceTimersByTime(1_000);
 			const duplicate = await t.mutation(
 				internal.templates.requestPublicTemplateSnapshotRefresh,
@@ -164,10 +161,7 @@ describe('templates materialized public snapshots', () => {
 			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {});
 			expect(firstPublish.list).toMatchObject({ ready: true, revision: 1 });
 
-			const next = await t.mutation(
-				internal.templates.requestPublicTemplateSnapshotRefresh,
-				{}
-			);
+			const next = await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
 			const nextDuplicate = await t.mutation(
 				internal.templates.requestPublicTemplateSnapshotRefresh,
 				{}
@@ -260,6 +254,178 @@ describe('templates materialized public snapshots', () => {
 		expect((await t.query(api.templates.listPublic, {})).map((template) => template.id)).toEqual(
 			beforeOversize
 		);
+	});
+
+	it('caps each template to its newest six endorsement organizations and preserves the total', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		try {
+			const t = newHarness();
+			const templateId = await t.run((ctx) =>
+				ctx.db.insert('templates', templateValue(3_000, { endorsementCount: 30 }))
+			);
+
+			for (let index = 0; index < 30; index++) {
+				vi.advanceTimersByTime(1_000);
+				await t.run(async (ctx) => {
+					const orgId = await ctx.db.insert('organizations', {
+						name: `Endorser ${index}`,
+						slug: `endorser-${index}`,
+						maxSeats: 1,
+						maxTemplatesMonth: 1,
+						dmCacheTtlDays: 7,
+						countryCode: 'US',
+						isPublic: true,
+						updatedAt: Date.now()
+					});
+					await ctx.db.insert('templateEndorsements', {
+						templateId,
+						orgId,
+						endorsedAt: Date.now()
+					});
+				});
+			}
+
+			await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+			const [template] = await t.query(api.templates.listPublic, {});
+			expect(template.endorsingOrgs).toHaveLength(6);
+			expect(template.endorsingOrgs.map((org: { name: string }) => org.name)).toEqual(
+				Array.from({ length: 6 }, (_, offset) => `Endorser ${29 - offset}`)
+			);
+			expect(template.endorsementCount).toBe(30);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('ages quiet daily-arrival windows to the materialization day', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T12:00:00.000Z'));
+		try {
+			const t = newHarness();
+			const anchoredDay = Date.parse('2026-07-13T00:00:00.000Z');
+			const expiredDay = Date.parse('2026-06-01T00:00:00.000Z');
+			await t.run(async (ctx) => {
+				await ctx.db.insert(
+					'templates',
+					templateValue(3_100, {
+						verifiedSends: 18,
+						dailyArrivals: [...new Array<number>(27).fill(0), 5, 6, 7],
+						dailyArrivalsLastDay: anchoredDay
+					})
+				);
+				await ctx.db.insert(
+					'templates',
+					templateValue(3_101, {
+						verifiedSends: 9,
+						dailyArrivals: [...new Array<number>(29).fill(0), 9],
+						dailyArrivalsLastDay: expiredDay
+					})
+				);
+			});
+
+			await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+			const templates = await t.query(api.templates.listPublic, {});
+			const shifted = templates.find((template) => template.slug === 'template-3100');
+			const expired = templates.find((template) => template.slug === 'template-3101');
+
+			expect(shifted?.daily_arrivals).toHaveLength(30);
+			expect(shifted?.daily_arrivals.slice(-6)).toEqual([5, 6, 7, 0, 0, 0]);
+			expect(expired?.daily_arrivals).toEqual(new Array<number>(30).fill(0));
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('marks the public list dirty only when an organization avatar changes', async () => {
+		const t = newHarness();
+		const tokenIdentifier = 'https://issuer.example|avatar-editor';
+		const { orgId } = await t.run(async (ctx) => {
+			const userId = await ctx.db.insert('users', {
+				tokenIdentifier,
+				updatedAt: Date.now(),
+				isVerified: true,
+				authorityLevel: 1,
+				trustTier: 1,
+				trustScore: 0,
+				reputationTier: 'novice',
+				districtVerified: false,
+				templatesContributed: 0,
+				templateAdoptionRate: 0,
+				peerEndorsements: 0,
+				activeMonths: 0,
+				profileVisibility: 'private'
+			});
+			const orgId = await ctx.db.insert('organizations', {
+				name: 'Avatar Org',
+				slug: 'avatar-org',
+				maxSeats: 2,
+				maxTemplatesMonth: 2,
+				dmCacheTtlDays: 7,
+				countryCode: 'US',
+				isPublic: true,
+				updatedAt: Date.now()
+			});
+			await ctx.db.insert('orgMemberships', {
+				userId,
+				orgId,
+				role: 'editor',
+				joinedAt: Date.now()
+			});
+			return { orgId };
+		});
+		const authenticated = t.withIdentity({
+			subject: 'avatar-editor',
+			issuer: 'https://issuer.example',
+			tokenIdentifier
+		});
+
+		await authenticated.mutation(api.organizations.update, {
+			slug: 'avatar-org',
+			description: 'Description-only updates do not affect public template cards.'
+		});
+		expect(
+			await t.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			)
+		).toBeNull();
+
+		await authenticated.mutation(api.organizations.update, {
+			slug: 'avatar-org',
+			avatar: 'https://images.example/avatar.png'
+		});
+		const dirtyManifest = await t.run((ctx) =>
+			ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique()
+		);
+		expect(dirtyManifest).toMatchObject({
+			key: 'public',
+			listReady: false,
+			listRevision: 0
+		});
+		expect(dirtyManifest?.listDirtyAt).toEqual(expect.any(Number));
+		expect(dirtyManifest?.listRefreshScheduledAt).toEqual(expect.any(Number));
+		expect(await t.run((ctx) => ctx.db.get(orgId))).toMatchObject({
+			avatar: 'https://images.example/avatar.png'
+		});
+
+		const firstDirtyAt = dirtyManifest?.listDirtyAt;
+		await authenticated.mutation(api.organizations.update, {
+			slug: 'avatar-org',
+			avatar: 'https://images.example/avatar.png'
+		});
+		const unchangedManifest = await t.run((ctx) =>
+			ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique()
+		);
+		expect(unchangedManifest?.listDirtyAt).toBe(firstDirtyAt);
 	});
 
 	it('publishes pure-helper-equivalent relations and never live-scans on reads', async () => {
@@ -361,5 +527,15 @@ describe('templates materialized public snapshots', () => {
 		});
 		expect(JSON.stringify(snapshotRows[0])).not.toContain('topicEmbedding');
 		expect(JSON.stringify(snapshotRows[0])).not.toContain('tagEmbeddings');
+
+		// A removed topic must not keep influencing the concept vocabulary merely
+		// because its old server-side vector is still stored for cheap reuse.
+		await t.run(async (ctx) => {
+			await ctx.db.patch(ids[0], { topics: [] });
+		});
+		await t.mutation(internal.templates.rebuildRelationSnapshot, {});
+		expect((await t.query(api.templates.conceptRelations, {})).conceptMap).not.toHaveProperty(
+			tags[0]
+		);
 	});
 });

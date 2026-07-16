@@ -15,7 +15,9 @@ Record one release SHA that is contained in `origin/production`. Both deploys
 must use that SHA. A manual Pages dispatch runs the static Convex query-efficiency
 guardrail, focused public-discovery tests, the full test suite, application
 checks, and Convex type checks before its deploy job can enter the GitHub
-`production` Environment.
+`production` Environment. Cloudflare's native Git production deploy remains
+disabled; the gated Wrangler job is the sole standard production uploader. No
+GitHub Environment reviewer rule is assumed.
 
 ## 1. Deploy the backend producer
 
@@ -26,9 +28,17 @@ credential in that workflow.
 ```sh
 npx convex deploy --env-file .env.production --dry-run --typecheck enable
 npx convex deploy --env-file .env.production --typecheck enable
+# One-time topic-marker cutover only; omit from subsequent routine deploys.
+npx convex run --env-file .env.production templates:migrateTopicEmbeddingMarkers '{}'
+npx convex run --env-file .env.production templates:topicEmbeddingMarkerMigrationStatus '{}'
 ```
 
-Do not approve the production Environment yet.
+The migration self-pages in 100-row transactions and never calls Gemini; it
+marks only already-valid legacy topic vectors. Its first invocation returns
+before later scheduled pages finish, so poll the status command until it reports
+`"status":"complete"` before any embedding repair. A completed cutover is
+durable and routine deploys must not rescan the corpus. Do not push or dispatch
+the frontend consumer yet.
 
 ## 2. Rebuild and close the readiness gate
 
@@ -45,19 +55,22 @@ The rebuild is a go only when:
 
 - list `sourceCap` is `250` and relation `sourceCap` is `50`;
 - list/relation corpus counts are nonzero for the current production corpus;
-- both list rows and the relation row are below `900000` bytes; and
+- both list rows and the relation row are below `900000` bytes;
 - the manifest reports `list.ready` and `relations.ready` with nonzero
-  revisions and current timestamps.
+  revisions; and
+- both manifest timestamps are no more than 26 hours old, allowing two hours
+  of scheduling tolerance beyond the daily `essential` cron cadence.
 
 A thrown rebuild is atomic and preserves the prior committed snapshots. A first
 deployment must therefore finish this step before the frontend can expose its
 honest-but-empty cold state.
 
 Call the public manifest/list/relation functions directly and inspect Convex
-logs before approval. Public requests must read only `publicDiscoveryManifest`,
-`publicTemplateSnapshots`, or `templateRelationSnapshots`; they must not collect
-the embedding-bearing `templates` corpus. Each one-read payload's `revision`
-must equal its corresponding ready manifest revision:
+logs before frontend upload. Public requests must read only
+`publicDiscoveryManifest`, `publicTemplateSnapshots`, or
+`templateRelationSnapshots`; they must not collect the embedding-bearing
+`templates` corpus. Each one-read payload's `revision` must equal its
+corresponding ready manifest revision:
 
 ```sh
 npx convex run templates:publicDiscoveryList \
@@ -67,9 +80,14 @@ npx convex run templates:publicDiscoveryRelations '{}' --env-file .env.productio
 
 ## 3. Deploy the same frontend SHA
 
-Configure the repository's GitHub `production` Environment with required
-reviewers. Then dispatch the exact verified SHA (or approve the automatic
-production-branch run that is already waiting at that Environment):
+Keep Cloudflare Pages native Git production deployment disabled, then dispatch
+the exact verified SHA. A production-branch CI completion can also trigger this
+workflow only after the hardened definition has landed on the default branch:
+GitHub resolves `workflow_run` there, not from the triggering branch. During the
+first bootstrap, merge the hardened workflow to `main` before pushing or
+dispatching `production`, then verify the workflow and release SHA. Because no
+GitHub Environment reviewer protection is assumed, start either path only after
+the producer evidence above is complete:
 
 ```sh
 gh workflow run deploy.yml --ref production \
@@ -77,9 +95,15 @@ gh workflow run deploy.yml --ref production \
   -f ref="$RELEASE_SHA"
 ```
 
-Approve only after the backend evidence above is attached to the release. The
-workflow deploys an immutable Cloudflare Pages artifact, performs a
+The workflow queries the public manifest, both list variants, and the combined
+relation payload before upload. It refuses a cold manifest, empty production
+corpus, revision skew, an oversized serialized payload, or a materialization
+timestamp more than 26 hours old. It then deploys an immutable Cloudflare Pages
+artifact through the sole standard Wrangler uploader, performs a
 defense-in-depth production cache purge, and gates on its `/api/health` result.
+Confirm the Pages API reports `production_deployments_enabled: false` and
+`preview_deployment_setting: "all"` with the verification command in
+`docs/development/deployment.md`.
 
 ## 4. Warm, smoke, and observe
 
@@ -90,7 +114,7 @@ curl -fsSI https://commons.email/api/templates
 curl -fsS https://commons.email/api/health | jq -e '.status == "ok"'
 ```
 
-Materialization revision changes trigger a synchronous refresh on the first
+Materialization generation (`revision:updatedAt`) changes trigger a synchronous refresh on the first
 request after the one-minute manifest TTL; the purge is not the correctness
 boundary. Confirm the homepage and graph are populated, the API advertises its
 one-minute shared-cache TTL, `PUBLIC_DISCOVERY_KV` is bound, and public-query

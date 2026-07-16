@@ -5,7 +5,7 @@
     {"source": "PD-10", "target": "PD-20", "reason": "Only the verified exact SHA may become the backend producer."},
     {"source": "PD-20", "target": "PD-30", "reason": "The schema and rebuild functions must exist before materialization."},
     {"source": "PD-30", "target": "PD-40", "reason": "Direct smoke needs a committed ready snapshot revision."},
-    {"source": "PD-40", "target": "PD-50", "reason": "Frontend approval is held until bounded backend reads are observed."},
+    {"source": "PD-40", "target": "PD-50", "reason": "Frontend upload is held until bounded backend reads are observed."},
     {"source": "PD-50", "target": "PD-60", "reason": "Warm only the immutable deployment that passed health."},
     {"source": "PD-60", "target": "PD-70", "reason": "Live observation begins after deliberate custom-origin warming."}
   ]

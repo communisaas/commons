@@ -428,12 +428,6 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
-		"convex/templates.ts::listMissingEmbeddings": {
-			"rules": { "collect": 1, "queryFilter": 1 },
-			"owner": "@ejmockler",
-			"expires": "2027-01-31",
-			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
-		},
 		"convex/users.ts::getMyRepresentatives": {
 			"rules": { "collect": 1 },
 			"owner": "@ejmockler",

@@ -139,4 +139,64 @@ describe('home page load', () => {
 		);
 		expect(consoleError).toHaveBeenCalledTimes(2);
 	});
+
+	it('reloads a payload when updatedAt changes even if a reseed reuses the revision number', async () => {
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+		let updatedAt = 1_800_000_000_000;
+		let templateId = 'before-reseed';
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return {
+					list: { ready: true, revision: 1, updatedAt },
+					relations: { ready: true, revision: 1, updatedAt }
+				};
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return { revision: 1, updatedAt, templates: [{ id: templateId }] };
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(load(loadEvent('/'))).resolves.toMatchObject({
+			templates: [{ id: 'before-reseed' }]
+		});
+		updatedAt += 60_001;
+		templateId = 'after-reseed';
+		clock.mockReturnValue(1_800_000_060_001);
+
+		await expect(load(loadEvent('/'))).resolves.toMatchObject({
+			templates: [{ id: 'after-reseed' }]
+		});
+		expect(mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryList)).toHaveLength(2);
+	});
+
+	it('rejects a same-revision snapshot from a newer epoch than the cached manifest', async () => {
+		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+		let manifestUpdatedAt = 100;
+		const snapshotUpdatedAt = 200;
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return {
+					list: { ready: true, revision: 1, updatedAt: manifestUpdatedAt },
+					relations: { ready: true, revision: 1, updatedAt: manifestUpdatedAt }
+				};
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					revision: 1,
+					updatedAt: snapshotUpdatedAt,
+					templates: [{ id: 'new-epoch' }]
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+		vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+		await expect(load(loadEvent('/'))).resolves.toMatchObject({ templates: [] });
+		manifestUpdatedAt = snapshotUpdatedAt;
+		clock.mockReturnValue(1_800_000_060_001);
+		await expect(load(loadEvent('/'))).resolves.toMatchObject({
+			templates: [{ id: 'new-epoch' }]
+		});
+	});
 });

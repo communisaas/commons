@@ -13,8 +13,8 @@ the largest _remaining_ read risk once it is deployed and populated.
 The committed guardrail currently sees:
 
 - 232 exported public Convex queries in 36 modules;
-- 107 syntactic `.collect()` calls across 81 public queries;
-- 12 Convex query-builder `.filter()` calls across 11 public queries; and
+- 106 syntactic `.collect()` calls across 80 public queries;
+- 11 Convex query-builder `.filter()` calls across 10 public queries; and
 - 15 direct `Date.now()` calls across 13 public queries.
 
 These figures are a debt inventory, not a claim that every occurrence costs the
@@ -23,6 +23,13 @@ embedding-bearing documents. Conversely, the static count does not see a
 `Date.now()` hidden in a called helper, a large `.take(10_001)`, repeated SSR
 queries, or an N+1 loop. The ranked findings below include those manually traced
 dependencies.
+
+The completion audit removed one especially dangerous baseline exception:
+`templates.listMissingEmbeddings` is now secret-gated and uses the exact
+`(status, isPublic, topicEmbeddingsUpdatedAt)` index with a 100-row hard cap. Both
+the SvelteKit admin repair route and the Convex-native backfill publish the
+homepage materializations once after a batch instead of scheduling one heavy
+composite rebuild per template.
 
 Eighty-five public queries call `requireOrgRole` directly and another 40 call
 `requireAuth` directly. `requireOrgRole` itself reads the caller's `users` row,

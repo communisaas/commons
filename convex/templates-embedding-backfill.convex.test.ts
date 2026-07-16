@@ -1,0 +1,326 @@
+/// <reference types="vite/client" />
+
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { convexTest } from 'convex-test';
+
+import { api, internal } from './_generated/api';
+import schema from './schema';
+
+const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
+const SECRET = 'embedding-backfill-test-secret-32-bytes-minimum';
+
+function harness() {
+	return convexTest({
+		schema,
+		modules,
+		transactionLimits: {
+			documentsRead: 25,
+			databaseQueries: 2,
+			bytesRead: 100_000
+		}
+	});
+}
+
+function migrationHarness() {
+	return convexTest({
+		schema,
+		modules,
+		transactionLimits: {
+			// The migration reads 100 rows and patches each valid row in the same
+			// bounded transaction; convex-test counts patch lookups toward this cap.
+			documentsRead: 225,
+			databaseQueries: 5,
+			bytesRead: 5_000_000
+		}
+	});
+}
+
+async function seedTemplates(t: ReturnType<typeof harness>, missing: number, completed: number) {
+	await t.run(async (ctx) => {
+		for (let index = 0; index < missing + completed; index += 1) {
+			const hasEmbedding = index >= missing;
+			await ctx.db.insert('templates', {
+				slug: `backfill-${index}`,
+				title: `Backfill ${index}`,
+				description: 'Bounded embedding repair fixture',
+				topics: ['repair'],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				...(hasEmbedding
+					? {
+							topicEmbedding: [1, 0],
+							locationEmbedding: [1, 0],
+							embeddingsUpdatedAt: 1_800_000_000_000 + index,
+							topicEmbeddingsUpdatedAt: 1_800_000_000_000 + index
+						}
+					: {}),
+				embeddingVersion: 'test',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1_800_000_000_000 + index
+			});
+		}
+	});
+}
+
+describe('bounded embedding backfill discovery', () => {
+	beforeEach(() => {
+		vi.stubEnv('INTERNAL_API_SECRET', SECRET);
+		vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+	});
+
+	it('requires the server secret before exposing repair candidates', async () => {
+		const t = harness();
+		await seedTemplates(t, 2, 0);
+		await expect(
+			t.query(api.templates.listMissingEmbeddings, { _secret: 'not-the-secret', limit: 1 })
+		).rejects.toThrow('Unauthorized');
+	});
+
+	it('uses the exact missing-embedding index and honors a hard batch limit', async () => {
+		const t = harness();
+		await seedTemplates(t, 40, 5);
+
+		const rows = await t.query(api.templates.listMissingEmbeddings, {
+			_secret: SECRET,
+			limit: 20
+		});
+
+		expect(rows).toHaveLength(20);
+		expect(rows.every((row) => !('slug' in row))).toBe(true);
+		expect(rows.map((row) => row.title)).toEqual(
+			Array.from({ length: 20 }, (_, offset) => `Backfill ${39 - offset}`)
+		);
+		expect(rows.every((row) => !('topicEmbedding' in row))).toBe(true);
+	});
+
+	it('does not let a tag-only write hide a missing topic embedding', async () => {
+		const t = harness();
+		await t.run(async (ctx) => {
+			await ctx.db.insert('templates', {
+				slug: 'tag-first',
+				title: 'Tag first',
+				description: 'Tag vectors arrived before the topic vector',
+				topics: ['repair'],
+				tagEmbeddings: [{ tag: 'repair', embedding: [1, 0] }],
+				// Legacy/shared activity timestamp must not satisfy the topic marker.
+				embeddingsUpdatedAt: 1_800_000_000_000,
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'test',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1_800_000_000_000
+			});
+		});
+
+		await expect(
+			t.query(api.templates.listMissingEmbeddings, { _secret: SECRET, limit: 1 })
+		).resolves.toMatchObject([{ title: 'Tag first' }]);
+	});
+
+	it('migrates valid legacy topic vectors without paying to regenerate them', async () => {
+		const t = harness();
+		const vector = new Array<number>(768).fill(0);
+		vector[0] = 1;
+		await t.run(async (ctx) => {
+			for (const [index, topicEmbedding] of [vector, [1, 0]].entries()) {
+				await ctx.db.insert('templates', {
+					slug: `legacy-vector-${index}`,
+					title: `Legacy vector ${index}`,
+					description: 'Migration fixture',
+					topics: [],
+					topicEmbedding,
+					embeddingsUpdatedAt: 1_800_000_000_000 + index,
+					type: 'email',
+					deliveryMethod: 'email',
+					preview: 'Preview',
+					messageBody: 'Body',
+					deliveryConfig: {},
+					recipientConfig: {},
+					status: 'published',
+					isPublic: true,
+					verifiedSends: 0,
+					uniqueDistricts: 0,
+					embeddingVersion: 'legacy',
+					flaggedByModeration: false,
+					consensusApproved: true,
+					reputationDelta: 0,
+					reputationApplied: false,
+					updatedAt: 1_800_000_000_000 + index
+				});
+			}
+		});
+
+		await expect(
+			t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
+		).resolves.toMatchObject({ scanned: 2, marked: 1, isDone: true });
+		await expect(
+			t.query(api.templates.listMissingEmbeddings, { _secret: SECRET, limit: 10 })
+		).resolves.toMatchObject([{ title: 'Legacy vector 1' }]);
+		await expect(
+			t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
+		).resolves.toMatchObject({ status: 'complete', scanned: 2, marked: 1 });
+		await expect(
+			t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
+		).resolves.toMatchObject({ status: 'already-complete', scanned: 2, marked: 1 });
+	});
+
+	it('self-pages beyond 100 rows and exposes durable completion evidence', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		try {
+			const t = migrationHarness();
+			const vector = new Array<number>(768).fill(0);
+			vector[0] = 1;
+			await t.run(async (ctx) => {
+				for (let index = 0; index < 101; index += 1) {
+					await ctx.db.insert('templates', {
+						slug: `legacy-page-${index}`,
+						title: `Legacy page ${index}`,
+						description: 'Multi-page migration fixture',
+						topics: [],
+						topicEmbedding: vector,
+						embeddingsUpdatedAt: 1_800_000_000_000 + index,
+						type: 'email',
+						deliveryMethod: 'email',
+						preview: 'Preview',
+						messageBody: 'Body',
+						deliveryConfig: {},
+						recipientConfig: {},
+						status: 'published',
+						isPublic: true,
+						verifiedSends: 0,
+						uniqueDistricts: 0,
+						embeddingVersion: 'legacy',
+						flaggedByModeration: false,
+						consensusApproved: true,
+						reputationDelta: 0,
+						reputationApplied: false,
+						updatedAt: 1_800_000_000_000 + index
+					});
+				}
+			});
+
+			await expect(
+				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
+			).resolves.toMatchObject({
+				status: 'running',
+				pageScanned: 100,
+				scanned: 100,
+				isDone: false
+			});
+			await expect(
+				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
+			).resolves.toMatchObject({ status: 'running', scanned: 100, marked: 100 });
+
+			vi.advanceTimersByTime(0);
+			await t.finishInProgressScheduledFunctions();
+
+			await expect(
+				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
+			).resolves.toMatchObject({ status: 'complete', scanned: 101, marked: 101 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('rejects embedding payloads that could bloat public source documents', async () => {
+		const t = harness();
+		const templateId = await t.run((ctx) =>
+			ctx.db.insert('templates', {
+				slug: 'dimension-guard',
+				title: 'Dimension guard',
+				description: 'Fixture',
+				topics: [],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'test',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1_800_000_000_000
+			})
+		);
+
+		await expect(
+			t.mutation(api.templates.updateEmbeddings, {
+				templateId,
+				locationEmbedding: [1, 0],
+				topicEmbedding: [1, 0],
+				_secret: SECRET,
+				deferHomepageRebuild: true
+			})
+		).rejects.toThrow('INVALID_EMBEDDING_DIMENSION:expected=768');
+	});
+
+	it('does not trust direct callers to self-publish server-derived content', async () => {
+		const t = harness();
+		const userId = await t.run((ctx) =>
+			ctx.db.insert('users', {
+				tokenIdentifier: 'https://issuer.example|publisher',
+				updatedAt: 1_800_000_000_000,
+				isVerified: true,
+				authorityLevel: 1,
+				trustTier: 1,
+				trustScore: 100,
+				reputationTier: 'novice',
+				districtVerified: false,
+				templatesContributed: 0,
+				templateAdoptionRate: 0,
+				peerEndorsements: 0,
+				activeMonths: 0,
+				profileVisibility: 'private'
+			})
+		);
+
+		await expect(
+			t.mutation(api.templates.createTemplate, {
+				_secret: 'caller-controlled',
+				userId,
+				title: 'Self approved',
+				slug: 'self-approved',
+				description: '',
+				messageBody: 'Body',
+				preview: 'Preview',
+				type: 'email',
+				deliveryMethod: 'email',
+				domain: 'civic',
+				topics: [],
+				contentHash: 'self-approved-hash',
+				status: 'published',
+				isPublic: true,
+				consensusApproved: true
+			})
+		).rejects.toThrow('Unauthorized');
+	});
+});

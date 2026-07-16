@@ -13,6 +13,10 @@ type PublicQueryContext = {
 
 type SnapshotFamily = 'list' | 'relations';
 
+function snapshotGeneration(revision: number, updatedAt: number | null): string {
+	return `${revision}:${updatedAt ?? 'cold'}`;
+}
+
 export class PublicDiscoverySnapshotNotReadyError extends Error {
 	readonly family: SnapshotFamily;
 
@@ -50,13 +54,16 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 		{
 			...context,
 			freshForMs: PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
-			revision: manifest.list.revision
+			revision: snapshotGeneration(manifest.list.revision, manifest.list.updatedAt)
 		},
 		async () => {
 			const snapshot = await serverQuery(api.templates.publicDiscoveryList, { excludeCwc });
-			if (snapshot.revision !== manifest.list.revision) {
+			if (
+				snapshot.revision !== manifest.list.revision ||
+				snapshot.updatedAt !== manifest.list.updatedAt
+			) {
 				throw new Error(
-					`PUBLIC_DISCOVERY_REVISION_MISMATCH:list:${snapshot.revision}:${manifest.list.revision}`
+					`PUBLIC_DISCOVERY_GENERATION_MISMATCH:list:${snapshot.revision}:${snapshot.updatedAt}:${manifest.list.revision}:${manifest.list.updatedAt}`
 				);
 			}
 			return snapshot.templates;
@@ -81,13 +88,16 @@ export async function getCachedPublicRelations(context: PublicQueryContext) {
 		{
 			...context,
 			freshForMs: PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
-			revision: expectedRevision
+			revision: snapshotGeneration(expectedRevision, manifest.relations.updatedAt)
 		},
 		async () => {
 			const snapshot = await serverQuery(api.templates.publicDiscoveryRelations, {});
-			if (snapshot.revision !== expectedRevision) {
+			if (
+				snapshot.revision !== expectedRevision ||
+				snapshot.updatedAt !== manifest.relations.updatedAt
+			) {
 				throw new Error(
-					`PUBLIC_DISCOVERY_REVISION_MISMATCH:relations:${snapshot.revision}:${expectedRevision}`
+					`PUBLIC_DISCOVERY_GENERATION_MISMATCH:relations:${snapshot.revision}:${snapshot.updatedAt}:${expectedRevision}:${manifest.relations.updatedAt}`
 				);
 			}
 			return snapshot;

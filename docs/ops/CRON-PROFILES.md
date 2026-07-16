@@ -39,7 +39,7 @@ than silently running the full fleet.
 
 ---
 
-## 1. Tier classification (32 crons)
+## 1. Tier classification (31 crons)
 
 Tiers are: **ESSENTIAL** (always on — correctness / recovery / data-integrity;
 cheap or event-gated; mostly no-op when their source tables are empty),
@@ -72,7 +72,7 @@ all three tiers.
 | `agent-traces-expire`             | hourly :37  | Trace TTL. Writer off-by-default → usually empty.                  |
 | `org-events-expire`               | hourly :47  | SSE event TTL.                                                     |
 | `public-template-snapshot-rebuild` | daily 04:07 | Bounded top-50 public-list freshness; hard-capped at 250 source rows. |
-| `template-relation-snapshot-rebuild` | daily 04:17 | Bounded graph freshness after calibration/tag maintenance; hard-capped at 50 source rows. |
+| `template-relation-snapshot-rebuild` | daily 04:17 | Bounded graph freshness with inline calibration after optional tag maintenance; hard-capped at 50 source rows. |
 
 **Do NOT disable ESSENTIAL crons.** Disabling a recovery sweep
 (`sweep-stuck-processing`, `sweep-stranded-*`, `reschedule-stuck-revocations`, or
@@ -86,7 +86,7 @@ cadence for tick-reduction but must not be turned off. `sweep-stuck-processing`
 > the canary is never silently dropped; if Sentry alerting is not yet wired you
 > may widen/disable it, but record the choice: **DECISION: ____ (date / who).**
 
-### OPERATIONAL (11) — off pre-launch; enable only after each dependency gate
+### OPERATIONAL (10) — off pre-launch; enable only after each dependency gate
 
 | Cron                                 | Cadence     | Why off pre-launch                                              |
 | ------------------------------------ | ----------- | -------------------------------------------------------------- |
@@ -98,7 +98,6 @@ cadence for tick-reduction but must not be turned off. `sweep-stuck-processing`
 | `retry-failed-anchors`               | every 5m    | On-chain anchor retry — no anchors pre-launch.              |
 | `webhook-retry`                      | every 1m    | Retries orgWebhookDeliveries — none pre-launch. **1,440 ticks/day**; widen or make event-driven post-launch. |
 | `reputation-recompute`               | daily 03:11 | Nightly recompute — no users to score.                      |
-| `relatedness-calibration-recompute`  | daily 03:23 | Nightly recompute on public corpus — cheap, deferrable.     |
 | `tag-concept-embedding-backfill`     | daily 03:41 | Embeds NEW tags — near-zero pre-launch.                      |
 | `drain-usage`                        | every 15m   | Reports metered rows. **Never register while either provider is `noop`; follow the atomic billing activation gate.** |
 

@@ -15,7 +15,7 @@ npx convex deploy --env-file .env.production --typecheck enable
 
 # Frontend (SvelteKit on Cloudflare Pages)
 git push origin main:staging       # staging deploy after CI passes
-git push origin main:production    # production deploy after CI + Environment approval
+git push origin main:production    # production deploy after CI + live producer gate
 ```
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
@@ -27,7 +27,7 @@ Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env
 - **Runtime**: Cloudflare Workers (Pages Functions)
 - **Adapter**: `@sveltejs/adapter-cloudflare`
 - **Backend**: Convex (cloud-managed, code-driven schema)
-- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV, REGISTRATION_RETRY_KV
+- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV, REGISTRATION_RETRY_KV, PUBLIC_DISCOVERY_KV
 - **Config**: `wrangler.toml` at repo root
 
 ```
@@ -88,6 +88,7 @@ npx wrangler kv namespace create DC_SESSION_KV
 npx wrangler kv namespace create REJECTION_MONITOR_KV
 npx wrangler kv namespace create VICAL_KV
 npx wrangler kv namespace create REGISTRATION_RETRY_KV
+npx wrangler kv namespace create PUBLIC_DISCOVERY_KV
 ```
 
 Update `wrangler.toml` with the returned namespace IDs.
@@ -122,16 +123,64 @@ npx convex deploy --env-file .env.production --typecheck enable
 npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
 npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
 
-# 3. Push the exact frontend SHA. CI runs, then production waits for approval.
+# 3. Push the exact frontend SHA only after the hardened workflow is on main.
 git push origin "$RELEASE_SHA":refs/heads/production
 ```
 
+For the first cutover that introduces `topicEmbeddingsUpdatedAt` only, run the
+bounded legacy marker migration after the Convex deploy and before any paid
+embedding repair. Do not put this one-time scan in routine deploys. It is
+idempotent after completion and self-pages in 100-row transactions; the first
+command returning does not prove later scheduled pages have finished. Poll the
+durable singleton status until it reports `"status":"complete"`:
+
+```bash
+npx convex run templates:migrateTopicEmbeddingMarkers '{}' --env-file .env.production
+npx convex run templates:topicEmbeddingMarkerMigrationStatus '{}' --env-file .env.production
+```
+
+Use `{"restart":true}` only to recover a deliberately diagnosed stalled
+cutover. Never begin Gemini repair while the status is `running` or
+`not-started`.
+
+Production Pages deployments enforce the producer gate mechanically with
+`scripts/verify-public-discovery-readiness.mjs`: both snapshot families must be
+ready, both list variants and the relation payload must match their manifest
+revisions, the known production corpus must be non-empty, every payload must be
+below 900,000 bytes, and both materialization timestamps must be no more than
+26 hours old before upload. The 26-hour bound allows two hours of scheduling
+tolerance beyond the daily `essential` cron cadence.
+`PUBLIC_DISCOVERY_MAX_AGE_HOURS` is the verifier's deliberate override; the
+production workflow pins it to `26`.
+
 Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
-The normal deploy path is the GitHub Actions workflow so CI, immutable Pages health, and
-deployment health gates are recorded together. Configure required reviewers on the
-repository's GitHub `production` Environment. Approve that Environment only after the
-backend manifest reports list and relations ready at revisions that match the persisted
-snapshots.
+Cloudflare's native Git production deployment must remain disabled; the GitHub Actions
+workflow's gated Wrangler job is the sole standard production uploader so CI, producer
+readiness, immutable Pages health, and deployment health are recorded together. No GitHub
+Environment reviewer rule is assumed, so do not push or dispatch the frontend release
+until the backend manifest and persisted snapshots are ready.
+
+Verify that native production uploads are still disabled while preview deployments remain
+enabled:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/communique-site" \
+  | jq -e '.success == true and
+      .result.source.config.production_deployments_enabled == false and
+      .result.source.config.preview_deployment_setting == "all"'
+```
+
+The production job repeats the `production_deployments_enabled == false`
+assertion against this same project response and stops before upload if the
+setting drifts.
+
+Bootstrap caveat: GitHub evaluates `workflow_run` using the workflow file on the
+default branch. For the first release of this gate, merge the hardened workflow
+to `main` before pushing or dispatching `production`, then verify that the run
+checked out the intended workflow and SHA. Never rely on the old default-branch
+deploy definition for this cutover.
 
 For a manual redeploy, the requested ref must already be contained in the selected branch:
 
@@ -142,9 +191,10 @@ gh workflow run deploy.yml --ref production \
 ```
 
 The manual path resolves an exact SHA and cannot bypass the static Convex query-efficiency
-guardrail, focused public-discovery checks, full test suite, application checks, or Convex
-type checks. The backend remains an explicit operator step because the Pages workflow has
-no established Convex deploy credential. See `docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
+guardrail, focused public-discovery checks, full test suite, application checks, Convex
+type checks, or the live producer-readiness gate. The backend remains an explicit operator
+step because the Pages workflow has no established Convex deploy credential. See
+`docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
 `docs/strategy/public-discovery-release-hypergraph/` for the go/no-go evidence.
 
 ### Preview Deploy (non-production branch)

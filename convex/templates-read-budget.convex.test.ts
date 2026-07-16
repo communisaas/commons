@@ -162,12 +162,14 @@ describe('public template query read budgets', () => {
 		await t.run(async (ctx) => {
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'all',
+				revision: 7,
 				templates: [allCard, nonCwcCard],
 				sourceCount: 20,
 				updatedAt: 1_800_000_000_000
 			});
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'excludeCwc',
+				revision: 7,
 				templates: [nonCwcCard],
 				sourceCount: 20,
 				updatedAt: 1_800_000_000_000
@@ -191,6 +193,50 @@ describe('public template query read budgets', () => {
 		expect(excludingCwc.metrics.documentsRead.used).toBe(1);
 		expect(excludingCwc.metrics.databaseQueries.used).toBe(1);
 		expect(excludingCwc.metrics.bytesRead.used).toBeLessThan(2_000);
+
+		const versioned = await t.query(async (ctx) => {
+			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				excludeCwc: false
+			});
+			return { result, metrics: await getTransactionMetrics(ctx) };
+		});
+		expect(versioned.result).toEqual({
+			revision: 7,
+			updatedAt: 1_800_000_000_000,
+			templates: [allCard, nonCwcCard]
+		});
+		expect(versioned.metrics.documentsRead.used).toBe(1);
+		expect(versioned.metrics.databaseQueries.used).toBe(1);
+		expect(versioned.metrics.bytesRead.used).toBeLessThan(2_000);
+	});
+
+	it('the readiness manifest reads only its compact singleton', async () => {
+		const t = newHarness();
+		await seedHeavyTemplates(t, 20);
+		await t.run(async (ctx) => {
+			await ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				relationsReady: true,
+				listRevision: 7,
+				relationsRevision: 9,
+				listUpdatedAt: 1_800_000_000_000,
+				relationsUpdatedAt: 1_800_000_000_001
+			});
+		});
+
+		const observed = await t.query(async (ctx) => {
+			const result = await ctx.runQuery(api.templates.publicDiscoveryManifest, {});
+			return { result, metrics: await getTransactionMetrics(ctx) };
+		});
+
+		expect(observed.result).toEqual({
+			list: { ready: true, revision: 7, updatedAt: 1_800_000_000_000 },
+			relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_001 }
+		});
+		expect(observed.metrics.documentsRead.used).toBe(1);
+		expect(observed.metrics.databaseQueries.used).toBe(1);
+		expect(observed.metrics.bytesRead.used).toBeLessThan(1_000);
 	});
 
 	it('relation queries return honest empty shapes without scanning templates on snapshot cold start', async () => {
@@ -216,6 +262,7 @@ describe('public template query read budgets', () => {
 		await t.run(async (ctx) => {
 			await ctx.db.insert('templateRelationSnapshots', {
 				key: 'public',
+				revision: 9,
 				twinEdges: [{ a: 'alpha', b: 'beta', score: 0.91, kind: 'twin' }],
 				conceptEdges: [{ a: 'alpha', b: 'beta', concept: 'libraries', kind: 'concept' }],
 				conceptEntries: [
@@ -253,5 +300,25 @@ describe('public template query read budgets', () => {
 		expect(concepts.metrics.documentsRead.used).toBe(1);
 		expect(concepts.metrics.databaseQueries.used).toBe(1);
 		expect(concepts.metrics.bytesRead.used).toBeLessThan(2_000);
+
+		const combined = await t.query(async (ctx) => {
+			const result = await ctx.runQuery(api.templates.publicDiscoveryRelations, {});
+			return { result, metrics: await getTransactionMetrics(ctx) };
+		});
+		expect(combined.result).toEqual({
+			revision: 9,
+			updatedAt: 1_800_000_000_000,
+			twinEdges: [{ a: 'alpha', b: 'beta', score: 0.91, kind: 'twin' }],
+			conceptRelations: {
+				edges: [{ a: 'alpha', b: 'beta', concept: 'libraries', kind: 'concept' }],
+				conceptMap: {
+					'library-card': 'libraries',
+					libraries: 'libraries'
+				}
+			}
+		});
+		expect(combined.metrics.documentsRead.used).toBe(1);
+		expect(combined.metrics.databaseQueries.used).toBe(1);
+		expect(combined.metrics.bytesRead.used).toBeLessThan(2_000);
 	});
 });

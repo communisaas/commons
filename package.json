@@ -10,6 +10,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"check:convex-queries": "node scripts/check-convex-query-efficiency.mjs",
+		"verify:public-discovery-readiness": "node scripts/verify-public-discovery-readiness.mjs",
 		"format": "prettier --write .",
 		"lint": "prettier --check . && eslint .",
 		"lint:strict": "prettier --check . && eslint . --max-warnings 0",

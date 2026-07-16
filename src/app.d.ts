@@ -111,6 +111,7 @@ declare global {
 		interface Platform {
 			env?: {
 				PUBLIC_DISCOVERY_KV?: KVNamespace;
+				PUBLIC_CONVEX_URL?: string;
 				DC_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespaceWithList;
 				REJECTION_MONITOR_KV?: KVNamespace;

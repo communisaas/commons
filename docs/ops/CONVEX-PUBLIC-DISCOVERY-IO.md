@@ -30,9 +30,12 @@ The protection has two independent data layers and one small control plane:
 1. Cloudflare Pages Functions cache anonymous public-discovery results in the
    data-centre-local `caches.default`, with `PUBLIC_DISCOVERY_KV` as the global
    source shield and last-known-good store. The tiny manifest revalidates every
-   minute; a matching revisioned payload may live for seven days, while any
-   revision change refreshes it synchronously. Failed refreshes back off for 15
-   minutes. The cache contains public data only and is never used for cookie- or
+   minute. Healthy payload generations revalidate every 24 hours, remain usable
+   for seven days during an outage, and carry an eight-day KV lease. A generation
+   is `revision:updatedAt`, so a seed/rebuild that restarts a numeric revision can
+   never reuse the old payload. Generation changes refresh synchronously; failed
+   refreshes back off that generation for 15 minutes without suppressing a newer
+   one. The cache contains public data only and is never used for cookie- or
    identity-dependent responses. Neither edge layer is treated as the database
    safety boundary.
 2. Convex public queries read compact materialized snapshots. `listPublic`
@@ -43,9 +46,9 @@ The protection has two independent data layers and one small control plane:
    candidates), and a 900,000-byte document guard.
 3. `templates:publicDiscoveryManifest` distinguishes a never-built cold state
    (`ready:false`, revision `0`) from a successful build of a legitimately empty
-   corpus. List and relation payloads fail closed when their stored revision does
-   not match the manifest. The edge cache stores the materialized revision with
-   each payload and refreshes synchronously when it changes, so a successful
+   corpus. List and relation payloads fail closed when their stored revision and
+   timestamp do not match the manifest. The edge cache stores the materialized
+   generation with each payload and refreshes synchronously when it changes, so a successful
    rebuild does not wait for the six-hour safety revalidation interval.
 
 Normal list and spectrum homepage loads do not request graph relations at all.
@@ -53,13 +56,17 @@ Only `?view=graph` loads one combined twin+concept snapshot, in parallel with
 the list. `/api/templates` uses the same internal cache and a one-minute outer
 CDN TTL, so an old six-hour HTTP response cannot mask a new revision.
 
-### Zero-cost Cloudflare posture
+### Cost-minimal Cloudflare posture
 
-The cache owns four stable, origin-scoped logical entries: the manifest, two
-list variants, and combined relations. Query strings do not create new cache or
-KV keys, so random-parameter traffic cannot force Convex payload misses. Cache
-API is the request hot path; Workers KV is used as the cross-location source
-shield, and writes occur only after a successful load or revision transition.
+The cache owns four logical families: the manifest, two list variants, and
+combined relations. Cache API stores origin-local immutable generation entries
+plus a last-known-good pointer. KV keeps one stable entry per logical family,
+scoped by Convex backend rather than preview hostname, so production and staging
+cannot contaminate each other while aliases of one backend share the shield.
+Query strings do not create keys, so random-parameter traffic cannot force
+Convex payload misses. Cache API is the request hot path; Workers KV is the
+cross-location shield, and writes occur only after a successful load or healthy
+24-hour renewal.
 
 Workers KV's current Free allowance is 100,000 reads/day, 1,000 writes/day, and
 1 GB. Four entries are comfortably inside that envelope at current traffic,
@@ -70,7 +77,7 @@ automatically query-cached and incur no database bandwidth.
 
 ## Production activation
 
-Order matters. Deploy and populate the Convex snapshots before approving the
+Order matters. Deploy and populate the Convex snapshots before releasing the
 Cloudflare consumer; otherwise an early request can observe the honest-but-empty
 cold state. The scoped execution graph is
 [`docs/strategy/public-discovery-release-hypergraph/`](../strategy/public-discovery-release-hypergraph/docs/WORKFLOW.md).
@@ -91,6 +98,21 @@ cold state. The scoped execution graph is
    npx convex deploy --env-file .env.production --typecheck enable
    ```
 
+   On this first marker-schema cutover only, start the bounded, self-paging
+   legacy marker migration before any embedding repair. Do not make it part of
+   routine deploys. It only stamps already-valid 768-dimensional topic vectors;
+   it never calls Gemini. Genuinely missing vectors remain in the repair index:
+
+   ```sh
+   npx convex run templates:migrateTopicEmbeddingMarkers '{}' --env-file .env.production
+   npx convex run templates:topicEmbeddingMarkerMigrationStatus '{}' --env-file .env.production
+   ```
+
+   The first command returns after its first 100-row page while later pages run
+   through the scheduler. Poll the status command until it reports
+   `"status":"complete"`; that durable completion makes an accidental repeat a
+   no-op. Do not begin Gemini repair while it is `running` or `not-started`.
+
 4. Build both list snapshots and the relation snapshot once, then inspect the
    control-plane manifest. For a non-first publication, record the current
    manifest revisions and confirm that an available pre-rebuild backup/export
@@ -104,12 +126,14 @@ cold state. The scoped execution graph is
    The rebuild must report list `sourceCap: 250`, relation `sourceCap: 50`,
    nonzero source/list counts for the current production corpus, and each
    snapshot size below 900,000 bytes. The manifest must report both
-   `list.ready` and `relations.ready`, nonzero revisions, and current timestamps.
-   The persisted snapshot revisions must match the manifest revisions. A size or
-   compute failure is atomic and leaves the prior committed snapshots unchanged.
+   `list.ready` and `relations.ready`, nonzero revisions, and timestamps no more
+   than 26 hours old. This allows two hours of scheduling tolerance beyond the
+   daily `essential` cron cadence. The persisted snapshot revisions and
+   timestamps must match the manifest. A size or compute failure is atomic and
+   leaves the prior committed snapshots unchanged.
 
-5. Call the public functions directly and inspect Convex logs before frontend
-   approval:
+5. Call the public functions directly and inspect Convex logs before the
+   frontend upload:
 
    ```sh
    npx convex run templates:publicDiscoveryList \
@@ -124,10 +148,15 @@ cold state. The scoped execution graph is
    the `templates` corpus. The legacy split queries remain compatible but do not
    constitute the version/readiness gate.
 
-6. Configure required reviewers on the repository's GitHub `production`
-   Environment, then deploy the same SHA. Either approve the automatic
-   production-branch run that is waiting at that Environment, or dispatch it
-   explicitly:
+6. Keep Cloudflare Pages native Git production deployment disabled. The gated
+   Wrangler job in `.github/workflows/deploy.yml` is the sole standard
+   production uploader. No GitHub Environment reviewer protection is assumed,
+   so push or dispatch the same SHA only after steps 3–5 are complete. A
+   production-branch CI completion triggers the workflow only after this
+   hardened workflow has first been merged to the default branch. GitHub runs
+   `workflow_run` from the default-branch workflow context; during this first
+   bootstrap, do not push the unmerged release to `production`. Merge the
+   hardened workflow to `main` first, then push or dispatch the release:
 
    ```sh
    gh workflow run deploy.yml --ref production \
@@ -137,8 +166,13 @@ cold state. The scoped execution graph is
 
    Manual dispatch cannot bypass verification: the workflow resolves the ref to
    an exact SHA contained in the selected branch, runs focused and full checks,
-   then deploys that SHA. Do not approve the production Environment before steps
-   3–5 have produced backend readiness evidence.
+   then runs `scripts/verify-public-discovery-readiness.mjs` against production.
+   That executable gate re-reads the manifest and all three versioned payloads
+   and rejects cold, empty, oversized, revision-skewed, or more-than-26-hour-old
+   state before upload. Verify the Pages source configuration still reports
+   `production_deployments_enabled: false` and
+   `preview_deployment_setting: "all"` with the API check in
+   `docs/development/deployment.md`.
 
 7. Warm and inspect both public paths:
 
@@ -167,8 +201,9 @@ cold state. The scoped execution graph is
 - The bounded public-list snapshot refresh runs daily in the `essential` cron
   profile. This updates reach/debate/endorsement fields and the seven-day
   `isNew` flag.
-- The bounded relation snapshot refresh runs daily in the `essential` profile,
-  after the optional operational calibration and tag-embedding maintenance.
+- The bounded relation snapshot refresh runs daily in the `essential` profile.
+  It computes calibration inline from the exact 50-row generation, after the
+  optional operational tag-embedding maintenance when that tier is enabled.
 - Template, reach, endorsement, and debate writes coalesce behind one 60-second
   scheduler token, and scheduled heavy list rebuilds run no more often than
   every six hours. On a quiet site, the first change after that cost window is
@@ -184,8 +219,9 @@ cold state. The scoped execution graph is
   failure.
 
 The first request after the manifest's 60-second TTL synchronously observes a
-successful snapshot publication. A stale KV envelope with the wrong revision is
-rejected, not served as current. The six-hour interval is the materializer's
+successful snapshot publication. A stale KV envelope with the wrong revision or
+timestamp is rejected as current (but can remain the outage fallback). Healthy
+payloads renew at 24 hours; the six-hour interval is the materializer's
 write-amplification ceiling, while last-known-good data may remain available for
 seven days during an outage. For an urgent explicit namespace cutover, bump
 `CACHE_SCHEMA_VERSION` in `src/lib/server/public-discovery-cache.ts` and redeploy

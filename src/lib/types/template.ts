@@ -66,6 +66,8 @@ export interface Template {
 	endorsingOrg?: { name: string; slug: string; avatar: string | null } | null;
 	// Coalition endorsements — multiple orgs can endorse the same template
 	endorsingOrgs?: Array<{ name: string; slug: string; avatar: string | null }>;
+	// Authoritative total; endorsingOrgs is only a bounded newest-first sample.
+	endorsementCount?: number;
 
 	// === PERCEPTUAL ENCODING PROPERTIES ===
 	// Visual weight encoding (0-1 scale for card size transformation)

@@ -39,6 +39,7 @@ import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
 import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
 import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
+import { markPublicDiscoveryListDirty } from "./lib/publicDiscovery";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -296,6 +297,9 @@ export const seedAll = internalAction({
     console.log("[seed] Phase 19: Inserting org subscriptions...");
     await ctx.runMutation(internal.seed.insertSubscriptions, { orgIds });
 
+    console.log("[seed] Phase 20: Publishing bounded public-discovery snapshots...");
+    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {});
+
     console.log(
       `[seed] Complete! Created ${userIds.length} users, ${orgIds.length} orgs, ` +
       `${templateIds.length} templates, ${campaignIds.length} campaigns, ` +
@@ -334,6 +338,9 @@ export const seedPublic = internalAction({
     const dmIds = await ctx.runMutation(internal.seed.insertDecisionMakers);
     await ctx.runMutation(internal.seed.insertUserDmRelations, { userIds, dmIds });
 
+    console.log("[seedPublic] Phase 5: Publishing bounded public-discovery snapshots...");
+    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {});
+
     console.log(
       `[seedPublic] Complete! Created ${userIds.length} users, ${templateIds.length} templates, ${dmIds.length} decision makers (public, no org).`,
     );
@@ -354,6 +361,9 @@ export const zeroTemplateMetrics = internalMutation({
         uniqueDistricts: 0,
         deliveredDistricts: [],
       });
+    }
+    if (templates.some((template) => template.status === "published" && template.isPublic)) {
+      await markPublicDiscoveryListDirty(ctx);
     }
     console.log(`Zeroed metrics on ${templates.length} templates.`);
   },
@@ -2711,6 +2721,10 @@ export const patchSeedRecord = internalMutation({
 // 17 tables that were silently skipped have been added in dependency order.
 const SEED_TABLES = [
   // Leaf tables (no dependents)
+  // Public-discovery control/read models must be removed before any source
+  // corpus table so a partial operator clear can never leave a ready stale page.
+  "publicTemplateSnapshots", "templateRelationSnapshots",
+  "publicDiscoveryManifest", "relatednessCalibration",
   "delegationReviews", "delegatedActions", "delegationGrants",
   "scorecardSnapshots", "orgDmFollows", "orgBillWatches", "orgBillRelevances",
   "externalIds", "decisionMakers", "orgIssueDomains",
@@ -2766,6 +2780,21 @@ const SEED_TABLES = [
   "sessions", "accounts", "users",
 ] as const;
 
+const PUBLIC_DISCOVERY_SOURCE_TABLES = new Set<string>([
+  "templates",
+  "templateEndorsements",
+  "organizations",
+  "debates",
+  "debateArguments",
+]);
+
+const PUBLIC_DISCOVERY_STATE_TABLES = [
+  "publicTemplateSnapshots",
+  "templateRelationSnapshots",
+  "publicDiscoveryManifest",
+  "relatednessCalibration",
+] as const;
+
 export const clearSeed = internalAction({
   args: {},
   handler: async (ctx): Promise<{ tables: number; deleted: number; failedRows: number; failedTables: number }> => {
@@ -2800,6 +2829,10 @@ export const clearSeed = internalAction({
 export const clearTable = internalMutation({
   args: { table: v.string() },
   handler: async (ctx, { table }): Promise<{ deleted: number; failed: number }> => {
+    if (!SEED_TABLES.includes(table as typeof SEED_TABLES[number])) {
+      throw new Error(`CLEAR_TABLE_NOT_ALLOWED: ${table}`);
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const docs = await (ctx.db as any).query(table).collect();
     let deleted = 0;
@@ -2826,6 +2859,17 @@ export const clearTable = internalMutation({
     }
     if (failed > 0) {
       console.error(`  ${table}: first ${errors.length} errors → ${errors.join("; ")}`);
+    }
+
+    // Source-table maintenance must fail closed: remove the tiny discovery
+    // read models/control row in the same transaction so old ready payloads
+    // cannot survive a corpus wipe. Seed/reseed actions publish once after all
+    // source writes finish.
+    if (deleted > 0 && PUBLIC_DISCOVERY_SOURCE_TABLES.has(table)) {
+      for (const stateTable of PUBLIC_DISCOVERY_STATE_TABLES) {
+        const stateRows = await ctx.db.query(stateTable).collect();
+        for (const row of stateRows) await ctx.db.delete(row._id);
+      }
     }
     return { deleted, failed };
   },
@@ -2884,6 +2928,10 @@ export const reseedTemplates = internalAction({
       await ctx.runMutation(internal.seed.insertCampaigns, { orgIds, templateIds });
     }
 
+    // Publish once after every source table is stable. The template clear above
+    // intentionally removed old snapshot/control rows.
+    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {});
+
     console.log(`[reseedTemplates] Done: ${templateIds.length} templates, debates, campaigns reseeded.`);
   },
 });
@@ -2921,6 +2969,7 @@ export const backfillScopes = internalMutation({
         patched++;
       }
     }
+    if (patched > 0) await markPublicDiscoveryListDirty(ctx);
     console.log(`[seed] Backfilled scopes on ${patched}/${templates.length} templates.`);
   },
 });

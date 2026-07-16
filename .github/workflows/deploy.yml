@@ -94,11 +94,14 @@ jobs:
           npx vitest --run \
             convex/templates-read-budget.convex.test.ts \
             convex/templates-snapshots.convex.test.ts \
+            convex/templates-embedding-backfill.convex.test.ts \
             convex/observability-service-ping.convex.test.ts \
             convex/lib/relatedness.test.ts \
             convex/lib/tag_concepts.test.ts \
             tests/unit/server/public-discovery-cache.test.ts \
             tests/unit/routes/home-page-load.test.ts \
+            tests/unit/routes/templates-api-auth.test.ts \
+            tests/unit/scripts/public-discovery-readiness.test.ts \
             --config=vitest.config.ts
 
       - name: Run full test suite
@@ -166,6 +169,11 @@ jobs:
             vite_atlas_url="$atlas_url"
           fi
           if [ "$DEPLOY_BRANCH" = "production" ]; then
+            if ! printf '%s' "$response" | jq -e \
+              '.result.source.config.production_deployments_enabled == false' >/dev/null; then
+              echo "::error::Native Cloudflare Pages production deployments must remain disabled; use this gated Wrangler workflow."
+              exit 1
+            fi
             if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
               echo "::error::Production ATLAS_BASE_URL must be versioned, got: $atlas_url"
               exit 1
@@ -184,10 +192,12 @@ jobs:
             echo "::warning::Cell map root/depth are not pinned for ${DEPLOY_BRANCH}; non-production health may warn."
           fi
 
-          echo "ATLAS_BASE_URL=$atlas_url" >> "$GITHUB_ENV"
-          echo "VITE_ATLAS_BASE_URL=$vite_atlas_url" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth" >> "$GITHUB_ENV"
+          {
+            echo "ATLAS_BASE_URL=$atlas_url"
+            echo "VITE_ATLAS_BASE_URL=$vite_atlas_url"
+            echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root"
+            echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth"
+          } >> "$GITHUB_ENV"
           echo "Using ATLAS_BASE_URL=$atlas_url"
           echo "Using VITE_ATLAS_BASE_URL=$vite_atlas_url"
 
@@ -197,18 +207,31 @@ jobs:
           # staging and preview (main/*) share the non-prod deployment.
           case "${DEPLOY_BRANCH}" in
             production)
-              echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://quirky-chinchilla-352.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=production"
+                echo "PUBLIC_CONVEX_URL=https://quirky-chinchilla-352.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
             staging)
-              echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=staging"
+                echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
             *)
-              echo "VITE_ENVIRONMENT=development" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=development"
+                echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Require public-discovery producer readiness
+        if: env.DEPLOY_BRANCH == 'production'
+        env:
+          # Daily essential-cron cadence plus two hours of scheduling tolerance.
+          PUBLIC_DISCOVERY_MAX_AGE_HOURS: '26'
+        run: npm run verify:public-discovery-readiness
 
       - name: Sync Shadow Atlas vars into Wrangler config
         run: |

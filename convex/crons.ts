@@ -523,29 +523,11 @@ if (enabled("operational")) {
 }
 
 // ---------------------------------------------------------------------------
-// 27. Relatedness calibration recompute — nightly refit of the public-corpus
-//     centroid + threshold the template relatedness query normalizes against,
-//     so the measured-twin edges track the corpus as it grows rather than
-//     freezing today's common-mode. Pure Convex compute, no external cost.
-//     03:23 UTC to stagger off reputation-recompute (03:11) and the other
-//     UTC-day-boundary crons clustered near midnight.
-//     OPERATIONAL: corpus refit needs a corpus.
-// ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "relatedness-calibration-recompute",
-    { hourUTC: 3, minuteUTC: 23 },
-    internal.templates.recomputeRelatednessCalibration,
-    {},
-  );
-}
-
-// ---------------------------------------------------------------------------
 // 28. Tag-concept embedding backfill — embed any newly authored / edited tags
 //     so the tag-concept clustering (which folds synonyms and grounds the
 //     concept edges) tracks the corpus as it grows. Embeds only the tags that
 //     lack a vector, so the Gemini cost is a trivial one-time-per-tag charge.
-//     03:41 UTC to stagger off the calibration recompute and the midnight crons.
+//     03:41 UTC to stagger off the midnight crons.
 //     OPERATIONAL: embeds new tags (Gemini cost — needs authored tags).
 // ---------------------------------------------------------------------------
 if (enabled("operational")) {
@@ -576,7 +558,8 @@ if (enabled("essential")) {
 
 // ---------------------------------------------------------------------------
 // 28b. Public template relation snapshot — materialize measured-twin edges and
-//      tag-concept relations after the nightly calibration + tag-embedding jobs.
+//      tag-concept relations after the optional tag-embedding job. Calibration
+//      is computed inline from this exact bounded generation.
 //      Homepage requests read only this compact singleton and never scan the
 //      embedding-heavy template corpus. A missing snapshot is served honestly as
 //      no edges until this job (or an operator-triggered rebuild) succeeds.

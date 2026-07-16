@@ -2,7 +2,7 @@
   "version": "1.0.0",
   "name": "public-discovery-release-hypergraph",
   "scope": "One production release path for the bounded Convex public-discovery snapshots and the Cloudflare edge consumer.",
-  "invariant": "The snapshot-safe Convex producer is deployed and both snapshot families are ready before the frontend consumer is approved; rollback never restores the embedding-heavy request path.",
+  "invariant": "The snapshot-safe Convex producer is deployed and both snapshot families are ready before the frontend consumer is uploaded; rollback never restores the embedding-heavy request path.",
   "node_types": [
     {
       "id": "gate",

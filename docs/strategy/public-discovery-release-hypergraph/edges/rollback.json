@@ -1,7 +1,7 @@
 {
   "type": "rollback",
   "edges": [
-    {"source": "PD-30", "target": "RB-20", "trigger": "Rebuild fails or readiness remains false; retain the last good singleton and repair before frontend approval."},
+    {"source": "PD-30", "target": "RB-20", "trigger": "Rebuild fails or readiness remains false; retain the last good singleton and repair before frontend upload."},
     {"source": "PD-40", "target": "RB-30", "trigger": "Direct smoke observes an unbounded backend read path."},
     {"source": "PD-50", "target": "RB-10", "trigger": "Immutable Pages health fails or the consumer is incompatible."},
     {"source": "PD-60", "target": "RB-10", "trigger": "Custom-origin warm exposes a frontend regression."},

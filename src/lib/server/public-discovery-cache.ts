@@ -12,7 +12,7 @@
  * revision remains available with a retry backoff.
  */
 
-const CACHE_SCHEMA_VERSION = 'v2';
+const CACHE_SCHEMA_VERSION = 'v3';
 
 /** Safety revalidation for callers that do not provide a materialization revision. */
 export const PUBLIC_DISCOVERY_FRESH_MS = 6 * 60 * 60 * 1000;
@@ -20,11 +20,14 @@ export const PUBLIC_DISCOVERY_FRESH_MS = 6 * 60 * 60 * 1000;
 /** Revision manifests are tiny and bound landing-page propagation delay. */
 export const PUBLIC_DISCOVERY_MANIFEST_FRESH_MS = 60 * 1000;
 
-/** A revisioned payload is immutable until its manifest revision changes. */
-export const PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS = 7 * 24 * 60 * 60 * 1000;
+/** Revalidate immutable payloads daily so their global LKG lease keeps rolling. */
+export const PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS = 24 * 60 * 60 * 1000;
 
 /** Keep a last-known-good value through a multi-day Convex outage. */
 const PUBLIC_DISCOVERY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Retain KV data slightly beyond the application-level LKG window. */
+export const PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS = 8 * 24 * 60 * 60;
 
 /** Renew an unchanged global last-known-good envelope at most once per day. */
 const PUBLIC_DISCOVERY_KV_REVALIDATE_MS = 24 * 60 * 60 * 1000;
@@ -36,6 +39,7 @@ type CacheEnvelope<T> = {
 	cachedAt: number;
 	globalCachedAt?: number;
 	retryAfter?: number;
+	retryRevision?: string;
 	revision?: string;
 	value: T;
 };
@@ -52,19 +56,47 @@ type CloudflareCacheStorage = CacheStorage & { default?: Cache };
 
 const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 const inFlight = new Map<string, Promise<unknown>>();
+const latestRequestedRevision = new Map<string, string>();
 
-function storageIdentity(logicalKey: string, url: URL): string {
-	return `${url.origin}|${logicalKey}`;
+function configuredBackend(platform?: App.Platform): string | undefined {
+	const configured = platform?.env?.PUBLIC_CONVEX_URL;
+	if (typeof configured !== 'string' || configured.length === 0) return undefined;
+	try {
+		return new URL(configured).origin.toLowerCase();
+	} catch {
+		return undefined;
+	}
 }
 
-function edgeCacheKey(logicalKey: string, url: URL): Request {
+function cacheScope(url: URL, platform?: App.Platform): string {
+	const backend = configuredBackend(platform);
+	return backend ? `backend=${backend}` : `origin=${url.origin.toLowerCase()}`;
+}
+
+function storageIdentity(logicalKey: string, url: URL, platform?: App.Platform): string {
+	return `${url.origin}|${cacheScope(url, platform)}|${logicalKey}`;
+}
+
+function edgeCacheKey(
+	logicalKey: string,
+	url: URL,
+	platform?: App.Platform,
+	revision?: string
+): Request {
 	const keyUrl = new URL(url.origin);
-	keyUrl.pathname = `/.internal-cache/public-discovery/${CACHE_SCHEMA_VERSION}/${encodeURIComponent(logicalKey)}`;
+	const revisionPath = revision === undefined ? '' : `/revision=${encodeURIComponent(revision)}`;
+	keyUrl.pathname = `/.internal-cache/public-discovery/${CACHE_SCHEMA_VERSION}/${encodeURIComponent(cacheScope(url, platform))}/${encodeURIComponent(logicalKey)}${revisionPath}`;
 	return new Request(keyUrl, { method: 'GET' });
 }
 
-function kvCacheKey(logicalKey: string, url: URL): string {
-	return `public-discovery:${CACHE_SCHEMA_VERSION}:${url.hostname}:${encodeURIComponent(logicalKey)}`;
+function edgeLkgPointerKey(logicalKey: string, url: URL, platform?: App.Platform): Request {
+	const keyUrl = new URL(url.origin);
+	keyUrl.pathname = `/.internal-cache/public-discovery/${CACHE_SCHEMA_VERSION}/${encodeURIComponent(cacheScope(url, platform))}/${encodeURIComponent(logicalKey)}/lkg-pointer`;
+	return new Request(keyUrl, { method: 'GET' });
+}
+
+function kvCacheKey(logicalKey: string, url: URL, platform?: App.Platform): string {
+	return `public-discovery:${CACHE_SCHEMA_VERSION}:${encodeURIComponent(cacheScope(url, platform))}:${encodeURIComponent(logicalKey)}`;
 }
 
 function defaultCloudflareCache(): Cache | undefined {
@@ -81,6 +113,10 @@ function parseEnvelope<T>(raw: unknown): CacheEnvelope<T> | null {
 	const candidate = raw as Partial<CacheEnvelope<T>>;
 	if (typeof candidate.cachedAt !== 'number' || !('value' in candidate)) return null;
 	if (candidate.globalCachedAt !== undefined && typeof candidate.globalCachedAt !== 'number') {
+		return null;
+	}
+	if (candidate.retryAfter !== undefined && typeof candidate.retryAfter !== 'number') return null;
+	if (candidate.retryRevision !== undefined && typeof candidate.retryRevision !== 'string') {
 		return null;
 	}
 	if (candidate.revision !== undefined && typeof candidate.revision !== 'string') return null;
@@ -145,16 +181,22 @@ function persistKv<T>(
 	key: string,
 	envelope: CacheEnvelope<T>,
 	platform?: App.Platform
-): Promise<void> {
+): Promise<boolean> {
 	const kv = publicDiscoveryKv(platform);
-	if (!kv) return Promise.resolve();
+	if (!kv) return Promise.resolve(false);
 
-	return kv.put(key, JSON.stringify(envelope)).catch((error) => {
-		console.warn(
-			'[public-discovery-cache] KV write failed:',
-			error instanceof Error ? error.message : String(error)
-		);
-	});
+	return kv
+		.put(key, JSON.stringify(envelope), {
+			expirationTtl: PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS
+		})
+		.then(() => true)
+		.catch((error) => {
+			console.warn(
+				'[public-discovery-cache] KV write failed:',
+				error instanceof Error ? error.message : String(error)
+			);
+			return false;
+		});
 }
 
 function persistEnvelope<T>(
@@ -181,42 +223,146 @@ function persistEnvelope<T>(
 	return write;
 }
 
-function newestEnvelope<T>(
+function preferredEnvelope<T>(
+	revision: string | undefined,
 	...candidates: Array<CacheEnvelope<T> | null | undefined>
 ): CacheEnvelope<T> | undefined {
-	return candidates
-		.filter(
-			(candidate): candidate is CacheEnvelope<T> => candidate !== null && candidate !== undefined
-		)
-		.sort((a, b) => b.cachedAt - a.cachedAt)[0];
+	const available = candidates.filter(
+		(candidate): candidate is CacheEnvelope<T> => candidate !== null && candidate !== undefined
+	);
+	const matching = available.filter((candidate) => candidate.revision === revision);
+	return (matching.length > 0 ? matching : available).sort((a, b) => b.cachedAt - a.cachedAt)[0];
 }
 
 async function readCachedEnvelope<T>(
 	identity: string,
 	edgeKey: Request,
+	edgePointerKey: Request | undefined,
+	edgeKeyForRevision: ((revision: string) => Request) | undefined,
 	kvKey: string,
 	platform: App.Platform | undefined,
-	refreshSharedLayers: boolean
+	refreshSharedLayers: boolean,
+	revision: string | undefined,
+	now: number,
+	freshForMs: number
 ): Promise<CacheEnvelope<T> | undefined> {
 	const inMemory = memoryCache.get(identity) as CacheEnvelope<T> | undefined;
 	if (inMemory && !refreshSharedLayers) return inMemory;
 
-	const [edge, global] = await Promise.all([readEdge<T>(edgeKey), readKv<T>(kvKey, platform)]);
-	const envelope = newestEnvelope(inMemory, edge, global);
+	const edge = await readEdge<T>(edgeKey);
+	const local = preferredEnvelope(revision, inMemory, edge);
+	if (local && local.revision === revision && now - local.cachedAt <= freshForMs) {
+		memoryCache.set(identity, local);
+		return local;
+	}
+
+	const priorEdgePromise =
+		edgePointerKey && edgeKeyForRevision && (!edge || edge.revision !== revision)
+			? readEdge<null>(edgePointerKey).then((pointer) =>
+					pointer?.revision && pointer.revision !== revision
+						? readEdge<T>(edgeKeyForRevision(pointer.revision))
+						: null
+				)
+			: Promise.resolve(null);
+	const [global, priorEdge] = await Promise.all([readKv<T>(kvKey, platform), priorEdgePromise]);
+	const envelope = preferredEnvelope(revision, inMemory, edge, priorEdge, global);
 	if (!envelope) return undefined;
 
 	memoryCache.set(identity, envelope);
 	// A KV hit in a cold location should warm its local free hot layer.
-	if (global && envelope === global && (!edge || edge.cachedAt < global.cachedAt)) {
-		const warm = persistEdge(edgeKey, global);
+	if (
+		global &&
+		envelope === global &&
+		global.revision === revision &&
+		(!edge || edge.cachedAt < global.cachedAt)
+	) {
+		const warm = Promise.all([
+			persistEdge(edgeKey, global),
+			edgePointerKey
+				? persistEdge(edgePointerKey, {
+						cachedAt: global.cachedAt,
+						revision: global.revision,
+						value: null
+					})
+				: Promise.resolve()
+		]);
 		if (platform?.context?.waitUntil) platform.context.waitUntil(warm);
 	}
 	return envelope;
 }
 
+function observeRequestedRevision(kvKey: string, revision: string | undefined): void {
+	if (revision === undefined) return;
+	const existing = latestRequestedRevision.get(kvKey);
+	if (existing === undefined) {
+		latestRequestedRevision.set(kvKey, revision);
+		return;
+	}
+
+	const existingGeneration = /^(\d+):(\d+)$/.exec(existing);
+	const candidateGeneration = /^(\d+):(\d+)$/.exec(revision);
+	if (existingGeneration && candidateGeneration) {
+		const existingOrder = [BigInt(existingGeneration[2]), BigInt(existingGeneration[1])] as const;
+		const candidateOrder = [
+			BigInt(candidateGeneration[2]),
+			BigInt(candidateGeneration[1])
+		] as const;
+		if (
+			candidateOrder[0] > existingOrder[0] ||
+			(candidateOrder[0] === existingOrder[0] && candidateOrder[1] >= existingOrder[1])
+		) {
+			latestRequestedRevision.set(kvKey, revision);
+		}
+		return;
+	}
+
+	if (/^\d+$/.test(existing) && /^\d+$/.test(revision)) {
+		if (BigInt(revision) >= BigInt(existing)) latestRequestedRevision.set(kvKey, revision);
+		return;
+	}
+	latestRequestedRevision.set(kvKey, revision);
+}
+
+function mayWriteRequestedRevision(kvKey: string, revision: string | undefined): boolean {
+	return revision === undefined || latestRequestedRevision.get(kvKey) === revision;
+}
+
+async function persistLoadedEnvelope<T>(
+	identity: string,
+	edgeKey: Request,
+	edgePointerKey: Request | undefined,
+	kvKey: string,
+	envelope: CacheEnvelope<T>,
+	platform: App.Platform | undefined,
+	writeKv: boolean
+): Promise<void> {
+	const globallyRenewed = writeKv
+		? ({ ...envelope, globalCachedAt: envelope.cachedAt } satisfies CacheEnvelope<T>)
+		: envelope;
+	const [_, kvWritten] = await Promise.all([
+		persistEdge(edgeKey, envelope),
+		writeKv ? persistKv(kvKey, globallyRenewed, platform) : Promise.resolve(false)
+	]);
+
+	if (kvWritten) {
+		if (memoryCache.get(identity) === envelope) memoryCache.set(identity, globallyRenewed);
+		// The first edge write makes the value available without waiting on KV. Once
+		// KV succeeds, replace it with the envelope that records that confirmed lease.
+		await persistEdge(edgeKey, globallyRenewed);
+	}
+	if (edgePointerKey && mayWriteRequestedRevision(kvKey, envelope.revision)) {
+		await persistEdge(edgePointerKey, {
+			cachedAt: envelope.cachedAt,
+			revision: envelope.revision,
+			value: null
+		});
+	}
+}
+
 function loadAndCache<T>(
 	identity: string,
 	edgeKey: Request,
+	edgePointerKey: Request | undefined,
 	kvKey: string,
 	platform: App.Platform | undefined,
 	revision: string | undefined,
@@ -234,24 +380,35 @@ function loadAndCache<T>(
 				previousEnvelope !== undefined &&
 				previousEnvelope.revision === revision &&
 				JSON.stringify(previousEnvelope.value) === JSON.stringify(value);
-			// Older v2 envelopes predate `globalCachedAt`; their `cachedAt` is the
-			// best conservative approximation of the last successful KV write.
-			const lastGlobalWrite = previousEnvelope?.globalCachedAt ?? previousEnvelope?.cachedAt ?? 0;
+			const lastGlobalWrite = previousEnvelope?.globalCachedAt ?? 0;
 			const writeKv =
 				publicDiscoveryKv(platform) !== undefined &&
+				mayWriteRequestedRevision(kvKey, revision) &&
 				(!valueUnchanged || now - lastGlobalWrite >= PUBLIC_DISCOVERY_KV_REVALIDATE_MS);
 			const envelope: CacheEnvelope<T> = {
 				cachedAt: now,
-				...(writeKv
-					? { globalCachedAt: now }
-					: previousEnvelope?.globalCachedAt !== undefined
-						? { globalCachedAt: previousEnvelope.globalCachedAt }
+				...(previousEnvelope?.globalCachedAt !== undefined
+					? { globalCachedAt: previousEnvelope.globalCachedAt }
+					: publicDiscoveryKv(platform)
+						? { globalCachedAt: 0 }
 						: {}),
 				revision,
 				value
 			};
 			memoryCache.set(identity, envelope);
-			await persistEnvelope(edgeKey, kvKey, envelope, platform, writeKv);
+			if (defaultCloudflareCache() || writeKv) {
+				const persistence = persistLoadedEnvelope(
+					identity,
+					edgeKey,
+					edgePointerKey,
+					kvKey,
+					envelope,
+					platform,
+					writeKv
+				);
+				if (platform?.context?.waitUntil) platform.context.waitUntil(persistence);
+				else await persistence;
+			}
 			return value;
 		})
 		.finally(() => {
@@ -269,16 +426,22 @@ async function backOffEnvelope<T>(
 	platform: App.Platform | undefined,
 	envelope: CacheEnvelope<T>,
 	error: unknown,
-	reason: 'background refresh' | 'revision refresh' | 'stale refresh'
+	reason: 'background refresh' | 'revision refresh' | 'stale refresh',
+	requestedRevision: string | undefined
 ): Promise<void> {
 	const backedOff = {
 		...envelope,
-		retryAfter: Date.now() + PUBLIC_DISCOVERY_RETRY_MS
+		retryAfter: Date.now() + PUBLIC_DISCOVERY_RETRY_MS,
+		retryRevision: requestedRevision ?? 'unversioned'
 	};
 	memoryCache.set(identity, backedOff);
 	// A local retry backoff must not overwrite the global last-known-good value
 	// or consume one KV write per Cloudflare location during an origin outage.
-	await persistEnvelope(edgeKey, kvKey, backedOff, platform, false);
+	// A prior-revision payload must also never be written beneath the new
+	// revision's physical edge key.
+	if (reason !== 'revision refresh') {
+		await persistEnvelope(edgeKey, kvKey, backedOff, platform, false);
+	}
 	console.warn(
 		`[public-discovery-cache] ${reason} failed:`,
 		error instanceof Error ? error.message : String(error)
@@ -288,6 +451,7 @@ async function backOffEnvelope<T>(
 function refreshInBackground<T>(
 	identity: string,
 	edgeKey: Request,
+	edgePointerKey: Request | undefined,
 	kvKey: string,
 	platform: App.Platform | undefined,
 	revision: string | undefined,
@@ -297,13 +461,23 @@ function refreshInBackground<T>(
 	const refresh = loadAndCache(
 		identity,
 		edgeKey,
+		edgePointerKey,
 		kvKey,
 		platform,
 		revision,
 		loader,
 		staleEnvelope
 	).catch((error) =>
-		backOffEnvelope(identity, edgeKey, kvKey, platform, staleEnvelope, error, 'background refresh')
+		backOffEnvelope(
+			identity,
+			edgeKey,
+			kvKey,
+			platform,
+			staleEnvelope,
+			error,
+			'background refresh',
+			revision
+		)
 	);
 	platform?.context?.waitUntil(refresh);
 }
@@ -323,20 +497,41 @@ export async function getCachedPublicData<T>(
 	const freshForMs = context.freshForMs ?? PUBLIC_DISCOVERY_FRESH_MS;
 	const now = Date.now();
 	const revision = context.revision === undefined ? undefined : String(context.revision);
-	const identity = storageIdentity(logicalKey, context.url);
-	const edgeKey = edgeCacheKey(logicalKey, context.url);
-	const kvKey = kvCacheKey(logicalKey, context.url);
+	const identity = storageIdentity(logicalKey, context.url, context.platform);
+	const edgeKey = edgeCacheKey(logicalKey, context.url, context.platform, revision);
+	const edgePointerKey =
+		revision === undefined
+			? undefined
+			: edgeLkgPointerKey(logicalKey, context.url, context.platform);
+	const kvKey = kvCacheKey(logicalKey, context.url, context.platform);
+	observeRequestedRevision(kvKey, revision);
 
 	const inMemory = memoryCache.get(identity) as CacheEnvelope<T> | undefined;
 	const inMemoryAge = inMemory ? now - inMemory.cachedAt : Number.POSITIVE_INFINITY;
 	const inMemoryRevisionMatches = inMemory?.revision === revision;
+	if (
+		inMemory &&
+		inMemoryAge <= PUBLIC_DISCOVERY_STALE_MS &&
+		(inMemory.retryAfter ?? 0) > now &&
+		inMemory.retryRevision === (revision ?? 'unversioned')
+	) {
+		return inMemory.value;
+	}
 	const refreshSharedLayers = !inMemory || inMemoryAge > freshForMs || !inMemoryRevisionMatches;
 	const envelope = await readCachedEnvelope<T>(
 		identity,
 		edgeKey,
+		edgePointerKey,
+		revision === undefined
+			? undefined
+			: (candidateRevision) =>
+					edgeCacheKey(logicalKey, context.url, context.platform, candidateRevision),
 		kvKey,
 		context.platform,
-		refreshSharedLayers
+		refreshSharedLayers,
+		revision,
+		now,
+		freshForMs
 	);
 
 	if (envelope) {
@@ -346,13 +541,19 @@ export async function getCachedPublicData<T>(
 		if (revisionMatches && age <= freshForMs) return envelope.value;
 
 		if (age <= PUBLIC_DISCOVERY_STALE_MS) {
-			if ((envelope.retryAfter ?? 0) > now) return envelope.value;
+			if (
+				(envelope.retryAfter ?? 0) > now &&
+				envelope.retryRevision === (revision ?? 'unversioned')
+			) {
+				return envelope.value;
+			}
 
 			if (!revisionMatches) {
 				try {
 					return await loadAndCache(
 						identity,
 						edgeKey,
+						edgePointerKey,
 						kvKey,
 						context.platform,
 						revision,
@@ -367,7 +568,8 @@ export async function getCachedPublicData<T>(
 						context.platform,
 						envelope,
 						error,
-						'revision refresh'
+						'revision refresh',
+						revision
 					);
 					return envelope.value;
 				}
@@ -378,6 +580,7 @@ export async function getCachedPublicData<T>(
 					return await loadAndCache(
 						identity,
 						edgeKey,
+						edgePointerKey,
 						kvKey,
 						context.platform,
 						revision,
@@ -392,24 +595,35 @@ export async function getCachedPublicData<T>(
 						context.platform,
 						envelope,
 						error,
-						'stale refresh'
+						'stale refresh',
+						revision
 					);
 					return envelope.value;
 				}
 			}
 
-			refreshInBackground(identity, edgeKey, kvKey, context.platform, revision, envelope, loader);
+			refreshInBackground(
+				identity,
+				edgeKey,
+				edgePointerKey,
+				kvKey,
+				context.platform,
+				revision,
+				envelope,
+				loader
+			);
 			return envelope.value;
 		}
 
 		memoryCache.delete(identity);
 	}
 
-	return loadAndCache(identity, edgeKey, kvKey, context.platform, revision, loader);
+	return loadAndCache(identity, edgeKey, edgePointerKey, kvKey, context.platform, revision, loader);
 }
 
 /** Test-only reset for module-local state. */
 export function clearPublicDiscoveryCache(): void {
 	memoryCache.clear();
 	inFlight.clear();
+	latestRequestedRevision.clear();
 }

@@ -5,6 +5,7 @@ import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { env } from '$env/dynamic/private';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /** In-memory guard to prevent concurrent backfill runs */
 let backfillRunning = false;
@@ -15,8 +16,9 @@ const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Bool
 /**
  * POST /api/admin/backfill-embeddings
  *
- * Finds all templates where topicEmbedding is missing and regenerates
- * embeddings via Gemini batch API. Processes in batches of 20.
+ * Repairs at most 100 public templates that have never completed an embedding
+ * write, using the exact bounded Convex index. Processes in Gemini batches of
+ * 20; repeat the operation to drain a larger legacy backlog.
  *
  * Requires authentication + admin role.
  */
@@ -40,7 +42,11 @@ export const POST: RequestHandler = async ({ locals }) => {
 
 	try {
 		// Find templates missing embeddings via Convex
-		const missing = await serverQuery(api.templates.listMissingEmbeddings, {});
+		const internalSecret = getInternalSecret();
+		const missing = await serverQuery(api.templates.listMissingEmbeddings, {
+			_secret: internalSecret,
+			limit: 100
+		});
 
 		if (missing.length === 0) {
 			return json({ processed: 0, message: 'All templates have embeddings' });
@@ -74,7 +80,9 @@ export const POST: RequestHandler = async ({ locals }) => {
 						await serverMutation(api.templates.updateEmbeddings, {
 							templateId,
 							locationEmbedding: embeddings[j * 2],
-							topicEmbedding: embeddings[j * 2 + 1]
+							topicEmbedding: embeddings[j * 2 + 1],
+							_secret: internalSecret,
+							deferHomepageRebuild: true
 						});
 						totalProcessed++;
 					} catch (writeErr) {
@@ -95,11 +103,19 @@ export const POST: RequestHandler = async ({ locals }) => {
 			}
 		}
 
+		if (totalProcessed > 0) {
+			await serverMutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
+				_secret: internalSecret
+			});
+		}
+
 		console.log(`[backfill] Processed ${totalProcessed}/${missing.length} templates, ${errors.length} errors`);
 
 		return json({
 			processed: totalProcessed,
 			total_missing: missing.length,
+			batch_cap: 100,
+			may_have_more: missing.length === 100,
 			errors: errors.length > 0 ? errors : undefined
 		});
 	} finally {
