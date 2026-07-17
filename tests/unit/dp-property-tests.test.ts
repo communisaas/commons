@@ -7,11 +7,12 @@
  * empirical distributions match theoretical predictions.
  *
  * STATISTICAL TESTING APPROACH:
- * - Large sample sizes (N=10000+) for distribution tests
+ * - Large, reproducible seeded samples (N=10000+) for transform tests
  * - Generous tolerance (3-4 standard deviations) to avoid flaky tests
  * - Manual chi-squared and KS-style checks (no extra dependencies)
  * - Tests are designed to fail only on genuine implementation bugs,
  *   not on statistical noise (p < 1e-6 failure thresholds)
+ * - A separate robustness test exercises cryptoRandom against real WebCrypto
  *
  * WHAT IS TESTED:
  * 1. Laplace distribution verification (mean, variance, symmetry, continuity)
@@ -21,7 +22,7 @@
  * 5. Core DP guarantee: neighboring dataset indistinguishability
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
 	applyLaplace,
 	applyKaryRR,
@@ -87,6 +88,46 @@ function skewness(arr: number[]): number {
 	return s3 / sigma ** 3;
 }
 
+/** Deterministic Uint32 stream for reproducible statistical transform tests. */
+function makeSeededGetRandomValues(seed: number): Crypto['getRandomValues'] {
+	let state = seed >>> 0;
+
+	function nextWord(): number {
+		state ^= state << 13;
+		state ^= state >>> 17;
+		state ^= state << 5;
+		return state >>> 0;
+	}
+
+	return ((array: ArrayBufferView | null) => {
+		if (!array) return array;
+
+		const bytes = new Uint8Array(array.buffer, array.byteOffset, array.byteLength);
+		let word = 0;
+		let remaining = 0;
+
+		for (let i = 0; i < bytes.length; i++) {
+			if (remaining === 0) {
+				word = nextWord();
+				remaining = 4;
+			}
+			bytes[i] = word & 0xff;
+			word >>>= 8;
+			remaining--;
+		}
+
+		return array;
+	}) as Crypto['getRandomValues'];
+}
+
+function useSeededCrypto(seed: number): void {
+	vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation(makeSeededGetRandomValues(seed));
+}
+
+afterEach(() => {
+	vi.restoreAllMocks();
+});
+
 /**
  * Compute an empirical CDF value: P(X <= x)
  */
@@ -116,10 +157,7 @@ function laplaceCDF(x: number, mu: number, b: number): number {
  * For N=10000, the critical value at alpha=0.001 is approximately
  * 1.95 / sqrt(N) = 0.0195. We use a generous threshold.
  */
-function ksStatistic(
-	samples: number[],
-	theoreticalCDF: (x: number) => number
-): number {
+function ksStatistic(samples: number[], theoreticalCDF: (x: number) => number): number {
 	const sorted = [...samples].sort((a, b) => a - b);
 	const n = sorted.length;
 	let maxD = 0;
@@ -160,8 +198,9 @@ describe('Laplace Distribution Verification', () => {
 	let noise: number[];
 
 	beforeEach(() => {
-		// Generate samples once per describe block via beforeEach
-		// (vitest runs beforeEach before every it())
+		// Pin only this transform-verification block. The robustness suite below
+		// restores and exercises the production WebCrypto source directly.
+		useSeededCrypto(0xc0ffee);
 		samples = [];
 		noise = [];
 		for (let i = 0; i < N; i++) {
@@ -179,8 +218,8 @@ describe('Laplace Distribution Verification', () => {
 		// Standard error of mean = sigma / sqrt(N)
 		// Laplace variance = 2 * b^2 = 2 * 1.0 = 2.0
 		// sigma = sqrt(2) ~= 1.414
-		// SE = 1.414 / sqrt(10000) = 0.01414
-		// 4 SE ~= 0.057
+		// SE = 1.414 / sqrt(20000) = 0.01000
+		// 4 SE ~= 0.040
 		const se = Math.sqrt(2 * SCALE ** 2) / Math.sqrt(N);
 		const tolerance = 4 * se;
 
@@ -276,8 +315,7 @@ describe('Laplace Distribution Verification', () => {
 
 		// Test noise values from -10 to +10 (covers >99.99% of mass for b=1)
 		for (let k = -10; k <= 10; k++) {
-			const pK =
-				laplaceCDF(k + 0.5, 0, SCALE) - laplaceCDF(k - 0.5, 0, SCALE);
+			const pK = laplaceCDF(k + 0.5, 0, SCALE) - laplaceCDF(k - 0.5, 0, SCALE);
 			const expected = N * pK;
 
 			// Only include bins with expected count >= 5 (chi-squared validity)
@@ -307,7 +345,7 @@ describe('Laplace Distribution Verification', () => {
 		// Use the discretized tail probability
 		const expectedFraction = Math.exp(-(tailThreshold + 0.5) / SCALE);
 
-		const se = Math.sqrt(expectedFraction * (1 - expectedFraction) / N);
+		const se = Math.sqrt((expectedFraction * (1 - expectedFraction)) / N);
 		expect(Math.abs(tailCount / N - expectedFraction)).toBeLessThan(4 * se);
 	});
 });
@@ -328,6 +366,7 @@ describe('k-ary Randomized Response Properties', () => {
 	let outputs: (Metric | null)[];
 
 	beforeEach(() => {
+		useSeededCrypto(0x4b415259);
 		outputs = [];
 		for (let i = 0; i < N; i++) {
 			outputs.push(applyKaryRR(TRUE_METRIC, EPS));
@@ -339,7 +378,7 @@ describe('k-ary Randomized Response Properties', () => {
 		const observedP = trueCount / N;
 
 		// Standard error of proportion: sqrt(p(1-p)/N)
-		const se = Math.sqrt(P_TRUE * (1 - P_TRUE) / N);
+		const se = Math.sqrt((P_TRUE * (1 - P_TRUE)) / N);
 
 		expect(Math.abs(observedP - P_TRUE)).toBeLessThan(4 * se);
 	});
@@ -358,7 +397,7 @@ describe('k-ary Randomized Response Properties', () => {
 
 		// Check each non-true metric
 		const otherMetrics = METRIC_VALUES.filter((m) => m !== TRUE_METRIC);
-		const se = Math.sqrt(P_OTHER * (1 - P_OTHER) / N);
+		const se = Math.sqrt((P_OTHER * (1 - P_OTHER)) / N);
 
 		for (const m of otherMetrics) {
 			const observedP = (counts.get(m) ?? 0) / N;
@@ -468,7 +507,7 @@ describe('k-ary Randomized Response Properties', () => {
 				if (applyKaryRR(trueMetric, EPS) === trueMetric) trueCount++;
 			}
 			const observedP = trueCount / localN;
-			const se = Math.sqrt(P_TRUE * (1 - P_TRUE) / localN);
+			const se = Math.sqrt((P_TRUE * (1 - P_TRUE)) / localN);
 
 			expect(Math.abs(observedP - P_TRUE)).toBeLessThan(4 * se);
 		}
@@ -484,6 +523,10 @@ describe('LDP Correction Accuracy', () => {
 	const EXP_EPS = Math.exp(EPS);
 	const P_TRUE = EXP_EPS / (EXP_EPS + K - 1);
 	const P_OTHER = 1 / (EXP_EPS + K - 1);
+
+	beforeEach(() => {
+		useSeededCrypto(0x4c445000);
+	});
 
 	it('should produce corrected counts closer to true counts than observed counts (on average)', () => {
 		const TRUE_COUNT = 500;
@@ -715,6 +758,10 @@ describe('Composition Theorem', () => {
 // =============================================================================
 
 describe('Privacy Guarantee: Neighboring Dataset Indistinguishability', () => {
+	beforeEach(() => {
+		useSeededCrypto(0x44504700);
+	});
+
 	it('should produce statistically close output distributions for Laplace mechanism on neighboring datasets', () => {
 		// Core DP property test:
 		// For neighboring datasets D and D' (differing by 1 record):

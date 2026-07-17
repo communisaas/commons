@@ -77,12 +77,11 @@ export const POST: RequestHandler = async ({ locals }) => {
 					const templateId = batch[j]._id;
 
 					try {
-						await serverMutation(api.templates.updateEmbeddings, {
+						await serverMutation(api.templates.updateMissingEmbeddingsForBackfill, {
 							templateId,
 							locationEmbedding: embeddings[j * 2],
 							topicEmbedding: embeddings[j * 2 + 1],
-							_secret: internalSecret,
-							deferHomepageRebuild: true
+							_secret: internalSecret
 						});
 						totalProcessed++;
 					} catch (writeErr) {
@@ -109,7 +108,9 @@ export const POST: RequestHandler = async ({ locals }) => {
 			});
 		}
 
-		console.log(`[backfill] Processed ${totalProcessed}/${missing.length} templates, ${errors.length} errors`);
+		console.log(
+			`[backfill] Processed ${totalProcessed}/${missing.length} templates, ${errors.length} errors`
+		);
 
 		return json({
 			processed: totalProcessed,

@@ -13,6 +13,9 @@ const { mockServerQuery, api } = vi.hoisted(() => ({
 
 vi.mock('convex-sveltekit', () => ({ serverQuery: mockServerQuery }));
 vi.mock('$lib/convex', () => ({ api }));
+vi.mock('$lib/config/features', () => ({
+	FEATURES: { CONGRESSIONAL: false }
+}));
 
 import { load } from '../../../src/routes/+page.server';
 import { clearPublicDiscoveryCache } from '$lib/server/public-discovery-cache';
@@ -24,44 +27,46 @@ function loadEvent(href: string) {
 	} as never;
 }
 
+function readyQueryResult(ref: string) {
+	if (ref === api.templates.publicDiscoveryManifest) {
+		return {
+			list: { ready: true, revision: 4, updatedAt: 1_800_000_000_000 },
+			relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_000 }
+		};
+	}
+	if (ref === api.templates.publicDiscoveryList) {
+		return {
+			revision: 4,
+			updatedAt: 1_800_000_000_000,
+			templates: [{ id: 'template_1' }]
+		};
+	}
+	if (ref === api.templates.publicDiscoveryRelations) {
+		return {
+			revision: 9,
+			updatedAt: 1_800_000_000_000,
+			twinEdges: [{ a: 'template_1', b: 'template_2', score: 0.9, kind: 'twin' }],
+			conceptRelations: {
+				edges: [
+					{
+						a: 'template_1',
+						b: 'template_2',
+						concept: 'libraries',
+						kind: 'concept'
+					}
+				],
+				conceptMap: { 'library card': 'libraries' }
+			}
+		};
+	}
+	throw new Error(`Unexpected query: ${ref}`);
+}
+
 describe('home page load', () => {
 	beforeEach(() => {
 		clearPublicDiscoveryCache();
 		mockServerQuery.mockReset();
-		mockServerQuery.mockImplementation(async (ref: string) => {
-			if (ref === api.templates.publicDiscoveryManifest) {
-				return {
-					list: { ready: true, revision: 4, updatedAt: 1_800_000_000_000 },
-					relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_000 }
-				};
-			}
-			if (ref === api.templates.publicDiscoveryList) {
-				return {
-					revision: 4,
-					updatedAt: 1_800_000_000_000,
-					templates: [{ id: 'template_1' }]
-				};
-			}
-			if (ref === api.templates.publicDiscoveryRelations) {
-				return {
-					revision: 9,
-					updatedAt: 1_800_000_000_000,
-					twinEdges: [{ a: 'template_1', b: 'template_2', score: 0.9, kind: 'twin' }],
-					conceptRelations: {
-						edges: [
-							{
-								a: 'template_1',
-								b: 'template_2',
-								concept: 'libraries',
-								kind: 'concept'
-							}
-						],
-						conceptMap: { 'library card': 'libraries' }
-					}
-				};
-			}
-			throw new Error(`Unexpected query: ${ref}`);
-		});
+		mockServerQuery.mockImplementation(async (ref: string) => readyQueryResult(ref));
 	});
 
 	it.each(['/', '/?view=list', '/?view=spectrum'])(
@@ -70,14 +75,10 @@ describe('home page load', () => {
 			const result = (await load(loadEvent(href))) as Awaited<ReturnType<typeof load>>;
 
 			expect(mockServerQuery).toHaveBeenCalledTimes(2);
-				expect(mockServerQuery).toHaveBeenCalledWith(
-					api.templates.publicDiscoveryManifest,
-					{}
-				);
-			expect(mockServerQuery).toHaveBeenCalledWith(
-				api.templates.publicDiscoveryList,
-				expect.any(Object)
-			);
+			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryList, {
+				excludeCwc: true
+			});
 			expect(result).toMatchObject({
 				templates: [{ id: 'template_1' }],
 				relationEdges: [],
@@ -104,7 +105,48 @@ describe('home page load', () => {
 		});
 	});
 
-	it('keeps independent empty fallbacks when graph queries fail', async () => {
+	it('preserves graph relations when only the list snapshot read fails', async () => {
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryList) {
+				throw new Error('List snapshot unavailable');
+			}
+			return readyQueryResult(ref);
+		});
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
+
+		expect(result).toMatchObject({
+			templates: [],
+			relationEdges: [{ kind: 'twin', score: 0.9 }],
+			conceptRelations: {
+				edges: [{ kind: 'concept', concept: 'libraries' }],
+				conceptMap: { 'library card': 'libraries' }
+			}
+		});
+		expect(consoleError).toHaveBeenCalledTimes(1);
+	});
+
+	it('preserves templates when only the relation snapshot read fails', async () => {
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryRelations) {
+				throw new Error('Relation snapshot unavailable');
+			}
+			return readyQueryResult(ref);
+		});
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
+
+		expect(result).toEqual({
+			templates: [{ id: 'template_1' }],
+			relationEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+		expect(consoleError).toHaveBeenCalledTimes(1);
+	});
+
+	it('returns both empty fallbacks when the shared manifest read fails', async () => {
 		mockServerQuery.mockRejectedValue(new Error('Convex unavailable'));
 		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -167,7 +209,9 @@ describe('home page load', () => {
 		await expect(load(loadEvent('/'))).resolves.toMatchObject({
 			templates: [{ id: 'after-reseed' }]
 		});
-		expect(mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryList)).toHaveLength(2);
+		expect(
+			mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryList)
+		).toHaveLength(2);
 	});
 
 	it('rejects a same-revision snapshot from a newer epoch than the cached manifest', async () => {

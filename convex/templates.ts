@@ -16,13 +16,17 @@ import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
 import { clusterTagConcepts, conceptEdges, tagConceptMap } from "./lib/tag_concepts";
 import {
   PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+  PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
   commitPublicDiscoveryListPublication,
   commitPublicDiscoveryRelationsPublication,
   getPublicDiscoveryManifestRow,
+  markPublicDiscoveryListAndRelationsDirty,
   markPublicDiscoveryListDirty,
+  markPublicDiscoveryRelationsDirty,
   preparePublicDiscoveryListPublication,
   preparePublicDiscoveryRelationsPublication,
   reschedulePublicDiscoveryListRefresh,
+  reschedulePublicDiscoveryRelationsRefresh,
   toPublicDiscoveryManifestPayload,
 } from "./lib/publicDiscovery";
 
@@ -982,6 +986,75 @@ export const rebuildRelationSnapshot = internalMutation({
   handler: rebuildRelationSnapshotImpl,
 });
 
+/** Internal entry point used by tests/operators and relation-affecting writers. */
+export const requestPublicTemplateRelationSnapshotRefresh = internalMutation({
+  args: {},
+  handler: async (ctx) => markPublicDiscoveryRelationsDirty(ctx),
+});
+
+/**
+ * Coalesced write-driven relation refresh.
+ *
+ * Topic and tag-embedding writes only dirty the compact control-plane row.
+ * The first write schedules this bounded rebuild; subsequent writes reuse the
+ * token, and no scheduled relation rebuild can run more than once per six-hour
+ * cost window. A successful publication clears the dirty marker. Oversize and
+ * runtime failures preserve the last-good relation row and leave it dirty.
+ */
+export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
+  args: { scheduledAt: v.number() },
+  handler: async (ctx, { scheduledAt }) => {
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!manifest || manifest.relationsRefreshScheduledAt !== scheduledAt) {
+      return { status: "superseded" as const };
+    }
+
+    if (manifest.relationsDirtyAt === undefined) {
+      await ctx.db.patch(manifest._id, { relationsRefreshScheduledAt: undefined });
+      return { status: "clean" as const };
+    }
+
+    const now = Date.now();
+    const nextAllowedAt =
+      (manifest.relationsUpdatedAt ?? 0) +
+      PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
+    if (now < nextAllowedAt) {
+      const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
+        ctx,
+        manifest,
+        now,
+        nextAllowedAt,
+      );
+      return { status: "deferred" as const, scheduledAt: nextScheduledAt };
+    }
+
+    try {
+      const rebuilt = await rebuildRelationSnapshotImpl(ctx);
+      const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
+      if (publishedManifest?.relationsRefreshScheduledAt === scheduledAt) {
+        await ctx.db.patch(publishedManifest._id, {
+          relationsRefreshScheduledAt: undefined,
+        });
+      }
+      return { status: "rebuilt" as const, rebuilt };
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) {
+        throw error;
+      }
+      const current = await getPublicDiscoveryManifestRow(ctx);
+      if (!current) throw error;
+      const retryAt = await reschedulePublicDiscoveryRelationsRefresh(
+        ctx,
+        current,
+        now,
+        now + PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
+      );
+      console.error(`[public-discovery] relation snapshot remains last-good; retry scheduled at ${retryAt}: ${error.message}`);
+      return { status: "oversize" as const, scheduledAt: retryAt };
+    }
+  },
+});
+
 /**
  * One-shot activation and post-authoring refresh for every homepage snapshot.
  * Both materializations publish in one transaction, so callers can never
@@ -1703,8 +1776,51 @@ export const topicEmbeddingMarkerMigrationStatus = internalQuery({
   },
 });
 
+type TemplateEmbeddingWrite = {
+  locationEmbedding: number[];
+  topicEmbedding: number[];
+  domainHue?: number;
+};
+
+function assertEmbeddingDimensions(args: TemplateEmbeddingWrite): void {
+  if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
+    throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
+  }
+}
+
+async function patchTemplateEmbeddingValues(
+  ctx: MutationCtx,
+  template: Doc<"templates">,
+  args: TemplateEmbeddingWrite,
+  embeddingVersion: string,
+): Promise<void> {
+  const embeddingsUpdatedAt = Date.now();
+  await ctx.db.patch(template._id, {
+    locationEmbedding: args.locationEmbedding,
+    topicEmbedding: args.topicEmbedding,
+    embeddingVersion,
+    embeddingsUpdatedAt,
+    topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
+    ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
+  });
+
+  if (template.status !== "published" || !template.isPublic) return;
+
+  // Topic vectors always affect twins. Domain hue affects the list card, but
+  // the vectors and repair markers themselves never enter the public list row.
+  const listChanged =
+    args.domainHue !== undefined && args.domainHue !== template.domainHue;
+  if (listChanged) {
+    await markPublicDiscoveryListAndRelationsDirty(ctx);
+  } else {
+    await markPublicDiscoveryRelationsDirty(ctx);
+  }
+}
+
 /**
- * Update template embeddings (for backfill).
+ * Update embeddings for one template owned by the authenticated caller.
+ * `deferHomepageRebuild` controls only publication timing; it never changes
+ * the ownership requirement.
  */
 export const updateEmbeddings = mutation({
   args: {
@@ -1717,35 +1833,18 @@ export const updateEmbeddings = mutation({
   },
   handler: async (ctx, args) => {
     requireInternalSecret(args._secret);
-    if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
-      throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
-    }
+    assertEmbeddingDimensions(args);
+    const { userId } = await requireAuth(ctx);
     const template = await ctx.db.get(args.templateId);
     if (!template) throw new Error("Template not found");
-
-    if (!args.deferHomepageRebuild) {
-      const { userId } = await requireAuth(ctx);
-      if (template.userId !== userId) throw new Error("Unauthorized");
-    }
+    if (template.userId !== userId) throw new Error("Unauthorized");
 
     const shouldRebuildHomepage =
       template.status === "published" &&
       template.isPublic &&
       template.topicEmbeddingsUpdatedAt === undefined;
 
-    const embeddingsUpdatedAt = Date.now();
-    await ctx.db.patch(args.templateId, {
-      locationEmbedding: args.locationEmbedding,
-      topicEmbedding: args.topicEmbedding,
-      embeddingVersion: "v1",
-      embeddingsUpdatedAt,
-      topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
-      ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
-    });
-
-    if (template.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
-    }
+    await patchTemplateEmbeddingValues(ctx, template, args, "v1");
 
     // Public creation defers embeddings/hue until its final step. Rebuild once,
     // after the first embedding patch, so retries or later re-embeddings cannot
@@ -1754,6 +1853,42 @@ export const updateEmbeddings = mutation({
     if (shouldRebuildHomepage && !args.deferHomepageRebuild) {
       await ctx.scheduler.runAfter(0, rebuildHomepageSnapshotsRef, {});
     }
+  },
+});
+
+/**
+ * Narrow secret-gated bridge for the SvelteKit repair batch.
+ *
+ * Unlike `updateEmbeddings`, this path deliberately has no end-user ownership
+ * context. It can only fill a row still selected by the missing-topic marker;
+ * it cannot overwrite an existing embedding. The batch publishes once through
+ * `rebuildHomepageSnapshotsAfterBackfill` after all bounded writes complete.
+ */
+export const updateMissingEmbeddingsForBackfill = mutation({
+  args: {
+    templateId: v.id("templates"),
+    locationEmbedding: v.array(v.float64()),
+    topicEmbedding: v.array(v.float64()),
+    domainHue: v.optional(v.float64()),
+    _secret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    assertEmbeddingDimensions(args);
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
+    if (template.status !== "published" || !template.isPublic) {
+      throw new Error("EMBEDDING_BACKFILL_PUBLIC_TEMPLATE_REQUIRED");
+    }
+    if (
+      template.topicEmbeddingsUpdatedAt !== undefined ||
+      (Array.isArray(template.topicEmbedding) && template.topicEmbedding.length === 768)
+    ) {
+      throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
+    }
+
+    await patchTemplateEmbeddingValues(ctx, template, args, "gemini-001-768");
+    return { updated: true };
   },
 });
 
@@ -2006,11 +2141,13 @@ export const createTemplate = mutation({
       });
     }
 
-    // Do not make public-list publication depend on the external embedding call:
-    // Gemini failure still gets a bounded list refresh. The first successful
-    // embedding patch below retains its immediate composite rebuild.
+    // Do not make public discovery publication depend on the external embedding
+    // call. A new row can enter/evict the relation graph's bounded top-50 even
+    // before it has vectors, so Gemini failure must still refresh both families.
+    // The first successful embedding patch below retains its immediate composite
+    // rebuild and clears these dirty markers atomically.
     if (args.status === "published" && args.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
+      await markPublicDiscoveryListAndRelationsDirty(ctx);
     }
 
     const template = await ctx.db.get(templateId);
@@ -2025,7 +2162,7 @@ export const deleteTemplate = internalMutation({
     const template = await ctx.db.get(templateId);
     await ctx.db.delete(templateId);
     if (template?.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
+      await markPublicDiscoveryListAndRelationsDirty(ctx);
     }
   },
 });
@@ -2052,7 +2189,11 @@ export const patchMetadata = mutation({
       ...(args.topics !== undefined ? { topics: args.topics } : {}),
     });
     if (template.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
+      if (args.topics !== undefined) {
+        await markPublicDiscoveryListAndRelationsDirty(ctx);
+      } else if (args.domain !== undefined) {
+        await markPublicDiscoveryListDirty(ctx);
+      }
     }
   },
 });
@@ -2167,22 +2308,10 @@ export const patchEmbeddings = internalMutation({
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
-    if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
-      throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
-    }
+    assertEmbeddingDimensions(args);
     const template = await ctx.db.get(args.templateId);
-    const embeddingsUpdatedAt = Date.now();
-    await ctx.db.patch(args.templateId, {
-      locationEmbedding: args.locationEmbedding,
-      topicEmbedding: args.topicEmbedding,
-      embeddingVersion: "gemini-001-768",
-      embeddingsUpdatedAt,
-      topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
-      ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
-    });
-    if (template?.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
-    }
+    if (!template) throw new Error("Template not found");
+    await patchTemplateEmbeddingValues(ctx, template, args, "gemini-001-768");
   },
 });
 
@@ -2307,10 +2436,18 @@ export const patchTagEmbeddings = internalMutation({
     tagEmbeddings: v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) })),
   },
   handler: async (ctx, args) => {
+    if (args.tagEmbeddings.some(({ embedding }) => embedding.length !== 768)) {
+      throw new Error("INVALID_TAG_EMBEDDING_DIMENSION:expected=768");
+    }
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
     await ctx.db.patch(args.templateId, {
       tagEmbeddings: args.tagEmbeddings,
       embeddingsUpdatedAt: Date.now(),
     });
+    if (template.status === "published" && template.isPublic) {
+      await markPublicDiscoveryRelationsDirty(ctx);
+    }
   },
 });
 

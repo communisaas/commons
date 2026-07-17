@@ -183,6 +183,211 @@ describe('templates materialized public snapshots', () => {
 		}
 	});
 
+	it('coalesces relation writes, defers them for six hours, and clears dirty state only after publication', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		try {
+			const t = newHarness();
+			const firstDirtyAt = Date.now();
+			const first = await t.mutation(
+				internal.templates.requestPublicTemplateRelationSnapshotRefresh,
+				{}
+			);
+			vi.advanceTimersByTime(1_000);
+			const duplicate = await t.mutation(
+				internal.templates.requestPublicTemplateRelationSnapshotRefresh,
+				{}
+			);
+			expect(first.scheduled).toBe(true);
+			expect(duplicate).toEqual({ scheduled: false, scheduledAt: first.scheduledAt });
+
+			const coalescedRow = await t.run(async (ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(coalescedRow?.relationsDirtyAt).toBe(firstDirtyAt);
+			expect(coalescedRow?.relationsRefreshScheduledAt).toBe(first.scheduledAt);
+
+			vi.advanceTimersByTime(58_999);
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations.revision).toBe(0);
+			vi.advanceTimersByTime(1);
+			await t.finishInProgressScheduledFunctions();
+
+			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {});
+			expect(firstPublish.relations).toMatchObject({ ready: true, revision: 1 });
+			const cleanRow = await t.run(async (ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(cleanRow?.relationsDirtyAt).toBeUndefined();
+			expect(cleanRow?.relationsRefreshScheduledAt).toBeUndefined();
+
+			const next = await t.mutation(
+				internal.templates.requestPublicTemplateRelationSnapshotRefresh,
+				{}
+			);
+			const nextDuplicate = await t.mutation(
+				internal.templates.requestPublicTemplateRelationSnapshotRefresh,
+				{}
+			);
+			expect(next.scheduled).toBe(true);
+			expect(nextDuplicate).toEqual({ scheduled: false, scheduledAt: next.scheduledAt });
+			expect(next.scheduledAt).toBe(firstPublish.relations.updatedAt! + 6 * 60 * 60 * 1000);
+
+			vi.advanceTimersByTime(6 * 60 * 60 * 1000 - 1);
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations.revision).toBe(1);
+			vi.advanceTimersByTime(1);
+			await t.finishInProgressScheduledFunctions();
+			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations).toMatchObject({
+				ready: true,
+				revision: 2
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('dirties relations for topic and tag-embedding writes while reusing one relation token', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		try {
+			const t = newHarness();
+			const tokenIdentifier = 'https://issuer.example|topic-editor';
+			const { templateId } = await t.run(async (ctx) => {
+				const userId = await ctx.db.insert('users', {
+					tokenIdentifier,
+					updatedAt: Date.now(),
+					isVerified: true,
+					authorityLevel: 1,
+					trustTier: 1,
+					trustScore: 0,
+					reputationTier: 'novice',
+					districtVerified: false,
+					templatesContributed: 0,
+					templateAdoptionRate: 0,
+					peerEndorsements: 0,
+					activeMonths: 0,
+					profileVisibility: 'private'
+				});
+				const templateId = await ctx.db.insert(
+					'templates',
+					templateValue(3_200, { userId, topics: [] })
+				);
+				return { templateId };
+			});
+			const authenticated = t.withIdentity({
+				subject: 'topic-editor',
+				issuer: 'https://issuer.example',
+				tokenIdentifier
+			});
+
+			await authenticated.mutation(api.templates.patchMetadata, {
+				templateId,
+				topics: ['public libraries']
+			});
+			const afterTopics = await t.run(async (ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(afterTopics?.listDirtyAt).toEqual(expect.any(Number));
+			expect(afterTopics?.relationsDirtyAt).toEqual(expect.any(Number));
+			expect(afterTopics?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
+
+			vi.advanceTimersByTime(1_000);
+			await t.mutation(internal.templates.patchTagEmbeddings, {
+				templateId,
+				tagEmbeddings: [{ tag: 'public libraries', embedding: embedding([1, 0]) }]
+			});
+			const afterTagEmbedding = await t.run(async (ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(afterTagEmbedding?.relationsDirtyAt).toBe(afterTopics?.relationsDirtyAt);
+			expect(afterTagEmbedding?.relationsRefreshScheduledAt).toBe(
+				afterTopics?.relationsRefreshScheduledAt
+			);
+			expect(await t.run((ctx) => ctx.db.get(templateId))).toMatchObject({
+				topics: ['public libraries'],
+				tagEmbeddings: [{ tag: 'public libraries', embedding: embedding([1, 0]) }]
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('dirties both snapshot families when a public template is created before embeddings exist', async () => {
+		const secret = 'public-create-discovery-secret-32-bytes';
+		vi.stubEnv('INTERNAL_API_SECRET', secret);
+		vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+		try {
+			const t = newHarness();
+			const tokenIdentifier = 'https://issuer.example|public-creator';
+			const userId = await t.run((ctx) =>
+				ctx.db.insert('users', {
+					tokenIdentifier,
+					updatedAt: Date.now(),
+					isVerified: true,
+					authorityLevel: 1,
+					trustTier: 1,
+					trustScore: 100,
+					reputationTier: 'novice',
+					districtVerified: false,
+					templatesContributed: 0,
+					templateAdoptionRate: 0,
+					peerEndorsements: 0,
+					activeMonths: 0,
+					profileVisibility: 'private'
+				})
+			);
+			const authenticated = t.withIdentity({
+				subject: 'public-creator',
+				issuer: 'https://issuer.example',
+				tokenIdentifier
+			});
+
+			await authenticated.mutation(api.templates.createTemplate, {
+				_secret: secret,
+				userId,
+				title: 'Public creation invalidates discovery',
+				slug: 'public-creation-invalidates-discovery',
+				description: 'No embedding provider response is required.',
+				messageBody: 'Body',
+				preview: 'Preview',
+				type: 'email',
+				deliveryMethod: 'email',
+				domain: 'civic',
+				topics: [],
+				contentHash: 'public-creation-invalidates-discovery',
+				status: 'published',
+				isPublic: true,
+				consensusApproved: true
+			});
+
+			const manifest = await t.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(manifest).toMatchObject({
+				listDirtyAt: expect.any(Number),
+				listRefreshScheduledAt: expect.any(Number),
+				relationsDirtyAt: expect.any(Number),
+				relationsRefreshScheduledAt: expect.any(Number)
+			});
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it('rebuilds both bounded list variants once, preserves order, and retains last-good rows on oversize', async () => {
 		const t = newHarness();
 

@@ -93,6 +93,19 @@ npx wrangler kv namespace create PUBLIC_DISCOVERY_KV
 
 Update `wrangler.toml` with the returned namespace IDs.
 
+Before deploying, list the account namespaces and confirm every committed ID,
+especially `PUBLIC_DISCOVERY_KV`, matches the ID returned by Cloudflare:
+
+```bash
+npx wrangler kv namespace list
+```
+
+Do not commit a placeholder or unverified namespace ID. This repository has no
+branch-specific Wrangler environments, so the configured bindings are shared by
+the Pages project across branch deployments; `PUBLIC_DISCOVERY_KV` isolates
+payload keys by Convex backend, but its operation and storage quotas remain
+shared at the namespace/account level.
+
 ---
 
 ## Schema Changes

@@ -3205,7 +3205,8 @@ export default defineSchema({
 	// Small control-plane singleton for public discovery. Payloads remain in the
 	// two bounded snapshot tables above; this row only states whether each family
 	// has ever published successfully, which monotonically increasing revision is
-	// current, and the coalescing state for low-frequency list refreshes.
+	// current, and the independent coalescing state for bounded list and relation
+	// refreshes.
 	//
 	// No row is the explicit cold-start state (`ready:false`, revision 0). A
 	// successful rebuild over a legitimately empty corpus creates/updates this row
@@ -3220,6 +3221,8 @@ export default defineSchema({
 		relationsUpdatedAt: v.optional(v.number()),
 		listDirtyAt: v.optional(v.number()),
 		listRefreshScheduledAt: v.optional(v.number()),
+		relationsDirtyAt: v.optional(v.number()),
+		relationsRefreshScheduledAt: v.optional(v.number()),
 		// One-time cutover progress for stamping valid legacy topic vectors with
 		// the dedicated repair marker. Keeping this on the existing singleton
 		// makes self-paging completion observable without another table or scan.

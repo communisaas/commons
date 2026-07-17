@@ -1,4 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockConvexQuery } = vi.hoisted(() => ({
+	mockConvexQuery: vi.fn()
+}));
+
+vi.mock('convex/browser', () => ({
+	ConvexHttpClient: class MockConvexHttpClient {
+		readonly query = mockConvexQuery;
+
+		constructor(url: string) {
+			void url;
+		}
+	}
+}));
 
 import {
 	DEFAULT_MAX_SNAPSHOT_AGE_MS,
@@ -60,6 +74,10 @@ function readyFixture(): ReadinessFixture {
 }
 
 describe('public discovery producer readiness', () => {
+	beforeEach(() => {
+		mockConvexQuery.mockReset();
+	});
+
 	it('accepts matched, ready, fresh, bounded materializations', () => {
 		expect(validatePublicDiscoveryReadiness(readyFixture(), { now: NOW })).toMatchObject({
 			listRevision: 4,
@@ -129,9 +147,36 @@ describe('public discovery producer readiness', () => {
 		).toMatchObject({ allCount: 0, excludeCwcCount: 0 });
 	});
 
-	it('rejects a deceptive non-Convex URL before making a request', async () => {
+	it.each([
+		['non-HTTPS protocol', 'http://valid-deployment.convex.cloud'],
+		['non-Convex hostname', 'https://convex.cloud.evil.example'],
+		['embedded credentials', 'https://user:pass@valid-deployment.convex.cloud'],
+		['non-root path', 'https://valid-deployment.convex.cloud/attacker-path'],
+		['query parameters', 'https://valid-deployment.convex.cloud?target=attacker'],
+		['URL fragment', 'https://valid-deployment.convex.cloud#attacker']
+	])('rejects a Convex URL with %s before making a request', async (_label, url) => {
+		await expect(verifyPublicDiscoveryReadiness(url)).rejects.toThrow(
+			'A valid https://*.convex.cloud URL is required'
+		);
+		expect(mockConvexQuery).not.toHaveBeenCalled();
+	});
+
+	it('accepts a root HTTPS Convex URL and queries every readiness payload', async () => {
+		const fixture = readyFixture();
+		mockConvexQuery
+			.mockResolvedValueOnce(fixture.manifest)
+			.mockResolvedValueOnce(fixture.allList)
+			.mockResolvedValueOnce(fixture.excludeCwcList)
+			.mockResolvedValueOnce(fixture.relations);
+
 		await expect(
-			verifyPublicDiscoveryReadiness('https://example.com/fake.convex.cloud')
-		).rejects.toThrow('A valid https://*.convex.cloud URL is required');
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+		).resolves.toMatchObject({
+			listRevision: 4,
+			relationsRevision: 7,
+			allCount: 1,
+			excludeCwcCount: 1
+		});
+		expect(mockConvexQuery).toHaveBeenCalledTimes(4);
 	});
 });

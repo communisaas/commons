@@ -89,8 +89,10 @@ cold state. The scoped execution graph is
 2. Record one release SHA, use a clean worktree at that SHA, and require the
    static Convex query-efficiency guardrail, focused public-discovery checks,
    full test suite, application checks, and Convex type checks to pass. A manual
-   Pages dispatch now runs all five gates before it can enter the GitHub
-   `production` Environment.
+   Pages dispatch runs all five gates before it can enter the GitHub `production`
+   Environment. Automatic `workflow_run` deployment is also gated on a
+   successful `CI Tests` run, which includes both application and Convex type
+   checks for the exact `head_sha` deployed.
 3. Preview and deploy the Convex schema/functions from that exact SHA:
 
    ```sh
@@ -212,8 +214,15 @@ cold state. The scoped execution graph is
   remainder of the current six-hour window.
   Operator, cron, and first-embedding composite rebuilds remain explicit
   immediate paths.
-- A successful public-template embedding update schedules the composite rebuild,
-  so newly authored public content need not wait for the daily job.
+- Relation-affecting writes (public creation, topic edits, topic/tag embedding
+  changes, and public template deletion) use a separate 60-second token and the
+  same six-hour scheduled-rebuild ceiling. List-only reach/debate/endorsement
+  traffic never triggers the embedding-heavy relation rebuild. The daily
+  relation job remains the missed-write backstop.
+- A first successful public-template embedding update schedules the composite
+  rebuild immediately, so newly authored public content need not wait for either
+  bounded scheduler or the daily job. Later re-embeddings use the coalesced
+  relation path.
 - An operator can safely repeat the activation command at any time. Rebuilds
   upsert deterministic singleton rows and preserve the last good snapshot on
   failure.

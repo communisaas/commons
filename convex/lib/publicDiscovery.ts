@@ -7,6 +7,7 @@ export const PUBLIC_DISCOVERY_MANIFEST_KEY = 'public' as const;
 
 /** First dirty write owns one bounded coalescing window. */
 export const PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS = 60 * 1000;
+export const PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS = 60 * 1000;
 
 /**
  * The list materialization is deliberately expensive relative to its tiny
@@ -15,14 +16,20 @@ export const PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS = 60 * 1000;
  * bypasses and publish immediately.
  */
 export const PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type Manifest = Doc<'publicDiscoveryManifest'>;
 
 type ScheduledListRefreshArgs = { scheduledAt: number };
+type ScheduledRelationsRefreshArgs = { scheduledAt: number };
 
 const flushScheduledListRefreshRef = makeFunctionReference<'mutation'>(
 	'templates:flushScheduledPublicTemplateRefresh'
 ) as unknown as FunctionReference<'mutation', 'internal', ScheduledListRefreshArgs, unknown>;
+
+const flushScheduledRelationsRefreshRef = makeFunctionReference<'mutation'>(
+	'templates:flushScheduledPublicTemplateRelationsRefresh'
+) as unknown as FunctionReference<'mutation', 'internal', ScheduledRelationsRefreshArgs, unknown>;
 
 export type PublicDiscoveryManifestPayload = {
 	list: {
@@ -129,7 +136,8 @@ export async function commitPublicDiscoveryRelationsPublication(
 		await ctx.db.patch(manifest._id, {
 			relationsReady: true,
 			relationsRevision: publication.revision,
-			relationsUpdatedAt: publication.updatedAt
+			relationsUpdatedAt: publication.updatedAt,
+			relationsDirtyAt: undefined
 		});
 		return;
 	}
@@ -154,6 +162,111 @@ async function scheduleListRefresh(
 	);
 }
 
+async function scheduleRelationsRefresh(
+	ctx: MutationCtx,
+	scheduledAt: number,
+	now: number
+): Promise<Id<'_scheduled_functions'>> {
+	return await ctx.scheduler.runAfter(
+		Math.max(0, scheduledAt - now),
+		flushScheduledRelationsRefreshRef,
+		{ scheduledAt }
+	);
+}
+
+type PublicDiscoveryRefreshPatch = {
+	listDirtyAt?: number;
+	listRefreshScheduledAt?: number;
+	relationsDirtyAt?: number;
+	relationsRefreshScheduledAt?: number;
+};
+
+type RefreshPlan = {
+	result: { scheduled: boolean; scheduledAt: number };
+	patch: PublicDiscoveryRefreshPatch;
+	shouldSchedule: boolean;
+};
+
+function planListRefresh(manifest: Manifest | null, now: number): RefreshPlan {
+	const existingScheduledAt = manifest?.listRefreshScheduledAt;
+	if (manifest && existingScheduledAt !== undefined && existingScheduledAt > now) {
+		return {
+			result: { scheduled: false, scheduledAt: existingScheduledAt },
+			patch: manifest.listDirtyAt === undefined ? { listDirtyAt: now } : {},
+			shouldSchedule: false
+		};
+	}
+
+	const nextAllowedAt =
+		(manifest?.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
+	const scheduledAt = Math.max(now + PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS, nextAllowedAt);
+	return {
+		result: { scheduled: true, scheduledAt },
+		patch: { listDirtyAt: now, listRefreshScheduledAt: scheduledAt },
+		shouldSchedule: true
+	};
+}
+
+function planRelationsRefresh(manifest: Manifest | null, now: number): RefreshPlan {
+	const existingScheduledAt = manifest?.relationsRefreshScheduledAt;
+	if (manifest && existingScheduledAt !== undefined && existingScheduledAt > now) {
+		return {
+			result: { scheduled: false, scheduledAt: existingScheduledAt },
+			patch: manifest.relationsDirtyAt === undefined ? { relationsDirtyAt: now } : {},
+			shouldSchedule: false
+		};
+	}
+
+	const nextAllowedAt =
+		(manifest?.relationsUpdatedAt ?? 0) + PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
+	const scheduledAt = Math.max(now + PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS, nextAllowedAt);
+	return {
+		result: { scheduled: true, scheduledAt },
+		patch: { relationsDirtyAt: now, relationsRefreshScheduledAt: scheduledAt },
+		shouldSchedule: true
+	};
+}
+
+async function markPublicDiscoveryFamiliesDirty(
+	ctx: MutationCtx,
+	families: { list: boolean; relations: boolean },
+	now: number
+): Promise<{
+	list?: { scheduled: boolean; scheduledAt: number };
+	relations?: { scheduled: boolean; scheduledAt: number };
+}> {
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	const listPlan = families.list ? planListRefresh(manifest, now) : undefined;
+	const relationsPlan = families.relations ? planRelationsRefresh(manifest, now) : undefined;
+	const patch = {
+		...(listPlan?.patch ?? {}),
+		...(relationsPlan?.patch ?? {})
+	};
+
+	if (manifest) {
+		if (Object.keys(patch).length > 0) {
+			await ctx.db.patch(manifest._id, patch);
+		}
+	} else {
+		await ctx.db.insert('publicDiscoveryManifest', {
+			...manifestInsertBase(),
+			...patch
+		});
+	}
+
+	if (listPlan?.shouldSchedule) {
+		await scheduleListRefresh(ctx, listPlan.result.scheduledAt, now);
+	}
+	if (relationsPlan?.shouldSchedule) {
+		await scheduleRelationsRefresh(ctx, relationsPlan.result.scheduledAt, now);
+	}
+
+	return {
+		...(listPlan ? { list: listPlan.result } : {}),
+		...(relationsPlan ? { relations: relationsPlan.result } : {})
+	};
+}
+
 /**
  * Mark the list payload dirty and ensure exactly one bounded refresh job owns
  * the current window. Every caller writes only this singleton; duplicate writes
@@ -163,38 +276,32 @@ export async function markPublicDiscoveryListDirty(
 	ctx: MutationCtx,
 	now = Date.now()
 ): Promise<{ scheduled: boolean; scheduledAt: number }> {
-	const manifest = await getPublicDiscoveryManifestRow(ctx);
-	const existingScheduledAt = manifest?.listRefreshScheduledAt;
-	if (manifest && existingScheduledAt !== undefined && existingScheduledAt > now) {
-		// The first write already made the singleton dirty. Avoid patching the same
-		// hot row for every reach/debate event in the coalescing window. A direct
-		// publish clears `listDirtyAt` but deliberately leaves its old token alive;
-		// the first subsequent write restores dirty state here.
-		if (manifest.listDirtyAt === undefined) {
-			await ctx.db.patch(manifest._id, { listDirtyAt: now });
-		}
-		return { scheduled: false, scheduledAt: existingScheduledAt };
-	}
+	const result = await markPublicDiscoveryFamiliesDirty(ctx, { list: true, relations: false }, now);
+	return result.list!;
+}
 
-	const nextAllowedAt =
-		(manifest?.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
-	const scheduledAt = Math.max(now + PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS, nextAllowedAt);
+/**
+ * Mark the embedding-heavy relation payload dirty without rebuilding it on the
+ * writer's transaction. Repeated topic/tag writes share one scheduled token.
+ */
+export async function markPublicDiscoveryRelationsDirty(
+	ctx: MutationCtx,
+	now = Date.now()
+): Promise<{ scheduled: boolean; scheduledAt: number }> {
+	const result = await markPublicDiscoveryFamiliesDirty(ctx, { list: false, relations: true }, now);
+	return result.relations!;
+}
 
-	if (manifest) {
-		await ctx.db.patch(manifest._id, {
-			listDirtyAt: now,
-			listRefreshScheduledAt: scheduledAt
-		});
-	} else {
-		await ctx.db.insert('publicDiscoveryManifest', {
-			...manifestInsertBase(),
-			listDirtyAt: now,
-			listRefreshScheduledAt: scheduledAt
-		});
-	}
-
-	await scheduleListRefresh(ctx, scheduledAt, now);
-	return { scheduled: true, scheduledAt };
+/** Dirty both snapshot families with one singleton read and at most one patch. */
+export async function markPublicDiscoveryListAndRelationsDirty(
+	ctx: MutationCtx,
+	now = Date.now()
+): Promise<{
+	list: { scheduled: boolean; scheduledAt: number };
+	relations: { scheduled: boolean; scheduledAt: number };
+}> {
+	const result = await markPublicDiscoveryFamiliesDirty(ctx, { list: true, relations: true }, now);
+	return { list: result.list!, relations: result.relations! };
 }
 
 /** Replace the current job token with a later one after a bounded deferral. */
@@ -207,5 +314,18 @@ export async function reschedulePublicDiscoveryListRefresh(
 	const scheduledAt = Math.max(nextAt, now + PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS);
 	await ctx.db.patch(manifest._id, { listRefreshScheduledAt: scheduledAt });
 	await scheduleListRefresh(ctx, scheduledAt, now);
+	return scheduledAt;
+}
+
+/** Replace the current relation job token after a bounded deferral. */
+export async function reschedulePublicDiscoveryRelationsRefresh(
+	ctx: MutationCtx,
+	manifest: Manifest,
+	now: number,
+	nextAt: number
+): Promise<number> {
+	const scheduledAt = Math.max(nextAt, now + PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS);
+	await ctx.db.patch(manifest._id, { relationsRefreshScheduledAt: scheduledAt });
+	await scheduleRelationsRefresh(ctx, scheduledAt, now);
 	return scheduledAt;
 }

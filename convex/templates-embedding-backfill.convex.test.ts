@@ -4,10 +4,42 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest } from 'convex-test';
 
 import { api, internal } from './_generated/api';
+import type { Doc } from './_generated/dataModel';
 import schema from './schema';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 const SECRET = 'embedding-backfill-test-secret-32-bytes-minimum';
+type TemplateValue = Omit<Doc<'templates'>, '_id' | '_creationTime'>;
+
+function missingTemplateValue(slug: string, overrides: Partial<TemplateValue> = {}): TemplateValue {
+	return {
+		slug,
+		title: 'Missing embedding fixture',
+		description: 'Fixture',
+		topics: [],
+		type: 'email',
+		deliveryMethod: 'email',
+		preview: 'Preview',
+		messageBody: 'Body',
+		deliveryConfig: {},
+		recipientConfig: {},
+		status: 'published',
+		isPublic: true,
+		verifiedSends: 0,
+		uniqueDistricts: 0,
+		embeddingVersion: 'test',
+		flaggedByModeration: false,
+		consensusApproved: true,
+		reputationDelta: 0,
+		reputationApplied: false,
+		updatedAt: 1_800_000_000_000,
+		...overrides
+	};
+}
+
+function validEmbedding(): number[] {
+	return [1, ...new Array<number>(767).fill(0)];
+}
 
 function harness() {
 	return convexTest({
@@ -19,6 +51,10 @@ function harness() {
 			bytesRead: 100_000
 		}
 	});
+}
+
+function writeHarness() {
+	return convexTest(schema, modules);
 }
 
 function migrationHarness() {
@@ -281,6 +317,149 @@ describe('bounded embedding backfill discovery', () => {
 				deferHomepageRebuild: true
 			})
 		).rejects.toThrow('INVALID_EMBEDDING_DIMENSION:expected=768');
+	});
+
+	it('never lets deferred publication waive authentication or template ownership', async () => {
+		const t = writeHarness();
+		const ownerToken = 'https://issuer.example|embedding-owner';
+		const attackerToken = 'https://issuer.example|embedding-attacker';
+		const { templateId } = await t.run(async (ctx) => {
+			const baseUser = {
+				updatedAt: 1_800_000_000_000,
+				isVerified: true,
+				authorityLevel: 1,
+				trustTier: 1,
+				trustScore: 100,
+				reputationTier: 'novice' as const,
+				districtVerified: false,
+				templatesContributed: 0,
+				templateAdoptionRate: 0,
+				peerEndorsements: 0,
+				activeMonths: 0,
+				profileVisibility: 'private' as const
+			};
+			const ownerId = await ctx.db.insert('users', {
+				...baseUser,
+				tokenIdentifier: ownerToken
+			});
+			await ctx.db.insert('users', {
+				...baseUser,
+				tokenIdentifier: attackerToken
+			});
+			const templateId = await ctx.db.insert(
+				'templates',
+				missingTemplateValue('owned-embedding', { userId: ownerId })
+			);
+			return { templateId };
+		});
+		const args = {
+			templateId,
+			locationEmbedding: validEmbedding(),
+			topicEmbedding: validEmbedding(),
+			_secret: SECRET,
+			deferHomepageRebuild: true
+		};
+
+		await expect(t.mutation(api.templates.updateEmbeddings, args)).rejects.toThrow(
+			'Not authenticated'
+		);
+		await expect(
+			t
+				.withIdentity({
+					subject: 'embedding-attacker',
+					issuer: 'https://issuer.example',
+					tokenIdentifier: attackerToken
+				})
+				.mutation(api.templates.updateEmbeddings, args)
+		).rejects.toThrow('Unauthorized');
+
+		await expect(
+			t
+				.withIdentity({
+					subject: 'embedding-owner',
+					issuer: 'https://issuer.example',
+					tokenIdentifier: ownerToken
+				})
+				.mutation(api.templates.updateEmbeddings, args)
+		).resolves.toBeNull();
+
+		expect(await t.run((ctx) => ctx.db.get(templateId))).toMatchObject({
+			topicEmbeddingsUpdatedAt: expect.any(Number)
+		});
+		const manifest = await t.run((ctx) =>
+			ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique()
+		);
+		expect(manifest?.relationsDirtyAt).toEqual(expect.any(Number));
+		expect(manifest?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
+	});
+
+	it('keeps the secret-gated backfill bridge missing-only', async () => {
+		const t = harness();
+		const { templateId, legacyValidId, privateId } = await t.run(async (ctx) => ({
+			templateId: await ctx.db.insert('templates', missingTemplateValue('trusted-backfill')),
+			legacyValidId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('legacy-valid', {
+					locationEmbedding: validEmbedding(),
+					topicEmbedding: validEmbedding()
+				})
+			),
+			privateId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('private-missing', { isPublic: false })
+			)
+		}));
+		const args = {
+			templateId,
+			locationEmbedding: validEmbedding(),
+			topicEmbedding: validEmbedding()
+		};
+
+		await expect(
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				...args,
+				_secret: 'not-the-secret'
+			})
+		).rejects.toThrow('Unauthorized');
+		await expect(
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				...args,
+				_secret: SECRET
+			})
+		).resolves.toEqual({ updated: true });
+		await expect(
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				...args,
+				_secret: SECRET
+			})
+		).rejects.toThrow('TOPIC_EMBEDDINGS_ALREADY_PRESENT');
+		await expect(
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				...args,
+				templateId: legacyValidId,
+				_secret: SECRET
+			})
+		).rejects.toThrow('TOPIC_EMBEDDINGS_ALREADY_PRESENT');
+		await expect(
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				...args,
+				templateId: privateId,
+				_secret: SECRET
+			})
+		).rejects.toThrow('EMBEDDING_BACKFILL_PUBLIC_TEMPLATE_REQUIRED');
+
+		const manifest = await t.run((ctx) =>
+			ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique()
+		);
+		expect(manifest?.listDirtyAt).toBeUndefined();
+		expect(manifest?.relationsDirtyAt).toEqual(expect.any(Number));
+		expect(manifest?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
 	});
 
 	it('does not trust direct callers to self-publish server-derived content', async () => {
