@@ -4,6 +4,7 @@ import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
 const startTime = Date.now();
+const HEALTH_PROBE_TIMEOUT_MS = 5_000;
 
 type HealthEnv = {
 	ATLAS_BASE_URL?: string;
@@ -14,11 +15,7 @@ type HealthEnv = {
 export const GET: RequestHandler = async ({ platform }) => {
 	const [atlas, convex] = await Promise.all([
 		checkAtlas(platform?.env as HealthEnv | undefined),
-		// Executing a constant query proves Convex is enabled without hydrating an
-		// embedding-bearing application row on every uptime probe.
-		serverQuery(api.observability.servicePing, {})
-			.then(() => true)
-			.catch(() => false)
+		checkConvex()
 	]);
 
 	const healthy = convex && atlas.status === 'ok';
@@ -35,6 +32,26 @@ export const GET: RequestHandler = async ({ platform }) => {
 		{ status: code }
 	);
 };
+
+async function checkConvex(): Promise<boolean> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	try {
+		// servicePing performs one indexed read of the tiny public-discovery
+		// manifest singleton, exercising the data plane without hydrating an
+		// embedding-bearing application document.
+		const query = serverQuery(api.observability.servicePing, {})
+			.then(() => true)
+			.catch(() => false);
+		const deadline = new Promise<boolean>((resolve) => {
+			timeout = setTimeout(() => resolve(false), HEALTH_PROBE_TIMEOUT_MS);
+		});
+		return await Promise.race([query, deadline]);
+	} catch {
+		return false;
+	} finally {
+		if (timeout !== undefined) clearTimeout(timeout);
+	}
+}
 
 async function checkAtlas(env: HealthEnv | undefined) {
 	const baseUrl = (env?.ATLAS_BASE_URL || process.env.ATLAS_BASE_URL || '').replace(/\/$/, '');
@@ -70,7 +87,7 @@ async function headOk(url: string): Promise<boolean> {
 	try {
 		const response = await fetch(url, {
 			method: 'HEAD',
-			signal: AbortSignal.timeout(5_000),
+			signal: AbortSignal.timeout(HEALTH_PROBE_TIMEOUT_MS),
 			headers: { 'Cache-Control': 'no-cache', Pragma: 'no-cache' }
 		});
 		return response.ok;

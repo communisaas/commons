@@ -261,7 +261,10 @@ export function clusterTagConcepts(
  * Deterministic: the map is derived purely from the (already-sorted) concepts.
  */
 export function tagConceptMap(concepts: TagConcept[]): Record<string, string> {
-  const map: Record<string, string> = {};
+  // Raw author tags are arbitrary strings. A null prototype makes keys such as
+  // `__proto__` and `constructor` ordinary own properties instead of inherited
+  // object behavior that can corrupt or suppress a materialized edge.
+  const map = Object.create(null) as Record<string, string>;
   for (const c of concepts) {
     for (const tag of c.tags) map[tag] = c.concept;
   }

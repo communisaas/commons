@@ -313,13 +313,12 @@ describe('bounded embedding backfill discovery', () => {
 				templateId,
 				locationEmbedding: [1, 0],
 				topicEmbedding: [1, 0],
-				_secret: SECRET,
-				deferHomepageRebuild: true
+				_secret: SECRET
 			})
 		).rejects.toThrow('INVALID_EMBEDDING_DIMENSION:expected=768');
 	});
 
-	it('never lets deferred publication waive authentication or template ownership', async () => {
+	it('keeps direct embedding updates authenticated and owner-only', async () => {
 		const t = writeHarness();
 		const ownerToken = 'https://issuer.example|embedding-owner';
 		const attackerToken = 'https://issuer.example|embedding-attacker';
@@ -356,8 +355,7 @@ describe('bounded embedding backfill discovery', () => {
 			templateId,
 			locationEmbedding: validEmbedding(),
 			topicEmbedding: validEmbedding(),
-			_secret: SECRET,
-			deferHomepageRebuild: true
+			_secret: SECRET
 		};
 
 		await expect(t.mutation(api.templates.updateEmbeddings, args)).rejects.toThrow(
@@ -394,6 +392,102 @@ describe('bounded embedding backfill discovery', () => {
 		);
 		expect(manifest?.relationsDirtyAt).toEqual(expect.any(Number));
 		expect(manifest?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
+	});
+
+	it('completes deferred creator embeddings without request auth and reuses the bounded refresh tokens', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-17T00:00:00.000Z'));
+		try {
+			const t = writeHarness();
+			const { ownerId, otherId, templateId } = await t.run(async (ctx) => {
+				const baseUser = {
+					updatedAt: Date.now(),
+					isVerified: true,
+					authorityLevel: 1,
+					trustTier: 1,
+					trustScore: 100,
+					reputationTier: 'novice' as const,
+					districtVerified: false,
+					templatesContributed: 0,
+					templateAdoptionRate: 0,
+					peerEndorsements: 0,
+					activeMonths: 0,
+					profileVisibility: 'private' as const
+				};
+				const ownerId = await ctx.db.insert('users', {
+					...baseUser,
+					tokenIdentifier: 'https://issuer.example|deferred-owner'
+				});
+				const otherId = await ctx.db.insert('users', {
+					...baseUser,
+					tokenIdentifier: 'https://issuer.example|wrong-deferred-owner'
+				});
+				const templateId = await ctx.db.insert(
+					'templates',
+					missingTemplateValue('deferred-completion', { userId: ownerId })
+				);
+				return { ownerId, otherId, templateId };
+			});
+
+			const listToken = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			const relationToken = await t.mutation(
+				internal.templates.requestPublicTemplateRelationSnapshotRefresh,
+				{}
+			);
+			const args = {
+				templateId,
+				expectedUserId: ownerId,
+				locationEmbedding: validEmbedding(),
+				topicEmbedding: validEmbedding(),
+				domainHue: 120,
+				_secret: SECRET
+			};
+
+			await expect(
+				t.mutation(api.templates.completePublicTemplateEmbeddings, {
+					...args,
+					expectedUserId: otherId
+				})
+			).rejects.toThrow('EMBEDDING_COMPLETION_OWNER_MISMATCH');
+			await expect(
+				t.mutation(api.templates.completePublicTemplateEmbeddings, args)
+			).resolves.toEqual({ updated: true });
+
+			const dirty = await t.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(dirty).toMatchObject({
+				listRefreshScheduledAt: listToken.scheduledAt,
+				relationsRefreshScheduledAt: relationToken.scheduledAt
+			});
+
+			// No direct runAfter(0) composite rebuild is allowed. The first embedding
+			// remains behind the same 60-second coalescing window as creation.
+			vi.advanceTimersByTime(0);
+			await t.finishInProgressScheduledFunctions();
+			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+				list: { revision: 0 },
+				relations: { revision: 0 }
+			});
+
+			vi.advanceTimersByTime(60_000);
+			await t.finishInProgressScheduledFunctions();
+			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+				list: { ready: true, revision: 1 },
+				relations: { ready: true, revision: 1 }
+			});
+			await expect(
+				t.mutation(api.templates.completePublicTemplateEmbeddings, args)
+			).rejects.toThrow('TOPIC_EMBEDDINGS_ALREADY_PRESENT');
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('keeps the secret-gated backfill bridge missing-only', async () => {

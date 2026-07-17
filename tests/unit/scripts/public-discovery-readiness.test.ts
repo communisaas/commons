@@ -53,7 +53,8 @@ type ReadinessFixture = {
 	};
 	allList: ListPayload;
 	excludeCwcList: ListPayload;
-	relations: RelationsPayload;
+	allRelations: RelationsPayload;
+	excludeCwcRelations: RelationsPayload;
 };
 
 function readyFixture(): ReadinessFixture {
@@ -62,9 +63,27 @@ function readyFixture(): ReadinessFixture {
 			list: { ready: true, revision: 4, updatedAt: LIST_UPDATED_AT },
 			relations: { ready: true, revision: 7, updatedAt: RELATIONS_UPDATED_AT }
 		},
-		allList: { revision: 4, updatedAt: LIST_UPDATED_AT, templates: [{ id: 'a' }] },
-		excludeCwcList: { revision: 4, updatedAt: LIST_UPDATED_AT, templates: [{ id: 'a' }] },
-		relations: {
+		allList: {
+			revision: 4,
+			updatedAt: LIST_UPDATED_AT,
+			templates: [
+				{ id: 'a', deliveryMethod: 'email' },
+				{ id: 'b', deliveryMethod: 'cwc' },
+				{ id: 'c', deliveryMethod: 'email' }
+			]
+		},
+		excludeCwcList: {
+			revision: 4,
+			updatedAt: LIST_UPDATED_AT,
+			templates: [{ id: 'a', deliveryMethod: 'email' }]
+		},
+		allRelations: {
+			revision: 7,
+			updatedAt: RELATIONS_UPDATED_AT,
+			twinEdges: [{ a: 'a', b: 'b' }],
+			conceptRelations: { edges: [{ a: 'a', b: 'c' }], conceptMap: { topic: 'Topic' } }
+		},
+		excludeCwcRelations: {
 			revision: 7,
 			updatedAt: RELATIONS_UPDATED_AT,
 			twinEdges: [],
@@ -84,8 +103,16 @@ describe('public discovery producer readiness', () => {
 			relationsRevision: 7,
 			listAgeMs: 60 * 60 * 1000,
 			relationsAgeMs: 30 * 60 * 1000,
-			allCount: 1,
-			excludeCwcCount: 1
+				allCount: 3,
+			excludeCwcCount: 1,
+			allTwinEdgeCount: 1,
+			allConceptEdgeCount: 1,
+			excludeCwcTwinEdgeCount: 0,
+			excludeCwcConceptEdgeCount: 0,
+			sizes: {
+				allRelations: expect.any(Number),
+				excludeCwcRelations: expect.any(Number)
+			}
 		});
 	});
 
@@ -99,9 +126,44 @@ describe('public discovery producer readiness', () => {
 
 	it('rejects payload and manifest revision skew', () => {
 		const fixture = readyFixture();
-		fixture.relations.revision = 6;
+		fixture.allRelations.revision = 6;
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
-			/relations\.revision does not match manifest\.relations\.revision/
+			/allRelations\.revision does not match manifest\.relations\.revision/
+		);
+	});
+
+	it('rejects the exclude-CWC payload when its timestamp does not match the shared manifest', () => {
+		const fixture = readyFixture();
+		fixture.excludeCwcRelations.updatedAt -= 1;
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/excludeCwcRelations\.updatedAt does not match manifest\.relations\.updatedAt/
+		);
+	});
+
+	it('shape-checks both relation variants', () => {
+		const fixture = readyFixture();
+		fixture.excludeCwcRelations.conceptRelations.conceptMap = null as unknown as Record<
+			string,
+			string
+		>;
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/excludeCwcRelations\.conceptRelations\.conceptMap is not an object/
+		);
+	});
+
+	it('rejects a CWC template in the exclude-CWC list', () => {
+		const fixture = readyFixture();
+		fixture.excludeCwcList.templates.push({ id: 'hidden', deliveryMethod: 'cwc' });
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/excludeCwcList\.templates\[1\] leaks a CWC template/
+		);
+	});
+
+	it('rejects relation endpoints that are absent from the matching list', () => {
+		const fixture = readyFixture();
+		fixture.excludeCwcRelations.twinEdges = [{ a: 'a', b: 'hidden-cwc' }];
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/excludeCwcRelations\.twinEdges\[0\] endpoint hidden-cwc is absent from its matching list/
 		);
 	});
 
@@ -135,10 +197,23 @@ describe('public discovery producer readiness', () => {
 		);
 	});
 
+	it('size-checks the exclude-CWC relation variant independently', () => {
+		const fixture = readyFixture();
+		fixture.excludeCwcRelations.conceptRelations.conceptMap = {
+			oversized: 'x'.repeat(900_000)
+		};
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/excludeCwcRelations serialized payload is \d+ bytes, above 900000/
+		);
+	});
+
 	it('requires content for production but supports a deliberate empty corpus', () => {
 		const fixture = readyFixture();
 		fixture.allList.templates = [];
 		fixture.excludeCwcList.templates = [];
+		fixture.allRelations.twinEdges = [];
+		fixture.allRelations.conceptRelations.edges = [];
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
 			/populated production release/
 		);
@@ -167,16 +242,26 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(fixture.manifest)
 			.mockResolvedValueOnce(fixture.allList)
 			.mockResolvedValueOnce(fixture.excludeCwcList)
-			.mockResolvedValueOnce(fixture.relations);
+			.mockResolvedValueOnce(fixture.allRelations)
+			.mockResolvedValueOnce(fixture.excludeCwcRelations);
 
 		await expect(
 			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
 		).resolves.toMatchObject({
 			listRevision: 4,
 			relationsRevision: 7,
-			allCount: 1,
-			excludeCwcCount: 1
+				allCount: 3,
+			excludeCwcCount: 1,
+			allTwinEdgeCount: 1,
+			excludeCwcTwinEdgeCount: 0
 		});
-		expect(mockConvexQuery).toHaveBeenCalledTimes(4);
+		expect(mockConvexQuery).toHaveBeenCalledTimes(5);
+		expect(mockConvexQuery.mock.calls.map(([, args]) => args)).toEqual([
+			{},
+			{ excludeCwc: false },
+			{ excludeCwc: true },
+			{ excludeCwc: false },
+			{ excludeCwc: true }
+		]);
 	});
 });

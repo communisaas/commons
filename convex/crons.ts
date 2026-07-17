@@ -544,7 +544,7 @@ if (enabled("operational")) {
 //      payloads once daily even on the cost-safe ESSENTIAL profile. The rebuild
 //      scans at most 250 exact published+public rows and is the low-cost freshness
 //      backstop for reach, debate, endorsement, and `isNew` changes. New authored
-//      templates also schedule the composite rebuild after embeddings complete.
+//      templates reuse the bounded write-driven dirty token after embeddings complete.
 //      04:07 UTC avoids the UTC-hour boundary and precedes the relation refresh.
 // ---------------------------------------------------------------------------
 if (enabled("essential")) {
@@ -557,10 +557,10 @@ if (enabled("essential")) {
 }
 
 // ---------------------------------------------------------------------------
-// 28b. Public template relation snapshot — materialize measured-twin edges and
+// 28b. Public template relation snapshots — materialize measured-twin edges and
 //      tag-concept relations after the optional tag-embedding job. Calibration
 //      is computed inline from this exact bounded generation.
-//      Homepage requests read only this compact singleton and never scan the
+//      Homepage requests read only the matching compact variant and never scan the
 //      embedding-heavy template corpus. A missing snapshot is served honestly as
 //      no edges until this job (or an operator-triggered rebuild) succeeds.
 //      04:17 UTC leaves the tag backfill 36 minutes to finish while avoiding the
@@ -568,8 +568,8 @@ if (enabled("essential")) {
 //      ESSENTIAL: this is the bounded freshness backstop for topic edits,
 //      re-embeddings, deletes, and any missed write-driven composite refresh.
 //      Production intentionally runs the cost-safe ESSENTIAL profile before
-//      launch, so leaving this operational would make relation freshness depend
-//      entirely on successful first-embedding events or manual intervention.
+//      launch, so leaving this operational is the durable backstop for any missed
+//      write-driven dirty token or repeated bounded rebuild failure.
 // ---------------------------------------------------------------------------
 if (enabled("essential")) {
   crons.daily(

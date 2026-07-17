@@ -3148,13 +3148,16 @@ export default defineSchema({
 		updatedAt: v.number()
 	}).index('by_key', ['key']),
 
-	// Materialized public relation result. Homepage reads must never hydrate the
-	// embedding-heavy templates table: both public relation queries read this one
-	// compact row and return honest empty shapes until the first rebuild publishes
-	// it. `conceptEntries` is an array instead of an object keyed by raw author tags
-	// so arbitrary tag strings never become stored Convex field names.
+	// Materialized public relation results. Homepage reads must never hydrate the
+	// embedding-heavy templates table: each list variant reads its matching compact
+	// relation row and returns honest empty shapes until the first rebuild publishes
+	// it. Both `all` and `excludeCwc` rows publish under one manifest revision.
+	// `public` is retained only so the first deploy accepts the legacy singleton;
+	// no current query or rebuild writes that key. `conceptEntries` is an array
+	// instead of an object keyed by raw author tags so arbitrary tag strings never
+	// become stored Convex field names.
 	templateRelationSnapshots: defineTable({
-		key: v.string(), // singleton selector — always 'public'
+		key: v.union(v.literal('public'), v.literal('all'), v.literal('excludeCwc')),
 		// Publication revision shared with `publicDiscoveryManifest`. Optional so
 		// the first deploy can migrate existing snapshot rows in place; every new
 		// rebuild writes it before marking relations ready.

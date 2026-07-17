@@ -11,6 +11,7 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	// Cache across client-side navigations — only re-fetch when invalidated
 	depends('data:templates');
 	const showGraph = selectLandingSurface(url) === 'graph';
+	const excludeCwc = !FEATURES.CONGRESSIONAL;
 
 	// Degrade gracefully: a transient SSR→Convex failure (e.g. an intermittent
 	// connect-timeout) should render an empty homepage, not a hard 500. Mirrors
@@ -19,7 +20,7 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	const templatesPromise = getCachedPublicTemplates(
 		cacheContext,
 		// Keep CWC templates out of public discovery until congressional launch.
-		!FEATURES.CONGRESSIONAL
+		excludeCwc
 	).catch((err) => {
 		console.error(
 			'[Page] templates.listPublic failed (transient):',
@@ -39,7 +40,7 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	// are backfilled — `edges` is simply empty, and the graph's concept legend item
 	// stays hidden. That empty result is expected, not a failure.
 	const relationsPromise = showGraph
-		? getCachedPublicRelations(cacheContext).catch((err) => {
+		? getCachedPublicRelations(cacheContext, excludeCwc).catch((err) => {
 				console.error(
 					'[Page] templates.publicDiscoveryRelations failed (transient):',
 					err instanceof Error ? err.message : String(err)

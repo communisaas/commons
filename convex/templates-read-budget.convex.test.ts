@@ -96,10 +96,20 @@ describe('public template query read budgets', () => {
 			excludeCwcCount: 19
 		});
 		expect(rebuilt.relations).toMatchObject({
-			sourceCap: 50,
-			sourceTemplateCount: 20,
-			embeddedTemplateCount: 20,
-			tagVectorCount: 20
+			sourceScanCap: 250,
+			scannedCount: 20,
+			all: {
+				sourceCap: 50,
+				sourceTemplateCount: 20,
+				embeddedTemplateCount: 20,
+				tagVectorCount: 20
+			},
+			excludeCwc: {
+				sourceCap: 50,
+				sourceTemplateCount: 19,
+				embeddedTemplateCount: 19,
+				tagVectorCount: 19
+			}
 		});
 
 		const all = await t.query(api.templates.listPublic, { excludeCwc: false });
@@ -116,7 +126,7 @@ describe('public template query read budgets', () => {
 		const relationSnapshot = await t.run(async (ctx) =>
 			ctx.db
 				.query('templateRelationSnapshots')
-				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.withIndex('by_key', (q) => q.eq('key', 'all'))
 				.unique()
 		);
 		expect(relationSnapshot).toMatchObject({
@@ -261,7 +271,7 @@ describe('public template query read budgets', () => {
 		await seedHeavyTemplates(t, 20);
 		await t.run(async (ctx) => {
 			await ctx.db.insert('templateRelationSnapshots', {
-				key: 'public',
+				key: 'all',
 				revision: 9,
 				twinEdges: [{ a: 'alpha', b: 'beta', score: 0.91, kind: 'twin' }],
 				conceptEdges: [{ a: 'alpha', b: 'beta', concept: 'libraries', kind: 'concept' }],

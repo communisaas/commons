@@ -15,8 +15,17 @@ type TransactionMetrics = {
 };
 
 describe('observability service ping', () => {
-	it('executes without database reads', async () => {
+	it('proves indexed data-plane readability without hydrating an application row', async () => {
 		const t = convexTest({ schema, modules });
+		await t.run((ctx) =>
+			ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: false,
+				listRevision: 0,
+				relationsReady: false,
+				relationsRevision: 0
+			})
+		);
 
 		const observed = await t.query(async (ctx) => {
 			const value = await ctx.runQuery(api.observability.servicePing, {});
@@ -28,9 +37,13 @@ describe('observability service ping', () => {
 			return { value, metrics };
 		});
 
-		expect(observed.value).toEqual({ ok: true });
-		expect(observed.metrics.bytesRead.used).toBe(0);
-		expect(observed.metrics.documentsRead.used).toBe(0);
-		expect(observed.metrics.databaseQueries.used).toBe(0);
+		expect(observed.value).toEqual({
+			ok: true,
+			storageReadable: true,
+			discoveryManifestPresent: true
+		});
+		expect(observed.metrics.bytesRead.used).toBeLessThan(2_000);
+		expect(observed.metrics.documentsRead.used).toBe(1);
+		expect(observed.metrics.databaseQueries.used).toBe(1);
 	});
 });

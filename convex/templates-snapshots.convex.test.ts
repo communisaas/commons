@@ -48,6 +48,52 @@ function embedding(head: number[]): number[] {
 	return [...head, ...new Array<number>(768 - head.length).fill(0)];
 }
 
+const PUBLIC_CREATE_SECRET = 'public-create-discovery-secret-32-bytes';
+
+async function createPublicTemplate(t: Harness, index: number): Promise<Id<'templates'>> {
+	const tokenIdentifier = `https://issuer.example|occ-creator-${index}`;
+	const userId = await t.run((ctx) =>
+		ctx.db.insert('users', {
+			tokenIdentifier,
+			updatedAt: Date.now(),
+			isVerified: true,
+			authorityLevel: 1,
+			trustTier: 1,
+			trustScore: 100,
+			reputationTier: 'novice',
+			districtVerified: false,
+			templatesContributed: 0,
+			templateAdoptionRate: 0,
+			peerEndorsements: 0,
+			activeMonths: 0,
+			profileVisibility: 'private'
+		})
+	);
+	const authenticated = t.withIdentity({
+		subject: `occ-creator-${index}`,
+		issuer: 'https://issuer.example',
+		tokenIdentifier
+	});
+	const created = await authenticated.mutation(api.templates.createTemplate, {
+		_secret: PUBLIC_CREATE_SECRET,
+		userId,
+		title: `OCC publication ${index}`,
+		slug: `occ-publication-${index}`,
+		description: 'Serializable flush ordering fixture',
+		messageBody: 'Body',
+		preview: 'Preview',
+		type: 'email',
+		deliveryMethod: 'email',
+		domain: 'civic',
+		topics: [],
+		contentHash: `occ-publication-${index}`,
+		status: 'published',
+		isPublic: true,
+		consensusApproved: true
+	});
+	return created!._id;
+}
+
 describe('templates materialized public snapshots', () => {
 	it('publishes explicit ready revisions atomically and distinguishes a valid empty corpus from cold start', async () => {
 		const t = newHarness();
@@ -119,7 +165,7 @@ describe('templates materialized public snapshots', () => {
 		await t.run(async (ctx) => {
 			const row = await ctx.db
 				.query('templateRelationSnapshots')
-				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.withIndex('by_key', (q) => q.eq('key', 'all'))
 				.unique();
 			if (!row) throw new Error('missing relation snapshot');
 			await ctx.db.patch(row._id, { revision: 999 });
@@ -128,6 +174,87 @@ describe('templates materialized public snapshots', () => {
 			revision: 999,
 			twinEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
+		});
+	});
+
+	it('degrades to the newest snapshot when a duplicate key exists instead of hard-failing public reads', async () => {
+		const t = newHarness();
+		const older = { id: 'older', slug: 'older' };
+		const newer = { id: 'newer', slug: 'newer' };
+		const newerTwin = { a: 'newer-a', b: 'newer-b', score: 0.9, kind: 'twin' as const };
+		await t.run(async (ctx) => {
+			await ctx.db.insert('publicTemplateSnapshots', {
+				key: 'all',
+				revision: 1,
+				templates: [older],
+				sourceCount: 1,
+				updatedAt: 1
+			});
+			await ctx.db.insert('publicTemplateSnapshots', {
+				key: 'all',
+				revision: 2,
+				templates: [newer],
+				sourceCount: 1,
+				updatedAt: 2
+			});
+			await ctx.db.insert('templateRelationSnapshots', {
+				key: 'all',
+				revision: 1,
+				twinEdges: [],
+				conceptEdges: [],
+				conceptEntries: [],
+				sourceCap: 50,
+				sourceTemplateCount: 0,
+				embeddedTemplateCount: 0,
+				tagVectorCount: 0,
+				updatedAt: 1
+			});
+			await ctx.db.insert('templateRelationSnapshots', {
+				key: 'all',
+				revision: 2,
+				twinEdges: [newerTwin],
+				conceptEdges: [],
+				conceptEntries: [],
+				sourceCap: 50,
+				sourceTemplateCount: 2,
+				embeddedTemplateCount: 2,
+				tagVectorCount: 0,
+				updatedAt: 2
+			});
+			await ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				listRevision: 1,
+				listUpdatedAt: 1,
+				relationsReady: true,
+				relationsRevision: 1,
+				relationsUpdatedAt: 1
+			});
+			await ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				listRevision: 2,
+				listUpdatedAt: 2,
+				relationsReady: true,
+				relationsRevision: 2,
+				relationsUpdatedAt: 2
+			});
+		});
+
+		await expect(t.query(api.templates.listPublic, {})).resolves.toEqual([newer]);
+		await expect(t.query(api.templates.publicDiscoveryList, {})).resolves.toEqual({
+			revision: 2,
+			updatedAt: 2,
+			templates: [newer]
+		});
+		await expect(t.query(api.templates.publicDiscoveryRelations, {})).resolves.toMatchObject({
+			revision: 2,
+			updatedAt: 2,
+			twinEdges: [newerTwin]
+		});
+		await expect(t.query(api.templates.publicDiscoveryManifest, {})).resolves.toEqual({
+			list: { ready: true, revision: 2, updatedAt: 2 },
+			relations: { ready: true, revision: 2, updatedAt: 2 }
 		});
 	});
 
@@ -179,6 +306,66 @@ describe('templates materialized public snapshots', () => {
 				revision: 2
 			});
 		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('preserves a publication across both serializable OCC orders around a list flush', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		vi.stubEnv('INTERNAL_API_SECRET', PUBLIC_CREATE_SECRET);
+		vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+		try {
+			// Writer serializes first: it reuses the already-dirty token without a
+			// manifest patch, and the following range-read flush must include it.
+			const writerFirst = newHarness();
+			const writerFirstToken = await writerFirst.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			vi.advanceTimersByTime(59_999);
+			const writerFirstId = await createPublicTemplate(writerFirst, 1);
+			vi.advanceTimersByTime(1);
+			await writerFirst.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: writerFirstToken.scheduledAt
+			});
+			expect((await writerFirst.query(api.templates.listPublic, {})).map(({ id }) => id)).toContain(
+				writerFirstId
+			);
+
+			// Flush serializes first: a later source+dirty commit owns the next cost
+			// window rather than being cleared by the completed generation.
+			const flushFirst = newHarness();
+			const flushFirstToken = await flushFirst.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			vi.advanceTimersByTime(60_000);
+			await flushFirst.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: flushFirstToken.scheduledAt
+			});
+			const flushFirstId = await createPublicTemplate(flushFirst, 2);
+			const pending = await flushFirst.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(pending).toMatchObject({
+				listDirtyAt: expect.any(Number),
+				listRefreshScheduledAt: expect.any(Number)
+			});
+			expect(await flushFirst.query(api.templates.listPublic, {})).toEqual([]);
+
+			vi.setSystemTime(pending!.listRefreshScheduledAt!);
+			await flushFirst.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: pending!.listRefreshScheduledAt!
+			});
+			expect((await flushFirst.query(api.templates.listPublic, {})).map(({ id }) => id)).toContain(
+				flushFirstId
+			);
+		} finally {
+			vi.unstubAllEnvs();
 			vi.useRealTimers();
 		}
 	});
@@ -421,9 +608,18 @@ describe('templates materialized public snapshots', () => {
 			excludeCwcCount: 50
 		});
 		expect(rebuilt.relations).toMatchObject({
-			sourceCap: 50,
-			sourceTemplateCount: 50,
-			embeddedTemplateCount: 0
+			sourceScanCap: 250,
+			scannedCount: 250,
+			all: {
+				sourceCap: 50,
+				sourceTemplateCount: 50,
+				embeddedTemplateCount: 0
+			},
+			excludeCwc: {
+				sourceCap: 50,
+				sourceTemplateCount: 50,
+				embeddedTemplateCount: 0
+			}
 		});
 
 		const all = await t.query(api.templates.listPublic, {});
@@ -633,7 +829,71 @@ describe('templates materialized public snapshots', () => {
 		expect(unchangedManifest?.listDirtyAt).toBe(firstDirtyAt);
 	});
 
-	it('publishes pure-helper-equivalent relations and never live-scans on reads', async () => {
+	it('publishes graph rows for both list variants without hidden CWC endpoints', async () => {
+		const t = newHarness();
+		const emailVectors = [
+			embedding([10, 1, 0, 0]),
+			embedding([10, 1, 0, 0]),
+			embedding([10, 0, 1, 0]),
+			embedding([10, 0, -1, 0])
+		];
+		const emailIds = await t.run(async (ctx) => {
+			const ids: Id<'templates'>[] = [];
+			for (let index = 0; index < emailVectors.length; index++) {
+				ids.push(
+					await ctx.db.insert(
+						'templates',
+						templateValue(7_000 + index, {
+							topicEmbedding: emailVectors[index]
+						})
+					)
+				);
+			}
+			// These newer CWC rows occupy the entire unfiltered top 50. The
+			// exclude-CWC graph must still be built from the four displayed emails.
+			for (let index = 0; index < 50; index++) {
+				await ctx.db.insert(
+					'templates',
+					templateValue(8_000 + index, {
+						deliveryMethod: 'cwc'
+					})
+				);
+			}
+			return ids;
+		});
+
+		await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+		const allList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: false });
+		const emailList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: true });
+		const allRelations = await t.query(api.templates.publicDiscoveryRelations, {
+			excludeCwc: false
+		});
+		const emailRelations = await t.query(api.templates.publicDiscoveryRelations, {
+			excludeCwc: true
+		});
+
+		expect(allList.templates).toHaveLength(50);
+		expect(allList.templates.every(({ deliveryMethod }) => deliveryMethod === 'cwc')).toBe(true);
+		expect(emailList.templates.map(({ id }) => id)).toEqual([...emailIds].reverse());
+		expect(allRelations.revision).toBe(emailRelations.revision);
+		expect(allRelations.updatedAt).toBe(emailRelations.updatedAt);
+
+		const expectedEmailTwins = computeTwinEdges(
+			emailIds.map((id, index) => ({ id, embedding: emailVectors[index] }))
+		);
+		expect(expectedEmailTwins).toHaveLength(1);
+		expect(emailRelations.twinEdges).toEqual(expectedEmailTwins);
+		const visibleEmailIds = new Set<string>(emailList.templates.map(({ id }) => id));
+		for (const edge of [
+			...emailRelations.twinEdges,
+			...emailRelations.conceptRelations.edges
+		]) {
+			expect(visibleEmailIds.has(edge.a)).toBe(true);
+			expect(visibleEmailIds.has(edge.b)).toBe(true);
+		}
+	});
+
+	it('publishes pure-helper-equivalent relations, rejects malformed vectors, and never live-scans on reads', async () => {
 		const t = newHarness();
 		const topicVectors = [
 			embedding([10, 1, 0, 0]),
@@ -662,6 +922,16 @@ describe('templates materialized public snapshots', () => {
 				);
 				inserted.push(id);
 			}
+			// A newer malformed legacy vector must not establish a two-dimensional
+			// calibration or prevent the canonical vectors from entering the graph.
+			await ctx.db.insert(
+				'templates',
+				templateValue(12, {
+					topics: ['malformed-vector'],
+					topicEmbedding: [1, 0],
+					tagEmbeddings: [{ tag: 'malformed-vector', embedding: [1, 0] }]
+				})
+			);
 			// Both rows carry valid vectors but are outside the exact public corpus.
 			await ctx.db.insert(
 				'templates',
@@ -688,11 +958,24 @@ describe('templates materialized public snapshots', () => {
 
 		const rebuilt = await t.mutation(internal.templates.rebuildRelationSnapshot, {});
 		expect(rebuilt).toMatchObject({
-			sourceCap: 50,
-			sourceTemplateCount: 4,
-			embeddedTemplateCount: 4,
-			tagVectorCount: 4
+			sourceScanCap: 250,
+			scannedCount: 5,
+			all: {
+				sourceCap: 50,
+				sourceTemplateCount: 5,
+				embeddedTemplateCount: 4,
+				tagVectorCount: 4
+			},
+			excludeCwc: {
+				sourceCap: 50,
+				sourceTemplateCount: 5,
+				embeddedTemplateCount: 4,
+				tagVectorCount: 4
+			}
 		});
+		await expect(
+			t.mutation(internal.templates.recomputeRelatednessCalibration, {})
+		).resolves.toMatchObject({ updated: true, count: 4, dim: 768 });
 
 		const expectedTwins = computeTwinEdges(
 			ids.map((id, index) => ({ id, embedding: topicVectors[index] }))
@@ -724,14 +1007,18 @@ describe('templates materialized public snapshots', () => {
 		const snapshotRows = await t.run(async (ctx) =>
 			ctx.db.query('templateRelationSnapshots').collect()
 		);
-		expect(snapshotRows).toHaveLength(1);
-		expect(snapshotRows[0]).toMatchObject({
-			key: 'public',
-			sourceCap: 50,
-			sourceTemplateCount: 4
-		});
-		expect(JSON.stringify(snapshotRows[0])).not.toContain('topicEmbedding');
-		expect(JSON.stringify(snapshotRows[0])).not.toContain('tagEmbeddings');
+		expect(snapshotRows).toHaveLength(2);
+		expect(snapshotRows.map(({ key }) => key).sort()).toEqual(['all', 'excludeCwc']);
+		for (const snapshotRow of snapshotRows) {
+			expect(snapshotRow).toMatchObject({
+				sourceCap: 50,
+				sourceTemplateCount: 5,
+				embeddedTemplateCount: 4,
+				tagVectorCount: 4
+			});
+			expect(JSON.stringify(snapshotRow)).not.toContain('topicEmbedding');
+			expect(JSON.stringify(snapshotRow)).not.toContain('tagEmbeddings');
+		}
 
 		// A removed topic must not keep influencing the concept vocabulary merely
 		// because its old server-side vector is still stored for cheap reuse.

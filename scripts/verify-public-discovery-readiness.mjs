@@ -14,7 +14,8 @@ export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
  * @property {unknown} manifest
  * @property {unknown} allList
  * @property {unknown} excludeCwcList
- * @property {unknown} relations
+ * @property {unknown} allRelations
+ * @property {unknown} excludeCwcRelations
  */
 
 /**
@@ -48,6 +49,52 @@ function currentTimestamp(value) {
 	return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+/**
+ * Validate the public template projection and return the ids its matching graph
+ * is allowed to reference.
+ *
+ * @param {string} name
+ * @param {unknown[]} templates
+ * @param {boolean} excludeCwc
+ * @param {string[]} errors
+ */
+function validateTemplateProjection(name, templates, excludeCwc, errors) {
+	const ids = new Set();
+	for (const [index, template] of templates.entries()) {
+		if (!isRecord(template) || typeof template.id !== 'string' || template.id.length === 0) {
+			errors.push(`${name}.templates[${index}] has no string id`);
+			continue;
+		}
+		ids.add(template.id);
+		if (typeof template.deliveryMethod !== 'string') {
+			errors.push(`${name}.templates[${index}].deliveryMethod is not a string`);
+		} else if (excludeCwc && template.deliveryMethod === 'cwc') {
+			errors.push(`${name}.templates[${index}] leaks a CWC template`);
+		}
+	}
+	return ids;
+}
+
+/**
+ * @param {string} name
+ * @param {unknown[]} edges
+ * @param {Set<unknown>} visibleIds
+ * @param {string[]} errors
+ */
+function validateVisibleEndpoints(name, edges, visibleIds, errors) {
+	for (const [index, edge] of edges.entries()) {
+		if (!isRecord(edge) || typeof edge.a !== 'string' || typeof edge.b !== 'string') {
+			errors.push(`${name}[${index}] has invalid endpoints`);
+			continue;
+		}
+		for (const endpoint of [edge.a, edge.b]) {
+			if (!visibleIds.has(endpoint)) {
+				errors.push(`${name}[${index}] endpoint ${endpoint} is absent from its matching list`);
+			}
+		}
+	}
+}
+
 /** @param {string | undefined} value */
 function configuredMaxAgeMs(value) {
 	if (value === undefined || value === '') return DEFAULT_MAX_SNAPSHOT_AGE_MS;
@@ -68,7 +115,7 @@ function configuredMaxAgeMs(value) {
  * @param {ReadinessOptions} [options]
  */
 export function validatePublicDiscoveryReadiness(
-	{ manifest, allList, excludeCwcList, relations },
+	{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
 	{ requireContent = true, maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS, now = Date.now() } = {}
 ) {
 	if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) {
@@ -116,6 +163,8 @@ export function validatePublicDiscoveryReadiness(
 		['allList', allList],
 		['excludeCwcList', excludeCwcList]
 	];
+	/** @type {Record<string, Set<unknown>>} */
+	const visibleIds = { allList: new Set(), excludeCwcList: new Set() };
 	for (const [name, payload] of listPayloads) {
 		if (!isRecord(payload)) {
 			errors.push(`${name} is missing`);
@@ -129,29 +178,55 @@ export function validatePublicDiscoveryReadiness(
 		}
 		if (!Array.isArray(payload.templates)) {
 			errors.push(`${name}.templates is not an array`);
-		} else if (requireContent && payload.templates.length === 0) {
-			errors.push(`${name}.templates is empty for a populated production release`);
+		} else {
+			visibleIds[name] = validateTemplateProjection(
+				name,
+				payload.templates,
+				name === 'excludeCwcList',
+				errors
+			);
+			if (requireContent && payload.templates.length === 0) {
+				errors.push(`${name}.templates is empty for a populated production release`);
+			}
 		}
 	}
 
-	if (!isRecord(relations)) {
-		errors.push('relations payload is missing');
-	} else {
-		if (relations.revision !== relationState?.revision) {
-			errors.push('relations.revision does not match manifest.relations.revision');
+	/** @type {Array<[string, unknown, Set<unknown>]>} */
+	const relationPayloads = [
+		['allRelations', allRelations, visibleIds.allList],
+		['excludeCwcRelations', excludeCwcRelations, visibleIds.excludeCwcList]
+	];
+	for (const [name, payload, matchingIds] of relationPayloads) {
+		if (!isRecord(payload)) {
+			errors.push(`${name} payload is missing`);
+			continue;
 		}
-		if (relations.updatedAt !== relationState?.updatedAt) {
-			errors.push('relations.updatedAt does not match manifest.relations.updatedAt');
+		if (payload.revision !== relationState?.revision) {
+			errors.push(`${name}.revision does not match manifest.relations.revision`);
 		}
-		if (!Array.isArray(relations.twinEdges)) errors.push('relations.twinEdges is not an array');
-		if (!isRecord(relations.conceptRelations)) {
-			errors.push('relations.conceptRelations is missing');
+		if (payload.updatedAt !== relationState?.updatedAt) {
+			errors.push(`${name}.updatedAt does not match manifest.relations.updatedAt`);
+		}
+		if (!Array.isArray(payload.twinEdges)) {
+			errors.push(`${name}.twinEdges is not an array`);
 		} else {
-			if (!Array.isArray(relations.conceptRelations.edges)) {
-				errors.push('relations.conceptRelations.edges is not an array');
+			validateVisibleEndpoints(`${name}.twinEdges`, payload.twinEdges, matchingIds, errors);
+		}
+		if (!isRecord(payload.conceptRelations)) {
+			errors.push(`${name}.conceptRelations is missing`);
+		} else {
+			if (!Array.isArray(payload.conceptRelations.edges)) {
+				errors.push(`${name}.conceptRelations.edges is not an array`);
+			} else {
+				validateVisibleEndpoints(
+					`${name}.conceptRelations.edges`,
+					payload.conceptRelations.edges,
+					matchingIds,
+					errors
+				);
 			}
-			if (!isRecord(relations.conceptRelations.conceptMap)) {
-				errors.push('relations.conceptRelations.conceptMap is not an object');
+			if (!isRecord(payload.conceptRelations.conceptMap)) {
+				errors.push(`${name}.conceptRelations.conceptMap is not an object`);
 			}
 		}
 	}
@@ -159,7 +234,8 @@ export function validatePublicDiscoveryReadiness(
 	const sizes = {
 		allList: Buffer.byteLength(JSON.stringify(allList ?? null)),
 		excludeCwcList: Buffer.byteLength(JSON.stringify(excludeCwcList ?? null)),
-		relations: Buffer.byteLength(JSON.stringify(relations ?? null))
+		allRelations: Buffer.byteLength(JSON.stringify(allRelations ?? null)),
+		excludeCwcRelations: Buffer.byteLength(JSON.stringify(excludeCwcRelations ?? null))
 	};
 	for (const [name, bytes] of Object.entries(sizes)) {
 		if (bytes > MAX_SNAPSHOT_BYTES) {
@@ -178,10 +254,14 @@ export function validatePublicDiscoveryReadiness(
 	const readyRelationState = /** @type {{ revision: number; updatedAt: number }} */ (relationState);
 	const readyAllList = /** @type {{ templates: unknown[] }} */ (allList);
 	const readyExcludeCwcList = /** @type {{ templates: unknown[] }} */ (excludeCwcList);
-	const readyRelations = /** @type {{
+	const readyAllRelations = /** @type {{
 	 * twinEdges: unknown[];
 	 * conceptRelations: { edges: unknown[] };
-	 * }} */ (relations);
+	 * }} */ (allRelations);
+	const readyExcludeCwcRelations = /** @type {{
+	 * twinEdges: unknown[];
+	 * conceptRelations: { edges: unknown[] };
+	 * }} */ (excludeCwcRelations);
 
 	return {
 		listRevision: readyListState.revision,
@@ -190,8 +270,10 @@ export function validatePublicDiscoveryReadiness(
 		relationsAgeMs: now - readyRelationState.updatedAt,
 		allCount: readyAllList.templates.length,
 		excludeCwcCount: readyExcludeCwcList.templates.length,
-		twinEdgeCount: readyRelations.twinEdges.length,
-		conceptEdgeCount: readyRelations.conceptRelations.edges.length,
+		allTwinEdgeCount: readyAllRelations.twinEdges.length,
+		allConceptEdgeCount: readyAllRelations.conceptRelations.edges.length,
+		excludeCwcTwinEdgeCount: readyExcludeCwcRelations.twinEdges.length,
+		excludeCwcConceptEdgeCount: readyExcludeCwcRelations.conceptRelations.edges.length,
 		sizes
 	};
 }
@@ -260,7 +342,7 @@ export async function verifyPublicDiscoveryReadiness(
 		'templates:publicDiscoveryManifest',
 		timeoutMs
 	);
-	const [allList, excludeCwcList, relations] = await Promise.all([
+	const [allList, excludeCwcList, allRelations, excludeCwcRelations] = await Promise.all([
 		withTimeout(
 			client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: false }),
 			'templates:publicDiscoveryList(all)',
@@ -272,14 +354,19 @@ export async function verifyPublicDiscoveryReadiness(
 			timeoutMs
 		),
 		withTimeout(
-			client.query(anyApi.templates.publicDiscoveryRelations, {}),
-			'templates:publicDiscoveryRelations',
+			client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: false }),
+			'templates:publicDiscoveryRelations(all)',
+			timeoutMs
+		),
+		withTimeout(
+			client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: true }),
+			'templates:publicDiscoveryRelations(excludeCwc)',
 			timeoutMs
 		)
 	]);
 
 	return validatePublicDiscoveryReadiness(
-		{ manifest, allList, excludeCwcList, relations },
+		{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
 		{ requireContent, maxAgeMs, now }
 	);
 }

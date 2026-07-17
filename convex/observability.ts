@@ -88,14 +88,24 @@ const COVERAGE_FLOOR = 0.5;
 /**
  * Public service-liveness probe.
  *
- * Reaching and executing this function proves that the deployment is enabled
- * without reading any database document. Keep this deliberately constant: an
- * uptime monitor must not turn one embedding-bearing application row into
- * continuous database I/O.
+ * Reaching and executing this function proves both that the deployment is
+ * enabled and that its data plane can serve an indexed read. The manifest is a
+ * tiny control-plane singleton, so the uptime monitor never hydrates an
+ * embedding-bearing application row.
  */
 export const servicePing = query({
 	args: {},
-	handler: () => ({ ok: true as const }),
+	handler: async (ctx) => {
+		const manifest = await ctx.db
+			.query('publicDiscoveryManifest')
+			.withIndex('by_key', (q) => q.eq('key', 'public'))
+			.first();
+		return {
+			ok: true as const,
+			storageReadable: true as const,
+			discoveryManifestPresent: manifest !== null
+		};
+	}
 });
 
 export const getBoundaryCellRate24h = internalQuery({

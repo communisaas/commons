@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockServerQuery, api } = vi.hoisted(() => ({
 	mockServerQuery: vi.fn(),
@@ -30,7 +30,12 @@ describe('/api/health', () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
 	});
 
-	it('uses the zero-read Convex service ping and reports a healthy dependency set', async () => {
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.unstubAllGlobals();
+	});
+
+	it('uses the singleton-read Convex service ping and reports a healthy dependency set', async () => {
 		mockServerQuery.mockResolvedValue({ ok: true });
 
 		const response = await GET(event());
@@ -46,6 +51,19 @@ describe('/api/health', () => {
 		mockServerQuery.mockRejectedValue(new Error('deployment disabled'));
 
 		const response = await GET(event());
+		const body = await response.json();
+
+		expect(response.status).toBe(503);
+		expect(body).toMatchObject({ status: 'down', convex: false, atlas: { status: 'ok' } });
+	});
+
+	it('bounds a never-settling Convex probe and reports it unhealthy', async () => {
+		vi.useFakeTimers();
+		mockServerQuery.mockReturnValue(new Promise(() => {}));
+
+		const responsePromise = GET(event());
+		await vi.advanceTimersByTimeAsync(5_000);
+		const response = await responsePromise;
 		const body = await response.json();
 
 		expect(response.status).toBe(503);

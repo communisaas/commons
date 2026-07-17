@@ -8,7 +8,7 @@
       "status": "blocked_external",
       "owner": "team billing administrator",
       "description": "Upgrade or reactivate the shared Convex team after the database-I/O quota suspension, disable the root-page uptime probe, and establish enough I/O headroom for one bounded rebuild.",
-      "acceptance": "Production deploys and zero-read servicePing calls succeed; the monitor no longer requests `/`; quota/billing state is active."
+      "acceptance": "Production deploys and bounded one-document servicePing calls succeed; the monitor no longer requests `/`; quota/billing state is active."
     },
     {
       "id": "PD-10",
@@ -35,7 +35,7 @@
       "status": "operator_gate",
       "owner": "release operator",
       "description": "Run the composite homepage snapshot rebuild and verify the public manifest reports both list and relations ready at nonzero revisions.",
-      "acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; list sourceCap is 250, relation sourceCap is 50, expected corpus counts are nonzero, every snapshot is below 900000 bytes, and both manifest families are ready at timestamps no more than 26 hours old."
+      "acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; list sourceCap and relation sourceScanCap are 250, each relation variant sourceCap is 50, expected corpus counts are nonzero, all four payloads are below 900000 bytes, and both manifest families are ready at timestamps no more than 26 hours old."
     },
     {
       "id": "PD-40",
@@ -52,8 +52,8 @@
       "name": "Gate and deploy frontend consumer",
       "status": "operator_gate",
       "owner": "release operator and GitHub Actions",
-      "description": "Keep native Cloudflare Git production deployment disabled and use the gated Wrangler workflow to deploy the same verified SHA only after PD-30 and PD-40.",
-      "acceptance": "The Pages source config reports production_deployments_enabled=false, and the immutable workflow deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed."
+      "description": "Keep native Cloudflare Git production deployment disabled and use the provenance-gated Wrangler workflow to deploy the same verified SHA only after PD-30 and PD-40; reserve the audited manual readiness bypass for unrelated emergency hotfixes.",
+      "acceptance": "The Pages source config reports production_deployments_enabled=false, and the immutable workflow deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed; any emergency bypass is followed by producer repair and an unbypassed readiness run."
     },
     {
       "id": "PD-60",
@@ -70,7 +70,7 @@
       "name": "Live smoke and observation",
       "status": "operator_gate",
       "owner": "release operator",
-      "description": "Verify list, graph, API cache headers, zero-read health, and post-warm Convex I/O, then move the uptime monitor to `/api/health`.",
+      "description": "Verify list, graph, API cache headers, bounded control-plane health, and post-warm Convex I/O, then move the uptime monitor to `/api/health`.",
       "acceptance": "Public paths render, health returns 200/ok, only snapshot tables appear in public-query reads, and database I/O stays flat relative to page requests."
     },
     {

@@ -12,8 +12,8 @@ export const PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS = 60 * 1000;
 /**
  * The list materialization is deliberately expensive relative to its tiny
  * manifest. Event-driven refreshes therefore cannot run more than once per six
- * hours. Operator, cron, and first-embedding composite rebuilds remain explicit
- * bypasses and publish immediately.
+ * hours. Operator and cron composite rebuilds remain explicit bypasses and
+ * publish immediately.
  */
 export const PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -71,7 +71,8 @@ export async function getPublicDiscoveryManifestRow(ctx: MutationCtx): Promise<M
 	return await ctx.db
 		.query('publicDiscoveryManifest')
 		.withIndex('by_key', (q) => q.eq('key', PUBLIC_DISCOVERY_MANIFEST_KEY))
-		.unique();
+		.order('desc')
+		.first();
 }
 
 function manifestInsertBase(): Omit<Manifest, '_id' | '_creationTime'> {
@@ -126,7 +127,7 @@ export async function preparePublicDiscoveryRelationsPublication(
 	return { revision: (manifest?.relationsRevision ?? 0) + 1, updatedAt };
 }
 
-/** Mark a fully-written relation snapshot as the new public revision. */
+/** Mark both fully-written relation variants as the new public revision. */
 export async function commitPublicDiscoveryRelationsPublication(
 	ctx: MutationCtx,
 	publication: { revision: number; updatedAt: number }
@@ -268,6 +269,18 @@ async function markPublicDiscoveryFamiliesDirty(
 }
 
 /**
+ * Convex mutations commit under serializable optimistic concurrency control.
+ * That guarantee is load-bearing here: after the first writer sets a dirty bit
+ * and owns a scheduled token, later writers intentionally avoid another
+ * manifest patch. A flush range-reads the source index in its own transaction;
+ * a source write that commits across that read either serializes before the
+ * flush (and is included) or after it (and retains/schedules the next dirty
+ * generation). Convex retries a conflicting flush rather than letting it clear
+ * a generation whose source write was omitted.
+ *
+ * Keep the source write and this dirty-mark call in the same mutation. Moving
+ * either side outside that transaction would invalidate the no-drop argument.
+ *
  * Mark the list payload dirty and ensure exactly one bounded refresh job owns
  * the current window. Every caller writes only this singleton; duplicate writes
  * reuse the same scheduled token.

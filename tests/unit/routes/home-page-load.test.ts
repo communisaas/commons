@@ -94,7 +94,9 @@ describe('home page load', () => {
 		await vi.waitFor(() => expect(mockServerQuery).toHaveBeenCalledTimes(3));
 		const result = (await pending) as Awaited<ReturnType<typeof load>>;
 
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {});
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {
+			excludeCwc: true
+		});
 		expect(result).toMatchObject({
 			templates: [{ id: 'template_1' }],
 			relationEdges: [{ kind: 'twin', score: 0.9 }],

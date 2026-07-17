@@ -4,7 +4,11 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { getCachedPublicTemplates } from '$lib/server/public-template-queries';
+import {
+	getCachedPublicTemplates,
+	PublicDiscoverySnapshotNotReadyError
+} from '$lib/server/public-template-queries';
+import { FEATURES } from '$lib/config/features';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
@@ -69,6 +73,15 @@ interface CreateTemplateRequest {
 }
 
 type ValidationError = ApiError;
+
+const SOURCE_TITLE_MAX_LENGTH = 500;
+const SOURCE_URL_MAX_LENGTH = 2_048;
+const SOURCE_TYPE_MAX_LENGTH = 64;
+const RESEARCH_LOG_ENTRY_MAX_LENGTH = 1_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function validateTemplateData(data: unknown): {
 	isValid: boolean;
@@ -144,6 +157,14 @@ function validateTemplateData(data: unknown): {
 		);
 	}
 
+	for (const field of ['slug', 'description', 'domain'] as const) {
+		if (templateData[field] !== undefined && typeof templateData[field] !== 'string') {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be a string`)
+			);
+		}
+	}
+
 	// bound remaining caller-supplied strings + arrays before
 	// they hit Gemini moderation + Convex insert. type/deliveryMethod are
 	// enum-like (downstream Convex validates the actual values); cap length
@@ -176,19 +197,88 @@ function validateTemplateData(data: unknown): {
 			createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters')
 		);
 	}
-	if (Array.isArray(templateData.sources) && templateData.sources.length > 50) {
+	if (templateData.sources !== undefined && !Array.isArray(templateData.sources)) {
 		errors.push(
-			createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries')
+			createValidationError('sources', 'VALIDATION_INVALID_FORMAT', 'sources must be an array')
 		);
+	} else if (Array.isArray(templateData.sources)) {
+		if (templateData.sources.length > 50) {
+			errors.push(
+				createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries')
+			);
+		}
+
+		for (const [index, source] of templateData.sources.entries()) {
+			if (
+				!isRecord(source) ||
+				typeof source.num !== 'number' ||
+				!Number.isFinite(source.num) ||
+				typeof source.title !== 'string' ||
+				typeof source.url !== 'string' ||
+				typeof source.type !== 'string'
+			) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_INVALID_FORMAT',
+						`sources[${index}] must contain a finite num and string title, url, and type`
+					)
+				);
+				continue;
+			}
+
+			if (
+				source.title.length > SOURCE_TITLE_MAX_LENGTH ||
+				source.url.length > SOURCE_URL_MAX_LENGTH ||
+				source.type.length > SOURCE_TYPE_MAX_LENGTH
+			) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_TOO_LONG',
+						`sources[${index}] exceeds the title, URL, or type length limit`
+					)
+				);
+			}
+		}
 	}
-	if (Array.isArray(templateData.research_log) && templateData.research_log.length > 200) {
+	if (templateData.research_log !== undefined && !Array.isArray(templateData.research_log)) {
 		errors.push(
 			createValidationError(
 				'research_log',
-				'VALIDATION_TOO_LONG',
-				'research_log must have ≤200 entries'
+				'VALIDATION_INVALID_FORMAT',
+				'research_log must be an array'
 			)
 		);
+	} else if (Array.isArray(templateData.research_log)) {
+		if (templateData.research_log.length > 200) {
+			errors.push(
+				createValidationError(
+					'research_log',
+					'VALIDATION_TOO_LONG',
+					'research_log must have ≤200 entries'
+				)
+			);
+		}
+		for (const [index, entry] of templateData.research_log.entries()) {
+			if (typeof entry !== 'string') {
+				errors.push(
+					createValidationError(
+						'research_log',
+						'VALIDATION_INVALID_FORMAT',
+						`research_log[${index}] must be a string`
+					)
+				);
+			} else if (entry.length > RESEARCH_LOG_ENTRY_MAX_LENGTH) {
+				errors.push(
+					createValidationError(
+						'research_log',
+						'VALIDATION_TOO_LONG',
+						`research_log[${index}] must be ≤${RESEARCH_LOG_ENTRY_MAX_LENGTH.toLocaleString()} characters`
+					)
+				);
+			}
+		}
 	}
 
 	if (errors.length > 0) {
@@ -224,20 +314,45 @@ function validateTemplateData(data: unknown): {
 }
 
 // GET fully migrated to Convex
-export const GET: RequestHandler = async ({ url, platform, setHeaders }) => {
-	setHeaders({
-		// The payload itself is revision-cached in Cache API + KV. Keep the outer
-		// HTTP response on the same one-minute freshness bound as the manifest so
-		// the CDN cannot hide a newly published revision for another six hours.
-		// Do not use s-maxage here: it implies proxy-revalidate and disables both
-		// stale-while-revalidate and stale-if-error at Cloudflare. Set this before
-		// the loader so a 5xx revalidation can use a previously cached good body.
-		'Cache-Control':
-			'public, max-age=60, stale-while-revalidate=30, stale-if-error=604800'
-	});
-	const templates = await getCachedPublicTemplates({ url, platform }, false);
-	const response: StructuredApiResponse = { success: true, data: templates };
-	return json(response);
+export const GET: RequestHandler = async ({ url, platform }) => {
+	const successHeaders = {
+		// The stored successful response owns stale-if-error behavior. A failed
+		// revalidation can therefore reuse a prior good body without ever marking
+		// the error response itself public-cacheable.
+		'Cache-Control': 'public, max-age=60, stale-while-revalidate=30, stale-if-error=604800'
+	};
+	const coldHeaders = {
+		// A cold empty collection is compatible, but it is not a last-known-good
+		// payload worth serving stale through a producer outage.
+		'Cache-Control': 'public, max-age=60'
+	};
+
+	try {
+		const templates = await getCachedPublicTemplates({ url, platform }, !FEATURES.CONGRESSIONAL);
+		const response: StructuredApiResponse = { success: true, data: templates };
+		return json(response, { headers: successHeaders });
+	} catch (error) {
+		// Preserve the API's historical cold-start contract: before the first
+		// snapshot publication, public discovery is an honest empty collection.
+		if (error instanceof PublicDiscoverySnapshotNotReadyError) {
+			const response: StructuredApiResponse = { success: true, data: [] };
+			return json(response, { headers: coldHeaders });
+		}
+
+		console.error('[api/templates] Public discovery read failed:', error);
+		const response: StructuredApiResponse = {
+			success: false,
+			error: createApiError(
+				'server',
+				'SERVER_DATABASE',
+				'Public templates are temporarily unavailable'
+			)
+		};
+		return json(response, {
+			status: 503,
+			headers: { 'Cache-Control': 'no-store' }
+		});
+	}
 };
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
@@ -250,10 +365,16 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		if (!requestUser) {
 			const response: StructuredApiResponse = {
 				success: false,
-				error: createApiError('auth', 'AUTH_REQUIRED', 'Authentication required to create templates')
+				error: createApiError(
+					'auth',
+					'AUTH_REQUIRED',
+					'Authentication required to create templates'
+				)
 			};
 			return json(response, { status: 401 });
 		}
+		// `handleAuth` calls authOps.validateSession for every request and hydrates
+		// these fields from the current Convex user document, not from JWT claims.
 		if (requestUser.is_verified !== true && (requestUser.trust_score ?? 0) < 100) {
 			const response: StructuredApiResponse = {
 				success: false,
@@ -568,8 +689,9 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 								const domainHue = projectToHue(embeddings[1]);
 
-								await serverMutation(api.templates.updateEmbeddings, {
+								await serverMutation(api.templates.completePublicTemplateEmbeddings, {
 									templateId: templateId as Id<'templates'>,
+									expectedUserId: user.id as Id<'users'>,
 									locationEmbedding: embeddings[0],
 									topicEmbedding: embeddings[1],
 									domainHue,

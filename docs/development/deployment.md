@@ -158,7 +158,7 @@ cutover. Never begin Gemini repair while the status is `running` or
 
 Production Pages deployments enforce the producer gate mechanically with
 `scripts/verify-public-discovery-readiness.mjs`: both snapshot families must be
-ready, both list variants and the relation payload must match their manifest
+ready, both list variants and both relation variants must match their manifest
 revisions, the known production corpus must be non-empty, every payload must be
 below 900,000 bytes, and both materialization timestamps must be no more than
 26 hours old before upload. The 26-hour bound allows two hours of scheduling
@@ -195,6 +195,12 @@ to `main` before pushing or dispatching `production`, then verify that the run
 checked out the intended workflow and SHA. Never rely on the old default-branch
 deploy definition for this cutover.
 
+Automatic deploys accept only the current remote head of their selected branch.
+If a slower CI run for an older push finishes after a newer push, its source
+verification fails instead of rolling the environment backward. Manual dispatch
+retains the explicit ancestor rule so an operator can intentionally redeploy a
+prior contained SHA.
+
 For a manual redeploy, the requested ref must already be contained in the selected branch:
 
 ```bash
@@ -204,11 +210,32 @@ gh workflow run deploy.yml --ref production \
 ```
 
 The manual path resolves an exact SHA and cannot bypass the static Convex query-efficiency
-guardrail, focused public-discovery checks, full test suite, application checks, Convex
-type checks, or the live producer-readiness gate. The backend remains an explicit operator
-step because the Pages workflow has no established Convex deploy credential. See
+guardrail, focused public-discovery checks, full test suite, application checks, or Convex
+type checks. The live producer-readiness gate also remains mandatory in normal releases.
+The backend remains an explicit operator step because the Pages workflow has no established
+Convex deploy credential. See
 `docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
 `docs/strategy/public-discovery-release-hypergraph/` for the go/no-go evidence.
+
+If stale discovery state would block an unrelated emergency security or availability
+hotfix, an operator may use the manual-only
+`skip_public_discovery_readiness=true` input. This does not bypass source provenance,
+branch ancestry, CI, tests, or type checks, and the workflow emits an auditable warning.
+Never use it for a discovery-affecting release. Immediately after the hotfix, repair the
+producer and run a normal dispatch without the bypass:
+
+```bash
+gh workflow run deploy.yml --ref production \
+  -f branch=production \
+  -f ref="$RELEASE_SHA" \
+  -f skip_public_discovery_readiness=true
+
+# After producer recovery, prove the gate normally before considering the incident closed.
+npm run verify:public-discovery-readiness
+gh workflow run deploy.yml --ref production \
+  -f branch=production \
+  -f ref="$RELEASE_SHA"
+```
 
 ### Preview Deploy (non-production branch)
 

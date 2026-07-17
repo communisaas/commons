@@ -185,6 +185,7 @@ export const getBySlug = query({
 });
 
 type PublicTemplateSnapshotKey = "all" | "excludeCwc";
+type RelationSnapshotKey = PublicTemplateSnapshotKey;
 const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
 // TemplateCard renders three avatars. Read the newest six endorsement rows so
 // filtering a possible owner endorsement still leaves a bounded display sample.
@@ -192,7 +193,7 @@ const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
 // rows and <=600 endorsement-org gets. The authoritative counter travels
 // separately; this array is never a total.
 const PUBLIC_TEMPLATE_ENDORSEMENT_CAP = 6;
-const RELATION_SNAPSHOT_SCAN_CAP = 50;
+const RELATION_SNAPSHOT_VARIANT_CAP = 50;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
 const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -444,7 +445,8 @@ export const publicDiscoveryManifest = query({
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
+      .order("desc")
+      .first();
     return toPublicDiscoveryManifestPayload(manifest);
   },
 });
@@ -465,7 +467,8 @@ export const listPublic = query({
     const snapshot = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
+      .order("desc")
+      .first();
     return Array.isArray(snapshot?.templates)
       ? (snapshot.templates as PublicTemplatePayload[])
       : [];
@@ -485,7 +488,8 @@ export const publicDiscoveryList = query({
     const snapshot = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
+      .order("desc")
+      .first();
     return {
       revision: snapshot?.revision ?? 0,
       updatedAt: snapshot?.updatedAt ?? null,
@@ -573,7 +577,8 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
     const existing = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", row.key))
-      .unique();
+      .order("desc")
+      .first();
     if (existing) {
       await ctx.db.patch(existing._id, row);
     } else {
@@ -671,13 +676,15 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
 });
 
 /**
- * Singleton selectors for the public-corpus normalization and its materialized
- * relation result. They intentionally share the same key but live in separate
- * tables: the calibration row contains a 768-dimension centroid needed only by
- * the nightly rebuild, while request-path reads touch only the compact snapshot.
+ * Selector for the public-corpus normalization. Relation payloads use the same
+ * `all` / `excludeCwc` keys as their list variants so every returned edge has
+ * endpoints in the exact graph being displayed.
  */
 const RELATEDNESS_CALIBRATION_KEY = "public";
-const RELATION_SNAPSHOT_KEY = "public";
+
+function relationSnapshotKey(excludeCwc: boolean | undefined): RelationSnapshotKey {
+  return excludeCwc ? "excludeCwc" : "all";
+}
 
 /** Leave headroom for Convex document system fields below the 1 MiB value cap. */
 const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
@@ -698,8 +705,9 @@ export const relatednessEdges = query({
   handler: async (ctx): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
-      .unique();
+      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .order("desc")
+      .first();
     return snapshot?.twinEdges ?? [];
   },
 });
@@ -728,10 +736,10 @@ export const recomputeRelatednessCalibration = internalMutation({
       .query("templates")
       .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
       .order("desc")
-      .take(RELATION_SNAPSHOT_SCAN_CAP);
+      .take(RELATION_SNAPSHOT_VARIANT_CAP);
 
     const items = templates
-      .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+      .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length === 768)
       .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
     const calibration = computeCalibration(items);
@@ -743,7 +751,8 @@ export const recomputeRelatednessCalibration = internalMutation({
     const existing = await ctx.db
       .query("relatednessCalibration")
       .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
-      .unique();
+      .order("desc")
+      .first();
 
     const row = {
       key: RELATEDNESS_CALIBRATION_KEY,
@@ -796,8 +805,9 @@ export const conceptRelations = query({
   }> => {
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
-      .unique();
+      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .order("desc")
+      .first();
     if (!snapshot) return { edges: [], conceptMap: {} };
 
     return {
@@ -813,12 +823,14 @@ export const conceptRelations = query({
  * concept data can never come from different cache generations.
  */
 export const publicDiscoveryRelations = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { excludeCwc: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const key = relationSnapshotKey(args.excludeCwc);
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
-      .unique();
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .order("desc")
+      .first();
     if (!snapshot) {
       return {
         revision: 0,
@@ -843,26 +855,26 @@ export const publicDiscoveryRelations = query({
 });
 
 /**
- * Nightly materialization for both public relation queries.
+ * Nightly materialization for both public relation variants.
  *
  * This is the ONLY request-independent path that reads the embedding-heavy
  * public template corpus. It preserves the former scoring and filtering rules
  * over an explicitly bounded discovery corpus:
  *
- * - the corpus is the newest 50 templates where
- *   `status === "published" && isPublic === true`, matching the bounded homepage
- *   discovery source; the graph consumes only edges whose endpoints are among
- *   its displayed top-50 nodes;
+ * - one bounded newest-250 source scan derives the same newest-50 `all` and
+ *   newest-50 non-CWC sets as the list materialization;
+ * - each graph consumes only edges whose endpoints are in its displayed list;
  * - twin edges fit their calibration from this exact bounded generation, so a
  *   stale optional maintenance row cannot skew a newly published snapshot;
  * - concept clustering pools one vector per distinct raw tag across that same
  *   corpus, then relates all tagged templates against the resulting concepts.
  *
- * The compact result is published atomically as one singleton. If computation
- * or the size guard fails, the mutation writes nothing and the last good
- * snapshot remains available. Public queries never fall back to this scan.
+ * Both compact results are size-checked before either is written, then published
+ * under one manifest revision. If computation or a guard fails, Convex mutation
+ * atomicity preserves both last-good rows. Public queries never fall back to
+ * this scan.
  */
-type RelationSnapshotRebuildResult = {
+type RelationSnapshotVariantRebuildResult = {
   sourceCap: number;
   sourceTemplateCount: number;
   embeddedTemplateCount: number;
@@ -872,19 +884,30 @@ type RelationSnapshotRebuildResult = {
   snapshotBytes: number;
 };
 
-async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSnapshotRebuildResult> {
-  // Reserve without advancing the manifest. The relation row becomes the new
-  // revision only after its size guard and upsert both succeed.
-  const publication = await preparePublicDiscoveryRelationsPublication(ctx);
-  const templates = await ctx.db
-    .query("templates")
-    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
-    .order("desc")
-    .take(RELATION_SNAPSHOT_SCAN_CAP);
-
+function buildRelationSnapshotVariant(
+  key: RelationSnapshotKey,
+  templates: Doc<"templates">[],
+  publication: { revision: number; updatedAt: number },
+): {
+  snapshot: {
+    key: RelationSnapshotKey;
+    revision: number;
+    twinEdges: ReturnType<typeof computeTwinEdges>;
+    conceptEdges: ReturnType<typeof conceptEdges>;
+    conceptEntries: Array<{ tag: string; concept: string }>;
+    sourceCap: number;
+    sourceTemplateCount: number;
+    embeddedTemplateCount: number;
+    tagVectorCount: number;
+    updatedAt: number;
+  };
+  result: RelationSnapshotVariantRebuildResult;
+} {
   // Measured twins: missing embeddings contribute no edge, exactly as before.
+  // Reject malformed legacy vectors before calibration: the first vector must
+  // never get to redefine the canonical dimensionality for the whole corpus.
   const items = templates
-    .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length > 0)
+    .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length === 768)
     .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
   // Fit the matched centroid/threshold from the exact snapshot generation.
@@ -919,7 +942,7 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
         typeof tagEmbedding.tag === "string" &&
         currentTagSet.has(tagEmbedding.tag) &&
         Array.isArray(tagEmbedding.embedding) &&
-        tagEmbedding.embedding.length > 0 &&
+        tagEmbedding.embedding.length === 768 &&
         !seenTag.has(tagEmbedding.tag)
       ) {
         seenTag.add(tagEmbedding.tag);
@@ -939,12 +962,12 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
   }));
 
   const snapshot = {
-    key: RELATION_SNAPSHOT_KEY,
+    key,
     revision: publication.revision,
     twinEdges,
     conceptEdges: conceptEdgesResult,
     conceptEntries,
-    sourceCap: RELATION_SNAPSHOT_SCAN_CAP,
+    sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
     sourceTemplateCount: templates.length,
     embeddedTemplateCount: items.length,
     tagVectorCount: tagVectors.length,
@@ -954,29 +977,74 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
   // signature, but every field above is a concrete Convex value.
   const snapshotBytes = getConvexSize(snapshot as unknown as Value);
   if (snapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
-    throw new Error(`RELATION_SNAPSHOT_TOO_LARGE:${snapshotBytes}>${MAX_RELATION_SNAPSHOT_BYTES}`);
+    throw new Error(
+      `RELATION_SNAPSHOT_TOO_LARGE:${key}:${snapshotBytes}>${MAX_RELATION_SNAPSHOT_BYTES}`,
+    );
   }
 
-  const existing = await ctx.db
-    .query("templateRelationSnapshots")
-    .withIndex("by_key", (q) => q.eq("key", RELATION_SNAPSHOT_KEY))
-    .unique();
-  if (existing) {
-    await ctx.db.patch(existing._id, snapshot);
-  } else {
-    await ctx.db.insert("templateRelationSnapshots", snapshot);
+  return {
+    snapshot,
+    result: {
+      sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
+      sourceTemplateCount: templates.length,
+      embeddedTemplateCount: items.length,
+      tagVectorCount: tagVectors.length,
+      twinEdgeCount: twinEdges.length,
+      conceptEdgeCount: conceptEdgesResult.length,
+      snapshotBytes,
+    },
+  };
+}
+
+type RelationSnapshotRebuildResult = {
+  sourceScanCap: number;
+  scannedCount: number;
+  all: RelationSnapshotVariantRebuildResult;
+  excludeCwc: RelationSnapshotVariantRebuildResult;
+};
+
+async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSnapshotRebuildResult> {
+  // Reserve without advancing the manifest. Both relation rows become visible
+  // only after both size guards and upserts succeed.
+  const publication = await preparePublicDiscoveryRelationsPublication(ctx);
+  const candidates = await ctx.db
+    .query("templates")
+    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
+    .order("desc")
+    .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+  const sources: Record<RelationSnapshotKey, Doc<"templates">[]> = {
+    all: candidates.slice(0, RELATION_SNAPSHOT_VARIANT_CAP),
+    excludeCwc: candidates
+      .filter((template) => template.deliveryMethod !== "cwc")
+      .slice(0, RELATION_SNAPSHOT_VARIANT_CAP),
+  };
+
+  // Building both variants performs every size check before the first write.
+  const variants = {
+    all: buildRelationSnapshotVariant("all", sources.all, publication),
+    excludeCwc: buildRelationSnapshotVariant("excludeCwc", sources.excludeCwc, publication),
+  };
+
+  for (const key of ["all", "excludeCwc"] as const) {
+    const existing = await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .order("desc")
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, variants[key].snapshot);
+    } else {
+      await ctx.db.insert("templateRelationSnapshots", variants[key].snapshot);
+    }
   }
 
   await commitPublicDiscoveryRelationsPublication(ctx, publication);
 
   return {
-    sourceCap: RELATION_SNAPSHOT_SCAN_CAP,
-    sourceTemplateCount: templates.length,
-    embeddedTemplateCount: items.length,
-    tagVectorCount: tagVectors.length,
-    twinEdgeCount: twinEdges.length,
-    conceptEdgeCount: conceptEdgesResult.length,
-    snapshotBytes,
+    sourceScanCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
+    scannedCount: candidates.length,
+    all: variants.all.result,
+    excludeCwc: variants.excludeCwc.result,
   };
 }
 
@@ -1763,7 +1831,8 @@ export const topicEmbeddingMarkerMigrationStatus = internalQuery({
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
+      .order("desc")
+      .first();
     const startedAt = manifest?.topicEmbeddingMarkerMigrationStartedAt ?? null;
     const completedAt = manifest?.topicEmbeddingMarkerMigrationCompletedAt ?? null;
     return {
@@ -1819,8 +1888,9 @@ async function patchTemplateEmbeddingValues(
 
 /**
  * Update embeddings for one template owned by the authenticated caller.
- * `deferHomepageRebuild` controls only publication timing; it never changes
- * the ownership requirement.
+ * Snapshot publication always travels through the bounded dirty/coalescing
+ * path in `patchTemplateEmbeddingValues`; this mutation never starts a direct
+ * relation rebuild.
  */
 export const updateEmbeddings = mutation({
   args: {
@@ -1829,7 +1899,6 @@ export const updateEmbeddings = mutation({
     topicEmbedding: v.array(v.float64()),
     domainHue: v.optional(v.float64()),
     _secret: v.string(),
-    deferHomepageRebuild: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     requireInternalSecret(args._secret);
@@ -1839,20 +1908,52 @@ export const updateEmbeddings = mutation({
     if (!template) throw new Error("Template not found");
     if (template.userId !== userId) throw new Error("Unauthorized");
 
-    const shouldRebuildHomepage =
-      template.status === "published" &&
-      template.isPublic &&
-      template.topicEmbeddingsUpdatedAt === undefined;
+    await patchTemplateEmbeddingValues(ctx, template, args, "v1");
+  },
+});
+
+/**
+ * Complete the one missing embedding write started by an authenticated template
+ * creation request. The caller captures `expectedUserId` before entering its
+ * post-response continuation, so this bridge does not depend on request-local
+ * Convex auth surviving a `waitUntil`/provider await. The server secret protects
+ * the bridge, the expected owner prevents cross-request mixups, and missing-only
+ * semantics prevent it from becoming an embedding-overwrite capability.
+ *
+ * The original creation dirties both snapshot families. Completion always
+ * dirties relations and also dirties the list when domain hue changes, reusing
+ * the existing coalesced tokens; no first-embedding path can bypass the
+ * six-hour relation cost ceiling.
+ */
+export const completePublicTemplateEmbeddings = mutation({
+  args: {
+    templateId: v.id("templates"),
+    expectedUserId: v.id("users"),
+    locationEmbedding: v.array(v.float64()),
+    topicEmbedding: v.array(v.float64()),
+    domainHue: v.optional(v.float64()),
+    _secret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    assertEmbeddingDimensions(args);
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
+    if (template.userId !== args.expectedUserId) {
+      throw new Error("EMBEDDING_COMPLETION_OWNER_MISMATCH");
+    }
+    if (template.status !== "published" || !template.isPublic) {
+      throw new Error("EMBEDDING_COMPLETION_PUBLIC_TEMPLATE_REQUIRED");
+    }
+    if (
+      template.topicEmbeddingsUpdatedAt !== undefined ||
+      (Array.isArray(template.topicEmbedding) && template.topicEmbedding.length === 768)
+    ) {
+      throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
+    }
 
     await patchTemplateEmbeddingValues(ctx, template, args, "v1");
-
-    // Public creation defers embeddings/hue until its final step. Rebuild once,
-    // after the first embedding patch, so retries or later re-embeddings cannot
-    // turn this public mutation into an unbounded snapshot-rebuild trigger.
-    // High-frequency reach-counter writes intentionally do not schedule it.
-    if (shouldRebuildHomepage && !args.deferHomepageRebuild) {
-      await ctx.scheduler.runAfter(0, rebuildHomepageSnapshotsRef, {});
-    }
+    return { updated: true };
   },
 });
 
@@ -2144,8 +2245,8 @@ export const createTemplate = mutation({
     // Do not make public discovery publication depend on the external embedding
     // call. A new row can enter/evict the relation graph's bounded top-50 even
     // before it has vectors, so Gemini failure must still refresh both families.
-    // The first successful embedding patch below retains its immediate composite
-    // rebuild and clears these dirty markers atomically.
+    // A successful embedding patch below reuses the relation dirty token (and
+    // the list token when domain hue changes); it never starts a direct rebuild.
     if (args.status === "published" && args.isPublic) {
       await markPublicDiscoveryListAndRelationsDirty(ctx);
     }
@@ -2330,16 +2431,25 @@ export const patchEmbeddings = internalMutation({
 export const listMissingTagEmbeddings = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const templates = await ctx.db
+    const candidates = await ctx.db
       .query("templates")
       .withIndex("by_status_isPublic", (q) =>
         q.eq("status", "published").eq("isPublic", true),
       )
       .order("desc")
-      // Only this newest bounded corpus can enter the landing-page relation
-      // snapshot. Older rows need no Gemini work until the product deliberately
-      // expands that materialization cap.
-      .take(RELATION_SNAPSHOT_SCAN_CAP);
+      // Match the one bounded candidate scan used to derive both relation
+      // variants; older rows need no Gemini work until a variant can display
+      // them.
+      .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+
+    const selectedIds = new Set([
+      ...candidates.slice(0, RELATION_SNAPSHOT_VARIANT_CAP).map(({ _id }) => _id),
+      ...candidates
+        .filter(({ deliveryMethod }) => deliveryMethod !== "cwc")
+        .slice(0, RELATION_SNAPSHOT_VARIANT_CAP)
+        .map(({ _id }) => _id),
+    ]);
+    const templates = candidates.filter(({ _id }) => selectedIds.has(_id));
 
     return templates
       .map((t) => ({ doc: t, tags: normalizeTags(t.topics) }))
@@ -2347,7 +2457,7 @@ export const listMissingTagEmbeddings = internalQuery({
         if (tags.length === 0) return false; // nothing to embed
         const covered = new Set(
           (Array.isArray(doc.tagEmbeddings) ? doc.tagEmbeddings : [])
-            .filter((te) => te && Array.isArray(te.embedding) && te.embedding.length > 0)
+            .filter((te) => te && Array.isArray(te.embedding) && te.embedding.length === 768)
             .map((te) => te.tag),
         );
         // Re-embed only when some current tag has no embedding yet.

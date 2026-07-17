@@ -53,9 +53,10 @@ npx convex run --env-file .env.production templates:publicDiscoveryManifest '{}'
 
 The rebuild is a go only when:
 
-- list `sourceCap` is `250` and relation `sourceCap` is `50`;
+- list `sourceCap` and relation `sourceScanCap` are `250`, while each relation
+  variant's `sourceCap` is `50`;
 - list/relation corpus counts are nonzero for the current production corpus;
-- both list rows and the relation row are below `900000` bytes;
+- both list rows and both relation rows are below `900000` bytes;
 - the manifest reports `list.ready` and `relations.ready` with nonzero
   revisions; and
 - both manifest timestamps are no more than 26 hours old, allowing two hours
@@ -75,7 +76,12 @@ corresponding ready manifest revision:
 ```sh
 npx convex run templates:publicDiscoveryList \
   '{"excludeCwc":false}' --env-file .env.production
-npx convex run templates:publicDiscoveryRelations '{}' --env-file .env.production
+npx convex run templates:publicDiscoveryList \
+  '{"excludeCwc":true}' --env-file .env.production
+npx convex run templates:publicDiscoveryRelations \
+  '{"excludeCwc":false}' --env-file .env.production
+npx convex run templates:publicDiscoveryRelations \
+  '{"excludeCwc":true}' --env-file .env.production
 ```
 
 ## 3. Deploy the same frontend SHA
@@ -95,8 +101,8 @@ gh workflow run deploy.yml --ref production \
   -f ref="$RELEASE_SHA"
 ```
 
-The workflow queries the public manifest, both list variants, and the combined
-relation payload before upload. It refuses a cold manifest, empty production
+The workflow queries the public manifest, both list variants, and both combined
+relation variants before upload. It refuses a cold manifest, empty production
 corpus, revision skew, an oversized serialized payload, or a materialization
 timestamp more than 26 hours old. It then deploys an immutable Cloudflare Pages
 artifact through the sole standard Wrangler uploader, performs a

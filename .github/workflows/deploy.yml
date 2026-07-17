@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ''
+      skip_public_discovery_readiness:
+        description: 'Emergency production hotfix only: bypass the discovery freshness gate.'
+        required: false
+        type: boolean
+        default: false
   workflow_run:
     workflows: [CI Tests]
     types: [completed]
@@ -27,8 +32,55 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source-verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    env:
+      DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
+      DEPLOY_EVENT: ${{ github.event_name }}
+    outputs:
+      verified_sha: ${{ steps.resolve-sha.outputs.sha }}
+    steps:
+      # This job has no secrets and executes no code from the requested tree.
+      # It establishes repository identity and branch ancestry before npm ci can
+      # run lifecycle scripts in either downstream job.
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.branch) || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve and validate requested SHA
+        id: resolve-sha
+        run: |
+          verified_sha=$(git rev-parse HEAD)
+          git fetch --no-tags origin "${DEPLOY_BRANCH}"
+          if ! git merge-base --is-ancestor "${verified_sha}" "origin/${DEPLOY_BRANCH}"; then
+            echo "::error::Requested ref ${verified_sha} is not contained in origin/${DEPLOY_BRANCH}."
+            exit 1
+          fi
+          # A slower CI run for push A must not deploy after newer push B. Manual
+          # dispatch intentionally retains ancestor semantics for audited rollback.
+          if [ "${DEPLOY_EVENT}" = "workflow_run" ]; then
+            branch_head=$(git rev-parse "origin/${DEPLOY_BRANCH}")
+            if [ "${verified_sha}" != "${branch_head}" ]; then
+              echo "::error::Skipping stale CI result ${verified_sha}; current ${DEPLOY_BRANCH} head is ${branch_head}."
+              exit 1
+            fi
+          fi
+          echo "sha=${verified_sha}" >> "$GITHUB_OUTPUT"
+
   manual-verify:
-    if: github.event_name == 'workflow_dispatch'
+    needs: source-verify
+    if: github.event_name == 'workflow_dispatch' && needs.source-verify.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -55,27 +107,11 @@ jobs:
       SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
       BLAST_DISPATCH_SECRET: ci-test-blast-dispatch-secret-32b-padding-x
       BLAST_RECEIPTS_SECRET: ci-test-blast-receipts-secret-32b-padding-x
-    outputs:
-      verified_sha: ${{ steps.resolve-sha.outputs.sha }}
     steps:
-      - name: Checkout requested ref
+      - name: Checkout source-verified SHA
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref || inputs.branch }}
-          fetch-depth: 0
-
-      - name: Resolve and validate requested SHA
-        id: resolve-sha
-        env:
-          DEPLOY_BRANCH: ${{ inputs.branch }}
-        run: |
-          verified_sha=$(git rev-parse HEAD)
-          git fetch --no-tags origin "${DEPLOY_BRANCH}"
-          if ! git merge-base --is-ancestor "${verified_sha}" "origin/${DEPLOY_BRANCH}"; then
-            echo "::error::Requested ref ${verified_sha} is not contained in origin/${DEPLOY_BRANCH}."
-            exit 1
-          fi
-          echo "sha=${verified_sha}" >> "$GITHUB_OUTPUT"
+          ref: ${{ needs.source-verify.outputs.verified_sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -115,18 +151,25 @@ jobs:
         run: npx tsc --noEmit -p convex/tsconfig.json
 
   deploy:
-    needs: manual-verify
+    # workflow_run already passed the equivalent CI suite; workflow_dispatch
+    # uses manual-verify. source-verify gates repository identity and ancestry
+    # for both paths before this secret-bearing job executes requested code.
+    needs: [source-verify, manual-verify]
     if: >-
       always() &&
+      needs.source-verify.result == 'success' &&
       ((github.event_name == 'workflow_dispatch' && needs.manual-verify.result == 'success') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'))
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
       name: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
     env:
       DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
-      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && needs.manual-verify.outputs.verified_sha || github.event.workflow_run.head_sha }}
+      DEPLOY_REF: ${{ needs.source-verify.outputs.verified_sha }}
     permissions:
       contents: read
       deployments: write
@@ -226,8 +269,19 @@ jobs:
               ;;
           esac
 
+      - name: Record public-discovery readiness bypass
+        if: >-
+          env.DEPLOY_BRANCH == 'production' &&
+          github.event_name == 'workflow_dispatch' &&
+          inputs.skip_public_discovery_readiness
+        run: >-
+          echo "::warning::Emergency hotfix deploy is bypassing the public-discovery freshness gate;
+          restore producer freshness and run readiness verification immediately after release."
+
       - name: Require public-discovery producer readiness
-        if: env.DEPLOY_BRANCH == 'production'
+        if: >-
+          env.DEPLOY_BRANCH == 'production' &&
+          !(github.event_name == 'workflow_dispatch' && inputs.skip_public_discovery_readiness)
         env:
           # Daily essential-cron cadence plus two hours of scheduling tolerance.
           PUBLIC_DISCOVERY_MAX_AGE_HOURS: '26'

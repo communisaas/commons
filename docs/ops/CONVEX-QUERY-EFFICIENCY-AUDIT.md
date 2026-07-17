@@ -269,7 +269,7 @@ The repository already has the right primitive. `convex-test` exposes
 and database-query count. `convex/templates-read-budget.convex.test.ts:16-28,36-44`
 uses embedding-heavy fixtures and asserts compact snapshot reads below 2 KB;
 `convex/observability-service-ping.convex.test.ts:17-35` proves the health probe
-performs zero database reads.
+performs one indexed manifest read, returns one document, and stays below 2 KB.
 
 Add representative budgets in this order:
 
@@ -306,5 +306,5 @@ baseline.
 
 Static route-to-function mapping from this hypergraph plus function-log totals
 is enough to rank remediation without adding application writes. Continue to
-send uptime traffic only to the zero-read `/api/health` path, never to a dynamic
-product page.
+send uptime traffic only to the one-document, indexed `/api/health` control-plane
+probe, never to a dynamic product page.

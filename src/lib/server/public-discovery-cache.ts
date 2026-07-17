@@ -48,8 +48,10 @@ type CacheContext = {
 	url: URL;
 	platform?: App.Platform;
 	freshForMs?: number;
+	forceRefresh?: boolean;
 	revision?: number | string;
 	refreshMode?: 'background' | 'blocking';
+	shouldFallbackToStale?: (error: unknown) => boolean;
 };
 
 type CloudflareCacheStorage = CacheStorage & { default?: Cache };
@@ -97,6 +99,14 @@ function edgeLkgPointerKey(logicalKey: string, url: URL, platform?: App.Platform
 
 function kvCacheKey(logicalKey: string, url: URL, platform?: App.Platform): string {
 	return `public-discovery:${CACHE_SCHEMA_VERSION}:${encodeURIComponent(cacheScope(url, platform))}:${encodeURIComponent(logicalKey)}`;
+}
+
+function kvRevisionPrefix(kvKey: string): string {
+	return `${kvKey}:revision=`;
+}
+
+function kvRevisionKey(kvKey: string, revision: string): string {
+	return `${kvRevisionPrefix(kvKey)}${encodeURIComponent(revision)}`;
 }
 
 function defaultCloudflareCache(): Cache | undefined {
@@ -153,6 +163,79 @@ async function readKv<T>(key: string, platform?: App.Platform): Promise<CacheEnv
 		);
 		return null;
 	}
+}
+
+function revisionOrder(revision: string): readonly [bigint, bigint] | null {
+	const generation = /^(\d+):(\d+|cold)$/.exec(revision);
+	if (generation) {
+		return [BigInt(generation[1]), generation[2] === 'cold' ? -1n : BigInt(generation[2])];
+	}
+	if (/^\d+$/.test(revision)) return [BigInt(revision), 0n];
+	return null;
+}
+
+function compareRevisions(left: string, right: string): number | null {
+	const leftOrder = revisionOrder(left);
+	const rightOrder = revisionOrder(right);
+	if (!leftOrder || !rightOrder) return null;
+	if (leftOrder[0] !== rightOrder[0]) return leftOrder[0] > rightOrder[0] ? 1 : -1;
+	if (leftOrder[1] !== rightOrder[1]) return leftOrder[1] > rightOrder[1] ? 1 : -1;
+	return 0;
+}
+
+async function readLatestKvRevision<T>(
+	kvKey: string,
+	platform?: App.Platform
+): Promise<CacheEnvelope<T> | null> {
+	const kv = publicDiscoveryKv(platform);
+	if (!kv) return null;
+
+	const prefix = kvRevisionPrefix(kvKey);
+	const list = kv.list?.bind(kv);
+	if (!list) return readKv<T>(kvKey, platform);
+	try {
+		let cursor: string | undefined;
+		let latest: { key: string; revision: string } | undefined;
+		do {
+			const page = await list({ prefix, ...(cursor ? { cursor } : {}) });
+			for (const { name } of page.keys) {
+				const encodedRevision = name.slice(prefix.length);
+				let revision: string;
+				try {
+					revision = decodeURIComponent(encodedRevision);
+				} catch {
+					continue;
+				}
+				if (!revisionOrder(revision)) continue;
+				if (!latest || (compareRevisions(revision, latest.revision) ?? -1) > 0) {
+					latest = { key: name, revision };
+				}
+			}
+			cursor = page.list_complete ? undefined : page.cursor;
+		} while (cursor);
+
+		if (latest) return readKv<T>(latest.key, platform);
+		// Read the pre-revision-key layout only as a rollout fallback. New writes
+		// never target this shared key, so cross-isolate completion order cannot
+		// regress the current LKG.
+		return readKv<T>(kvKey, platform);
+	} catch (error) {
+		console.warn(
+			'[public-discovery-cache] KV revision listing failed:',
+			error instanceof Error ? error.message : String(error)
+		);
+		return readKv<T>(kvKey, platform);
+	}
+}
+
+async function readKvForRevision<T>(
+	kvKey: string,
+	revision: string | undefined,
+	platform?: App.Platform
+): Promise<CacheEnvelope<T> | null> {
+	if (revision === undefined) return readKv<T>(kvKey, platform);
+	const exact = await readKv<T>(kvRevisionKey(kvKey, revision), platform);
+	return exact ?? readLatestKvRevision<T>(kvKey, platform);
 }
 
 function persistEdge<T>(key: Request, envelope: CacheEnvelope<T>): Promise<void> {
@@ -234,6 +317,22 @@ function preferredEnvelope<T>(
 	return (matching.length > 0 ? matching : available).sort((a, b) => b.cachedAt - a.cachedAt)[0];
 }
 
+function newestEnvelope<T>(
+	...candidates: Array<CacheEnvelope<T> | null | undefined>
+): CacheEnvelope<T> | undefined {
+	return candidates
+		.filter(
+			(candidate): candidate is CacheEnvelope<T> => candidate !== null && candidate !== undefined
+		)
+		.sort((left, right) => {
+			if (left.revision && right.revision) {
+				const compared = compareRevisions(right.revision, left.revision);
+				if (compared !== null && compared !== 0) return compared;
+			}
+			return right.cachedAt - left.cachedAt;
+		})[0];
+}
+
 async function readCachedEnvelope<T>(
 	identity: string,
 	edgeKey: Request,
@@ -264,7 +363,10 @@ async function readCachedEnvelope<T>(
 						: null
 				)
 			: Promise.resolve(null);
-	const [global, priorEdge] = await Promise.all([readKv<T>(kvKey, platform), priorEdgePromise]);
+	const [global, priorEdge] = await Promise.all([
+		readKvForRevision<T>(kvKey, revision, platform),
+		priorEdgePromise
+	]);
 	const envelope = preferredEnvelope(revision, inMemory, edge, priorEdge, global);
 	if (!envelope) return undefined;
 
@@ -299,25 +401,9 @@ function observeRequestedRevision(kvKey: string, revision: string | undefined): 
 		return;
 	}
 
-	const existingGeneration = /^(\d+):(\d+)$/.exec(existing);
-	const candidateGeneration = /^(\d+):(\d+)$/.exec(revision);
-	if (existingGeneration && candidateGeneration) {
-		const existingOrder = [BigInt(existingGeneration[2]), BigInt(existingGeneration[1])] as const;
-		const candidateOrder = [
-			BigInt(candidateGeneration[2]),
-			BigInt(candidateGeneration[1])
-		] as const;
-		if (
-			candidateOrder[0] > existingOrder[0] ||
-			(candidateOrder[0] === existingOrder[0] && candidateOrder[1] >= existingOrder[1])
-		) {
-			latestRequestedRevision.set(kvKey, revision);
-		}
-		return;
-	}
-
-	if (/^\d+$/.test(existing) && /^\d+$/.test(revision)) {
-		if (BigInt(revision) >= BigInt(existing)) latestRequestedRevision.set(kvKey, revision);
+	const compared = compareRevisions(revision, existing);
+	if (compared !== null) {
+		if (compared >= 0) latestRequestedRevision.set(kvKey, revision);
 		return;
 	}
 	latestRequestedRevision.set(kvKey, revision);
@@ -341,7 +427,13 @@ async function persistLoadedEnvelope<T>(
 		: envelope;
 	const [_, kvWritten] = await Promise.all([
 		persistEdge(edgeKey, envelope),
-		writeKv ? persistKv(kvKey, globallyRenewed, platform) : Promise.resolve(false)
+		writeKv
+			? persistKv(
+					envelope.revision ? kvRevisionKey(kvKey, envelope.revision) : kvKey,
+					globallyRenewed,
+					platform
+				)
+			: Promise.resolve(false)
 	]);
 
 	if (kvWritten) {
@@ -495,6 +587,7 @@ export async function getCachedPublicData<T>(
 	loader: () => Promise<T>
 ): Promise<T> {
 	const freshForMs = context.freshForMs ?? PUBLIC_DISCOVERY_FRESH_MS;
+	const forceRefresh = context.forceRefresh === true;
 	const now = Date.now();
 	const revision = context.revision === undefined ? undefined : String(context.revision);
 	const identity = storageIdentity(logicalKey, context.url, context.platform);
@@ -510,6 +603,7 @@ export async function getCachedPublicData<T>(
 	const inMemoryAge = inMemory ? now - inMemory.cachedAt : Number.POSITIVE_INFINITY;
 	const inMemoryRevisionMatches = inMemory?.revision === revision;
 	if (
+		!forceRefresh &&
 		inMemory &&
 		inMemoryAge <= PUBLIC_DISCOVERY_STALE_MS &&
 		(inMemory.retryAfter ?? 0) > now &&
@@ -517,7 +611,8 @@ export async function getCachedPublicData<T>(
 	) {
 		return inMemory.value;
 	}
-	const refreshSharedLayers = !inMemory || inMemoryAge > freshForMs || !inMemoryRevisionMatches;
+	const refreshSharedLayers =
+		forceRefresh || !inMemory || inMemoryAge > freshForMs || !inMemoryRevisionMatches;
 	const envelope = await readCachedEnvelope<T>(
 		identity,
 		edgeKey,
@@ -538,10 +633,11 @@ export async function getCachedPublicData<T>(
 		const age = now - envelope.cachedAt;
 		const revisionMatches = envelope.revision === revision;
 
-		if (revisionMatches && age <= freshForMs) return envelope.value;
+		if (!forceRefresh && revisionMatches && age <= freshForMs) return envelope.value;
 
 		if (age <= PUBLIC_DISCOVERY_STALE_MS) {
 			if (
+				!forceRefresh &&
 				(envelope.retryAfter ?? 0) > now &&
 				envelope.retryRevision === (revision ?? 'unversioned')
 			) {
@@ -561,6 +657,7 @@ export async function getCachedPublicData<T>(
 						envelope
 					);
 				} catch (error) {
+					if (context.shouldFallbackToStale?.(error) === false) throw error;
 					await backOffEnvelope(
 						identity,
 						edgeKey,
@@ -575,7 +672,7 @@ export async function getCachedPublicData<T>(
 				}
 			}
 
-			if (context.refreshMode === 'blocking') {
+			if (forceRefresh || context.refreshMode === 'blocking') {
 				try {
 					return await loadAndCache(
 						identity,
@@ -588,6 +685,7 @@ export async function getCachedPublicData<T>(
 						envelope
 					);
 				} catch (error) {
+					if (context.shouldFallbackToStale?.(error) === false) throw error;
 					await backOffEnvelope(
 						identity,
 						edgeKey,
@@ -619,6 +717,43 @@ export async function getCachedPublicData<T>(
 	}
 
 	return loadAndCache(identity, edgeKey, edgePointerKey, kvKey, context.platform, revision, loader);
+}
+
+/**
+ * Read a still-valid payload without consulting its manifest or origin loader.
+ *
+ * This is intentionally a recovery-only path: callers use it when the tiny
+ * manifest query itself fails, never when an authoritative manifest says a
+ * family is not ready. Revision-qualified KV entries make the selected LKG
+ * monotonic even when old requests finish in other Worker isolates.
+ */
+export async function getCachedPublicDataLastKnownGood<T>(
+	logicalKey: string,
+	context: Pick<CacheContext, 'platform' | 'url'>
+): Promise<T | undefined> {
+	const now = Date.now();
+	const identity = storageIdentity(logicalKey, context.url, context.platform);
+	const kvKey = kvCacheKey(logicalKey, context.url, context.platform);
+	const inMemory = memoryCache.get(identity) as CacheEnvelope<T> | undefined;
+	const pointerKey = edgeLkgPointerKey(logicalKey, context.url, context.platform);
+	const pointer = await readEdge<null>(pointerKey);
+	const edge = pointer?.revision
+		? await readEdge<T>(edgeCacheKey(logicalKey, context.url, context.platform, pointer.revision))
+		: null;
+	const local = newestEnvelope(inMemory, edge);
+	if (local && now - local.cachedAt <= PUBLIC_DISCOVERY_STALE_MS) {
+		memoryCache.set(identity, local);
+		return local.value;
+	}
+
+	// KV list operations have a much smaller Free-plan allowance than reads.
+	// Consult the immutable global generations only when this location has no
+	// usable memory/Cache API LKG, then keep the winner hot locally.
+	const global = await readLatestKvRevision<T>(kvKey, context.platform);
+	const envelope = newestEnvelope(local, global);
+	if (!envelope || now - envelope.cachedAt > PUBLIC_DISCOVERY_STALE_MS) return undefined;
+	memoryCache.set(identity, envelope);
+	return envelope.value;
 }
 
 /** Test-only reset for module-local state. */
