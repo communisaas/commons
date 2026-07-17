@@ -70,8 +70,8 @@
       "name": "Live smoke and observation",
       "status": "operator_gate",
       "owner": "release operator",
-      "description": "Verify list, graph, API cache headers, bounded control-plane health, and post-warm Convex I/O, then move the uptime monitor to `/api/health`.",
-      "acceptance": "Public paths render, health returns 200/ok, only snapshot tables appear in public-query reads, and database I/O stays flat relative to page requests."
+      "description": "Verify list, graph, API cache headers, bounded control-plane health, and post-warm Convex I/O, then point liveness at `/api/live` and five-minute readiness at `/api/health`.",
+      "acceptance": "Public paths render, liveness and readiness return 200/ok, only snapshot tables appear in public-query reads, and database I/O stays flat relative to page requests."
     },
     {
       "id": "RB-10",

@@ -57,6 +57,21 @@ function writeHarness() {
 	return convexTest(schema, modules);
 }
 
+function snapshotRebuildBudgetHarness() {
+	return convexTest({
+		schema,
+		modules,
+		transactionLimits: {
+			// Fifty candidates require two indexed enrichment joins apiece. The
+			// shared list selection fits below this ceiling; preparing it again for
+			// relations would cross the limit and fail the publication transaction.
+			databaseQueries: 130,
+			documentsRead: 500,
+			bytesRead: 5_000_000
+		}
+	});
+}
+
 function migrationHarness() {
 	return convexTest({
 		schema,
@@ -371,6 +386,45 @@ describe('bounded embedding backfill discovery', () => {
 			await expect(
 				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
 			).resolves.toMatchObject({ status: 'complete', scanned: 0, marked: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('automatically restarts a stale marker migration and supersedes its old continuation', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));
+		try {
+			const t = writeHarness();
+			const staleStartedAt = Date.now() - 15 * 60 * 1000 - 1;
+			await t.run((ctx) =>
+				ctx.db.insert('publicDiscoveryManifest', {
+					key: 'public',
+					listReady: false,
+					relationsReady: false,
+					listRevision: 0,
+					relationsRevision: 0,
+					topicEmbeddingMarkerMigrationStartedAt: staleStartedAt,
+					topicEmbeddingMarkerMigrationScanned: 100,
+					topicEmbeddingMarkerMigrationMarked: 50
+				})
+			);
+
+			await expect(
+				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
+			).resolves.toMatchObject({
+				status: 'complete',
+				scanned: 0,
+				marked: 0,
+				startedAt: Date.now()
+			});
+			await expect(
+				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {
+					startedAt: staleStartedAt,
+					scanned: 100,
+					marked: 50
+				})
+			).resolves.toMatchObject({ status: 'superseded', startedAt: staleStartedAt });
 		} finally {
 			vi.useRealTimers();
 		}
@@ -702,6 +756,41 @@ describe('bounded embedding backfill discovery', () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('reuses one enriched list selection for the post-backfill list and relation publication', async () => {
+		const t = snapshotRebuildBudgetHarness();
+		const leaseToken = 'single-selection-rebuild-lease';
+		await t.run(async (ctx) => {
+			for (let index = 0; index < 50; index += 1) {
+				await ctx.db.insert(
+					'templates',
+					missingTemplateValue(`single-selection-${index}`, {
+						updatedAt: 1_800_000_000_000 + index
+					})
+				);
+			}
+		});
+		await expect(
+			t.mutation(api.templates.claimEmbeddingBackfillLease, {
+				_secret: SECRET,
+				token: leaseToken
+			})
+		).resolves.toMatchObject({ acquired: true });
+
+		await expect(
+			t.mutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
+				_secret: SECRET,
+				leaseToken
+			})
+		).resolves.toMatchObject({
+			list: { scannedCount: 50, allCount: 50, excludeCwcCount: 50 },
+			relations: {
+				scannedCount: 50,
+				all: { sourceTemplateCount: 50 },
+				excludeCwc: { sourceTemplateCount: 50 }
+			}
+		});
 	});
 
 	it('does not trust direct callers to self-publish server-derived content', async () => {

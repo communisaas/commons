@@ -7,6 +7,10 @@ import { anyApi } from 'convex/server';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_SNAPSHOT_BYTES = 900_000;
+const MAX_PUBLIC_TEMPLATE_COUNT = 50;
+const MAX_PUBLIC_RELATION_EDGES = 10_000;
+const MAX_PUBLIC_CONCEPT_ENTRIES = 10_000;
+const MAX_COHERENT_READ_ATTEMPTS = 3;
 const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
 export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
 
@@ -17,6 +21,7 @@ export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
  * @property {unknown} excludeCwcList
  * @property {unknown} allRelations
  * @property {unknown} excludeCwcRelations
+ * @property {unknown} producerStatus
  */
 
 /**
@@ -40,7 +45,7 @@ function isRecord(value) {
  * @returns {value is number}
  */
 function positiveRevision(value) {
-	return typeof value === 'number' && Number.isInteger(value) && value > 0;
+	return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
 }
 
 /**
@@ -62,10 +67,16 @@ function currentTimestamp(value) {
  */
 function validateTemplateProjection(name, templates, excludeCwc, errors) {
 	const ids = new Set();
+	if (templates.length > MAX_PUBLIC_TEMPLATE_COUNT) {
+		errors.push(`${name}.templates exceeds the ${MAX_PUBLIC_TEMPLATE_COUNT}-card public limit`);
+	}
 	for (const [index, template] of templates.entries()) {
 		if (!isRecord(template) || typeof template.id !== 'string' || template.id.length === 0) {
 			errors.push(`${name}.templates[${index}] has no string id`);
 			continue;
+		}
+		if (ids.has(template.id)) {
+			errors.push(`${name}.templates[${index}] duplicates id ${template.id}`);
 		}
 		ids.add(template.id);
 		if (typeof template.deliveryMethod !== 'string') {
@@ -81,7 +92,7 @@ function validateTemplateProjection(name, templates, excludeCwc, errors) {
 		}
 		if (
 			typeof template.recipient_count !== 'number' ||
-			!Number.isInteger(template.recipient_count) ||
+			!Number.isSafeInteger(template.recipient_count) ||
 			template.recipient_count < 0
 		) {
 			errors.push(`${name}.templates[${index}].recipient_count is not a non-negative integer`);
@@ -94,13 +105,27 @@ function validateTemplateProjection(name, templates, excludeCwc, errors) {
  * @param {string} name
  * @param {unknown[]} edges
  * @param {Set<unknown>} visibleIds
+ * @param {'twin' | 'concept'} expectedKind
  * @param {string[]} errors
  */
-function validateVisibleEndpoints(name, edges, visibleIds, errors) {
+function validateVisibleEndpoints(name, edges, visibleIds, expectedKind, errors) {
+	if (edges.length > MAX_PUBLIC_RELATION_EDGES) {
+		errors.push(`${name} exceeds the ${MAX_PUBLIC_RELATION_EDGES}-edge public limit`);
+	}
 	for (const [index, edge] of edges.entries()) {
 		if (!isRecord(edge) || typeof edge.a !== 'string' || typeof edge.b !== 'string') {
 			errors.push(`${name}[${index}] has invalid endpoints`);
 			continue;
+		}
+		if (edge.kind !== expectedKind) {
+			errors.push(`${name}[${index}].kind is not ${expectedKind}`);
+		}
+		if (
+			(expectedKind === 'twin' &&
+				(typeof edge.score !== 'number' || !Number.isFinite(edge.score))) ||
+			(expectedKind === 'concept' && typeof edge.concept !== 'string')
+		) {
+			errors.push(`${name}[${index}] has invalid ${expectedKind} fields`);
 		}
 		for (const endpoint of [edge.a, edge.b]) {
 			if (!visibleIds.has(endpoint)) {
@@ -161,7 +186,7 @@ export function readinessOptionsFromEnv(env) {
  * @param {ReadinessOptions} [options]
  */
 export function validatePublicDiscoveryReadiness(
-	{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
+	{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations, producerStatus },
 	{
 		requireContent = true,
 		contractOnly = false,
@@ -178,17 +203,48 @@ export function validatePublicDiscoveryReadiness(
 
 	/** @type {string[]} */
 	const errors = [];
+	const producerState = isRecord(producerStatus) ? producerStatus : null;
 	const listState = isRecord(manifest) && isRecord(manifest.list) ? manifest.list : null;
 	const relationState =
 		isRecord(manifest) && isRecord(manifest.relations) ? manifest.relations : null;
+
+	// Snapshot shape alone cannot expose durable producer failure evidence: a
+	// rebuild may intentionally publish a safe remainder while retaining a
+	// manifest failure code. The tiny service-ping control plane carries that
+	// state, so every release mode must prove it healthy before Pages uploads.
+	if (!producerState) {
+		errors.push('producerStatus is missing');
+	} else {
+		if (producerState.ok !== true) errors.push('producerStatus.ok is not true');
+		if (producerState.storageReadable !== true) {
+			errors.push('producerStatus.storageReadable is not true');
+		}
+		if (producerState.discoveryManifestPresent !== true) {
+			errors.push('producerStatus.discoveryManifestPresent is not true');
+		}
+		if (producerState.discoveryProducerHealthy !== true) {
+			errors.push('producerStatus.discoveryProducerHealthy is not true');
+		}
+
+		const overdueAt = producerState.discoveryProducerOverdueAt;
+		if (overdueAt !== null) {
+			if (!currentTimestamp(overdueAt)) {
+				errors.push('producerStatus.discoveryProducerOverdueAt is invalid');
+			} else if (now > overdueAt) {
+				errors.push(`producerStatus.discoveryProducerOverdueAt is overdue by ${now - overdueAt}ms`);
+			}
+		}
+	}
 
 	if (!listState) errors.push('manifest.list is missing');
 	if (!relationState) errors.push('manifest.relations is missing');
 	if (listState?.ready !== true) errors.push('manifest.list.ready is not true');
 	if (relationState?.ready !== true) errors.push('manifest.relations.ready is not true');
-	if (!positiveRevision(listState?.revision)) errors.push('manifest.list.revision is not positive');
+	if (!positiveRevision(listState?.revision)) {
+		errors.push('manifest.list.revision is not a positive safe integer');
+	}
 	if (!positiveRevision(relationState?.revision)) {
-		errors.push('manifest.relations.revision is not positive');
+		errors.push('manifest.relations.revision is not a positive safe integer');
 	}
 	if (!currentTimestamp(listState?.updatedAt)) errors.push('manifest.list.updatedAt is invalid');
 	if (!currentTimestamp(relationState?.updatedAt)) {
@@ -265,7 +321,7 @@ export function validatePublicDiscoveryReadiness(
 		if (!Array.isArray(payload.twinEdges)) {
 			errors.push(`${name}.twinEdges is not an array`);
 		} else {
-			validateVisibleEndpoints(`${name}.twinEdges`, payload.twinEdges, matchingIds, errors);
+			validateVisibleEndpoints(`${name}.twinEdges`, payload.twinEdges, matchingIds, 'twin', errors);
 		}
 		if (!isRecord(payload.conceptRelations)) {
 			errors.push(`${name}.conceptRelations is missing`);
@@ -277,11 +333,26 @@ export function validatePublicDiscoveryReadiness(
 					`${name}.conceptRelations.edges`,
 					payload.conceptRelations.edges,
 					matchingIds,
+					'concept',
 					errors
 				);
 			}
 			if (!isRecord(payload.conceptRelations.conceptMap)) {
 				errors.push(`${name}.conceptRelations.conceptMap is not an object`);
+			} else {
+				const conceptEntries = Object.entries(payload.conceptRelations.conceptMap);
+				if (conceptEntries.length > MAX_PUBLIC_CONCEPT_ENTRIES) {
+					errors.push(
+						`${name}.conceptRelations.conceptMap exceeds the ${MAX_PUBLIC_CONCEPT_ENTRIES}-entry public limit`
+					);
+				}
+				for (const [tag, concept] of conceptEntries) {
+					if (typeof concept !== 'string') {
+						errors.push(
+							`${name}.conceptRelations.conceptMap[${JSON.stringify(tag)}] is not a string`
+						);
+					}
+				}
 			}
 		}
 	}
@@ -317,6 +388,9 @@ export function validatePublicDiscoveryReadiness(
 	 * twinEdges: unknown[];
 	 * conceptRelations: { edges: unknown[] };
 	 * }} */ (excludeCwcRelations);
+	const readyProducerState = /** @type {{ discoveryProducerOverdueAt: number | null }} */ (
+		producerState
+	);
 
 	return {
 		listRevision: readyListState.revision,
@@ -329,6 +403,7 @@ export function validatePublicDiscoveryReadiness(
 		allConceptEdgeCount: readyAllRelations.conceptRelations.edges.length,
 		excludeCwcTwinEdgeCount: readyExcludeCwcRelations.twinEdges.length,
 		excludeCwcConceptEdgeCount: readyExcludeCwcRelations.conceptRelations.edges.length,
+		producerOverdueAt: readyProducerState.discoveryProducerOverdueAt,
 		sizes
 	};
 }
@@ -358,6 +433,32 @@ async function withTimeout(promise, label, timeoutMs) {
 }
 
 /**
+ * The four public payloads are separate queries, so a producer publication can
+ * land between them. Only accept an attempt bracketed by the same manifest
+ * generation; otherwise retry a small, fixed number of times rather than
+ * falsely blocking a healthy release or looping against Convex indefinitely.
+ *
+ * @param {unknown} before
+ * @param {unknown} after
+ */
+function sameManifestGeneration(before, after) {
+	if (!isRecord(before) || !isRecord(after)) return false;
+	for (const family of ['list', 'relations']) {
+		const beforeState = before[family];
+		const afterState = after[family];
+		if (!isRecord(beforeState) || !isRecord(afterState)) return false;
+		if (
+			beforeState.ready !== afterState.ready ||
+			beforeState.revision !== afterState.revision ||
+			beforeState.updatedAt !== afterState.updatedAt
+		) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
  * @param {string | undefined} convexUrl
  * @param {ReadinessOptions & { timeoutMs?: number }} [options]
  */
@@ -368,7 +469,7 @@ export async function verifyPublicDiscoveryReadiness(
 		requireContent = true,
 		contractOnly = false,
 		maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS,
-		now = Date.now()
+		now
 	} = {}
 ) {
 	if (typeof convexUrl !== 'string') {
@@ -393,37 +494,66 @@ export async function verifyPublicDiscoveryReadiness(
 	}
 
 	const client = new ConvexHttpClient(parsedUrl.origin);
-	const manifest = await withTimeout(
-		client.query(anyApi.templates.publicDiscoveryManifest, {}),
-		'templates:publicDiscoveryManifest',
-		timeoutMs
-	);
-	const [allList, excludeCwcList, allRelations, excludeCwcRelations] = await Promise.all([
-		withTimeout(
-			client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: false }),
-			'templates:publicDiscoveryList(all)',
+	for (let attempt = 1; attempt <= MAX_COHERENT_READ_ATTEMPTS; attempt += 1) {
+		const manifestBefore = await withTimeout(
+			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			'templates:publicDiscoveryManifest(before)',
 			timeoutMs
-		),
-		withTimeout(
-			client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: true }),
-			'templates:publicDiscoveryList(excludeCwc)',
+		);
+		const [allList, excludeCwcList, allRelations, excludeCwcRelations] = await Promise.all([
+			withTimeout(
+				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: false }),
+				'templates:publicDiscoveryList(all)',
+				timeoutMs
+			),
+			withTimeout(
+				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: true }),
+				'templates:publicDiscoveryList(excludeCwc)',
+				timeoutMs
+			),
+			withTimeout(
+				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: false }),
+				'templates:publicDiscoveryRelations(all)',
+				timeoutMs
+			),
+			withTimeout(
+				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: true }),
+				'templates:publicDiscoveryRelations(excludeCwc)',
+				timeoutMs
+			)
+		]);
+		const manifestAfter = await withTimeout(
+			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			'templates:publicDiscoveryManifest(after)',
 			timeoutMs
-		),
-		withTimeout(
-			client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: false }),
-			'templates:publicDiscoveryRelations(all)',
-			timeoutMs
-		),
-		withTimeout(
-			client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: true }),
-			'templates:publicDiscoveryRelations(excludeCwc)',
-			timeoutMs
-		)
-	]);
+		);
 
-	return validatePublicDiscoveryReadiness(
-		{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
-		{ requireContent, contractOnly, maxAgeMs, now }
+		if (!sameManifestGeneration(manifestBefore, manifestAfter)) continue;
+
+		// Health is deliberately the terminal read. Durable failure/dirty state
+		// can change without advancing public snapshot coordinates, so reading it
+		// before the closing manifest would leave a small stale-healthy window.
+		const producerStatus = await withTimeout(
+			client.query(anyApi.observability.servicePing, {}),
+			'observability:servicePing',
+			timeoutMs
+		);
+
+		return validatePublicDiscoveryReadiness(
+			{
+				manifest: manifestAfter,
+				allList,
+				excludeCwcList,
+				allRelations,
+				excludeCwcRelations,
+				producerStatus
+			},
+			{ requireContent, contractOnly, maxAgeMs, now: now ?? Date.now() }
+		);
+	}
+
+	throw new Error(
+		`PUBLIC_DISCOVERY_NOT_READY: producer publication changed during ${MAX_COHERENT_READ_ATTEMPTS} coherent-read attempts`
 	);
 }
 

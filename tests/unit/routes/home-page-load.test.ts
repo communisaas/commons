@@ -30,6 +30,8 @@ function loadEvent(href: string) {
 function publicCard(id: string) {
 	return {
 		id,
+		delivery_config: {},
+		cwc_config: null,
 		recipient_config: null,
 		recipientEmails: [],
 		recipient_count: 0

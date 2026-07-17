@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getFunctionName } from 'convex/server';
 
 const { mockConvexQuery } = vi.hoisted(() => ({
 	mockConvexQuery: vi.fn()
@@ -59,6 +60,13 @@ type RelationsPayload = {
 };
 
 type ReadinessFixture = {
+	producerStatus: {
+		ok: boolean;
+		storageReadable: boolean;
+		discoveryManifestPresent: boolean;
+		discoveryProducerHealthy: boolean;
+		discoveryProducerOverdueAt: number | null;
+	};
 	manifest: {
 		list: ReadinessState;
 		relations: ReadinessState;
@@ -71,6 +79,13 @@ type ReadinessFixture = {
 
 function readyFixture(): ReadinessFixture {
 	return {
+		producerStatus: {
+			ok: true,
+			storageReadable: true,
+			discoveryManifestPresent: true,
+			discoveryProducerHealthy: true,
+			discoveryProducerOverdueAt: null
+		},
 		manifest: {
 			list: { ready: true, revision: 4, updatedAt: LIST_UPDATED_AT },
 			relations: { ready: true, revision: 7, updatedAt: RELATIONS_UPDATED_AT }
@@ -94,8 +109,11 @@ function readyFixture(): ReadinessFixture {
 		allRelations: {
 			revision: 7,
 			updatedAt: RELATIONS_UPDATED_AT,
-			twinEdges: [{ a: 'a', b: 'b' }],
-			conceptRelations: { edges: [{ a: 'a', b: 'c' }], conceptMap: { topic: 'Topic' } }
+			twinEdges: [{ a: 'a', b: 'b', score: 0.8, kind: 'twin' }],
+			conceptRelations: {
+				edges: [{ a: 'a', b: 'c', concept: 'Topic', kind: 'concept' }],
+				conceptMap: { topic: 'Topic' }
+			}
 		},
 		excludeCwcRelations: {
 			revision: 7,
@@ -138,11 +156,48 @@ describe('public discovery producer readiness', () => {
 		);
 	});
 
+	it('rejects durable producer failure evidence even when every public snapshot looks ready', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.discoveryProducerHealthy = false;
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/producerStatus\.discoveryProducerHealthy is not true/
+		);
+	});
+
+	it('rejects an overdue producer refresh but permits a scheduled future refresh', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.discoveryProducerOverdueAt = NOW - 1;
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/producerStatus\.discoveryProducerOverdueAt is overdue by 1ms/
+		);
+
+		fixture.producerStatus.discoveryProducerOverdueAt = NOW + 1;
+		expect(validatePublicDiscoveryReadiness(fixture, { now: NOW })).toMatchObject({
+			producerOverdueAt: NOW + 1
+		});
+	});
+
 	it('rejects payload and manifest revision skew', () => {
 		const fixture = readyFixture();
 		fixture.allRelations.revision = 6;
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
 			/allRelations\.revision does not match manifest\.relations\.revision/
+		);
+	});
+
+	it('rejects a revision outside the runtime safe-integer contract', () => {
+		const fixture = readyFixture();
+		const unsafeRevision = Number.MAX_SAFE_INTEGER + 1;
+		fixture.manifest.list.revision = unsafeRevision;
+		fixture.manifest.relations.revision = unsafeRevision;
+		fixture.allList.revision = unsafeRevision;
+		fixture.excludeCwcList.revision = unsafeRevision;
+		fixture.allRelations.revision = unsafeRevision;
+		fixture.excludeCwcRelations.revision = unsafeRevision;
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/manifest\.list\.revision is not a positive safe integer/
 		);
 	});
 
@@ -193,9 +248,70 @@ describe('public discovery producer readiness', () => {
 
 	it('rejects relation endpoints that are absent from the matching list', () => {
 		const fixture = readyFixture();
-		fixture.excludeCwcRelations.twinEdges = [{ a: 'a', b: 'hidden-cwc' }];
+		fixture.excludeCwcRelations.twinEdges = [
+			{ a: 'a', b: 'hidden-cwc', score: 0.5, kind: 'twin' }
+		];
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
 			/excludeCwcRelations\.twinEdges\[0\] endpoint hidden-cwc is absent from its matching list/
+		);
+	});
+
+	it('rejects oversized or duplicate public lists', () => {
+		const oversized = readyFixture();
+		oversized.allList.templates = Array.from({ length: 51 }, (_, index) =>
+			publicCard(`template-${index}`, 'email')
+		);
+		expect(() => validatePublicDiscoveryReadiness(oversized, { now: NOW })).toThrow(
+			/allList\.templates exceeds the 50-card public limit/
+		);
+
+		const duplicate = readyFixture();
+		duplicate.allList.templates.push(publicCard('a', 'email'));
+		expect(() => validatePublicDiscoveryReadiness(duplicate, { now: NOW })).toThrow(
+			/allList\.templates\[3\] duplicates id a/
+		);
+	});
+
+	it('rejects malformed relation fields before an edge deploy', () => {
+		const fixture = readyFixture();
+		fixture.allRelations.twinEdges = [{ a: 'a', b: 'b', score: Number.NaN, kind: 'twin' }];
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/allRelations\.twinEdges\[0\] has invalid twin fields/
+		);
+
+		fixture.allRelations.twinEdges = [];
+		fixture.allRelations.conceptRelations.edges = [
+			{ a: 'a', b: 'b', concept: 42, kind: 'concept' }
+		];
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/allRelations\.conceptRelations\.edges\[0\] has invalid concept fields/
+		);
+	});
+
+	it('enforces the runtime relation and recipient-count bounds at the release gate', () => {
+		const unsafeCount = readyFixture();
+		unsafeCount.allList.templates[0].recipient_count = Number.MAX_SAFE_INTEGER + 1;
+		expect(() => validatePublicDiscoveryReadiness(unsafeCount, { now: NOW })).toThrow(
+			/recipient_count is not a non-negative integer/
+		);
+
+		const tooManyEdges = readyFixture();
+		tooManyEdges.allRelations.twinEdges = Array.from({ length: 10_001 }, () => ({
+			a: 'a',
+			b: 'b',
+			score: 0.5,
+			kind: 'twin'
+		}));
+		expect(() => validatePublicDiscoveryReadiness(tooManyEdges, { now: NOW })).toThrow(
+			/allRelations\.twinEdges exceeds the 10000-edge public limit/
+		);
+
+		const malformedMap = readyFixture();
+		malformedMap.allRelations.conceptRelations.conceptMap = {
+			topic: 42
+		} as unknown as Record<string, string>;
+		expect(() => validatePublicDiscoveryReadiness(malformedMap, { now: NOW })).toThrow(
+			/allRelations\.conceptRelations\.conceptMap\["topic"\] is not a string/
 		);
 	});
 
@@ -234,6 +350,15 @@ describe('public discovery producer readiness', () => {
 				now: NOW
 			})
 		).toMatchObject({ listRevision: 4 });
+		fixture.producerStatus.discoveryProducerHealthy = false;
+		expect(() =>
+			validatePublicDiscoveryReadiness(fixture, {
+				contractOnly: true,
+				requireContent: false,
+				now: NOW
+			})
+		).toThrow(/producerStatus\.discoveryProducerHealthy is not true/);
+		fixture.producerStatus.discoveryProducerHealthy = true;
 		fixture.excludeCwcList.projectionVersion = 3;
 		expect(() =>
 			validatePublicDiscoveryReadiness(fixture, {
@@ -321,7 +446,9 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(fixture.allList)
 			.mockResolvedValueOnce(fixture.excludeCwcList)
 			.mockResolvedValueOnce(fixture.allRelations)
-			.mockResolvedValueOnce(fixture.excludeCwcRelations);
+			.mockResolvedValueOnce(fixture.excludeCwcRelations)
+			.mockResolvedValueOnce(fixture.manifest)
+			.mockResolvedValueOnce(fixture.producerStatus);
 
 		await expect(
 			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
@@ -333,13 +460,76 @@ describe('public discovery producer readiness', () => {
 			allTwinEdgeCount: 1,
 			excludeCwcTwinEdgeCount: 0
 		});
-		expect(mockConvexQuery).toHaveBeenCalledTimes(5);
+		expect(mockConvexQuery).toHaveBeenCalledTimes(7);
 		expect(mockConvexQuery.mock.calls.map(([, args]) => args)).toEqual([
 			{},
 			{ excludeCwc: false },
 			{ excludeCwc: true },
 			{ excludeCwc: false },
-			{ excludeCwc: true }
+			{ excludeCwc: true },
+			{},
+			{}
 		]);
+		expect(mockConvexQuery.mock.calls.map(([reference]) => getFunctionName(reference))).toEqual([
+			'templates:publicDiscoveryManifest',
+			'templates:publicDiscoveryList',
+			'templates:publicDiscoveryList',
+			'templates:publicDiscoveryRelations',
+			'templates:publicDiscoveryRelations',
+			'templates:publicDiscoveryManifest',
+			'observability:servicePing'
+		]);
+	});
+
+	it('retries a publication race and validates only a coherently bracketed generation', async () => {
+		const oldFixture = readyFixture();
+		const nextFixture = readyFixture();
+		nextFixture.manifest.list.revision = 5;
+		nextFixture.manifest.relations.revision = 8;
+		nextFixture.allList.revision = 5;
+		nextFixture.excludeCwcList.revision = 5;
+		nextFixture.allRelations.revision = 8;
+		nextFixture.excludeCwcRelations.revision = 8;
+
+		mockConvexQuery
+			.mockResolvedValueOnce(oldFixture.manifest)
+			.mockResolvedValueOnce(oldFixture.allList)
+			.mockResolvedValueOnce(oldFixture.excludeCwcList)
+			.mockResolvedValueOnce(oldFixture.allRelations)
+			.mockResolvedValueOnce(oldFixture.excludeCwcRelations)
+			.mockResolvedValueOnce(nextFixture.manifest)
+			.mockResolvedValueOnce(nextFixture.manifest)
+			.mockResolvedValueOnce(nextFixture.allList)
+			.mockResolvedValueOnce(nextFixture.excludeCwcList)
+			.mockResolvedValueOnce(nextFixture.allRelations)
+			.mockResolvedValueOnce(nextFixture.excludeCwcRelations)
+			.mockResolvedValueOnce(nextFixture.manifest)
+			.mockResolvedValueOnce(nextFixture.producerStatus);
+
+		await expect(
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+		).resolves.toMatchObject({ listRevision: 5, relationsRevision: 8 });
+		expect(mockConvexQuery).toHaveBeenCalledTimes(13);
+	});
+
+	it('fails closed after three continuously changing publication generations', async () => {
+		const fixture = readyFixture();
+		for (let attempt = 0; attempt < 3; attempt += 1) {
+			const before = structuredClone(fixture.manifest);
+			const after = structuredClone(fixture.manifest);
+			after.list.revision += attempt + 1;
+			mockConvexQuery
+				.mockResolvedValueOnce(before)
+				.mockResolvedValueOnce(fixture.allList)
+				.mockResolvedValueOnce(fixture.excludeCwcList)
+				.mockResolvedValueOnce(fixture.allRelations)
+				.mockResolvedValueOnce(fixture.excludeCwcRelations)
+				.mockResolvedValueOnce(after);
+		}
+
+		await expect(
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+		).rejects.toThrow(/publication changed during 3 coherent-read attempts/);
+		expect(mockConvexQuery).toHaveBeenCalledTimes(18);
 	});
 });

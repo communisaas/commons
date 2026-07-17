@@ -11,13 +11,20 @@ type HealthEnv = {
 	EXPECTED_CELL_MAP_ROOT?: string;
 	EXPECTED_CELL_MAP_DEPTH?: string;
 	PUBLIC_CONVEX_URL?: string;
+	PUBLIC_DISCOVERY_KV?: KVNamespace;
 };
 
 export const GET: RequestHandler = async ({ platform }) => {
 	const env = platform?.env as HealthEnv | undefined;
 	const [atlas, convex] = await Promise.all([checkAtlas(env), checkConvex(env)]);
+	const publicDiscoveryCache = {
+		kvBound:
+			typeof env?.PUBLIC_DISCOVERY_KV?.get === 'function' &&
+			typeof env.PUBLIC_DISCOVERY_KV.put === 'function' &&
+			typeof env.PUBLIC_DISCOVERY_KV.list === 'function'
+	};
 
-	const healthy = convex && atlas.status === 'ok';
+	const healthy = convex && atlas.status === 'ok' && publicDiscoveryCache.kvBound;
 	const status = healthy ? 'ok' : 'down';
 	const code = healthy ? 200 : 503;
 
@@ -26,6 +33,7 @@ export const GET: RequestHandler = async ({ platform }) => {
 			status,
 			convex,
 			atlas,
+			publicDiscoveryCache,
 			uptime: Math.floor((Date.now() - startTime) / 1000)
 		},
 		{ status: code }

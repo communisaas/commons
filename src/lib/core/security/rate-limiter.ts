@@ -309,8 +309,7 @@ export class SlidingWindowRateLimiter {
 			// rather than the codebase silently degrading.
 			const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV;
 			const allowMemory =
-				env.RATE_LIMITER_ALLOW_MEMORY === '1' ||
-				process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
+				env.RATE_LIMITER_ALLOW_MEMORY === '1' || process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
 			if (nodeEnv === 'production' && !allowMemory) {
 				throw new Error(
 					'[RateLimiter] In-memory fallback in production must be explicit. ' +
@@ -636,7 +635,8 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
  */
 export const RATE_LIMIT_EXEMPT_PATHS = [
 	'/api/health', // Health checks
-	'/api/cron/', // Cron jobs (authenticated separately)
+	'/api/live', // Process-liveness checks (no dependency I/O)
+	'/api/cron/' // Cron jobs (authenticated separately)
 	// Stripe, SES, and Twilio webhooks moved to Convex HTTP actions (/webhooks/*)
 ];
 

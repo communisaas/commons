@@ -27,7 +27,10 @@ Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env
 - **Runtime**: Cloudflare Workers (Pages Functions)
 - **Adapter**: `@sveltejs/adapter-cloudflare`
 - **Backend**: Convex (cloud-managed, code-driven schema)
-- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV, REGISTRATION_RETRY_KV, PUBLIC_DISCOVERY_KV
+- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV,
+  REGISTRATION_RETRY_KV, and PUBLIC_DISCOVERY_KV. The first four hold ephemeral
+  workflow/session state; PUBLIC_DISCOVERY_KV is the eight-day recovery cache
+  for retained last-known-good anonymous discovery generations.
 - **Config**: `wrangler.toml` at repo root
 
 ```
@@ -170,19 +173,25 @@ Every Pages branch enforces the producer gate mechanically with
 gate, not a backend deployment step: deploy the Convex schema/functions and run
 `templates:rebuildHomepageSnapshots` from the same release SHA first. Both list
 payloads must then report `projectionVersion:4`, exact recipient redaction, and
-the manifest-matched revision. Production also requires the known corpus to be
-non-empty and both materialization timestamps to be no more than 26 hours old;
-non-production uses contract-only mode, which permits stale or empty fixture
-data but not cold, revision-skewed, legacy, or recipient-bearing payloads. The
-26-hour production bound allows two hours of scheduling tolerance beyond the
-daily `essential` cron cadence.
+the manifest-matched revision. After reading every payload, the verifier reads
+`observability:servicePing` and requires the discovery producer to be healthy,
+storage-readable, manifest-present, and not past its reported overdue time.
+Production also requires the known corpus to be non-empty and both
+materialization timestamps to be no more than 26 hours old; non-production uses
+contract-only mode, which permits stale or empty fixture data but does not waive
+producer health or permit cold, revision-skewed, legacy, or recipient-bearing
+payloads. The 26-hour production bound allows two hours of scheduling tolerance
+beyond the daily `essential` cron cadence.
 `PUBLIC_DISCOVERY_MAX_AGE_HOURS` is the verifier's deliberate override; the
 production workflow pins it to `26`.
 
-Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
-Cloudflare's native Git production deployment must remain disabled; the GitHub Actions
-workflow's gated Wrangler job is the sole standard production uploader so CI, producer
-readiness, immutable Pages health, and deployment health are recorded together.
+Direct `wrangler pages deploy` is prohibited for this shared Pages project,
+including emergency and preview uploads. Use the `deploy.yml` workflow-dispatch
+path for a manual release; it applies the same exact-SHA, CI, producer-health,
+snapshot-contract, namespace, build, and immutable-deployment health gates as
+an automatic release. Cloudflare's native Git production and preview
+deployments must remain disabled; the gated GitHub Actions job is the sole
+uploader for every branch.
 No GitHub Environment reviewer gate is currently configured, so treat backend
 readiness as mandatory: do not push or dispatch the frontend release until the
 backend manifest and persisted snapshots are ready.
@@ -196,8 +205,8 @@ bypass enabled. Adding required reviewers, branch policies, or disabling admin
 bypass is an external repository-administration action; this workflow does not
 claim those protections already exist.
 
-Verify that native production uploads are still disabled while preview deployments remain
-enabled:
+Verify that native Git uploads are disabled for both production and preview
+branches:
 
 ```bash
 curl -fsS \
@@ -205,12 +214,11 @@ curl -fsS \
   "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/communique-site" \
   | jq -e '.success == true and
       .result.source.config.production_deployments_enabled == false and
-      .result.source.config.preview_deployment_setting == "all"'
+      .result.source.config.preview_deployment_setting == "none"'
 ```
 
-The production job repeats the `production_deployments_enabled == false`
-assertion against this same project response and stops before upload if the
-setting drifts.
+Every deploy job repeats both source-setting assertions against this same
+project response and stops before upload if either setting drifts.
 
 Bootstrap caveat: GitHub evaluates `workflow_run` using the workflow file on the
 default branch. For the first release of this gate, merge the hardened workflow
@@ -246,12 +254,20 @@ exceptional temporary relaxation must be an explicit reviewed change to
 `.github/workflows/deploy.yml`, then be reverted after the incident; a single dispatcher
 cannot defeat the gate with a workflow input.
 
-### Preview Deploy (non-production branch)
+### Staging/manual preview deploy
 
 ```bash
-npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name communique-site --branch feature-name
+RELEASE_SHA=$(git rev-parse HEAD)
+gh workflow run deploy.yml --ref main \
+  -f branch=staging \
+  -f ref="$RELEASE_SHA"
 ```
+
+Only `main` and `staging` are supported non-production workflow targets. The
+requested SHA must already be contained in the selected branch. Do not use
+the Wrangler CLI as a shortcut: contract-only previews relax only content and
+age requirements; they still require a deployed, healthy producer and coherent
+v4 materializations before upload.
 
 ### Staging Smoke
 

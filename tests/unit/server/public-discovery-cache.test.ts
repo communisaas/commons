@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+	PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES,
 	PUBLIC_DISCOVERY_FRESH_MS,
 	PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS,
+	PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES,
 	PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
 	clearPublicDiscoveryCache,
 	getCachedPublicData,
@@ -164,6 +166,65 @@ describe('public discovery cache', () => {
 		expect(relationLoader).toHaveBeenCalledTimes(1);
 	});
 
+	it('bounds isolate-local cache entries and evicts the oldest logical key', async () => {
+		for (let index = 0; index <= PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES; index += 1) {
+			await getCachedPublicData(`bounded-${index}`, { url: TEST_URL }, async () => index);
+		}
+
+		const reloadOldest = vi.fn().mockResolvedValue('reloaded');
+		await expect(
+			getCachedPublicData('bounded-0', { url: TEST_URL }, reloadOldest)
+		).resolves.toBe('reloaded');
+		expect(reloadOldest).toHaveBeenCalledOnce();
+	});
+
+	it('does not let an evicted flight erase a newer same-key flight when it settles', async () => {
+		const original = deferred<number>();
+		const originalLoader = vi.fn(() => original.promise);
+		const originalRequest = getCachedPublicData('flight-0', { url: TEST_URL }, originalLoader);
+
+		const fillerLoads = Array.from(
+			{ length: PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES },
+			() => deferred<number>()
+		);
+		const fillerLoader = vi.fn((index: number) => fillerLoads[index].promise);
+		const fillerRequests = fillerLoads.map((_load, index) =>
+			getCachedPublicData(`flight-${index + 1}`, { url: TEST_URL }, () => fillerLoader(index))
+		);
+		await vi.waitFor(() => {
+			expect(originalLoader).toHaveBeenCalledOnce();
+			expect(fillerLoader).toHaveBeenCalledTimes(PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES);
+		});
+
+		// The coordination cap has evicted the original key, so a newer flight B
+		// can start for it while the original flight A is still unsettled.
+		const replacement = deferred<number>();
+		const replacementLoader = vi.fn(() => replacement.promise);
+		const replacementRequest = getCachedPublicData(
+			'flight-0',
+			{ url: TEST_URL },
+			replacementLoader
+		);
+		await vi.waitFor(() => expect(replacementLoader).toHaveBeenCalledOnce());
+
+		original.reject(new Error('evicted flight failed'));
+		await expect(originalRequest).rejects.toThrow('evicted flight failed');
+
+		const duplicateLoader = vi.fn().mockResolvedValue(3);
+		const coalescedRequest = getCachedPublicData('flight-0', { url: TEST_URL }, duplicateLoader);
+		// Let the request cross both empty edge/KV read microtasks and reach the
+		// in-flight lookup before B settles.
+		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		expect(duplicateLoader).not.toHaveBeenCalled();
+		replacement.resolve(2);
+		await expect(Promise.all([replacementRequest, coalescedRequest])).resolves.toEqual([2, 2]);
+		expect(replacementLoader).toHaveBeenCalledOnce();
+		expect(duplicateLoader).not.toHaveBeenCalled();
+
+		for (const [index, load] of fillerLoads.entries()) load.resolve(index);
+		await Promise.all(fillerRequests);
+	});
+
 	it('reuses a matching materialization revision and refreshes immediately when it changes', async () => {
 		const loader = vi.fn().mockResolvedValueOnce(['revision-1']).mockResolvedValueOnce(['revision-2']);
 
@@ -293,8 +354,8 @@ describe('public discovery cache', () => {
 
 		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, loader);
 		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(kv.put.mock.calls[0][0]).toContain('public-discovery:v4:');
-		expect(kv.put.mock.calls[0][0]).not.toContain('public-discovery:v3:');
+		expect(kv.put.mock.calls[0][0]).toContain('public-discovery:v5:');
+		expect(kv.put.mock.calls[0][0]).not.toContain('public-discovery:v4:');
 
 		clearPublicDiscoveryCache();
 		installEdgeCache();
@@ -311,7 +372,7 @@ describe('public discovery cache', () => {
 		expect(loader).toHaveBeenCalledTimes(1);
 	});
 
-	it('never serves a pre-v4 recipient-bearing envelope or pointer during origin failure', async () => {
+	it('never serves a pre-v5 unallowlisted envelope or pointer during origin failure', async () => {
 		const edge = installEdgeCache();
 		const kv = installKv();
 		const platform = platformWithKv(kv);
@@ -328,14 +389,14 @@ describe('public discovery cache', () => {
 
 		for (const [url, response] of [...edge.entries]) {
 			edge.entries.delete(url);
-			edge.entries.set(url.replace('/v4/', '/v3/'), response);
+			edge.entries.set(url.replace('/v5/', '/v4/'), response);
 		}
 		for (const [key, value] of [...kv.entries]) {
 			kv.entries.delete(key);
-			kv.entries.set(key.replace(':v4:', ':v3:'), value);
+			kv.entries.set(key.replace(':v5:', ':v4:'), value);
 		}
-		expect([...edge.entries.keys()].some((url) => url.includes('/v3/') && url.endsWith('/lkg-pointer'))).toBe(true);
-		expect([...kv.entries.keys()].some((key) => key.includes('public-discovery:v3:'))).toBe(true);
+		expect([...edge.entries.keys()].some((url) => url.includes('/v4/') && url.endsWith('/lkg-pointer'))).toBe(true);
+		expect([...kv.entries.keys()].some((key) => key.includes('public-discovery:v4:'))).toBe(true);
 
 		clearPublicDiscoveryCache();
 		await expect(
@@ -355,8 +416,8 @@ describe('public discovery cache', () => {
 			'[public-discovery-cache] revision refresh failed:',
 			'origin unavailable'
 		);
-		expect(edge.match.mock.calls.every(([request]) => request.url.includes('/v4/'))).toBe(true);
-		expect(kv.get.mock.calls.every(([key]) => String(key).includes(':v4:'))).toBe(true);
+		expect(edge.match.mock.calls.every(([request]) => request.url.includes('/v5/'))).toBe(true);
+		expect(kv.get.mock.calls.every(([key]) => String(key).includes(':v5:'))).toBe(true);
 	});
 
 	it('does not list older generations during a healthy cross-isolate revision transition', async () => {

@@ -186,6 +186,64 @@ jobs:
 
       - run: npm ci
 
+      - name: Verify public-discovery KV namespace
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          PUBLIC_DISCOVERY_KV_ID: '4517015752384e0f8628b85142c69221'
+        run: |
+          if ! configured_id=$(node <<'NODE'
+          const fs = require('node:fs');
+          const lines = fs.readFileSync('wrangler.toml', 'utf8').split(/\r?\n/);
+          const namespaces = [];
+          let current = null;
+
+          const finishNamespace = () => {
+            if (current) namespaces.push(current);
+            current = null;
+          };
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed === '[[kv_namespaces]]') {
+              finishNamespace();
+              current = {};
+              continue;
+            }
+            if (trimmed.startsWith('[')) {
+              finishNamespace();
+              continue;
+            }
+            if (!current) continue;
+            const field = /^(binding|id)\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(trimmed);
+            if (field) current[field[1]] = field[2];
+          }
+          finishNamespace();
+
+          const matches = namespaces.filter(({ binding }) => binding === 'PUBLIC_DISCOVERY_KV');
+          if (matches.length !== 1 || typeof matches[0].id !== 'string') {
+            throw new Error(
+              `wrangler.toml must contain exactly one PUBLIC_DISCOVERY_KV binding with an id; found ${matches.length}`
+            );
+          }
+          process.stdout.write(matches[0].id);
+          NODE
+          ); then
+            echo "::error::Unable to resolve the committed PUBLIC_DISCOVERY_KV binding from wrangler.toml."
+            exit 1
+          fi
+          if [ "$configured_id" != "$PUBLIC_DISCOVERY_KV_ID" ]; then
+            echo "::error::wrangler.toml binds PUBLIC_DISCOVERY_KV to ${configured_id}, expected approved namespace ${PUBLIC_DISCOVERY_KV_ID}."
+            exit 1
+          fi
+
+          namespaces=$(npx wrangler kv namespace list)
+          if ! printf '%s' "$namespaces" | jq -e --arg id "$configured_id" \
+            'map(select(.id == $id and .title == "PUBLIC_DISCOVERY_KV")) | length == 1' >/dev/null; then
+            echo "::error::The committed PUBLIC_DISCOVERY_KV binding is not a live namespace in this Cloudflare account."
+            exit 1
+          fi
+
       - name: Load Shadow Atlas build vars
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -209,12 +267,13 @@ jobs:
           if [ -z "$vite_atlas_url" ]; then
             vite_atlas_url="$atlas_url"
           fi
+          if ! printf '%s' "$response" | jq -e \
+            '.result.source.config.production_deployments_enabled == false and
+             .result.source.config.preview_deployment_setting == "none"' >/dev/null; then
+            echo "::error::Native Cloudflare Pages production and preview deployments must remain disabled; use this gated Wrangler workflow."
+            exit 1
+          fi
           if [ "$DEPLOY_BRANCH" = "production" ]; then
-            if ! printf '%s' "$response" | jq -e \
-              '.result.source.config.production_deployments_enabled == false' >/dev/null; then
-              echo "::error::Native Cloudflare Pages production deployments must remain disabled; use this gated Wrangler workflow."
-              exit 1
-            fi
             if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
               echo "::error::Production ATLAS_BASE_URL must be versioned, got: $atlas_url"
               exit 1
@@ -426,7 +485,7 @@ jobs:
                   if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
                     exit 0
                   fi
-                elif echo "$body" | jq -e '.convex == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
+                elif echo "$body" | jq -e '.convex == true and .publicDiscoveryCache.kvBound == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
                   if ! echo "$body" | jq -e '.atlas.rootPinned == true and .atlas.depthPinned == true' >/dev/null; then
                     echo "::warning::Non-production deploy health has atlas content reachable but root/depth are not pinned yet."
                   fi

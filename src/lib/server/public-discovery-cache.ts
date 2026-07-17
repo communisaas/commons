@@ -12,9 +12,9 @@
  * revision remains available with a retry backoff.
  */
 
-// v4 is a privacy boundary: v3 envelopes may contain legacy recipient_config
-// or recipientEmails fields and must never be selected after public redaction.
-const CACHE_SCHEMA_VERSION = 'v4';
+// v5 is a privacy boundary: v4 list/relation envelopes predate the exhaustive
+// consumer allowlists and must never be selected after that contract shipped.
+const CACHE_SCHEMA_VERSION = 'v5';
 
 /** Safety revalidation for callers that do not provide a materialization revision. */
 export const PUBLIC_DISCOVERY_FRESH_MS = 6 * 60 * 60 * 1000;
@@ -39,6 +39,10 @@ const PUBLIC_DISCOVERY_RETRY_MS = 15 * 60 * 1000;
 
 /** One bounded KV page is the hard ceiling for a global generation check. */
 const PUBLIC_DISCOVERY_KV_LIST_LIMIT = 1000;
+
+/** Hard isolate-local bounds; logical keys are fixed by trusted server callers. */
+export const PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES = 64;
+export const PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES = 256;
 
 /**
  * Re-check a pointer-selected outage fallback often enough to prevent a stale
@@ -78,6 +82,21 @@ const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 const inFlight = new Map<string, Promise<unknown>>();
 const latestRequestedRevision = new Map<string, string>();
 const latestRevisionRetryAfter = new Map<string, number>();
+
+function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
+	// Delete first so an update becomes the newest entry in insertion order.
+	map.delete(key);
+	map.set(key, value);
+	while (map.size > maxEntries) {
+		const oldest = map.keys().next();
+		if (oldest.done) break;
+		map.delete(oldest.value);
+	}
+}
+
+function setMemoryEnvelope<T>(identity: string, envelope: CacheEnvelope<T>): void {
+	setBoundedMap(memoryCache, identity, envelope, PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES);
+}
 
 function configuredBackend(platform?: App.Platform): string | undefined {
 	const configured = platform?.env?.PUBLIC_CONVEX_URL;
@@ -208,11 +227,14 @@ async function readKv<T>(key: string, platform?: App.Platform): Promise<CacheEnv
 }
 
 function revisionOrder(revision: string): readonly [bigint, bigint] | null {
-	const generation = /^(\d+):(\d+|cold)$/.exec(revision);
+	// Revisions and millisecond timestamps originate as safe JavaScript numbers.
+	// Bound decimal parsing so an attacker-shaped cache value cannot ask BigInt
+	// to allocate for an arbitrarily long digit string.
+	const generation = /^(\d{1,20}):(\d{1,20}|cold)$/.exec(revision);
 	if (generation) {
 		return [BigInt(generation[1]), generation[2] === 'cold' ? -1n : BigInt(generation[2])];
 	}
-	if (/^\d+$/.test(revision)) return [BigInt(revision), 0n];
+	if (/^\d{1,20}$/.test(revision)) return [BigInt(revision), 0n];
 	return null;
 }
 
@@ -413,7 +435,7 @@ async function readCachedEnvelope<T>(
 	const edge = await readEdge<T>(edgeKey);
 	const local = preferredEnvelope(revision, inMemory, edge);
 	if (local && local.revision === revision && now - local.cachedAt <= freshForMs) {
-		memoryCache.set(identity, local);
+		setMemoryEnvelope(identity, local);
 		return local;
 	}
 
@@ -432,7 +454,7 @@ async function readCachedEnvelope<T>(
 	const envelope = preferredEnvelope(revision, inMemory, edge, priorEdge, global);
 	if (!envelope) return undefined;
 
-	memoryCache.set(identity, envelope);
+	setMemoryEnvelope(identity, envelope);
 	// A KV hit in a cold location should warm its local free hot layer.
 	if (
 		global &&
@@ -453,16 +475,33 @@ function observeRequestedRevision(kvKey: string, revision: string | undefined): 
 	if (revision === undefined) return;
 	const existing = latestRequestedRevision.get(kvKey);
 	if (existing === undefined) {
-		latestRequestedRevision.set(kvKey, revision);
+		setBoundedMap(
+			latestRequestedRevision,
+			kvKey,
+			revision,
+			PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+		);
 		return;
 	}
 
 	const compared = compareRevisions(revision, existing);
 	if (compared !== null) {
-		if (compared >= 0) latestRequestedRevision.set(kvKey, revision);
+		if (compared >= 0) {
+			setBoundedMap(
+				latestRequestedRevision,
+				kvKey,
+				revision,
+				PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+			);
+		}
 		return;
 	}
-	latestRequestedRevision.set(kvKey, revision);
+	setBoundedMap(
+		latestRequestedRevision,
+		kvKey,
+		revision,
+		PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+	);
 }
 
 function mayWriteRequestedRevision(kvKey: string, revision: string | undefined): boolean {
@@ -493,7 +532,7 @@ async function persistLoadedEnvelope<T>(
 	]);
 
 	if (kvWritten) {
-		if (memoryCache.get(identity) === envelope) memoryCache.set(identity, globallyRenewed);
+		if (memoryCache.get(identity) === envelope) setMemoryEnvelope(identity, globallyRenewed);
 		// The first edge write makes the value available without waiting on KV. Once
 		// KV succeeds, replace it with the envelope that records that confirmed lease.
 		await persistEdge(edgeKey, globallyRenewed);
@@ -554,7 +593,7 @@ function loadAndCache<T>(
 				revision,
 				value
 			};
-			memoryCache.set(identity, envelope);
+			setMemoryEnvelope(identity, envelope);
 			if (defaultCloudflareCache() || writeKv) {
 				const persistence = persistLoadedEnvelope(
 					identity,
@@ -571,10 +610,12 @@ function loadAndCache<T>(
 			return value;
 		})
 		.finally(() => {
-			inFlight.delete(flightKey);
+			// A bounded-map eviction can let a newer flight for this same key start
+			// before this promise settles. Never let the older completion erase it.
+			if (inFlight.get(flightKey) === pending) inFlight.delete(flightKey);
 		});
 
-	inFlight.set(flightKey, pending);
+	setBoundedMap(inFlight, flightKey, pending, PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES);
 	return pending;
 }
 
@@ -593,7 +634,7 @@ async function backOffEnvelope<T>(
 		retryAfter: Date.now() + PUBLIC_DISCOVERY_RETRY_MS,
 		retryRevision: requestedRevision ?? 'unversioned'
 	};
-	memoryCache.set(identity, backedOff);
+	setMemoryEnvelope(identity, backedOff);
 	// A local retry backoff must not overwrite the global last-known-good value
 	// or consume one KV write per Cloudflare location during an origin outage.
 	// Revision-transition failures use their dedicated marker path instead.
@@ -646,14 +687,14 @@ async function recoverFailedRevision<T>(
 	// origin request was in flight. In that case recovery is complete; warm the
 	// exact physical edge entry and do not install a failure marker.
 	if (recoveryIsUsable && recovery.revision === requestedRevision) {
-		memoryCache.set(identity, recovery);
+		setMemoryEnvelope(identity, recovery);
 		await persistEdge(edgeCacheKey(logicalKey, url, platform, requestedRevision), recovery);
 		return recovery.value;
 	}
 
 	const retryAfter = now + PUBLIC_DISCOVERY_RETRY_MS;
 	if (recoveryIsUsable) {
-		memoryCache.set(identity, {
+		setMemoryEnvelope(identity, {
 			...recovery,
 			retryAfter,
 			retryRevision: requestedRevision
@@ -809,7 +850,7 @@ export async function getCachedPublicData<T>(
 					retryAfter: transitionMarker.retryAfter,
 					retryRevision: revision
 				};
-				memoryCache.set(identity, backedOff);
+				setMemoryEnvelope(identity, backedOff);
 				return backedOff.value;
 			}
 			throw new Error(`Public discovery revision ${revision} refresh is temporarily backed off`);
@@ -973,7 +1014,7 @@ export async function getCachedPublicDataLastKnownGood<T>(
 		localIsUsable &&
 		(!publicDiscoveryKv(context.platform) || localWasRecentlyChecked || revisionCheckIsBackedOff)
 	) {
-		memoryCache.set(identity, local);
+		setMemoryEnvelope(identity, local);
 		return local.value;
 	}
 	if (!publicDiscoveryKv(context.platform) || revisionCheckIsBackedOff) return undefined;
@@ -998,9 +1039,14 @@ export async function getCachedPublicDataLastKnownGood<T>(
 		// successful check; the 15-minute origin retry cadence would exhaust the
 		// much smaller KV list allowance across only a few active locations.
 		const retryAt = now + PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS;
-		latestRevisionRetryAfter.set(identity, retryAt);
+		setBoundedMap(
+			latestRevisionRetryAfter,
+			identity,
+			retryAt,
+			PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+		);
 		if (envelopeIsUsable) {
-			memoryCache.set(identity, { ...envelope, latestRevisionRetryAt: retryAt });
+			setMemoryEnvelope(identity, { ...envelope, latestRevisionRetryAt: retryAt });
 		}
 
 		// Overflow/error is a candidate observation, never a global certificate.
@@ -1030,7 +1076,7 @@ export async function getCachedPublicDataLastKnownGood<T>(
 	latestRevisionRetryAfter.delete(identity);
 	// Retain the global-check lease in module memory as well as the shared edge
 	// pointer so a runtime without Cache API does not spend one list per request.
-	memoryCache.set(identity, { ...envelope, latestRevisionCheckedAt: now });
+	setMemoryEnvelope(identity, { ...envelope, latestRevisionCheckedAt: now });
 	if (envelope.revision) {
 		const warm = Promise.all([
 			persistEdge(

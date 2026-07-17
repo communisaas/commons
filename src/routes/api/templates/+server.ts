@@ -1,6 +1,7 @@
 // CONVEX: Fully migrated — moderation (Groq) + embeddings (Gemini) stay in SvelteKit,
 // all DB operations go through Convex serverQuery/serverMutation.
 import { json } from '@sveltejs/kit';
+import { ConvexError } from 'convex/values';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
@@ -65,9 +66,15 @@ function resolveTemplateSlug(title: string, requestedSlug: string | undefined): 
 const TEMPLATE_SLUG_TAKEN = 'TEMPLATE_SLUG_TAKEN';
 
 function isTemplateSlugTakenError(error: unknown): boolean {
-	// Convex wraps server errors with request metadata, so match the stable code
-	// inside the message rather than requiring exact string equality.
-	return error instanceof Error && error.message.includes(TEMPLATE_SLUG_TAKEN);
+	if (!(error instanceof ConvexError)) return false;
+	const data = error.data;
+	return (
+		data === TEMPLATE_SLUG_TAKEN ||
+		(data !== null &&
+			typeof data === 'object' &&
+			!Array.isArray(data) &&
+			(data as { code?: unknown }).code === TEMPLATE_SLUG_TAKEN)
+	);
 }
 
 function duplicateSlugResponse(): Response {
@@ -404,6 +411,18 @@ function validateTemplateData(data: unknown): {
 		templateData.title as string,
 		templateData.slug as string | undefined
 	);
+	if (!prospectiveSlug || !/[a-z0-9]/.test(prospectiveSlug)) {
+		return {
+			isValid: false,
+			errors: [
+				createValidationError(
+					'slug',
+					'VALIDATION_INVALID_FORMAT',
+					'Title or custom link must contain at least one letter or number'
+				)
+			]
+		};
+	}
 
 	const budgetResult = validateTemplateInputBudgets({
 		title: templateData.title,
@@ -437,7 +456,7 @@ function validateTemplateData(data: unknown): {
 
 	const validData: CreateTemplateRequest = {
 		title: templateData.title as string,
-		slug: prospectiveSlug || undefined,
+		slug: prospectiveSlug,
 		message_body: templateData.message_body as string,
 		sources:
 			(templateData.sources as Array<{ num: number; title: string; url: string; type: string }>) ||

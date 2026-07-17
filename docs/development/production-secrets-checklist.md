@@ -453,9 +453,13 @@ After setting all secrets, verify deployment:
 # Check that secrets are set (values are hidden)
 wrangler pages secret list
 
-# Trigger a test deployment
-wrangler pages deploy
+# Trigger the gated staging deployment for a SHA already on staging
+RELEASE_SHA=$(git rev-parse HEAD)
+gh workflow run deploy.yml --ref main -f branch=staging -f ref="$RELEASE_SHA"
 ```
+
+Never validate production secrets with a direct `wrangler pages deploy`; it
+bypasses the repository's producer-readiness and exact-SHA release gates.
 
 ---
 

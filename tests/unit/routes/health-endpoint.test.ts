@@ -27,7 +27,12 @@ const HEALTH_ENV = {
 	ATLAS_BASE_URL: 'https://atlas.commons.email',
 	EXPECTED_CELL_MAP_ROOT: `0x${'a'.repeat(64)}`,
 	EXPECTED_CELL_MAP_DEPTH: '20',
-	PUBLIC_CONVEX_URL: 'https://health-probe.convex.cloud'
+	PUBLIC_CONVEX_URL: 'https://health-probe.convex.cloud',
+	PUBLIC_DISCOVERY_KV: {
+		get: vi.fn(),
+		put: vi.fn(),
+		list: vi.fn()
+	}
 };
 
 function event() {
@@ -65,7 +70,32 @@ describe('/api/health', () => {
 		);
 		expect(mockConvexQuery).toHaveBeenCalledOnce();
 		expect(mockConvexQuery).toHaveBeenCalledWith(api.observability.servicePing, {});
-		expect(body).toMatchObject({ status: 'ok', convex: true, atlas: { status: 'ok' } });
+		expect(body).toMatchObject({
+			status: 'ok',
+			convex: true,
+			atlas: { status: 'ok' },
+			publicDiscoveryCache: { kvBound: true }
+		});
+	});
+
+	it('fails readiness loudly when the global discovery KV binding is missing', async () => {
+		mockConvexQuery.mockResolvedValue({
+			ok: true,
+			storageReadable: true,
+			discoveryManifestPresent: true,
+			discoveryProducerHealthy: true,
+			discoveryProducerOverdueAt: null
+		});
+
+		const response = await GET({
+			platform: { env: { ...HEALTH_ENV, PUBLIC_DISCOVERY_KV: undefined } }
+		} as never);
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			status: 'down',
+			publicDiscoveryCache: { kvBound: false }
+		});
 	});
 
 	it('reports not ready when the discovery manifest singleton is missing', async () => {

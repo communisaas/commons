@@ -177,16 +177,26 @@ describe('public template query read budgets', () => {
 		});
 	});
 
-	it('listPublic returns an honest empty list without scanning templates on snapshot cold start', async () => {
+	it('listPublic distinguishes cold start without scanning templates', async () => {
 		const t = newHarness();
 		await seedHeavyTemplates(t, 20);
+		await expect(t.query(api.templates.listPublic, { excludeCwc: false })).rejects.toThrow(
+			'PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:all'
+		);
 
 		const observed = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.listPublic, { excludeCwc: false });
+			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				excludeCwc: false
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 
-		expect(observed.result).toEqual([]);
+		expect(observed.result).toEqual({
+			projectionVersion: 0,
+			revision: 0,
+			updatedAt: null,
+			templates: []
+		});
 		expect(observed.metrics.documentsRead.used).toBe(0);
 		expect(observed.metrics.databaseQueries.used).toBe(1);
 		expect(observed.metrics.bytesRead.used).toBe(0);

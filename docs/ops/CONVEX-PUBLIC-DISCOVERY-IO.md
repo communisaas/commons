@@ -18,7 +18,9 @@ meaningful product usage or a volumetric attack.
 
 The root URL is also the wrong health target: its graceful query fallbacks can
 still produce HTTP 200 while Convex is disabled. Disable that monitor during
-recovery, then repoint it to `/api/health`. The health endpoint calls the
+recovery, then use `/api/live` for one-minute process liveness and
+`/api/health` for five-minute dependency/readiness monitoring. `/api/live`
+performs no external I/O. The health endpoint calls the
 `observability.servicePing` query, which tests both function execution and an
 indexed read of the tiny discovery-manifest singleton without hydrating an
 embedding-bearing row. It also returns `discoveryProducerHealthy:false` while a
@@ -60,15 +62,22 @@ The protection has two independent data layers and one small control plane:
    the manifest stays unhealthy with an alert until a clean rebuild. If a
    non-empty corpus yields no safe card, publication freezes the last-good list
    instead of replacing it with an accidental empty snapshot. Public
-   cards and detail responses retain compatibility fields as
+   cacheable discovery/list cards retain compatibility fields as
    `recipient_config:null` and `recipientEmails:[]`; only the non-identifying
-   `recipient_count` scalar crosses the anonymous boundary.
+   `recipient_count` scalar crosses that anonymous cache boundary. The indexed,
+   published-only `getBySlugPublic` detail/send query constructs an explicit
+   public recipient-roster allowlist for `/s/[slug]` and
+   `/template-modal/[slug]`; opaque authoring fields and provider/CWC configs
+   remain redacted. Both responses are explicitly `private, no-store` to avoid
+   retention, though that policy is not an access-control boundary for the
+   directly public Convex query.
 3. `templates:publicDiscoveryManifest` distinguishes a never-built cold state
    (`ready:false`, revision `0`) from a successful build of a legitimately empty
    corpus. List and relation payloads fail closed when their stored revision and
    timestamp do not match the manifest. The edge cache stores the materialized
-   generation with each payload and refreshes synchronously when it changes, so a successful
-   rebuild does not wait for the six-hour safety revalidation interval.
+   generation with each payload and refreshes synchronously when it changes, so
+   a successful rebuild does not wait for the 24-hour versioned-payload safety
+   revalidation interval.
 
 Normal list and spectrum homepage loads do not request graph relations at all.
 Only `?view=graph` loads one combined twin+concept snapshot, in parallel with
@@ -233,9 +242,9 @@ cold state. The scoped execution graph is
    the `templates` corpus. The legacy split queries remain compatible but do not
    constitute the version/readiness gate.
 
-6. Keep Cloudflare Pages native Git production deployment disabled. The gated
-   Wrangler job in `.github/workflows/deploy.yml` is the sole standard
-   production uploader. No GitHub Environment reviewer protection is assumed,
+6. Keep Cloudflare Pages native Git production and preview deployments disabled.
+   The gated Wrangler job in `.github/workflows/deploy.yml` is the sole uploader
+   for every branch. No GitHub Environment reviewer protection is assumed,
    so push or dispatch the same SHA only after steps 3–5 are complete. A
    production-branch CI completion triggers the workflow only after this
    hardened workflow has first been merged to the default branch. GitHub runs
@@ -252,18 +261,20 @@ cold state. The scoped execution graph is
    Manual dispatch cannot bypass source provenance, branch ancestry, focused and
    full checks, type checks, or producer readiness. Every Pages branch runs
    `scripts/verify-public-discovery-readiness.mjs` against its configured Convex
-   backend before upload. Production additionally requires a non-empty corpus
-   and timestamps no more than 26 hours old; non-production still requires
-   ready, revision-matched v4/redacted payloads but permits an empty or stale
-   fixture corpus. That
-   executable gate re-reads the manifest and all versioned payloads and rejects
-   cold, empty, oversized, revision-skewed, or more-than-26-hour-old state before
-   upload. There is no dispatch-time bypass: an exceptional temporary relaxation
-   requires a reviewed workflow change and a follow-up revert, so one operator
-   cannot waive the gate. Verify the Pages source
+   backend before upload. It reads `observability:servicePing` after the public
+   payloads and rejects durable producer failure, unreadable storage, a missing
+   manifest, or a producer overdue time that has already elapsed. Production
+   additionally requires a non-empty corpus and timestamps no more than 26 hours
+   old; non-production still requires producer health plus ready,
+   revision-matched v4/redacted payloads but permits an empty or stale fixture
+   corpus. That executable gate re-reads the manifest and all versioned payloads
+   and rejects cold, empty, oversized, revision-skewed, or more-than-26-hour-old
+   production state before upload. There is no dispatch-time bypass: an
+   exceptional temporary relaxation requires a reviewed workflow change and a
+   follow-up revert, so one operator cannot waive the gate. Verify the Pages source
    configuration still reports
    `production_deployments_enabled: false` and
-   `preview_deployment_setting: "all"` with the API check in
+   `preview_deployment_setting: "none"` with the API check in
    `docs/development/deployment.md`.
 
 7. Warm and inspect both public paths:
@@ -295,12 +306,14 @@ cold state. The scoped execution graph is
    `templateRelationSnapshots`, never the `templates` corpus. Database I/O
    should stop growing in proportion to page requests.
 
-9. Re-enable the Sentry uptime monitor against
-   `https://commons.email/api/health`, not `/`. Use a five-minute cadence at soft
-   launch: even if every probe paid the enforced 2 KB ceiling instead of hitting
-   Convex's unchanged-query cache, that is under 17 MiB/month. A one-minute
-   cadence would raise the same worst-case bound to about 83 MiB/month and would add
-   unnecessary Atlas HEAD traffic and alert noise.
+9. Point the one-minute Sentry liveness monitor at
+   `https://commons.email/api/live`, never `/`; this endpoint performs no Convex,
+   Atlas, KV, or application-data I/O. Add a separate five-minute readiness
+   monitor for `https://commons.email/api/health`: even if every probe paid the
+   enforced 2 KB Convex ceiling instead of hitting the unchanged-query cache,
+   that is under 17 MiB/month. A one-minute readiness cadence would raise the
+   same worst-case bound to about 83 MiB/month and add unnecessary Atlas HEAD
+   traffic and alert noise.
 
 ## Ongoing refresh
 
@@ -398,13 +411,14 @@ defense in depth, but its warning-only result is not the correctness boundary.
 
 ### Retention and removal contract
 
-The cached template body and safe delivery projection are the same anonymous
-public projection exposed by the public template API. Raw recipient
+The cached template card is the same anonymous public projection exposed by
+the public template API. Raw recipient
 configuration and contact addresses are never cacheable: compatibility fields
 are fixed to `recipient_config:null` and `recipientEmails:[]`, with only
-`recipient_count` retained. This contract cut moved the application namespace
-from `v3` to `v4`, so a post-deploy read cannot select a legacy envelope; purge
-outer CDN state during rollout as the immediate-recall backstop.
+`recipient_count` retained. The exhaustive consumer-allowlist contract cut
+moved the application namespace from `v4` to `v5`, so a post-deploy read cannot
+select a legacy envelope; purge outer CDN state during rollout as the
+immediate-recall backstop.
 Sender/customer identity is not part of this cache.
 Revision-qualified KV rows are retained for up to eight days and remain eligible
 as an active LKG for the deliberate seven-day outage window. A normal deletion

@@ -323,6 +323,7 @@ on both team quota (50/75/90%) and per-function regressions against a rolling
 baseline.
 
 Static route-to-function mapping from this hypergraph plus function-log totals
-is enough to rank remediation without adding application writes. Continue to
-send uptime traffic only to the one-document, indexed `/api/health` control-plane
-probe, never to a dynamic product page.
+is enough to rank remediation without adding application writes. Send frequent
+process-liveness traffic only to the zero-dependency `/api/live` endpoint, never
+to a dynamic product page. Probe the one-document, indexed `/api/health`
+readiness control plane separately at a five-minute cadence.

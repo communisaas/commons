@@ -22,10 +22,12 @@
 - **TEE recovery is not yet covered**: TEE is Planned; witness
   decryption currently runs in `LocalConstituentResolver` (CF Worker
   process). No HSM / sealed recovery yet.
-- **Deploy cutover:** `npm run build && wrangler pages deploy
-  .svelte-kit/cloudflare --project-name communique-site --branch production` +
-  `npx convex deploy --env-file .env.production` (note: `-y` silently
-  fails for prod — always pass `--env-file`).
+- **Deploy cutover:** restore Convex with `npx convex deploy --env-file
+  .env.production`, rebuild and verify the v4 discovery snapshots, then use the
+  gated `.github/workflows/deploy.yml` workflow for the exact release SHA.
+  Direct `wrangler pages deploy` is prohibited because it bypasses recovery
+  readiness and immutable-SHA evidence. (`-y` silently fails for Convex prod —
+  always pass `--env-file`.)
 - **Rate limiter:** `SlidingWindowRateLimiter` uses `REDIS_URL` if set;
   otherwise in-memory. DR-sensitive: restoring to an env without Redis
   loses rate-limit state across restarts.
@@ -103,9 +105,10 @@ Spot-check these tables via the Convex dashboard or a quick query:
    ```
 2. Redeploy the frontend so it picks up the new env:
    ```bash
-   npm run build
-   npx wrangler pages deploy .svelte-kit/cloudflare \
-     --project-name communique-site --branch production
+   RELEASE_SHA=$(git rev-parse HEAD)
+   gh workflow run deploy.yml --ref production \
+     -f branch=production \
+     -f ref="$RELEASE_SHA"
    ```
 3. Verify the live site is operational: check `commons.email` health.
 

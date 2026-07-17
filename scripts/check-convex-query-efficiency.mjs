@@ -88,8 +88,7 @@ function buildModuleInfo(filePath, source) {
 		imports: new Map(),
 		namespaceImports: new Map(),
 		exports: new Map(),
-		queryFactories: new Set(),
-		queryNamespaces: new Set()
+		queryFactories: new Set()
 	};
 
 	for (const statement of sourceFile.statements) {
@@ -103,7 +102,6 @@ function buildModuleInfo(filePath, source) {
 			if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
 				const localName = clause.namedBindings.name.text;
 				info.namespaceImports.set(localName, specifier);
-				if (isGeneratedServerModule(specifier)) info.queryNamespaces.add(localName);
 			}
 			if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
 				for (const element of clause.namedBindings.elements) {
@@ -145,11 +143,13 @@ function buildModuleInfo(filePath, source) {
 			statement.exportClause &&
 			ts.isNamedExports(statement.exportClause)
 		) {
+			if (statement.isTypeOnly) continue;
 			const specifier =
 				statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
 					? statement.moduleSpecifier.text
 					: null;
 			for (const element of statement.exportClause.elements) {
+				if (element.isTypeOnly) continue;
 				const exportedName = element.name.text;
 				const importedName = element.propertyName?.text ?? exportedName;
 				info.exports.set(
@@ -209,35 +209,211 @@ function resolveExportExpression(info, exportedName, graph, seen = new Set()) {
 	return target ? resolveExportExpression(target, descriptor.importedName, graph, seen) : null;
 }
 
-function isQueryFactoryExpression(expression, info, graph, seen = new Set()) {
+function queryFactoryResolution(kind, reason = null) {
+	return { kind, reason };
+}
+
+function isQueryLikeName(name) {
+	const normalized = name.toLowerCase();
+	return normalized.includes('query') && !normalized.includes('internalquery');
+}
+
+function resolveExportedQueryFactory(info, exportedName, graph, seen = new Set()) {
+	const key = `factory-export:${info.filePath}::${exportedName}`;
+	if (seen.has(key)) {
+		return queryFactoryResolution(
+			'unresolved',
+			`query-factory export cycle at ${relative(info.filePath)}::${exportedName}`
+		);
+	}
+	seen.add(key);
+
+	const descriptor = info.exports.get(exportedName);
+	if (!descriptor) {
+		return isQueryLikeName(exportedName)
+			? queryFactoryResolution(
+					'unresolved',
+					`query-like export ${relative(info.filePath)}::${exportedName} is not declared`
+				)
+			: queryFactoryResolution('not-query');
+	}
+	if (descriptor.kind === 'expression') {
+		return resolveQueryFactoryExpression(descriptor.expression, info, graph, seen);
+	}
+	if (descriptor.kind === 'local') {
+		return resolveQueryFactoryBinding(info, descriptor.localName, graph, seen);
+	}
+	if (isGeneratedServerModule(descriptor.specifier)) {
+		return queryFactoryResolution(descriptor.importedName === 'query' ? 'query' : 'not-query');
+	}
+
+	const target = resolveRelativeModule(info, descriptor.specifier, graph.modulesByPath);
+	if (target) {
+		return resolveExportedQueryFactory(target, descriptor.importedName, graph, seen);
+	}
+	return isQueryLikeName(descriptor.importedName) || isQueryLikeName(exportedName)
+		? queryFactoryResolution(
+				'unresolved',
+				`query-like re-export ${relative(info.filePath)}::${exportedName} points to unresolved module ${descriptor.specifier}`
+			)
+		: queryFactoryResolution('not-query');
+}
+
+function resolveQueryFactoryBinding(info, name, graph, seen = new Set()) {
+	if (info.queryFactories.has(name)) return queryFactoryResolution('query');
+
+	const key = `factory-binding:${info.filePath}::${name}`;
+	if (seen.has(key)) {
+		return queryFactoryResolution(
+			'unresolved',
+			`query-factory binding cycle at ${relative(info.filePath)}::${name}`
+		);
+	}
+	seen.add(key);
+
+	const binding = localBinding(info, name);
+	if (binding) return resolveQueryFactoryExpression(binding, info, graph, seen);
+
+	const imported = info.imports.get(name);
+	if (!imported) {
+		return isQueryLikeName(name)
+			? queryFactoryResolution(
+					'unresolved',
+					`query-like factory ${name} has no statically resolvable binding in ${relative(info.filePath)}`
+				)
+			: queryFactoryResolution('not-query');
+	}
+	if (isGeneratedServerModule(imported.specifier)) {
+		return queryFactoryResolution(imported.importedName === 'query' ? 'query' : 'not-query');
+	}
+
+	const target = resolveRelativeModule(info, imported.specifier, graph.modulesByPath);
+	if (target) {
+		return resolveExportedQueryFactory(target, imported.importedName, graph, seen);
+	}
+	return isQueryLikeName(name) || isQueryLikeName(imported.importedName)
+		? queryFactoryResolution(
+				'unresolved',
+				`query-like factory ${name} points to unresolved module ${imported.specifier}`
+			)
+		: queryFactoryResolution('not-query');
+}
+
+function wrapperReturnExpressions(node) {
+	if (ts.isArrowFunction(node) && !ts.isBlock(node.body)) return [node.body];
+	const expressions = [];
+	const visit = (current) => {
+		if (current !== node && isFunctionLike(current)) return;
+		if (ts.isReturnStatement(current) && current.expression) {
+			expressions.push(current.expression);
+			return;
+		}
+		ts.forEachChild(current, visit);
+	};
+	if (node.body) visit(node.body);
+	return expressions;
+}
+
+function resolveWrappedQueryFactory(node, info, graph, seen) {
+	let unresolved = null;
+	for (const expression of wrapperReturnExpressions(node)) {
+		const current = unwrapExpression(expression);
+		let resolution = ts.isCallExpression(current)
+			? resolveQueryFactoryExpression(current.expression, info, graph, new Set(seen))
+			: resolveQueryFactoryExpression(current, info, graph, new Set(seen));
+		if (resolution.kind !== 'query' && ts.isCallExpression(current)) {
+			const higherOrderResolution = resolveQueryFactoryExpression(
+				current,
+				info,
+				graph,
+				new Set(seen)
+			);
+			if (higherOrderResolution.kind === 'query') resolution = higherOrderResolution;
+			else if (resolution.kind !== 'unresolved') resolution = higherOrderResolution;
+		}
+		if (resolution.kind === 'query') return resolution;
+		if (resolution.kind === 'unresolved') unresolved ??= resolution;
+	}
+	return unresolved ?? queryFactoryResolution('not-query');
+}
+
+function resolveQueryFactoryExpression(expression, info, graph, seen = new Set()) {
 	const current = unwrapExpression(expression);
 	if (ts.isIdentifier(current)) {
-		if (info.queryFactories.has(current.text)) return true;
-		const key = `${info.filePath}::${current.text}`;
-		if (seen.has(key)) return false;
-		seen.add(key);
-		const binding = localBinding(info, current.text);
-		return binding ? isQueryFactoryExpression(binding, info, graph, seen) : false;
+		return resolveQueryFactoryBinding(info, current.text, graph, seen);
 	}
-	return (
+	if (ts.isCallExpression(current)) {
+		let unresolved = null;
+		for (const argument of current.arguments) {
+			const resolution = resolveQueryFactoryExpression(argument, info, graph, new Set(seen));
+			if (resolution.kind === 'query') return resolution;
+			if (resolution.kind === 'unresolved') unresolved ??= resolution;
+		}
+		return unresolved ?? queryFactoryResolution('not-query');
+	}
+	if (isFunctionLike(current)) return resolveWrappedQueryFactory(current, info, graph, seen);
+	if (
 		ts.isPropertyAccessExpression(current) &&
 		ts.isIdentifier(current.expression) &&
-		info.queryNamespaces.has(current.expression.text) &&
-		current.name.text === 'query'
-	);
+		info.namespaceImports.has(current.expression.text)
+	) {
+		const specifier = info.namespaceImports.get(current.expression.text);
+		if (isGeneratedServerModule(specifier)) {
+			return queryFactoryResolution(current.name.text === 'query' ? 'query' : 'not-query');
+		}
+		const target = resolveRelativeModule(info, specifier, graph.modulesByPath);
+		if (target) return resolveExportedQueryFactory(target, current.name.text, graph, seen);
+		return isQueryLikeName(current.name.text)
+			? queryFactoryResolution(
+					'unresolved',
+					`query-like namespace factory ${current.getText(info.sourceFile)} points to unresolved module ${specifier}`
+				)
+			: queryFactoryResolution('not-query');
+	}
+	if (ts.isPropertyAccessExpression(current) && isQueryLikeName(current.name.text)) {
+		return queryFactoryResolution(
+			'unresolved',
+			`query-like factory ${current.getText(info.sourceFile)} has no statically resolvable namespace binding`
+		);
+	}
+	return queryFactoryResolution('not-query');
 }
 
 function resolveQueryCall(expression, info, graph, seen = new Set()) {
 	const current = unwrapExpression(expression);
-	if (ts.isCallExpression(current) && isQueryFactoryExpression(current.expression, info, graph)) {
-		return { info, call: current };
+	if (ts.isCallExpression(current)) {
+		const factory = resolveQueryFactoryExpression(current.expression, info, graph);
+		if (factory.kind === 'query') return { kind: 'query', info, call: current };
+		if (factory.kind === 'unresolved') return factory;
+		return queryFactoryResolution('not-query');
 	}
-	if (!ts.isIdentifier(current)) return null;
-	const key = `${info.filePath}::${current.text}`;
-	if (seen.has(key)) return null;
+	if (!ts.isIdentifier(current)) return queryFactoryResolution('not-query');
+	const key = `query-call:${info.filePath}::${current.text}`;
+	if (seen.has(key)) {
+		return queryFactoryResolution(
+			'unresolved',
+			`query-call binding cycle at ${relative(info.filePath)}::${current.text}`
+		);
+	}
 	seen.add(key);
 	const binding = localBinding(info, current.text);
-	return binding ? resolveQueryCall(binding, info, graph, seen) : null;
+	if (binding) return resolveQueryCall(binding, info, graph, seen);
+	const imported = info.imports.get(current.text);
+	if (!imported) return queryFactoryResolution('not-query');
+	if (isGeneratedServerModule(imported.specifier)) return queryFactoryResolution('not-query');
+	const target = resolveRelativeModule(info, imported.specifier, graph.modulesByPath);
+	if (!target) {
+		return isQueryLikeName(current.text) || isQueryLikeName(imported.importedName)
+			? queryFactoryResolution(
+					'unresolved',
+					`query-like call ${current.text} points to unresolved module ${imported.specifier}`
+				)
+			: queryFactoryResolution('not-query');
+	}
+	const exported = resolveExportExpression(target, imported.importedName, graph);
+	return exported
+		? resolveQueryCall(exported.expression, exported.info, graph, seen)
+		: queryFactoryResolution('not-query');
 }
 
 function isFunctionLike(node) {
@@ -560,6 +736,29 @@ function selfCheckAnalyzer() {
 	const root = path.join(REPO_ROOT, '__query_efficiency_self_test__');
 	const graph = buildModuleGraph([
 		{
+			filePath: path.join(root, 'factory.ts'),
+			source: `
+				import { query as baseQuery } from './_generated/server';
+				export { baseQuery as locallyReexportedQuery };
+				export const wrappedFactory = (definition) => baseQuery(definition);
+				const withTracing = (factory) => factory;
+				export const higherOrderFactory = withTracing(baseQuery);
+				export function blockWrappedFactory(definition) {
+					return wrappedFactory(definition);
+				}
+			`
+		},
+		{
+			filePath: path.join(root, 'factory-barrel.ts'),
+			source: `
+				export {
+					locallyReexportedQuery as forwardedFactory,
+					blockWrappedFactory as wrappedForwardedFactory,
+					higherOrderFactory as higherOrderForwardedFactory
+				} from './factory';
+			`
+		},
+		{
 			filePath: path.join(root, 'helper.ts'),
 			source: `
 				export function importedHazard({ db: database }) {
@@ -573,6 +772,11 @@ function selfCheckAnalyzer() {
 			source: `
 				import { query as publicQuery } from './_generated/server';
 				import * as server from './_generated/server';
+				import {
+					forwardedFactory,
+					wrappedForwardedFactory,
+					higherOrderForwardedFactory
+				} from './factory-barrel';
 				import { importedHazard as remoteHazard } from './helper';
 				const clockHazard = () => new Date().valueOf();
 				const delegatedBuilder = (builder) => builder.filter(Boolean).collect();
@@ -592,6 +796,15 @@ function selfCheckAnalyzer() {
 				export const namespaceQuery = server.query({
 					handler: async ({ db: store }) => store.query('rows').filter(Boolean).collect()
 				});
+				export const importedFactoryQuery = forwardedFactory({
+					handler: async ({ db }) => db.query('rows').collect()
+				});
+				export const wrappedFactoryQuery = wrappedForwardedFactory({
+					handler: async () => performance.now()
+				});
+				export const higherOrderFactoryQuery = higherOrderForwardedFactory({
+					handler: async ({ db }) => db.query('rows').filter(Boolean).collect()
+				});
 			`
 		},
 		{
@@ -603,7 +816,7 @@ function selfCheckAnalyzer() {
 		}
 	]);
 	const scan = scanPublicQueries(graph);
-	assert.equal(scan.publicQueryCount, 3);
+	assert.equal(scan.publicQueryCount, 6);
 	assert.deepEqual(scan.errors, []);
 	assert.deepEqual(scan.findings.get('__query_efficiency_self_test__/main.ts::synthetic')?.counts, {
 		collect: 4,
@@ -622,6 +835,43 @@ function selfCheckAnalyzer() {
 		scan.findings.get('__query_efficiency_self_test__/main.ts::namespaceQuery')?.counts,
 		{ collect: 1, queryFilter: 1, dateNow: 0 }
 	);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::importedFactoryQuery')?.counts,
+		{ collect: 1, queryFilter: 0, dateNow: 0 }
+	);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::wrappedFactoryQuery')?.counts,
+		{ collect: 0, queryFilter: 0, dateNow: 1 }
+	);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::higherOrderFactoryQuery')?.counts,
+		{ collect: 1, queryFilter: 1, dateNow: 0 }
+	);
+
+	const unresolvedGraph = buildModuleGraph([
+		{
+			filePath: path.join(root, 'unresolved.ts'),
+			source: `
+				import { publicQuery } from './missing-factory';
+				export const escaped = publicQuery({
+					handler: async ({ db }) => db.query('rows').collect()
+				});
+			`
+		}
+	]);
+	assert.deepEqual(scanPublicQueries(unresolvedGraph).errors, [
+		'__query_efficiency_self_test__/unresolved.ts::escaped: query-like factory publicQuery points to unresolved module ./missing-factory.'
+	]);
+}
+
+function unresolvedQueryLikeExportReason(info, exportedName) {
+	const descriptor = info.exports.get(exportedName);
+	if (!descriptor) return null;
+	const names = [exportedName];
+	if (descriptor.kind === 'local') names.push(descriptor.localName);
+	if (descriptor.kind === 'reexport') names.push(descriptor.importedName);
+	if (!names.some(isQueryLikeName)) return null;
+	return `query-like export could not be resolved from ${relative(info.filePath)}::${exportedName}`;
 }
 
 function scanPublicQueries(graph) {
@@ -632,14 +882,28 @@ function scanPublicQueries(graph) {
 
 	for (const info of graph.modules) {
 		for (const [exportedName] of info.exports) {
+			const key = `${relative(info.filePath)}::${exportedName}`;
 			const exported = resolveExportExpression(info, exportedName, graph);
-			if (!exported) continue;
+			if (!exported) {
+				const exportedFactory = resolveExportedQueryFactory(info, exportedName, graph);
+				if (exportedFactory.kind === 'query') continue;
+				const reason = unresolvedQueryLikeExportReason(info, exportedName);
+				if (reason) {
+					errors.push(
+						`${key}: ${exportedFactory.kind === 'unresolved' ? exportedFactory.reason : reason}.`
+					);
+				}
+				continue;
+			}
 			const resolved = resolveQueryCall(exported.expression, exported.info, graph);
-			if (!resolved) continue;
+			if (resolved.kind === 'unresolved') {
+				errors.push(`${key}: ${resolved.reason}.`);
+				continue;
+			}
+			if (resolved.kind !== 'query') continue;
 			publicQueryCount += 1;
 			modules.add(relative(info.filePath));
 			const analysis = analyzePublicQuery(resolved.call, resolved.info, graph);
-			const key = `${relative(info.filePath)}::${exportedName}`;
 			for (const error of analysis.errors) errors.push(`${key}: ${error}.`);
 			if (!RULES.some((rule) => analysis.counts[rule] > 0)) continue;
 			findings.set(key, {

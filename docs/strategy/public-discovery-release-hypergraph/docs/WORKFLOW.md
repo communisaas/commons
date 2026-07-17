@@ -15,9 +15,9 @@ Record one release SHA that is contained in `origin/production`. Both deploys
 must use that SHA. A manual Pages dispatch runs the static Convex query-efficiency
 guardrail, focused public-discovery tests, the full test suite, application
 checks, and Convex type checks before its deploy job can enter the GitHub
-`production` Environment. Cloudflare's native Git production deploy remains
-disabled; the gated Wrangler job is the sole standard production uploader. No
-GitHub Environment reviewer rule is assumed.
+`production` Environment. Cloudflare's native Git production and preview deploys
+remain disabled; the gated Wrangler job is the sole uploader for every branch.
+No GitHub Environment reviewer rule is assumed.
 
 ## 1. Deploy the backend producer
 
@@ -86,8 +86,8 @@ npx convex run templates:publicDiscoveryRelations \
 
 ## 3. Deploy the same frontend SHA
 
-Keep Cloudflare Pages native Git production deployment disabled, then dispatch
-the exact verified SHA. A production-branch CI completion can also trigger this
+Keep Cloudflare Pages native Git production and preview deployments disabled,
+then dispatch the exact verified SHA. A production-branch CI completion can also trigger this
 workflow only after the hardened definition has landed on the default branch:
 GitHub resolves `workflow_run` there, not from the triggering branch. During the
 first bootstrap, merge the hardened workflow to `main` before pushing or
@@ -102,13 +102,16 @@ gh workflow run deploy.yml --ref production \
 ```
 
 The workflow queries the public manifest, both list variants, and both combined
-relation variants before upload. It refuses a cold manifest, empty production
-corpus, revision skew, an oversized serialized payload, or a materialization
-timestamp more than 26 hours old. It then deploys an immutable Cloudflare Pages
-artifact through the sole standard Wrangler uploader, attempts a warning-only
-defense-in-depth production cache purge, and gates on its `/api/health` result.
+relation variants before upload, then reads `observability:servicePing` last. It
+refuses a cold manifest, durable producer failure, an elapsed producer overdue
+time, empty production corpus, revision skew, an oversized serialized payload,
+or a materialization timestamp more than 26 hours old. Contract-only preview
+verification relaxes corpus age and content requirements, not producer health.
+The workflow then deploys an immutable Cloudflare Pages artifact through the
+sole standard Wrangler uploader, attempts a warning-only defense-in-depth
+production cache purge, and gates on its `/api/health` result.
 Confirm the Pages API reports `production_deployments_enabled: false` and
-`preview_deployment_setting: "all"` with the verification command in
+`preview_deployment_setting: "none"` with the verification command in
 `docs/development/deployment.md`.
 
 ## 4. Warm, smoke, and observe
@@ -127,14 +130,16 @@ one-minute browser revalidation policy, `PUBLIC_DISCOVERY_KV` is bound, and
 public-query database I/O stays flat as requests arrive. Record two consecutive
 `CF-Cache-Status` values; do not claim a front-of-Worker cache unless the second
 request is a verified `HIT` with `Age`. The explicit Cache API/KV shield remains
-the cost boundary either way. Only then re-enable uptime monitoring against
-`/api/health`, never `/`.
+the cost boundary either way. Only then point one-minute process-liveness
+monitoring at `/api/live` and five-minute dependency readiness at `/api/health`;
+never monitor `/`.
 
 `/api/health` is a dependency-readiness signal, not a process-liveness signal:
-it deliberately returns `503` when Convex, the discovery manifest, or Atlas is
-unavailable or exceeds the five-second deadline. Use it for release gates and a
-five-minute uptime/readiness monitor; do not configure an orchestrator to restart
-healthy workers from this response. The Convex probe aborts its underlying HTTP
+it deliberately returns `503` when Convex, the discovery manifest, KV binding,
+or Atlas is unavailable or exceeds the five-second deadline. Use it for release
+gates and a five-minute readiness monitor; use `/api/live` for process liveness
+and do not configure an orchestrator to restart healthy workers from a readiness
+response. The Convex probe aborts its underlying HTTP
 fetch at the deadline so a dependency slowdown does not accumulate abandoned
 health requests.
 

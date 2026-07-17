@@ -46,7 +46,11 @@ function contextWithKv() {
 			cacheStatus: null
 		}))
 	} as unknown as KVNamespace;
-	return { url: URL, platform: { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform };
+	return {
+		url: URL,
+		platform: { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform,
+		kvEntries: entries
+	};
 }
 
 function manifest(
@@ -59,6 +63,8 @@ function manifest(
 function publicCard(id: string) {
 	return {
 		id,
+		delivery_config: {},
+		cwc_config: null,
 		recipient_config: null,
 		recipientEmails: [],
 		recipient_count: 0
@@ -247,6 +253,46 @@ describe('public template snapshot queries', () => {
 		).toBe(false);
 	});
 
+	it('allowlists list cards before returning or persisting them', async () => {
+		const context = contextWithKv();
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest({ ready: true, revision: 4, updatedAt: 400 });
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...listSnapshot(4, 400, 'safe'),
+					templates: [
+						{
+							...publicCard('safe'),
+							authorEmail: 'private@example.test',
+							delivery_config: { webhookSecret: 'private' },
+							cwc_config: { account: 'private' },
+							endorsingOrg: {
+								name: 'Public Org',
+								slug: 'public-org',
+								avatar: null,
+								ownerEmail: 'private@example.test'
+							}
+						}
+					]
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicTemplates(context, false)).resolves.toEqual([
+			{
+				...publicCard('safe'),
+				endorsingOrg: { name: 'Public Org', slug: 'public-org', avatar: null }
+			}
+		]);
+		const persisted = [...context.kvEntries.values()].join('\n');
+		expect(persisted).not.toContain('private@example.test');
+		expect(persisted).not.toContain('webhookSecret');
+		expect(persisted).not.toContain('ownerEmail');
+	});
+
 	it('refreshes the manifest and reuses the observed relation snapshot across a publish race', async () => {
 		let manifestReads = 0;
 		const relations = {
@@ -278,5 +324,71 @@ describe('public template snapshot queries', () => {
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {
 			excludeCwc: true
 		});
+	});
+
+	it('allowlists relation payloads before returning or persisting them', async () => {
+		const context = contextWithKv();
+		const safeRelations = {
+			revision: 8,
+			updatedAt: 800,
+			twinEdges: [{ a: 'a', b: 'b', score: 0.8, kind: 'twin' as const }],
+			conceptRelations: {
+				edges: [{ a: 'a', b: 'b', concept: 'libraries', kind: 'concept' as const }],
+				conceptMap: { library: 'libraries' }
+			}
+		};
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest(
+					{ ready: true, revision: 1, updatedAt: 100 },
+					{ ready: true, revision: 8, updatedAt: 800 }
+				);
+			}
+			if (ref === api.templates.publicDiscoveryRelations) {
+				return {
+					...safeRelations,
+					recipientEmails: ['private@example.test'],
+					twinEdges: [
+						{ ...safeRelations.twinEdges[0], recipientEmail: 'private@example.test' }
+					]
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicRelations(context, true)).resolves.toEqual(safeRelations);
+		const persisted = [...context.kvEntries.values()].join('\n');
+		expect(persisted).not.toContain('private@example.test');
+		expect(persisted).not.toContain('recipientEmail');
+	});
+
+	it('rejects malformed relation fields before they can enter KV', async () => {
+		const context = contextWithKv();
+		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest(
+					{ ready: true, revision: 1, updatedAt: 100 },
+					{ ready: true, revision: 9, updatedAt: 900 }
+				);
+			}
+			if (ref === api.templates.publicDiscoveryRelations) {
+				return {
+					revision: 9,
+					updatedAt: 900,
+					twinEdges: [{ a: 'a', b: 'b', score: Number.NaN, kind: 'twin' }],
+					conceptRelations: { edges: [], conceptMap: {} }
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicRelations(context, false)).rejects.toMatchObject({
+			name: 'PublicDiscoverySnapshotContractError',
+			family: 'relations'
+		});
+		expect(
+			kvPut.mock.calls.some(([key]) => String(key).includes('relations%3Acombined'))
+		).toBe(false);
 	});
 });

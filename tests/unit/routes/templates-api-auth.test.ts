@@ -1,15 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConvexError } from 'convex/values';
 
 const {
 	mockModerateTemplate,
 	mockGetCachedPublicTemplates,
 	mockServerQuery,
-	mockServerMutation
+	mockServerMutation,
+	mockGenerateBatchEmbeddings,
+	mockProjectToHue
 } = vi.hoisted(() => ({
 	mockModerateTemplate: vi.fn(),
 	mockGetCachedPublicTemplates: vi.fn(),
 	mockServerQuery: vi.fn(),
-	mockServerMutation: vi.fn()
+	mockServerMutation: vi.fn(),
+	mockGenerateBatchEmbeddings: vi.fn(),
+	mockProjectToHue: vi.fn()
 }));
 
 vi.mock('$lib/core/server/moderation', () => ({
@@ -19,26 +24,23 @@ vi.mock('convex-sveltekit', () => ({
 	serverQuery: mockServerQuery,
 	serverMutation: mockServerMutation
 }));
-vi.mock('$lib/server/public-template-queries', () => {
-	class PublicDiscoverySnapshotNotReadyError extends Error {
-		constructor(readonly family: 'list' | 'relations') {
-			super(`PUBLIC_DISCOVERY_SNAPSHOT_NOT_READY:${family}`);
-			this.name = 'PublicDiscoverySnapshotNotReadyError';
-		}
-	}
+vi.mock('$lib/server/public-template-queries', async (importOriginal) => {
+	const actual = await importOriginal<
+		typeof import('$lib/server/public-template-queries')
+	>();
 	return {
-		getCachedPublicTemplates: mockGetCachedPublicTemplates,
-		PublicDiscoverySnapshotNotReadyError
+		...actual,
+		getCachedPublicTemplates: mockGetCachedPublicTemplates
 	};
 });
 vi.mock('$lib/config/features', () => ({
 	FEATURES: { CONGRESSIONAL: false }
 }));
 vi.mock('$lib/core/search/gemini-embeddings', () => ({
-	generateBatchEmbeddings: vi.fn()
+	generateBatchEmbeddings: mockGenerateBatchEmbeddings
 }));
 vi.mock('$lib/utils/domain-hue-projection', () => ({
-	projectToHue: vi.fn()
+	projectToHue: mockProjectToHue
 }));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: vi.fn(() => 'test-internal-secret')
@@ -134,6 +136,8 @@ describe('POST /api/templates authoring cost gate', () => {
 		mockModerateTemplate.mockReset();
 		mockServerQuery.mockReset();
 		mockServerMutation.mockReset();
+		mockGenerateBatchEmbeddings.mockReset();
+		mockProjectToHue.mockReset();
 	});
 
 	it('rejects an unauthenticated request before parsing or moderation', async () => {
@@ -253,9 +257,7 @@ describe('POST /api/templates authoring cost gate', () => {
 			latency_ms: 1
 		});
 		mockServerQuery.mockResolvedValueOnce(null);
-		mockServerMutation.mockRejectedValue(
-			new Error('[CONVEX M(templates:createTemplate)] Server Error: TEMPLATE_SLUG_TAKEN')
-		);
+		mockServerMutation.mockRejectedValue(new ConvexError({ code: 'TEMPLATE_SLUG_TAKEN' }));
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 
 		const response = await POST(postEvent({ ...VALID_TEMPLATE, slug: 'shared-link' }));
@@ -318,6 +320,32 @@ describe('POST /api/templates authoring cost gate', () => {
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
 	});
 
+	it('rejects an empty sanitized slug before moderation or Convex I/O', async () => {
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, title: '!!!' }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [{ field: 'slug', code: 'VALIDATION_INVALID_FORMAT' }]
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
+	it('rejects a hyphen-only generated slug before moderation or Convex I/O', async () => {
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, title: '---' }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [{ field: 'slug', code: 'VALIDATION_INVALID_FORMAT' }]
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		['a missing trust score', { id: 'user_1', is_verified: false }],
 		['a below-threshold trust score', { id: 'user_1', is_verified: false, trust_score: 99 }]
@@ -373,6 +401,67 @@ describe('POST /api/templates authoring cost gate', () => {
 		expect(mockModerateTemplate).toHaveBeenCalledWith({
 			title: 'Protect the public library',
 			message_body: 'Please preserve funding for the public library.'
+		});
+	});
+
+	it('creates an approved template and runs deferred embedding work through waitUntil', async () => {
+		mockModerateTemplate.mockResolvedValue({
+			approved: true,
+			summary: 'Approved by test control',
+			latency_ms: 1
+		});
+		mockServerQuery.mockResolvedValue(null);
+		const created = {
+			_id: 'template_1',
+			slug: 'protect-the-public-library',
+			title: VALID_TEMPLATE.title,
+			description: '',
+			domain: '',
+			topics: [],
+			type: VALID_TEMPLATE.type,
+			deliveryMethod: VALID_TEMPLATE.deliveryMethod,
+			messageBody: VALID_TEMPLATE.message_body,
+			sources: [],
+			researchLog: [],
+			preview: VALID_TEMPLATE.preview,
+			deliveryConfig: {},
+			cwcConfig: {},
+			recipientConfig: {},
+			status: 'published',
+			isPublic: true,
+			_creationTime: 100,
+			updatedAt: 100
+		};
+		mockServerMutation.mockResolvedValueOnce(created).mockResolvedValueOnce(undefined);
+		mockGenerateBatchEmbeddings.mockResolvedValue([
+			Array.from({ length: 768 }, () => 0),
+			Array.from({ length: 768 }, () => 0)
+		]);
+		mockProjectToHue.mockReturnValue(180);
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+		const deferred: Promise<unknown>[] = [];
+		const base = postEvent(VALID_TEMPLATE) as unknown as Record<string, unknown>;
+
+		const response = await POST({
+			...base,
+			platform: {
+				context: { waitUntil: (promise: Promise<unknown>) => deferred.push(promise) }
+			}
+		} as never);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			success: true,
+			data: { template: { id: 'template_1', is_public: true, status: 'published' } }
+		});
+		expect(deferred).toHaveLength(1);
+		await Promise.all(deferred);
+		expect(mockGenerateBatchEmbeddings).toHaveBeenCalledOnce();
+		expect(mockServerMutation).toHaveBeenCalledTimes(2);
+		expect(mockServerMutation.mock.calls[1]?.[1]).toMatchObject({
+			templateId: 'template_1',
+			expectedUserId: 'user_1',
+			domainHue: 180
 		});
 	});
 });

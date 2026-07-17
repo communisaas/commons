@@ -23,7 +23,19 @@ type SnapshotCoordinates = {
 type PublicDiscoveryManifest = FunctionReturnType<typeof api.templates.publicDiscoveryManifest>;
 type PublicTemplateSnapshot = FunctionReturnType<typeof api.templates.publicDiscoveryList>;
 type PublicRelationsSnapshot = FunctionReturnType<typeof api.templates.publicDiscoveryRelations>;
+type PublicTemplateCard = PublicTemplateSnapshot['templates'][number];
+type ProjectedPublicRelationsSnapshot = {
+	revision: number;
+	updatedAt: number | null;
+	twinEdges: Array<{ a: string; b: string; score: number; kind: 'twin' }>;
+	conceptRelations: {
+		edges: Array<{ a: string; b: string; concept: string; kind: 'concept' }>;
+		conceptMap: Record<string, string>;
+	};
+};
 const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
+const MAX_PUBLIC_RELATION_EDGES = 10_000;
+const MAX_PUBLIC_CONCEPT_ENTRIES = 10_000;
 
 function snapshotGeneration(revision: number, updatedAt: number | null): string {
 	return `${revision}:${updatedAt ?? 'cold'}`;
@@ -40,9 +52,12 @@ export class PublicDiscoverySnapshotNotReadyError extends Error {
 }
 
 export class PublicDiscoverySnapshotContractError extends Error {
-	constructor(detail: string) {
-		super(`PUBLIC_DISCOVERY_SNAPSHOT_CONTRACT:list:${detail}`);
+	readonly family: SnapshotFamily;
+
+	constructor(detail: string, family: SnapshotFamily = 'list') {
+		super(`PUBLIC_DISCOVERY_SNAPSHOT_CONTRACT:${family}:${detail}`);
 		this.name = 'PublicDiscoverySnapshotContractError';
+		this.family = family;
 	}
 }
 
@@ -65,8 +80,182 @@ function matchesGeneration(snapshot: SnapshotCoordinates, expected: SnapshotCoor
 	return snapshot.revision === expected.revision && snapshot.updatedAt === expected.updatedAt;
 }
 
+const PUBLIC_TEMPLATE_FIELDS = [
+	'id',
+	'slug',
+	'title',
+	'description',
+	'domain',
+	'domainHue',
+	'topics',
+	'type',
+	'deliveryMethod',
+	'subject',
+	'message_body',
+	'preview',
+	'endorsingOrg',
+	'endorsingOrgs',
+	'endorsementCount',
+	'coordinationScale',
+	'isNew',
+	'hasActiveDebate',
+	'debateSummary',
+	'verified_sends',
+	'unique_districts',
+	'send_count',
+	'daily_arrivals',
+	'district_counts',
+	'tier_counts',
+	'delivery_config',
+	'cwc_config',
+	'recipient_config',
+	'recipient_count',
+	'campaign_id',
+	'status',
+	'is_public',
+	'jurisdictions',
+	'scope',
+	'scopes',
+	'recipientEmails',
+	'createdAt'
+] as const satisfies readonly (keyof PublicTemplateCard)[];
+
+// A producer field addition must make this module fail type-check until the
+// anonymous allowlist is reviewed. Runtime projection then drops fields from a
+// version-skewed or compromised producer instead of promoting them to the LKG.
+type MissingPublicTemplateField = Exclude<
+	keyof PublicTemplateCard,
+	(typeof PUBLIC_TEMPLATE_FIELDS)[number]
+>;
+const PUBLIC_TEMPLATE_FIELDS_ARE_EXHAUSTIVE: MissingPublicTemplateField extends never
+	? true
+	: never = true;
+void PUBLIC_TEMPLATE_FIELDS_ARE_EXHAUSTIVE;
+
+const PUBLIC_ORG_FIELDS = ['name', 'slug', 'avatar'] as const;
+const PUBLIC_DEBATE_FIELDS = [
+	'status',
+	'winningStance',
+	'uniqueParticipants',
+	'argumentCount',
+	'deadline'
+] as const;
+const PUBLIC_DISTRICT_COUNT_FIELDS = ['code', 'count'] as const;
+const PUBLIC_JURISDICTION_FIELDS = [
+	'id',
+	'template_id',
+	'jurisdiction_type',
+	'congressional_district',
+	'senate_class',
+	'state_code',
+	'state_senate_district',
+	'state_house_district',
+	'county_fips',
+	'county_name',
+	'city_name',
+	'city_fips',
+	'school_district_id',
+	'school_district_name',
+	'latitude',
+	'longitude',
+	'estimated_population',
+	'coverage_notes'
+] as const;
+const PUBLIC_SCOPE_FIELDS = [
+	'id',
+	'template_id',
+	'country_code',
+	'region_code',
+	'locality_code',
+	'district_code',
+	'display_text',
+	'scope_level',
+	'confidence',
+	'extraction_method'
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickFields(value: unknown, fields: readonly string[]): Record<string, unknown> | null {
+	if (!isRecord(value)) return null;
+	const projected: Record<string, unknown> = {};
+	for (const field of fields) {
+		if (Object.prototype.hasOwnProperty.call(value, field)) projected[field] = value[field];
+	}
+	return projected;
+}
+
+function projectObjectArray(value: unknown, fields: readonly string[]): unknown {
+	if (!Array.isArray(value)) return value;
+	return value.map((item) => pickFields(item, fields) ?? item);
+}
+
+/**
+ * Construct the anonymous card from an exhaustive allowlist. Unknown producer
+ * fields never cross the cache boundary; config-bearing list fields are
+ * deliberately normalized because direct-send routes have a separate private,
+ * no-store detail projection.
+ */
+function projectPublicTemplateCard(rawTemplate: unknown, index: number): PublicTemplateCard {
+	if (!isRecord(rawTemplate)) {
+		throw new PublicDiscoverySnapshotContractError(`unsafe-template:${index}`);
+	}
+	if (
+		rawTemplate.recipient_config !== null ||
+		!Array.isArray(rawTemplate.recipientEmails) ||
+		rawTemplate.recipientEmails.length !== 0 ||
+		typeof rawTemplate.recipient_count !== 'number' ||
+		!Number.isSafeInteger(rawTemplate.recipient_count) ||
+		rawTemplate.recipient_count < 0
+	) {
+		throw new PublicDiscoverySnapshotContractError(`unsafe-template:${index}`);
+	}
+
+	const projected = pickFields(rawTemplate, PUBLIC_TEMPLATE_FIELDS)!;
+	if (rawTemplate.endorsingOrg !== undefined) {
+		projected.endorsingOrg =
+			rawTemplate.endorsingOrg === null
+				? null
+				: pickFields(rawTemplate.endorsingOrg, PUBLIC_ORG_FIELDS);
+	}
+	if (rawTemplate.endorsingOrgs !== undefined) {
+		projected.endorsingOrgs = projectObjectArray(rawTemplate.endorsingOrgs, PUBLIC_ORG_FIELDS);
+	}
+	if (rawTemplate.debateSummary !== undefined) {
+		projected.debateSummary = pickFields(rawTemplate.debateSummary, PUBLIC_DEBATE_FIELDS);
+	}
+	if (rawTemplate.district_counts !== undefined) {
+		projected.district_counts = projectObjectArray(
+			rawTemplate.district_counts,
+			PUBLIC_DISTRICT_COUNT_FIELDS
+		);
+	}
+	if (rawTemplate.jurisdictions !== undefined) {
+		projected.jurisdictions = projectObjectArray(
+			rawTemplate.jurisdictions,
+			PUBLIC_JURISDICTION_FIELDS
+		);
+	}
+	if (rawTemplate.scope !== undefined) {
+		projected.scope =
+			rawTemplate.scope === null ? null : pickFields(rawTemplate.scope, PUBLIC_SCOPE_FIELDS);
+	}
+	if (rawTemplate.scopes !== undefined) {
+		projected.scopes = projectObjectArray(rawTemplate.scopes, PUBLIC_SCOPE_FIELDS);
+	}
+	projected.delivery_config = {};
+	projected.cwc_config = null;
+	projected.recipient_config = null;
+	projected.recipientEmails = [];
+	return projected as PublicTemplateCard;
+}
+
 /** Refuse a legacy or recipient-bearing producer payload before any cache write. */
-function assertPublicTemplateSnapshotContract(snapshot: PublicTemplateSnapshot): void {
+function projectPublicTemplateSnapshotContract(
+	snapshot: PublicTemplateSnapshot
+): PublicTemplateSnapshot['templates'] {
 	if (snapshot.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION) {
 		throw new PublicDiscoverySnapshotContractError(
 			`projection-version:${String(snapshot.projectionVersion)}`
@@ -75,22 +264,71 @@ function assertPublicTemplateSnapshotContract(snapshot: PublicTemplateSnapshot):
 	if (!Array.isArray(snapshot.templates)) {
 		throw new PublicDiscoverySnapshotContractError('templates-not-array');
 	}
-	for (const [index, rawTemplate] of snapshot.templates.entries()) {
-		const template = rawTemplate as unknown as Record<string, unknown>;
-		if (
-			rawTemplate === null ||
-			typeof rawTemplate !== 'object' ||
-			Array.isArray(rawTemplate) ||
-			template.recipient_config !== null ||
-			!Array.isArray(template.recipientEmails) ||
-			template.recipientEmails.length !== 0 ||
-			typeof template.recipient_count !== 'number' ||
-			!Number.isInteger(template.recipient_count) ||
-			template.recipient_count < 0
-		) {
-			throw new PublicDiscoverySnapshotContractError(`unsafe-template:${index}`);
-		}
+	return snapshot.templates.map((template, index) => projectPublicTemplateCard(template, index));
+}
+
+function projectPublicRelationsSnapshotContract(
+	snapshot: PublicRelationsSnapshot
+): ProjectedPublicRelationsSnapshot {
+	if (
+		!Number.isSafeInteger(snapshot.revision) ||
+		snapshot.revision < 0 ||
+		(snapshot.updatedAt !== null &&
+			(typeof snapshot.updatedAt !== 'number' ||
+				!Number.isFinite(snapshot.updatedAt) ||
+				snapshot.updatedAt < 0)) ||
+		!Array.isArray(snapshot.twinEdges) ||
+		snapshot.twinEdges.length > MAX_PUBLIC_RELATION_EDGES ||
+		!isRecord(snapshot.conceptRelations) ||
+		!Array.isArray(snapshot.conceptRelations.edges) ||
+		snapshot.conceptRelations.edges.length > MAX_PUBLIC_RELATION_EDGES ||
+		!isRecord(snapshot.conceptRelations.conceptMap) ||
+		Object.keys(snapshot.conceptRelations.conceptMap).length > MAX_PUBLIC_CONCEPT_ENTRIES
+	) {
+		throw new PublicDiscoverySnapshotContractError('unsafe-container', 'relations');
 	}
+
+	const twinEdges = snapshot.twinEdges.map((rawEdge, index) => {
+		const edge = rawEdge as unknown;
+		if (
+			!isRecord(edge) ||
+			typeof edge.a !== 'string' ||
+			typeof edge.b !== 'string' ||
+			typeof edge.score !== 'number' ||
+			!Number.isFinite(edge.score) ||
+			edge.kind !== 'twin'
+		) {
+			throw new PublicDiscoverySnapshotContractError(`unsafe-twin-edge:${index}`, 'relations');
+		}
+		return { a: edge.a, b: edge.b, score: edge.score, kind: 'twin' as const };
+	});
+	const conceptEdges = snapshot.conceptRelations.edges.map((rawEdge, index) => {
+		const edge = rawEdge as unknown;
+		if (
+			!isRecord(edge) ||
+			typeof edge.a !== 'string' ||
+			typeof edge.b !== 'string' ||
+			typeof edge.concept !== 'string' ||
+			edge.kind !== 'concept'
+		) {
+			throw new PublicDiscoverySnapshotContractError(`unsafe-concept-edge:${index}`, 'relations');
+		}
+		return { a: edge.a, b: edge.b, concept: edge.concept, kind: 'concept' as const };
+	});
+	const conceptMap: Record<string, string> = {};
+	for (const [tag, concept] of Object.entries(snapshot.conceptRelations.conceptMap)) {
+		if (typeof concept !== 'string') {
+			throw new PublicDiscoverySnapshotContractError('unsafe-concept-map', 'relations');
+		}
+		conceptMap[tag] = concept;
+	}
+
+	return {
+		revision: snapshot.revision,
+		updatedAt: snapshot.updatedAt,
+		twinEdges,
+		conceptRelations: { edges: conceptEdges, conceptMap }
+	};
 }
 
 /**
@@ -188,8 +426,7 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 						excludeCwc
 					}))) as PublicTemplateSnapshot,
 			(snapshot) => {
-				assertPublicTemplateSnapshotContract(snapshot);
-				return snapshot.templates;
+				return projectPublicTemplateSnapshotContract(snapshot);
 			}
 		);
 
@@ -220,8 +457,10 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
  */
 export async function getCachedPublicRelations(context: PublicQueryContext, excludeCwc: boolean) {
 	const logicalKey = `relations:combined:exclude-cwc=${excludeCwc ? '1' : '0'}`;
-	const resolved = await manifestOrLastKnownGood<PublicRelationsSnapshot>(context, logicalKey, () =>
-		getCachedPublicDiscoveryManifest(context)
+	const resolved = await manifestOrLastKnownGood<ProjectedPublicRelationsSnapshot>(
+		context,
+		logicalKey,
+		() => getCachedPublicDiscoveryManifest(context)
 	);
 	if ('lkg' in resolved) return resolved.lkg;
 	const { manifest } = resolved;
@@ -240,7 +479,7 @@ export async function getCachedPublicRelations(context: PublicQueryContext, excl
 					(await serverQuery(api.templates.publicDiscoveryRelations, {
 						excludeCwc
 					}))) as PublicRelationsSnapshot,
-			(snapshot) => snapshot
+			(snapshot) => projectPublicRelationsSnapshotContract(snapshot)
 		);
 
 	try {

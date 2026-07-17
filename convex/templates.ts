@@ -1,7 +1,7 @@
 import { query, mutation, action, internalAction, internalQuery, internalMutation, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
-import { getConvexSize, v, type Value } from "convex/values";
+import { ConvexError, getConvexSize, v, type Value } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
@@ -94,6 +94,8 @@ const rebuildRelationSnapshotForCronAttemptRef = makeFunctionReference<"mutation
   Record<string, never>,
   | { status: "rebuilt"; rebuilt: RelationSnapshotRebuildResult }
   | { status: "oversize" }
+  | { status: "invalid" }
+  | { status: "failed" }
 >;
 const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<"mutation">(
   "templates:recordPublicDiscoverySnapshotRuntimeFailure",
@@ -297,29 +299,56 @@ async function recordPublicDiscoverySnapshotFailure(
   family: "list" | "relations",
   error: Error,
   failedAt: number,
+  previousFailure?: { code?: string; failedAt?: number },
 ): Promise<void> {
   const code = error.message.slice(0, 500);
+  const currentCode =
+    family === "list" ? manifest.listFailureCode : manifest.relationsFailureCode;
+  const currentFailedAt =
+    family === "list" ? manifest.listFailureAt : manifest.relationsFailureAt;
+  const priorCode = previousFailure === undefined ? currentCode : previousFailure.code;
+  const priorFailedAt =
+    previousFailure === undefined ? currentFailedAt : previousFailure.failedAt;
+  const repeatedFailure = priorCode === code && priorFailedAt !== undefined;
+  const durableFailedAt = repeatedFailure ? priorFailedAt : failedAt;
+
+  // A successful-but-degraded publication first clears the old failure in its
+  // commit marker, then calls this helper with `previousFailure`. If the exact
+  // same unsafe source rows are still present, retain their original evidence
+  // without re-dirtying the just-published revision or emitting another alert.
+  // A source write will dirty the family again, while the daily supervisor can
+  // still prove whether the degradation has been repaired.
+  const listDirtyAt =
+    repeatedFailure && previousFailure !== undefined
+      ? undefined
+      : manifest.listDirtyAt ?? failedAt;
+  const relationsDirtyAt =
+    repeatedFailure && previousFailure !== undefined
+      ? undefined
+      : manifest.relationsDirtyAt ?? failedAt;
   await ctx.db.patch(
     manifest._id,
     family === "list"
       ? {
-          listDirtyAt: manifest.listDirtyAt ?? failedAt,
+          listDirtyAt,
           listRefreshScheduledAt: undefined,
-          listFailureAt: failedAt,
+          listFailureAt: durableFailedAt,
           listFailureCode: code,
         }
       : {
-          relationsDirtyAt: manifest.relationsDirtyAt ?? failedAt,
+          relationsDirtyAt,
           relationsRefreshScheduledAt: undefined,
-          relationsFailureAt: failedAt,
+          relationsFailureAt: durableFailedAt,
           relationsFailureCode: code,
         },
   );
-  await ctx.scheduler.runAfter(0, reportPublicDiscoverySnapshotFailureRef, {
-    family,
-    code,
-    failedAt,
-  });
+  if (!repeatedFailure) {
+    await ctx.scheduler.runAfter(0, reportPublicDiscoverySnapshotFailureRef, {
+      family,
+      code,
+      failedAt,
+    });
+  }
 }
 
 async function freezePublicDiscoverySnapshotFailure(
@@ -560,8 +589,10 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       // future surfaces) inherit the floor without re-implementing.
       district_counts: (template.districtCounts ?? []).filter((d: { code: string; count: number }) => d.count >= 5),
       tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
-      delivery_config: template.deliveryConfig ?? {},
-      cwc_config: template.cwcConfig ?? null,
+      // Discovery cards never execute delivery. Provider routing and CWC
+      // workflow configuration are not part of any anonymous public payload.
+      delivery_config: {},
+      cwc_config: null,
       // Recipient addresses and decision-maker configuration are private source
       // data. Anonymous discovery needs only the non-identifying target count.
       recipient_config: null,
@@ -843,9 +874,17 @@ function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | nu
   const stored = value as Record<string, unknown>;
   const projected: Record<string, unknown> = {};
   for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
-    // Redact legacy snapshots at the public read boundary as well as in the
-    // producer. This closes exposure immediately, before every live row has
-    // been rematerialized, while retaining the old compatibility fields.
+    // Redact/minimize legacy snapshots at the public read boundary as well as
+    // in the producer. This closes exposure immediately, before every live row
+    // has been rematerialized, while retaining the old compatibility fields.
+    if (name === "delivery_config") {
+      projected[name] = {};
+      continue;
+    }
+    if (name === "cwc_config") {
+      projected[name] = null;
+      continue;
+    }
     if (name === "recipient_config") {
       projected[name] = null;
       continue;
@@ -942,9 +981,10 @@ export const publicDiscoveryFailureStatus = internalQuery({
 /**
  * Public: List public templates with enriched data for the homepage.
  *
- * Signature and payload are unchanged, but the request path reads one compact
- * singleton selected by `excludeCwc`. A missing snapshot returns an honest empty
- * list. There is deliberately no live-scan fallback.
+ * Signature and successful payload are unchanged, but the request path reads
+ * one compact singleton selected by `excludeCwc`. A missing snapshot is an
+ * explicit not-ready error; only a published empty snapshot returns `[]`.
+ * There is deliberately no live-scan fallback.
  */
 export const listPublic = query({
   args: {
@@ -956,9 +996,12 @@ export const listPublic = query({
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
       .unique();
-    return projectStoredPublicTemplates(snapshot?.templates, {
+    if (!snapshot) {
+      throw new Error(`PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:${key}`);
+    }
+    return projectStoredPublicTemplates(snapshot.templates, {
       key,
-      revision: snapshot?.revision ?? 0,
+      revision: snapshot.revision ?? 0,
     });
   },
 });
@@ -1002,6 +1045,28 @@ type PublicTemplateSnapshotRebuildResult = {
   excludeCwcSnapshotBytes: number;
 };
 
+type PublicDiscoveryPublication = { revision: number; updatedAt: number };
+
+type PublicTemplateSnapshotRow = {
+  key: PublicTemplateSnapshotKey;
+  projectionVersion: number;
+  revision: number;
+  templates: PublicTemplatePayload[];
+  sourceCount: number;
+  updatedAt: number;
+};
+
+type PublicTemplateSnapshotPlan = {
+  candidates: Doc<"templates">[];
+  sources: Record<PublicTemplateSnapshotKey, Doc<"templates">[]>;
+  rows: PublicTemplateSnapshotRow[];
+  rowSizes: Map<PublicTemplateSnapshotKey, number>;
+  invalidTemplateIds: string[];
+  oversizedTemplateIds: string[];
+  aggregateShedIds: string[];
+  exclusionCodes: string[];
+};
+
 /**
  * Build and atomically upsert both `listPublic` materializations.
  *
@@ -1012,10 +1077,10 @@ type PublicTemplateSnapshotRebuildResult = {
  * the next valid candidate within the same explicit I/O budget. Shared cards
  * are enriched once per batch.
  */
-async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<PublicTemplateSnapshotRebuildResult> {
-  // Reserve the revision without mutating the manifest. It becomes visible only
-  // after BOTH list rows have passed their size guards and been upserted.
-  const publication = await preparePublicDiscoveryListPublication(ctx);
+async function preparePublicTemplateSnapshotPlan(
+  ctx: MutationCtx,
+  publication: PublicDiscoveryPublication,
+): Promise<PublicTemplateSnapshotPlan> {
   const candidates = await ctx.db
     .query("templates")
     .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
@@ -1089,15 +1154,7 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
       const projected = enrichedById.get(id);
       return projected ? [projected] : [];
     });
-  type SnapshotRow = {
-    key: PublicTemplateSnapshotKey;
-    projectionVersion: number;
-    revision: number;
-    templates: PublicTemplatePayload[];
-    sourceCount: number;
-    updatedAt: number;
-  };
-  const buildRows = (): SnapshotRow[] => {
+  const buildRows = (): PublicTemplateSnapshotRow[] => {
     const allTemplates = projectSelectedIds(allTemplateIds);
     const excludeCwcTemplates = projectSelectedIds(excludeCwcTemplateIds);
     return [
@@ -1156,7 +1213,37 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
     throw noValidCardsError();
   }
 
-  for (const row of rows) {
+  const candidatesById = new Map(candidates.map((template) => [template._id, template]));
+  const projectSelectedSources = (ids: Array<Id<"templates">>) =>
+    ids.flatMap((id) => {
+      if (!enrichedById.has(id)) return [];
+      const source = candidatesById.get(id);
+      return source ? [source] : [];
+    });
+
+  return {
+    candidates,
+    sources: {
+      all: projectSelectedSources(allTemplateIds),
+      excludeCwc: projectSelectedSources(excludeCwcTemplateIds),
+    },
+    rows,
+    rowSizes,
+    invalidTemplateIds,
+    oversizedTemplateIds,
+    aggregateShedIds,
+    exclusionCodes,
+  };
+}
+
+async function publishPublicTemplateSnapshotPlan(
+  ctx: MutationCtx,
+  publication: PublicDiscoveryPublication,
+  plan: PublicTemplateSnapshotPlan,
+): Promise<PublicTemplateSnapshotRebuildResult> {
+  const previousManifest = await getPublicDiscoveryManifestRow(ctx);
+
+  for (const row of plan.rows) {
     const existing = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", row.key))
@@ -1172,37 +1259,61 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   // a later failure in the composite list+relations rebuild rolls this back too.
   await commitPublicDiscoveryListPublication(ctx, publication);
 
-  if (exclusionCodes.length > 0) {
+  if (plan.exclusionCodes.length > 0) {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
     if (!manifest) throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION");
-    const failure = new Error(exclusionCodes.length === 1 ? exclusionCodes[0] : `PUBLIC_TEMPLATE_SNAPSHOT_EXCLUDED:${exclusionCodes.join("|")}`);
-    await recordPublicDiscoverySnapshotFailure(ctx, manifest, "list", failure, publication.updatedAt);
-    if (oversizedTemplateIds.length === 0 && aggregateShedIds.length === 0) {
+    const failure = new Error(
+      plan.exclusionCodes.length === 1
+        ? plan.exclusionCodes[0]
+        : `PUBLIC_TEMPLATE_SNAPSHOT_EXCLUDED:${plan.exclusionCodes.join("|")}`,
+    );
+    await recordPublicDiscoverySnapshotFailure(
+      ctx,
+      manifest,
+      "list",
+      failure,
+      publication.updatedAt,
+      {
+        code: previousManifest?.listFailureCode,
+        failedAt: previousManifest?.listFailureAt,
+      },
+    );
+    if (plan.oversizedTemplateIds.length === 0 && plan.aggregateShedIds.length === 0) {
       console.error(
-        `[public-discovery] list revision ${publication.revision} excluded ${invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
+        `[public-discovery] list revision ${publication.revision} excluded ${plan.invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
       );
     } else {
       console.error(
-        `[public-discovery] list revision ${publication.revision} excluded ${exclusionCodes.length} unsafe or oversized template card(s); valid cards remain available`,
+        `[public-discovery] list revision ${publication.revision} excluded ${plan.exclusionCodes.length} unsafe or oversized template card(s); valid cards remain available`,
       );
     }
   }
 
-  const allTemplates = rows.find((row) => row.key === "all")!.templates;
-  const excludeCwcTemplates = rows.find((row) => row.key === "excludeCwc")!.templates;
+  const allTemplates = plan.rows.find((row) => row.key === "all")!.templates;
+  const excludeCwcTemplates = plan.rows.find((row) => row.key === "excludeCwc")!.templates;
 
   return {
     sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
-    scannedCount: candidates.length,
+    scannedCount: plan.candidates.length,
     allCount: allTemplates.length,
     excludeCwcCount: excludeCwcTemplates.length,
-    invalidCount: invalidTemplateIds.length,
-    oversizedCardCount: oversizedTemplateIds.length,
-    aggregateShedCount: aggregateShedIds.length,
-    excludedCount: exclusionCodes.length,
-    allSnapshotBytes: rowSizes.get("all")!,
-    excludeCwcSnapshotBytes: rowSizes.get("excludeCwc")!,
+    invalidCount: plan.invalidTemplateIds.length,
+    oversizedCardCount: plan.oversizedTemplateIds.length,
+    aggregateShedCount: plan.aggregateShedIds.length,
+    excludedCount: plan.exclusionCodes.length,
+    allSnapshotBytes: plan.rowSizes.get("all")!,
+    excludeCwcSnapshotBytes: plan.rowSizes.get("excludeCwc")!,
   };
+}
+
+async function rebuildPublicTemplateSnapshotsImpl(
+  ctx: MutationCtx,
+): Promise<PublicTemplateSnapshotRebuildResult> {
+  // Reserve the revision without mutating the manifest. It becomes visible only
+  // after BOTH list rows have passed their size guards and been upserted.
+  const publication = await preparePublicDiscoveryListPublication(ctx);
+  const plan = await preparePublicTemplateSnapshotPlan(ctx, publication);
+  return await publishPublicTemplateSnapshotPlan(ctx, publication, plan);
 }
 
 /** Internal/operator entry point for the low-cost public-list materialization. */
@@ -1366,7 +1477,7 @@ export const recomputeRelatednessCalibration = internalMutation({
       .take(RELATION_SNAPSHOT_VARIANT_CAP);
 
     const items = templates
-      .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length === 768)
+      .filter((t) => isFiniteEmbeddingVector(t.topicEmbedding))
       .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
     const calibration = computeCalibration(items);
@@ -1485,18 +1596,19 @@ export const publicDiscoveryRelations = query({
  * public template corpus. It preserves the former scoring and filtering rules
  * over an explicitly bounded discovery corpus:
  *
- * - one bounded newest-250 source scan derives the same newest-50 `all` and
- *   newest-50 non-CWC sets as the list materialization;
+ * - one bounded newest-250 source scan is card-validated and backfilled before
+ *   deriving the exact same at-most-50 `all` and non-CWC sets as the list;
  * - each graph consumes only edges whose endpoints are in its displayed list;
  * - twin edges fit their calibration from this exact bounded generation, so a
  *   stale optional maintenance row cannot skew a newly published snapshot;
  * - concept clustering pools one vector per distinct raw tag across that same
  *   corpus, then relates all tagged templates against the resulting concepts.
  *
- * Both compact results are size-checked before either is written, then published
- * under one manifest revision. If computation or a guard fails, Convex mutation
- * atomicity preserves both last-good rows. Public queries never fall back to
- * this scan.
+ * Both compact results are size-checked before either is written. Oversized
+ * derived arrays shed deterministic prefixes, publish a bounded usable graph,
+ * and retain unhealthy producer evidence until a clean repair. If computation
+ * or a base guard fails, Convex mutation atomicity preserves both last-good
+ * rows. Public queries never fall back to this scan.
  */
 type RelationSnapshotVariantRebuildResult = {
   sourceCap: number;
@@ -1505,33 +1617,56 @@ type RelationSnapshotVariantRebuildResult = {
   tagVectorCount: number;
   twinEdgeCount: number;
   conceptEdgeCount: number;
+  conceptEntryCount: number;
+  twinEdgeShedCount: number;
+  conceptEdgeShedCount: number;
+  conceptEntryShedCount: number;
   snapshotBytes: number;
 };
+
+type RelationSnapshotRow = {
+  key: RelationSnapshotKey;
+  revision: number;
+  twinEdges: ReturnType<typeof computeTwinEdges>;
+  conceptEdges: ReturnType<typeof conceptEdges>;
+  conceptEntries: Array<{ tag: string; concept: string }>;
+  sourceCap: number;
+  sourceTemplateCount: number;
+  embeddedTemplateCount: number;
+  tagVectorCount: number;
+  updatedAt: number;
+};
+
+type RelationSnapshotVariantBuild = {
+  snapshot: RelationSnapshotRow;
+  result: RelationSnapshotVariantRebuildResult;
+  degradationCode?: string;
+};
+
+function maximumFittingPrefixLength(
+  length: number,
+  fits: (prefixLength: number) => boolean,
+): number {
+  let low = 0;
+  let high = length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(middle)) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
 
 function buildRelationSnapshotVariant(
   key: RelationSnapshotKey,
   templates: Doc<"templates">[],
-  publication: { revision: number; updatedAt: number },
-): {
-  snapshot: {
-    key: RelationSnapshotKey;
-    revision: number;
-    twinEdges: ReturnType<typeof computeTwinEdges>;
-    conceptEdges: ReturnType<typeof conceptEdges>;
-    conceptEntries: Array<{ tag: string; concept: string }>;
-    sourceCap: number;
-    sourceTemplateCount: number;
-    embeddedTemplateCount: number;
-    tagVectorCount: number;
-    updatedAt: number;
-  };
-  result: RelationSnapshotVariantRebuildResult;
-} {
+  publication: PublicDiscoveryPublication,
+): RelationSnapshotVariantBuild {
   // Measured twins: missing embeddings contribute no edge, exactly as before.
   // Reject malformed legacy vectors before calibration: the first vector must
   // never get to redefine the canonical dimensionality for the whole corpus.
   const items = templates
-    .filter((t) => Array.isArray(t.topicEmbedding) && t.topicEmbedding.length === 768)
+    .filter((t) => isFiniteEmbeddingVector(t.topicEmbedding))
     .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
   // Fit the matched centroid/threshold from the exact snapshot generation.
@@ -1565,8 +1700,7 @@ function buildRelationSnapshotVariant(
         tagEmbedding &&
         typeof tagEmbedding.tag === "string" &&
         currentTagSet.has(tagEmbedding.tag) &&
-        Array.isArray(tagEmbedding.embedding) &&
-        tagEmbedding.embedding.length === 768 &&
+        isFiniteEmbeddingVector(tagEmbedding.embedding) &&
         !seenTag.has(tagEmbedding.tag)
       ) {
         seenTag.add(tagEmbedding.tag);
@@ -1579,24 +1713,105 @@ function buildRelationSnapshotVariant(
   }
 
   const concepts = clusterTagConcepts(tagVectors);
-  const conceptEdgesResult = conceptEdges(taggedTemplates, concepts);
-  const conceptEntries = Object.entries(tagConceptMap(concepts)).map(([tag, concept]) => ({
+  const allConceptEdges = conceptEdges(taggedTemplates, concepts);
+  const allConceptEntries = Object.entries(tagConceptMap(concepts)).map(([tag, concept]) => ({
     tag,
     concept,
   }));
 
-  const snapshot = {
+  const buildSnapshot = (
+    retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
+    retainedConceptEdges: ReturnType<typeof conceptEdges>,
+    retainedConceptEntries: Array<{ tag: string; concept: string }>,
+  ): RelationSnapshotRow => ({
     key,
     revision: publication.revision,
-    twinEdges,
-    conceptEdges: conceptEdgesResult,
-    conceptEntries,
+    twinEdges: retainedTwinEdges,
+    conceptEdges: retainedConceptEdges,
+    conceptEntries: retainedConceptEntries,
     sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
     sourceTemplateCount: templates.length,
     embeddedTemplateCount: items.length,
     tagVectorCount: tagVectors.length,
     updatedAt: publication.updatedAt,
-  };
+  });
+  const measureSnapshot = (
+    retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
+    retainedConceptEdges: ReturnType<typeof conceptEdges>,
+    retainedConceptEntries: Array<{ tag: string; concept: string }>,
+  ) =>
+    getConvexSize(
+      buildSnapshot(
+        retainedTwinEdges,
+        retainedConceptEdges,
+        retainedConceptEntries,
+      ) as unknown as Value,
+    );
+
+  let retainedTwinEdges = twinEdges;
+  let retainedConceptEdges = allConceptEdges;
+  let retainedConceptEntries = allConceptEntries;
+  const initialSnapshotBytes = measureSnapshot(
+    retainedTwinEdges,
+    retainedConceptEdges,
+    retainedConceptEntries,
+  );
+
+  if (initialSnapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
+    // Preserve the primary measured-twin graph first. Concept edges are
+    // additive, followed by the display-only concept map, and weakest twins
+    // are the last resort. Every array already has a deterministic quality
+    // order; binary-searching prefixes bounds fitting work and keeps rebuilds
+    // byte-stable for an unchanged corpus.
+    const conceptEdgeCount = maximumFittingPrefixLength(
+      retainedConceptEdges.length,
+      (count) =>
+        measureSnapshot(
+          retainedTwinEdges,
+          retainedConceptEdges.slice(0, count),
+          retainedConceptEntries,
+        ) <= MAX_RELATION_SNAPSHOT_BYTES,
+    );
+    retainedConceptEdges = retainedConceptEdges.slice(0, conceptEdgeCount);
+
+    if (
+      measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
+      MAX_RELATION_SNAPSHOT_BYTES
+    ) {
+      const conceptEntryCount = maximumFittingPrefixLength(
+        retainedConceptEntries.length,
+        (count) =>
+          measureSnapshot(
+            retainedTwinEdges,
+            retainedConceptEdges,
+            retainedConceptEntries.slice(0, count),
+          ) <= MAX_RELATION_SNAPSHOT_BYTES,
+      );
+      retainedConceptEntries = retainedConceptEntries.slice(0, conceptEntryCount);
+    }
+
+    if (
+      measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
+      MAX_RELATION_SNAPSHOT_BYTES
+    ) {
+      const twinEdgeCount = maximumFittingPrefixLength(
+        retainedTwinEdges.length,
+        (count) =>
+          measureSnapshot(
+            retainedTwinEdges.slice(0, count),
+            retainedConceptEdges,
+            retainedConceptEntries,
+          ) <= MAX_RELATION_SNAPSHOT_BYTES,
+      );
+      retainedTwinEdges = retainedTwinEdges.slice(0, twinEdgeCount);
+    }
+  }
+
+  const snapshot = buildSnapshot(
+    retainedTwinEdges,
+    retainedConceptEdges,
+    retainedConceptEntries,
+  );
   // RelationEdge/ConceptEdge are nominal interfaces without Value's index
   // signature, but every field above is a concrete Convex value.
   const snapshotBytes = getConvexSize(snapshot as unknown as Value);
@@ -1606,15 +1821,28 @@ function buildRelationSnapshotVariant(
     );
   }
 
+  const twinEdgeShedCount = twinEdges.length - retainedTwinEdges.length;
+  const conceptEdgeShedCount = allConceptEdges.length - retainedConceptEdges.length;
+  const conceptEntryShedCount = allConceptEntries.length - retainedConceptEntries.length;
+  const degradationCode =
+    twinEdgeShedCount + conceptEdgeShedCount + conceptEntryShedCount > 0
+      ? `RELATION_SNAPSHOT_DEGRADED:${key}:initial=${initialSnapshotBytes}:final=${snapshotBytes}:twin=${twinEdgeShedCount}:concept=${conceptEdgeShedCount}:entries=${conceptEntryShedCount}`
+      : undefined;
+
   return {
     snapshot,
+    degradationCode,
     result: {
       sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
       sourceTemplateCount: templates.length,
       embeddedTemplateCount: items.length,
       tagVectorCount: tagVectors.length,
-      twinEdgeCount: twinEdges.length,
-      conceptEdgeCount: conceptEdgesResult.length,
+      twinEdgeCount: retainedTwinEdges.length,
+      conceptEdgeCount: retainedConceptEdges.length,
+      conceptEntryCount: retainedConceptEntries.length,
+      twinEdgeShedCount,
+      conceptEdgeShedCount,
+      conceptEntryShedCount,
       snapshotBytes,
     },
   };
@@ -1627,33 +1855,72 @@ type RelationSnapshotRebuildResult = {
   excludeCwc: RelationSnapshotVariantRebuildResult;
 };
 
-async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSnapshotRebuildResult> {
-  // Reserve without advancing the manifest. Both relation rows become visible
-  // only after both size guards and upserts succeed.
+type PreparedRelationSnapshotRebuild = {
+  publication: PublicDiscoveryPublication;
+  selection: PublicTemplateSnapshotPlan;
+  variants: Record<RelationSnapshotKey, RelationSnapshotVariantBuild>;
+  existingRows: Record<RelationSnapshotKey, Doc<"templateRelationSnapshots"> | null>;
+};
+
+function normalizeRelationSnapshotError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+function classifyRelationSnapshotFreeze(error: Error): "oversize" | "invalid" | "failed" {
+  if (error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) return "oversize";
+  const listStatus = classifyPublicTemplateSnapshotFreeze(error);
+  if (listStatus === "oversize") return "oversize";
+  if (listStatus === "invalid") return "invalid";
+  return "failed";
+}
+
+async function prepareRelationSnapshotRebuild(
+  ctx: MutationCtx,
+  selection?: PublicTemplateSnapshotPlan,
+): Promise<PreparedRelationSnapshotRebuild> {
+  // Reserve without advancing either manifest revision. A relation-only rebuild
+  // runs the exact list selector (including validation, backfill, and aggregate
+  // shedding); the composite rebuild supplies its already-computed plan.
   const publication = await preparePublicDiscoveryRelationsPublication(ctx);
-  const candidates = await ctx.db
-    .query("templates")
-    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
-    .order("desc")
-    .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
-  const sources: Record<RelationSnapshotKey, Doc<"templates">[]> = {
-    all: candidates.slice(0, RELATION_SNAPSHOT_VARIANT_CAP),
-    excludeCwc: candidates
-      .filter((template) => template.deliveryMethod !== "cwc")
-      .slice(0, RELATION_SNAPSHOT_VARIANT_CAP),
+  const existingRows = {
+    all: await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .unique(),
+    excludeCwc: await ctx.db
+      .query("templateRelationSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", "excludeCwc"))
+      .unique(),
   };
+  const resolvedSelection =
+    selection ??
+    (await preparePublicTemplateSnapshotPlan(
+      ctx,
+      await preparePublicDiscoveryListPublication(ctx, publication.updatedAt),
+    ));
 
   // Building both variants performs every size check before the first write.
   const variants = {
-    all: buildRelationSnapshotVariant("all", sources.all, publication),
-    excludeCwc: buildRelationSnapshotVariant("excludeCwc", sources.excludeCwc, publication),
+    all: buildRelationSnapshotVariant("all", resolvedSelection.sources.all, publication),
+    excludeCwc: buildRelationSnapshotVariant(
+      "excludeCwc",
+      resolvedSelection.sources.excludeCwc,
+      publication,
+    ),
   };
 
+  return { publication, selection: resolvedSelection, variants, existingRows };
+}
+
+async function publishRelationSnapshotRebuild(
+  ctx: MutationCtx,
+  prepared: PreparedRelationSnapshotRebuild,
+): Promise<RelationSnapshotRebuildResult> {
+  const { publication, selection, variants, existingRows } = prepared;
+  const previousManifest = await getPublicDiscoveryManifestRow(ctx);
+
   for (const key of ["all", "excludeCwc"] as const) {
-    const existing = await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
+    const existing = existingRows[key];
     if (existing) {
       await ctx.db.patch(existing._id, variants[key].snapshot);
     } else {
@@ -1663,38 +1930,80 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
 
   await commitPublicDiscoveryRelationsPublication(ctx, publication);
 
+  const degradationCodes = (["all", "excludeCwc"] as const).flatMap((key) => {
+    const code = variants[key].degradationCode;
+    return code ? [code] : [];
+  });
+  if (degradationCodes.length > 0) {
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!manifest) {
+      throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_RELATIONS_PUBLICATION");
+    }
+    const failure = new Error(degradationCodes.join("|"));
+    await recordPublicDiscoverySnapshotFailure(
+      ctx,
+      manifest,
+      "relations",
+      failure,
+      publication.updatedAt,
+      {
+        code: previousManifest?.relationsFailureCode,
+        failedAt: previousManifest?.relationsFailureAt,
+      },
+    );
+    console.error(
+      `[public-discovery] relation revision ${publication.revision} shed bounded payload data; retained graph remains available`,
+    );
+  }
+
   return {
     sourceScanCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
-    scannedCount: candidates.length,
+    scannedCount: selection.candidates.length,
     all: variants.all.result,
     excludeCwc: variants.excludeCwc.result,
   };
 }
 
+async function rebuildRelationSnapshotImpl(
+  ctx: MutationCtx,
+  selection?: PublicTemplateSnapshotPlan,
+): Promise<RelationSnapshotRebuildResult> {
+  return await publishRelationSnapshotRebuild(
+    ctx,
+    await prepareRelationSnapshotRebuild(ctx, selection),
+  );
+}
+
 /** Internal/operator entry point for relation-only refreshes and the cron. */
 export const rebuildRelationSnapshot = internalMutation({
   args: {},
-  handler: rebuildRelationSnapshotImpl,
+  handler: async (ctx) => await rebuildRelationSnapshotImpl(ctx),
 });
 
 /** Mutation attempt supervised by the cron action below. */
 export const rebuildRelationSnapshotForCronAttempt = internalMutation({
   args: {},
   handler: async (ctx) => {
+    let prepared: PreparedRelationSnapshotRebuild;
     try {
-      return { status: "rebuilt" as const, rebuilt: await rebuildRelationSnapshotImpl(ctx) };
+      prepared = await prepareRelationSnapshotRebuild(ctx);
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) {
-        throw error;
-      }
+      const normalized = normalizeRelationSnapshotError(error);
+      const status = classifyRelationSnapshotFreeze(normalized);
       await freezePublicDiscoverySnapshotFailure(
         ctx,
         "relations",
-        error,
+        normalized,
         Date.now(),
       );
-      return { status: "oversize" as const };
+      return { status };
     }
+    // Keep database-write errors throwable so this transaction rolls every
+    // partial upsert back; the outer action records them in a fresh mutation.
+    return {
+      status: "rebuilt" as const,
+      rebuilt: await publishRelationSnapshotRebuild(ctx, prepared),
+    };
   },
 });
 
@@ -1751,24 +2060,46 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
       return { status: "deferred" as const, scheduledAt: nextScheduledAt };
     }
 
+    let prepared: PreparedRelationSnapshotRebuild;
     try {
-      const rebuilt = await rebuildRelationSnapshotImpl(ctx);
-      const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
-      if (publishedManifest?.relationsRefreshScheduledAt === scheduledAt) {
-        await ctx.db.patch(publishedManifest._id, {
-          relationsRefreshScheduledAt: undefined,
-        });
-      }
-      return { status: "rebuilt" as const, rebuilt };
+      prepared = await prepareRelationSnapshotRebuild(ctx);
     } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) {
-        throw error;
-      }
-      await freezePublicDiscoverySnapshotFailure(ctx, "relations", error, now);
-      return { status: "oversize" as const };
+      const normalized = normalizeRelationSnapshotError(error);
+      const status = classifyRelationSnapshotFreeze(normalized);
+      await freezePublicDiscoverySnapshotFailure(ctx, "relations", normalized, now);
+      return { status };
     }
+
+    // Preparation is side-effect-free, so every compute/validation failure is
+    // durably classified above. Publication errors still throw to preserve
+    // Convex's all-or-nothing rollback for the two snapshot rows.
+    const rebuilt = await publishRelationSnapshotRebuild(ctx, prepared);
+    const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
+    if (publishedManifest?.relationsRefreshScheduledAt === scheduledAt) {
+      await ctx.db.patch(publishedManifest._id, {
+        relationsRefreshScheduledAt: undefined,
+      });
+    }
+    return { status: "rebuilt" as const, rebuilt };
   },
 });
+
+async function rebuildHomepageSnapshotsImpl(ctx: MutationCtx) {
+  const listPublication = await preparePublicDiscoveryListPublication(ctx);
+  const selection = await preparePublicTemplateSnapshotPlan(ctx, listPublication);
+  const preparedRelations = await prepareRelationSnapshotRebuild(ctx, selection);
+
+  // Finish both pure preparations before the first row write. The relation
+  // graph therefore consumes the exact cards the list publishes, and a guard
+  // failure cannot expose a half-prepared generation even transiently.
+  const list = await publishPublicTemplateSnapshotPlan(
+    ctx,
+    listPublication,
+    selection,
+  );
+  const relations = await publishRelationSnapshotRebuild(ctx, preparedRelations);
+  return { list, relations };
+}
 
 /**
  * One-shot activation and post-authoring refresh for every homepage snapshot.
@@ -1777,11 +2108,7 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
  */
 export const rebuildHomepageSnapshots = internalMutation({
   args: {},
-  handler: async (ctx) => {
-    const list = await rebuildPublicTemplateSnapshotsImpl(ctx);
-    const relations = await rebuildRelationSnapshotImpl(ctx);
-    return { list, relations };
-  },
+  handler: rebuildHomepageSnapshotsImpl,
 });
 
 /**
@@ -1790,8 +2117,10 @@ export const rebuildHomepageSnapshots = internalMutation({
  * This indexed query is deliberately separate from the materialized discovery
  * snapshots. Detail/send pages need the target roster to render the power
  * landscape and construct a mailto action; homepage/list snapshots must never
- * contain it. SvelteKit callers mark responses private + no-store so this
- * purpose-bound payload cannot enter browser or Cloudflare caches.
+ * contain it. This Convex query is directly public, so every returned field is
+ * treated as public; SvelteKit's private + no-store response policy only keeps
+ * the purpose-bound roster out of browser and Cloudflare caches. Provider and
+ * CWC configuration are therefore redacted here, not merely at the HTTP edge.
  */
 export const getBySlugPublic = query({
   args: { slug: v.string() },
@@ -1825,6 +2154,7 @@ export const getBySlugPublic = query({
         author = { name: user.name ?? null, avatar: user.avatar ?? null };
       }
     }
+    const publicRecipientConfig = projectPublicDetailRecipientConfig(template.recipientConfig);
 
     return {
       id: template._id,
@@ -1844,10 +2174,11 @@ export const getBySlugPublic = query({
       verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
       unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
       send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-      delivery_config: template.deliveryConfig,
-      recipient_config: template.recipientConfig,
+      delivery_config: {},
+      cwc_config: null,
+      recipient_config: publicRecipientConfig,
       recipient_count: countRecipientsConvex(template.recipientConfig),
-      recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+      recipientEmails: publicRecipientConfig.emails,
       topics: template.topics ?? [],
       author,
       createdAt: new Date(template._creationTime).toISOString(),
@@ -1892,6 +2223,103 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
   // `decisionMakers`. Keep the compatibility projection and recipient count
   // stable instead of double-counting that denormalized representation.
   return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
+}
+
+/**
+ * Construct the exact public roster shape used by anonymous detail/send pages.
+ *
+ * `recipientConfig` is stored as opaque JSON for authoring compatibility, so it
+ * must never cross a directly callable public Convex boundary wholesale. Legacy
+ * recipient shapes are normalized into `emails`; decision-maker and location
+ * objects retain only fields used by the public power-landscape/mailto UI.
+ */
+function projectPublicDetailRecipientConfig(
+  recipientConfig: unknown,
+): Record<string, unknown> & { emails: string[] } {
+  const projected: Record<string, unknown> & { emails: string[] } = {
+    emails: extractRecipientEmailsConvex(recipientConfig).slice(0, 50),
+  };
+  if (!recipientConfig || typeof recipientConfig !== "object" || Array.isArray(recipientConfig)) {
+    return projected;
+  }
+
+  const config = recipientConfig as Record<string, unknown>;
+  for (const field of ["reach", "target_type", "personalPrompt"] as const) {
+    if (typeof config[field] === "string") projected[field] = config[field];
+  }
+  for (const field of ["cwcRouting", "includesCongress"] as const) {
+    if (typeof config[field] === "boolean") projected[field] = config[field];
+  }
+  if (Array.isArray(config.chambers)) {
+    projected.chambers = config.chambers
+      .filter((value): value is string => typeof value === "string")
+      .slice(0, 4);
+  }
+
+  if (config.location && typeof config.location === "object" && !Array.isArray(config.location)) {
+    const location = config.location as Record<string, unknown>;
+    const publicLocation: Record<string, string> = {};
+    for (const field of ["city", "jurisdiction", "state", "country"] as const) {
+      if (typeof location[field] === "string") publicLocation[field] = location[field];
+    }
+    if (Object.keys(publicLocation).length > 0) projected.location = publicLocation;
+  }
+
+  if (Array.isArray(config.decisionMakers)) {
+    const decisionMakers = config.decisionMakers
+      .slice(0, 50)
+      .map((value) => {
+        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+        const decisionMaker = value as Record<string, unknown>;
+        const publicDecisionMaker: Record<string, unknown> = {};
+        for (const field of [
+          "name",
+          "title",
+          "role",
+          "shortName",
+          "organization",
+          "email",
+          "roleCategory",
+          "personalPrompt",
+          "accountabilityOpener",
+          "provenance",
+          "source",
+          "source_url",
+          "recencyCheck",
+          "positionSourceDate",
+          "emailSource",
+          "emailSourceTitle",
+        ] as const) {
+          if (typeof decisionMaker[field] === "string") {
+            publicDecisionMaker[field] = decisionMaker[field];
+          }
+        }
+        for (const field of ["isAiResolved", "emailGrounded"] as const) {
+          if (typeof decisionMaker[field] === "boolean") {
+            publicDecisionMaker[field] = decisionMaker[field];
+          }
+        }
+        if (
+          decisionMaker.emailVerified === "deliverable" ||
+          decisionMaker.emailVerified === "risky"
+        ) {
+          publicDecisionMaker.emailVerified = decisionMaker.emailVerified;
+        }
+        if (typeof decisionMaker.relevanceRank === "number" && Number.isFinite(decisionMaker.relevanceRank)) {
+          publicDecisionMaker.relevanceRank = decisionMaker.relevanceRank;
+        }
+        if (Array.isArray(decisionMaker.publicActions)) {
+          publicDecisionMaker.publicActions = decisionMaker.publicActions
+            .filter((value): value is string => typeof value === "string")
+            .slice(0, 20);
+        }
+        return Object.keys(publicDecisionMaker).length > 0 ? publicDecisionMaker : null;
+      })
+      .filter((value): value is Record<string, unknown> => value !== null);
+    if (decisionMakers.length > 0) projected.decisionMakers = decisionMakers;
+  }
+
+  return projected;
 }
 
 /** Return only the non-identifying cardinality needed by anonymous UI. */
@@ -2321,6 +2749,7 @@ export const updateSourceCache = mutation({
 
 const EMBEDDING_BACKFILL_BATCH_LIMIT = 100;
 const EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT = 100;
+const EMBEDDING_MARKER_MIGRATION_STALE_MS = 15 * 60 * 1000;
 const EMBEDDING_BACKFILL_LEASE_MS = 15 * 60 * 1000;
 
 function assertEmbeddingBackfillLeaseToken(token: string): void {
@@ -2436,7 +2865,9 @@ export const listMissingEmbeddings = query({
  * repair index. Each transaction scans at most 100 stable creation-order rows
  * and schedules the next page, avoiding one oversized migration transaction.
  * Progress lives on the public-discovery singleton so operators can prove every
- * scheduled page finished; once complete, an accidental rerun is a no-op.
+ * scheduled page finished. A top-level invocation restarts a run whose first
+ * page is older than 15 minutes; the new start token supersedes any delayed old
+ * continuation. Once complete, an accidental rerun is a no-op.
  */
 export const migrateTopicEmbeddingMarkers = internalMutation({
   args: {
@@ -2465,14 +2896,19 @@ export const migrateTopicEmbeddingMarkers = internalMutation({
         };
       }
       if (manifest?.topicEmbeddingMarkerMigrationStartedAt !== undefined) {
-        return {
-          status: "already-running" as const,
-          scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
-          marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
-          isDone: false,
-          startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt,
-          completedAt: null,
-        };
+        const stale =
+          Date.now() - manifest.topicEmbeddingMarkerMigrationStartedAt >=
+          EMBEDDING_MARKER_MIGRATION_STALE_MS;
+        if (!stale) {
+          return {
+            status: "already-running" as const,
+            scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+            marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+            isDone: false,
+            startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt,
+            completedAt: null,
+          };
+        }
       }
     }
 
@@ -2715,9 +3151,7 @@ export const rebuildHomepageSnapshotsAfterBackfill = mutation({
   handler: async (ctx, args) => {
     requireInternalSecret(args._secret);
     await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
-    const list = await rebuildPublicTemplateSnapshotsImpl(ctx);
-    const relations = await rebuildRelationSnapshotImpl(ctx);
-    return { list, relations };
+    return await rebuildHomepageSnapshotsImpl(ctx);
   },
 });
 
@@ -2839,7 +3273,7 @@ export const createTemplate = mutation({
       .query("templates")
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
-    if (existingSlug) throw new Error("TEMPLATE_SLUG_TAKEN");
+    if (existingSlug) throw new ConvexError({ code: "TEMPLATE_SLUG_TAKEN" });
 
     // Check org quota
     const membership = await ctx.db

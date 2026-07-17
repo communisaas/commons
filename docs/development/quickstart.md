@@ -358,10 +358,15 @@ Note: `npx convex deploy -y` silently no-ops against prod. Always pass `--env-fi
 **Frontend (Cloudflare Pages):**
 
 ```bash
-npm run build
-npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name communique-site --branch production
+RELEASE_SHA=$(git rev-parse HEAD)
+gh workflow run deploy.yml --ref production \
+  -f branch=production \
+  -f ref="$RELEASE_SHA"
 ```
+
+The backend producer and v4 snapshots must already be ready at the same release
+SHA. Direct `wrangler pages deploy` is prohibited because it bypasses those
+checks; see [deployment.md](deployment.md).
 
 ### Schema Changes in Production
 
@@ -400,16 +405,9 @@ jobs:
       - run: npm run build
       - run: npm run test:ci
 
-  deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - run: npm ci
-      - run: npx convex deploy --env-file .env.production
-      - run: npm run build
-      - run: npx wrangler pages deploy .svelte-kit/cloudflare --project-name communique-site --branch production
+# Deployment is intentionally separate in .github/workflows/deploy.yml. It
+# consumes a successful CI result for the exact SHA and adds producer-readiness,
+# KV-namespace, build, and immutable deployment-health gates.
 ```
 
 ---
