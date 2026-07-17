@@ -62,6 +62,26 @@ function resolveTemplateSlug(title: string, requestedSlug: string | undefined): 
 		.substring(0, 100);
 }
 
+const TEMPLATE_SLUG_TAKEN = 'TEMPLATE_SLUG_TAKEN';
+
+function isTemplateSlugTakenError(error: unknown): boolean {
+	// Convex wraps server errors with request metadata, so match the stable code
+	// inside the message rather than requiring exact string equality.
+	return error instanceof Error && error.message.includes(TEMPLATE_SLUG_TAKEN);
+}
+
+function duplicateSlugResponse(): Response {
+	const response: StructuredApiResponse = {
+		success: false,
+		error: createValidationError(
+			'slug',
+			'VALIDATION_DUPLICATE',
+			'This link is already taken. Please choose a different one or customize your link.'
+		)
+	};
+	return json(response, { status: 400 });
+}
+
 /** Validate and sanitize topics at the API boundary. */
 function sanitizeTopics(raw: unknown): string[] {
 	if (!Array.isArray(raw)) return [];
@@ -238,6 +258,14 @@ function validateTemplateData(data: unknown): {
 		if (templateData[field] !== undefined && !isRecord(templateData[field])) {
 			errors.push(
 				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be an object`)
+			);
+		}
+	}
+
+	for (const field of ['scopes', 'jurisdictions'] as const) {
+		if (templateData[field] !== undefined && !Array.isArray(templateData[field])) {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be an array`)
 			);
 		}
 	}
@@ -725,25 +753,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				const slug = resolveTemplateSlug(validData.title, validData.slug);
 
-				// Slug uniqueness check via Convex
-				const existingTemplate = await serverQuery(api.templates.findBySlug, {
-					slug,
-					_secret: getInternalSecret()
-				});
-
-				if (existingTemplate) {
-					const response: StructuredApiResponse = {
-						success: false,
-						error: createValidationError(
-							'slug',
-							'VALIDATION_DUPLICATE',
-							'This link is already taken. Please choose a different one or customize your link.'
-						)
-					};
-					return json(response, { status: 400 });
-				}
-
-				// Create template via Convex (includes quota check + geographic scope)
+				// The create mutation owns slug uniqueness atomically along with quota
+				// enforcement; avoid a redundant check-then-create query here.
 				const newTemplate = await serverMutation(api.templates.createTemplate, {
 					_secret: getInternalSecret(),
 					userId: user.id as Id<'users'>,
@@ -878,6 +889,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				return json(response);
 			} catch (error) {
+				// Slug uniqueness belongs to the create transaction; translate its
+				// stable conflict code without reintroducing a check-then-create race.
+				if (isTemplateSlugTakenError(error)) {
+					return duplicateSlugResponse();
+				}
+
 				if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
 					const response: StructuredApiResponse = {
 						success: false,

@@ -217,7 +217,7 @@ describe('templates materialized public snapshots', () => {
 		});
 	});
 
-	it('degrades to the newest snapshot when a duplicate key exists instead of hard-failing public reads', async () => {
+	it('degrades to the newest snapshot and logs counted invalid stored cards', async () => {
 		const t = newHarness();
 		const older = storedPublicCard('older', { title: 'Older', subject: 'Older' });
 		const publicOrg = { name: 'Public org', slug: 'public-org', avatar: null };
@@ -321,12 +321,23 @@ describe('templates materialized public snapshots', () => {
 			});
 		});
 
+		const storedProjectionError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		await expect(t.query(api.templates.listPublic, {})).resolves.toEqual([newer]);
 		await expect(t.query(api.templates.publicDiscoveryList, {})).resolves.toEqual({
 			revision: 2,
 			updatedAt: 2,
 			templates: [newer]
 		});
+		expect(storedProjectionError).toHaveBeenCalledTimes(2);
+		expect(storedProjectionError).toHaveBeenNthCalledWith(
+			1,
+			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=2:dropped=3:stored=4'
+		);
+		expect(storedProjectionError).toHaveBeenNthCalledWith(
+			2,
+			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=2:dropped=3:stored=4'
+		);
+		storedProjectionError.mockRestore();
 		await expect(t.query(api.templates.publicDiscoveryRelations, {})).resolves.toMatchObject({
 			revision: 2,
 			updatedAt: 2,
@@ -773,17 +784,21 @@ describe('templates materialized public snapshots', () => {
 		);
 	});
 
-	it('rejects producer cards that the public reader would drop and freezes the last-good revision', async () => {
+	it('publishes valid cards while recording and alerting invalid producer cards', async () => {
 		const t = newHarness();
-		const templateId = await t.run((ctx) => ctx.db.insert('templates', templateValue(3_000)));
+		const { invalidTemplateId, validTemplateId } = await t.run(async (ctx) => {
+			const invalidTemplateId = await ctx.db.insert('templates', templateValue(3_000));
+			const validTemplateId = await ctx.db.insert('templates', templateValue(3_001));
+			return { invalidTemplateId, validTemplateId };
+		});
 
 		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
 		const before = await t.query(api.templates.publicDiscoveryManifest, {});
 		const lastGood = await t.query(api.templates.listPublic, {});
-		expect(lastGood.map(({ id }) => id)).toEqual([templateId]);
+		expect(lastGood.map(({ id }) => id)).toEqual([validTemplateId, invalidTemplateId]);
 
 		await t.run((ctx) =>
-			ctx.db.patch(templateId, {
+			ctx.db.patch(invalidTemplateId, {
 				scopes: Array.from({ length: 101 }, (_, index) => ({
 					countryCode: 'US',
 					regionCode: `US-${index}`,
@@ -795,18 +810,35 @@ describe('templates materialized public snapshots', () => {
 			})
 		);
 
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		await expect(
 			t.mutation(internal.templates.rebuildPublicTemplateSnapshotsForCronAttempt, {})
-		).resolves.toEqual({ status: 'invalid' });
-		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
-			list: { ready: true, revision: before.list.revision, updatedAt: before.list.updatedAt }
+		).resolves.toEqual({
+			status: 'rebuilt',
+			rebuilt: expect.objectContaining({
+				invalidCount: 1,
+				allCount: 1,
+				excludeCwcCount: 1
+			})
 		});
-		expect(await t.query(api.templates.listPublic, {})).toEqual(lastGood);
+		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			list: { ready: true, revision: before.list.revision + 1 }
+		});
+		expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).toEqual([
+			validTemplateId
+		]);
 		await expect(
 			t.query(internal.templates.publicDiscoveryFailureStatus, {})
 		).resolves.toMatchObject({
-			list: { code: `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${templateId}` }
+			list: { code: `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${invalidTemplateId}` }
 		});
+		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			discoveryProducerHealthy: false
+		});
+		expect(consoleError).toHaveBeenCalledWith(
+			'[public-discovery] list revision 2 excluded 1 invalid template card(s); valid cards remain available'
+		);
+		consoleError.mockRestore();
 	});
 
 	it('records and clears an alerted last-good freeze around a scheduled oversize rebuild', async () => {

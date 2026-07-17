@@ -73,7 +73,8 @@ describe('/api/health', () => {
 			ok: true,
 			storageReadable: true,
 			discoveryManifestPresent: false,
-			discoveryProducerHealthy: false
+			discoveryProducerHealthy: true,
+			discoveryProducerOverdueAt: null
 		});
 
 		const response = await GET(event());
@@ -88,7 +89,8 @@ describe('/api/health', () => {
 			ok: true,
 			storageReadable: true,
 			discoveryManifestPresent: true,
-			discoveryProducerHealthy: false
+			discoveryProducerHealthy: false,
+			discoveryProducerOverdueAt: null
 		});
 
 		const response = await GET(event());

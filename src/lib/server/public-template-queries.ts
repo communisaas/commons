@@ -60,7 +60,10 @@ function matchesGeneration(snapshot: SnapshotCoordinates, expected: SnapshotCoor
 /**
  * The control-plane query reads one tiny singleton. Its one-minute edge TTL is
  * the upper bound on cache invalidation propagation; Convex's own query cache
- * makes unchanged manifest reads database-bandwidth-free.
+ * makes unchanged manifest reads database-bandwidth-free. `forceRefresh`
+ * bypasses this application's cache layers, not Convex's query cache; Convex
+ * invalidates that cache when a dependency changes, so it does not add a second
+ * time-based staleness window after a committed publication.
  */
 export function getCachedPublicDiscoveryManifest(
 	context: PublicQueryContext,
@@ -157,6 +160,11 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 		if (!(error instanceof PublicDiscoveryGenerationMismatchError) || error.family !== 'list') {
 			throw error;
 		}
+		// Separate manifest and payload queries can straddle one atomic publication.
+		// One dependency-invalidated manifest read closes that ordinary race and the
+		// observed snapshot is reused when it already matches. If another publication
+		// overtakes this bounded retry, fail closed and let the next request retry
+		// instead of adding an unbounded read loop during an active publish storm.
 		const freshManifest = await getCachedPublicDiscoveryManifest(context, true);
 		if (!freshManifest.list.ready) throw new PublicDiscoverySnapshotNotReadyError('list');
 		const prefetched = matchesGeneration(error.snapshot as SnapshotCoordinates, freshManifest.list)

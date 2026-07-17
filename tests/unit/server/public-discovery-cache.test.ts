@@ -379,6 +379,58 @@ describe('public discovery cache', () => {
 		expect(kv.put).toHaveBeenCalledTimes(2);
 	});
 
+	it('writes a changed unversioned manifest through before daily renewal', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+
+		await getCachedPublicData(
+			'manifest',
+			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
+			async () => ({ list: { ready: true, revision: 1 } })
+		);
+		expect(kv.put).toHaveBeenCalledTimes(1);
+
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		await getCachedPublicData(
+			'manifest',
+			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
+			async () => ({ list: { ready: true, revision: 2 } })
+		);
+
+		expect(kv.put).toHaveBeenCalledTimes(2);
+		expect(JSON.parse([...kv.entries.values()][0]).value.list.revision).toBe(2);
+	});
+
+	it('uses a versioned coordinate instead of serializing the payload to decide KV renewal', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		let serializations = 0;
+		const payload = (label: string) => ({
+			toJSON: () => {
+				serializations += 1;
+				return { templates: [label] };
+			}
+		});
+
+		await getCachedPublicData(
+			'templates',
+			{ url: TEST_URL, platform, revision: '1:100', freshForMs: 60_000 },
+			async () => payload('first')
+		);
+		expect(kv.put).toHaveBeenCalledTimes(1);
+		expect(serializations).toBe(1);
+
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		await getCachedPublicData(
+			'templates',
+			{ url: TEST_URL, platform, revision: '1:100', freshForMs: 60_000 },
+			async () => payload('second')
+		);
+
+		expect(kv.put).toHaveBeenCalledTimes(1);
+		expect(serializations).toBe(1);
+	});
+
 	it('ignores request path and query while physically busting edge payloads by generation', async () => {
 		const edge = installEdgeCache();
 		const loader = vi.fn().mockResolvedValueOnce(['generation-a']).mockResolvedValueOnce(['generation-b']);

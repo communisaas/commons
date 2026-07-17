@@ -52,7 +52,9 @@ selection tests, and this document together.
    be renewed, and its Cache API copy may carry local retry metadata, but it
    never contains another revision's payload. A late old request can therefore
    update only its old revision entry; the monotonic pointer rules prevent it
-   from overwriting a newer generation's selected value.
+   from overwriting a newer generation's selected value. Producers must advance
+   the revision coordinate for every payload change; the cache uses that
+   coordinate instead of deep-comparing large snapshot bodies.
 
 2. **A request-specific hit cannot certify global latest.** An exact KV hit may
    warm only the matching physical Cache API entry. A successful origin load may
@@ -134,12 +136,13 @@ selection tests, and this document together.
 
 The module guarantees at most one list page per check. After a completed-check
 lease becomes visible, the manifest-outage LKG path performs at most one check
-per hot logical family per Cache API location per day. Cache API publication is
-check-then-put, not an atomic lock: simultaneous first-wave isolates can each
-check before any sees the new lease. Therefore `F × L` is the steady-state daily
-bound after lease publication, not a hard concurrency bound. If at most `C`
-isolates race in each location, the first wave can cost up to `C × F × L`; this
-module does not itself bound `C`.
+per hot logical family per Cache API location per day. Let `F` be the number of
+hot logical families and `L` the number of active Cache API locations; the
+resulting steady-state bound is `F × L`. Cache API publication is check-then-put,
+not an atomic lock: simultaneous first-wave isolates can each check before any
+sees the new lease. Therefore `F × L` is not a hard concurrency bound. If at
+most `C` isolates race in each location, the first wave can cost up to
+`C × F × L`; this module does not itself bound `C`.
 
 An authoritative revision request whose exact KV generation is absent goes to
 the origin without listing. Only an origin failure makes one bounded check for a
@@ -154,7 +157,28 @@ first-wave races in quota monitoring.
 
 The Workers KV free allowance is shared with other namespaces, so code alone
 cannot guarantee the account-wide 1,000-list allowance for an unbounded number
-of active locations.
+of active locations. If that allowance is exhausted during a manifest outage, a
+cold location with no local LKG can fail closed until KV listing or Convex
+recovers. This is an explicit Free-tier availability ceiling, not a distributed
+single-flight guarantee.
+
+The one-page scan is also an intentional cardinality ceiling. With eight-day KV
+retention and the six-hour rebuild ceiling (normally only the daily cron), each
+family stays far below 1,000 live generation keys. If abnormal publication
+frequency crosses that threshold, the first lexicographic page is only an
+uncertified candidate: the cache serves a usable local LKG when available,
+records a daily retry lease, and never follows a cursor on the request path.
+Operators must treat repeated overflow warnings as a migration trigger rather
+than raising the page count.
+
+A healthy new revision can still produce one exact KV miss and one compact
+Convex snapshot query per active location until the successful KV fill becomes
+visible. The module deliberately does not emulate a lock with eventually
+consistent KV: there is no atomic put-if-absent, and a lock would consume scarce
+writes without proving ownership. Convex's cached singleton query prevents this
+fill wave from scanning the template corpus. A strict cross-location
+single-flight requirement needs a serialized publisher or coordinator outside
+this module.
 
 Cross-location coordination would require a stronger primitive than Cache API
 or KV's non-transactional mutable keys. Do not add a mutable KV `latest` pointer:
@@ -162,6 +186,15 @@ an old isolate can overwrite it after a newer isolate, and it doubles scarce KV
 writes. If the one-page generation bound becomes routinely insufficient, use a
 new schema with lexically order-preserving immutable revision keys or an
 explicit serialized coordinator.
+
+## Change boundary
+
+The landing page, browse page, and public templates API must continue to enter
+this state machine through `public-template-queries.ts`; adding another caller,
+storage tier, or lease type requires first extracting pure transition decisions
+from persistence effects and adding state-sequence/property coverage. Until
+then, this module is frozen to correctness, cost, and observability fixes rather
+than new cache features.
 
 ## Required regression coverage
 

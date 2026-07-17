@@ -159,7 +159,7 @@
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
 		"convex/legislation.ts::exportScorecards": {
-			"rules": { "collect": 2 },
+			"rules": { "collect": 2, "dateNow": 1 },
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
@@ -351,7 +351,7 @@
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
 		"convex/subscriptions.ts::checkPlanLimits": {
-			"rules": { "dateNow": 1 },
+			"rules": { "dateNow": 2 },
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."

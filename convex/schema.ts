@@ -3240,5 +3240,14 @@ export default defineSchema({
 		topicEmbeddingMarkerMigrationCompletedAt: v.optional(v.number()),
 		topicEmbeddingMarkerMigrationScanned: v.optional(v.number()),
 		topicEmbeddingMarkerMigrationMarked: v.optional(v.number())
+	}).index('by_key', ['key']),
+
+	// Distributed lease for the Cloudflare admin embedding repair route. Pages
+	// isolates do not share module memory, so the route claims this tiny row before
+	// spending Gemini calls. An expiry makes an evicted worker self-recovering.
+	embeddingBackfillLeases: defineTable({
+		key: v.literal('topic'),
+		token: v.string(),
+		expiresAt: v.number()
 	}).index('by_key', ['key'])
 });

@@ -110,6 +110,26 @@ as a hard concurrency bound. If KV is unavailable or reaches its free operation
 limit, the code degrades to Cache API + Convex. Unchanged Convex manifest queries
 are automatically query-cached and incur no database bandwidth.
 
+The eight-day generation retention and six-hour rebuild ceiling (normally only
+the daily cron) keep each logical family far below the one-page, 1,000-key
+recovery ceiling. A `KV revision listing exceeded 1000-key recovery bound`
+warning means abnormal publication frequency has crossed the design envelope.
+The request deliberately does not follow a cursor: it serves a usable local
+candidate without certifying it and backs the next global check off for one day.
+Repeated overflow is an operator migration signal for order-preserving keys or
+a serialized coordinator, not permission to spend multiple Free-plan list
+operations per request.
+
+The daily Cache API lease is also not a distributed lock. A first wave can spend
+`C × F × L` list operations before markers become visible, and the module does
+not bound `C`; exhausting the shared list allowance can leave a cold location
+without local LKG unable to recover globally. Likewise, a healthy publication
+can issue one cached singleton Convex query per active location until the first
+KV fill propagates. Do not add an eventually consistent KV lock: it cannot prove
+ownership and consumes the scarcer write allowance. If measured location count
+or publication frequency threatens either allowance, upgrade the plan or move
+publication/warming behind a serialized coordinator before raising traffic.
+
 ## Production activation
 
 Order matters. Deploy and populate the Convex snapshots before releasing the
@@ -215,14 +235,13 @@ cold state. The scoped execution graph is
    ```
 
    Manual dispatch cannot bypass source provenance, branch ancestry, focused and
-   full checks, or type checks. In normal releases it then runs
+   full checks, type checks, or producer readiness. Every production release runs
    `scripts/verify-public-discovery-readiness.mjs` against production. That
    executable gate re-reads the manifest and all versioned payloads and rejects
    cold, empty, oversized, revision-skewed, or more-than-26-hour-old state before
-   upload. A manual-only `skip_public_discovery_readiness=true` input exists solely
-   for an unrelated emergency hotfix when stale producer state would otherwise
-   freeze recovery; it emits a workflow warning and must be followed immediately
-   by producer repair and an unbypassed verification run. Verify the Pages source
+   upload. There is no dispatch-time bypass: an exceptional temporary relaxation
+   requires a reviewed workflow change and a follow-up revert, so one operator
+   cannot waive the gate. Verify the Pages source
    configuration still reports
    `production_deployments_enabled: false` and
    `preview_deployment_setting: "all"` with the API check in
@@ -305,6 +324,16 @@ cold state. The scoped execution graph is
   limit, or runtime failure rolls the attempt back, the action records a generic
   durable failure and alert in a separate mutation before rethrowing. This keeps
   mutation atomicity without allowing a system-limit failure to stay green.
+- A structurally invalid producer card is excluded from both list variants while
+  the remaining valid cards publish under the new revision. The stored
+  `sourceCount` counts only served cards; the manifest retains
+  `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:<id...>`, queues the same Sentry action, and
+  keeps the service ping unhealthy until the source is repaired and a clean
+  rebuild clears the failure. If a manual edit or migration corrupts an already
+  stored snapshot row, public readers retain its valid cards and emit one
+  counted `PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID` error per read for Convex log
+  alerting. Queries cannot schedule a Sentry action without violating query
+  purity.
 - Public authoring is constrained before moderation and again at the direct
   Convex boundary: 16,384 UTF-8 bytes for the stored authoring input, 12,288 for
   its public projection, and 8,192 across all three configuration objects, plus
@@ -315,12 +344,14 @@ cold state. The scoped execution graph is
   and aggregate corpus growth can still cross the document guard, so the
   900,000-byte atomic last-good freeze, alert, and readiness failure remain the
   authoritative availability boundary.
-- Do not automatically truncate `message_body` or silently drop templates to
-  make a snapshot fit. Advocacy content is semantic data, and dropping a list
-  member can invalidate relation endpoints. Repair the source/projection budget
-  and republish. The operator composite rebuild deliberately commits list and
-  relation generations in one transaction, so a failed graph cannot accompany
-  a newly published list.
+- Do not automatically truncate `message_body` or drop a structurally valid
+  template to make a snapshot fit. Advocacy content is semantic data, and
+  arbitrary list truncation can invalidate relation endpoints. The explicit
+  invalid-card path above is the only exclusion: it is counted, alerted, and
+  keeps readiness unhealthy. Repair the source/projection budget and republish.
+  The operator composite rebuild deliberately commits list and relation
+  generations in one transaction, so a failed graph cannot accompany a newly
+  published list.
 - Each verified-send aggregation performs one indexed read of the tiny manifest;
   only the first dirty write in a window patches it, while later writes reuse the
   token. Before materially increasing send volume, load-test the target peak QPS

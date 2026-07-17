@@ -17,11 +17,6 @@ on:
         required: false
         type: string
         default: ''
-      skip_public_discovery_readiness:
-        description: 'Emergency production hotfix only: bypass the discovery freshness gate.'
-        required: false
-        type: boolean
-        default: false
   workflow_run:
     workflows: [CI Tests]
     types: [completed]
@@ -269,19 +264,8 @@ jobs:
               ;;
           esac
 
-      - name: Record public-discovery readiness bypass
-        if: >-
-          env.DEPLOY_BRANCH == 'production' &&
-          github.event_name == 'workflow_dispatch' &&
-          inputs.skip_public_discovery_readiness
-        run: >-
-          echo "::warning::Emergency hotfix deploy is bypassing the public-discovery freshness gate;
-          restore producer freshness and run readiness verification immediately after release."
-
       - name: Require public-discovery producer readiness
-        if: >-
-          env.DEPLOY_BRANCH == 'production' &&
-          !(github.event_name == 'workflow_dispatch' && inputs.skip_public_discovery_readiness)
+        if: env.DEPLOY_BRANCH == 'production'
         env:
           # Daily essential-cron cadence plus two hours of scheduling tolerance.
           PUBLIC_DISCOVERY_MAX_AGE_HOURS: '26'

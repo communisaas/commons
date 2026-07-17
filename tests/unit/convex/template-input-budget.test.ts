@@ -156,6 +156,12 @@ describe('bounded template authoring JSON', () => {
 				jurisdictions: [{ jurisdictionType: 'x'.repeat(920_000) }]
 			})
 		).toMatchObject({ ok: false, scope: 'authoring_input', reason: 'max_bytes' });
+		expect(
+			validateTemplateInputBudgets({
+				...base,
+				scopes: 'not-an-array' as never
+			})
+		).toMatchObject({ ok: false, scope: 'public_input', reason: 'invalid_json_value' });
 	});
 
 	it('keeps every committed seed template inside every aggregate budget', () => {

@@ -1,16 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockModerateTemplate, mockGetCachedPublicTemplates } = vi.hoisted(() => ({
+const {
+	mockModerateTemplate,
+	mockGetCachedPublicTemplates,
+	mockServerQuery,
+	mockServerMutation
+} = vi.hoisted(() => ({
 	mockModerateTemplate: vi.fn(),
-	mockGetCachedPublicTemplates: vi.fn()
+	mockGetCachedPublicTemplates: vi.fn(),
+	mockServerQuery: vi.fn(),
+	mockServerMutation: vi.fn()
 }));
 
 vi.mock('$lib/core/server/moderation', () => ({
 	moderateTemplate: mockModerateTemplate
 }));
 vi.mock('convex-sveltekit', () => ({
-	serverQuery: vi.fn(),
-	serverMutation: vi.fn()
+	serverQuery: mockServerQuery,
+	serverMutation: mockServerMutation
 }));
 vi.mock('$lib/server/public-template-queries', () => {
 	class PublicDiscoverySnapshotNotReadyError extends Error {
@@ -125,6 +132,8 @@ describe('GET /api/templates public discovery contract', () => {
 describe('POST /api/templates authoring cost gate', () => {
 	beforeEach(() => {
 		mockModerateTemplate.mockReset();
+		mockServerQuery.mockReset();
+		mockServerMutation.mockReset();
 	});
 
 	it('rejects an unauthenticated request before parsing or moderation', async () => {
@@ -156,6 +165,8 @@ describe('POST /api/templates authoring cost gate', () => {
 		['null recipient config', { recipient_config: null }, 'recipient_config'],
 		['array recipient config', { recipient_config: [] }, 'recipient_config'],
 		['scalar recipient config', { recipient_config: true }, 'recipient_config'],
+		['non-array scopes', { scopes: {} }, 'scopes'],
+		['non-array jurisdictions', { jurisdictions: 'US' }, 'jurisdictions'],
 		['sources object', { sources: {} }, 'sources'],
 		['malformed source entry', { sources: [{ num: 1, title: 42, url: 'https://x.test', type: 'web' }] }, 'sources'],
 		['oversized source string', { sources: [{ num: 1, title: 'x'.repeat(501), url: 'https://x.test', type: 'web' }] }, 'sources'],
@@ -174,6 +185,7 @@ describe('POST /api/templates authoring cost gate', () => {
 			errors: [expect.objectContaining({ field })]
 		});
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
 	it.each([
@@ -232,6 +244,32 @@ describe('POST /api/templates authoring cost gate', () => {
 			errors: [expect.objectContaining({ field, code: expect.stringMatching(/^VALIDATION_/) })]
 		});
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('maps the atomic Convex slug conflict to the existing duplicate validation response', async () => {
+		mockModerateTemplate.mockResolvedValue({
+			approved: true,
+			summary: 'Approved by test control',
+			latency_ms: 1
+		});
+		mockServerQuery.mockResolvedValueOnce(null);
+		mockServerMutation.mockRejectedValue(
+			new Error('[CONVEX M(templates:createTemplate)] Server Error: TEMPLATE_SLUG_TAKEN')
+		);
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, slug: 'shared-link' }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: {
+				field: 'slug',
+				code: 'VALIDATION_DUPLICATE'
+			}
+		});
+		expect(mockServerQuery).toHaveBeenCalledOnce();
+		expect(mockServerMutation).toHaveBeenCalledOnce();
 	});
 
 	it('budgets the generated slug before moderation when the request omits one', async () => {

@@ -140,6 +140,69 @@ describe('bounded embedding backfill discovery', () => {
 		expect(rows.every((row) => !('topicEmbedding' in row))).toBe(true);
 	});
 
+	it('serializes Pages isolates with an expiring token-checked lease', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));
+		try {
+			const t = writeHarness();
+			const firstToken = 'backfill-lease-token-first';
+			const secondToken = 'backfill-lease-token-second';
+			const startedAt = Date.now();
+
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: 'not-the-secret',
+					token: firstToken
+				})
+			).rejects.toThrow('Unauthorized');
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: firstToken
+				})
+			).resolves.toEqual({ acquired: true, expiresAt: startedAt + 15 * 60 * 1000 });
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: secondToken
+				})
+			).resolves.toEqual({ acquired: false, retryAt: startedAt + 15 * 60 * 1000 });
+
+			await expect(
+				t.mutation(api.templates.releaseEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: secondToken
+				})
+			).resolves.toEqual({ released: false });
+
+			vi.advanceTimersByTime(15 * 60 * 1000 + 1);
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: secondToken
+				})
+			).resolves.toMatchObject({ acquired: true });
+			// The evicted/late first runner cannot clear the reclaimed generation.
+			await expect(
+				t.mutation(api.templates.releaseEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: firstToken
+				})
+			).resolves.toEqual({ released: false });
+			await expect(
+				t.mutation(api.templates.releaseEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: secondToken
+				})
+			).resolves.toEqual({ released: true });
+			await expect(
+				t.run((ctx) => ctx.db.query('embeddingBackfillLeases').collect())
+			).resolves.toEqual([]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('does not let a tag-only write hide a missing topic embedding', async () => {
 		const t = harness();
 		await t.run(async (ctx) => {

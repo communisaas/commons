@@ -7,7 +7,8 @@
  * `query({...})` declarations and records three expensive constructs:
  *   - `.collect()` calls;
  *   - Convex query-builder `.filter()` calls (not Array.prototype.filter);
- *   - `Date.now()` calls.
+ *   - wall-clock reads (`Date.now()`, zero-argument `new Date()`, `Date()`,
+ *     `performance.now()`, and `Temporal.Now.*()`).
  *
  * Existing debt is an exact baseline, not a blanket exemption. Every baseline
  * entry needs an owner, reason, and expiry. A new occurrence, a new hazardous
@@ -128,11 +129,53 @@ function collectBuilderNames(root) {
 	return builderNames;
 }
 
+function isIdentifierNamed(node, name) {
+	const current = unwrapExpression(node);
+	return ts.isIdentifier(current) && current.text === name;
+}
+
+function isTemporalNowReceiver(node) {
+	const current = unwrapExpression(node);
+	return (
+		ts.isPropertyAccessExpression(current) &&
+		current.name.text === 'Now' &&
+		isIdentifierNamed(current.expression, 'Temporal')
+	);
+}
+
+/**
+ * Keep the legacy `dateNow` baseline key stable while covering equivalent
+ * zero-input clock reads. Constructing Date from an explicit value remains
+ * deterministic and is intentionally not flagged.
+ */
+function isWallClockRead(node) {
+	if (ts.isNewExpression(node)) {
+		return isIdentifierNamed(node.expression, 'Date') && (node.arguments?.length ?? 0) === 0;
+	}
+	if (!ts.isCallExpression(node)) return false;
+
+	const callee = unwrapExpression(node.expression);
+	if (ts.isIdentifier(callee)) return callee.text === 'Date';
+	if (!ts.isPropertyAccessExpression(callee)) return false;
+
+	const method = callee.name.text;
+	const receiver = callee.expression;
+	return (
+		(method === 'now' &&
+			(isIdentifierNamed(receiver, 'Date') || isIdentifierNamed(receiver, 'performance'))) ||
+		isTemporalNowReceiver(receiver)
+	);
+}
+
 function analyzePublicQuery(queryNode, sourceFile) {
 	const builderNames = collectBuilderNames(queryNode);
 	const lines = { collect: [], queryFilter: [], dateNow: [] };
 
 	const visit = (node) => {
+		if (isWallClockRead(node)) {
+			const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+			lines.dateNow.push(line);
+		}
 		if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
 			const method = node.expression.name.text;
 			const receiver = node.expression.expression;
@@ -142,8 +185,6 @@ function analyzePublicQuery(queryNode, sourceFile) {
 				lines.collect.push(line);
 			} else if (method === 'filter' && isQueryBuilderExpression(receiver, builderNames)) {
 				lines.queryFilter.push(line);
-			} else if (method === 'now' && ts.isIdentifier(receiver) && receiver.text === 'Date') {
-				lines.dateNow.push(line);
 			}
 		}
 		ts.forEachChild(node, visit);
@@ -163,7 +204,16 @@ function selfCheckAnalyzer() {
 				let builder = ctx.db.query('rows');
 				builder = builder.withIndex('by_status', (q) => q.eq('status', 'active'));
 				const rows = await builder.filter((q) => q.eq(q.field('visible'), true)).collect();
-				return { count: rows.filter(Boolean).length, now: Date.now() };
+				const deterministic = new Date(0).toISOString();
+				return {
+					count: rows.filter(Boolean).length,
+					deterministic,
+					dateNow: Date.now(),
+					dateConstructor: new Date().valueOf(),
+					dateFunction: Date(),
+					performanceNow: performance.now(),
+					temporalNow: Temporal.Now.instant()
+				};
 			}
 		});
 	`;
@@ -178,7 +228,7 @@ function selfCheckAnalyzer() {
 	const declaration = statement?.declarationList.declarations[0];
 	assert(declaration?.initializer && ts.isCallExpression(declaration.initializer));
 	const result = analyzePublicQuery(declaration.initializer, sourceFile);
-	assert.deepEqual(result.counts, { collect: 1, queryFilter: 1, dateNow: 1 });
+	assert.deepEqual(result.counts, { collect: 1, queryFilter: 1, dateNow: 5 });
 }
 
 function scanPublicQueries() {
@@ -401,7 +451,7 @@ console.log(
 	`Convex query efficiency: ${scan.publicQueryCount} public queries in ${scan.moduleCount} modules; ` +
 		`${totals.collect.calls} collect calls/${totals.collect.queries} queries, ` +
 		`${totals.queryFilter.calls} query filters/${totals.queryFilter.queries} queries, ` +
-		`${totals.dateNow.calls} Date.now calls/${totals.dateNow.queries} queries.`
+		`${totals.dateNow.calls} clock reads/${totals.dateNow.queries} queries.`
 );
 
 if (errors.length > 0) {

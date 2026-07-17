@@ -184,6 +184,36 @@ describe('templates.createTemplate input budgets', () => {
 		});
 	});
 
+	it('enforces slug uniqueness inside the authoritative create mutation', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+		const base = baseCreateArgs(userId);
+
+		const attempts = await Promise.allSettled([
+			authenticated.mutation(api.templates.createTemplate, base),
+			authenticated.mutation(api.templates.createTemplate, {
+				...base,
+				title: 'A concurrent request chose the same slug',
+				contentHash: 'different-content-same-slug'
+			})
+		]);
+		const fulfilled = attempts.filter((result) => result.status === 'fulfilled');
+		const rejected = attempts.filter(
+			(result): result is PromiseRejectedResult => result.status === 'rejected'
+		);
+		expect(fulfilled).toHaveLength(1);
+		expect(rejected).toHaveLength(1);
+		expect(String(rejected[0].reason)).toContain('TEMPLATE_SLUG_TAKEN');
+
+		await t.run(async (ctx) => {
+			const rows = await ctx.db
+				.query('templates')
+				.withIndex('by_slug', (q) => q.eq('slug', base.slug))
+				.collect();
+			expect(rows).toHaveLength(1);
+		});
+	});
+
 	it('rechecks the resulting public projection when metadata is patched', async () => {
 		const t = newHarness();
 		const { authenticated, userId } = await createAuthenticatedUser(t);

@@ -95,15 +95,23 @@ function boundaries(file: string, src: string): Boundary[] {
 			continue;
 		}
 		if (!ts.isVariableStatement(statement)) continue;
-		if (!statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword)) {
-			continue;
-		}
+		const exported = statement.modifiers?.some(
+			(modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword
+		);
 		for (const declaration of statement.declarationList.declarations) {
 			if (!ts.isIdentifier(declaration.name) || !declaration.initializer) continue;
+			const initializer = unwrap(declaration.initializer);
+			if (
+				!exported &&
+				!ts.isArrowFunction(initializer) &&
+				!ts.isFunctionExpression(initializer)
+			) {
+				continue;
+			}
 			result.push({
 				file,
 				name: declaration.name.text,
-				body: declaration.initializer.getText(parsed)
+				body: initializer.getText(parsed)
 			});
 		}
 	}
@@ -566,6 +574,13 @@ describe('public-discovery source writer contract', () => {
 async function helper(ctx, id: Id<"templates">) {
   await ctx.db.patch(id, { title: "unsafe" });
 }
+const arrowHelper = async (ctx, id: Id<"templates">) => {
+  await ctx.db.patch(id, { title: "unsafe" });
+};
+export const delegated = mutation({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, args) => arrowHelper(ctx, args.templateId),
+});
 export const inserted = mutation({
   handler: async (ctx) => ctx.db.insert("templates", { title: "unsafe" }),
 });
@@ -590,6 +605,7 @@ export const replaced = mutation({
 			.map(({ key, operation }) => `${key}:${operation}`)
 			.sort();
 		expect(detected).toEqual([
+			'synthetic.ts:arrowHelper:projected-patch',
 			'synthetic.ts:computedPatch:dynamic-patch',
 			'synthetic.ts:dynamicPatch:dynamic-patch',
 			'synthetic.ts:helper:projected-patch',

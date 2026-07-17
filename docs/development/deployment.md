@@ -156,6 +156,15 @@ Use `{"restart":true}` only to recover a deliberately diagnosed stalled
 cutover. Never begin Gemini repair while the status is `running` or
 `not-started`.
 
+The authenticated `/api/admin/backfill-embeddings` repair handles one 20-row
+Gemini batch per request. It claims a 15-minute lease in Convex before any
+provider call; another Pages isolate receives 429, and an evicted worker cannot
+block repair beyond lease expiry. Repeat the request to drain a larger backlog.
+Every successful row update transactionally schedules the bounded relation
+refresh, so eviction before the route's immediate composite rebuild cannot
+strand a stale generation. Lease release is token-checked so a late old worker
+cannot clear a reclaimed lease.
+
 Production Pages deployments enforce the producer gate mechanically with
 `scripts/verify-public-discovery-readiness.mjs`: both snapshot families must be
 ready, both list variants and both relation variants must match their manifest
@@ -210,32 +219,18 @@ gh workflow run deploy.yml --ref production \
 ```
 
 The manual path resolves an exact SHA and cannot bypass the static Convex query-efficiency
-guardrail, focused public-discovery checks, full test suite, application checks, or Convex
-type checks. The live producer-readiness gate also remains mandatory in normal releases.
+guardrail, focused public-discovery checks, full test suite, application checks, Convex
+type checks, or the live producer-readiness gate.
 The backend remains an explicit operator step because the Pages workflow has no established
 Convex deploy credential. See
 `docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
 `docs/strategy/public-discovery-release-hypergraph/` for the go/no-go evidence.
 
-If stale discovery state would block an unrelated emergency security or availability
-hotfix, an operator may use the manual-only
-`skip_public_discovery_readiness=true` input. This does not bypass source provenance,
-branch ancestry, CI, tests, or type checks, and the workflow emits an auditable warning.
-Never use it for a discovery-affecting release. Immediately after the hotfix, repair the
-producer and run a normal dispatch without the bypass:
-
-```bash
-gh workflow run deploy.yml --ref production \
-  -f branch=production \
-  -f ref="$RELEASE_SHA" \
-  -f skip_public_discovery_readiness=true
-
-# After producer recovery, prove the gate normally before considering the incident closed.
-npm run verify:public-discovery-readiness
-gh workflow run deploy.yml --ref production \
-  -f branch=production \
-  -f ref="$RELEASE_SHA"
-```
+There is deliberately no dispatch-time readiness bypass. If stale discovery state blocks
+an unrelated emergency security or availability hotfix, repair the producer first. Any
+exceptional temporary relaxation must be an explicit reviewed change to
+`.github/workflows/deploy.yml`, then be reverted after the incident; a single dispatcher
+cannot defeat the gate with a workflow input.
 
 ### Preview Deploy (non-production branch)
 

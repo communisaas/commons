@@ -842,11 +842,34 @@ function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | nu
   return projected as PublicTemplatePayload;
 }
 
-function projectStoredPublicTemplates(value: unknown): PublicTemplatePayload[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((template) => projectStoredPublicTemplate(template))
-    .filter((template): template is PublicTemplatePayload => template !== null);
+function projectStoredPublicTemplates(
+  value: unknown,
+  context: { key: PublicTemplateSnapshotKey; revision: number },
+): PublicTemplatePayload[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    console.error(
+      `[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:container=non_array`,
+    );
+    return [];
+  }
+
+  const templates: PublicTemplatePayload[] = [];
+  let dropped = 0;
+  for (const stored of value) {
+    const template = projectStoredPublicTemplate(stored);
+    if (template) templates.push(template);
+    else dropped += 1;
+  }
+  if (dropped > 0) {
+    // Queries cannot schedule the Sentry action without violating Convex query
+    // purity. Emit one stable, counted error per read so Convex log alerts can
+    // detect at-rest/manual corruption without sacrificing the valid cards.
+    console.error(
+      `[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:dropped=${dropped}:stored=${value.length}`,
+    );
+  }
+  return templates;
 }
 
 /**
@@ -868,7 +891,7 @@ export const publicDiscoveryManifest = query({
   },
 });
 
-/** Operator detail for a producer that is serving a frozen last-good revision. */
+/** Operator detail for a producer serving a frozen or explicitly degraded revision. */
 export const publicDiscoveryFailureStatus = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -911,7 +934,10 @@ export const listPublic = query({
       .withIndex("by_key", (q) => q.eq("key", key))
       .order("desc")
       .first();
-    return projectStoredPublicTemplates(snapshot?.templates);
+    return projectStoredPublicTemplates(snapshot?.templates, {
+      key,
+      revision: snapshot?.revision ?? 0,
+    });
   },
 });
 
@@ -933,7 +959,10 @@ export const publicDiscoveryList = query({
     return {
       revision: snapshot?.revision ?? 0,
       updatedAt: snapshot?.updatedAt ?? null,
-      templates: projectStoredPublicTemplates(snapshot?.templates),
+      templates: projectStoredPublicTemplates(snapshot?.templates, {
+        key,
+        revision: snapshot?.revision ?? 0,
+      }),
     };
   },
 });
@@ -943,6 +972,7 @@ type PublicTemplateSnapshotRebuildResult = {
   scannedCount: number;
   allCount: number;
   excludeCwcCount: number;
+  invalidCount: number;
   allSnapshotBytes: number;
   excludeCwcSnapshotBytes: number;
 };
@@ -973,16 +1003,23 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   const selectedIds = new Set([...allSources.map((template) => template._id), ...excludeCwcSources.map((template) => template._id)]);
   const selectedSources = candidates.filter((template) => selectedIds.has(template._id));
   const enriched = await enrichPublicTemplates(ctx, selectedSources);
-  const validatedEnriched = enriched.map((template) => {
+  const invalidTemplateIds: string[] = [];
+  const validatedEnriched = enriched.flatMap((template) => {
     const projected = projectStoredPublicTemplate(template);
     if (!projected) {
-      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${template.id}`);
+      invalidTemplateIds.push(String(template.id));
+      return [];
     }
-    return projected;
+    return [projected];
   });
   const enrichedById = new Map(validatedEnriched.map((template) => [template.id, template]));
-  const allTemplates = allSources.map((template) => enrichedById.get(template._id)!);
-  const excludeCwcTemplates = excludeCwcSources.map((template) => enrichedById.get(template._id)!);
+  const projectValidSources = (sources: Doc<"templates">[]) =>
+    sources.flatMap((template) => {
+      const projected = enrichedById.get(template._id);
+      return projected ? [projected] : [];
+    });
+  const allTemplates = projectValidSources(allSources);
+  const excludeCwcTemplates = projectValidSources(excludeCwcSources);
 
   const rows: Array<{
     key: PublicTemplateSnapshotKey;
@@ -995,14 +1032,14 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
       key: "all",
       revision: publication.revision,
       templates: allTemplates,
-      sourceCount: allSources.length,
+      sourceCount: allTemplates.length,
       updatedAt: publication.updatedAt,
     },
     {
       key: "excludeCwc",
       revision: publication.revision,
       templates: excludeCwcTemplates,
-      sourceCount: excludeCwcSources.length,
+      sourceCount: excludeCwcTemplates.length,
       updatedAt: publication.updatedAt,
     },
   ];
@@ -1035,11 +1072,30 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   // a later failure in the composite list+relations rebuild rolls this back too.
   await commitPublicDiscoveryListPublication(ctx, publication);
 
+  if (invalidTemplateIds.length > 0) {
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!manifest) throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION");
+    const failure = new Error(
+      `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${invalidTemplateIds.join(",")}`,
+    );
+    await recordPublicDiscoverySnapshotFailure(
+      ctx,
+      manifest,
+      "list",
+      failure,
+      publication.updatedAt,
+    );
+    console.error(
+      `[public-discovery] list revision ${publication.revision} excluded ${invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
+    );
+  }
+
   return {
     sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
     scannedCount: candidates.length,
     allCount: allTemplates.length,
     excludeCwcCount: excludeCwcTemplates.length,
+    invalidCount: invalidTemplateIds.length,
     allSnapshotBytes: rowSizes.get("all")!,
     excludeCwcSnapshotBytes: rowSizes.get("excludeCwc")!,
   };
@@ -2141,6 +2197,67 @@ export const updateSourceCache = mutation({
 
 const EMBEDDING_BACKFILL_BATCH_LIMIT = 100;
 const EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT = 100;
+const EMBEDDING_BACKFILL_LEASE_MS = 15 * 60 * 1000;
+
+function assertEmbeddingBackfillLeaseToken(token: string): void {
+  if (token.length < 16 || token.length > 100) {
+    throw new Error("EMBEDDING_BACKFILL_LEASE_TOKEN_INVALID");
+  }
+}
+
+/**
+ * Claim one distributed repair lease before the Pages route spends Gemini I/O.
+ *
+ * The indexed read and insert/patch share a Convex mutation, so concurrent
+ * isolates serialize on the `topic` key. The lease expires if a worker is
+ * evicted before its token-checked release runs.
+ */
+export const claimEmbeddingBackfillLease = mutation({
+  args: { _secret: v.string(), token: v.string() },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    assertEmbeddingBackfillLeaseToken(args.token);
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("embeddingBackfillLeases")
+      .withIndex("by_key", (q) => q.eq("key", "topic"))
+      .unique();
+
+    if (existing && existing.expiresAt > now) {
+      return { acquired: false as const, retryAt: existing.expiresAt };
+    }
+
+    const expiresAt = now + EMBEDDING_BACKFILL_LEASE_MS;
+    if (existing) {
+      await ctx.db.patch(existing._id, { token: args.token, expiresAt });
+    } else {
+      await ctx.db.insert("embeddingBackfillLeases", {
+        key: "topic",
+        token: args.token,
+        expiresAt,
+      });
+    }
+    return { acquired: true as const, expiresAt };
+  },
+});
+
+/** Release only the lease generation owned by this request. */
+export const releaseEmbeddingBackfillLease = mutation({
+  args: { _secret: v.string(), token: v.string() },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
+    assertEmbeddingBackfillLeaseToken(args.token);
+    const existing = await ctx.db
+      .query("embeddingBackfillLeases")
+      .withIndex("by_key", (q) => q.eq("key", "topic"))
+      .unique();
+    if (!existing || existing.token !== args.token) {
+      return { released: false as const };
+    }
+    await ctx.db.delete(existing._id);
+    return { released: true as const };
+  },
+});
 
 function embeddingBackfillLimit(limit: number | undefined): number {
   if (limit === undefined) return EMBEDDING_BACKFILL_BATCH_LIMIT;
@@ -2517,21 +2634,6 @@ export const findByContentHash = query({
 });
 
 /**
- * Find template by slug (uniqueness check).
- */
-export const findBySlug = query({
-  args: { slug: v.string(), _secret: v.string() },
-  handler: async (ctx, { slug, _secret }) => {
-    requireInternalSecret(_secret);
-    const template = await ctx.db
-      .query("templates")
-      .withIndex("by_slug", (q) => q.eq("slug", slug))
-      .first();
-    return template ? { _id: template._id } : null;
-  },
-});
-
-/**
  * Get user's org membership (for quota check).
  */
 export const getUserOrgId = internalQuery({
@@ -2621,6 +2723,15 @@ export const createTemplate = mutation({
         `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,
       );
     }
+
+    // Fail duplicate links before the more expensive plan/quota reads. This
+    // indexed range read remains authoritative: Convex OCC serializes a
+    // concurrent same-slug insert and retries the loser against the new row.
+    const existingSlug = await ctx.db
+      .query("templates")
+      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
+      .first();
+    if (existingSlug) throw new Error("TEMPLATE_SLUG_TAKEN");
 
     // Check org quota
     const membership = await ctx.db

@@ -277,12 +277,20 @@ export function validateTemplateInputBudgets(
 		[input.scopes, MAX_PUBLIC_TEMPLATE_SCOPES],
 		[input.jurisdictions, MAX_PUBLIC_TEMPLATE_JURISDICTIONS]
 	] as const) {
-		if (value !== undefined && (!Array.isArray(value) || value.length > limit)) {
+		if (value === undefined) continue;
+		if (!Array.isArray(value)) {
+			return {
+				ok: false,
+				scope: 'public_input',
+				reason: 'invalid_json_value'
+			};
+		}
+		if (value.length > limit) {
 			return {
 				ok: false,
 				scope: 'public_input',
 				reason: 'max_container_entries',
-				actual: Array.isArray(value) ? value.length : undefined,
+				actual: value.length,
 				limit
 			};
 		}

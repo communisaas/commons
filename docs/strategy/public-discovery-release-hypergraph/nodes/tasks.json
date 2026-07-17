@@ -52,8 +52,8 @@
       "name": "Gate and deploy frontend consumer",
       "status": "operator_gate",
       "owner": "release operator and GitHub Actions",
-      "description": "Keep native Cloudflare Git production deployment disabled and use the provenance-gated Wrangler workflow to deploy the same verified SHA only after PD-30 and PD-40; reserve the audited manual readiness bypass for unrelated emergency hotfixes.",
-      "acceptance": "The Pages source config reports production_deployments_enabled=false, and the immutable workflow deployment for the exact SHA passes `/api/health` before custom-origin traffic is warmed; any emergency bypass is followed by producer repair and an unbypassed readiness run."
+      "description": "Keep native Cloudflare Git production deployment disabled and use the provenance-gated Wrangler workflow to deploy the same verified SHA only after PD-30 and PD-40; do not expose a dispatch-time readiness bypass.",
+      "acceptance": "The Pages source config reports production_deployments_enabled=false, the immutable workflow deployment for the exact SHA passes producer readiness and `/api/health` before custom-origin traffic is warmed, and any exceptional gate relaxation requires a reviewed workflow change plus revert."
     },
     {
       "id": "PD-60",

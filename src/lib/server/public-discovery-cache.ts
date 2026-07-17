@@ -527,10 +527,16 @@ function loadAndCache<T>(
 	const pending = loader()
 		.then(async (value) => {
 			const now = Date.now();
+			// A versioned payload's materialization coordinate is its content identity,
+			// so comparing the revision avoids serializing snapshot bodies that may be
+			// close to the 900 KB producer cap. The only unversioned caller is the tiny
+			// manifest control plane; retain equality there so a changed manifest is
+			// written through to KV immediately instead of waiting for daily renewal.
 			const valueUnchanged =
 				previousEnvelope !== undefined &&
-				previousEnvelope.revision === revision &&
-				JSON.stringify(previousEnvelope.value) === JSON.stringify(value);
+				(revision !== undefined
+					? previousEnvelope.revision === revision
+					: JSON.stringify(previousEnvelope.value) === JSON.stringify(value));
 			const lastGlobalWrite = previousEnvelope?.globalCachedAt ?? 0;
 			const writeKv =
 				publicDiscoveryKv(platform) !== undefined &&
