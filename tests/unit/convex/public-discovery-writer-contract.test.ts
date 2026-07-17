@@ -722,6 +722,8 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:commitPublicDiscoveryRelationsPublication:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:completePublicDiscoveryCoordinatedRebuild:unresolved-patch-target:manifest._id':
+		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:invalidatePublicDiscoveryAfterDestructiveSourceChange:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:invalidatePublicDiscoveryForCoordinatedRebuild:unresolved-patch-target:manifest._id':
@@ -836,6 +838,54 @@ describe('public-discovery source writer contract', () => {
 		expect(boundary!.body.indexOf('getPublicDiscoveryManifestRow(ctx)')).toBeLessThan(
 			boundary!.body.indexOf('planListRefresh')
 		);
+		expect(boundary!.body).toMatch(/coordinatedRebuildToken[\s\S]*COORDINATED_REBUILD_LOCKED/);
+		expect(boundary!.body.indexOf('coordinatedRebuildToken')).toBeLessThan(
+			boundary!.body.indexOf('planListRefresh')
+		);
+	});
+
+	it('keeps the coordinated lock private and represented honestly in schema', () => {
+		const schemaSource = source('schema.ts');
+		const manifestSchema = schemaSource.slice(
+			schemaSource.indexOf('publicDiscoveryManifest: defineTable'),
+			schemaSource.indexOf(".index('by_key'", schemaSource.indexOf('publicDiscoveryManifest: defineTable'))
+		);
+		expect(manifestSchema).toMatch(/coordinatedRebuildToken:\s*v\.optional\(v\.string\(\)\)/);
+		expect(manifestSchema).toMatch(/coordinatedRebuildStartedAt:\s*v\.optional\(v\.number\(\)\)/);
+
+		const discoverySource = source('lib/publicDiscovery.ts');
+		const publicProjection = discoverySource.slice(
+			discoverySource.indexOf('export function toPublicDiscoveryManifestPayload'),
+			discoverySource.indexOf('export async function getPublicDiscoveryManifestRow')
+		);
+		expect(publicProjection).not.toMatch(/coordinatedRebuildToken|coordinatedRebuildStartedAt/);
+	});
+
+	it('authorizes both sides of publication and releases only a complete composite', () => {
+		for (const key of [
+			'lib/publicDiscovery.ts:preparePublicDiscoveryListPublication',
+			'lib/publicDiscovery.ts:commitPublicDiscoveryListPublication',
+			'lib/publicDiscovery.ts:preparePublicDiscoveryRelationsPublication',
+			'lib/publicDiscovery.ts:commitPublicDiscoveryRelationsPublication'
+		]) {
+			expect(boundaryByKey.get(key)!.body).toMatch(
+				/assertPublicDiscoveryPublicationAuthorized/
+			);
+		}
+
+		const complete = boundaryByKey.get(
+			'lib/publicDiscovery.ts:completePublicDiscoveryCoordinatedRebuild'
+		)!.body;
+		expect(complete).toMatch(/!manifest\.listReady\s*\|\|\s*!manifest\.relationsReady/);
+		expect(complete.indexOf('!manifest.listReady')).toBeLessThan(complete.indexOf('ctx.db.patch'));
+
+		const composite = boundaryByKey.get('templates.ts:rebuildHomepageSnapshotsImpl')!.body;
+		expect(composite.indexOf('publishPublicTemplateSnapshotPlan')).toBeLessThan(
+			composite.indexOf('publishRelationSnapshotRebuild')
+		);
+		expect(composite.indexOf('publishRelationSnapshotRebuild')).toBeLessThan(
+			composite.indexOf('completePublicDiscoveryCoordinatedRebuild')
+		);
 	});
 
 	it('pins newest-first source membership required by the no-drop OCC proof', () => {
@@ -904,6 +954,85 @@ describe('public-discovery source writer contract', () => {
 		expect(clearTable).toMatch(/invalidatePublicDiscoveryAfterDestructiveSourceChange\s*\(/);
 		expect(clearTable).toMatch(/!suppressDiscoveryRefresh/);
 		expect(clearTable).not.toMatch(/publicTemplateSnapshots|templateRelationSnapshots/);
+		const seedSource = source('seed.ts');
+		const seedTables = seedSource.slice(
+			seedSource.indexOf('const SEED_TABLES = ['),
+			seedSource.indexOf('] as const;', seedSource.indexOf('const SEED_TABLES = ['))
+		);
+		expect(seedTables).not.toMatch(
+			/publicDiscoveryManifest|publicTemplateSnapshots|templateRelationSnapshots/
+		);
+	});
+
+	it('requires the active owner token before every suppressed seed write', () => {
+		for (const key of [
+			'seed.ts:clearTable',
+			'seed.ts:insertTemplates',
+			'seed.ts:insertTemplatesPublic',
+			'seed.ts:insertDebates'
+		]) {
+			const body = boundaryByKey.get(key)!.body;
+			expect(body).toMatch(/suppressDiscoveryRefresh[\s\S]*assertPublicDiscoveryCoordinatedRebuildAuthorized/);
+			const authorizationAt = body.indexOf('assertPublicDiscoveryCoordinatedRebuildAuthorized');
+			const firstWriteAt = Math.min(
+				...['ctx.db.insert', 'ctx.db.patch', 'ctx.db.delete']
+					.map((operation) => body.indexOf(operation))
+					.filter((position) => position >= 0)
+			);
+			expect(authorizationAt, `${key} must authorize before its first source write`).toBeGreaterThanOrEqual(0);
+			expect(authorizationAt, `${key} authorizes after a source write`).toBeLessThan(firstWriteAt);
+		}
+	});
+
+	it('pins clearSeed to one gated publication around suppressed table clears', () => {
+		const clearSeed = boundaryByKey.get('seed.ts:clearSeed')!.body;
+		const invalidateAt = clearSeed.indexOf('beginCoordinatedPublicDiscoveryRebuild');
+		const clearLoopAt = clearSeed.indexOf('for (const table of SEED_TABLES)');
+		const publishAt = clearSeed.indexOf('internal.templates.rebuildHomepageSnapshots');
+		expect(invalidateAt).toBeGreaterThanOrEqual(0);
+		expect(invalidateAt).toBeLessThan(clearLoopAt);
+		expect(clearLoopAt).toBeLessThan(publishAt);
+		expect(clearSeed).toMatch(/suppressDiscoveryRefresh:\s*true/);
+		expect(clearSeed).toMatch(/crypto\.randomUUID\(\)/);
+		expect(clearSeed).toMatch(/suppressDiscoveryRefresh:\s*true,\s*coordinatedRebuildToken/);
+		expect(clearSeed.indexOf('if (totalFailed > 0)')).toBeLessThan(publishAt);
+		expect(clearSeed).toMatch(/CLEAR_SEED_PARTIAL_FAILURE/);
+	});
+
+	it('threads one action-generated owner through every reseed suppression and final publish', () => {
+		const reseed = boundaryByKey.get('seed.ts:reseedTemplates')!.body;
+		expect(reseed).toMatch(/const coordinatedRebuildToken = crypto\.randomUUID\(\)/);
+		expect(reseed).toMatch(
+			/beginCoordinatedPublicDiscoveryRebuild[\s\S]*coordinatedRebuildToken/
+		);
+		const suppressions = reseed.match(/suppressDiscoveryRefresh:\s*true/g) ?? [];
+		const authorizedSuppressions =
+			reseed.match(/suppressDiscoveryRefresh:\s*true,\s*coordinatedRebuildToken/g) ?? [];
+		expect(suppressions.length).toBeGreaterThan(0);
+		expect(authorizedSuppressions).toHaveLength(suppressions.length);
+		expect(reseed).toMatch(/rebuildHomepageSnapshots[\s\S]*coordinatedRebuildToken/);
+		expect(reseed).toMatch(/if \(result\.failed > 0\)[\s\S]*RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE/);
+		expect(reseed.indexOf('RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE')).toBeLessThan(
+			reseed.indexOf('rebuildHomepageSnapshots')
+		);
+	});
+
+	it('allows stale lock takeover only through a fresh coordinated begin', () => {
+		const discoverySource = source('lib/publicDiscovery.ts');
+		expect(discoverySource).toMatch(
+			/export const PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS = \d+ \* 60 \* 1000/
+		);
+		const begin = boundaryByKey.get(
+			'lib/publicDiscovery.ts:invalidatePublicDiscoveryForCoordinatedRebuild'
+		)!.body;
+		expect(begin).toMatch(/coordinatedRebuildStartedAt/);
+		expect(begin).toMatch(/PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS/);
+		expect(begin).toMatch(/PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED/);
+		const destructive = boundaryByKey.get(
+			'lib/publicDiscovery.ts:invalidatePublicDiscoveryAfterDestructiveSourceChange'
+		)!.body;
+		expect(destructive).toMatch(/coordinatedRebuildToken[\s\S]*COORDINATED_REBUILD_LOCKED/);
+		expect(destructive).not.toMatch(/LOCK_TTL|coordinatedRebuildStartedAt/);
 	});
 
 	it('detects synthetic typed, helper, inserted, replaced, and dynamic unmarked writers', () => {

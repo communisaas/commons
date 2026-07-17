@@ -20,7 +20,10 @@ vi.mock('convex/browser', () => ({
 		query = mockConvexQuery;
 	}
 }));
-vi.mock('$lib/convex', () => ({ api, CONVEX_URL: 'https://static-convex.example' }));
+vi.mock('$lib/convex', () => ({
+	api,
+	CONVEX_URL: 'https://health-probe.convex.cloud'
+}));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: mockGetInternalSecret
 }));
@@ -84,6 +87,27 @@ describe('/api/health', () => {
 			atlas: { status: 'ok' },
 			publicDiscoveryCache: { status: 'ok', kvBound: true }
 		});
+	});
+
+	it.each([
+		['an off-domain host', 'https://attacker.example'],
+		['another Convex tenant', 'https://attacker-owned.convex.cloud'],
+		['plain HTTP', 'http://health-probe.convex.cloud'],
+		['embedded credentials', 'https://user:pass@health-probe.convex.cloud'],
+		['a non-root path', 'https://health-probe.convex.cloud/collect'],
+		['query parameters', 'https://health-probe.convex.cloud?target=attacker'],
+		['a URL fragment', 'https://health-probe.convex.cloud#attacker'],
+		['a non-standard port', 'https://health-probe.convex.cloud:444']
+	])('rejects %s before constructing a client or reading the secret', async (_label, convexUrl) => {
+		const response = await GET({
+			platform: { env: { ...HEALTH_ENV, PUBLIC_CONVEX_URL: convexUrl } }
+		} as never);
+
+		expect(response.status).toBe(503);
+		expect(mockConvexConstructor).not.toHaveBeenCalled();
+		expect(mockConvexQuery).not.toHaveBeenCalled();
+		expect(mockGetInternalSecret).not.toHaveBeenCalled();
+		await expect(response.json()).resolves.toMatchObject({ status: 'down', convex: false });
 	});
 
 	it('fails closed when the server-side internal secret is unavailable', async () => {

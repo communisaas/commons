@@ -34,6 +34,7 @@ type ProjectedPublicRelationsSnapshot = {
 	};
 };
 const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
+const MAX_PUBLIC_TEMPLATE_CARDS = 50;
 const MAX_PUBLIC_RELATION_EDGES = 10_000;
 const MAX_PUBLIC_CONCEPT_ENTRIES = 10_000;
 
@@ -284,6 +285,9 @@ function projectPublicTemplateCardsContract(
 ): PublicTemplateSnapshot['templates'] {
 	if (!Array.isArray(value)) {
 		throw new PublicDiscoverySnapshotContractError('templates-not-array');
+	}
+	if (value.length > MAX_PUBLIC_TEMPLATE_CARDS) {
+		throw new PublicDiscoverySnapshotContractError(`templates-over-cap:${value.length}`);
 	}
 	return value.map((template, index) => {
 		const projected = projectPublicTemplateCard(template, index);

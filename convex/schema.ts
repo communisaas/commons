@@ -3229,6 +3229,11 @@ export default defineSchema({
 		listRefreshScheduledAt: v.optional(v.number()),
 		relationsDirtyAt: v.optional(v.number()),
 		relationsRefreshScheduledAt: v.optional(v.number()),
+		// Multi-mutation clear/reseed lease. While present, source writers roll
+		// back and every rebuild path rejects unless it carries this exact token.
+		// The matching composite final publication clears both fields atomically.
+		coordinatedRebuildToken: v.optional(v.string()),
+		coordinatedRebuildStartedAt: v.optional(v.number()),
 		// Durable producer-failure evidence. Scheduled rebuilds retain last-good
 		// payloads, stamp the first-class failure state, and enqueue an alert action;
 		// a later successful publication clears the corresponding pair.

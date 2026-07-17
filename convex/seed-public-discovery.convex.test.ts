@@ -3,7 +3,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { convexTest } from 'convex-test';
 
-import { internal } from './_generated/api';
+import { api, internal } from './_generated/api';
+import { PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS } from './lib/publicDiscovery';
 import schema from './schema';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
@@ -215,6 +216,362 @@ describe('seed maintenance public-discovery safety', () => {
 					relationsFailureCode: 'PRESERVE_ME'
 				});
 				expect(await ctx.db.query('templateRelationSnapshots').collect()).toHaveLength(1);
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('clearSeed gates the old generation and publishes one coherent empty generation', async () => {
+		const t = convexTest({ schema, modules });
+		const oldTemplateId = await t.run(async (ctx) => {
+			return await ctx.db.insert('templates', {
+				slug: 'clear-seed-stale-template',
+				title: 'Clear seed stale template',
+				description: 'Must never survive the coordinated clear',
+				topics: [],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'none',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1
+			});
+		});
+		await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+
+		const oldManifest = await t.query(api.templates.publicDiscoveryManifest, {});
+		const oldList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: false });
+		expect(oldManifest.list).toMatchObject({ ready: true, revision: 1 });
+		expect(oldManifest.relations).toMatchObject({ ready: true, revision: 1 });
+		expect(oldList.templates).toHaveLength(1);
+		expect(String(oldList.templates[0].id)).toBe(String(oldTemplateId));
+
+		const preservedIds = await t.run(async (ctx) => {
+			const manifest = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			return {
+				manifest: String(manifest?._id),
+				list: (await ctx.db.query('publicTemplateSnapshots').collect())
+					.map((row) => String(row._id))
+					.sort(),
+				relations: (await ctx.db.query('templateRelationSnapshots').collect())
+					.map((row) => String(row._id))
+					.sort()
+			};
+		});
+
+		await t.action(internal.seed.clearSeed, {});
+
+		const [manifest, allList, excludeCwcList, allRelations, excludeCwcRelations] =
+			await Promise.all([
+				t.query(api.templates.publicDiscoveryManifest, {}),
+				t.query(api.templates.publicDiscoveryList, { excludeCwc: false }),
+				t.query(api.templates.publicDiscoveryList, { excludeCwc: true }),
+				t.query(api.templates.publicDiscoveryRelations, { excludeCwc: false }),
+				t.query(api.templates.publicDiscoveryRelations, { excludeCwc: true })
+			]);
+		expect(manifest.list).toMatchObject({ ready: true, revision: 2 });
+		expect(manifest.relations).toMatchObject({ ready: true, revision: 2 });
+		expect(allList).toMatchObject({ revision: 2, templates: [] });
+		expect(excludeCwcList).toMatchObject({ revision: 2, templates: [] });
+		expect(allRelations).toMatchObject({
+			revision: 2,
+			twinEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+		expect(excludeCwcRelations).toMatchObject({
+			revision: 2,
+			twinEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
+		});
+		expect(allList.updatedAt).toBe(manifest.list.updatedAt);
+		expect(excludeCwcList.updatedAt).toBe(manifest.list.updatedAt);
+		expect(allRelations.updatedAt).toBe(manifest.relations.updatedAt);
+		expect(excludeCwcRelations.updatedAt).toBe(manifest.relations.updatedAt);
+		await expect(t.query(api.templates.listPublic, { excludeCwc: false })).resolves.toEqual([]);
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('templates').collect()).toEqual([]);
+			const manifestRow = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			expect(manifestRow?.listDirtyAt).toBeUndefined();
+			expect(manifestRow?.relationsDirtyAt).toBeUndefined();
+			expect(manifestRow?.listRefreshScheduledAt).toBeUndefined();
+			expect(manifestRow?.relationsRefreshScheduledAt).toBeUndefined();
+			expect(manifestRow?.coordinatedRebuildToken).toBeUndefined();
+			expect(manifestRow?.coordinatedRebuildStartedAt).toBeUndefined();
+			expect(String(manifestRow?._id)).toBe(preservedIds.manifest);
+			expect(
+				(await ctx.db.query('publicTemplateSnapshots').collect())
+					.map((row) => String(row._id))
+					.sort()
+			).toEqual(preservedIds.list);
+			expect(
+				(await ctx.db.query('templateRelationSnapshots').collect())
+					.map((row) => String(row._id))
+					.sort()
+			).toEqual(preservedIds.relations);
+		});
+	});
+
+	it('serializes interleaved writers and rebuilds behind the coordinated token', async () => {
+		const t = convexTest({ schema, modules });
+		const templateId = await t.run(async (ctx) => {
+			return await ctx.db.insert('templates', {
+				slug: 'coordinated-lock-template',
+				title: 'Coordinated lock template',
+				description: 'Must roll back concurrent projection writes',
+				topics: [],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'none',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1
+			});
+		});
+		await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+		await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
+		await t.mutation(internal.templates.requestPublicTemplateRelationSnapshotRefresh, {});
+		const supersededTokens = await t.run(async (ctx) => {
+			const manifest = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			return {
+				list: manifest?.listRefreshScheduledAt,
+				relations: manifest?.relationsRefreshScheduledAt
+			};
+		});
+		expect(supersededTokens.list).toEqual(expect.any(Number));
+		expect(supersededTokens.relations).toEqual(expect.any(Number));
+
+		const coordinatedRebuildToken = 'coordinated-owner-token';
+		await expect(
+			t.mutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+				coordinatedRebuildToken
+			})
+		).resolves.toEqual({ coordinatedRebuildToken });
+		await expect(
+			t.mutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+				coordinatedRebuildToken: 'overlapping-owner-token'
+			})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+
+		await expect(
+			t.mutation(internal.templates.patchTagEmbeddings, {
+				templateId,
+				tagEmbeddings: [{ tag: 'locked', embedding: Array.from({ length: 768 }, () => 0) }]
+			})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+		await expect(t.mutation(internal.seed.clearTable, { table: 'templates' })).rejects.toThrow(
+			'PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED'
+		);
+		await expect(
+			t.mutation(internal.seed.clearTable, {
+				table: 'templates',
+				suppressDiscoveryRefresh: true
+			})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+		await expect(
+			t.mutation(internal.seed.clearTable, {
+				table: 'templates',
+				suppressDiscoveryRefresh: true,
+				coordinatedRebuildToken: 'wrong-owner-token'
+			})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+
+		await expect(t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {})).rejects.toThrow(
+			'PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED'
+		);
+		await expect(t.mutation(internal.templates.rebuildRelationSnapshot, {})).rejects.toThrow(
+			'PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED'
+		);
+		await expect(t.mutation(internal.templates.rebuildHomepageSnapshots, {})).rejects.toThrow(
+			'PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED'
+		);
+		await expect(
+			t.mutation(internal.templates.rebuildRelationSnapshotForCronAttempt, {})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+		const lockedAttempt = await t.query(internal.templates.publicDiscoveryCronAttemptState, {});
+		await expect(
+			t.mutation(internal.templates.recordPublicDiscoverySnapshotRuntimeFailure, {
+				failures: [{ family: 'list', code: 'MUST_NOT_STAMP_LOCKED_GENERATION' }],
+				failedAt: Date.now(),
+				attempt: lockedAttempt
+			})
+		).resolves.toEqual({ recorded: [] });
+		await expect(
+			t.mutation(internal.templates.recoverPublicDiscoveryScheduledRefreshFailure, {
+				family: 'list',
+				scheduledAt: supersededTokens.list!,
+				code: 'MUST_NOT_RECOVER_LOCKED_GENERATION',
+				failedAt: Date.now()
+			})
+		).resolves.toEqual({ recorded: [] });
+
+		await t.run(async (ctx) => {
+			const template = await ctx.db.get(templateId);
+			expect(template?.tagEmbeddings).toBeUndefined();
+			expect(template?.embeddingsUpdatedAt).toBeUndefined();
+			const manifest = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			expect(manifest).toMatchObject({
+				listReady: false,
+				relationsReady: false,
+				listRevision: 1,
+				relationsRevision: 1,
+				coordinatedRebuildToken,
+				coordinatedRebuildStartedAt: expect.any(Number)
+			});
+			expect(manifest?.listFailureAt).toBeUndefined();
+			expect(manifest?.relationsFailureAt).toBeUndefined();
+		});
+		// A coordinated rebuild freezes the public generation; legacy readers keep
+		// serving the preserved last-good rows, never the in-progress corpus.
+		const [publicManifestWhileLocked, lastGoodList] = await Promise.all([
+			t.query(api.templates.publicDiscoveryManifest, {}),
+			t.query(api.templates.listPublic, { excludeCwc: false })
+		]);
+		expect(publicManifestWhileLocked).toEqual({
+			list: { ready: false, revision: 1, updatedAt: expect.any(Number) },
+			relations: { ready: false, revision: 1, updatedAt: expect.any(Number) }
+		});
+		expect('coordinatedRebuildToken' in publicManifestWhileLocked).toBe(false);
+		expect(lastGoodList).toHaveLength(1);
+		expect(String(lastGoodList[0].id)).toBe(String(templateId));
+
+		await expect(
+			t.mutation(internal.seed.clearTable, {
+				table: 'templates',
+				suppressDiscoveryRefresh: true,
+				coordinatedRebuildToken
+			})
+		).resolves.toEqual({ deleted: 1, failed: 0 });
+		await expect(
+			t.mutation(internal.templates.rebuildHomepageSnapshots, {
+				coordinatedRebuildToken: 'wrong-owner-token'
+			})
+		).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+		await t.mutation(internal.templates.rebuildHomepageSnapshots, {
+			coordinatedRebuildToken
+		});
+		await expect(
+			t.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: supersededTokens.list!
+			})
+		).resolves.toEqual({ status: 'superseded' });
+		await expect(
+			t.mutation(internal.templates.flushScheduledPublicTemplateRelationsRefresh, {
+				scheduledAt: supersededTokens.relations!
+			})
+		).resolves.toEqual({ status: 'superseded' });
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.get(templateId)).toBeNull();
+			const manifest = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique();
+			expect(manifest).toMatchObject({
+				listReady: true,
+				relationsReady: true,
+				listRevision: 2,
+				relationsRevision: 2
+			});
+			expect(manifest?.coordinatedRebuildToken).toBeUndefined();
+			expect(manifest?.coordinatedRebuildStartedAt).toBeUndefined();
+			expect(manifest?.listDirtyAt).toBeUndefined();
+			expect(manifest?.relationsDirtyAt).toBeUndefined();
+		});
+	});
+
+	it('permits only a new begin to take over a stale coordinated lock', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-18T02:00:00.000Z'));
+		try {
+			const t = convexTest({ schema, modules });
+			const previousToken = 'stale-owner-token';
+			const replacementToken = 'replacement-owner-token';
+			await t.mutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+				coordinatedRebuildToken: previousToken
+			});
+
+			vi.advanceTimersByTime(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS + 1);
+			await expect(
+				t.mutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+					coordinatedRebuildToken: replacementToken
+				})
+			).resolves.toEqual({ coordinatedRebuildToken: replacementToken });
+
+			await expect(
+				t.mutation(internal.seed.clearTable, {
+					table: 'templates',
+					suppressDiscoveryRefresh: true,
+					coordinatedRebuildToken: previousToken
+				})
+			).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+			await expect(
+				t.mutation(internal.templates.rebuildHomepageSnapshots, {
+					coordinatedRebuildToken: previousToken
+				})
+			).rejects.toThrow('PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED');
+
+			await t.run(async (ctx) => {
+				const manifest = await ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique();
+				expect(manifest).toMatchObject({
+					listReady: false,
+					relationsReady: false,
+					coordinatedRebuildToken: replacementToken,
+					coordinatedRebuildStartedAt: Date.now()
+				});
+			});
+
+			await t.mutation(internal.templates.rebuildHomepageSnapshots, {
+				coordinatedRebuildToken: replacementToken
+			});
+			await t.run(async (ctx) => {
+				const manifest = await ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique();
+				expect(manifest).toMatchObject({
+					listReady: true,
+					relationsReady: true,
+					listRevision: 1,
+					relationsRevision: 1
+				});
+				expect(manifest?.coordinatedRebuildToken).toBeUndefined();
 			});
 		} finally {
 			vi.useRealTimers();

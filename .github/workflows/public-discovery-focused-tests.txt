@@ -3,6 +3,7 @@
 convex/templates-read-budget.convex.test.ts
 convex/templates-snapshots.convex.test.ts
 convex/templates-embedding-backfill.convex.test.ts
+convex/seed-public-discovery.convex.test.ts
 convex/observability-service-ping.convex.test.ts
 convex/lib/relatedness.test.ts
 convex/lib/tag_concepts.test.ts

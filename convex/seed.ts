@@ -40,6 +40,7 @@ import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
 import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
 import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
 import {
+  assertPublicDiscoveryCoordinatedRebuildAuthorized,
   invalidatePublicDiscoveryAfterDestructiveSourceChange,
   invalidatePublicDiscoveryForCoordinatedRebuild,
   markPublicDiscoveryListAndRelationsDirty,
@@ -819,11 +820,15 @@ export const insertTemplates = internalMutation({
     userIds: v.array(v.id("users")),
     orgIds: v.array(v.id("organizations")),
     suppressDiscoveryRefresh: v.optional(v.boolean()),
+    coordinatedRebuildToken: v.optional(v.string()),
   },
   handler: async (
     ctx,
-    { userIds, orgIds, suppressDiscoveryRefresh },
+    { userIds, orgIds, suppressDiscoveryRefresh, coordinatedRebuildToken },
   ): Promise<Id<"templates">[]> => {
+    if (suppressDiscoveryRefresh) {
+      await assertPublicDiscoveryCoordinatedRebuildAuthorized(ctx, coordinatedRebuildToken);
+    }
     const now = Date.now();
     const ids: Id<"templates">[] = [];
 
@@ -905,8 +910,15 @@ export const insertTemplatesPublic = internalMutation({
   args: {
     userIds: v.array(v.id("users")),
     suppressDiscoveryRefresh: v.optional(v.boolean()),
+    coordinatedRebuildToken: v.optional(v.string()),
   },
-  handler: async (ctx, { userIds, suppressDiscoveryRefresh }): Promise<Id<"templates">[]> => {
+  handler: async (
+    ctx,
+    { userIds, suppressDiscoveryRefresh, coordinatedRebuildToken },
+  ): Promise<Id<"templates">[]> => {
+    if (suppressDiscoveryRefresh) {
+      await assertPublicDiscoveryCoordinatedRebuildAuthorized(ctx, coordinatedRebuildToken);
+    }
     const now = Date.now();
     const ids: Id<"templates">[] = [];
 
@@ -2153,8 +2165,15 @@ export const insertDebates = internalMutation({
   args: {
     templateIds: v.array(v.id("templates")),
     suppressDiscoveryRefresh: v.optional(v.boolean()),
+    coordinatedRebuildToken: v.optional(v.string()),
   },
-  handler: async (ctx, { templateIds, suppressDiscoveryRefresh }) => {
+  handler: async (
+    ctx,
+    { templateIds, suppressDiscoveryRefresh, coordinatedRebuildToken },
+  ) => {
+    if (suppressDiscoveryRefresh) {
+      await assertPublicDiscoveryCoordinatedRebuildAuthorized(ctx, coordinatedRebuildToken);
+    }
     const now = Date.now();
 
     // Generate deterministic 0x-prefixed 32-byte hex strings for seed
@@ -2778,11 +2797,11 @@ export const patchSeedRecord = internalMutation({
 // 17 tables that were silently skipped have been added in dependency order.
 const SEED_TABLES = [
   // Leaf tables (no dependents)
-  // Public-discovery control/read models must be removed before any source
-  // corpus table so a partial operator clear can never leave a ready stale page.
-  "embeddingBackfillLeases", "publicTemplateSnapshots",
-  "templateRelationSnapshots",
-  "publicDiscoveryManifest", "relatednessCalibration",
+  // Keep public-discovery snapshots + manifest outside this inventory. The
+  // coordinated lock leaves their last revision unready until the final
+  // token-authorized rebuild atomically replaces it. Deleting the lock row here
+  // would let a concurrent writer recreate it and publish a partial corpus.
+  "embeddingBackfillLeases", "relatednessCalibration",
   "delegationReviews", "delegatedActions", "delegationGrants",
   "scorecardSnapshots", "orgDmFollows", "orgBillWatches", "orgBillRelevances",
   "externalIds", "decisionMakers", "orgIssueDomains",
@@ -2841,13 +2860,21 @@ const SEED_TABLES = [
 export const clearSeed = internalAction({
   args: {},
   handler: async (ctx): Promise<{ tables: number; deleted: number; failedRows: number; failedTables: number }> => {
+    // Gate the old generation before the first per-table transaction. Every
+    // clear below suppresses its own refresh, and one final publication exposes
+    // only the stable post-clear corpus.
+    const coordinatedRebuildToken = crypto.randomUUID();
+    await ctx.runMutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+      coordinatedRebuildToken,
+    });
+
     let totalDeleted = 0;
     let totalFailed = 0;
     let failedTables = 0;
     for (const table of SEED_TABLES) {
       const result: { deleted: number; failed: number } = await ctx.runMutation(
         internal.seed.clearTable,
-        { table, suppressDiscoveryRefresh: true },
+        { table, suppressDiscoveryRefresh: true, coordinatedRebuildToken },
       );
       totalDeleted += result.deleted;
       totalFailed += result.failed;
@@ -2857,9 +2884,15 @@ export const clearSeed = internalAction({
       console.error(
         `[seed] Cleared ${totalDeleted} rows across ${SEED_TABLES.length} tables — ${failedTables} tables had partial failures (${totalFailed} rows). Inspect per-table logs above.`,
       );
-    } else {
-      console.log(`[seed] All ${totalDeleted} rows across ${SEED_TABLES.length} tables cleared.`);
+      throw new Error(
+        `CLEAR_SEED_PARTIAL_FAILURE:failedRows=${totalFailed}:failedTables=${failedTables}`,
+      );
     }
+
+    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {
+      coordinatedRebuildToken,
+    });
+    console.log(`[seed] All ${totalDeleted} rows across ${SEED_TABLES.length} tables cleared.`);
     return {
       tables: SEED_TABLES.length,
       deleted: totalDeleted,
@@ -2870,13 +2903,20 @@ export const clearSeed = internalAction({
 });
 
 export const clearTable = internalMutation({
-  args: { table: v.string(), suppressDiscoveryRefresh: v.optional(v.boolean()) },
+  args: {
+    table: v.string(),
+    suppressDiscoveryRefresh: v.optional(v.boolean()),
+    coordinatedRebuildToken: v.optional(v.string()),
+  },
   handler: async (
     ctx,
-    { table, suppressDiscoveryRefresh },
+    { table, suppressDiscoveryRefresh, coordinatedRebuildToken },
   ): Promise<{ deleted: number; failed: number }> => {
     if (!SEED_TABLES.includes(table as typeof SEED_TABLES[number])) {
       throw new Error(`CLEAR_TABLE_NOT_ALLOWED: ${table}`);
+    }
+    if (suppressDiscoveryRefresh) {
+      await assertPublicDiscoveryCoordinatedRebuildAuthorized(ctx, coordinatedRebuildToken);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -2921,14 +2961,19 @@ export const clearTable = internalMutation({
   },
 });
 
-/** Hide both families while reseedTemplates replaces their source corpus. */
-export const beginTemplateReseedDiscoveryRebuild = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    await invalidatePublicDiscoveryForCoordinatedRebuild(ctx, {
-      list: true,
-      relations: true,
-    });
+/** Hide both families while an action replaces or clears their source corpus. */
+export const beginCoordinatedPublicDiscoveryRebuild = internalMutation({
+  args: { coordinatedRebuildToken: v.string() },
+  handler: async (ctx, { coordinatedRebuildToken }) => {
+    await invalidatePublicDiscoveryForCoordinatedRebuild(
+      ctx,
+      {
+        list: true,
+        relations: true,
+      },
+      coordinatedRebuildToken,
+    );
+    return { coordinatedRebuildToken };
   },
 });
 
@@ -2941,58 +2986,46 @@ export const reseedTemplates = internalAction({
   handler: async (ctx) => {
     // Make the old generation unreadable once, then suppress every intermediate
     // clear/insert refresh. The final composite mutation is the only publisher.
-    await ctx.runMutation(internal.seed.beginTemplateReseedDiscoveryRebuild, {});
+    const coordinatedRebuildToken = crypto.randomUUID();
+    await ctx.runMutation(internal.seed.beginCoordinatedPublicDiscoveryRebuild, {
+      coordinatedRebuildToken,
+    });
+
+    const clearForReseed = async (table: typeof SEED_TABLES[number]): Promise<void> => {
+      const result: { deleted: number; failed: number } = await ctx.runMutation(
+        internal.seed.clearTable,
+        { table, suppressDiscoveryRefresh: true, coordinatedRebuildToken },
+      );
+      if (result.failed > 0) {
+        console.error(
+          `[reseedTemplates] ${table} clear failed for ${result.failed} row(s); coordinated lock retained.`,
+        );
+        throw new Error(
+          `RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE:table=${table}:failedRows=${result.failed}`,
+        );
+      }
+    };
 
     // 1. Delete debates + arguments + nullifiers. Order matches the
     // children-first invariant in SEED_TABLES — debateNullifiers
     // references debateArguments via argumentId (typed v.id() post-F18),
     // so clear nullifiers BEFORE arguments to avoid leaving dangling
     // refs if the clear is interrupted mid-action.
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "debateNullifiers",
-      suppressDiscoveryRefresh: true,
-    });
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "debateArguments",
-      suppressDiscoveryRefresh: true,
-    });
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "debates",
-      suppressDiscoveryRefresh: true,
-    });
+    await clearForReseed("debateNullifiers");
+    await clearForReseed("debateArguments");
+    await clearForReseed("debates");
     // 2. Delete campaigns + dependents
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "campaignDeliveries",
-      suppressDiscoveryRefresh: true,
-    });
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "campaignActions",
-      suppressDiscoveryRefresh: true,
-    });
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "campaigns",
-      suppressDiscoveryRefresh: true,
-    });
+    await clearForReseed("campaignDeliveries");
+    await clearForReseed("campaignActions");
+    await clearForReseed("campaigns");
     // 3. Delete position data
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "positionDeliveries",
-      suppressDiscoveryRefresh: true,
-    });
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "positionRegistrations",
-      suppressDiscoveryRefresh: true,
-    });
+    await clearForReseed("positionDeliveries");
+    await clearForReseed("positionRegistrations");
     // 4. Delete other tables that FK templates so the reinsert below
     // doesn't leave orphans pointing at the old template Ids.
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "templateEndorsements",
-      suppressDiscoveryRefresh: true,
-    });
+    await clearForReseed("templateEndorsements");
     // 5. Delete templates
-    await ctx.runMutation(internal.seed.clearTable, {
-      table: "templates",
-      suppressDiscoveryRefresh: true,
-    });
+    await clearForReseed("templates");
 
     // 5. Get existing user + org IDs to reassign templates
     const userIds = await ctx.runQuery(internal.seed.getSeedUserIds);
@@ -3001,7 +3034,9 @@ export const reseedTemplates = internalAction({
     if (userIds.length === 0) {
       // Empty is a valid generation. Publish it before returning so the
       // coordinated invalidation cannot remain cold indefinitely.
-      await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {});
+      await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {
+        coordinatedRebuildToken,
+      });
       console.log("[reseedTemplates] No seed users found — cannot reseed.");
       return;
     }
@@ -3013,11 +3048,13 @@ export const reseedTemplates = internalAction({
         userIds,
         orgIds,
         suppressDiscoveryRefresh: true,
+        coordinatedRebuildToken,
       });
     } else {
       templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, {
         userIds,
         suppressDiscoveryRefresh: true,
+        coordinatedRebuildToken,
       });
     }
 
@@ -3025,6 +3062,7 @@ export const reseedTemplates = internalAction({
     await ctx.runMutation(internal.seed.insertDebates, {
       templateIds,
       suppressDiscoveryRefresh: true,
+      coordinatedRebuildToken,
     });
 
     // 8. Reinsert campaigns (only if orgs exist)
@@ -3033,7 +3071,9 @@ export const reseedTemplates = internalAction({
     }
 
     // Publish once after every source table is stable.
-    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {});
+    await ctx.runMutation(internal.templates.rebuildHomepageSnapshots, {
+      coordinatedRebuildToken,
+    });
 
     console.log(`[reseedTemplates] Done: ${templateIds.length} templates, debates, campaigns reseeded.`);
   },

@@ -287,6 +287,33 @@ describe('public template snapshot queries', () => {
 		).toBe(false);
 	});
 
+	it('rejects more than 50 live cards before mapping any card into KV', async () => {
+		const context = contextWithKv();
+		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest({ ready: true, revision: 4, updatedAt: 400 });
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...listSnapshot(4, 400, 'unused'),
+					templates: [
+						null,
+						...Array.from({ length: 50 }, (_, index) => publicCard(`card-${index}`))
+					]
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicTemplates(context, false)).rejects.toThrow(
+			'PUBLIC_DISCOVERY_SNAPSHOT_CONTRACT:list:templates-over-cap:51'
+		);
+		expect(
+			kvPut.mock.calls.some(([key]) => String(key).includes('templates%3Aexclude-cwc%3D0'))
+		).toBe(false);
+	});
+
 	it('fails closed when the exclude-CWC producer leaks a congressional card', async () => {
 		const context = contextWithKv();
 		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);
@@ -364,6 +391,21 @@ describe('public template snapshot queries', () => {
 					message_body: { recipientEmail: 'private@example.test' }
 				}
 			]
+		);
+		clearPublicDiscoveryCache();
+		mockServerQuery.mockRejectedValue(new Error('manifest unavailable'));
+
+		await expect(getCachedPublicTemplates(context, true)).rejects.toThrow('manifest unavailable');
+		expect(kvList).toHaveBeenCalledOnce();
+	});
+
+	it('reprojects a serialized list LKG and refuses more than 50 cached cards', async () => {
+		const context = contextWithKv();
+		const kvList = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.list!);
+		await getCachedPublicData(
+			'templates:exclude-cwc=1',
+			{ ...context, revision: '4:400' },
+			async () => Array.from({ length: 51 }, (_, index) => publicCard(`cached-${index}`))
 		);
 		clearPublicDiscoveryCache();
 		mockServerQuery.mockRejectedValue(new Error('manifest unavailable'));

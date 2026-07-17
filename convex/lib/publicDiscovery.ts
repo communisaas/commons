@@ -4,6 +4,12 @@ import type { Doc, Id } from '../_generated/dataModel';
 import type { MutationCtx } from '../_generated/server';
 
 export const PUBLIC_DISCOVERY_MANIFEST_KEY = 'public' as const;
+export const PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED =
+	'PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED' as const;
+export const PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH =
+	'PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH' as const;
+/** Long enough for the seed actions, bounded so an interrupted action is retryable. */
+export const PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS = 30 * 60 * 1000;
 
 /**
  * Canonical inventory of source tables and the snapshot families they affect.
@@ -36,6 +42,12 @@ export const PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 type Manifest = Doc<'publicDiscoveryManifest'>;
+
+type PublicDiscoveryPublication = {
+	revision: number;
+	updatedAt: number;
+	coordinatedRebuildToken?: string;
+};
 
 type ScheduledListRefreshArgs = { scheduledAt: number; bypassMinInterval?: boolean };
 type ScheduledRelationsRefreshArgs = { scheduledAt: number; bypassMinInterval?: boolean };
@@ -101,21 +113,64 @@ function manifestInsertBase(): Omit<Manifest, '_id' | '_creationTime'> {
 	};
 }
 
+function assertPublicDiscoveryPublicationAuthorized(
+	manifest: Manifest | null,
+	coordinatedRebuildToken?: string
+): void {
+	const activeToken = manifest?.coordinatedRebuildToken;
+	if (activeToken === undefined) {
+		if (coordinatedRebuildToken !== undefined) {
+			throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH);
+		}
+		return;
+	}
+	if (coordinatedRebuildToken !== activeToken) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED);
+	}
+}
+
+/**
+ * Prove that a mutation suppressing ordinary refresh work belongs to the
+ * currently active coordinated rebuild. The manifest read is intentionally
+ * performed before the caller's first write: Convex OCC then prevents the
+ * lock from being acquired, replaced, or released around that source write.
+ */
+export async function assertPublicDiscoveryCoordinatedRebuildAuthorized(
+	ctx: MutationCtx,
+	coordinatedRebuildToken?: string
+): Promise<void> {
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	const activeToken = manifest?.coordinatedRebuildToken;
+	if (activeToken === undefined) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH);
+	}
+	if (coordinatedRebuildToken !== activeToken) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED);
+	}
+}
+
 /** Reserve (without publishing) the revision a list rebuild will own. */
 export async function preparePublicDiscoveryListPublication(
 	ctx: MutationCtx,
+	coordinatedRebuildToken?: string,
 	updatedAt = Date.now()
-): Promise<{ revision: number; updatedAt: number }> {
+): Promise<PublicDiscoveryPublication> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
-	return { revision: (manifest?.listRevision ?? 0) + 1, updatedAt };
+	assertPublicDiscoveryPublicationAuthorized(manifest, coordinatedRebuildToken);
+	return {
+		revision: (manifest?.listRevision ?? 0) + 1,
+		updatedAt,
+		...(coordinatedRebuildToken !== undefined ? { coordinatedRebuildToken } : {})
+	};
 }
 
 /** Mark a fully-written pair of list snapshots as the new public revision. */
 export async function commitPublicDiscoveryListPublication(
 	ctx: MutationCtx,
-	publication: { revision: number; updatedAt: number }
+	publication: PublicDiscoveryPublication
 ): Promise<void> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	assertPublicDiscoveryPublicationAuthorized(manifest, publication.coordinatedRebuildToken);
 	if (manifest) {
 		await ctx.db.patch(manifest._id, {
 			listReady: true,
@@ -139,18 +194,25 @@ export async function commitPublicDiscoveryListPublication(
 /** Reserve (without publishing) the revision a relation rebuild will own. */
 export async function preparePublicDiscoveryRelationsPublication(
 	ctx: MutationCtx,
+	coordinatedRebuildToken?: string,
 	updatedAt = Date.now()
-): Promise<{ revision: number; updatedAt: number }> {
+): Promise<PublicDiscoveryPublication> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
-	return { revision: (manifest?.relationsRevision ?? 0) + 1, updatedAt };
+	assertPublicDiscoveryPublicationAuthorized(manifest, coordinatedRebuildToken);
+	return {
+		revision: (manifest?.relationsRevision ?? 0) + 1,
+		updatedAt,
+		...(coordinatedRebuildToken !== undefined ? { coordinatedRebuildToken } : {})
+	};
 }
 
 /** Mark both fully-written relation variants as the new public revision. */
 export async function commitPublicDiscoveryRelationsPublication(
 	ctx: MutationCtx,
-	publication: { revision: number; updatedAt: number }
+	publication: PublicDiscoveryPublication
 ): Promise<void> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	assertPublicDiscoveryPublicationAuthorized(manifest, publication.coordinatedRebuildToken);
 	if (manifest) {
 		await ctx.db.patch(manifest._id, {
 			relationsReady: true,
@@ -221,6 +283,9 @@ export async function invalidatePublicDiscoveryAfterDestructiveSourceChange(
 	now = Date.now()
 ): Promise<{ scheduledAt: number }> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	if (manifest?.coordinatedRebuildToken !== undefined) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED);
+	}
 	const scheduledAt = uniqueImmediateRefreshToken(manifest, now);
 	const patch = {
 		...(families.list
@@ -264,10 +329,25 @@ export async function invalidatePublicDiscoveryAfterDestructiveSourceChange(
 export async function invalidatePublicDiscoveryForCoordinatedRebuild(
 	ctx: MutationCtx,
 	families: { list: boolean; relations: boolean },
+	coordinatedRebuildToken: string,
 	now = Date.now()
 ): Promise<void> {
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	if (manifest?.coordinatedRebuildToken !== undefined) {
+		const startedAt = manifest.coordinatedRebuildStartedAt;
+		if (
+			startedAt === undefined ||
+			now < startedAt + PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS
+		) {
+			throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED);
+		}
+	}
+	if (coordinatedRebuildToken.length === 0) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH);
+	}
 	const patch = {
+		coordinatedRebuildToken,
+		coordinatedRebuildStartedAt: now,
 		...(families.list
 			? {
 					listReady: false,
@@ -292,6 +372,26 @@ export async function invalidatePublicDiscoveryForCoordinatedRebuild(
 			...patch
 		});
 	}
+}
+
+/** Release a coordinated lock only after both families published successfully. */
+export async function completePublicDiscoveryCoordinatedRebuild(
+	ctx: MutationCtx,
+	coordinatedRebuildToken: string
+): Promise<void> {
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	if (!manifest || manifest.coordinatedRebuildToken !== coordinatedRebuildToken) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH);
+	}
+	if (!manifest.listReady || !manifest.relationsReady) {
+		throw new Error('PUBLIC_DISCOVERY_COORDINATED_REBUILD_INCOMPLETE');
+	}
+	await ctx.db.patch(manifest._id, {
+		coordinatedRebuildToken: undefined,
+		coordinatedRebuildStartedAt: undefined,
+		listRefreshScheduledAt: undefined,
+		relationsRefreshScheduledAt: undefined
+	});
 }
 
 type PublicDiscoveryRefreshPatch = {
@@ -363,6 +463,12 @@ async function markPublicDiscoveryFamiliesDirty(
 	// `_creationTime` order. A score/reach sort could promote an unread row into
 	// the top 50 and would invalidate the range-read OCC proof below.
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	// Every projection writer calls this helper before its mutation commits. A
+	// throw therefore rolls back the source write instead of letting it escape a
+	// coordinated clear/reseed and race the token-authorized final publication.
+	if (manifest?.coordinatedRebuildToken !== undefined) {
+		throw new Error(PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED);
+	}
 	const listPlan = families.list ? planListRefresh(manifest, now) : undefined;
 	const relationsPlan = families.relations ? planRelationsRefresh(manifest, now) : undefined;
 	const patch = {

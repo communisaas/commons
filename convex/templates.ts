@@ -21,9 +21,12 @@ import {
   validateTemplateInputBudgets,
 } from "./lib/templateInputBudget";
 import {
+  PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED,
+  PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH,
   PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
   PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
   PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
+  completePublicDiscoveryCoordinatedRebuild,
   commitPublicDiscoveryListPublication,
   commitPublicDiscoveryRelationsPublication,
   getPublicDiscoveryManifestRow,
@@ -443,6 +446,11 @@ async function freezePublicDiscoverySnapshotFailure(
   expectedScheduledAt?: number | null,
 ): Promise<void> {
   let manifest = await getPublicDiscoveryManifestRow(ctx);
+  if (manifest?.coordinatedRebuildToken !== undefined) {
+    // A cron/operator attempt without the owning token must not translate the
+    // lock rejection into failure metadata or clear coordinated dirty state.
+    throw error;
+  }
   if (!manifest) {
     // A first-ever cron can fail before a manifest exists. Create the tiny
     // dirty control row through the normal scheduler path. An in-transaction
@@ -493,6 +501,9 @@ export const recordPublicDiscoverySnapshotRuntimeFailure = internalMutation({
   },
   handler: async (ctx, args) => {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (manifest?.coordinatedRebuildToken !== undefined) {
+      return { recorded: [] as Array<"list" | "relations"> };
+    }
     const sameManifest = (manifest?._id ?? null) === args.attempt.manifestId;
     const eligible = sameManifest
       ? args.failures.filter(({ family }, index, failures) => {
@@ -597,6 +608,9 @@ export const recoverPublicDiscoveryScheduledRefreshFailure = internalMutation({
   handler: async (ctx, args) => {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
     if (!manifest) return { recorded: [] as Array<"list" | "relations"> };
+    if (manifest.coordinatedRebuildToken !== undefined) {
+      return { recorded: [] as Array<"list" | "relations"> };
+    }
 
     const recorded: Array<"list" | "relations"> = [];
     if (args.family === "list" && manifest.listRefreshScheduledAt === args.scheduledAt) {
@@ -1329,7 +1343,11 @@ type PublicTemplateSnapshotRebuildResult = {
   excludeCwcSnapshotBytes: number;
 };
 
-type PublicDiscoveryPublication = { revision: number; updatedAt: number };
+type PublicDiscoveryPublication = {
+  revision: number;
+  updatedAt: number;
+  coordinatedRebuildToken?: string;
+};
 
 type PublicTemplateSnapshotRow = {
   key: PublicTemplateSnapshotKey;
@@ -2211,6 +2229,13 @@ function normalizeRelationSnapshotError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+function isPublicDiscoveryCoordinationError(error: Error): boolean {
+  return (
+    error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED ||
+    error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH
+  );
+}
+
 function classifyRelationSnapshotFreeze(error: Error): "oversize" | "invalid" | "failed" {
   if (error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) return "oversize";
   const listStatus = classifyPublicTemplateSnapshotFreeze(error);
@@ -2300,11 +2325,15 @@ async function preparePublishedPublicTemplateRelationSelection(
 async function prepareRelationSnapshotRebuild(
   ctx: MutationCtx,
   selection?: PublicTemplateRelationSelection,
+  coordinatedRebuildToken?: string,
 ): Promise<PreparedRelationSnapshotRebuild> {
   // Reserve without advancing either manifest revision. A relation-only rebuild
   // hydrates the exact IDs in the currently published list generation; the
   // composite rebuild supplies its already-computed plan.
-  const publication = await preparePublicDiscoveryRelationsPublication(ctx);
+  const publication = await preparePublicDiscoveryRelationsPublication(
+    ctx,
+    coordinatedRebuildToken,
+  );
   const existingRows = {
     all: await ctx.db
       .query("templateRelationSnapshots")
@@ -2408,6 +2437,7 @@ export const rebuildRelationSnapshotForCronAttempt = internalMutation({
       prepared = await prepareRelationSnapshotRebuild(ctx);
     } catch (error) {
       const normalized = normalizeRelationSnapshotError(error);
+      if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
       const status = classifyRelationSnapshotFreeze(normalized);
       await freezePublicDiscoverySnapshotFailure(
         ctx,
@@ -2506,6 +2536,7 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
       prepared = await prepareRelationSnapshotRebuild(ctx);
     } catch (error) {
       const normalized = normalizeRelationSnapshotError(error);
+      if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
       const status = classifyRelationSnapshotFreeze(normalized);
       await freezePublicDiscoverySnapshotFailure(ctx, "relations", normalized, now);
       return { status };
@@ -2527,10 +2558,18 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
 
 async function rebuildHomepageSnapshotsImpl(
   ctx: MutationCtx,
+  coordinatedRebuildToken?: string,
 ): Promise<HomepageSnapshotRebuildResult> {
-  const listPublication = await preparePublicDiscoveryListPublication(ctx);
+  const listPublication = await preparePublicDiscoveryListPublication(
+    ctx,
+    coordinatedRebuildToken,
+  );
   const selection = await preparePublicTemplateSnapshotPlan(ctx, listPublication);
-  const preparedRelations = await prepareRelationSnapshotRebuild(ctx, selection);
+  const preparedRelations = await prepareRelationSnapshotRebuild(
+    ctx,
+    selection,
+    coordinatedRebuildToken,
+  );
 
   // Finish both pure preparations before the first row write. The relation
   // graph therefore consumes the exact cards the list publishes, and a guard
@@ -2541,6 +2580,9 @@ async function rebuildHomepageSnapshotsImpl(
     selection,
   );
   const relations = await publishRelationSnapshotRebuild(ctx, preparedRelations);
+  if (coordinatedRebuildToken !== undefined) {
+    await completePublicDiscoveryCoordinatedRebuild(ctx, coordinatedRebuildToken);
+  }
   return { list, relations };
 }
 
@@ -2550,8 +2592,9 @@ async function rebuildHomepageSnapshotsImpl(
  * observe a freshly rebuilt list paired with relations from a failed rebuild.
  */
 export const rebuildHomepageSnapshots = internalMutation({
-  args: {},
-  handler: rebuildHomepageSnapshotsImpl,
+  args: { coordinatedRebuildToken: v.optional(v.string()) },
+  handler: async (ctx, args) =>
+    await rebuildHomepageSnapshotsImpl(ctx, args.coordinatedRebuildToken),
 });
 
 /** One atomic list+relations attempt used by the consolidated daily cron. */

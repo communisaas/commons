@@ -284,8 +284,10 @@ async function readLatestKvRevision<T>(
 	const prefix = kvRevisionPrefix(kvKey);
 	const list = kv.list?.bind(kv);
 	if (!list) {
-		const legacy = await readKv<T>(kvKey, platform, projectCachedValue);
-		return { envelope: legacy, source: legacy ? 'legacy' : 'none', status: 'error' };
+		// Without a complete revision listing, the mutable rollout-era key cannot
+		// certify the globally newest value. Callers may retain only an independently
+		// local memory/Cache API LKG.
+		return { envelope: null, source: 'none', status: 'error' };
 	}
 	try {
 		// Never follow a cursor here: an outage request may spend one bounded list
@@ -330,8 +332,9 @@ async function readLatestKvRevision<T>(
 			'[public-discovery-cache] KV revision listing failed:',
 			error instanceof Error ? error.message : String(error)
 		);
-		const legacy = await readKv<T>(kvKey, platform, projectCachedValue);
-		return { envelope: legacy, source: legacy ? 'legacy' : 'none', status: 'error' };
+		// A failed listing cannot safely select the shared legacy key. Preserve only
+		// a memory/Cache API LKG that was obtained independently of this KV check.
+		return { envelope: null, source: 'none', status: 'error' };
 	}
 }
 

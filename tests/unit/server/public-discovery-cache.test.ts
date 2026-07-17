@@ -1246,6 +1246,83 @@ describe('public discovery cache', () => {
 		);
 	});
 
+	it('does not read or serve the global legacy key when KV revision listing is unavailable', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+
+		await getCachedPublicData('templates', { url: TEST_URL, platform }, async () => [
+			'legacy-global'
+		]);
+		clearPublicDiscoveryCache();
+		const readsBeforeRecovery = kv.get.mock.calls.length;
+		const listlessKv = {
+			get: kv.get,
+			put: kv.put,
+			delete: kv.delete
+		} as unknown as KVNamespace;
+
+		await expect(
+			getCachedPublicDataLastKnownGood<string[]>('templates', {
+				url: TEST_URL,
+				platform: platformWithKv(listlessKv)
+			})
+		).resolves.toBeUndefined();
+
+		expect(kv.list).not.toHaveBeenCalled();
+		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
+	});
+
+	it('does not read or serve the global legacy key when KV revision listing throws', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await getCachedPublicData('templates', { url: TEST_URL, platform }, async () => [
+			'legacy-global'
+		]);
+		clearPublicDiscoveryCache();
+		const readsBeforeRecovery = kv.get.mock.calls.length;
+		kv.list.mockRejectedValueOnce(new Error('KV list unavailable'));
+
+		await expect(
+			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
+		).resolves.toBeUndefined();
+
+		expect(kv.list).toHaveBeenCalledOnce();
+		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
+		expect(warn).toHaveBeenCalledWith(
+			'[public-discovery-cache] KV revision listing failed:',
+			'KV list unavailable'
+		);
+	});
+
+	it('retains an independently edge-local LKG when KV revision listing throws', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		installEdgeCache();
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await getCachedPublicData(
+			'templates',
+			{ url: TEST_URL, platform, revision: '1:100' },
+			async () => ['edge-known-good']
+		);
+		clearPublicDiscoveryCache();
+		const readsBeforeRecovery = kv.get.mock.calls.length;
+		kv.list.mockRejectedValueOnce(new Error('KV list unavailable'));
+
+		await expect(
+			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
+		).resolves.toEqual(['edge-known-good']);
+
+		expect(kv.list).toHaveBeenCalledOnce();
+		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
+		expect(warn).toHaveBeenCalledWith(
+			'[public-discovery-cache] KV revision listing failed:',
+			'KV list unavailable'
+		);
+	});
+
 	it('does not certify a failed KV check and shares its daily retry backoff', async () => {
 		const kv = installKv();
 		const platform = platformWithKv(kv);

@@ -15,6 +15,43 @@ type HealthEnv = {
 	PUBLIC_DISCOVERY_KV?: KVNamespace;
 };
 
+/**
+ * Validate the secret-bearing Convex destination against both the hosted
+ * deployment shape and the build-pinned public URL. The Convex SDK accepts any
+ * syntactically valid HTTP(S) URL, so its constructor check is not an egress
+ * boundary for INTERNAL_API_SECRET.
+ */
+function pinnedConvexHealthOrigin(env: HealthEnv | undefined): string {
+	const parseHostedOrigin = (value: string): URL => {
+		let parsed: URL;
+		try {
+			parsed = new URL(value);
+		} catch {
+			throw new Error('Invalid Convex health URL');
+		}
+		if (
+			parsed.protocol !== 'https:' ||
+			!parsed.hostname.endsWith('.convex.cloud') ||
+			parsed.port !== '' ||
+			parsed.username !== '' ||
+			parsed.password !== '' ||
+			parsed.pathname !== '/' ||
+			parsed.search !== '' ||
+			parsed.hash !== ''
+		) {
+			throw new Error('Invalid Convex health URL');
+		}
+		return parsed;
+	};
+
+	const pinned = parseHostedOrigin(CONVEX_URL);
+	const effective = parseHostedOrigin(env?.PUBLIC_CONVEX_URL || CONVEX_URL);
+	if (effective.origin !== pinned.origin) {
+		throw new Error('Convex health URL does not match the build-pinned deployment');
+	}
+	return effective.origin;
+}
+
 export const GET: RequestHandler = async ({ platform }) => {
 	const env = platform?.env as HealthEnv | undefined;
 	const [atlas, convex] = await Promise.all([checkAtlas(env), checkConvex(env)]);
@@ -56,7 +93,11 @@ async function checkConvex(env: HealthEnv | undefined): Promise<boolean> {
 		// exposing failure or refresh timing to anonymous Convex callers. Use a
 		// request-local HTTP client so the deadline aborts the underlying fetch
 		// rather than merely abandoning an unbounded serverQuery promise.
-		const client = new ConvexHttpClient(env?.PUBLIC_CONVEX_URL || CONVEX_URL, {
+		// Resolve and pin the destination before constructing a client or reading
+		// the shared secret. A mutable public env var must never become a secret
+		// exfiltration target, including another tenant's valid Convex deployment.
+		const convexOrigin = pinnedConvexHealthOrigin(env);
+		const client = new ConvexHttpClient(convexOrigin, {
 			logger: false,
 			fetch: (input, init) => fetch(input, { ...init, signal: controller.signal })
 		});
