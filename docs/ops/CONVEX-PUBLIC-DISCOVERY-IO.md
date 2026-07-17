@@ -20,16 +20,22 @@ The root URL is also the wrong health target: its graceful query fallbacks can
 still produce HTTP 200 while Convex is disabled. Disable that monitor during
 recovery, then use `/api/live` for one-minute process liveness and
 `/api/health` for five-minute dependency/readiness monitoring. `/api/live`
-performs no external I/O. The health endpoint calls the
-`observability.servicePing` query, which tests both function execution and an
-indexed read of the tiny discovery-manifest singleton without hydrating an
-embedding-bearing row. It also returns `discoveryProducerHealthy:false` while a
-snapshot family is cold, structurally orphaned, or retaining durable failure
-evidence after a frozen or deliberately degraded publication. Its deterministic `discoveryProducerOverdueAt`
-coordinate lets `/api/health` detect a dirty refresh more than 15 minutes past
-its token without putting `Date.now()` in the cacheable Convex query.
+performs no external I/O. The health endpoint calls the server-only,
+`_secret`-gated `observability.discoveryProducerStatus` query, which tests both
+function execution and an indexed read of the tiny discovery-manifest singleton
+without hydrating an embedding-bearing row. It returns
+`discoveryProducerHealthy:false` to the server while a snapshot family is cold,
+structurally orphaned, or retaining durable failure evidence after a frozen or
+deliberately degraded publication. Its deterministic
+`discoveryProducerOverdueAt` coordinate lets `/api/health` detect a dirty
+refresh more than 15 minutes past its token without putting `Date.now()` in the
+cacheable Convex query. Anonymous `observability.servicePing` calls expose only
+generic liveness and storage-readability booleans.
 `/api/health` returns 503 when that producer signal is overdue, Convex is
-unavailable, or a pinned Atlas dependency is unhealthy.
+unavailable, or a pinned Atlas dependency is unhealthy. A missing
+`PUBLIC_DISCOVERY_KV` binding is reported as a degraded cache sub-check while
+core health remains available; the deploy workflow independently requires the
+committed live namespace and runtime binding before accepting a release.
 
 ## Corrected read path
 
@@ -104,9 +110,14 @@ The cache owns five logical families: the manifest, two list variants, and two
 combined-relation variants. Cache API stores origin-local immutable generation
 entries plus a last-known-good pointer. KV keeps immutable revision-qualified
 payload entries scoped by both request origin and Convex backend. Preview,
-staging, and production therefore cannot contaminate one another even when they
-share the zero-cost namespace and backend. On recovery, the highest logical
-revision wins even if an older request finishes later in another Worker isolate.
+staging, and production therefore cannot overwrite one another's payloads even
+when they share the same namespace and backend. They are not capacity
+isolated: traffic in any environment consumes the same account-wide Workers KV
+operation and storage allowance and can degrade the others. A separate namespace
+in the same account would improve operational isolation without creating a new
+Free quota pool; an independent capacity boundary is an account/plan decision,
+not a repository-only change. On recovery, the highest logical revision wins
+even if an older request finishes later in another Worker isolate.
 Query strings do not create keys, so random-parameter traffic cannot force
 Convex payload misses. Cache API is the request hot path; Workers KV is the
 cross-location shield, and writes occur only after a successful load or healthy
@@ -120,14 +131,27 @@ explicit directive; enabling it across personalized routes would be a privacy
 regression. The safe future shape is a separately audited public entrypoint or a
 route-scoped cache rule. Until then, `Cloudflare-CDN-Cache-Control` is policy for
 an optional front cache, while the explicit `caches.default` + KV state machine
-is the deployed zero-cost data shield. See Cloudflare's
+is the deployed Free-plan data shield within the account ceilings below. It is
+not a promise of unlimited traffic or permanently zero cost. See Cloudflare's
 [Workers caching configuration](https://developers.cloudflare.com/workers/cache/configuration/).
 
+[Cloudflare's Workers Free limits](https://developers.cloudflare.com/workers/platform/limits/#worker-limits)
+cap Worker requests at 100,000 per day per account, resetting at 00:00 UTC.
+[Pages Functions requests count as Workers requests](https://developers.cloudflare.com/pages/functions/pricing/),
+and a dynamic SvelteKit request invokes this Worker before the application can
+reach its local Cache API hit. The cache therefore protects Convex and KV
+operations but cannot make dynamic landing-page or API requests exempt from the
+Worker request ceiling. Treat that ceiling as an attack and traffic boundary:
+monitor account usage and introduce rate controls, a separately audited
+static/public entrypoint, or a paid plan before approaching it. If it is
+exhausted, requests can fail before this cache state machine runs.
+
 [Cloudflare's published Workers KV Free allowance](https://developers.cloudflare.com/kv/platform/pricing/)
-is 100,000 reads/day, 1,000 writes/day, 1,000 lists/day, and 1 GB. The small
+is 100,000 reads/day, 1,000 writes/day, 1,000 lists/day, and 1 GB per account,
+shared across its namespaces. The small
 bounded set of live eight-day generations is comfortably inside that envelope
-at current traffic, but the allowance is shared with this account's other KV
-namespaces and must be monitored. Recovery checks memory and the free local
+at current traffic, but every environment and KV consumer in the account draws
+from that allowance and must be monitored. Recovery checks memory and the free local
 Cache API before spending a list operation to discover the newest
 revision-isolated KV generation. During a sustained manifest outage, each hot
 payload family and Cache API location rechecks its pointer once per day in
@@ -208,8 +232,12 @@ cold state. The scoped execution graph is
    ```sh
    npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
    npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
-   npx convex run observability:servicePing '{}' --env-file .env.production
+   npm run verify:public-discovery-readiness
    ```
+
+   Run the verifier with `PUBLIC_CONVEX_URL` and `INTERNAL_API_SECRET` already
+   loaded into its process environment. Do not place the secret in command
+   arguments or logs.
 
    The rebuild must report list `sourceCap: 250`, relation `sourceScanCap: 250`,
    and `sourceCap: 50` for each relation variant, with nonzero source/list counts
@@ -221,10 +249,10 @@ cold state. The scoped execution graph is
    timestamps must match the manifest. Relation size or unknown compute failures
    are atomic and leave the prior committed snapshots unchanged. A list-card
    exclusion instead publishes the healthy remainder and is not release-ready:
-   `servicePing.discoveryProducerHealthy` remains false until the offending
-   source is repaired and a clean revision publishes.
-   `servicePing.discoveryProducerHealthy` must be true. If it is false, inspect
-   the durable family and size code with:
+   The gated readiness verifier remains failed until the offending source is
+   repaired and a clean revision publishes. It must succeed before release. If
+   it reports unhealthy producer state, inspect the durable family and size code
+   with:
 
    ```sh
    npx convex run templates:publicDiscoveryFailureStatus '{}' --env-file .env.production
@@ -272,9 +300,10 @@ cold state. The scoped execution graph is
    Manual dispatch cannot bypass source provenance, branch ancestry, focused and
    full checks, type checks, or producer readiness. Every Pages branch runs
    `scripts/verify-public-discovery-readiness.mjs` against its configured Convex
-   backend before upload. It reads `observability:servicePing` after the public
-   payloads and rejects durable producer failure, unreadable storage, a missing
-   manifest, or a producer overdue time that has already elapsed. Production
+   backend before upload. It reads the `_secret`-gated
+   `observability:discoveryProducerStatus` query after the public payloads and
+   rejects durable producer failure, unreadable storage, a missing manifest, or
+   a producer overdue time that has already elapsed. Production
    additionally requires a non-empty corpus and timestamps no more than 26 hours
    old; non-production still requires producer health plus ready,
    revision-matched v4/redacted payloads but permits an empty or stale fixture
@@ -443,7 +472,7 @@ revision advancement alone: publish
 the removal, cut the cache namespace (or delete all matching KV generation keys),
 purge Cache API/CDN state, warm the replacement variants, and verify the removed
 content is absent. Shortening every healthy lease would increase Convex origin
-traffic and weaken outage recovery, so it is not the default zero-cost posture.
+traffic and weaken outage recovery, so it is not the default Free-plan posture.
 
 The deploy workflow attempts a warning-only whole-zone purge after each
 successful Pages upload. This is defense-in-depth for Cache API state and any

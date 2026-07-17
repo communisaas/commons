@@ -63,11 +63,40 @@ function manifest(
 function publicCard(id: string) {
 	return {
 		id,
+		slug: id,
+		title: id,
+		description: 'Description',
+		domain: 'Civic life',
+		topics: [],
+		type: 'advocacy',
+		deliveryMethod: 'email',
+		subject: 'Subject',
+		message_body: 'Message',
+		preview: 'Preview',
+		endorsingOrg: null,
+		endorsingOrgs: [],
+		endorsementCount: 0,
+		coordinationScale: 0,
+		isNew: false,
+		hasActiveDebate: false,
+		verified_sends: null,
+		unique_districts: null,
+		send_count: 0,
+		daily_arrivals: [],
+		district_counts: [],
+		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
 		recipient_config: null,
 		recipientEmails: [],
-		recipient_count: 0
+		recipient_count: 0,
+		campaign_id: null,
+		status: 'published',
+		is_public: true,
+		jurisdictions: [],
+		scope: null,
+		scopes: [],
+		createdAt: '2026-07-18T00:00:00.000Z'
 	};
 }
 
@@ -100,7 +129,7 @@ describe('public template snapshot queries', () => {
 		await getCachedPublicData(
 			'templates:exclude-cwc=1',
 			{ ...context, revision: '4:100' },
-			async () => [{ id: 'known-good' }]
+			async () => [publicCard('known-good')]
 		);
 		kvList.mockClear();
 		// Model a new Worker isolate: no module-local cache and no local edge entry.
@@ -109,10 +138,10 @@ describe('public template snapshot queries', () => {
 		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await expect(getCachedPublicTemplates(context, true)).resolves.toEqual([
-			{ id: 'known-good' }
+			publicCard('known-good')
 		]);
 		await expect(getCachedPublicTemplates(context, true)).resolves.toEqual([
-			{ id: 'known-good' }
+			publicCard('known-good')
 		]);
 		expect(mockServerQuery).toHaveBeenCalledTimes(2);
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
@@ -127,7 +156,7 @@ describe('public template snapshot queries', () => {
 		await getCachedPublicData(
 			'templates:exclude-cwc=1',
 			{ ...CONTEXT, revision: '4:100' },
-			async () => [{ id: 'revoked-or-unready' }]
+			async () => [publicCard('revoked-or-unready')]
 		);
 		mockServerQuery.mockResolvedValue(
 			manifest({ ready: false, revision: 0, updatedAt: null })
@@ -172,7 +201,7 @@ describe('public template snapshot queries', () => {
 		await getCachedPublicData(
 			'templates:exclude-cwc=1',
 			{ ...CONTEXT, revision: '1:100' },
-			async () => [{ id: 'older-lkg' }]
+			async () => [publicCard('older-lkg')]
 		);
 		let manifestReads = 0;
 		mockServerQuery.mockImplementation(async (ref: string) => {
@@ -229,6 +258,9 @@ describe('public template snapshot queries', () => {
 		['legacy projection version', { projectionVersion: 3 }],
 		['raw recipient config', { recipient_config: { recipients: ['private'] } }],
 		['recipient address', { recipientEmails: ['private@example.test'] }],
+		['missing required field', { message_body: undefined }],
+		['object-valued primitive field', { message_body: { recipientEmail: 'private@example.test' } }],
+		['malformed primitive-array element', { topics: [{ private: 'value' }] }],
 		['non-array object-list field', { jurisdictions: { private: 'value' } }],
 		['malformed object-list element', { scopes: [['private@example.test']] }]
 	] as const)('rejects %s before the list payload can enter KV', async (_label, patch) => {
@@ -252,6 +284,31 @@ describe('public template snapshot queries', () => {
 		);
 		expect(
 			kvPut.mock.calls.some(([key]) => String(key).includes('templates%3Aexclude-cwc%3D0'))
+		).toBe(false);
+	});
+
+	it('fails closed when the exclude-CWC producer leaks a congressional card', async () => {
+		const context = contextWithKv();
+		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest({ ready: true, revision: 4, updatedAt: 400 });
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...listSnapshot(4, 400, 'cwc-leak'),
+					templates: [{ ...publicCard('cwc-leak'), deliveryMethod: 'cwc' }]
+				};
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicTemplates(context, true)).rejects.toMatchObject({
+			name: 'PublicDiscoverySnapshotContractError',
+			family: 'list'
+		});
+		expect(
+			kvPut.mock.calls.some(([key]) => String(key).includes('templates%3Aexclude-cwc%3D1'))
 		).toBe(false);
 	});
 
@@ -293,6 +350,26 @@ describe('public template snapshot queries', () => {
 		expect(persisted).not.toContain('private@example.test');
 		expect(persisted).not.toContain('webhookSecret');
 		expect(persisted).not.toContain('ownerEmail');
+	});
+
+	it('reprojects a serialized list LKG and refuses a poisoned cached card', async () => {
+		const context = contextWithKv();
+		const kvList = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.list!);
+		await getCachedPublicData(
+			'templates:exclude-cwc=1',
+			{ ...context, revision: '4:400' },
+			async () => [
+				{
+					...publicCard('poisoned'),
+					message_body: { recipientEmail: 'private@example.test' }
+				}
+			]
+		);
+		clearPublicDiscoveryCache();
+		mockServerQuery.mockRejectedValue(new Error('manifest unavailable'));
+
+		await expect(getCachedPublicTemplates(context, true)).rejects.toThrow('manifest unavailable');
+		expect(kvList).toHaveBeenCalledOnce();
 	});
 
 	it('refreshes the manifest and reuses the observed relation snapshot across a publish race', async () => {

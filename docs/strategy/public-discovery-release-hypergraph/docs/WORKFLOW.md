@@ -102,11 +102,14 @@ gh workflow run deploy.yml --ref production \
 ```
 
 The workflow queries the public manifest, both list variants, and both combined
-relation variants before upload, then reads `observability:servicePing` last. It
-refuses a cold manifest, durable producer failure, an elapsed producer overdue
-time, empty production corpus, revision skew, an oversized serialized payload,
-or a materialization timestamp more than 26 hours old. Contract-only preview
-verification relaxes corpus age and content requirements, not producer health.
+relation variants before upload, then reads the `_secret`-gated
+`observability:discoveryProducerStatus` query last. It refuses a cold manifest,
+durable producer failure, an elapsed producer overdue time, empty production
+corpus, revision skew, an oversized serialized payload, or a materialization
+timestamp more than 26 hours old. Contract-only preview verification relaxes
+corpus age and content requirements, not producer health. Anonymous
+`observability:servicePing` callers receive only generic liveness and
+storage-readability booleans.
 The workflow then deploys an immutable Cloudflare Pages artifact through the
 sole standard Wrangler uploader, attempts a warning-only defense-in-depth
 production cache purge, and gates on its `/api/health` result.
@@ -135,10 +138,13 @@ monitoring at `/api/live` and five-minute dependency readiness at `/api/health`;
 never monitor `/`.
 
 `/api/health` is a dependency-readiness signal, not a process-liveness signal:
-it deliberately returns `503` when Convex, the discovery manifest, KV binding,
-or Atlas is unavailable or exceeds the five-second deadline. Use it for release
-gates and a five-minute readiness monitor; use `/api/live` for process liveness
-and do not configure an orchestrator to restart healthy workers from a readiness
+it deliberately returns `503` when Convex, the discovery manifest, or Atlas is
+unavailable or exceeds the five-second deadline. A missing `PUBLIC_DISCOVERY_KV`
+binding appears as `publicDiscoveryCache.status: "degraded"` without taking the
+whole application down; the release workflow separately requires `kvBound:true`
+after checking the committed namespace live. Use `/api/health` for release gates
+and a five-minute readiness monitor; use `/api/live` for process liveness and do
+not configure an orchestrator to restart healthy workers from a readiness
 response. The Convex probe aborts its underlying HTTP
 fetch at the deadline so a dependency slowdown does not accumulate abandoned
 health requests.

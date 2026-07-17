@@ -19,9 +19,12 @@ is safe.
 
 The application cache stores anonymous public projections only. Its keys are
 scoped by both the request origin and configured Convex backend, so a preview
-origin cannot mutate production's last-known-good state even when both use the
-same zero-cost namespace and Convex deployment. Request paths and query strings
-must not create new identities in these application-managed layers. The
+origin cannot overwrite production's last-known-good payload even when both use
+the same zero-cost namespace and Convex deployment. This is state isolation,
+not capacity isolation: all namespaces in the account share the Workers KV
+operation and storage allowance, so preview traffic can still exhaust capacity
+used by production. Request paths and query strings must not create new
+identities in these application-managed layers. The
 anonymous projection fixes `recipient_config` to `null` and `recipientEmails`
 to an empty array; only `recipient_count` may represent targets. Raw recipient
 configuration or addresses in a cache envelope are a security invariant
@@ -172,11 +175,12 @@ race multiplier. Revisions are internal manifest values rather than request
 input; operators must still include failed publication transitions and
 first-wave races in quota monitoring.
 
-The Workers KV free allowance is shared with other namespaces, so code alone
-cannot guarantee the account-wide 1,000-list allowance for an unbounded number
-of active locations. If that allowance is exhausted during a manifest outage, a
-cold location with no local LKG can fail closed until KV listing or Convex
-recovers. This is an explicit Free-tier availability ceiling, not a distributed
+The Workers KV free allowance is account-wide across namespaces, so code alone
+cannot guarantee the 1,000-list allowance for an unbounded number of active
+locations. Creating another namespace in the same account would not enlarge
+that pool. If the allowance is exhausted during a manifest outage, a cold
+location with no local LKG can fail closed until KV listing or Convex recovers.
+This is an explicit Free-tier availability ceiling, not a distributed
 single-flight guarantee.
 
 The one-page scan is also an intentional cardinality ceiling. With eight-day KV

@@ -1,0 +1,18 @@
+# Shared by CI Tests and the manual deploy verifier. Keep this list focused on
+# the public-discovery cost, publication, cache, route, and readiness contracts.
+convex/templates-read-budget.convex.test.ts
+convex/templates-snapshots.convex.test.ts
+convex/templates-embedding-backfill.convex.test.ts
+convex/observability-service-ping.convex.test.ts
+convex/lib/relatedness.test.ts
+convex/lib/tag_concepts.test.ts
+tests/unit/convex/public-discovery-writer-contract.test.ts
+tests/unit/convex/public-discovery-cron-contract.test.ts
+tests/unit/server/public-discovery-cache.test.ts
+tests/unit/routes/home-page-load.test.ts
+tests/unit/routes/templates-api-auth.test.ts
+tests/unit/routes/admin-backfill-embeddings.test.ts
+tests/unit/routes/health-endpoint.test.ts
+tests/unit/scripts/public-discovery-readiness.test.ts
+tests/unit/email/mailto-url-security.test.ts
+tests/unit/stores/templates-ssr-hydration.test.ts

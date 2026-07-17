@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest, type TestConvex } from 'convex-test';
 
 import schema from './schema';
@@ -90,6 +90,15 @@ function embedding(head: number[]): number[] {
 }
 
 const PUBLIC_CREATE_SECRET = 'public-create-discovery-secret-32-bytes';
+
+beforeEach(() => {
+	vi.stubEnv('INTERNAL_API_SECRET', PUBLIC_CREATE_SECRET);
+	vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
 
 async function createPublicTemplate(t: Harness, index: number): Promise<Id<'templates'>> {
 	const tokenIdentifier = `https://issuer.example|occ-creator-${index}`;
@@ -530,9 +539,11 @@ describe('templates materialized public snapshots', () => {
 
 		const detail = await t.query(api.templates.getBySlugPublic, { slug: 'template-9003' });
 		expect(detail).not.toBeNull();
-		const decisionMakers = (detail!.recipient_config as unknown as {
-			decisionMakers: Array<Record<string, unknown>>;
-		}).decisionMakers;
+		const decisionMakers = (
+			detail!.recipient_config as unknown as {
+				decisionMakers: Array<Record<string, unknown>>;
+			}
+		).decisionMakers;
 		expect(decisionMakers).toEqual([
 			{
 				name: 'Bare source',
@@ -918,10 +929,9 @@ describe('templates materialized public snapshots', () => {
 			);
 
 			vi.setSystemTime(listRequest.scheduledAt);
-			const deferred = await t.mutation(
-				internal.templates.flushScheduledPublicTemplateRefresh,
-				{ scheduledAt: listRequest.scheduledAt }
-			);
+			const deferred = await t.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: listRequest.scheduledAt
+			});
 			expect(deferred).toEqual({
 				status: 'deferred',
 				scheduledAt: relationRequest.scheduledAt,
@@ -1027,9 +1037,7 @@ describe('templates materialized public snapshots', () => {
 		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		try {
 			const t = newHarness();
-			const templateId = await t.run((ctx) =>
-				ctx.db.insert('templates', templateValue(7_160))
-			);
+			const templateId = await t.run((ctx) => ctx.db.insert('templates', templateValue(7_160)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
 			const lastGood = await t.query(api.templates.publicDiscoveryManifest, {});
 
@@ -1062,9 +1070,7 @@ describe('templates materialized public snapshots', () => {
 				listDirtyAt: expect.any(Number),
 				relationsDirtyAt: expect.any(Number),
 				listFailureCode: expect.stringMatching(/^PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:/),
-				relationsFailureCode: expect.stringMatching(
-					/^PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:/
-				)
+				relationsFailureCode: expect.stringMatching(/^PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:/)
 			});
 			expect(frozen?.listRefreshScheduledAt).toBeUndefined();
 			expect(frozen?.relationsRefreshScheduledAt).toBeUndefined();
@@ -1171,6 +1177,95 @@ describe('templates materialized public snapshots', () => {
 				list: null,
 				relations: null
 			});
+		} finally {
+			consoleError.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it('cron recovery records failure without clearing a newer writer-owned token', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const t = newHarness();
+			await t.run((ctx) => ctx.db.insert('templates', templateValue(7_176)));
+			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+			const attempt = await t.query(internal.templates.publicDiscoveryCronAttemptState, {});
+
+			// The source writer schedules a successor after the failed attempt rolled
+			// back but before the fresh recovery mutation begins.
+			const successor = await t.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			await t.mutation(internal.templates.recordPublicDiscoverySnapshotRuntimeFailure, {
+				failures: [
+					{
+						family: 'list',
+						code: 'PUBLIC_DISCOVERY_LIST_REBUILD_FAILED:synthetic'
+					}
+				],
+				failedAt: Date.now(),
+				attempt
+			});
+
+			const manifest = await t.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(manifest).toMatchObject({
+				listRefreshScheduledAt: successor.scheduledAt,
+				listDirtyAt: expect.any(Number),
+				listFailureCode: 'PUBLIC_DISCOVERY_LIST_REBUILD_FAILED:synthetic'
+			});
+		} finally {
+			consoleError.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it('cron recovery ignores an attempt superseded by a newer successful publication', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+		try {
+			const t = newHarness();
+			await t.run((ctx) => ctx.db.insert('templates', templateValue(7_177)));
+			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+			const attempt = await t.query(internal.templates.publicDiscoveryCronAttemptState, {});
+
+			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
+			const newer = await t.query(internal.templates.publicDiscoveryCronAttemptState, {});
+			await expect(
+				t.mutation(internal.templates.recordPublicDiscoverySnapshotRuntimeFailure, {
+					failures: [
+						{ family: 'list', code: 'STALE_LIST_CRON_FAILURE' },
+						{ family: 'relations', code: 'STALE_RELATIONS_CRON_FAILURE' }
+					],
+					failedAt: Date.now(),
+					attempt
+				})
+			).resolves.toEqual({ recorded: [] });
+
+			const manifest = await t.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(manifest).toMatchObject({
+				listReady: true,
+				relationsReady: true,
+				listRevision: newer.listRevision,
+				relationsRevision: newer.relationsRevision
+			});
+			expect(manifest?.listDirtyAt).toBeUndefined();
+			expect(manifest?.relationsDirtyAt).toBeUndefined();
+			expect(manifest?.listFailureCode).toBeUndefined();
+			expect(manifest?.relationsFailureCode).toBeUndefined();
 		} finally {
 			consoleError.mockRestore();
 			vi.useRealTimers();
@@ -1501,7 +1596,9 @@ describe('templates materialized public snapshots', () => {
 		).resolves.toMatchObject({
 			list: { code: `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${invalidTemplateId}` }
 		});
-		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+		await expect(
+			t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+		).resolves.toMatchObject({
 			discoveryProducerHealthy: false
 		});
 		expect(consoleError).toHaveBeenCalledWith(
@@ -1626,7 +1723,9 @@ describe('templates materialized public snapshots', () => {
 				list: null,
 				relations: null
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: true
 			});
 		} finally {
@@ -1680,7 +1779,9 @@ describe('templates materialized public snapshots', () => {
 				},
 				relations: null
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: false
 			});
 			vi.advanceTimersByTime(0);
@@ -1708,7 +1809,9 @@ describe('templates materialized public snapshots', () => {
 				list: null,
 				relations: null
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: true
 			});
 		} finally {
@@ -1929,7 +2032,9 @@ describe('templates materialized public snapshots', () => {
 					)
 				}
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: false
 			});
 
@@ -1948,7 +2053,9 @@ describe('templates materialized public snapshots', () => {
 				list: null,
 				relations: null
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: true
 			});
 		} finally {
@@ -2076,7 +2183,9 @@ describe('templates materialized public snapshots', () => {
 			expect(first.relations.all.snapshotBytes).toBeLessThanOrEqual(900_000);
 			const firstFailure = await t.query(internal.templates.publicDiscoveryFailureStatus, {});
 			expect(firstFailure.relations?.code).toMatch(/^RELATION_SNAPSHOT_DEGRADED:/);
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: false
 			});
 			vi.advanceTimersByTime(0);
@@ -2108,7 +2217,9 @@ describe('templates materialized public snapshots', () => {
 				list: null,
 				relations: null
 			});
-			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			await expect(
+				t.query(api.observability.discoveryProducerStatus, { _secret: PUBLIC_CREATE_SECRET })
+			).resolves.toMatchObject({
 				discoveryProducerHealthy: true
 			});
 		} finally {

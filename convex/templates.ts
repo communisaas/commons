@@ -18,8 +18,6 @@ import { captureToSentry } from "./_sentry";
 import {
   MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
   MAX_PUBLIC_TEMPLATE_SCOPES,
-  TEMPLATE_CONFIG_STRUCTURE_BUDGET,
-  validateBoundedJson,
   validateTemplateInputBudgets,
 } from "./lib/templateInputBudget";
 import {
@@ -106,15 +104,43 @@ const rebuildHomepageSnapshotsForCronAttemptRef = makeFunctionReference<"mutatio
   Record<string, never>,
   { status: "rebuilt"; rebuilt: HomepageSnapshotRebuildResult }
 >;
+type PublicDiscoveryCronAttemptState = {
+  manifestId: Id<"publicDiscoveryManifest"> | null;
+  listRevision: number;
+  listUpdatedAt: number | null;
+  listScheduledAt: number | null;
+  relationsRevision: number;
+  relationsUpdatedAt: number | null;
+  relationsScheduledAt: number | null;
+};
+type PublicDiscoveryCronFailure = {
+  family: "list" | "relations";
+  code: string;
+};
 const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<"mutation">(
   "templates:recordPublicDiscoverySnapshotRuntimeFailure",
 ) as unknown as FunctionReference<
   "mutation",
   "internal",
-  { family: "list" | "relations"; code: string; failedAt: number },
+  {
+    failures: PublicDiscoveryCronFailure[];
+    failedAt: number;
+    attempt: PublicDiscoveryCronAttemptState;
+  },
   unknown
 >;
-type ScheduledPublicDiscoveryRefreshArgs = { scheduledAt: number };
+const publicDiscoveryCronAttemptStateRef = makeFunctionReference<"query">(
+  "templates:publicDiscoveryCronAttemptState",
+) as unknown as FunctionReference<
+  "query",
+  "internal",
+  Record<string, never>,
+  PublicDiscoveryCronAttemptState
+>;
+type ScheduledPublicDiscoveryRefreshArgs = {
+  scheduledAt: number;
+  bypassMinInterval?: boolean;
+};
 const scheduledPublicDiscoveryRefreshAttemptStateRef = makeFunctionReference<"query">(
   "templates:scheduledPublicDiscoveryRefreshAttemptState",
 ) as unknown as FunctionReference<
@@ -352,6 +378,7 @@ async function recordPublicDiscoverySnapshotFailure(
   error: Error,
   failedAt: number,
   previousFailure?: { code?: string; failedAt?: number },
+  expectedScheduledAt?: number | null,
 ): Promise<void> {
   const code = error.message.slice(0, 500);
   const currentCode =
@@ -363,6 +390,11 @@ async function recordPublicDiscoverySnapshotFailure(
     previousFailure === undefined ? currentFailedAt : previousFailure.failedAt;
   const repeatedFailure = priorCode === code && priorFailedAt !== undefined;
   const durableFailedAt = repeatedFailure ? priorFailedAt : failedAt;
+  const currentScheduledAt =
+    family === "list" ? manifest.listRefreshScheduledAt : manifest.relationsRefreshScheduledAt;
+  const mayClearScheduledToken =
+    expectedScheduledAt === undefined ||
+    currentScheduledAt === (expectedScheduledAt === null ? undefined : expectedScheduledAt);
 
   // A successful-but-degraded publication first clears the old failure in its
   // commit marker, then calls this helper with `previousFailure`. If the exact
@@ -383,13 +415,13 @@ async function recordPublicDiscoverySnapshotFailure(
     family === "list"
       ? {
           listDirtyAt,
-          listRefreshScheduledAt: undefined,
+          ...(mayClearScheduledToken ? { listRefreshScheduledAt: undefined } : {}),
           listFailureAt: durableFailedAt,
           listFailureCode: code,
         }
       : {
           relationsDirtyAt,
-          relationsRefreshScheduledAt: undefined,
+          ...(mayClearScheduledToken ? { relationsRefreshScheduledAt: undefined } : {}),
           relationsFailureAt: durableFailedAt,
           relationsFailureCode: code,
         },
@@ -408,13 +440,14 @@ async function freezePublicDiscoverySnapshotFailure(
   family: "list" | "relations",
   error: Error,
   failedAt: number,
+  expectedScheduledAt?: number | null,
 ): Promise<void> {
   let manifest = await getPublicDiscoveryManifestRow(ctx);
   if (!manifest) {
     // A first-ever cron can fail before a manifest exists. Create the tiny
-    // dirty control row through the normal scheduler path. Recording the
-    // failure below clears that token, so its queued invocation is a cheap
-    // superseded no-op rather than another deterministic oversize scan.
+    // dirty control row through the normal scheduler path. An in-transaction
+    // deterministic freeze clears that token; guarded action recovery retains
+    // it because the cron observed no token before the failed attempt.
     if (family === "list") {
       await markPublicDiscoveryListDirty(ctx, failedAt);
     } else {
@@ -424,7 +457,15 @@ async function freezePublicDiscoverySnapshotFailure(
   }
   if (!manifest) throw error;
 
-  await recordPublicDiscoverySnapshotFailure(ctx, manifest, family, error, failedAt);
+  await recordPublicDiscoverySnapshotFailure(
+    ctx,
+    manifest,
+    family,
+    error,
+    failedAt,
+    undefined,
+    expectedScheduledAt,
+  );
   console.error(
     `[public-discovery] ${family} snapshot frozen at last-good until the next source write or daily cron: ${error.message}`,
   );
@@ -433,18 +474,74 @@ async function freezePublicDiscoverySnapshotFailure(
 /** Persist a failure observed outside the failed rebuild mutation transaction. */
 export const recordPublicDiscoverySnapshotRuntimeFailure = internalMutation({
   args: {
-    family: v.union(v.literal("list"), v.literal("relations")),
-    code: v.string(),
+    failures: v.array(
+      v.object({
+        family: v.union(v.literal("list"), v.literal("relations")),
+        code: v.string(),
+      }),
+    ),
     failedAt: v.number(),
+    attempt: v.object({
+      manifestId: v.union(v.id("publicDiscoveryManifest"), v.null()),
+      listRevision: v.number(),
+      listUpdatedAt: v.union(v.number(), v.null()),
+      listScheduledAt: v.union(v.number(), v.null()),
+      relationsRevision: v.number(),
+      relationsUpdatedAt: v.union(v.number(), v.null()),
+      relationsScheduledAt: v.union(v.number(), v.null()),
+    }),
   },
   handler: async (ctx, args) => {
-    await freezePublicDiscoverySnapshotFailure(
-      ctx,
-      args.family,
-      new Error(args.code.slice(0, 500)),
-      args.failedAt,
-    );
-    return { recorded: true };
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    const sameManifest = (manifest?._id ?? null) === args.attempt.manifestId;
+    const eligible = sameManifest
+      ? args.failures.filter(({ family }, index, failures) => {
+          if (failures.findIndex((failure) => failure.family === family) !== index) return false;
+          return family === "list"
+            ? (manifest?.listRevision ?? 0) === args.attempt.listRevision &&
+                (manifest?.listUpdatedAt ?? null) === args.attempt.listUpdatedAt
+            : (manifest?.relationsRevision ?? 0) === args.attempt.relationsRevision &&
+                (manifest?.relationsUpdatedAt ?? null) === args.attempt.relationsUpdatedAt;
+        })
+      : [];
+
+    // Compute eligibility before the first freeze. A first-ever composite cron
+    // has no manifest; recording the list failure creates one, but the sibling
+    // relation failure still belongs to the same absent-manifest attempt.
+    const recorded: Array<"list" | "relations"> = [];
+    for (const failure of eligible) {
+      await freezePublicDiscoverySnapshotFailure(
+        ctx,
+        failure.family,
+        new Error(failure.code.slice(0, 500)),
+        args.failedAt,
+        failure.family === "list"
+          ? args.attempt.listScheduledAt
+          : args.attempt.relationsScheduledAt,
+      );
+      recorded.push(failure.family);
+    }
+    return { recorded };
+  },
+});
+
+/** Capture publication identity, coordinates, and tokens before a cron attempt. */
+export const publicDiscoveryCronAttemptState = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const manifest = await ctx.db
+      .query("publicDiscoveryManifest")
+      .withIndex("by_key", (q) => q.eq("key", "public"))
+      .unique();
+    return {
+      manifestId: manifest?._id ?? null,
+      listRevision: manifest?.listRevision ?? 0,
+      listUpdatedAt: manifest?.listUpdatedAt ?? null,
+      listScheduledAt: manifest?.listRefreshScheduledAt ?? null,
+      relationsRevision: manifest?.relationsRevision ?? 0,
+      relationsUpdatedAt: manifest?.relationsUpdatedAt ?? null,
+      relationsScheduledAt: manifest?.relationsRefreshScheduledAt ?? null,
+    };
   },
 });
 
@@ -576,7 +673,7 @@ async function superviseScheduledPublicDiscoveryRefresh(
 
 /** Durable supervisor for the list token scheduled by publicDiscovery.ts. */
 export const superviseScheduledPublicTemplateRefresh = internalAction({
-  args: { scheduledAt: v.number() },
+  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
   handler: async (ctx, args) =>
     await superviseScheduledPublicDiscoveryRefresh(
       ctx,
@@ -588,7 +685,7 @@ export const superviseScheduledPublicTemplateRefresh = internalAction({
 
 /** Durable supervisor for the relation token scheduled by publicDiscovery.ts. */
 export const superviseScheduledPublicTemplateRelationsRefresh = internalAction({
-  args: { scheduledAt: v.number() },
+  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
   handler: async (ctx, args) =>
     await superviseScheduledPublicDiscoveryRefresh(
       ctx,
@@ -603,15 +700,24 @@ async function supervisePublicDiscoveryCronRebuild<Result>(
   family: "list" | "relations",
   attempt: FunctionReference<"mutation", "internal", Record<string, never>, Result>,
 ): Promise<Result> {
+  // The failed attempt rolls back, then recovery runs in a fresh transaction.
+  // Capture publication coordinates first so recovery cannot re-dirty a newer
+  // successful generation or clear a successor token from a source writer.
+  const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
   try {
     return await ctx.runMutation(attempt, {});
   } catch (error) {
     const failedAt = Date.now();
     const message = error instanceof Error ? error.message : String(error);
     await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
-      family,
-      code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_REBUILD_FAILED:${message}`.slice(0, 500),
+      failures: [
+        {
+          family,
+          code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_REBUILD_FAILED:${message}`.slice(0, 500),
+        },
+      ],
       failedAt,
+      attempt: attemptState,
     });
     throw error;
   }
@@ -870,7 +976,7 @@ type SnapshotField =
   | { kind: "string" }
   | { kind: "number" }
   | { kind: "boolean" }
-  | { kind: "config" }
+  | { kind: "redacted"; replacement: "emptyObject" | "emptyArray" | "null" }
   | { kind: "optional"; value: SnapshotField }
   | { kind: "nullable"; value: SnapshotField }
   | { kind: "array"; value: SnapshotField; maxItems: number }
@@ -885,7 +991,9 @@ type SnapshotSchemaFor<T> = {
 const SNAPSHOT_STRING = { kind: "string" } as const satisfies SnapshotField;
 const SNAPSHOT_NUMBER = { kind: "number" } as const satisfies SnapshotField;
 const SNAPSHOT_BOOLEAN = { kind: "boolean" } as const satisfies SnapshotField;
-const SNAPSHOT_CONFIG = { kind: "config" } as const satisfies SnapshotField;
+const snapshotRedacted = (
+  replacement: "emptyObject" | "emptyArray" | "null",
+): Extract<SnapshotField, { kind: "redacted" }> => ({ kind: "redacted", replacement });
 const snapshotOptional = <T extends SnapshotField>(value: T): { kind: "optional"; value: T } => ({
   kind: "optional",
   value,
@@ -984,9 +1092,12 @@ const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
     500,
   ),
   tier_counts: snapshotArray(SNAPSHOT_NUMBER, 6),
-  delivery_config: SNAPSHOT_CONFIG,
-  cwc_config: snapshotNullable(SNAPSHOT_CONFIG),
-  recipient_config: snapshotNullable(SNAPSHOT_CONFIG),
+  // These compatibility keys are deliberately represented as redactions in
+  // the schema itself. There is no generic "config" projector that a future
+  // field can accidentally use to clone producer secrets into public output.
+  delivery_config: snapshotRedacted("emptyObject"),
+  cwc_config: snapshotRedacted("null"),
+  recipient_config: snapshotRedacted("null"),
   recipient_count: SNAPSHOT_NUMBER,
   campaign_id: snapshotNullable(SNAPSHOT_STRING),
   status: SNAPSHOT_STRING,
@@ -994,50 +1105,11 @@ const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
   jurisdictions: snapshotArray(SNAPSHOT_JURISDICTION, MAX_PUBLIC_TEMPLATE_JURISDICTIONS),
   scope: snapshotNullable(SNAPSHOT_SCOPE),
   scopes: snapshotArray(SNAPSHOT_SCOPE, MAX_PUBLIC_TEMPLATE_SCOPES),
-  recipientEmails: snapshotArray(SNAPSHOT_STRING, 200),
+  recipientEmails: snapshotRedacted("emptyArray"),
   createdAt: SNAPSHOT_STRING,
 } satisfies SnapshotSchemaFor<PublicTemplatePayload>;
 
 const INVALID_SNAPSHOT_VALUE = Symbol("INVALID_SNAPSHOT_VALUE");
-
-function cloneSnapshotConfig(value: unknown): unknown | typeof INVALID_SNAPSHOT_VALUE {
-  const bounded = validateBoundedJson(value, TEMPLATE_CONFIG_STRUCTURE_BUDGET);
-  if (!bounded.ok || value === null || typeof value !== "object" || Array.isArray(value)) {
-    return INVALID_SNAPSHOT_VALUE;
-  }
-
-  const clone = (current: unknown): unknown | typeof INVALID_SNAPSHOT_VALUE => {
-    if (
-      current === null ||
-      typeof current === "string" ||
-      typeof current === "boolean" ||
-      (typeof current === "number" && Number.isFinite(current))
-    ) {
-      return current;
-    }
-    if (Array.isArray(current)) {
-      const projected: unknown[] = [];
-      for (const item of current) {
-        const next = clone(item);
-        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
-        projected.push(next);
-      }
-      return projected;
-    }
-    if (current !== null && typeof current === "object") {
-      const projected: Record<string, unknown> = {};
-      for (const [key, item] of Object.entries(current)) {
-        const next = clone(item);
-        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
-        projected[key] = next;
-      }
-      return projected;
-    }
-    return INVALID_SNAPSHOT_VALUE;
-  };
-
-  return clone(value);
-}
 
 function projectSnapshotField(
   value: unknown,
@@ -1052,8 +1124,12 @@ function projectSnapshotField(
         : INVALID_SNAPSHOT_VALUE;
     case "boolean":
       return typeof value === "boolean" ? value : INVALID_SNAPSHOT_VALUE;
-    case "config":
-      return cloneSnapshotConfig(value);
+    case "redacted":
+      return field.replacement === "emptyObject"
+        ? {}
+        : field.replacement === "emptyArray"
+          ? []
+          : null;
     case "optional":
       return projectSnapshotField(value, field.value);
     case "nullable":
@@ -1094,22 +1170,11 @@ function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | nu
   const projected: Record<string, unknown> = {};
   for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
     // Redact/minimize legacy snapshots at the public read boundary as well as
-    // in the producer. This closes exposure immediately, before every live row
-    // has been rematerialized, while retaining the old compatibility fields.
-    if (name === "delivery_config") {
-      projected[name] = {};
-      continue;
-    }
-    if (name === "cwc_config") {
-      projected[name] = null;
-      continue;
-    }
-    if (name === "recipient_config") {
-      projected[name] = null;
-      continue;
-    }
-    if (name === "recipientEmails") {
-      projected[name] = [];
+    // in the producer. The replacement travels with the field descriptor, so a
+    // rename or newly reviewed config field cannot fall through to generic JSON
+    // cloning merely because a hard-coded field-name list was not updated.
+    if (field.kind === "redacted") {
+      projected[name] = projectSnapshotField(undefined, field);
       continue;
     }
     if (name === "recipient_count" && (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined)) {
@@ -1589,8 +1654,8 @@ export const requestPublicTemplateSnapshotRefresh = internalMutation({
  * repeatedly paying the bounded enrichment joins.
  */
 export const flushScheduledPublicTemplateRefresh = internalMutation({
-  args: { scheduledAt: v.number() },
-  handler: async (ctx, { scheduledAt }) => {
+  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+  handler: async (ctx, { scheduledAt, bypassMinInterval }) => {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
     if (!manifest || manifest.listRefreshScheduledAt !== scheduledAt) {
       return { status: "superseded" as const };
@@ -1610,7 +1675,7 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
         PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS
       : 0;
     const nextAllowedAt = Math.max(listNextAllowedAt, relationsNextAllowedAt);
-    if (now < nextAllowedAt) {
+    if (!bypassMinInterval && now < nextAllowedAt) {
       const nextScheduledAt = await reschedulePublicDiscoveryListRefresh(
         ctx,
         manifest,
@@ -2388,8 +2453,8 @@ export const requestPublicTemplateRelationSnapshotRefresh = internalMutation({
  * runtime failures preserve the last-good relation row and leave it dirty.
  */
 export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
-  args: { scheduledAt: v.number() },
-  handler: async (ctx, { scheduledAt }) => {
+  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+  handler: async (ctx, { scheduledAt, bypassMinInterval }) => {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
     if (!manifest || manifest.relationsRefreshScheduledAt !== scheduledAt) {
       return { status: "superseded" as const };
@@ -2426,7 +2491,7 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
     const nextAllowedAt =
       (manifest.relationsUpdatedAt ?? 0) +
       PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
-    if (now < nextAllowedAt) {
+    if (!bypassMinInterval && now < nextAllowedAt) {
       const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
         ctx,
         manifest,
@@ -2506,21 +2571,23 @@ export const rebuildHomepageSnapshotsForCronAttempt = internalMutation({
 export const rebuildHomepageSnapshotsForCron = internalAction({
   args: {},
   handler: async (ctx) => {
+    const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
     try {
       return await ctx.runMutation(rebuildHomepageSnapshotsForCronAttemptRef, {});
     } catch (error) {
       const failedAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
-      for (const family of ["list", "relations"] as const) {
-        await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+      await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+        failures: (["list", "relations"] as const).map((family) => ({
           family,
           code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_COMPOSITE_CRON_REBUILD_FAILED:${message}`.slice(
             0,
             500,
           ),
-          failedAt,
-        });
-      }
+        })),
+        failedAt,
+        attempt: attemptState,
+      });
       throw error;
     }
   },

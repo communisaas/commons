@@ -11,6 +11,7 @@ const MAX_PUBLIC_TEMPLATE_COUNT = 50;
 const MAX_PUBLIC_RELATION_EDGES = 10_000;
 const MAX_PUBLIC_CONCEPT_ENTRIES = 10_000;
 const MAX_COHERENT_READ_ATTEMPTS = 3;
+const MIN_INTERNAL_SECRET_BYTES = 32;
 const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
 export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
 
@@ -30,6 +31,7 @@ export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
  * @property {boolean} [contractOnly]
  * @property {number} [maxAgeMs]
  * @property {number} [now]
+ * @property {string} [internalSecret]
  */
 
 /**
@@ -469,7 +471,8 @@ export async function verifyPublicDiscoveryReadiness(
 		requireContent = true,
 		contractOnly = false,
 		maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS,
-		now
+		now,
+		internalSecret
 	} = {}
 ) {
 	if (typeof convexUrl !== 'string') {
@@ -491,6 +494,9 @@ export async function verifyPublicDiscoveryReadiness(
 		parsedUrl.hash !== ''
 	) {
 		throw new Error('A valid https://*.convex.cloud URL is required');
+	}
+	if (typeof internalSecret !== 'string' || internalSecret.length < MIN_INTERNAL_SECRET_BYTES) {
+		throw new Error('INTERNAL_API_SECRET must be configured for producer readiness');
 	}
 
 	const client = new ConvexHttpClient(parsedUrl.origin);
@@ -534,8 +540,8 @@ export async function verifyPublicDiscoveryReadiness(
 		// can change without advancing public snapshot coordinates, so reading it
 		// before the closing manifest would leave a small stale-healthy window.
 		const producerStatus = await withTimeout(
-			client.query(anyApi.observability.servicePing, {}),
-			'observability:servicePing',
+			client.query(anyApi.observability.discoveryProducerStatus, { _secret: internalSecret }),
+			'observability:discoveryProducerStatus',
 			timeoutMs
 		);
 
@@ -561,7 +567,10 @@ async function main() {
 	const convexUrl = process.argv[2] || process.env.PUBLIC_CONVEX_URL;
 	try {
 		const options = readinessOptionsFromEnv(process.env);
-		const report = await verifyPublicDiscoveryReadiness(convexUrl, options);
+		const report = await verifyPublicDiscoveryReadiness(convexUrl, {
+			...options,
+			internalSecret: process.env.INTERNAL_API_SECRET
+		});
 		console.log(`Public discovery producer ready: ${JSON.stringify(report)}`);
 	} catch (error) {
 		console.error(

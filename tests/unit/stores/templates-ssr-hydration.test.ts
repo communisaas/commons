@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Template } from '$lib/types/template';
 
@@ -123,13 +121,4 @@ describe('template store SSR reconciliation', () => {
 		expect(templateStore.loading).toBe(false);
 	});
 
-	it('keeps root-page reconciliation isolated from selection and local CRUD state', () => {
-		const pageSource = readFileSync(
-			path.resolve(process.cwd(), 'src/routes/+page.svelte'),
-			'utf8'
-		);
-		expect(pageSource).toMatch(
-			/untrack\(\(\) => templateStore\.hydrateFromSSR\(data\.templates \?\? \[\]\)\)/
-		);
-	});
 });

@@ -80,128 +80,174 @@ function matchesGeneration(snapshot: SnapshotCoordinates, expected: SnapshotCoor
 	return snapshot.revision === expected.revision && snapshot.updatedAt === expected.updatedAt;
 }
 
-const PUBLIC_TEMPLATE_FIELDS = [
-	'id',
-	'slug',
-	'title',
-	'description',
-	'domain',
-	'domainHue',
-	'topics',
-	'type',
-	'deliveryMethod',
-	'subject',
-	'message_body',
-	'preview',
-	'endorsingOrg',
-	'endorsingOrgs',
-	'endorsementCount',
-	'coordinationScale',
-	'isNew',
-	'hasActiveDebate',
-	'debateSummary',
-	'verified_sends',
-	'unique_districts',
-	'send_count',
-	'daily_arrivals',
-	'district_counts',
-	'tier_counts',
-	'delivery_config',
-	'cwc_config',
-	'recipient_config',
-	'recipient_count',
-	'campaign_id',
-	'status',
-	'is_public',
-	'jurisdictions',
-	'scope',
-	'scopes',
-	'recipientEmails',
-	'createdAt'
-] as const satisfies readonly (keyof PublicTemplateCard)[];
+type PublicProjectionField =
+	| { kind: 'string' }
+	| { kind: 'number' }
+	| { kind: 'boolean' }
+	| { kind: 'optional'; value: PublicProjectionField }
+	| { kind: 'nullable'; value: PublicProjectionField }
+	| { kind: 'array'; value: PublicProjectionField; maxItems: number }
+	| { kind: 'object'; fields: Record<string, PublicProjectionField> }
+	| { kind: 'redacted-object' }
+	| { kind: 'redacted-null' }
+	| { kind: 'redacted-array' };
 
-// A producer field addition must make this module fail type-check until the
-// anonymous allowlist is reviewed. Runtime projection then drops fields from a
-// version-skewed or compromised producer instead of promoting them to the LKG.
-type MissingPublicTemplateField = Exclude<
-	keyof PublicTemplateCard,
-	(typeof PUBLIC_TEMPLATE_FIELDS)[number]
->;
-const PUBLIC_TEMPLATE_FIELDS_ARE_EXHAUSTIVE: MissingPublicTemplateField extends never
-	? true
-	: never = true;
-void PUBLIC_TEMPLATE_FIELDS_ARE_EXHAUSTIVE;
+const PUBLIC_STRING = { kind: 'string' } as const satisfies PublicProjectionField;
+const PUBLIC_NUMBER = { kind: 'number' } as const satisfies PublicProjectionField;
+const PUBLIC_BOOLEAN = { kind: 'boolean' } as const satisfies PublicProjectionField;
+const PUBLIC_REDACTED_OBJECT = {
+	kind: 'redacted-object'
+} as const satisfies PublicProjectionField;
+const PUBLIC_REDACTED_NULL = { kind: 'redacted-null' } as const satisfies PublicProjectionField;
+const PUBLIC_REDACTED_ARRAY = {
+	kind: 'redacted-array'
+} as const satisfies PublicProjectionField;
+const publicOptional = <T extends PublicProjectionField>(value: T) =>
+	({ kind: 'optional', value }) as const;
+const publicNullable = <T extends PublicProjectionField>(value: T) =>
+	({ kind: 'nullable', value }) as const;
+const publicArray = <T extends PublicProjectionField>(value: T, maxItems: number) =>
+	({ kind: 'array', value, maxItems }) as const;
+const publicObject = <T extends Record<string, PublicProjectionField>>(fields: T) =>
+	({ kind: 'object', fields }) as const;
 
-const PUBLIC_ORG_FIELDS = ['name', 'slug', 'avatar'] as const;
-const PUBLIC_DEBATE_FIELDS = [
-	'status',
-	'winningStance',
-	'uniqueParticipants',
-	'argumentCount',
-	'deadline'
-] as const;
-const PUBLIC_DISTRICT_COUNT_FIELDS = ['code', 'count'] as const;
-const PUBLIC_JURISDICTION_FIELDS = [
-	'id',
-	'template_id',
-	'jurisdiction_type',
-	'congressional_district',
-	'senate_class',
-	'state_code',
-	'state_senate_district',
-	'state_house_district',
-	'county_fips',
-	'county_name',
-	'city_name',
-	'city_fips',
-	'school_district_id',
-	'school_district_name',
-	'latitude',
-	'longitude',
-	'estimated_population',
-	'coverage_notes'
-] as const;
-const PUBLIC_SCOPE_FIELDS = [
-	'id',
-	'template_id',
-	'country_code',
-	'region_code',
-	'locality_code',
-	'district_code',
-	'display_text',
-	'scope_level',
-	'confidence',
-	'extraction_method'
-] as const;
+const PUBLIC_ORG_SCHEMA = publicObject({
+	name: PUBLIC_STRING,
+	slug: PUBLIC_STRING,
+	avatar: publicNullable(PUBLIC_STRING)
+});
+const PUBLIC_SCOPE_SCHEMA = publicObject({
+	id: PUBLIC_STRING,
+	template_id: PUBLIC_STRING,
+	country_code: PUBLIC_STRING,
+	region_code: publicNullable(PUBLIC_STRING),
+	locality_code: publicNullable(PUBLIC_STRING),
+	district_code: publicNullable(PUBLIC_STRING),
+	display_text: PUBLIC_STRING,
+	scope_level: PUBLIC_STRING,
+	confidence: PUBLIC_NUMBER,
+	extraction_method: PUBLIC_STRING
+});
+const PUBLIC_JURISDICTION_SCHEMA = publicObject({
+	id: PUBLIC_STRING,
+	template_id: PUBLIC_STRING,
+	jurisdiction_type: PUBLIC_STRING,
+	congressional_district: publicNullable(PUBLIC_STRING),
+	senate_class: publicNullable(PUBLIC_STRING),
+	state_code: publicNullable(PUBLIC_STRING),
+	state_senate_district: publicNullable(PUBLIC_STRING),
+	state_house_district: publicNullable(PUBLIC_STRING),
+	county_fips: publicNullable(PUBLIC_STRING),
+	county_name: publicNullable(PUBLIC_STRING),
+	city_name: publicNullable(PUBLIC_STRING),
+	city_fips: publicNullable(PUBLIC_STRING),
+	school_district_id: publicNullable(PUBLIC_STRING),
+	school_district_name: publicNullable(PUBLIC_STRING),
+	latitude: publicNullable(PUBLIC_NUMBER),
+	longitude: publicNullable(PUBLIC_NUMBER),
+	estimated_population: publicNullable(PUBLIC_NUMBER),
+	coverage_notes: publicNullable(PUBLIC_STRING)
+});
+
+// This schema is both the runtime reconstruction contract and the compile-time
+// field fuse. A producer field addition fails type-check until it is classified.
+const PUBLIC_TEMPLATE_SCHEMA = {
+	id: PUBLIC_STRING,
+	slug: PUBLIC_STRING,
+	title: PUBLIC_STRING,
+	description: PUBLIC_STRING,
+	domain: PUBLIC_STRING,
+	domainHue: publicOptional(PUBLIC_NUMBER),
+	topics: publicArray(PUBLIC_STRING, 200),
+	type: PUBLIC_STRING,
+	deliveryMethod: PUBLIC_STRING,
+	subject: PUBLIC_STRING,
+	message_body: PUBLIC_STRING,
+	preview: PUBLIC_STRING,
+	endorsingOrg: publicNullable(PUBLIC_ORG_SCHEMA),
+	endorsingOrgs: publicArray(PUBLIC_ORG_SCHEMA, 6),
+	endorsementCount: PUBLIC_NUMBER,
+	coordinationScale: PUBLIC_NUMBER,
+	isNew: PUBLIC_BOOLEAN,
+	hasActiveDebate: PUBLIC_BOOLEAN,
+	debateSummary: publicOptional(
+		publicObject({
+			status: PUBLIC_STRING,
+			winningStance: publicOptional(PUBLIC_STRING),
+			uniqueParticipants: publicNullable(PUBLIC_NUMBER),
+			argumentCount: publicNullable(PUBLIC_NUMBER),
+			deadline: publicOptional(PUBLIC_STRING)
+		})
+	),
+	verified_sends: publicNullable(PUBLIC_NUMBER),
+	unique_districts: publicNullable(PUBLIC_NUMBER),
+	send_count: publicNullable(PUBLIC_NUMBER),
+	daily_arrivals: publicArray(PUBLIC_NUMBER, 30),
+	district_counts: publicArray(publicObject({ code: PUBLIC_STRING, count: PUBLIC_NUMBER }), 500),
+	tier_counts: publicArray(PUBLIC_NUMBER, 6),
+	delivery_config: PUBLIC_REDACTED_OBJECT,
+	cwc_config: PUBLIC_REDACTED_NULL,
+	recipient_config: PUBLIC_REDACTED_NULL,
+	recipient_count: PUBLIC_NUMBER,
+	campaign_id: publicNullable(PUBLIC_STRING),
+	status: PUBLIC_STRING,
+	is_public: PUBLIC_BOOLEAN,
+	jurisdictions: publicArray(PUBLIC_JURISDICTION_SCHEMA, 100),
+	scope: publicNullable(PUBLIC_SCOPE_SCHEMA),
+	scopes: publicArray(PUBLIC_SCOPE_SCHEMA, 100),
+	recipientEmails: PUBLIC_REDACTED_ARRAY,
+	createdAt: PUBLIC_STRING
+} as const satisfies { [K in keyof PublicTemplateCard]-?: PublicProjectionField };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function pickFields(value: unknown, fields: readonly string[]): Record<string, unknown> | null {
-	if (!isRecord(value)) return null;
+function projectPublicObject(
+	value: unknown,
+	fields: Record<string, PublicProjectionField>,
+	path: string
+): Record<string, unknown> {
+	if (!isRecord(value)) throw new PublicDiscoverySnapshotContractError(`unsafe-${path}`);
 	const projected: Record<string, unknown> = {};
-	for (const field of fields) {
-		if (Object.prototype.hasOwnProperty.call(value, field)) projected[field] = value[field];
+	for (const [name, field] of Object.entries(fields)) {
+		if (!Object.prototype.hasOwnProperty.call(value, name) || value[name] === undefined) {
+			if (field.kind === 'optional') continue;
+			throw new PublicDiscoverySnapshotContractError(`unsafe-${path}.${name}`);
+		}
+		projected[name] = projectPublicField(value[name], field, `${path}.${name}`);
 	}
 	return projected;
 }
 
-function projectObjectArray(
-	value: unknown,
-	fields: readonly string[],
-	fieldName: string
-): Record<string, unknown>[] {
-	if (!Array.isArray(value)) {
-		throw new PublicDiscoverySnapshotContractError(`unsafe-${fieldName}`);
+function projectPublicField(value: unknown, field: PublicProjectionField, path: string): unknown {
+	switch (field.kind) {
+		case 'string':
+			if (typeof value === 'string') return value;
+			break;
+		case 'number':
+			if (typeof value === 'number' && Number.isFinite(value)) return value;
+			break;
+		case 'boolean':
+			if (typeof value === 'boolean') return value;
+			break;
+		case 'optional':
+			return projectPublicField(value, field.value, path);
+		case 'nullable':
+			return value === null ? null : projectPublicField(value, field.value, path);
+		case 'array':
+			if (!Array.isArray(value) || value.length > field.maxItems) break;
+			return value.map((item, index) => projectPublicField(item, field.value, `${path}:${index}`));
+		case 'object':
+			return projectPublicObject(value, field.fields, path);
+		case 'redacted-object':
+			return {};
+		case 'redacted-null':
+			return null;
+		case 'redacted-array':
+			return [];
 	}
-	return value.map((item, index) => {
-		const projected = pickFields(item, fields);
-		if (!projected) {
-			throw new PublicDiscoverySnapshotContractError(`unsafe-${fieldName}:${index}`);
-		}
-		return projected;
-	});
+	throw new PublicDiscoverySnapshotContractError(`unsafe-${path}`);
 }
 
 /**
@@ -225,72 +271,52 @@ function projectPublicTemplateCard(rawTemplate: unknown, index: number): PublicT
 		throw new PublicDiscoverySnapshotContractError(`unsafe-template:${index}`);
 	}
 
-	const projected = pickFields(rawTemplate, PUBLIC_TEMPLATE_FIELDS)!;
-	if (rawTemplate.endorsingOrg !== undefined) {
-		projected.endorsingOrg =
-			rawTemplate.endorsingOrg === null
-				? null
-				: pickFields(rawTemplate.endorsingOrg, PUBLIC_ORG_FIELDS);
-	}
-	if (rawTemplate.endorsingOrgs !== undefined) {
-		projected.endorsingOrgs = projectObjectArray(
-			rawTemplate.endorsingOrgs,
-			PUBLIC_ORG_FIELDS,
-			'endorsingOrgs'
-		);
-	}
-	if (rawTemplate.debateSummary !== undefined) {
-		projected.debateSummary = pickFields(rawTemplate.debateSummary, PUBLIC_DEBATE_FIELDS);
-	}
-	if (rawTemplate.district_counts !== undefined) {
-		projected.district_counts = projectObjectArray(
-			rawTemplate.district_counts,
-			PUBLIC_DISTRICT_COUNT_FIELDS,
-			'district_counts'
-		);
-	}
-	if (rawTemplate.jurisdictions !== undefined) {
-		projected.jurisdictions = projectObjectArray(
-			rawTemplate.jurisdictions,
-			PUBLIC_JURISDICTION_FIELDS,
-			'jurisdictions'
-		);
-	}
-	if (rawTemplate.scope !== undefined) {
-		projected.scope =
-			rawTemplate.scope === null ? null : pickFields(rawTemplate.scope, PUBLIC_SCOPE_FIELDS);
-	}
-	if (rawTemplate.scopes !== undefined) {
-		projected.scopes = projectObjectArray(rawTemplate.scopes, PUBLIC_SCOPE_FIELDS, 'scopes');
-	}
-	projected.delivery_config = {};
-	projected.cwc_config = null;
-	projected.recipient_config = null;
-	projected.recipientEmails = [];
-	return projected as PublicTemplateCard;
+	return projectPublicObject(
+		rawTemplate,
+		PUBLIC_TEMPLATE_SCHEMA,
+		`template:${index}`
+	) as unknown as PublicTemplateCard;
 }
 
-/** Refuse a legacy or recipient-bearing producer payload before any cache write. */
-function projectPublicTemplateSnapshotContract(
-	snapshot: PublicTemplateSnapshot
+function projectPublicTemplateCardsContract(
+	value: unknown,
+	excludeCwc: boolean
 ): PublicTemplateSnapshot['templates'] {
+	if (!Array.isArray(value)) {
+		throw new PublicDiscoverySnapshotContractError('templates-not-array');
+	}
+	return value.map((template, index) => {
+		const projected = projectPublicTemplateCard(template, index);
+		if (excludeCwc && projected.deliveryMethod === 'cwc') {
+			throw new PublicDiscoverySnapshotContractError(`cwc-leak:${index}`);
+		}
+		return projected;
+	});
+}
+
+/** Refuse a legacy, malformed, recipient-bearing, or visibility-leaking payload. */
+function projectPublicTemplateSnapshotContract(
+	snapshot: unknown,
+	excludeCwc: boolean
+): PublicTemplateSnapshot['templates'] {
+	if (!isRecord(snapshot)) {
+		throw new PublicDiscoverySnapshotContractError('unsafe-container');
+	}
 	if (snapshot.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION) {
 		throw new PublicDiscoverySnapshotContractError(
 			`projection-version:${String(snapshot.projectionVersion)}`
 		);
 	}
-	if (!Array.isArray(snapshot.templates)) {
-		throw new PublicDiscoverySnapshotContractError('templates-not-array');
-	}
-	return snapshot.templates.map((template, index) => projectPublicTemplateCard(template, index));
+	return projectPublicTemplateCardsContract(snapshot.templates, excludeCwc);
 }
 
 function projectPublicRelationsSnapshotContract(
-	snapshot: PublicRelationsSnapshot
+	snapshot: unknown
 ): ProjectedPublicRelationsSnapshot {
 	if (
+		!isRecord(snapshot) ||
 		!Number.isSafeInteger(snapshot.revision) ||
-		snapshot.revision < 0 ||
+		(snapshot.revision as number) < 0 ||
 		(snapshot.updatedAt !== null &&
 			(typeof snapshot.updatedAt !== 'number' ||
 				!Number.isFinite(snapshot.updatedAt) ||
@@ -342,11 +368,47 @@ function projectPublicRelationsSnapshotContract(
 	}
 
 	return {
-		revision: snapshot.revision,
-		updatedAt: snapshot.updatedAt,
+		revision: snapshot.revision as number,
+		updatedAt: snapshot.updatedAt as number | null,
 		twinEdges,
 		conceptRelations: { edges: conceptEdges, conceptMap }
 	};
+}
+
+function projectSnapshotCoordinates(
+	value: unknown,
+	family: SnapshotFamily
+): SnapshotCoordinates & {
+	ready: boolean;
+} {
+	if (
+		!isRecord(value) ||
+		typeof value.ready !== 'boolean' ||
+		!Number.isSafeInteger(value.revision) ||
+		(value.revision as number) < 0 ||
+		(value.updatedAt !== null &&
+			(typeof value.updatedAt !== 'number' ||
+				!Number.isFinite(value.updatedAt) ||
+				value.updatedAt < 0)) ||
+		(value.ready && value.updatedAt === null)
+	) {
+		throw new PublicDiscoverySnapshotContractError('unsafe-manifest', family);
+	}
+	return {
+		ready: value.ready,
+		revision: value.revision as number,
+		updatedAt: value.updatedAt as number | null
+	};
+}
+
+function projectPublicDiscoveryManifestContract(value: unknown): PublicDiscoveryManifest {
+	if (!isRecord(value)) {
+		throw new PublicDiscoverySnapshotContractError('unsafe-manifest');
+	}
+	return {
+		list: projectSnapshotCoordinates(value.list, 'list'),
+		relations: projectSnapshotCoordinates(value.relations, 'relations')
+	} as PublicDiscoveryManifest;
 }
 
 /**
@@ -367,7 +429,8 @@ export function getCachedPublicDiscoveryManifest(
 			...context,
 			freshForMs: PUBLIC_DISCOVERY_MANIFEST_FRESH_MS,
 			forceRefresh,
-			refreshMode: 'blocking'
+			refreshMode: 'blocking',
+			projectCachedValue: projectPublicDiscoveryManifestContract
 		},
 		() => serverQuery(api.templates.publicDiscoveryManifest, {})
 	);
@@ -376,12 +439,16 @@ export function getCachedPublicDiscoveryManifest(
 async function manifestOrLastKnownGood<T>(
 	context: PublicQueryContext,
 	logicalKey: string,
-	loadManifest: () => Promise<PublicDiscoveryManifest>
+	loadManifest: () => Promise<PublicDiscoveryManifest>,
+	projectCachedValue: (value: unknown) => T
 ): Promise<{ manifest: PublicDiscoveryManifest } | { lkg: T }> {
 	try {
 		return { manifest: await loadManifest() };
 	} catch (error) {
-		const lkg = await getCachedPublicDataLastKnownGood<T>(logicalKey, context);
+		const lkg = await getCachedPublicDataLastKnownGood<T>(logicalKey, {
+			...context,
+			projectCachedValue
+		});
 		if (lkg === undefined) throw error;
 		console.warn(
 			`[public-template-queries] manifest unavailable; serving ${logicalKey} last-known-good:`,
@@ -397,7 +464,8 @@ async function cacheExpectedSnapshot<TSnapshot extends SnapshotCoordinates, TVal
 	family: SnapshotFamily,
 	expected: SnapshotCoordinates,
 	loader: () => Promise<TSnapshot>,
-	select: (snapshot: TSnapshot) => TValue
+	select: (snapshot: TSnapshot) => TValue,
+	projectCachedValue: (value: unknown) => TValue
 ): Promise<TValue> {
 	return getCachedPublicData(
 		logicalKey,
@@ -405,6 +473,7 @@ async function cacheExpectedSnapshot<TSnapshot extends SnapshotCoordinates, TVal
 			...context,
 			freshForMs: PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
 			revision: snapshotGeneration(expected.revision, expected.updatedAt),
+			projectCachedValue,
 			// A coordinate mismatch is a benign publication race, not an origin
 			// outage. Let the typed error reach the one-retry manifest path instead
 			// of hiding it behind an older payload and a 15-minute retry backoff.
@@ -426,7 +495,8 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 	const resolved = await manifestOrLastKnownGood<PublicTemplateSnapshot['templates']>(
 		context,
 		logicalKey,
-		() => getCachedPublicDiscoveryManifest(context)
+		() => getCachedPublicDiscoveryManifest(context),
+		(value) => projectPublicTemplateCardsContract(value, excludeCwc)
 	);
 	if ('lkg' in resolved) return resolved.lkg;
 	const { manifest } = resolved;
@@ -443,9 +513,8 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 					(await serverQuery(api.templates.publicDiscoveryList, {
 						excludeCwc
 					}))) as PublicTemplateSnapshot,
-			(snapshot) => {
-				return projectPublicTemplateSnapshotContract(snapshot);
-			}
+			(snapshot) => projectPublicTemplateSnapshotContract(snapshot, excludeCwc),
+			(value) => projectPublicTemplateCardsContract(value, excludeCwc)
 		);
 
 	try {
@@ -478,7 +547,8 @@ export async function getCachedPublicRelations(context: PublicQueryContext, excl
 	const resolved = await manifestOrLastKnownGood<ProjectedPublicRelationsSnapshot>(
 		context,
 		logicalKey,
-		() => getCachedPublicDiscoveryManifest(context)
+		() => getCachedPublicDiscoveryManifest(context),
+		projectPublicRelationsSnapshotContract
 	);
 	if ('lkg' in resolved) return resolved.lkg;
 	const { manifest } = resolved;
@@ -497,7 +567,8 @@ export async function getCachedPublicRelations(context: PublicQueryContext, excl
 					(await serverQuery(api.templates.publicDiscoveryRelations, {
 						excludeCwc
 					}))) as PublicRelationsSnapshot,
-			(snapshot) => projectPublicRelationsSnapshotContract(snapshot)
+			(snapshot) => projectPublicRelationsSnapshotContract(snapshot),
+			projectPublicRelationsSnapshotContract
 		);
 
 	try {

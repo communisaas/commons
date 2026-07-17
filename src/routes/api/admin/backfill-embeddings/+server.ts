@@ -3,15 +3,51 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
-import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
+import {
+	EMBEDDING_CONFIG,
+	generateBatchEmbeddings,
+	truncateText
+} from '$lib/core/search/gemini-embeddings';
 import { env } from '$env/dynamic/private';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const BATCH_SIZE = 20;
+const FALLBACK_CONCURRENCY = 4;
+const EMBEDDING_TASK = { taskType: 'RETRIEVAL_DOCUMENT' as const };
+const FALLBACK_EMBEDDING_TASK = { ...EMBEDDING_TASK, maxRetries: 1 };
+const TEMPLATE_SPECIFIC_BATCH_FAILURE_PATTERNS = [
+	/\binvalid (?:input|argument)\b/i,
+	/\btext too long\b/i,
+	/\b(?:safety|content)\b.{0,80}\b(?:block|filter|policy|prohibit|reject)/i,
+	/\b(?:block|filter|prohibit|reject)\w*\b.{0,80}\b(?:safety|content)\b/i
+] as const;
 
 type BackfillError =
 	| { stage: 'embedding_generation' | 'embedding_write'; id: string; error: string }
 	| { stage: 'snapshot_rebuild'; error: string };
+
+function embeddingFailureMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Per-template retries are useful only when one row can poison an otherwise
+ * valid batch. Global auth, quota, timeout, and unknown service failures must
+ * stop after the already-retried batch call instead of multiplying external
+ * requests by the number of templates.
+ */
+function shouldIsolateTemplateFailures(error: unknown): boolean {
+	if (
+		error !== null &&
+		typeof error === 'object' &&
+		'code' in error &&
+		(error as { code?: unknown }).code === 'INVALID_ARGUMENT'
+	) {
+		return true;
+	}
+	const message = embeddingFailureMessage(error);
+	return TEMPLATE_SPECIFIC_BATCH_FAILURE_PATTERNS.some((pattern) => pattern.test(message));
+}
 
 /** Admin user IDs — populated from ADMIN_USER_IDS env var (comma-separated) */
 const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Boolean));
@@ -63,53 +99,118 @@ export const POST: RequestHandler = async ({ locals }) => {
 		let totalProcessed = 0;
 		const errors: BackfillError[] = [];
 
-		// Build text pairs: [location0, topic0, location1, topic1, ...]
-		const texts: string[] = [];
-		for (const t of batch) {
-			const locationText = `${t.title} ${t.description || ''} ${t.domain}`;
-			const topicText = `${t.title} ${t.description || ''} ${t.messageBody}`;
-			texts.push(locationText, topicText);
-		}
+		// Leave one token of headroom because truncateText may append an ellipsis.
+		// Embeddings are derived search material; the stored/public semantic fields
+		// remain untouched.
+		const maxEmbeddingTokens = EMBEDDING_CONFIG.maxInputTokens - 1;
+		const textPairs = batch.map((template) => [
+			truncateText(
+				`${template.title} ${template.description || ''} ${template.domain}`,
+				maxEmbeddingTokens
+			),
+			truncateText(
+				`${template.title} ${template.description || ''} ${template.messageBody}`,
+				maxEmbeddingTokens
+			)
+		]);
+		const texts = textPairs.flat();
+
+		const writeEmbeddings = async (
+			templateId: (typeof batch)[number]['_id'],
+			embeddings: number[][]
+		) => {
+			try {
+				await serverMutation(api.templates.updateMissingEmbeddingsForBackfill, {
+					templateId,
+					locationEmbedding: embeddings[0],
+					topicEmbedding: embeddings[1],
+					_secret: internalSecret,
+					leaseToken
+				});
+				totalProcessed++;
+				return true;
+			} catch (writeErr) {
+				const message = embeddingFailureMessage(writeErr);
+				errors.push({
+					stage: 'embedding_write',
+					id: templateId,
+					error: message
+				});
+				// Once this worker loses or outlives its lease, every later write
+				// would fail the same authoritative Convex check.
+				return !message.includes('EMBEDDING_BACKFILL_LEASE_');
+			}
+		};
 
 		try {
-			const embeddings = await generateBatchEmbeddings(texts, {
-				taskType: 'RETRIEVAL_DOCUMENT'
-			});
+			const embeddings = await generateBatchEmbeddings(texts, EMBEDDING_TASK);
 
 			// Write embeddings back via Convex. Every successful mutation marks the
 			// relation materialization dirty in the same transaction.
 			for (let j = 0; j < batch.length; j++) {
-				const templateId = batch[j]._id;
-
-				try {
-					await serverMutation(api.templates.updateMissingEmbeddingsForBackfill, {
-						templateId,
-						locationEmbedding: embeddings[j * 2],
-						topicEmbedding: embeddings[j * 2 + 1],
-						_secret: internalSecret,
-						leaseToken
-					});
-					totalProcessed++;
-				} catch (writeErr) {
-					const message = writeErr instanceof Error ? writeErr.message : String(writeErr);
-					errors.push({
-						stage: 'embedding_write',
-						id: templateId,
-						error: message
-					});
-					// Once this worker loses or outlives its lease, every later write
-					// would fail the same authoritative Convex check.
-					if (message.includes('EMBEDDING_BACKFILL_LEASE_')) break;
-				}
+				const keepWriting = await writeEmbeddings(batch[j]._id, [
+					embeddings[j * 2],
+					embeddings[j * 2 + 1]
+				]);
+				if (!keepWriting) break;
 			}
 		} catch (batchErr) {
-			// Entire batch failed (Gemini API error)
-			for (const t of batch) {
-				errors.push({
-					stage: 'embedding_generation',
-					id: t._id,
-					error: batchErr instanceof Error ? batchErr.message : String(batchErr)
-				});
+			const batchMessage = embeddingFailureMessage(batchErr);
+			if (!shouldIsolateTemplateFailures(batchErr)) {
+				console.warn(
+					'[backfill] Batch embedding generation failed globally; skipping per-template fallback:',
+					batchMessage
+				);
+				for (const template of batch) {
+					errors.push({
+						stage: 'embedding_generation',
+						id: template._id,
+						error: batchMessage
+					});
+				}
+			} else {
+				console.warn(
+					'[backfill] Batch contains invalid content; isolating individual templates:',
+					batchMessage
+				);
+
+				// One malformed/safety-rejected template must not pin the first page of
+				// missing rows forever. The efficient one-call batch remains the normal
+				// path; only an input-specific failure falls back to bounded four-way
+				// isolation, with Gemini's internal retries disabled because the batch
+				// already exhausted them. Successful siblings advance and the exact failed
+				// IDs are reported.
+				let keepWriting = true;
+				for (let offset = 0; offset < batch.length && keepWriting; offset += FALLBACK_CONCURRENCY) {
+					const candidates = batch.slice(offset, offset + FALLBACK_CONCURRENCY);
+					const outcomes = await Promise.all(
+						candidates.map(async (template, candidateIndex) => {
+							try {
+								const embeddings = await generateBatchEmbeddings(
+									textPairs[offset + candidateIndex],
+									FALLBACK_EMBEDDING_TASK
+								);
+								return { template, embeddings };
+							} catch (templateError) {
+								return { template, error: templateError };
+							}
+						})
+					);
+
+					for (const outcome of outcomes) {
+						if ('error' in outcome) {
+							errors.push({
+								stage: 'embedding_generation',
+								id: outcome.template._id,
+								error: embeddingFailureMessage(outcome.error)
+							});
+							continue;
+						}
+
+						keepWriting = await writeEmbeddings(outcome.template._id, outcome.embeddings);
+						if (!keepWriting) break;
+					}
+				}
 			}
 		}
 
@@ -120,7 +221,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 					leaseToken
 				});
 			} catch (rebuildError) {
-				const message = rebuildError instanceof Error ? rebuildError.message : String(rebuildError);
+				const message = embeddingFailureMessage(rebuildError);
 				errors.push({ stage: 'snapshot_rebuild', error: message });
 				console.error('[backfill] Immediate snapshot rebuild failed', rebuildError);
 			}

@@ -106,11 +106,11 @@ id = "90772b3f79d945d5b5f0df3d6d2ca732"
 # PUBLIC_DISCOVERY_KV: global source shield + last-known-good store for the
 # anonymous homepage/API snapshot payloads. The per-location Cache API remains
 # the hot layer; this namespace prevents one Convex cold fill per Cloudflare PoP.
-# Provisioned namespace verified in the configured Cloudflare account on
-# 2026-07-18. The gated deploy independently checks this exact ID and title.
-# Preview and production share this zero-cost namespace, but every key is scoped
-# by both request origin and configured Convex backend so a preview cannot mutate
-# production's last-known-good state. Namespace quotas remain shared.
+# The gated deploy checks this exact ID and title live in the configured account.
+# Preview and production keys are scoped by request origin and Convex backend,
+# preventing payload/LKG collisions. They still consume one account-wide Workers
+# KV operation and storage allowance; another namespace in this account would
+# improve operational separation, not create an independent Free quota pool.
 [[kv_namespaces]]
 binding = "PUBLIC_DISCOVERY_KV"
 id = "4517015752384e0f8628b85142c69221"

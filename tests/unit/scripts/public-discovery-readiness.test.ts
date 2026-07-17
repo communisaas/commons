@@ -25,6 +25,7 @@ import {
 const NOW = Date.UTC(2026, 6, 16, 14);
 const LIST_UPDATED_AT = NOW - 60 * 60 * 1000;
 const RELATIONS_UPDATED_AT = NOW - 30 * 60 * 1000;
+const INTERNAL_SECRET = 'release-readiness-secret-32-byte-padding';
 
 type ReadinessState = {
 	ready: boolean;
@@ -439,6 +440,13 @@ describe('public discovery producer readiness', () => {
 		expect(mockConvexQuery).not.toHaveBeenCalled();
 	});
 
+	it('requires the server-side internal secret before reading producer state', async () => {
+		await expect(
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud')
+		).rejects.toThrow('INTERNAL_API_SECRET must be configured for producer readiness');
+		expect(mockConvexQuery).not.toHaveBeenCalled();
+	});
+
 	it('accepts a root HTTPS Convex URL and queries every readiness payload', async () => {
 		const fixture = readyFixture();
 		mockConvexQuery
@@ -451,7 +459,10 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(fixture.producerStatus);
 
 		await expect(
-			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', {
+				now: NOW,
+				internalSecret: INTERNAL_SECRET
+			})
 		).resolves.toMatchObject({
 			listRevision: 4,
 			relationsRevision: 7,
@@ -468,7 +479,7 @@ describe('public discovery producer readiness', () => {
 			{ excludeCwc: false },
 			{ excludeCwc: true },
 			{},
-			{}
+			{ _secret: INTERNAL_SECRET }
 		]);
 		expect(mockConvexQuery.mock.calls.map(([reference]) => getFunctionName(reference))).toEqual([
 			'templates:publicDiscoveryManifest',
@@ -477,7 +488,7 @@ describe('public discovery producer readiness', () => {
 			'templates:publicDiscoveryRelations',
 			'templates:publicDiscoveryRelations',
 			'templates:publicDiscoveryManifest',
-			'observability:servicePing'
+			'observability:discoveryProducerStatus'
 		]);
 	});
 
@@ -507,7 +518,10 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(nextFixture.producerStatus);
 
 		await expect(
-			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', {
+				now: NOW,
+				internalSecret: INTERNAL_SECRET
+			})
 		).resolves.toMatchObject({ listRevision: 5, relationsRevision: 8 });
 		expect(mockConvexQuery).toHaveBeenCalledTimes(13);
 	});
@@ -528,7 +542,10 @@ describe('public discovery producer readiness', () => {
 		}
 
 		await expect(
-			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', { now: NOW })
+			verifyPublicDiscoveryReadiness('https://valid-deployment.convex.cloud', {
+				now: NOW,
+				internalSecret: INTERNAL_SECRET
+			})
 		).rejects.toThrow(/publication changed during 3 coherent-read attempts/);
 		expect(mockConvexQuery).toHaveBeenCalledTimes(18);
 	});

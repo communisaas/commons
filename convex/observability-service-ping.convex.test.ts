@@ -1,12 +1,13 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest } from 'convex-test';
 
 import schema from './schema';
 import { api } from './_generated/api';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
+const INTERNAL_SECRET = 'observability-readiness-secret-32-byte-padding';
 
 type TransactionMetrics = {
 	bytesRead: { used: number };
@@ -15,6 +16,15 @@ type TransactionMetrics = {
 };
 
 describe('observability service ping', () => {
+	beforeEach(() => {
+		vi.stubEnv('INTERNAL_API_SECRET', INTERNAL_SECRET);
+		vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+	});
+
 	it('fails loudly when the manifest singleton invariant is violated', async () => {
 		const t = convexTest({ schema, modules });
 		await t.run(async (ctx) => {
@@ -56,14 +66,37 @@ describe('observability service ping', () => {
 
 		expect(observed.value).toEqual({
 			ok: true,
+			storageReadable: true
+		});
+		expect(observed.metrics.bytesRead.used).toBeLessThan(2_000);
+		expect(observed.metrics.documentsRead.used).toBe(1);
+		expect(observed.metrics.databaseQueries.used).toBe(1);
+	});
+
+	it('keeps producer health and refresh timing behind the internal-secret boundary', async () => {
+		const t = convexTest({ schema, modules });
+		await t.run((ctx) =>
+			ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				listRevision: 1,
+				relationsReady: true,
+				relationsRevision: 1
+			})
+		);
+
+		await expect(
+			t.query(api.observability.discoveryProducerStatus, { _secret: 'anonymous' })
+		).rejects.toThrow('Unauthorized');
+		await expect(
+			t.query(api.observability.discoveryProducerStatus, { _secret: INTERNAL_SECRET })
+		).resolves.toEqual({
+			ok: true,
 			storageReadable: true,
 			discoveryManifestPresent: true,
 			discoveryProducerHealthy: true,
 			discoveryProducerOverdueAt: null
 		});
-		expect(observed.metrics.bytesRead.used).toBeLessThan(2_000);
-		expect(observed.metrics.documentsRead.used).toBe(1);
-		expect(observed.metrics.databaseQueries.used).toBe(1);
 	});
 
 	it('reports a durable public-discovery producer failure without extra reads', async () => {
@@ -80,7 +113,9 @@ describe('observability service ping', () => {
 			})
 		);
 
-		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+		await expect(
+			t.query(api.observability.discoveryProducerStatus, { _secret: INTERNAL_SECRET })
+		).resolves.toMatchObject({
 			discoveryManifestPresent: true,
 			discoveryProducerHealthy: false,
 			discoveryProducerOverdueAt: null
@@ -101,7 +136,9 @@ describe('observability service ping', () => {
 			})
 		);
 
-		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+		await expect(
+			t.query(api.observability.discoveryProducerStatus, { _secret: INTERNAL_SECRET })
+		).resolves.toMatchObject({
 			discoveryProducerHealthy: false,
 			discoveryProducerOverdueAt: 1_000 + 15 * 60 * 1000
 		});

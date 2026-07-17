@@ -27,7 +27,17 @@ vi.mock('convex-sveltekit', () => ({
 	serverQuery: mockServerQuery
 }));
 vi.mock('$lib/core/search/gemini-embeddings', () => ({
-	generateBatchEmbeddings: mockGenerateBatchEmbeddings
+	EMBEDDING_CONFIG: { maxInputTokens: 2048 },
+	generateBatchEmbeddings: mockGenerateBatchEmbeddings,
+	truncateText: (text: string, maxTokens: number) => {
+		const maxChars = maxTokens * 4;
+		if (text.length <= maxChars) return text;
+		const truncated = text.slice(0, maxChars);
+		const lastSpace = truncated.lastIndexOf(' ');
+		return lastSpace > maxChars * 0.8
+			? `${truncated.slice(0, lastSpace)}...`
+			: `${truncated}...`;
+	}
 }));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: vi.fn(() => 'route-backfill-secret')
@@ -54,6 +64,7 @@ describe('POST /api/admin/backfill-embeddings', () => {
 		mockServerQuery.mockReset();
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		vi.spyOn(console, 'error').mockImplementation(() => {});
+		vi.spyOn(console, 'warn').mockImplementation(() => {});
 	});
 
 	afterEach(() => {
@@ -168,5 +179,113 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			([ref]) => ref === api.templates.releaseEmbeddingBackfillLease
 		)?.[1];
 		expect(release).toEqual(claim);
+	});
+
+	it('isolates a poison template after a batch failure and advances healthy siblings', async () => {
+		mockServerQuery.mockResolvedValue([missingTemplate(0), missingTemplate(1)]);
+		mockGenerateBatchEmbeddings
+			.mockRejectedValueOnce(new Error('batch contains invalid input'))
+			.mockRejectedValueOnce(new Error('template 0 is invalid'))
+			.mockResolvedValueOnce([[11], [12]]);
+		mockServerMutation.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.claimEmbeddingBackfillLease) {
+				return { acquired: true, expiresAt: Date.now() + 900_000 };
+			}
+			if (ref === api.templates.updateMissingEmbeddingsForBackfill) return { updated: true };
+			if (ref === api.templates.rebuildHomepageSnapshotsAfterBackfill) return {};
+			if (ref === api.templates.releaseEmbeddingBackfillLease) return { released: true };
+			throw new Error(`Unexpected mutation: ${ref}`);
+		});
+
+		const response = await POST(event);
+		await expect(response.json()).resolves.toMatchObject({
+			processed: 1,
+			total_missing: 2,
+			errors: [
+				{ stage: 'embedding_generation', id: 'template-0', error: 'template 0 is invalid' }
+			]
+		});
+		expect(mockGenerateBatchEmbeddings).toHaveBeenCalledTimes(3);
+		expect(mockGenerateBatchEmbeddings.mock.calls[0][0]).toHaveLength(4);
+		expect(mockGenerateBatchEmbeddings.mock.calls[1][0]).toHaveLength(2);
+		expect(mockGenerateBatchEmbeddings.mock.calls[1][1]).toMatchObject({ maxRetries: 1 });
+		const updates = mockServerMutation.mock.calls.filter(
+			([ref]) => ref === api.templates.updateMissingEmbeddingsForBackfill
+		);
+		expect(updates).toHaveLength(1);
+		expect(updates[0][1]).toMatchObject({ templateId: 'template-1' });
+		expect(mockServerMutation).toHaveBeenCalledWith(
+			api.templates.rebuildHomepageSnapshotsAfterBackfill,
+			expect.objectContaining({ leaseToken: expect.any(String) })
+		);
+	});
+
+	it.each([
+		['authentication', 'Invalid GEMINI_API_KEY. Get key from the provider console.'],
+		[
+			'rate limit',
+			'Failed to generate batch embeddings after 3 attempts: RESOURCE_EXHAUSTED: quota exceeded'
+		],
+		[
+			'timeout',
+			'Failed to generate batch embeddings after 3 attempts: Gemini API timeout after 30000ms'
+		],
+		['unknown provider', 'Failed to generate batch embeddings after 3 attempts: provider exploded']
+	])('does not fan out a global %s failure into per-template Gemini calls', async (_label, message) => {
+		mockServerQuery.mockResolvedValue([missingTemplate(0), missingTemplate(1)]);
+		mockGenerateBatchEmbeddings.mockRejectedValueOnce(new Error(message));
+		mockServerMutation.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.claimEmbeddingBackfillLease) {
+				return { acquired: true, expiresAt: Date.now() + 900_000 };
+			}
+			if (ref === api.templates.releaseEmbeddingBackfillLease) return { released: true };
+			throw new Error(`Unexpected mutation after global embedding failure: ${ref}`);
+		});
+
+		const response = await POST(event);
+		await expect(response.json()).resolves.toMatchObject({
+			processed: 0,
+			total_missing: 2,
+			errors: [
+				{ stage: 'embedding_generation', id: 'template-0', error: message },
+				{ stage: 'embedding_generation', id: 'template-1', error: message }
+			]
+		});
+		expect(mockGenerateBatchEmbeddings).toHaveBeenCalledTimes(1);
+		expect(mockGenerateBatchEmbeddings.mock.calls[0][0]).toHaveLength(4);
+		expect(mockServerMutation).not.toHaveBeenCalledWith(
+			api.templates.updateMissingEmbeddingsForBackfill,
+			expect.anything()
+		);
+		expect(mockServerMutation).not.toHaveBeenCalledWith(
+			api.templates.rebuildHomepageSnapshotsAfterBackfill,
+			expect.anything()
+		);
+		expect(console.warn).toHaveBeenCalledWith(
+			'[backfill] Batch embedding generation failed globally; skipping per-template fallback:',
+			message
+		);
+	});
+
+	it('bounds oversized derived embedding text without changing the stored template', async () => {
+		const oversized = { ...missingTemplate(0), messageBody: 'x'.repeat(10_000) };
+		mockServerQuery.mockResolvedValue([oversized]);
+		mockGenerateBatchEmbeddings.mockResolvedValue([[1], [2]]);
+		mockServerMutation.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.claimEmbeddingBackfillLease) {
+				return { acquired: true, expiresAt: Date.now() + 900_000 };
+			}
+			if (ref === api.templates.updateMissingEmbeddingsForBackfill) return { updated: true };
+			if (ref === api.templates.rebuildHomepageSnapshotsAfterBackfill) return {};
+			if (ref === api.templates.releaseEmbeddingBackfillLease) return { released: true };
+			throw new Error(`Unexpected mutation: ${ref}`);
+		});
+
+		const response = await POST(event);
+		await expect(response.json()).resolves.toMatchObject({ processed: 1, total_missing: 1 });
+		const texts = mockGenerateBatchEmbeddings.mock.calls[0][0] as string[];
+		expect(texts).toHaveLength(2);
+		expect(Math.ceil(texts[1].length / 4)).toBeLessThanOrEqual(2048);
+		expect(oversized.messageBody).toHaveLength(10_000);
 	});
 });

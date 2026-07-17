@@ -106,8 +106,11 @@ npx wrangler kv namespace list
 Do not commit a placeholder or unverified namespace ID. This repository has no
 branch-specific Wrangler environments, so the configured bindings are shared by
 the Pages project across branch deployments; `PUBLIC_DISCOVERY_KV` isolates
-payload keys by Convex backend, but its operation and storage quotas remain
-shared at the namespace/account level.
+payload keys by origin and Convex backend, but Workers KV operation and storage
+quotas are account-wide across namespaces. Creating a second namespace in the
+same account improves operational separation; it does not add Free-plan
+capacity. An independent capacity boundary requires an account/plan decision
+outside this repository.
 
 ---
 
@@ -174,8 +177,10 @@ gate, not a backend deployment step: deploy the Convex schema/functions and run
 `templates:rebuildHomepageSnapshots` from the same release SHA first. Both list
 payloads must then report `projectionVersion:4`, exact recipient redaction, and
 the manifest-matched revision. After reading every payload, the verifier reads
-`observability:servicePing` and requires the discovery producer to be healthy,
-storage-readable, manifest-present, and not past its reported overdue time.
+the `_secret`-gated `observability:discoveryProducerStatus` query and requires
+the discovery producer to be healthy, storage-readable, manifest-present, and
+not past its reported overdue time. The anonymous `observability:servicePing`
+response contains only generic liveness and storage-readability booleans.
 Production also requires the known corpus to be non-empty and both
 materialization timestamps to be no more than 26 hours old; non-production uses
 contract-only mode, which permits stale or empty fixture data but does not waive
@@ -282,10 +287,11 @@ v4 materializations before upload.
 and preview builds at the non-production Convex deployment
 `outstanding-firefly-831`, while production uses `quirky-chinchilla-352`. The repo-visible
 Wrangler configuration still shares KV namespace bindings (and the same Pages project) across
-branches. Until separate staging KV resources and branch-scoped runtime secrets are
-provisioned, treat real-device credential smoke on staging as controlled smoke with test
-accounts and no live congressional delivery paths; do not describe it as production-Convex
-backed.
+branches. Until branch-specific staging KV resources and runtime secrets are provisioned,
+treat real-device credential smoke on staging as controlled smoke with test accounts and no
+live congressional delivery paths; do not describe it as production-Convex backed. A distinct
+namespace in the same Cloudflare account would isolate operational state, but preview and
+production traffic would still contend for the same account-wide KV allowance.
 
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
 `wrangler pages deploy`. Custom domains are validated during release smoke because

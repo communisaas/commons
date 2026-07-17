@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockConvexQuery, mockConvexConstructor, api } = vi.hoisted(() => ({
+const { mockConvexQuery, mockConvexConstructor, mockGetInternalSecret, api } = vi.hoisted(() => ({
 	mockConvexQuery: vi.fn(),
 	mockConvexConstructor: vi.fn(),
+	mockGetInternalSecret: vi.fn(),
 	api: {
 		observability: {
-			servicePing: 'observability.servicePing'
+			discoveryProducerStatus: 'observability.discoveryProducerStatus'
 		}
 	}
 }));
@@ -20,6 +21,9 @@ vi.mock('convex/browser', () => ({
 	}
 }));
 vi.mock('$lib/convex', () => ({ api, CONVEX_URL: 'https://static-convex.example' }));
+vi.mock('$lib/server/internal/secret-auth', () => ({
+	getInternalSecret: mockGetInternalSecret
+}));
 
 import { GET } from '../../../src/routes/api/health/+server';
 
@@ -43,6 +47,8 @@ describe('/api/health', () => {
 	beforeEach(() => {
 		mockConvexQuery.mockReset();
 		mockConvexConstructor.mockReset();
+		mockGetInternalSecret.mockReset();
+		mockGetInternalSecret.mockReturnValue('health-probe-internal-secret-32-byte-padding');
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
 	});
 
@@ -51,7 +57,7 @@ describe('/api/health', () => {
 		vi.unstubAllGlobals();
 	});
 
-	it('uses the singleton-read Convex service ping and reports a healthy dependency set', async () => {
+	it('uses the secret-gated singleton producer probe and reports a healthy dependency set', async () => {
 		mockConvexQuery.mockResolvedValue({
 			ok: true,
 			storageReadable: true,
@@ -69,16 +75,30 @@ describe('/api/health', () => {
 			expect.objectContaining({ logger: false, fetch: expect.any(Function) })
 		);
 		expect(mockConvexQuery).toHaveBeenCalledOnce();
-		expect(mockConvexQuery).toHaveBeenCalledWith(api.observability.servicePing, {});
+		expect(mockConvexQuery).toHaveBeenCalledWith(api.observability.discoveryProducerStatus, {
+			_secret: 'health-probe-internal-secret-32-byte-padding'
+		});
 		expect(body).toMatchObject({
 			status: 'ok',
 			convex: true,
 			atlas: { status: 'ok' },
-			publicDiscoveryCache: { kvBound: true }
+			publicDiscoveryCache: { status: 'ok', kvBound: true }
 		});
 	});
 
-	it('fails readiness loudly when the global discovery KV binding is missing', async () => {
+	it('fails closed when the server-side internal secret is unavailable', async () => {
+		mockGetInternalSecret.mockImplementation(() => {
+			throw new Error('INTERNAL_API_SECRET not configured');
+		});
+
+		const response = await GET(event());
+
+		expect(response.status).toBe(503);
+		expect(mockConvexQuery).not.toHaveBeenCalled();
+		await expect(response.json()).resolves.toMatchObject({ status: 'down', convex: false });
+	});
+
+	it('reports cache degradation without taking core application health down', async () => {
 		mockConvexQuery.mockResolvedValue({
 			ok: true,
 			storageReadable: true,
@@ -91,10 +111,12 @@ describe('/api/health', () => {
 			platform: { env: { ...HEALTH_ENV, PUBLIC_DISCOVERY_KV: undefined } }
 		} as never);
 
-		expect(response.status).toBe(503);
+		expect(response.status).toBe(200);
 		await expect(response.json()).resolves.toMatchObject({
-			status: 'down',
-			publicDiscoveryCache: { kvBound: false }
+			status: 'ok',
+			convex: true,
+			atlas: { status: 'ok' },
+			publicDiscoveryCache: { status: 'degraded', kvBound: false }
 		});
 	});
 

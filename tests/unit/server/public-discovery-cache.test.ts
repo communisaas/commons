@@ -212,9 +212,8 @@ describe('public discovery cache', () => {
 
 		const duplicateLoader = vi.fn().mockResolvedValue(3);
 		const coalescedRequest = getCachedPublicData('flight-0', { url: TEST_URL }, duplicateLoader);
-		// Let the request cross both empty edge/KV read microtasks and reach the
-		// in-flight lookup before B settles.
-		await new Promise<void>((resolve) => setTimeout(resolve, 0));
+		// Cold misses consult the active flight before any asynchronous shared-layer
+		// read, so this assertion is synchronous and scheduler-independent.
 		expect(duplicateLoader).not.toHaveBeenCalled();
 		replacement.resolve(2);
 		await expect(Promise.all([replacementRequest, coalescedRequest])).resolves.toEqual([2, 2]);
@@ -347,6 +346,39 @@ describe('public discovery cache', () => {
 		expect(loader).toHaveBeenCalledTimes(1);
 	});
 
+	it('reprojects an edge envelope before returning its serialized value', async () => {
+		const edge = installEdgeCache();
+		await getCachedPublicData('cards', { url: TEST_URL, revision: 1 }, async () => ({
+			publicTitle: 'Safe title',
+			privateRecipient: 'private@example.test'
+		}));
+		clearPublicDiscoveryCache();
+		const loader = vi.fn().mockRejectedValue(new Error('projected edge value should satisfy'));
+
+		await expect(
+			getCachedPublicData(
+				'cards',
+				{
+					url: TEST_URL,
+					revision: 1,
+					projectCachedValue: (value) => {
+						if (
+							!value ||
+							typeof value !== 'object' ||
+							typeof (value as { publicTitle?: unknown }).publicTitle !== 'string'
+						) {
+							throw new Error('unsafe cached card');
+						}
+						return { publicTitle: (value as { publicTitle: string }).publicTitle };
+					}
+				},
+				loader
+			)
+		).resolves.toEqual({ publicTitle: 'Safe title' });
+		expect(loader).not.toHaveBeenCalled();
+		expect(edge.match).toHaveBeenCalled();
+	});
+
 	it('uses Workers KV as a global shield after a local edge cache miss', async () => {
 		const kv = installKv();
 		const platform = { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform;
@@ -370,6 +402,40 @@ describe('public discovery cache', () => {
 		expect(kv.get).toHaveBeenCalledTimes(2);
 		expect(kv.list).not.toHaveBeenCalled();
 		expect(loader).toHaveBeenCalledTimes(1);
+	});
+
+	it('treats a malformed KV envelope value as a cache miss', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		await getCachedPublicData('cards', { url: TEST_URL, platform, revision: 2 }, async () => ({
+			message_body: { privateRecipient: 'private@example.test' }
+		}));
+		clearPublicDiscoveryCache();
+		const loader = vi.fn().mockResolvedValue({ message_body: 'Safe message' });
+
+		await expect(
+			getCachedPublicData(
+				'cards',
+				{
+					url: TEST_URL,
+					platform,
+					revision: 2,
+					projectCachedValue: (value) => {
+						if (
+							!value ||
+							typeof value !== 'object' ||
+							typeof (value as { message_body?: unknown }).message_body !== 'string'
+						) {
+							throw new Error('unsafe cached card');
+						}
+						return { message_body: (value as { message_body: string }).message_body };
+					}
+				},
+				loader
+			)
+		).resolves.toEqual({ message_body: 'Safe message' });
+		expect(loader).toHaveBeenCalledOnce();
+		expect(kv.get).toHaveBeenCalledTimes(2);
 	});
 
 	it('never serves a pre-v5 unallowlisted envelope or pointer during origin failure', async () => {
@@ -1062,7 +1128,7 @@ describe('public discovery cache', () => {
 		expect(kv.list).toHaveBeenCalledTimes(listCallsAfterCheck + 1);
 	});
 
-	it('bounds an overflowing KV generation scan to one page and backs off for a day', async () => {
+	it('refuses an overflow candidate while retaining an independently local LKG', async () => {
 		const kv = installKv();
 		const platform = platformWithKv(kv);
 		const edge = installEdgeCache();
@@ -1097,9 +1163,11 @@ describe('public discovery cache', () => {
 
 		clearPublicDiscoveryCache();
 		const listCallsBeforeRecovery = kv.list.mock.calls.length;
+		const readsBeforeRecovery = kv.get.mock.calls.length;
 		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
 			.resolves.toEqual(['local-newest']);
 		expect(kv.list).toHaveBeenCalledTimes(listCallsBeforeRecovery + 1);
+		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
 		expect(kv.list.mock.calls.at(-1)?.[0]).toMatchObject({ limit: 1000 });
 		expect(kv.list.mock.calls.at(-1)?.[0]).not.toHaveProperty('cursor');
 		expect(warn).toHaveBeenCalledWith(
@@ -1135,6 +1203,47 @@ describe('public discovery cache', () => {
 			})
 		).resolves.toEqual(['local-newest']);
 		expect(kv.list).toHaveBeenCalledTimes(listCallsBeforeRecovery + 2);
+	});
+
+	it('fails closed and spends one daily list when overflow has no local LKG', async () => {
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await getCachedPublicData(
+			'templates',
+			{ url: TEST_URL, platform, revision: '1:100' },
+			async () => ['revision-one']
+		);
+		const seedKey = [...kv.entries.keys()].find((key) => key.includes(':revision='));
+		expect(seedKey).toBeDefined();
+		const revisionPrefix = seedKey!.slice(0, seedKey!.indexOf(':revision=') + ':revision='.length);
+		for (let revision = 2; revision <= 1001; revision += 1) {
+			const generation = `${revision}:100`;
+			kv.entries.set(
+				`${revisionPrefix}${encodeURIComponent(generation)}`,
+				JSON.stringify({
+					cachedAt: NOW,
+					globalCachedAt: NOW,
+					revision: generation,
+					value: [`revision-${revision}`]
+				})
+			);
+		}
+		clearPublicDiscoveryCache();
+		const readsBeforeRecovery = kv.get.mock.calls.length;
+
+		await expect(
+			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
+		).resolves.toBeUndefined();
+		await expect(
+			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
+		).resolves.toBeUndefined();
+
+		expect(kv.list).toHaveBeenCalledOnce();
+		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
+		expect(warn).toHaveBeenCalledWith(
+			'[public-discovery-cache] KV revision listing exceeded 1000-key recovery bound'
+		);
 	});
 
 	it('does not certify a failed KV check and shares its daily retry backoff', async () => {

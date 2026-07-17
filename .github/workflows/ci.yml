@@ -57,8 +57,8 @@ jobs:
       - name: Convex query efficiency guardrail
         run: npm run check:convex-queries
 
-      - name: Public-discovery no-drop writer contract
-        run: npx vitest --run tests/unit/convex/public-discovery-writer-contract.test.ts --config=vitest.config.ts
+      - name: Run public-discovery focused verification
+        run: node scripts/run-public-discovery-focused-tests.mjs
 
       - name: Run application type checks
         run: npm run check

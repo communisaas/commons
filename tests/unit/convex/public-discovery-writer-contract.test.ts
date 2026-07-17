@@ -12,9 +12,14 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import {
+	PUBLIC_DISCOVERY_SOURCE_FAMILIES,
+	type PublicDiscoverySourceTable
+} from '../../../convex/lib/publicDiscovery';
+
 const CONVEX_DIR = path.resolve(process.cwd(), 'convex');
 
-type SourceTable = 'templates' | 'templateEndorsements' | 'debates' | 'organizations';
+type SourceTable = PublicDiscoverySourceTable;
 
 const SOURCE_FIELDS: Record<SourceTable, ReadonlySet<string>> = {
 	templates: new Set([
@@ -60,7 +65,9 @@ const SOURCE_FIELDS: Record<SourceTable, ReadonlySet<string>> = {
 	organizations: new Set(['name', 'slug', 'avatar'])
 };
 
-const SOURCE_TABLES = new Set<SourceTable>(Object.keys(SOURCE_FIELDS) as SourceTable[]);
+const SOURCE_TABLES = new Set<SourceTable>(
+	Object.keys(PUBLIC_DISCOVERY_SOURCE_FAMILIES) as SourceTable[]
+);
 const DIRTY_HELPER_RE =
 	/markPublicDiscovery(?:ListDirty|RelationsDirty|ListAndRelationsDirty)\s*\(/;
 
@@ -631,17 +638,6 @@ function analyzeBoundary(boundary: Boundary): Detection[] {
 	};
 	visitWrites(parsed);
 
-	if (
-		/PUBLIC_DISCOVERY_SOURCE_TABLES\.has\(table\)/.test(boundary.body) &&
-		/ctx\.db\.delete\(/.test(boundary.body)
-	) {
-		detections.push({
-			key: `${boundary.file}:${boundary.name}`,
-			table: 'dynamic',
-			operation: 'fail-closed-source-clear'
-		});
-	}
-
 	return detections;
 }
 
@@ -726,6 +722,10 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:commitPublicDiscoveryRelationsPublication:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:invalidatePublicDiscoveryAfterDestructiveSourceChange:unresolved-patch-target:manifest._id':
+		/ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:invalidatePublicDiscoveryForCoordinatedRebuild:unresolved-patch-target:manifest._id':
+		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:markPublicDiscoveryFamiliesDirty:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:reschedulePublicDiscoveryListRefresh:unresolved-patch-target:manifest._id':
@@ -742,11 +742,8 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(delivery\.webhookId/,
 	'orgWebhooks.ts:markDeliverySuccess:unresolved-patch-target:delivery.webhookId':
 		/ctx\.db\.patch\(delivery\.webhookId/,
-	'seed.ts:clearTable:fail-closed-source-clear': /PUBLIC_DISCOVERY_SOURCE_TABLES\.has\(table\)/,
 	'seed.ts:clearTable:unresolved-delete-target:doc._id':
-		/PUBLIC_DISCOVERY_SOURCE_TABLES\.has\(table\)/,
-	'seed.ts:clearTable:unresolved-delete-target:row._id':
-		/PUBLIC_DISCOVERY_SOURCE_TABLES\.has\(table\)/,
+		/SEED_TABLES\.includes/,
 	'seed.ts:patchSeedRecord:unresolved-patch-target:normalizedId': /ALLOWED_SEED_TABLES\.includes/,
 	'subscriptions.ts:updateMyStripeCustomerId:unresolved-patch-target:userId':
 		/ctx\.db\.patch\(userId/,
@@ -841,6 +838,15 @@ describe('public-discovery source writer contract', () => {
 		);
 	});
 
+	it('pins newest-first source membership required by the no-drop OCC proof', () => {
+		const boundary = boundaryByKey.get('templates.ts:preparePublicTemplateSnapshotPlan');
+		expect(boundary).toBeDefined();
+		expect(boundary!.body).toMatch(
+			/query\(['"]templates['"]\)[\s\S]*withIndex\(['"]by_status_isPublic['"][\s\S]*\.order\(['"]desc['"]\)[\s\S]*\.take\(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP\)/
+		);
+		expect(boundary!.body).not.toMatch(/\bcandidates\s*\.\s*(?:sort|toSorted)\s*\(/);
+	});
+
 	it('couples materializer source reads to the field-sensitive writer classifier', () => {
 		const projectedReads: Record<SourceTable, Array<[string, ReadonlySet<string>]>> = {
 			templates: [
@@ -894,8 +900,10 @@ describe('public-discovery source writer contract', () => {
 			/const ALLOWED_SEED_TABLES = \["supporters", "donations", "orgInvites"\] as const/
 		);
 		const clearTable = boundaryByKey.get('seed.ts:clearTable')!.body;
-		expect(clearTable).toMatch(/PUBLIC_DISCOVERY_STATE_TABLES/);
-		expect(clearTable).toMatch(/ctx\.db\.delete\(row\._id\)/);
+		expect(clearTable).toMatch(/PUBLIC_DISCOVERY_SOURCE_FAMILIES/);
+		expect(clearTable).toMatch(/invalidatePublicDiscoveryAfterDestructiveSourceChange\s*\(/);
+		expect(clearTable).toMatch(/!suppressDiscoveryRefresh/);
+		expect(clearTable).not.toMatch(/publicTemplateSnapshots|templateRelationSnapshots/);
 	});
 
 	it('detects synthetic typed, helper, inserted, replaced, and dynamic unmarked writers', () => {

@@ -29,9 +29,17 @@
  *   - Update the constant if multi-state launch shifts the baseline.
  */
 
-import { internalAction, internalQuery, query, type ActionCtx } from './_generated/server';
+import { v } from 'convex/values';
+import {
+	internalAction,
+	internalQuery,
+	query,
+	type ActionCtx,
+	type QueryCtx
+} from './_generated/server';
 import { makeFunctionReference, type FunctionReference } from 'convex/server';
 import { captureToSentry } from './_sentry';
+import { requireInternalSecret } from './_internalAuth';
 
 // Break circular type inference between the action and the query in the same
 // file (mirrors the revocations.ts pattern). Calling `internal.observability.*`
@@ -86,51 +94,75 @@ const MIN_DENOMINATOR_FOR_ALERT = 50;
 const COVERAGE_FLOOR = 0.5;
 const PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS = 15 * 60 * 1000;
 
+async function readPublicDiscoveryManifest(ctx: QueryCtx) {
+	return ctx.db
+		.query('publicDiscoveryManifest')
+		.withIndex('by_key', (q) => q.eq('key', 'public'))
+		.unique();
+}
+
+async function readDiscoveryProducerStatus(ctx: QueryCtx) {
+	const manifest = await readPublicDiscoveryManifest(ctx);
+	const overdueCandidates = manifest
+		? [
+				manifest.listDirtyAt === undefined
+					? null
+					: (manifest.listRefreshScheduledAt ?? manifest.listDirtyAt) +
+						PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS,
+				manifest.relationsDirtyAt === undefined
+					? null
+					: (manifest.relationsRefreshScheduledAt ?? manifest.relationsDirtyAt) +
+						PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS
+			].filter((value): value is number => value !== null)
+		: [];
+	return {
+		ok: true as const,
+		storageReadable: true as const,
+		discoveryManifestPresent: manifest !== null,
+		discoveryProducerHealthy:
+			manifest !== null &&
+			manifest.listReady &&
+			manifest.relationsReady &&
+			manifest.listFailureCode === undefined &&
+			manifest.relationsFailureCode === undefined &&
+			!(manifest.listDirtyAt !== undefined && manifest.listRefreshScheduledAt === undefined) &&
+			!(
+				manifest.relationsDirtyAt !== undefined &&
+				manifest.relationsRefreshScheduledAt === undefined
+			),
+		discoveryProducerOverdueAt:
+			overdueCandidates.length === 0 ? null : Math.min(...overdueCandidates)
+	};
+}
+
 /**
  * Public service-liveness probe.
  *
  * Reaching and executing this function proves both that the deployment is
  * enabled and that its data plane can serve an indexed read. The manifest is a
  * tiny control-plane singleton, so the uptime monitor never hydrates an
- * embedding-bearing application row.
+ * embedding-bearing application row. Publication state deliberately stays out
+ * of this anonymous response; trusted server probes use
+ * `discoveryProducerStatus` below.
  */
 export const servicePing = query({
 	args: {},
 	handler: async (ctx) => {
-		const manifest = await ctx.db
-			.query('publicDiscoveryManifest')
-			.withIndex('by_key', (q) => q.eq('key', 'public'))
-			.unique();
-		const overdueCandidates = manifest
-			? [
-					manifest.listDirtyAt === undefined
-						? null
-						: (manifest.listRefreshScheduledAt ?? manifest.listDirtyAt) +
-							PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS,
-					manifest.relationsDirtyAt === undefined
-						? null
-						: (manifest.relationsRefreshScheduledAt ?? manifest.relationsDirtyAt) +
-							PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS
-				].filter((value): value is number => value !== null)
-			: [];
-		return {
-			ok: true as const,
-			storageReadable: true as const,
-			discoveryManifestPresent: manifest !== null,
-			discoveryProducerHealthy:
-				manifest !== null &&
-				manifest.listReady &&
-				manifest.relationsReady &&
-				manifest.listFailureCode === undefined &&
-				manifest.relationsFailureCode === undefined &&
-				!(manifest.listDirtyAt !== undefined && manifest.listRefreshScheduledAt === undefined) &&
-				!(
-					manifest.relationsDirtyAt !== undefined &&
-					manifest.relationsRefreshScheduledAt === undefined
-				),
-			discoveryProducerOverdueAt:
-				overdueCandidates.length === 0 ? null : Math.min(...overdueCandidates)
-		};
+		await readPublicDiscoveryManifest(ctx);
+		return { ok: true as const, storageReadable: true as const };
+	}
+});
+
+/**
+ * Trusted publication-readiness probe for SvelteKit and release automation.
+ * The shared-secret check runs before the indexed read so anonymous callers
+ * cannot use this endpoint to observe failure state or refresh timing.
+ */
+export const discoveryProducerStatus = query({
+	args: { _secret: v.string() },
+	handler: async (ctx, { _secret }) => {
+		requireInternalSecret(_secret);
+		return readDiscoveryProducerStatus(ctx);
 	}
 });
 

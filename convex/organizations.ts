@@ -713,9 +713,12 @@ export const update = mutation({
 		}
 
 		await ctx.db.patch(org._id, updates);
-		// Public template cards denormalize owner and endorser avatars. Invalidate
-		// the one list singleton directly; discovering referencing templates here
-		// would turn a profile edit into an unbounded reverse scan.
+		// Public template cards read exactly organization `{ name, slug, avatar }`.
+		// This mutation cannot rename an organization or change its slug, so avatar
+		// is its only projection-affecting input. Invalidate the one list singleton
+		// directly; discovering referencing templates here would turn a profile edit
+		// into an unbounded reverse scan. The writer-contract test couples this field
+		// inventory to the materializer so adding another public org field fails CI.
 		if (avatarChanged) {
 			await markPublicDiscoveryListDirty(ctx);
 		}

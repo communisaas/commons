@@ -30,11 +30,40 @@ function loadEvent(href: string) {
 function publicCard(id: string) {
 	return {
 		id,
+		slug: id,
+		title: id,
+		description: 'Description',
+		domain: 'Civic life',
+		topics: [],
+		type: 'advocacy',
+		deliveryMethod: 'email',
+		subject: 'Subject',
+		message_body: 'Message',
+		preview: 'Preview',
+		endorsingOrg: null,
+		endorsingOrgs: [],
+		endorsementCount: 0,
+		coordinationScale: 0,
+		isNew: false,
+		hasActiveDebate: false,
+		verified_sends: null,
+		unique_districts: null,
+		send_count: 0,
+		daily_arrivals: [],
+		district_counts: [],
+		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
 		recipient_config: null,
 		recipientEmails: [],
-		recipient_count: 0
+		recipient_count: 0,
+		campaign_id: null,
+		status: 'published',
+		is_public: true,
+		jurisdictions: [],
+		scope: null,
+		scopes: [],
+		createdAt: '2026-07-18T00:00:00.000Z'
 	};
 }
 

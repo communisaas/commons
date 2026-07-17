@@ -5,6 +5,23 @@ import type { MutationCtx } from '../_generated/server';
 
 export const PUBLIC_DISCOVERY_MANIFEST_KEY = 'public' as const;
 
+/**
+ * Canonical inventory of source tables and the snapshot families they affect.
+ *
+ * Keep this mapping at the serialization boundary rather than duplicating it in
+ * seed/admin helpers or CI. `debateArguments` is intentionally absent: public
+ * cards read only the counters denormalized onto `debates`, whose writers are
+ * separately covered by the writer-contract ratchet.
+ */
+export const PUBLIC_DISCOVERY_SOURCE_FAMILIES = {
+	templates: { list: true, relations: true },
+	templateEndorsements: { list: true, relations: false },
+	debates: { list: true, relations: false },
+	organizations: { list: true, relations: false }
+} as const;
+
+export type PublicDiscoverySourceTable = keyof typeof PUBLIC_DISCOVERY_SOURCE_FAMILIES;
+
 /** First dirty write owns one bounded coalescing window. */
 export const PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS = 60 * 1000;
 export const PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS = 60 * 1000;
@@ -20,8 +37,8 @@ export const PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS = 6 * 60 * 60 * 
 
 type Manifest = Doc<'publicDiscoveryManifest'>;
 
-type ScheduledListRefreshArgs = { scheduledAt: number };
-type ScheduledRelationsRefreshArgs = { scheduledAt: number };
+type ScheduledListRefreshArgs = { scheduledAt: number; bypassMinInterval?: boolean };
+type ScheduledRelationsRefreshArgs = { scheduledAt: number; bypassMinInterval?: boolean };
 
 const flushScheduledListRefreshRef = makeFunctionReference<'action'>(
 	'templates:superviseScheduledPublicTemplateRefresh'
@@ -157,25 +174,124 @@ export async function commitPublicDiscoveryRelationsPublication(
 async function scheduleListRefresh(
 	ctx: MutationCtx,
 	scheduledAt: number,
-	now: number
+	now: number,
+	bypassMinInterval = false
 ): Promise<Id<'_scheduled_functions'>> {
 	return await ctx.scheduler.runAfter(
 		Math.max(0, scheduledAt - now),
 		flushScheduledListRefreshRef,
-		{ scheduledAt }
+		{ scheduledAt, ...(bypassMinInterval ? { bypassMinInterval: true } : {}) }
 	);
 }
 
 async function scheduleRelationsRefresh(
 	ctx: MutationCtx,
 	scheduledAt: number,
-	now: number
+	now: number,
+	bypassMinInterval = false
 ): Promise<Id<'_scheduled_functions'>> {
 	return await ctx.scheduler.runAfter(
 		Math.max(0, scheduledAt - now),
 		flushScheduledRelationsRefreshRef,
-		{ scheduledAt }
+		{ scheduledAt, ...(bypassMinInterval ? { bypassMinInterval: true } : {}) }
 	);
+}
+
+function uniqueImmediateRefreshToken(manifest: Manifest | null, now: number): number {
+	const occupied = new Set([
+		manifest?.listRefreshScheduledAt,
+		manifest?.relationsRefreshScheduledAt
+	]);
+	let scheduledAt = now;
+	while (occupied.has(scheduledAt)) scheduledAt++;
+	return scheduledAt;
+}
+
+/**
+ * Hide a destructively changed source immediately and force one proportional
+ * rebuild outside the ordinary six-hour authoring cost floor.
+ *
+ * The list worker owns a combined list+relations generation when both families
+ * are affected. A unique token supersedes every older queued invocation while
+ * preserving snapshots, calibration, leases, and the unaffected family.
+ */
+export async function invalidatePublicDiscoveryAfterDestructiveSourceChange(
+	ctx: MutationCtx,
+	families: { list: boolean; relations: boolean },
+	now = Date.now()
+): Promise<{ scheduledAt: number }> {
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	const scheduledAt = uniqueImmediateRefreshToken(manifest, now);
+	const patch = {
+		...(families.list
+			? {
+					listReady: false,
+					listDirtyAt: now,
+					listRefreshScheduledAt: scheduledAt
+				}
+			: {}),
+		...(families.relations
+			? {
+					relationsReady: false,
+					relationsDirtyAt: now,
+					relationsRefreshScheduledAt: scheduledAt
+				}
+			: {})
+	};
+
+	if (manifest) {
+		await ctx.db.patch(manifest._id, patch);
+	} else {
+		await ctx.db.insert('publicDiscoveryManifest', {
+			...manifestInsertBase(),
+			...patch
+		});
+	}
+
+	if (families.list) {
+		await scheduleListRefresh(ctx, scheduledAt, now, true);
+	} else if (families.relations) {
+		await scheduleRelationsRefresh(ctx, scheduledAt, now, true);
+	}
+	return { scheduledAt };
+}
+
+/**
+ * Begin a multi-mutation replacement without exposing stale or partial data.
+ * Existing jobs are superseded, but no replacement job is queued: the owning
+ * action must publish once after every source mutation is complete.
+ */
+export async function invalidatePublicDiscoveryForCoordinatedRebuild(
+	ctx: MutationCtx,
+	families: { list: boolean; relations: boolean },
+	now = Date.now()
+): Promise<void> {
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	const patch = {
+		...(families.list
+			? {
+					listReady: false,
+					listDirtyAt: now,
+					listRefreshScheduledAt: undefined
+				}
+			: {}),
+		...(families.relations
+			? {
+					relationsReady: false,
+					relationsDirtyAt: now,
+					relationsRefreshScheduledAt: undefined
+				}
+			: {})
+	};
+
+	if (manifest) {
+		await ctx.db.patch(manifest._id, patch);
+	} else {
+		await ctx.db.insert('publicDiscoveryManifest', {
+			...manifestInsertBase(),
+			...patch
+		});
+	}
 }
 
 type PublicDiscoveryRefreshPatch = {
@@ -242,6 +358,10 @@ async function markPublicDiscoveryFamiliesDirty(
 	// LOAD-BEARING NO-DROP READ: even when an existing future token makes the
 	// resulting patch empty, this unconditional singleton read must stay in the
 	// transaction read set so Convex OCC serializes it with an eligible flush.
+	// The corresponding list scanner's membership cutoff is also load-bearing:
+	// it must remain the bounded `by_status_isPublic` range in descending
+	// `_creationTime` order. A score/reach sort could promote an unread row into
+	// the top 50 and would invalidate the range-read OCC proof below.
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
 	const listPlan = families.list ? planListRefresh(manifest, now) : undefined;
 	const relationsPlan = families.relations ? planRelationsRefresh(manifest, now) : undefined;
@@ -294,7 +414,8 @@ async function markPublicDiscoveryFamiliesDirty(
  * source write calling the matching dirty helper in the same mutation. Moving
  * either side outside that transaction, or adding a new writer without the
  * helper, invalidates the argument. The CI writer-contract ratchet inventories
- * the current mutation boundaries; new projection fields/writers must extend it.
+ * the current mutation boundaries and pins the newest-first range membership;
+ * new projection fields/writers or a new ranking rule must extend that proof.
  *
  * Mark the list payload dirty and ensure exactly one bounded refresh job owns
  * the current window. Every caller writes only this singleton; duplicate writes

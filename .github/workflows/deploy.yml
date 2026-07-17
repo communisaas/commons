@@ -121,20 +121,7 @@ jobs:
         run: npm run check:convex-queries
 
       - name: Run public-discovery focused verification
-        run: |
-          npx vitest --run \
-            convex/templates-read-budget.convex.test.ts \
-            convex/templates-snapshots.convex.test.ts \
-            convex/templates-embedding-backfill.convex.test.ts \
-            convex/observability-service-ping.convex.test.ts \
-            convex/lib/relatedness.test.ts \
-            convex/lib/tag_concepts.test.ts \
-            tests/unit/convex/public-discovery-writer-contract.test.ts \
-            tests/unit/server/public-discovery-cache.test.ts \
-            tests/unit/routes/home-page-load.test.ts \
-            tests/unit/routes/templates-api-auth.test.ts \
-            tests/unit/scripts/public-discovery-readiness.test.ts \
-            --config=vitest.config.ts
+        run: node scripts/run-public-discovery-focused-tests.mjs
 
       - name: Run full test suite
         run: npm run test:run
@@ -192,42 +179,31 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
           PUBLIC_DISCOVERY_KV_ID: '4517015752384e0f8628b85142c69221'
         run: |
-          if ! configured_id=$(node <<'NODE'
-          const fs = require('node:fs');
-          const lines = fs.readFileSync('wrangler.toml', 'utf8').split(/\r?\n/);
-          const namespaces = [];
-          let current = null;
+          if ! configured_id=$(python3 <<'PYTHON'
+          import sys
+          import tomllib
 
-          const finishNamespace = () => {
-            if (current) namespaces.push(current);
-            current = null;
-          };
+          with open("wrangler.toml", "rb") as config_file:
+              config = tomllib.load(config_file)
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed === '[[kv_namespaces]]') {
-              finishNamespace();
-              current = {};
-              continue;
-            }
-            if (trimmed.startsWith('[')) {
-              finishNamespace();
-              continue;
-            }
-            if (!current) continue;
-            const field = /^(binding|id)\s*=\s*"([^"]+)"\s*(?:#.*)?$/.exec(trimmed);
-            if (field) current[field[1]] = field[2];
-          }
-          finishNamespace();
+          namespaces = config.get("kv_namespaces", [])
+          if not isinstance(namespaces, list):
+              sys.exit("wrangler.toml kv_namespaces must be an array")
 
-          const matches = namespaces.filter(({ binding }) => binding === 'PUBLIC_DISCOVERY_KV');
-          if (matches.length !== 1 || typeof matches[0].id !== 'string') {
-            throw new Error(
-              `wrangler.toml must contain exactly one PUBLIC_DISCOVERY_KV binding with an id; found ${matches.length}`
-            );
-          }
-          process.stdout.write(matches[0].id);
-          NODE
+          matches = [
+              namespace
+              for namespace in namespaces
+              if isinstance(namespace, dict)
+              and namespace.get("binding") == "PUBLIC_DISCOVERY_KV"
+          ]
+          if len(matches) != 1 or not isinstance(matches[0].get("id"), str) or not matches[0]["id"]:
+              sys.exit(
+                  "wrangler.toml must contain exactly one PUBLIC_DISCOVERY_KV "
+                  f"binding with a non-empty id; found {len(matches)}"
+              )
+
+          print(matches[0]["id"], end="")
+          PYTHON
           ); then
             echo "::error::Unable to resolve the committed PUBLIC_DISCOVERY_KV binding from wrangler.toml."
             exit 1
@@ -330,7 +306,13 @@ jobs:
         # This Pages workflow does not mutate Convex. A successful gate proves
         # the target backend already has the new functions/schema and a v4
         # rematerialization before any branch can upload an edge consumer.
+        env:
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
         run: |
+          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
+            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub Environment secret."
+            exit 1
+          fi
           if [ "${DEPLOY_BRANCH}" = "production" ]; then
             PUBLIC_DISCOVERY_MAX_AGE_HOURS=26 \
               PUBLIC_DISCOVERY_REQUIRE_CONTENT=true \
@@ -482,7 +464,8 @@ jobs:
                 echo "$body"
 
                 if [ "$strict_atlas" = "true" ]; then
-                  if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
+                  if [ "$http_status" = "200" ] && echo "$body" | jq -e \
+                    '.status == "ok" and .publicDiscoveryCache.kvBound == true' >/dev/null; then
                     exit 0
                   fi
                 elif echo "$body" | jq -e '.convex == true and .publicDiscoveryCache.kvBound == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then

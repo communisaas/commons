@@ -46,11 +46,12 @@ describe('observability module', () => {
 
 	it('alert payload contains aggregate counts only — no user IDs / hashes / addresses', async () => {
 		const source = await fs.readFile(observabilityPath, 'utf8');
-		// Locate the JSON.stringify body of the fetch alert call. We require
-		// only aggregate fields and forbid any per-user fields.
-		const alertCallStart = source.indexOf('/api/internal/alert');
-		expect(alertCallStart).toBeGreaterThan(0);
-		const alertWindow = source.slice(alertCallStart, alertCallStart + 1600);
+		// Anchor on the rate-alert payload itself: the module also documents and
+		// emits a separate coverage alert, so the first endpoint mention is not a
+		// stable proxy for this JSON.stringify body.
+		const alertPayloadStart = source.indexOf("code: 'BOUNDARY_CELL_RATE_HIGH'");
+		expect(alertPayloadStart).toBeGreaterThan(0);
+		const alertWindow = source.slice(alertPayloadStart, alertPayloadStart + 800);
 		// Allowed (aggregate counts):
 		expect(alertWindow).toMatch(/rate/);
 		expect(alertWindow).toMatch(/boundaryCount/);

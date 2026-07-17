@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { ConvexHttpClient } from 'convex/browser';
 import { api, CONVEX_URL } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const startTime = Date.now();
 const HEALTH_PROBE_TIMEOUT_MS = 5_000;
@@ -17,16 +18,22 @@ type HealthEnv = {
 export const GET: RequestHandler = async ({ platform }) => {
 	const env = platform?.env as HealthEnv | undefined;
 	const [atlas, convex] = await Promise.all([checkAtlas(env), checkConvex(env)]);
+	const kvBound =
+		typeof env?.PUBLIC_DISCOVERY_KV?.get === 'function' &&
+		typeof env.PUBLIC_DISCOVERY_KV.put === 'function' &&
+		typeof env.PUBLIC_DISCOVERY_KV.list === 'function';
 	const publicDiscoveryCache = {
-		kvBound:
-			typeof env?.PUBLIC_DISCOVERY_KV?.get === 'function' &&
-			typeof env.PUBLIC_DISCOVERY_KV.put === 'function' &&
-			typeof env.PUBLIC_DISCOVERY_KV.list === 'function'
+		status: kvBound ? 'ok' : 'degraded',
+		kvBound
 	};
 
-	const healthy = convex && atlas.status === 'ok' && publicDiscoveryCache.kvBound;
-	const status = healthy ? 'ok' : 'down';
-	const code = healthy ? 200 : 503;
+	// The cache is an availability/cost shield, not a whole-application
+	// dependency. Report a missing binding explicitly, but keep core readiness
+	// tied to Convex and Atlas. Deployment verification separately requires the
+	// committed namespace and this runtime binding before accepting a release.
+	const coreReady = convex && atlas.status === 'ok';
+	const status = coreReady ? 'ok' : 'down';
+	const code = coreReady ? 200 : 503;
 
 	return json(
 		{
@@ -44,17 +51,19 @@ async function checkConvex(env: HealthEnv | undefined): Promise<boolean> {
 	const controller = new AbortController();
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
-		// servicePing performs one indexed read of the tiny public-discovery
-		// manifest singleton, exercising the data plane without hydrating an
-		// embedding-bearing application document. Use a request-local HTTP client
-		// so the deadline aborts the underlying fetch rather than merely abandoning
-		// an unbounded serverQuery promise.
+		// The secret-gated producer status performs one indexed read of the tiny
+		// public-discovery manifest singleton, exercising the data plane without
+		// exposing failure or refresh timing to anonymous Convex callers. Use a
+		// request-local HTTP client so the deadline aborts the underlying fetch
+		// rather than merely abandoning an unbounded serverQuery promise.
 		const client = new ConvexHttpClient(env?.PUBLIC_CONVEX_URL || CONVEX_URL, {
 			logger: false,
 			fetch: (input, init) => fetch(input, { ...init, signal: controller.signal })
 		});
 		timeout = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
-		const result = await client.query(api.observability.servicePing, {});
+		const result = await client.query(api.observability.discoveryProducerStatus, {
+			_secret: getInternalSecret()
+		});
 		const producerScheduleHealthy =
 			result.discoveryProducerOverdueAt === null ||
 			(typeof result.discoveryProducerOverdueAt === 'number' &&
