@@ -84,6 +84,7 @@ const MIN_DENOMINATOR_FOR_ALERT = 50;
  * the bias and document.
  */
 const COVERAGE_FLOOR = 0.5;
+const PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS = 15 * 60 * 1000;
 
 /**
  * Public service-liveness probe.
@@ -100,10 +101,35 @@ export const servicePing = query({
 			.query('publicDiscoveryManifest')
 			.withIndex('by_key', (q) => q.eq('key', 'public'))
 			.first();
+		const overdueCandidates = manifest
+			? [
+					manifest.listDirtyAt === undefined
+						? null
+						: (manifest.listRefreshScheduledAt ?? manifest.listDirtyAt) +
+							PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS,
+					manifest.relationsDirtyAt === undefined
+						? null
+						: (manifest.relationsRefreshScheduledAt ?? manifest.relationsDirtyAt) +
+							PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS
+				].filter((value): value is number => value !== null)
+			: [];
 		return {
 			ok: true as const,
 			storageReadable: true as const,
-			discoveryManifestPresent: manifest !== null
+			discoveryManifestPresent: manifest !== null,
+			discoveryProducerHealthy:
+				manifest !== null &&
+				manifest.listReady &&
+				manifest.relationsReady &&
+				manifest.listFailureCode === undefined &&
+				manifest.relationsFailureCode === undefined &&
+				!(manifest.listDirtyAt !== undefined && manifest.listRefreshScheduledAt === undefined) &&
+				!(
+					manifest.relationsDirtyAt !== undefined &&
+					manifest.relationsRefreshScheduledAt === undefined
+				),
+			discoveryProducerOverdueAt:
+				overdueCandidates.length === 0 ? null : Math.min(...overdueCandidates)
 		};
 	}
 });

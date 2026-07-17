@@ -1,4 +1,4 @@
-import { query, mutation, action, internalAction, internalQuery, internalMutation, type MutationCtx, type QueryCtx } from "./_generated/server";
+import { query, mutation, action, internalAction, internalQuery, internalMutation, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { makeFunctionReference } from "convex/server";
 import type { FunctionReference } from "convex/server";
 import { getConvexSize, v, type Value } from "convex/values";
@@ -14,6 +14,14 @@ import {
 import anchorsData from "./domain-anchors.json";
 import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
 import { clusterTagConcepts, conceptEdges, tagConceptMap } from "./lib/tag_concepts";
+import { captureToSentry } from "./_sentry";
+import {
+  MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
+  MAX_PUBLIC_TEMPLATE_SCOPES,
+  TEMPLATE_CONFIG_STRUCTURE_BUDGET,
+  validateBoundedJson,
+  validateTemplateInputBudgets,
+} from "./lib/templateInputBudget";
 import {
   PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
   PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
@@ -32,6 +40,23 @@ import {
 
 declare const process: { env: Record<string, string | undefined> };
 
+const templateGeographicScopeValidator = v.union(
+  v.object({ type: v.literal("international") }),
+  v.object({
+    type: v.literal("nationwide"),
+    country: v.string(),
+    displayName: v.optional(v.string()),
+  }),
+  v.object({
+    type: v.literal("subnational"),
+    country: v.string(),
+    subdivision: v.optional(v.string()),
+    subdivisionName: v.optional(v.string()),
+    locality: v.optional(v.string()),
+    displayName: v.optional(v.string()),
+  }),
+);
+
 const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal">;
 const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unknown as FunctionReference<"query", "internal">;
 const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
@@ -43,6 +68,41 @@ const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patch
 const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
 const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
 const rebuildHomepageSnapshotsRef = makeFunctionReference<"mutation">("templates:rebuildHomepageSnapshots") as unknown as FunctionReference<"mutation", "internal">;
+const reportPublicDiscoverySnapshotFailureRef = makeFunctionReference<"action">(
+  "templates:reportPublicDiscoverySnapshotFailure",
+) as unknown as FunctionReference<
+  "action",
+  "internal",
+  { family: "list" | "relations"; code: string; failedAt: number },
+  unknown
+>;
+const rebuildPublicTemplateSnapshotsForCronAttemptRef = makeFunctionReference<"mutation">(
+  "templates:rebuildPublicTemplateSnapshotsForCronAttempt",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  Record<string, never>,
+  | { status: "rebuilt"; rebuilt: PublicTemplateSnapshotRebuildResult }
+  | { status: "oversize" }
+  | { status: "invalid" }
+>;
+const rebuildRelationSnapshotForCronAttemptRef = makeFunctionReference<"mutation">(
+  "templates:rebuildRelationSnapshotForCronAttempt",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  Record<string, never>,
+  | { status: "rebuilt"; rebuilt: RelationSnapshotRebuildResult }
+  | { status: "oversize" }
+>;
+const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<"mutation">(
+  "templates:recordPublicDiscoverySnapshotRuntimeFailure",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  { family: "list" | "relations"; code: string; failedAt: number },
+  unknown
+>;
 
 // ── Domain hue projection (cosine similarity → circular hue interpolation) ──
 
@@ -196,6 +256,127 @@ const PUBLIC_TEMPLATE_ENDORSEMENT_CAP = 6;
 const RELATION_SNAPSHOT_VARIANT_CAP = 50;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
 const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
+
+function classifyPublicTemplateSnapshotFreeze(
+  error: unknown,
+): "oversize" | "invalid" | null {
+  if (!(error instanceof Error)) return null;
+  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:")) return "oversize";
+  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_INVALID:")) return "invalid";
+  return null;
+}
+
+/** Emit the out-of-band alert scheduled by a failed snapshot mutation. */
+export const reportPublicDiscoverySnapshotFailure = internalAction({
+  args: {
+    family: v.union(v.literal("list"), v.literal("relations")),
+    code: v.string(),
+    failedAt: v.number(),
+  },
+  handler: async (_ctx, args) => {
+    await captureToSentry(new Error(args.code), {
+      action: "templates:publicDiscoverySnapshotRebuild",
+      level: "error",
+      extra: { family: args.family, failedAt: args.failedAt, code: args.code },
+    });
+    return { reported: true };
+  },
+});
+
+async function recordPublicDiscoverySnapshotFailure(
+  ctx: MutationCtx,
+  manifest: Doc<"publicDiscoveryManifest">,
+  family: "list" | "relations",
+  error: Error,
+  failedAt: number,
+): Promise<void> {
+  const code = error.message.slice(0, 500);
+  await ctx.db.patch(
+    manifest._id,
+    family === "list"
+      ? {
+          listDirtyAt: manifest.listDirtyAt ?? failedAt,
+          listRefreshScheduledAt: undefined,
+          listFailureAt: failedAt,
+          listFailureCode: code,
+        }
+      : {
+          relationsDirtyAt: manifest.relationsDirtyAt ?? failedAt,
+          relationsRefreshScheduledAt: undefined,
+          relationsFailureAt: failedAt,
+          relationsFailureCode: code,
+        },
+  );
+  await ctx.scheduler.runAfter(0, reportPublicDiscoverySnapshotFailureRef, {
+    family,
+    code,
+    failedAt,
+  });
+}
+
+async function freezePublicDiscoverySnapshotFailure(
+  ctx: MutationCtx,
+  family: "list" | "relations",
+  error: Error,
+  failedAt: number,
+): Promise<void> {
+  let manifest = await getPublicDiscoveryManifestRow(ctx);
+  if (!manifest) {
+    // A first-ever cron can fail before a manifest exists. Create the tiny
+    // dirty control row through the normal scheduler path. Recording the
+    // failure below clears that token, so its queued invocation is a cheap
+    // superseded no-op rather than another deterministic oversize scan.
+    if (family === "list") {
+      await markPublicDiscoveryListDirty(ctx, failedAt);
+    } else {
+      await markPublicDiscoveryRelationsDirty(ctx, failedAt);
+    }
+    manifest = await getPublicDiscoveryManifestRow(ctx);
+  }
+  if (!manifest) throw error;
+
+  await recordPublicDiscoverySnapshotFailure(ctx, manifest, family, error, failedAt);
+  console.error(
+    `[public-discovery] ${family} snapshot frozen at last-good until the next source write or daily cron: ${error.message}`,
+  );
+}
+
+/** Persist a failure observed outside the failed rebuild mutation transaction. */
+export const recordPublicDiscoverySnapshotRuntimeFailure = internalMutation({
+  args: {
+    family: v.union(v.literal("list"), v.literal("relations")),
+    code: v.string(),
+    failedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await freezePublicDiscoverySnapshotFailure(
+      ctx,
+      args.family,
+      new Error(args.code.slice(0, 500)),
+      args.failedAt,
+    );
+    return { recorded: true };
+  },
+});
+
+async function supervisePublicDiscoveryCronRebuild<Result>(
+  ctx: ActionCtx,
+  family: "list" | "relations",
+  attempt: FunctionReference<"mutation", "internal", Record<string, never>, Result>,
+): Promise<Result> {
+  try {
+    return await ctx.runMutation(attempt, {});
+  } catch (error) {
+    const failedAt = Date.now();
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+      family,
+      code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_REBUILD_FAILED:${message}`.slice(0, 500),
+      failedAt,
+    });
+    throw error;
+  }
+}
 
 /**
  * Align a stored oldest-first rolling arrival window with the materialization
@@ -371,9 +552,9 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       // future surfaces) inherit the floor without re-implementing.
       district_counts: (template.districtCounts ?? []).filter((d: { code: string; count: number }) => d.count >= 5),
       tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
-      delivery_config: template.deliveryConfig,
+      delivery_config: template.deliveryConfig ?? {},
       cwc_config: template.cwcConfig ?? null,
-      recipient_config: template.recipientConfig,
+      recipient_config: template.recipientConfig ?? {},
       campaign_id: template.campaignId ?? null,
       status: template.status,
       is_public: template.isPublic,
@@ -433,6 +614,242 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
 type PublicTemplatePayload = Awaited<ReturnType<typeof enrichPublicTemplates>>[number];
 
 /**
+ * Runtime schema for producer-trusted snapshot rows.
+ *
+ * `publicTemplateSnapshots.templates` remains `v.any()` during the live-row
+ * migration, but public readers never return a stored object or nested producer
+ * object verbatim. The `Record<keyof PublicTemplatePayload, SnapshotField>`
+ * constraint also makes a newly added producer field fail type-check until its
+ * public exposure and runtime shape are reviewed.
+ */
+type SnapshotField =
+  | { kind: "string" }
+  | { kind: "number" }
+  | { kind: "boolean" }
+  | { kind: "config" }
+  | { kind: "optional"; value: SnapshotField }
+  | { kind: "nullable"; value: SnapshotField }
+  | { kind: "array"; value: SnapshotField; maxItems: number }
+  | { kind: "object"; fields: Record<string, SnapshotField> };
+
+const SNAPSHOT_STRING: SnapshotField = { kind: "string" };
+const SNAPSHOT_NUMBER: SnapshotField = { kind: "number" };
+const SNAPSHOT_BOOLEAN: SnapshotField = { kind: "boolean" };
+const SNAPSHOT_CONFIG: SnapshotField = { kind: "config" };
+const snapshotOptional = (value: SnapshotField): SnapshotField => ({ kind: "optional", value });
+const snapshotNullable = (value: SnapshotField): SnapshotField => ({ kind: "nullable", value });
+const snapshotArray = (value: SnapshotField, maxItems: number): SnapshotField => ({
+  kind: "array",
+  value,
+  maxItems,
+});
+const snapshotObject = (fields: Record<string, SnapshotField>): SnapshotField => ({
+  kind: "object",
+  fields,
+});
+
+const SNAPSHOT_ORG = snapshotObject({
+  name: SNAPSHOT_STRING,
+  slug: SNAPSHOT_STRING,
+  avatar: snapshotNullable(SNAPSHOT_STRING),
+});
+const SNAPSHOT_SCOPE = snapshotObject({
+  id: SNAPSHOT_STRING,
+  template_id: SNAPSHOT_STRING,
+  country_code: SNAPSHOT_STRING,
+  region_code: snapshotNullable(SNAPSHOT_STRING),
+  locality_code: snapshotNullable(SNAPSHOT_STRING),
+  district_code: snapshotNullable(SNAPSHOT_STRING),
+  display_text: SNAPSHOT_STRING,
+  scope_level: SNAPSHOT_STRING,
+  confidence: SNAPSHOT_NUMBER,
+  extraction_method: SNAPSHOT_STRING,
+});
+const SNAPSHOT_JURISDICTION = snapshotObject({
+  id: SNAPSHOT_STRING,
+  template_id: SNAPSHOT_STRING,
+  jurisdiction_type: SNAPSHOT_STRING,
+  congressional_district: snapshotNullable(SNAPSHOT_STRING),
+  senate_class: snapshotNullable(SNAPSHOT_STRING),
+  state_code: snapshotNullable(SNAPSHOT_STRING),
+  state_senate_district: snapshotNullable(SNAPSHOT_STRING),
+  state_house_district: snapshotNullable(SNAPSHOT_STRING),
+  county_fips: snapshotNullable(SNAPSHOT_STRING),
+  county_name: snapshotNullable(SNAPSHOT_STRING),
+  city_name: snapshotNullable(SNAPSHOT_STRING),
+  city_fips: snapshotNullable(SNAPSHOT_STRING),
+  school_district_id: snapshotNullable(SNAPSHOT_STRING),
+  school_district_name: snapshotNullable(SNAPSHOT_STRING),
+  latitude: snapshotNullable(SNAPSHOT_NUMBER),
+  longitude: snapshotNullable(SNAPSHOT_NUMBER),
+  estimated_population: snapshotNullable(SNAPSHOT_NUMBER),
+  coverage_notes: snapshotNullable(SNAPSHOT_STRING),
+});
+
+const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
+  id: SNAPSHOT_STRING,
+  slug: SNAPSHOT_STRING,
+  title: SNAPSHOT_STRING,
+  description: SNAPSHOT_STRING,
+  domain: SNAPSHOT_STRING,
+  domainHue: snapshotOptional(SNAPSHOT_NUMBER),
+  topics: snapshotArray(SNAPSHOT_STRING, 200),
+  type: SNAPSHOT_STRING,
+  deliveryMethod: SNAPSHOT_STRING,
+  subject: SNAPSHOT_STRING,
+  message_body: SNAPSHOT_STRING,
+  preview: SNAPSHOT_STRING,
+  endorsingOrg: snapshotNullable(SNAPSHOT_ORG),
+  endorsingOrgs: snapshotArray(SNAPSHOT_ORG, PUBLIC_TEMPLATE_ENDORSEMENT_CAP),
+  endorsementCount: SNAPSHOT_NUMBER,
+  coordinationScale: SNAPSHOT_NUMBER,
+  isNew: SNAPSHOT_BOOLEAN,
+  hasActiveDebate: SNAPSHOT_BOOLEAN,
+  debateSummary: snapshotOptional(
+    snapshotObject({
+      status: SNAPSHOT_STRING,
+      winningStance: snapshotOptional(SNAPSHOT_STRING),
+      uniqueParticipants: snapshotNullable(SNAPSHOT_NUMBER),
+      argumentCount: snapshotNullable(SNAPSHOT_NUMBER),
+      deadline: snapshotOptional(SNAPSHOT_STRING),
+    }),
+  ),
+  verified_sends: snapshotNullable(SNAPSHOT_NUMBER),
+  unique_districts: snapshotNullable(SNAPSHOT_NUMBER),
+  send_count: snapshotNullable(SNAPSHOT_NUMBER),
+  daily_arrivals: snapshotArray(SNAPSHOT_NUMBER, 30),
+  district_counts: snapshotArray(
+    snapshotObject({ code: SNAPSHOT_STRING, count: SNAPSHOT_NUMBER }),
+    500,
+  ),
+  tier_counts: snapshotArray(SNAPSHOT_NUMBER, 6),
+  delivery_config: SNAPSHOT_CONFIG,
+  cwc_config: snapshotNullable(SNAPSHOT_CONFIG),
+  recipient_config: SNAPSHOT_CONFIG,
+  campaign_id: snapshotNullable(SNAPSHOT_STRING),
+  status: SNAPSHOT_STRING,
+  is_public: SNAPSHOT_BOOLEAN,
+  jurisdictions: snapshotArray(SNAPSHOT_JURISDICTION, MAX_PUBLIC_TEMPLATE_JURISDICTIONS),
+  scope: snapshotNullable(SNAPSHOT_SCOPE),
+  scopes: snapshotArray(SNAPSHOT_SCOPE, MAX_PUBLIC_TEMPLATE_SCOPES),
+  recipientEmails: snapshotArray(SNAPSHOT_STRING, 200),
+  createdAt: SNAPSHOT_STRING,
+} satisfies Record<keyof PublicTemplatePayload, SnapshotField>;
+
+const INVALID_SNAPSHOT_VALUE = Symbol("INVALID_SNAPSHOT_VALUE");
+
+function cloneSnapshotConfig(value: unknown): unknown | typeof INVALID_SNAPSHOT_VALUE {
+  const bounded = validateBoundedJson(value, TEMPLATE_CONFIG_STRUCTURE_BUDGET);
+  if (!bounded.ok || value === null || typeof value !== "object" || Array.isArray(value)) {
+    return INVALID_SNAPSHOT_VALUE;
+  }
+
+  const clone = (current: unknown): unknown | typeof INVALID_SNAPSHOT_VALUE => {
+    if (
+      current === null ||
+      typeof current === "string" ||
+      typeof current === "boolean" ||
+      (typeof current === "number" && Number.isFinite(current))
+    ) {
+      return current;
+    }
+    if (Array.isArray(current)) {
+      const projected: unknown[] = [];
+      for (const item of current) {
+        const next = clone(item);
+        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+        projected.push(next);
+      }
+      return projected;
+    }
+    if (current !== null && typeof current === "object") {
+      const projected: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(current)) {
+        const next = clone(item);
+        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+        projected[key] = next;
+      }
+      return projected;
+    }
+    return INVALID_SNAPSHOT_VALUE;
+  };
+
+  return clone(value);
+}
+
+function projectSnapshotField(
+  value: unknown,
+  field: SnapshotField,
+): unknown | typeof INVALID_SNAPSHOT_VALUE {
+  switch (field.kind) {
+    case "string":
+      return typeof value === "string" ? value : INVALID_SNAPSHOT_VALUE;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value)
+        ? value
+        : INVALID_SNAPSHOT_VALUE;
+    case "boolean":
+      return typeof value === "boolean" ? value : INVALID_SNAPSHOT_VALUE;
+    case "config":
+      return cloneSnapshotConfig(value);
+    case "optional":
+      return projectSnapshotField(value, field.value);
+    case "nullable":
+      return value === null ? null : projectSnapshotField(value, field.value);
+    case "array": {
+      if (!Array.isArray(value) || value.length > field.maxItems) return INVALID_SNAPSHOT_VALUE;
+      const projected: unknown[] = [];
+      for (const item of value) {
+        const next = projectSnapshotField(item, field.value);
+        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+        projected.push(next);
+      }
+      return projected;
+    }
+    case "object": {
+      if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return INVALID_SNAPSHOT_VALUE;
+      }
+      const stored = value as Record<string, unknown>;
+      const projected: Record<string, unknown> = {};
+      for (const [name, nestedField] of Object.entries(field.fields)) {
+        if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
+          if (nestedField.kind === "optional") continue;
+          return INVALID_SNAPSHOT_VALUE;
+        }
+        const next = projectSnapshotField(stored[name], nestedField);
+        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+        projected[name] = next;
+      }
+      return projected;
+    }
+  }
+}
+
+function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
+  const stored = value as Record<string, unknown>;
+  const projected: Record<string, unknown> = {};
+  for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
+    if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
+      if (field.kind === "optional") continue;
+      return null;
+    }
+    const next = projectSnapshotField(stored[name], field);
+    if (next === INVALID_SNAPSHOT_VALUE) return null;
+    projected[name] = next;
+  }
+  return projected as PublicTemplatePayload;
+}
+
+function projectStoredPublicTemplates(value: unknown): PublicTemplatePayload[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((template) => projectStoredPublicTemplate(template))
+    .filter((template): template is PublicTemplatePayload => template !== null);
+}
+
+/**
  * Tiny public control plane for edge versioning and honest cold starts.
  *
  * No manifest row means neither snapshot family has ever published. That is
@@ -448,6 +865,31 @@ export const publicDiscoveryManifest = query({
       .order("desc")
       .first();
     return toPublicDiscoveryManifestPayload(manifest);
+  },
+});
+
+/** Operator detail for a producer that is serving a frozen last-good revision. */
+export const publicDiscoveryFailureStatus = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const manifest = await ctx.db
+      .query("publicDiscoveryManifest")
+      .withIndex("by_key", (q) => q.eq("key", "public"))
+      .order("desc")
+      .first();
+    return {
+      list:
+        manifest?.listFailureAt === undefined
+          ? null
+          : { failedAt: manifest.listFailureAt, code: manifest.listFailureCode ?? "UNKNOWN" },
+      relations:
+        manifest?.relationsFailureAt === undefined
+          ? null
+          : {
+              failedAt: manifest.relationsFailureAt,
+              code: manifest.relationsFailureCode ?? "UNKNOWN",
+            },
+    };
   },
 });
 
@@ -469,9 +911,7 @@ export const listPublic = query({
       .withIndex("by_key", (q) => q.eq("key", key))
       .order("desc")
       .first();
-    return Array.isArray(snapshot?.templates)
-      ? (snapshot.templates as PublicTemplatePayload[])
-      : [];
+    return projectStoredPublicTemplates(snapshot?.templates);
   },
 });
 
@@ -493,9 +933,7 @@ export const publicDiscoveryList = query({
     return {
       revision: snapshot?.revision ?? 0,
       updatedAt: snapshot?.updatedAt ?? null,
-      templates: Array.isArray(snapshot?.templates)
-        ? (snapshot.templates as PublicTemplatePayload[])
-        : [],
+      templates: projectStoredPublicTemplates(snapshot?.templates),
     };
   },
 });
@@ -535,7 +973,14 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   const selectedIds = new Set([...allSources.map((template) => template._id), ...excludeCwcSources.map((template) => template._id)]);
   const selectedSources = candidates.filter((template) => selectedIds.has(template._id));
   const enriched = await enrichPublicTemplates(ctx, selectedSources);
-  const enrichedById = new Map(enriched.map((template) => [template.id, template]));
+  const validatedEnriched = enriched.map((template) => {
+    const projected = projectStoredPublicTemplate(template);
+    if (!projected) {
+      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${template.id}`);
+    }
+    return projected;
+  });
+  const enrichedById = new Map(validatedEnriched.map((template) => [template.id, template]));
   const allTemplates = allSources.map((template) => enrichedById.get(template._id)!);
   const excludeCwcTemplates = excludeCwcSources.map((template) => enrichedById.get(template._id)!);
 
@@ -606,6 +1051,37 @@ export const rebuildPublicTemplateSnapshots = internalMutation({
   handler: rebuildPublicTemplateSnapshotsImpl,
 });
 
+/** Mutation attempt supervised by the cron action below. */
+export const rebuildPublicTemplateSnapshotsForCronAttempt = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    try {
+      return { status: "rebuilt" as const, rebuilt: await rebuildPublicTemplateSnapshotsImpl(ctx) };
+    } catch (error) {
+      const status = classifyPublicTemplateSnapshotFreeze(error);
+      if (!status) throw error;
+      await freezePublicDiscoverySnapshotFailure(
+        ctx,
+        "list",
+        error as Error,
+        Date.now(),
+      );
+      return { status };
+    }
+  },
+});
+
+/** Daily supervisor persists even unknown rebuild failures in a new mutation. */
+export const rebuildPublicTemplateSnapshotsForCron = internalAction({
+  args: {},
+  handler: async (ctx) =>
+    await supervisePublicDiscoveryCronRebuild(
+      ctx,
+      "list",
+      rebuildPublicTemplateSnapshotsForCronAttemptRef,
+    ),
+});
+
 /** Internal entry point used by tests/operators and future write modules. */
 export const requestPublicTemplateSnapshotRefresh = internalMutation({
   args: {},
@@ -654,23 +1130,15 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
       }
       return { status: "rebuilt" as const, rebuilt };
     } catch (error) {
-      // Oversize is detected before either snapshot row is written. Retain the
-      // dirty marker and retry only after another six-hour cost window. Unknown
-      // database/runtime failures are rethrown so Convex rolls the transaction
-      // back atomically; the next dirty write treats the elapsed token as stale.
-      if (!(error instanceof Error) || !error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:")) {
-        throw error;
-      }
-      const current = await getPublicDiscoveryManifestRow(ctx);
-      if (!current) throw error;
-      const retryAt = await reschedulePublicDiscoveryListRefresh(
-        ctx,
-        current,
-        now,
-        now + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
-      );
-      console.error(`[public-discovery] list snapshot remains last-good; retry scheduled at ${retryAt}: ${error.message}`);
-      return { status: "oversize" as const, scheduledAt: retryAt };
+      // Size or runtime-schema rejection is detected before either snapshot row
+      // is written. Retain the dirty/failure evidence but clear this elapsed
+      // token: deterministic invalid input is retried by the next source write
+      // or daily cron, not four times per day forever. Unknown database/runtime
+      // failures are rethrown so Convex rolls the transaction back atomically.
+      const status = classifyPublicTemplateSnapshotFreeze(error);
+      if (!status) throw error;
+      await freezePublicDiscoverySnapshotFailure(ctx, "list", error as Error, now);
+      return { status };
     }
   },
 });
@@ -1054,6 +1522,38 @@ export const rebuildRelationSnapshot = internalMutation({
   handler: rebuildRelationSnapshotImpl,
 });
 
+/** Mutation attempt supervised by the cron action below. */
+export const rebuildRelationSnapshotForCronAttempt = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    try {
+      return { status: "rebuilt" as const, rebuilt: await rebuildRelationSnapshotImpl(ctx) };
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) {
+        throw error;
+      }
+      await freezePublicDiscoverySnapshotFailure(
+        ctx,
+        "relations",
+        error,
+        Date.now(),
+      );
+      return { status: "oversize" as const };
+    }
+  },
+});
+
+/** Daily supervisor persists even unknown rebuild failures in a new mutation. */
+export const rebuildRelationSnapshotForCron = internalAction({
+  args: {},
+  handler: async (ctx) =>
+    await supervisePublicDiscoveryCronRebuild(
+      ctx,
+      "relations",
+      rebuildRelationSnapshotForCronAttemptRef,
+    ),
+});
+
 /** Internal entry point used by tests/operators and relation-affecting writers. */
 export const requestPublicTemplateRelationSnapshotRefresh = internalMutation({
   args: {},
@@ -1109,16 +1609,8 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
       if (!(error instanceof Error) || !error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) {
         throw error;
       }
-      const current = await getPublicDiscoveryManifestRow(ctx);
-      if (!current) throw error;
-      const retryAt = await reschedulePublicDiscoveryRelationsRefresh(
-        ctx,
-        current,
-        now,
-        now + PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
-      );
-      console.error(`[public-discovery] relation snapshot remains last-good; retry scheduled at ${retryAt}: ${error.message}`);
-      return { status: "oversize" as const, scheduledAt: retryAt };
+      await freezePublicDiscoverySnapshotFailure(ctx, "relations", error, now);
+      return { status: "oversize" as const };
     }
   },
 });
@@ -2078,7 +2570,7 @@ export const createTemplate = mutation({
     cwcConfig: v.optional(v.any()),
     recipientConfig: v.optional(v.any()),
     consensusApproved: v.boolean(),
-    geographicScope: v.optional(v.any()),
+    geographicScope: v.optional(templateGeographicScopeValidator),
     domainHue: v.optional(v.float64()),
   },
   handler: async (ctx, args) => {
@@ -2096,6 +2588,38 @@ export const createTemplate = mutation({
     const ALLOWED_TEMPLATE_STATUSES = ["draft", "published", "archived", "pending"] as const;
     if (!ALLOWED_TEMPLATE_STATUSES.includes(args.status as typeof ALLOWED_TEMPLATE_STATUSES[number])) {
       throw new Error("INVALID_TEMPLATE_STATUS");
+    }
+
+    // Mirror the HTTP boundary before any quota reads or source write. The
+    // internal secret is a trust boundary, not permission to store a document
+    // large enough to exhaust the bounded homepage materializer.
+    const inputBudget = validateTemplateInputBudgets(
+      {
+        title: args.title,
+        slug: args.slug,
+        description: args.description,
+        messageBody: args.messageBody,
+        preview: args.preview,
+        type: args.type,
+        deliveryMethod: args.deliveryMethod,
+        domain: args.domain,
+        topics: args.topics,
+        sources: args.sources,
+        researchLog: args.researchLog,
+        deliveryConfig: args.deliveryConfig,
+        cwcConfig: args.cwcConfig,
+        recipientConfig: args.recipientConfig,
+        geographicScope: args.geographicScope,
+        contentHash: args.contentHash,
+        status: args.status,
+        isPublic: args.isPublic,
+      },
+      { includePublicInput: args.status === "published" && args.isPublic },
+    );
+    if (!inputBudget.ok) {
+      throw new Error(
+        `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,
+      );
     }
 
     // Check org quota
@@ -2283,6 +2807,39 @@ export const patchMetadata = mutation({
     const template = await ctx.db.get(args.templateId);
     if (!template) throw new Error("Template not found");
     if (template.userId !== userId) throw new Error("Unauthorized");
+
+    // Metadata is part of the materialized public card. Re-evaluate the full
+    // resulting authoring/public projection so this secondary writer cannot
+    // bypass the create boundary's snapshot-availability budget.
+    const inputBudget = validateTemplateInputBudgets(
+      {
+        title: template.title,
+        slug: template.slug,
+        description: template.description,
+        messageBody: template.messageBody,
+        preview: template.preview,
+        type: template.type,
+        deliveryMethod: template.deliveryMethod,
+        domain: args.domain ?? resolveDomain(template),
+        topics: args.topics ?? template.topics ?? [],
+        sources: template.sources,
+        researchLog: template.researchLog,
+        deliveryConfig: template.deliveryConfig,
+        cwcConfig: template.cwcConfig,
+        recipientConfig: template.recipientConfig,
+        scopes: template.scopes,
+        jurisdictions: template.jurisdictions,
+        contentHash: template.contentHash,
+        status: template.status,
+        isPublic: template.isPublic,
+      },
+      { includePublicInput: template.status === "published" && template.isPublic },
+    );
+    if (!inputBudget.ok) {
+      throw new Error(
+        `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,
+      );
+    }
 
     await ctx.db.patch(args.templateId, {
       updatedAt: Date.now(),

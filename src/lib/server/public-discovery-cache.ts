@@ -35,9 +35,25 @@ const PUBLIC_DISCOVERY_KV_REVALIDATE_MS = 24 * 60 * 60 * 1000;
 /** Do not retry a failed stale or revision refresh on every anonymous request. */
 const PUBLIC_DISCOVERY_RETRY_MS = 15 * 60 * 1000;
 
+/** One bounded KV page is the hard ceiling for a global generation check. */
+const PUBLIC_DISCOVERY_KV_LIST_LIMIT = 1000;
+
+/**
+ * Re-check a pointer-selected outage fallback often enough to prevent a stale
+ * isolate from pinning it, while staying inside Workers KV's small Free-plan
+ * list allowance. Once the Cache API lease is visible, one check per hot
+ * logical key and edge location is shared through the pointer during each
+ * daily payload-renewal window. Concurrent first-wave isolates can race before
+ * that non-atomic marker is published; the invariant document models that C
+ * multiplier explicitly.
+ */
+const PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS = PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS;
+
 type CacheEnvelope<T> = {
 	cachedAt: number;
 	globalCachedAt?: number;
+	latestRevisionCheckedAt?: number;
+	latestRevisionRetryAt?: number;
 	retryAfter?: number;
 	retryRevision?: string;
 	revision?: string;
@@ -59,6 +75,7 @@ type CloudflareCacheStorage = CacheStorage & { default?: Cache };
 const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 const inFlight = new Map<string, Promise<unknown>>();
 const latestRequestedRevision = new Map<string, string>();
+const latestRevisionRetryAfter = new Map<string, number>();
 
 function configuredBackend(platform?: App.Platform): string | undefined {
 	const configured = platform?.env?.PUBLIC_CONVEX_URL;
@@ -97,6 +114,17 @@ function edgeLkgPointerKey(logicalKey: string, url: URL, platform?: App.Platform
 	return new Request(keyUrl, { method: 'GET' });
 }
 
+function edgeRevisionRetryKey(
+	logicalKey: string,
+	url: URL,
+	platform: App.Platform | undefined,
+	revision: string
+): Request {
+	const keyUrl = new URL(url.origin);
+	keyUrl.pathname = `/.internal-cache/public-discovery/${CACHE_SCHEMA_VERSION}/${encodeURIComponent(cacheScope(url, platform))}/${encodeURIComponent(logicalKey)}/revision-retry=${encodeURIComponent(revision)}`;
+	return new Request(keyUrl, { method: 'GET' });
+}
+
 function kvCacheKey(logicalKey: string, url: URL, platform?: App.Platform): string {
 	return `public-discovery:${CACHE_SCHEMA_VERSION}:${encodeURIComponent(cacheScope(url, platform))}:${encodeURIComponent(logicalKey)}`;
 }
@@ -123,6 +151,18 @@ function parseEnvelope<T>(raw: unknown): CacheEnvelope<T> | null {
 	const candidate = raw as Partial<CacheEnvelope<T>>;
 	if (typeof candidate.cachedAt !== 'number' || !('value' in candidate)) return null;
 	if (candidate.globalCachedAt !== undefined && typeof candidate.globalCachedAt !== 'number') {
+		return null;
+	}
+	if (
+		candidate.latestRevisionCheckedAt !== undefined &&
+		typeof candidate.latestRevisionCheckedAt !== 'number'
+	) {
+		return null;
+	}
+	if (
+		candidate.latestRevisionRetryAt !== undefined &&
+		typeof candidate.latestRevisionRetryAt !== 'number'
+	) {
 		return null;
 	}
 	if (candidate.retryAfter !== undefined && typeof candidate.retryAfter !== 'number') return null;
@@ -183,48 +223,66 @@ function compareRevisions(left: string, right: string): number | null {
 	return 0;
 }
 
+type LatestKvRevisionResult<T> = {
+	envelope: CacheEnvelope<T> | null;
+	source: 'legacy' | 'none' | 'revision';
+	status: 'complete' | 'error' | 'overflow';
+};
+
 async function readLatestKvRevision<T>(
 	kvKey: string,
 	platform?: App.Platform
-): Promise<CacheEnvelope<T> | null> {
+): Promise<LatestKvRevisionResult<T>> {
 	const kv = publicDiscoveryKv(platform);
-	if (!kv) return null;
+	if (!kv) return { envelope: null, source: 'none', status: 'error' };
 
 	const prefix = kvRevisionPrefix(kvKey);
 	const list = kv.list?.bind(kv);
-	if (!list) return readKv<T>(kvKey, platform);
+	if (!list) {
+		const legacy = await readKv<T>(kvKey, platform);
+		return { envelope: legacy, source: legacy ? 'legacy' : 'none', status: 'error' };
+	}
 	try {
-		let cursor: string | undefined;
+		// Never follow a cursor here: an outage request may spend one bounded list
+		// operation, regardless of how many eight-day generations exist.
+		const page = await list({ prefix, limit: PUBLIC_DISCOVERY_KV_LIST_LIMIT });
 		let latest: { key: string; revision: string } | undefined;
-		do {
-			const page = await list({ prefix, ...(cursor ? { cursor } : {}) });
-			for (const { name } of page.keys) {
-				const encodedRevision = name.slice(prefix.length);
-				let revision: string;
-				try {
-					revision = decodeURIComponent(encodedRevision);
-				} catch {
-					continue;
-				}
-				if (!revisionOrder(revision)) continue;
-				if (!latest || (compareRevisions(revision, latest.revision) ?? -1) > 0) {
-					latest = { key: name, revision };
-				}
+		for (const { name } of page.keys) {
+			const encodedRevision = name.slice(prefix.length);
+			let revision: string;
+			try {
+				revision = decodeURIComponent(encodedRevision);
+			} catch {
+				continue;
 			}
-			cursor = page.list_complete ? undefined : page.cursor;
-		} while (cursor);
+			if (!revisionOrder(revision)) continue;
+			if (!latest || (compareRevisions(revision, latest.revision) ?? -1) > 0) {
+				latest = { key: name, revision };
+			}
+		}
 
-		if (latest) return readKv<T>(latest.key, platform);
+		const selected = latest
+			? await readKv<T>(latest.key, platform)
+			: await readKv<T>(kvKey, platform);
+		const source = selected ? (latest ? 'revision' : 'legacy') : 'none';
+		if (!page.list_complete) {
+			console.warn(
+				`[public-discovery-cache] KV revision listing exceeded ${PUBLIC_DISCOVERY_KV_LIST_LIMIT}-key recovery bound`
+			);
+			return { envelope: selected, source, status: 'overflow' };
+		}
+
 		// Read the pre-revision-key layout only as a rollout fallback. New writes
 		// never target this shared key, so cross-isolate completion order cannot
 		// regress the current LKG.
-		return readKv<T>(kvKey, platform);
+		return { envelope: selected, source, status: 'complete' };
 	} catch (error) {
 		console.warn(
 			'[public-discovery-cache] KV revision listing failed:',
 			error instanceof Error ? error.message : String(error)
 		);
-		return readKv<T>(kvKey, platform);
+		const legacy = await readKv<T>(kvKey, platform);
+		return { envelope: legacy, source: legacy ? 'legacy' : 'none', status: 'error' };
 	}
 }
 
@@ -234,8 +292,10 @@ async function readKvForRevision<T>(
 	platform?: App.Platform
 ): Promise<CacheEnvelope<T> | null> {
 	if (revision === undefined) return readKv<T>(kvKey, platform);
-	const exact = await readKv<T>(kvRevisionKey(kvKey, revision), platform);
-	return exact ?? readLatestKvRevision<T>(kvKey, platform);
+	// A healthy publication transition should pay one exact read, then go
+	// straight to its origin loader. Enumerating older generations belongs only
+	// on the recovery path after that loader fails.
+	return readKv<T>(kvRevisionKey(kvKey, revision), platform);
 }
 
 function persistEdge<T>(key: Request, envelope: CacheEnvelope<T>): Promise<void> {
@@ -378,16 +438,10 @@ async function readCachedEnvelope<T>(
 		global.revision === revision &&
 		(!edge || edge.cachedAt < global.cachedAt)
 	) {
-		const warm = Promise.all([
-			persistEdge(edgeKey, global),
-			edgePointerKey
-				? persistEdge(edgePointerKey, {
-						cachedAt: global.cachedAt,
-						revision: global.revision,
-						value: null
-					})
-				: Promise.resolve()
-		]);
+		// An exact revision hit proves only that this immutable generation exists;
+		// it does not prove that it is the newest generation in KV. Warm its physical
+		// edge key, but never let an old request rewrite the shared LKG pointer.
+		const warm = persistEdge(edgeKey, global);
 		if (platform?.context?.waitUntil) platform.context.waitUntil(warm);
 	}
 	return envelope;
@@ -443,6 +497,11 @@ async function persistLoadedEnvelope<T>(
 		await persistEdge(edgeKey, globallyRenewed);
 	}
 	if (edgePointerKey && mayWriteRequestedRevision(kvKey, envelope.revision)) {
+		// Normal request paths may advertise a local fallback, but they cannot
+		// prove that their revision is globally newest. Leave the global-check
+		// lease unset so recovery verifies immutable KV generations before using
+		// this pointer when KV is bound. Cache-API-only deployments still retain
+		// their best available local fallback.
 		await persistEdge(edgePointerKey, {
 			cachedAt: envelope.cachedAt,
 			revision: envelope.revision,
@@ -518,7 +577,7 @@ async function backOffEnvelope<T>(
 	platform: App.Platform | undefined,
 	envelope: CacheEnvelope<T>,
 	error: unknown,
-	reason: 'background refresh' | 'revision refresh' | 'stale refresh',
+	reason: 'background refresh' | 'stale refresh',
 	requestedRevision: string | undefined
 ): Promise<void> {
 	const backedOff = {
@@ -529,15 +588,100 @@ async function backOffEnvelope<T>(
 	memoryCache.set(identity, backedOff);
 	// A local retry backoff must not overwrite the global last-known-good value
 	// or consume one KV write per Cloudflare location during an origin outage.
-	// A prior-revision payload must also never be written beneath the new
-	// revision's physical edge key.
-	if (reason !== 'revision refresh') {
-		await persistEnvelope(edgeKey, kvKey, backedOff, platform, false);
-	}
+	// Revision-transition failures use their dedicated marker path instead.
+	await persistEnvelope(edgeKey, kvKey, backedOff, platform, false);
 	console.warn(
 		`[public-discovery-cache] ${reason} failed:`,
 		error instanceof Error ? error.message : String(error)
 	);
+}
+
+function revisionRetryIsActive(
+	marker: CacheEnvelope<null> | null,
+	requestedRevision: string,
+	now: number
+): boolean {
+	return marker?.retryRevision === requestedRevision && (marker.retryAfter ?? 0) > now;
+}
+
+async function recoverFailedRevision<T>(
+	identity: string,
+	logicalKey: string,
+	url: URL,
+	platform: App.Platform | undefined,
+	kvKey: string,
+	edgeRetryKey: Request,
+	requestedRevision: string,
+	transitionMarker: CacheEnvelope<null> | null,
+	localEnvelope: CacheEnvelope<T> | undefined,
+	error: unknown
+): Promise<T> {
+	const now = Date.now();
+	const markerMatches = transitionMarker?.retryRevision === requestedRevision;
+	const globalCheckIsFresh =
+		markerMatches &&
+		transitionMarker.latestRevisionCheckedAt !== undefined &&
+		now - transitionMarker.latestRevisionCheckedAt <= PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS;
+	const globalCheckIsBackedOff =
+		markerMatches && (transitionMarker.latestRevisionRetryAt ?? 0) > now;
+	const shouldCheckGlobal =
+		publicDiscoveryKv(platform) !== undefined && !globalCheckIsFresh && !globalCheckIsBackedOff;
+	const latestGlobal = shouldCheckGlobal
+		? await readLatestKvRevision<T>(kvKey, platform)
+		: undefined;
+	const global = latestGlobal?.envelope;
+	const recovery = newestEnvelope(localEnvelope, global);
+	const recoveryIsUsable =
+		recovery !== undefined && now - recovery.cachedAt <= PUBLIC_DISCOVERY_STALE_MS;
+
+	// The requested immutable generation may have become visible in KV while the
+	// origin request was in flight. In that case recovery is complete; warm the
+	// exact physical edge entry and do not install a failure marker.
+	if (recoveryIsUsable && recovery.revision === requestedRevision) {
+		memoryCache.set(identity, recovery);
+		await persistEdge(edgeCacheKey(logicalKey, url, platform, requestedRevision), recovery);
+		return recovery.value;
+	}
+
+	const retryAfter = now + PUBLIC_DISCOVERY_RETRY_MS;
+	if (recoveryIsUsable) {
+		memoryCache.set(identity, {
+			...recovery,
+			retryAfter,
+			retryRevision: requestedRevision
+		});
+	}
+
+	const globalCheckLease = latestGlobal
+		? latestGlobal.status === 'complete' && latestGlobal.source === 'revision'
+			? { latestRevisionCheckedAt: now }
+			: { latestRevisionRetryAt: now + PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS }
+		: globalCheckIsFresh
+			? { latestRevisionCheckedAt: transitionMarker.latestRevisionCheckedAt }
+			: globalCheckIsBackedOff
+				? { latestRevisionRetryAt: transitionMarker.latestRevisionRetryAt }
+				: {};
+	const marker: CacheEnvelope<null> = {
+		cachedAt: recoveryIsUsable ? recovery.cachedAt : now,
+		...globalCheckLease,
+		retryAfter,
+		retryRevision: requestedRevision,
+		revision: recoveryIsUsable ? recovery.revision : undefined,
+		value: null
+	};
+	await Promise.all([
+		persistEdge(edgeRetryKey, marker),
+		recoveryIsUsable && recovery.revision
+			? persistEdge(edgeCacheKey(logicalKey, url, platform, recovery.revision), recovery)
+			: Promise.resolve()
+	]);
+
+	console.warn(
+		'[public-discovery-cache] revision refresh failed:',
+		error instanceof Error ? error.message : String(error)
+	);
+	if (recoveryIsUsable) return recovery.value;
+	throw error;
 }
 
 function refreshInBackground<T>(
@@ -596,6 +740,10 @@ export async function getCachedPublicData<T>(
 		revision === undefined
 			? undefined
 			: edgeLkgPointerKey(logicalKey, context.url, context.platform);
+	const revisionRetryKey =
+		revision === undefined
+			? undefined
+			: edgeRevisionRetryKey(logicalKey, context.url, context.platform, revision);
 	const kvKey = kvCacheKey(logicalKey, context.url, context.platform);
 	observeRequestedRevision(kvKey, revision);
 
@@ -613,7 +761,7 @@ export async function getCachedPublicData<T>(
 	}
 	const refreshSharedLayers =
 		forceRefresh || !inMemory || inMemoryAge > freshForMs || !inMemoryRevisionMatches;
-	const envelope = await readCachedEnvelope<T>(
+	let envelope = await readCachedEnvelope<T>(
 		identity,
 		edgeKey,
 		edgePointerKey,
@@ -628,6 +776,37 @@ export async function getCachedPublicData<T>(
 		now,
 		freshForMs
 	);
+	let transitionMarker: CacheEnvelope<null> | null = null;
+	if (revision !== undefined && revisionRetryKey && envelope?.revision !== revision) {
+		transitionMarker = await readEdge<null>(revisionRetryKey);
+		if (
+			transitionMarker?.retryRevision === revision &&
+			transitionMarker.revision &&
+			transitionMarker.revision !== revision
+		) {
+			const markerFallback = await readEdge<T>(
+				edgeCacheKey(logicalKey, context.url, context.platform, transitionMarker.revision)
+			);
+			envelope = newestEnvelope(envelope, markerFallback);
+		}
+
+		if (
+			!forceRefresh &&
+			transitionMarker &&
+			revisionRetryIsActive(transitionMarker, revision, now)
+		) {
+			if (envelope && now - envelope.cachedAt <= PUBLIC_DISCOVERY_STALE_MS) {
+				const backedOff = {
+					...envelope,
+					retryAfter: transitionMarker.retryAfter,
+					retryRevision: revision
+				};
+				memoryCache.set(identity, backedOff);
+				return backedOff.value;
+			}
+			throw new Error(`Public discovery revision ${revision} refresh is temporarily backed off`);
+		}
+	}
 
 	if (envelope) {
 		const age = now - envelope.cachedAt;
@@ -658,17 +837,18 @@ export async function getCachedPublicData<T>(
 					);
 				} catch (error) {
 					if (context.shouldFallbackToStale?.(error) === false) throw error;
-					await backOffEnvelope(
+					return recoverFailedRevision(
 						identity,
-						edgeKey,
-						kvKey,
+						logicalKey,
+						context.url,
 						context.platform,
+						kvKey,
+						revisionRetryKey!,
+						revision!,
+						transitionMarker,
 						envelope,
-						error,
-						'revision refresh',
-						revision
+						error
 					);
-					return envelope.value;
 				}
 			}
 
@@ -716,7 +896,32 @@ export async function getCachedPublicData<T>(
 		memoryCache.delete(identity);
 	}
 
-	return loadAndCache(identity, edgeKey, edgePointerKey, kvKey, context.platform, revision, loader);
+	try {
+		return await loadAndCache(
+			identity,
+			edgeKey,
+			edgePointerKey,
+			kvKey,
+			context.platform,
+			revision,
+			loader
+		);
+	} catch (error) {
+		if (revision === undefined || !revisionRetryKey) throw error;
+		if (context.shouldFallbackToStale?.(error) === false) throw error;
+		return recoverFailedRevision(
+			identity,
+			logicalKey,
+			context.url,
+			context.platform,
+			kvKey,
+			revisionRetryKey,
+			revision,
+			transitionMarker,
+			envelope,
+			error
+		);
+	}
 }
 
 /**
@@ -741,18 +946,99 @@ export async function getCachedPublicDataLastKnownGood<T>(
 		? await readEdge<T>(edgeCacheKey(logicalKey, context.url, context.platform, pointer.revision))
 		: null;
 	const local = newestEnvelope(inMemory, edge);
-	if (local && now - local.cachedAt <= PUBLIC_DISCOVERY_STALE_MS) {
+	const localIsUsable = local !== undefined && now - local.cachedAt <= PUBLIC_DISCOVERY_STALE_MS;
+	const localWasRecentlyChecked =
+		localIsUsable &&
+		((pointer !== null &&
+			pointer.revision === local.revision &&
+			pointer.latestRevisionCheckedAt !== undefined &&
+			now - pointer.latestRevisionCheckedAt <= PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS) ||
+			(local.latestRevisionCheckedAt !== undefined &&
+				now - local.latestRevisionCheckedAt <= PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS));
+	const revisionCheckRetryAt = Math.max(
+		latestRevisionRetryAfter.get(identity) ?? 0,
+		pointer?.latestRevisionRetryAt ?? 0,
+		local?.latestRevisionRetryAt ?? 0
+	);
+	const revisionCheckIsBackedOff = revisionCheckRetryAt > now;
+	if (
+		localIsUsable &&
+		(!publicDiscoveryKv(context.platform) || localWasRecentlyChecked || revisionCheckIsBackedOff)
+	) {
 		memoryCache.set(identity, local);
 		return local.value;
 	}
+	if (!publicDiscoveryKv(context.platform) || revisionCheckIsBackedOff) return undefined;
 
 	// KV list operations have a much smaller Free-plan allowance than reads.
 	// Consult the immutable global generations only when this location has no
 	// usable memory/Cache API LKG, then keep the winner hot locally.
-	const global = await readLatestKvRevision<T>(kvKey, context.platform);
+	const latestGlobal = await readLatestKvRevision<T>(kvKey, context.platform);
+	const global = latestGlobal.envelope;
 	const envelope = newestEnvelope(local, global);
-	if (!envelope || now - envelope.cachedAt > PUBLIC_DISCOVERY_STALE_MS) return undefined;
-	memoryCache.set(identity, envelope);
+	const envelopeIsUsable =
+		envelope !== undefined && now - envelope.cachedAt <= PUBLIC_DISCOVERY_STALE_MS;
+	const globalSelectionIsCertified =
+		envelopeIsUsable &&
+		latestGlobal.status === 'complete' &&
+		latestGlobal.source === 'revision' &&
+		global?.revision !== undefined &&
+		envelope.revision === global.revision;
+
+	if (!globalSelectionIsCertified) {
+		// A failed/overflowed global check uses the same daily lease as a
+		// successful check; the 15-minute origin retry cadence would exhaust the
+		// much smaller KV list allowance across only a few active locations.
+		const retryAt = now + PUBLIC_DISCOVERY_LKG_REVISION_CHECK_MS;
+		latestRevisionRetryAfter.set(identity, retryAt);
+		if (envelopeIsUsable) {
+			memoryCache.set(identity, { ...envelope, latestRevisionRetryAt: retryAt });
+		}
+
+		// Overflow/error is a candidate observation, never a global certificate.
+		// Share only its daily retry backoff so another request in this location
+		// does not immediately spend another scarce list operation.
+		const candidateRevision = envelopeIsUsable ? envelope.revision : pointer?.revision;
+		const candidateCachedAt = envelopeIsUsable ? envelope.cachedAt : (pointer?.cachedAt ?? now);
+		const warm = Promise.all([
+			envelopeIsUsable && envelope.revision
+				? persistEdge(
+						edgeCacheKey(logicalKey, context.url, context.platform, envelope.revision),
+						envelope
+					)
+				: Promise.resolve(),
+			persistEdge(pointerKey, {
+				cachedAt: candidateCachedAt,
+				latestRevisionRetryAt: retryAt,
+				revision: candidateRevision,
+				value: null
+			})
+		]);
+		if (context.platform?.context?.waitUntil) context.platform.context.waitUntil(warm);
+		else await warm;
+		return envelopeIsUsable ? envelope.value : undefined;
+	}
+
+	latestRevisionRetryAfter.delete(identity);
+	// Retain the global-check lease in module memory as well as the shared edge
+	// pointer so a runtime without Cache API does not spend one list per request.
+	memoryCache.set(identity, { ...envelope, latestRevisionCheckedAt: now });
+	if (envelope.revision) {
+		const warm = Promise.all([
+			persistEdge(
+				edgeCacheKey(logicalKey, context.url, context.platform, envelope.revision),
+				envelope
+			),
+			persistEdge(pointerKey, {
+				cachedAt: envelope.cachedAt,
+				latestRevisionCheckedAt: now,
+				revision: envelope.revision,
+				value: null
+			})
+		]);
+		if (context.platform?.context?.waitUntil) context.platform.context.waitUntil(warm);
+		else await warm;
+	}
 	return envelope.value;
 }
 
@@ -761,4 +1047,5 @@ export function clearPublicDiscoveryCache(): void {
 	memoryCache.clear();
 	inFlight.clear();
 	latestRequestedRevision.clear();
+	latestRevisionRetryAfter.clear();
 }

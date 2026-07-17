@@ -105,7 +105,7 @@ The workflow queries the public manifest, both list variants, and both combined
 relation variants before upload. It refuses a cold manifest, empty production
 corpus, revision skew, an oversized serialized payload, or a materialization
 timestamp more than 26 hours old. It then deploys an immutable Cloudflare Pages
-artifact through the sole standard Wrangler uploader, performs a
+artifact through the sole standard Wrangler uploader, attempts a warning-only
 defense-in-depth production cache purge, and gates on its `/api/health` result.
 Confirm the Pages API reports `production_deployments_enabled: false` and
 `preview_deployment_setting: "all"` with the verification command in
@@ -123,9 +123,20 @@ curl -fsS https://commons.email/api/health | jq -e '.status == "ok"'
 Materialization generation (`revision:updatedAt`) changes trigger a synchronous refresh on the first
 request after the one-minute manifest TTL; the purge is not the correctness
 boundary. Confirm the homepage and graph are populated, the API advertises its
-one-minute shared-cache TTL, `PUBLIC_DISCOVERY_KV` is bound, and public-query
-database I/O stays flat as requests arrive. Only then re-enable uptime
-monitoring against `/api/health`, never `/`.
+one-minute browser revalidation policy, `PUBLIC_DISCOVERY_KV` is bound, and
+public-query database I/O stays flat as requests arrive. Record two consecutive
+`CF-Cache-Status` values; do not claim a front-of-Worker cache unless the second
+request is a verified `HIT` with `Age`. The explicit Cache API/KV shield remains
+the cost boundary either way. Only then re-enable uptime monitoring against
+`/api/health`, never `/`.
+
+`/api/health` is a dependency-readiness signal, not a process-liveness signal:
+it deliberately returns `503` when Convex, the discovery manifest, or Atlas is
+unavailable or exceeds the five-second deadline. Use it for release gates and a
+five-minute uptime/readiness monitor; do not configure an orchestrator to restart
+healthy workers from this response. The Convex probe aborts its underlying HTTP
+fetch at the deadline so a dependency slowdown does not accumulate abandoned
+health requests.
 
 ## Rollback
 

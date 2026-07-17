@@ -21,8 +21,13 @@ still produce HTTP 200 while Convex is disabled. Disable that monitor during
 recovery, then repoint it to `/api/health`. The health endpoint calls the
 `observability.servicePing` query, which tests both function execution and an
 indexed read of the tiny discovery-manifest singleton without hydrating an
-embedding-bearing row, and returns 503 when Convex or the pinned Atlas
-dependencies are unavailable.
+embedding-bearing row. It also returns `discoveryProducerHealthy:false` while a
+snapshot family is cold, structurally orphaned, or retaining a last-good
+revision after a failure. Its deterministic `discoveryProducerOverdueAt`
+coordinate lets `/api/health` detect a dirty refresh more than 15 minutes past
+its token without putting `Date.now()` in the cacheable Convex query.
+`/api/health` returns 503 when that producer signal is overdue, Convex is
+unavailable, or a pinned Atlas dependency is unhealthy.
 
 ## Corrected read path
 
@@ -57,8 +62,11 @@ The protection has two independent data layers and one small control plane:
 
 Normal list and spectrum homepage loads do not request graph relations at all.
 Only `?view=graph` loads one combined twin+concept snapshot, in parallel with
-the list. `/api/templates` uses the same internal cache and a one-minute outer
-CDN TTL, so an old six-hour HTTP response cannot mask a new revision.
+the list. `/api/templates` uses the same explicit in-Worker cache and tells
+browsers to revalidate after one minute. It also advertises a 60/30/3600
+Cloudflare-only policy for a future or externally configured route-scoped
+front cache, but correctness and the Convex-I/O cost bound do not assume that
+such a cache is enabled.
 
 ### Cost-minimal Cloudflare posture
 
@@ -74,15 +82,33 @@ Convex payload misses. Cache API is the request hot path; Workers KV is the
 cross-location shield, and writes occur only after a successful load or healthy
 24-hour renewal.
 
+The Pages artifact is currently one SvelteKit default Worker entrypoint, and
+`wrangler.toml` intentionally does not enable Cloudflare's front-of-Worker cache
+globally. Current Cloudflare Workers caching would otherwise consult that cache
+for every route and can heuristically cache successful responses that omit an
+explicit directive; enabling it across personalized routes would be a privacy
+regression. The safe future shape is a separately audited public entrypoint or a
+route-scoped cache rule. Until then, `Cloudflare-CDN-Cache-Control` is policy for
+an optional front cache, while the explicit `caches.default` + KV state machine
+is the deployed zero-cost data shield. See Cloudflare's
+[Workers caching configuration](https://developers.cloudflare.com/workers/cache/configuration/).
+
 [Cloudflare's published Workers KV Free allowance](https://developers.cloudflare.com/kv/platform/pricing/)
 is 100,000 reads/day, 1,000 writes/day, 1,000 lists/day, and 1 GB. The small
 bounded set of live eight-day generations is comfortably inside that envelope
 at current traffic, but the allowance is shared with this account's other KV
 namespaces and must be monitored. Recovery checks memory and the free local
-Cache API before spending a list operation to discover the newest immutable KV
-generation. If KV is unavailable or reaches its free operation limit, the code
-degrades to Cache API + Convex. Unchanged Convex manifest queries are
-automatically query-cached and incur no database bandwidth.
+Cache API before spending a list operation to discover the newest
+revision-isolated KV generation. During a sustained manifest outage, each hot
+payload family and Cache API location rechecks its pointer once per day in
+steady state; the globally checked pointer keeps intervening requests list-free,
+and an exact hit for an older revision cannot move it backward. Cache API has no
+atomic put-if-absent, so concurrent first-wave isolates can each spend one
+bounded list before the daily lease becomes visible. The cost model in the
+invariant document includes that `C` multiplier rather than presenting the lease
+as a hard concurrency bound. If KV is unavailable or reaches its free operation
+limit, the code degrades to Cache API + Convex. Unchanged Convex manifest queries
+are automatically query-cached and incur no database bandwidth.
 
 ## Production activation
 
@@ -132,6 +158,7 @@ cold state. The scoped execution graph is
    ```sh
    npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
    npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
+   npx convex run observability:servicePing '{}' --env-file .env.production
    ```
 
    The rebuild must report list `sourceCap: 250`, relation `sourceScanCap: 250`,
@@ -143,6 +170,12 @@ cold state. The scoped execution graph is
    daily `essential` cron cadence. The persisted snapshot revisions and
    timestamps must match the manifest. A size or compute failure is atomic and
    leaves the prior committed snapshots unchanged.
+   `servicePing.discoveryProducerHealthy` must be true. If it is false, inspect
+   the durable family and size code with:
+
+   ```sh
+   npx convex run templates:publicDiscoveryFailureStatus '{}' --env-file .env.production
+   ```
 
 5. Call the public functions directly and inspect Convex logs before the
    frontend upload:
@@ -200,12 +233,24 @@ cold state. The scoped execution graph is
    ```sh
    curl -fsS https://commons.email/ >/dev/null
    curl -fsS 'https://commons.email/?view=graph' >/dev/null
-   curl -fsSI https://commons.email/api/templates
+   curl -fsS -D /tmp/templates-cache-first.headers \
+     -o /dev/null https://commons.email/api/templates
+   sleep 1
+   curl -fsS -D /tmp/templates-cache-second.headers \
+     -o /dev/null https://commons.email/api/templates
+   grep -Ei '^(cache-control|cloudflare-cdn-cache-control|cf-cache-status|age):' \
+     /tmp/templates-cache-first.headers /tmp/templates-cache-second.headers
    ```
 
-   `/api/templates` should advertise a one-minute shared-cache TTL. Confirm the
-   homepage renders templates and the graph renders without vectors in page
-   data.
+   `/api/templates` must expose browser `Cache-Control: public, max-age=60,
+   must-revalidate`. Record `CF-Cache-Status` on both requests. Under the current
+   source-controlled single-entrypoint configuration, do not assume a
+   front-of-Worker hit; `DYNAMIC` or no cache-status header is compatible with
+   the explicit in-Worker design. If the second response is `HIT`, an external
+   rule or newer entrypoint cache is active: require a nonzero `Age`, inventory
+   that configuration, and exercise the whole-zone purge before release. Never
+   claim front-cache savings from headers alone. Confirm the homepage renders
+   templates and the graph renders without vectors in page data.
 
 8. In Convex usage/function logs, verify that public request executions read
    only `publicDiscoveryManifest`, `publicTemplateSnapshots`, or
@@ -248,6 +293,41 @@ cold state. The scoped execution graph is
 - An operator can safely repeat the activation command at any time. Rebuilds
   upsert deterministic singleton rows and preserve the last good snapshot on
   failure.
+- The daily list and relation entry points turn a known oversize failure into a
+  durable manifest failure code, retain the previous committed revision, queue
+  an out-of-band Sentry event, and clear the elapsed scheduler token. A
+  deterministic oversize payload is retried by the next projection-affecting
+  write (subject to the six-hour rebuild ceiling) or the next daily cron, not by
+  a four-times-per-day rescan loop. The service ping stays unhealthy until a
+  successful publication clears that family's failure fields. An operator can
+  inspect the exact code with `templates:publicDiscoveryFailureStatus`.
+- Daily cron actions supervise their rebuild mutations. If an unknown database,
+  limit, or runtime failure rolls the attempt back, the action records a generic
+  durable failure and alert in a separate mutation before rethrowing. This keeps
+  mutation atomicity without allowing a system-limit failure to stay green.
+- Public authoring is constrained before moderation and again at the direct
+  Convex boundary: 16,384 UTF-8 bytes for the stored authoring input, 12,288 for
+  its public projection, and 8,192 across all three configuration objects, plus
+  depth, node, fanout, and exact geographic-scope limits. Metadata patches
+  re-evaluate the resulting document, and CI validates every committed seed.
+  These controls reduce author-controlled oversize risk; they do not prove that
+  every future snapshot fits. Derived reach histograms, internal maintenance,
+  and aggregate corpus growth can still cross the document guard, so the
+  900,000-byte atomic last-good freeze, alert, and readiness failure remain the
+  authoritative availability boundary.
+- Do not automatically truncate `message_body` or silently drop templates to
+  make a snapshot fit. Advocacy content is semantic data, and dropping a list
+  member can invalidate relation endpoints. Repair the source/projection budget
+  and republish. The operator composite rebuild deliberately commits list and
+  relation generations in one transaction, so a failed graph cannot accompany
+  a newly published list.
+- Each verified-send aggregation performs one indexed read of the tiny manifest;
+  only the first dirty write in a window patches it, while later writes reuse the
+  token. Before materially increasing send volume, load-test the target peak QPS
+  and monitor Convex OCC retries/action latency. Move invalidation farther off
+  the acknowledgement path only if that measurement shows meaningful
+  contention; doing so must preserve same-mutation no-drop semantics or replace
+  them with an equally explicit durable queue contract.
 
 The first request after the manifest's 60-second TTL synchronously observes a
 successful snapshot publication. A stale KV envelope with the wrong revision or
@@ -278,6 +358,40 @@ the removal, cut the cache namespace (or delete all matching KV generation keys)
 purge Cache API/CDN state, warm the replacement variants, and verify the removed
 content is absent. Shortening every healthy lease would increase Convex origin
 traffic and weaken outage recovery, so it is not the default zero-cost posture.
+
+The deploy workflow attempts a warning-only whole-zone purge after each
+successful Pages upload. This is defense-in-depth for Cache API state and any
+front cache enabled outside the current source-controlled Worker configuration;
+the normal read path does not require a front cache. For an emergency edge
+recall outside a deploy, use the same scoped Cloudflare credentials as the
+workflow and purge the whole zone. An exact-file purge of the bare endpoint is
+insufficient because Cloudflare's default URL cache key keeps query-string
+variants distinct. See Cloudflare's
+[purge-cache documentation](https://developers.cloudflare.com/cache/how-to/purge-cache/).
+
+```bash
+curl -fsS -X POST \
+  "https://api.cloudflare.com/client/v4/zones/${CLOUDFLARE_ZONE_ID}/purge_cache" \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  --data '{"purge_everything":true}'
+```
+
+That command clears any configured Cloudflare outer edge cache, including query
+variants. A successful response uses browser-facing `Cache-Control: public,
+max-age=60, must-revalidate` plus a more specific
+`Cloudflare-CDN-Cache-Control` carrying the 30-second revalidation and one-hour
+error-stale windows. When a front cache is enabled, Cloudflare consumes the
+latter instead of forwarding it, per Cloudflare's
+[CDN cache-control precedence](https://developers.cloudflare.com/cache/concepts/cdn-cache-control/),
+so newly served browser copies cannot remain usable past 60 seconds without
+revalidation. Copies fetched before this split policy was deployed can retain
+the former one-hour `stale-if-error` allowance; account for that one-time
+migration residual in an emergency recall. During a coincident Convex outage,
+bump `CACHE_SCHEMA_VERSION`, deploy the namespace cut, run the zone purge, and
+accept a non-cacheable `503` until the removed revision can be rebuilt and
+warmed; serving nothing is the correct edge-recall fallback. Verify with a fresh
+request for the bare endpoint and representative query variants.
 
 ## Safe rollback
 

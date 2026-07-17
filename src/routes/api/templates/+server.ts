@@ -23,6 +23,14 @@ import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { projectToHue } from '$lib/utils/domain-hue-projection';
 import { createHash } from 'crypto';
 import type { GeoScope } from '$lib/core/agents/types';
+import {
+	MAX_GEOGRAPHIC_SCOPE_BYTES,
+	MAX_PUBLIC_TEMPLATE_INPUT_BYTES,
+	MAX_TEMPLATE_AUTHORING_INPUT_BYTES,
+	MAX_TEMPLATE_CONFIG_BYTES,
+	validateTemplateInputBudgets,
+	type TemplateInputBudgetResult
+} from '$convex/lib/templateInputBudget';
 
 /** Content-addressable fingerprint: same title + body = same template */
 function contentHash(title: string, body: string): string {
@@ -40,6 +48,18 @@ function sanitizeSlug(slug: string | undefined): string | undefined {
 			.replace(/^-|-$/g, '')
 			.slice(0, 100) || undefined
 	);
+}
+
+/** Resolve the exact slug that will be sent to Convex before enforcing byte budgets. */
+function resolveTemplateSlug(title: string, requestedSlug: string | undefined): string {
+	const sanitized = sanitizeSlug(requestedSlug);
+	if (sanitized) return sanitized;
+
+	return title
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, '')
+		.replace(/\s+/g, '-')
+		.substring(0, 100);
 }
 
 /** Validate and sanitize topics at the API boundary. */
@@ -81,6 +101,55 @@ const RESEARCH_LOG_ENTRY_MAX_LENGTH = 1_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPublicHttpUrl(value: string): boolean {
+	try {
+		const parsed = new URL(value);
+		return (
+			(parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+			!parsed.username &&
+			!parsed.password
+		);
+	} catch {
+		return false;
+	}
+}
+
+function inputBudgetError(
+	failure: Exclude<TemplateInputBudgetResult, { ok: true }>
+): ValidationError {
+	const excessive = new Set(['max_depth', 'max_nodes', 'max_container_entries', 'max_bytes']).has(
+		failure.reason
+	);
+	const code = excessive ? 'VALIDATION_TOO_LONG' : 'VALIDATION_INVALID_FORMAT';
+
+	switch (failure.scope) {
+		case 'configs':
+			return createValidationError(
+				'recipient_config',
+				code,
+				`Combined template configuration must be structurally bounded and ≤${MAX_TEMPLATE_CONFIG_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'geographic_scope':
+			return createValidationError(
+				'geographic_scope',
+				code,
+				`geographic_scope must match the supported GeoScope shape and be ≤${MAX_GEOGRAPHIC_SCOPE_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'authoring_input':
+			return createValidationError(
+				'body',
+				code,
+				`Combined template content must be structurally bounded and ≤${MAX_TEMPLATE_AUTHORING_INPUT_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'public_input':
+			return createValidationError(
+				'body',
+				code,
+				`Public template content must be structurally bounded and ≤${MAX_PUBLIC_TEMPLATE_INPUT_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+	}
 }
 
 function validateTemplateData(data: unknown): {
@@ -165,6 +234,14 @@ function validateTemplateData(data: unknown): {
 		}
 	}
 
+	for (const field of ['delivery_config', 'cwc_config', 'recipient_config'] as const) {
+		if (templateData[field] !== undefined && !isRecord(templateData[field])) {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be an object`)
+			);
+		}
+	}
+
 	// bound remaining caller-supplied strings + arrays before
 	// they hit Gemini moderation + Convex insert. type/deliveryMethod are
 	// enum-like (downstream Convex validates the actual values); cap length
@@ -240,6 +317,16 @@ function validateTemplateData(data: unknown): {
 					)
 				);
 			}
+
+			if (!isPublicHttpUrl(source.url)) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_INVALID_FORMAT',
+						`sources[${index}].url must be an absolute http(s) URL without credentials`
+					)
+				);
+			}
 		}
 	}
 	if (templateData.research_log !== undefined && !Array.isArray(templateData.research_log)) {
@@ -285,9 +372,44 @@ function validateTemplateData(data: unknown): {
 		return { isValid: false, errors };
 	}
 
+	const prospectiveSlug = resolveTemplateSlug(
+		templateData.title as string,
+		templateData.slug as string | undefined
+	);
+
+	const budgetResult = validateTemplateInputBudgets({
+		title: templateData.title,
+		slug: prospectiveSlug,
+		description:
+			(templateData.description as string) ||
+			(templateData.preview as string).substring(0, 160) ||
+			'',
+		messageBody: templateData.message_body,
+		preview: templateData.preview,
+		type: templateData.type,
+		deliveryMethod: templateData.deliveryMethod,
+		domain: (templateData.domain as string) || '',
+		topics: sanitizeTopics(templateData.topics),
+		sources: templateData.sources || [],
+		researchLog: templateData.research_log || [],
+		deliveryConfig: templateData.delivery_config || {},
+		cwcConfig: templateData.cwc_config || {},
+		recipientConfig: templateData.recipient_config || {},
+		geographicScope: templateData.geographic_scope,
+		contentHash: contentHash(templateData.title as string, templateData.message_body as string),
+		// Moderation may promote this request to published/public. Budget the
+		// largest canonical mutation now so an exact-boundary request cannot pass
+		// HTTP preflight and fail three bytes later at Convex.
+		status: 'published',
+		isPublic: true
+	});
+	if (!budgetResult.ok) {
+		return { isValid: false, errors: [inputBudgetError(budgetResult)] };
+	}
+
 	const validData: CreateTemplateRequest = {
 		title: templateData.title as string,
-		slug: sanitizeSlug(templateData.slug as string) || undefined,
+		slug: prospectiveSlug || undefined,
 		message_body: templateData.message_body as string,
 		sources:
 			(templateData.sources as Array<{ num: number; title: string; url: string; type: string }>) ||
@@ -316,15 +438,19 @@ function validateTemplateData(data: unknown): {
 // GET fully migrated to Convex
 export const GET: RequestHandler = async ({ url, platform }) => {
 	const successHeaders = {
-		// The stored successful response owns stale-if-error behavior. A failed
-		// revalidation can therefore reuse a prior good body without ever marking
-		// the error response itself public-cacheable.
-		'Cache-Control': 'public, max-age=60, stale-while-revalidate=30, stale-if-error=604800'
+		// Browsers revalidate after one minute. If a route-scoped Cloudflare Worker
+		// cache is enabled later, the more specific header preserves edge-only stale
+		// resilience without forwarding that allowance to browsers. The current
+		// Convex cost shield is the explicit Cache API/KV state machine, not this
+		// advisory front-of-Worker policy.
+		'Cache-Control': 'public, max-age=60, must-revalidate',
+		'Cloudflare-CDN-Cache-Control':
+			'public, max-age=60, stale-while-revalidate=30, stale-if-error=3600'
 	};
 	const coldHeaders = {
 		// A cold empty collection is compatible, but it is not a last-known-good
 		// payload worth serving stale through a producer outage.
-		'Cache-Control': 'public, max-age=60'
+		'Cache-Control': 'public, max-age=60, must-revalidate'
 	};
 
 	try {
@@ -597,13 +723,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response);
 				}
 
-				const slug = validData.slug?.trim()
-					? validData.slug.trim()
-					: validData.title
-							.toLowerCase()
-							.replace(/[^a-z0-9\s-]/g, '')
-							.replace(/\s+/g, '-')
-							.substring(0, 100);
+				const slug = resolveTemplateSlug(validData.title, validData.slug);
 
 				// Slug uniqueness check via Convex
 				const existingTemplate = await serverQuery(api.templates.findBySlug, {

@@ -39,7 +39,11 @@ import { sealOrgKey, getOrgKeyForAction } from "./_orgKeyUnseal";
 import { encryptWithOrgKey, importOrgKey } from "./_orgKey";
 import { computeOrgScopedEmailHash, computeGlobalEmailHash } from "./_orgHash";
 import { computeSupporterStats, emptySupporterStats } from "./_supporterStats";
-import { markPublicDiscoveryListDirty } from "./lib/publicDiscovery";
+import {
+  markPublicDiscoveryListAndRelationsDirty,
+  markPublicDiscoveryListDirty,
+} from "./lib/publicDiscovery";
+import { validateTemplateInputBudgets } from "./lib/templateInputBudget";
 // Org encryption configured during seed — supporters encrypted with org key, hashes org-scoped.
 
 // =============================================================================
@@ -162,6 +166,36 @@ import type { SeedTemplate } from "./seedData";
 
 // Note: SEED_TEMPLATES is imported from ./seedData above.
 // To regenerate, run: npx tsx scripts/seed-with-agents.ts
+
+function assertSeedTemplateInputBudget(template: SeedTemplate): void {
+  const budget = validateTemplateInputBudgets({
+    title: template.title,
+    slug: template.slug,
+    description: template.description,
+    messageBody: template.messageBody,
+    preview: template.preview,
+    type: template.type,
+    deliveryMethod: template.deliveryMethod,
+    domain: template.domain,
+    topics: template.topics,
+    sources: template.sources,
+    researchLog: template.researchLog,
+    deliveryConfig: template.deliveryConfig,
+    cwcConfig: template.cwcConfig,
+    recipientConfig: template.recipientConfig,
+    geographicScope: { type: "nationwide", country: template.countryCode },
+    scopes: template.scopes,
+    jurisdictions: template.jurisdictions,
+    contentHash: template.contentHash,
+    status: "published",
+    isPublic: true,
+  });
+  if (!budget.ok) {
+    throw new Error(
+      `SEED_TEMPLATE_INPUT_BUDGET_EXCEEDED:${template.slug}:${budget.scope}:${budget.reason}`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Supporter name pools
@@ -789,6 +823,7 @@ export const insertTemplates = internalMutation({
     // Map templates to user/org owners in a round-robin pattern
     for (let i = 0; i < SEED_TEMPLATES.length; i++) {
       const t = SEED_TEMPLATES[i];
+      assertSeedTemplateInputBudget(t);
       const userIdx = i % userIds.length;
       const orgIdx = i % orgIds.length;
 
@@ -847,6 +882,8 @@ export const insertTemplates = internalMutation({
       await ctx.db.patch(userIds[i], { templatesContributed: countByUser[i] });
     }
 
+    if (ids.length > 0) await markPublicDiscoveryListAndRelationsDirty(ctx);
+
     return ids;
   },
 });
@@ -865,6 +902,7 @@ export const insertTemplatesPublic = internalMutation({
 
     for (let i = 0; i < SEED_TEMPLATES.length; i++) {
       const t = SEED_TEMPLATES[i];
+      assertSeedTemplateInputBudget(t);
       const userIdx = i % userIds.length;
 
       const id = await ctx.db.insert("templates", {
@@ -920,6 +958,8 @@ export const insertTemplatesPublic = internalMutation({
     for (let i = 0; i < userIds.length; i++) {
       await ctx.db.patch(userIds[i], { templatesContributed: countByUser[i] });
     }
+
+    if (ids.length > 0) await markPublicDiscoveryListAndRelationsDirty(ctx);
 
     return ids;
   },
@@ -2276,6 +2316,8 @@ export const insertDebates = internalMutation({
         });
       }
     }
+
+    if (debateDefs.length > 0) await markPublicDiscoveryListDirty(ctx);
   },
 });
 

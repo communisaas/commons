@@ -551,7 +551,7 @@ if (enabled("essential")) {
   crons.daily(
     "public-template-snapshot-rebuild",
     { hourUTC: 4, minuteUTC: 7 },
-    internal.templates.rebuildPublicTemplateSnapshots,
+    internal.templates.rebuildPublicTemplateSnapshotsForCron,
     {},
   );
 }
@@ -575,7 +575,7 @@ if (enabled("essential")) {
   crons.daily(
     "template-relation-snapshot-rebuild",
     { hourUTC: 4, minuteUTC: 17 },
-    internal.templates.rebuildRelationSnapshot,
+    internal.templates.rebuildRelationSnapshotForCron,
     {},
   );
 }

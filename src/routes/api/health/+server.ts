@@ -1,7 +1,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { ConvexHttpClient } from 'convex/browser';
+import { api, CONVEX_URL } from '$lib/convex';
 
 const startTime = Date.now();
 const HEALTH_PROBE_TIMEOUT_MS = 5_000;
@@ -10,13 +10,12 @@ type HealthEnv = {
 	ATLAS_BASE_URL?: string;
 	EXPECTED_CELL_MAP_ROOT?: string;
 	EXPECTED_CELL_MAP_DEPTH?: string;
+	PUBLIC_CONVEX_URL?: string;
 };
 
 export const GET: RequestHandler = async ({ platform }) => {
-	const [atlas, convex] = await Promise.all([
-		checkAtlas(platform?.env as HealthEnv | undefined),
-		checkConvex()
-	]);
+	const env = platform?.env as HealthEnv | undefined;
+	const [atlas, convex] = await Promise.all([checkAtlas(env), checkConvex(env)]);
 
 	const healthy = convex && atlas.status === 'ok';
 	const status = healthy ? 'ok' : 'down';
@@ -33,19 +32,33 @@ export const GET: RequestHandler = async ({ platform }) => {
 	);
 };
 
-async function checkConvex(): Promise<boolean> {
+async function checkConvex(env: HealthEnv | undefined): Promise<boolean> {
+	const controller = new AbortController();
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 	try {
 		// servicePing performs one indexed read of the tiny public-discovery
 		// manifest singleton, exercising the data plane without hydrating an
-		// embedding-bearing application document.
-		const query = serverQuery(api.observability.servicePing, {})
-			.then(() => true)
-			.catch(() => false);
-		const deadline = new Promise<boolean>((resolve) => {
-			timeout = setTimeout(() => resolve(false), HEALTH_PROBE_TIMEOUT_MS);
+		// embedding-bearing application document. Use a request-local HTTP client
+		// so the deadline aborts the underlying fetch rather than merely abandoning
+		// an unbounded serverQuery promise.
+		const client = new ConvexHttpClient(env?.PUBLIC_CONVEX_URL || CONVEX_URL, {
+			logger: false,
+			fetch: (input, init) => fetch(input, { ...init, signal: controller.signal })
 		});
-		return await Promise.race([query, deadline]);
+		timeout = setTimeout(() => controller.abort(), HEALTH_PROBE_TIMEOUT_MS);
+		const result = await client.query(api.observability.servicePing, {});
+		const producerScheduleHealthy =
+			result.discoveryProducerOverdueAt === null ||
+			(typeof result.discoveryProducerOverdueAt === 'number' &&
+				Number.isFinite(result.discoveryProducerOverdueAt) &&
+				Date.now() <= result.discoveryProducerOverdueAt);
+		return (
+			result.ok === true &&
+			result.storageReadable === true &&
+			result.discoveryManifestPresent === true &&
+			result.discoveryProducerHealthy === true &&
+			producerScheduleHealthy
+		);
 	} catch {
 		return false;
 	} finally {

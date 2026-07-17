@@ -3226,6 +3226,13 @@ export default defineSchema({
 		listRefreshScheduledAt: v.optional(v.number()),
 		relationsDirtyAt: v.optional(v.number()),
 		relationsRefreshScheduledAt: v.optional(v.number()),
+		// Durable producer-failure evidence. Scheduled rebuilds retain last-good
+		// payloads, stamp the first-class failure state, and enqueue an alert action;
+		// a later successful publication clears the corresponding pair.
+		listFailureAt: v.optional(v.number()),
+		listFailureCode: v.optional(v.string()),
+		relationsFailureAt: v.optional(v.number()),
+		relationsFailureCode: v.optional(v.string()),
 		// One-time cutover progress for stamping valid legacy topic vectors with
 		// the dedicated repair marker. Keeping this on the existing singleton
 		// makes self-paging completion observable without another table or scan.

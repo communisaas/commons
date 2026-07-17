@@ -20,10 +20,10 @@ describe('observability service ping', () => {
 		await t.run((ctx) =>
 			ctx.db.insert('publicDiscoveryManifest', {
 				key: 'public',
-				listReady: false,
-				listRevision: 0,
-				relationsReady: false,
-				relationsRevision: 0
+				listReady: true,
+				listRevision: 1,
+				relationsReady: true,
+				relationsRevision: 1
 			})
 		);
 
@@ -40,10 +40,53 @@ describe('observability service ping', () => {
 		expect(observed.value).toEqual({
 			ok: true,
 			storageReadable: true,
-			discoveryManifestPresent: true
+			discoveryManifestPresent: true,
+			discoveryProducerHealthy: true,
+			discoveryProducerOverdueAt: null
 		});
 		expect(observed.metrics.bytesRead.used).toBeLessThan(2_000);
 		expect(observed.metrics.documentsRead.used).toBe(1);
 		expect(observed.metrics.databaseQueries.used).toBe(1);
+	});
+
+	it('reports a durable public-discovery producer failure without extra reads', async () => {
+		const t = convexTest({ schema, modules });
+		await t.run((ctx) =>
+			ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				listRevision: 3,
+				listFailureAt: 123,
+				listFailureCode: 'PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all',
+				relationsReady: true,
+				relationsRevision: 3
+			})
+		);
+
+		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			discoveryManifestPresent: true,
+			discoveryProducerHealthy: false,
+			discoveryProducerOverdueAt: null
+		});
+	});
+
+	it('returns deterministic readiness and overdue coordinates without reading the clock', async () => {
+		const t = convexTest({ schema, modules });
+		await t.run((ctx) =>
+			ctx.db.insert('publicDiscoveryManifest', {
+				key: 'public',
+				listReady: true,
+				listRevision: 1,
+				listDirtyAt: 100,
+				listRefreshScheduledAt: 1_000,
+				relationsReady: false,
+				relationsRevision: 0
+			})
+		);
+
+		await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+			discoveryProducerHealthy: false,
+			discoveryProducerOverdueAt: 1_000 + 15 * 60 * 1000
+		});
 	});
 });

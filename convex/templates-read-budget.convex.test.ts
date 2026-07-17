@@ -33,6 +33,48 @@ function newRebuildHarness(): Harness {
 	return convexTest({ schema, modules });
 }
 
+function storedPublicCard(
+	id: string,
+	deliveryMethod: 'email' | 'cwc'
+): Record<string, unknown> {
+	return {
+		id,
+		slug: `${id}-template`,
+		title: `${id} template`,
+		description: 'Compact snapshot fixture',
+		domain: 'civic',
+		topics: [],
+		type: 'email',
+		deliveryMethod,
+		subject: `${id} template`,
+		message_body: 'Body',
+		preview: 'Preview',
+		endorsingOrg: null,
+		endorsingOrgs: [],
+		endorsementCount: 0,
+		coordinationScale: 0,
+		isNew: false,
+		hasActiveDebate: false,
+		verified_sends: null,
+		unique_districts: null,
+		send_count: null,
+		daily_arrivals: [],
+		district_counts: [],
+		tier_counts: [],
+		delivery_config: {},
+		cwc_config: null,
+		recipient_config: {},
+		campaign_id: null,
+		status: 'published',
+		is_public: true,
+		jurisdictions: [],
+		scope: null,
+		scopes: [],
+		recipientEmails: [],
+		createdAt: '2026-07-17T00:00:00.000Z'
+	};
+}
+
 function getTransactionMetrics(ctx: unknown): Promise<TransactionMetrics> {
 	// convex-test 0.0.54 implements the current ctx.meta syscall, while its
 	// published GenericQueryCtx type still reflects the older Convex surface.
@@ -155,20 +197,8 @@ describe('public template query read budgets', () => {
 	it('listPublic reads one compact, feature-gate-specific snapshot', async () => {
 		const t = newHarness();
 		await seedHeavyTemplates(t, 20);
-		const allCard = {
-			id: 'template-all',
-			slug: 'all-template',
-			title: 'All template',
-			deliveryMethod: 'cwc',
-			is_public: true
-		};
-		const nonCwcCard = {
-			id: 'template-email',
-			slug: 'email-template',
-			title: 'Email template',
-			deliveryMethod: 'email',
-			is_public: true
-		};
+		const allCard = storedPublicCard('all', 'cwc');
+		const nonCwcCard = storedPublicCard('email', 'email');
 		await t.run(async (ctx) => {
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'all',
@@ -193,7 +223,7 @@ describe('public template query read budgets', () => {
 		expect(all.result).toEqual([allCard, nonCwcCard]);
 		expect(all.metrics.documentsRead.used).toBe(1);
 		expect(all.metrics.databaseQueries.used).toBe(1);
-		expect(all.metrics.bytesRead.used).toBeLessThan(2_000);
+		expect(all.metrics.bytesRead.used).toBeLessThan(8_000);
 
 		const excludingCwc = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.listPublic, { excludeCwc: true });
@@ -202,7 +232,7 @@ describe('public template query read budgets', () => {
 		expect(excludingCwc.result).toEqual([nonCwcCard]);
 		expect(excludingCwc.metrics.documentsRead.used).toBe(1);
 		expect(excludingCwc.metrics.databaseQueries.used).toBe(1);
-		expect(excludingCwc.metrics.bytesRead.used).toBeLessThan(2_000);
+		expect(excludingCwc.metrics.bytesRead.used).toBeLessThan(8_000);
 
 		const versioned = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
@@ -217,7 +247,7 @@ describe('public template query read budgets', () => {
 		});
 		expect(versioned.metrics.documentsRead.used).toBe(1);
 		expect(versioned.metrics.databaseQueries.used).toBe(1);
-		expect(versioned.metrics.bytesRead.used).toBeLessThan(2_000);
+		expect(versioned.metrics.bytesRead.used).toBeLessThan(8_000);
 	});
 
 	it('the readiness manifest reads only its compact singleton', async () => {

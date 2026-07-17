@@ -44,6 +44,46 @@ function templateValue(index: number, overrides: Partial<TemplateValue> = {}): T
 	};
 }
 
+function storedPublicCard(id: string, overrides: Record<string, unknown> = {}) {
+	return {
+		id,
+		slug: id,
+		title: `Title ${id}`,
+		description: `Description ${id}`,
+		domain: 'civic',
+		topics: [],
+		type: 'email',
+		deliveryMethod: 'email',
+		subject: `Title ${id}`,
+		message_body: 'Body',
+		preview: 'Preview',
+		endorsingOrg: null,
+		endorsingOrgs: [],
+		endorsementCount: 0,
+		coordinationScale: 0,
+		isNew: false,
+		hasActiveDebate: false,
+		verified_sends: null,
+		unique_districts: null,
+		send_count: null,
+		daily_arrivals: [],
+		district_counts: [],
+		tier_counts: [],
+		delivery_config: {},
+		cwc_config: null,
+		recipient_config: {},
+		campaign_id: null,
+		status: 'published',
+		is_public: true,
+		jurisdictions: [],
+		scope: null,
+		scopes: [],
+		recipientEmails: [],
+		createdAt: '2026-07-17T00:00:00.000Z',
+		...overrides
+	};
+}
+
 function embedding(head: number[]): number[] {
 	return [...head, ...new Array<number>(768 - head.length).fill(0)];
 }
@@ -179,8 +219,43 @@ describe('templates materialized public snapshots', () => {
 
 	it('degrades to the newest snapshot when a duplicate key exists instead of hard-failing public reads', async () => {
 		const t = newHarness();
-		const older = { id: 'older', slug: 'older' };
-		const newer = { id: 'newer', slug: 'newer' };
+		const older = storedPublicCard('older', { title: 'Older', subject: 'Older' });
+		const publicOrg = { name: 'Public org', slug: 'public-org', avatar: null };
+		const publicScope = {
+			id: 'newer_s0',
+			template_id: 'newer',
+			country_code: 'CA',
+			region_code: null,
+			locality_code: null,
+			district_code: null,
+			display_text: 'Canada',
+			scope_level: 'country',
+			confidence: 1,
+			extraction_method: 'fixture'
+		};
+		const newer = storedPublicCard('newer', {
+			title: 'Newer',
+			subject: 'Newer',
+			endorsingOrg: publicOrg,
+			scopes: [publicScope]
+		});
+		const storedNewer = {
+			...newer,
+			endorsingOrg: {
+				...publicOrg,
+				encryptedBillingEmail: 'producer-private-fixture'
+			},
+			scopes: [
+				{
+					...publicScope,
+					internalBoundarySource: 'producer-private-fixture'
+				}
+			],
+			topicEmbedding: [0.1, 0.2],
+			moderationNotes: 'producer-only fixture'
+		};
+		const { title: _missingTitle, ...missingDisplaySpine } =
+			storedPublicCard('missing-display-spine');
 		const newerTwin = { a: 'newer-a', b: 'newer-b', score: 0.9, kind: 'twin' as const };
 		await t.run(async (ctx) => {
 			await ctx.db.insert('publicTemplateSnapshots', {
@@ -193,8 +268,13 @@ describe('templates materialized public snapshots', () => {
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'all',
 				revision: 2,
-				templates: [newer],
-				sourceCount: 1,
+				templates: [
+					storedNewer,
+					'malformed-producer-row',
+					{ ...storedPublicCard('malformed-allowed-field'), deliveryMethod: 42 },
+					missingDisplaySpine
+				],
+				sourceCount: 2,
 				updatedAt: 2
 			});
 			await ctx.db.insert('templateRelationSnapshots', {
@@ -363,6 +443,42 @@ describe('templates materialized public snapshots', () => {
 			});
 			expect((await flushFirst.query(api.templates.listPublic, {})).map(({ id }) => id)).toContain(
 				flushFirstId
+			);
+
+			// Exact boundary: `scheduledAt === now` is eligible, so a writer must
+			// replace the elapsed token and patch the manifest. The old flush is then
+			// superseded rather than being able to clear the writer's generation.
+			vi.setSystemTime(new Date('2026-07-17T00:00:00.000Z'));
+			const boundary = newHarness();
+			const elapsedToken = await boundary.mutation(
+				internal.templates.requestPublicTemplateSnapshotRefresh,
+				{}
+			);
+			vi.setSystemTime(elapsedToken.scheduledAt);
+			const boundaryId = await createPublicTemplate(boundary, 3);
+			const successor = await boundary.run((ctx) =>
+				ctx.db
+					.query('publicDiscoveryManifest')
+					.withIndex('by_key', (q) => q.eq('key', 'public'))
+					.unique()
+			);
+			expect(successor).toMatchObject({
+				listDirtyAt: elapsedToken.scheduledAt,
+				listRefreshScheduledAt: expect.any(Number)
+			});
+			expect(successor!.listRefreshScheduledAt!).toBeGreaterThan(elapsedToken.scheduledAt);
+			await expect(
+				boundary.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+					scheduledAt: elapsedToken.scheduledAt
+				})
+			).resolves.toEqual({ status: 'superseded' });
+
+			vi.setSystemTime(successor!.listRefreshScheduledAt!);
+			await boundary.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: successor!.listRefreshScheduledAt!
+			});
+			expect((await boundary.query(api.templates.listPublic, {})).map(({ id }) => id)).toContain(
+				boundaryId
 			);
 		} finally {
 			vi.unstubAllEnvs();
@@ -657,6 +773,115 @@ describe('templates materialized public snapshots', () => {
 		);
 	});
 
+	it('rejects producer cards that the public reader would drop and freezes the last-good revision', async () => {
+		const t = newHarness();
+		const templateId = await t.run((ctx) => ctx.db.insert('templates', templateValue(3_000)));
+
+		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+		const before = await t.query(api.templates.publicDiscoveryManifest, {});
+		const lastGood = await t.query(api.templates.listPublic, {});
+		expect(lastGood.map(({ id }) => id)).toEqual([templateId]);
+
+		await t.run((ctx) =>
+			ctx.db.patch(templateId, {
+				scopes: Array.from({ length: 101 }, (_, index) => ({
+					countryCode: 'US',
+					regionCode: `US-${index}`,
+					displayText: `Region ${index}`,
+					scopeLevel: 'region',
+					confidence: 1,
+					extractionMethod: 'test'
+				}))
+			})
+		);
+
+		await expect(
+			t.mutation(internal.templates.rebuildPublicTemplateSnapshotsForCronAttempt, {})
+		).resolves.toEqual({ status: 'invalid' });
+		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			list: { ready: true, revision: before.list.revision, updatedAt: before.list.updatedAt }
+		});
+		expect(await t.query(api.templates.listPublic, {})).toEqual(lastGood);
+		await expect(
+			t.query(internal.templates.publicDiscoveryFailureStatus, {})
+		).resolves.toMatchObject({
+			list: { code: `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${templateId}` }
+		});
+	});
+
+	it('records and clears an alerted last-good freeze around a scheduled oversize rebuild', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
+		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const sentryWarning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		vi.stubEnv('SENTRY_DSN', 'invalid-test-dsn');
+		try {
+			const t = newHarness();
+			await t.run((ctx) => ctx.db.insert('templates', templateValue(4_000)));
+			await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+			await t.mutation(internal.templates.rebuildRelationSnapshot, {});
+			const lastGoodIds = (await t.query(api.templates.listPublic, {})).map(({ id }) => id);
+
+			await t.run(async (ctx) => {
+				for (let index = 0; index < 50; index++) {
+					await ctx.db.insert(
+						'templates',
+						templateValue(5_000 + index, { messageBody: 'x'.repeat(22_000) })
+					);
+				}
+			});
+			const failedAt = Date.now();
+			const failure = await t.action(internal.templates.rebuildPublicTemplateSnapshotsForCron, {});
+			expect(failure).toEqual({ status: 'oversize' });
+			if (failure.status !== 'oversize') throw new Error('expected oversize refresh result');
+			expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).toEqual(
+				lastGoodIds
+			);
+			await expect(t.query(internal.templates.publicDiscoveryFailureStatus, {})).resolves.toEqual({
+				list: {
+					failedAt,
+					code: expect.stringMatching(/^PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all:/)
+				},
+				relations: null
+			});
+			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+				discoveryProducerHealthy: false
+			});
+			vi.advanceTimersByTime(0);
+			await t.finishInProgressScheduledFunctions();
+			expect(sentryWarning).toHaveBeenCalledWith(
+				'[Sentry/convex] Invalid SENTRY_DSN format; skipping capture'
+			);
+
+			await t.run(async (ctx) => {
+				for (const row of await ctx.db
+					.query('templates')
+					.withIndex('by_status_isPublic', (q) => q.eq('status', 'published').eq('isPublic', true))
+					.take(50)) {
+					if (row.slug.startsWith('template-5')) await ctx.db.delete(row._id);
+				}
+			});
+			const retry = await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
+			expect(retry.scheduled).toBe(true);
+			vi.setSystemTime(retry.scheduledAt);
+			await t.mutation(internal.templates.flushScheduledPublicTemplateRefresh, {
+				scheduledAt: retry.scheduledAt
+			});
+			await expect(t.query(internal.templates.publicDiscoveryFailureStatus, {})).resolves.toEqual({
+				list: null,
+				relations: null
+			});
+			await expect(t.query(api.observability.servicePing, {})).resolves.toMatchObject({
+				discoveryProducerHealthy: true
+			});
+		} finally {
+			consoleError.mockRestore();
+			sentryWarning.mockRestore();
+			vi.unstubAllEnvs();
+			vi.useRealTimers();
+		}
+	});
+
 	it('caps each template to its newest six endorsement organizations and preserves the total', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
@@ -884,10 +1109,7 @@ describe('templates materialized public snapshots', () => {
 		expect(expectedEmailTwins).toHaveLength(1);
 		expect(emailRelations.twinEdges).toEqual(expectedEmailTwins);
 		const visibleEmailIds = new Set<string>(emailList.templates.map(({ id }) => id));
-		for (const edge of [
-			...emailRelations.twinEdges,
-			...emailRelations.conceptRelations.edges
-		]) {
+		for (const edge of [...emailRelations.twinEdges, ...emailRelations.conceptRelations.edges]) {
 			expect(visibleEmailIds.has(edge.a)).toBe(true);
 			expect(visibleEmailIds.has(edge.b)).toBe(true);
 		}

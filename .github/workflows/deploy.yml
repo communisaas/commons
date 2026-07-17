@@ -500,6 +500,64 @@ jobs:
             sleep 10
           done
 
+      - name: Verify public discovery cache contract
+        if: env.DEPLOY_BRANCH == 'production'
+        run: |
+          first_headers=$(mktemp)
+          second_headers=$(mktemp)
+          response_body=$(mktemp)
+
+          first_status=$(curl -sS --max-time 20 \
+            -D "$first_headers" \
+            -o "$response_body" \
+            -w "%{http_code}" \
+            "$DEPLOY_PUBLIC_URL/api/templates") || {
+              echo "::warning::Could not probe the production public-discovery cache contract from the GitHub runner."
+              exit 0
+            }
+
+          if [ "$first_status" = "403" ] && grep -Eiq 'Just a moment|cf_chl|challenge-platform' "$response_body"; then
+            echo "::warning::Cloudflare challenged the public-discovery cache probe; complete the two-request cache-policy smoke externally."
+            exit 0
+          fi
+          if [ "$first_status" != "200" ] || ! jq -e '.success == true' "$response_body" >/dev/null 2>&1; then
+            echo "::error::Public discovery returned HTTP ${first_status} or a non-success payload."
+            head -c 4000 "$response_body"
+            exit 1
+          fi
+
+          cache_control=$(awk 'BEGIN { IGNORECASE=1 } /^cache-control:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$first_headers")
+          if [ "$cache_control" != "public, max-age=60, must-revalidate" ]; then
+            echo "::error::Unexpected browser Cache-Control on /api/templates: ${cache_control:-missing}"
+            exit 1
+          fi
+
+          sleep 1
+          second_status=$(curl -sS --max-time 20 \
+            -D "$second_headers" \
+            -o "$response_body" \
+            -w "%{http_code}" \
+            "$DEPLOY_PUBLIC_URL/api/templates") || {
+              echo "::warning::Second public-discovery cache probe failed; complete it externally."
+              exit 0
+            }
+          if [ "$second_status" != "200" ]; then
+            echo "::error::Second public-discovery cache probe returned HTTP ${second_status}."
+            exit 1
+          fi
+
+          cf_cache_status=$(awk 'BEGIN { IGNORECASE=1 } /^cf-cache-status:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
+          age=$(awk 'BEGIN { IGNORECASE=1 } /^age:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
+          if [ "$cf_cache_status" = "HIT" ]; then
+            if ! [[ "$age" =~ ^[0-9]+$ ]] || [ "$age" -lt 1 ]; then
+              echo "::error::Front-of-Worker cache reported HIT without a positive Age header."
+              exit 1
+            fi
+            echo "Verified optional front-of-Worker cache: CF-Cache-Status=HIT Age=${age}."
+          else
+            echo "::notice::No verified front-of-Worker HIT (CF-Cache-Status=${cf_cache_status:-absent}); explicit Cache API + KV remains the deployed cost boundary."
+          fi
+
       - name: Probe production browser-mediated mDL route
         if: env.DEPLOY_BRANCH == 'production'
         run: |

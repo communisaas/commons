@@ -105,7 +105,9 @@ export async function commitPublicDiscoveryListPublication(
 			listReady: true,
 			listRevision: publication.revision,
 			listUpdatedAt: publication.updatedAt,
-			listDirtyAt: undefined
+			listDirtyAt: undefined,
+			listFailureAt: undefined,
+			listFailureCode: undefined
 		});
 		return;
 	}
@@ -138,7 +140,9 @@ export async function commitPublicDiscoveryRelationsPublication(
 			relationsReady: true,
 			relationsRevision: publication.revision,
 			relationsUpdatedAt: publication.updatedAt,
-			relationsDirtyAt: undefined
+			relationsDirtyAt: undefined,
+			relationsFailureAt: undefined,
+			relationsFailureCode: undefined
 		});
 		return;
 	}
@@ -245,6 +249,12 @@ async function markPublicDiscoveryFamiliesDirty(
 	};
 
 	if (manifest) {
+		// An empty patch is possible only while every requested family already
+		// owns a strictly-future token (`scheduledAt > now`). Its flush cannot yet
+		// be scanning: a scheduled function becomes eligible no earlier than that
+		// token. At the token boundary (`scheduledAt <= now`) planning MUST create
+		// and patch a successor token, which restores the manifest OCC conflict for
+		// either serialization order around an eligible scanner.
 		if (Object.keys(patch).length > 0) {
 			await ctx.db.patch(manifest._id, patch);
 		}
@@ -278,8 +288,11 @@ async function markPublicDiscoveryFamiliesDirty(
  * generation). Convex retries a conflicting flush rather than letting it clear
  * a generation whose source write was omitted.
  *
- * Keep the source write and this dirty-mark call in the same mutation. Moving
- * either side outside that transaction would invalidate the no-drop argument.
+ * The no-drop property is exactly equivalent to every projection-affecting
+ * source write calling the matching dirty helper in the same mutation. Moving
+ * either side outside that transaction, or adding a new writer without the
+ * helper, invalidates the argument. The CI writer-contract ratchet inventories
+ * the current mutation boundaries; new projection fields/writers must extend it.
  *
  * Mark the list payload dirty and ensure exactly one bounded refresh job owns
  * the current window. Every caller writes only this singleton; duplicate writes

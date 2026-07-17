@@ -39,6 +39,7 @@ vi.mock('$lib/server/internal/secret-auth', () => ({
 
 import { GET, POST } from '../../../src/routes/api/templates/+server';
 import { PublicDiscoverySnapshotNotReadyError } from '$lib/server/public-template-queries';
+import { validateTemplateInputBudgets } from '../../../convex/lib/templateInputBudget';
 
 const VALID_TEMPLATE = {
 	title: 'Protect the public library',
@@ -79,7 +80,10 @@ describe('GET /api/templates public discovery contract', () => {
 		const response = await GET(getEvent());
 
 		expect(response.status).toBe(200);
-		expect(response.headers.get('Cache-Control')).toContain('max-age=60');
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=60, must-revalidate');
+		expect(response.headers.get('Cloudflare-CDN-Cache-Control')).toBe(
+			'public, max-age=60, stale-while-revalidate=30, stale-if-error=3600'
+		);
 		expect(mockGetCachedPublicTemplates).toHaveBeenCalledWith(
 			{ url: new URL('https://commons.email/api/templates'), platform: undefined },
 			true
@@ -98,7 +102,8 @@ describe('GET /api/templates public discovery contract', () => {
 		const response = await GET(getEvent());
 
 		expect(response.status).toBe(200);
-		expect(response.headers.get('Cache-Control')).toContain('max-age=60');
+		expect(response.headers.get('Cache-Control')).toBe('public, max-age=60, must-revalidate');
+		expect(response.headers.has('Cloudflare-CDN-Cache-Control')).toBe(false);
 		await expect(response.json()).resolves.toEqual({ success: true, data: [] });
 	});
 
@@ -142,9 +147,22 @@ describe('POST /api/templates authoring cost gate', () => {
 	it.each([
 		['description object', { description: {} }, 'description'],
 		['domain object', { domain: {} }, 'domain'],
+		['null delivery config', { delivery_config: null }, 'delivery_config'],
+		['array delivery config', { delivery_config: [] }, 'delivery_config'],
+		['scalar delivery config', { delivery_config: 'smtp' }, 'delivery_config'],
+		['null CWC config', { cwc_config: null }, 'cwc_config'],
+		['array CWC config', { cwc_config: [] }, 'cwc_config'],
+		['scalar CWC config', { cwc_config: 42 }, 'cwc_config'],
+		['null recipient config', { recipient_config: null }, 'recipient_config'],
+		['array recipient config', { recipient_config: [] }, 'recipient_config'],
+		['scalar recipient config', { recipient_config: true }, 'recipient_config'],
 		['sources object', { sources: {} }, 'sources'],
 		['malformed source entry', { sources: [{ num: 1, title: 42, url: 'https://x.test', type: 'web' }] }, 'sources'],
 		['oversized source string', { sources: [{ num: 1, title: 'x'.repeat(501), url: 'https://x.test', type: 'web' }] }, 'sources'],
+		['javascript source URL', { sources: [{ num: 1, title: 'unsafe', url: 'javascript:alert(1)', type: 'web' }] }, 'sources'],
+		['data source URL', { sources: [{ num: 1, title: 'unsafe', url: 'data:text/html,unsafe', type: 'web' }] }, 'sources'],
+		['relative source URL', { sources: [{ num: 1, title: 'unsafe', url: '/relative', type: 'web' }] }, 'sources'],
+		['credentialed source URL', { sources: [{ num: 1, title: 'unsafe', url: 'https://user:pass@example.com', type: 'web' }] }, 'sources'],
 		['non-string research entry', { research_log: [42] }, 'research_log'],
 		['oversized research entry', { research_log: ['x'.repeat(1_001)] }, 'research_log']
 	])('rejects a malformed optional %s before moderation', async (_label, patch, field) => {
@@ -154,6 +172,110 @@ describe('POST /api/templates authoring cost gate', () => {
 		await expect(response.json()).resolves.toMatchObject({
 			success: false,
 			errors: [expect.objectContaining({ field })]
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[
+			'combined configuration bytes',
+			{
+				delivery_config: { first: 'x'.repeat(4_096) },
+				recipient_config: { second: 'x'.repeat(4_096) }
+			},
+			'recipient_config'
+		],
+		[
+			'configuration fanout',
+			{ recipient_config: Object.fromEntries(Array.from({ length: 129 }, (_, i) => [`k${i}`, true])) },
+			'recipient_config'
+		],
+		[
+			'full stored authoring bytes',
+			{ research_log: Array.from({ length: 17 }, () => 'x'.repeat(1_000)) },
+			'body'
+		],
+		[
+			'public projection bytes',
+			{
+				message_body: 'x'.repeat(10_000),
+				preview: 'x'.repeat(500),
+				description: 'x'.repeat(1_000),
+				domain: 'x'.repeat(200),
+				topics: Array.from({ length: 5 }, (_, i) => `${i}${'x'.repeat(99)}`),
+				recipient_config: { note: 'x'.repeat(500) }
+			},
+			'body'
+		],
+		[
+			'an unsupported geographic shape',
+			{ geographic_scope: { type: 'subnational', country: 'US', locality: 'Austin', ballast: 'x' } },
+			'geographic_scope'
+		],
+		[
+			'an oversized geographic label',
+			{
+				geographic_scope: {
+					type: 'subnational',
+					country: 'US',
+					locality: 'x'.repeat(201)
+				}
+			},
+			'geographic_scope'
+		]
+	])('rejects %s before moderation', async (_label, patch, field) => {
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, ...patch }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [expect.objectContaining({ field, code: expect.stringMatching(/^VALIDATION_/) })]
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('budgets the generated slug before moderation when the request omits one', async () => {
+		const title = 'x'.repeat(100);
+		const preview = VALID_TEMPLATE.preview;
+		const fullResearchEntries = Array.from({ length: 15 }, () => 'x'.repeat(1_000));
+		const budgetInput = (slug: string, tailLength: number) => ({
+			title,
+			slug,
+			description: preview,
+			messageBody: VALID_TEMPLATE.message_body,
+			preview,
+			type: VALID_TEMPLATE.type,
+			deliveryMethod: VALID_TEMPLATE.deliveryMethod,
+			domain: '',
+			topics: [],
+			sources: [],
+			researchLog: [...fullResearchEntries, 'x'.repeat(tailLength)],
+			deliveryConfig: {},
+			cwcConfig: {},
+			recipientConfig: {},
+			contentHash: '0'.repeat(40),
+			status: 'published',
+			isPublic: true
+		});
+		const tailLength = Array.from({ length: 1_001 }, (_, index) => 1_000 - index).find(
+			(length) =>
+				validateTemplateInputBudgets(budgetInput('', length)).ok &&
+				!validateTemplateInputBudgets(budgetInput(title, length)).ok
+		);
+
+		expect(tailLength).toBeDefined();
+		const response = await POST(
+			postEvent({
+				...VALID_TEMPLATE,
+				title,
+				research_log: [...fullResearchEntries, 'x'.repeat(tailLength!)]
+			})
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [{ field: 'body', code: 'VALIDATION_TOO_LONG' }]
 		});
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
 	});
@@ -191,7 +313,13 @@ describe('POST /api/templates authoring cost gate', () => {
 			request: new Request('https://commons.email/api/templates', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify(VALID_TEMPLATE)
+				body: JSON.stringify({
+					...VALID_TEMPLATE,
+					sources: [
+						{ num: 1, title: 'HTTP source', url: 'http://example.com/source', type: 'web' },
+						{ num: 2, title: 'HTTPS source', url: 'https://example.com/source', type: 'web' }
+					]
+				})
 			}),
 			locals: {
 				user: { id: 'user_1', is_verified: false, trust_score: 100 }
