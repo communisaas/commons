@@ -578,11 +578,14 @@ describe('public discovery cache', () => {
 		expect(loader).toHaveBeenCalledTimes(2);
 	});
 
-	it('shares KV across preview hosts for one backend and isolates different backends', async () => {
+	it('isolates KV by request origin and configured backend', async () => {
 		const kv = installKv();
 		const production = platformWithKv(kv, 'https://alpha.convex.cloud');
 		const otherBackend = platformWithKv(kv, 'https://beta.convex.cloud');
-		const loader = vi.fn().mockResolvedValueOnce(['alpha']).mockResolvedValueOnce(['beta']);
+		const loader = vi.fn()
+			.mockResolvedValueOnce(['alpha-first-origin'])
+			.mockResolvedValueOnce(['alpha-second-origin'])
+			.mockResolvedValueOnce(['beta']);
 
 		await getCachedPublicData(
 			'templates',
@@ -596,7 +599,7 @@ describe('public discovery cache', () => {
 				{ url: new URL('https://second-preview.pages.dev/'), platform: production, revision: 7 },
 				loader
 			)
-		).resolves.toEqual(['alpha']);
+		).resolves.toEqual(['alpha-second-origin']);
 
 		clearPublicDiscoveryCache();
 		await expect(
@@ -610,8 +613,9 @@ describe('public discovery cache', () => {
 		const revisionKeys = kv.get.mock.calls
 			.map(([key]) => key as string)
 			.filter((key) => key.includes(':revision='));
-		expect(revisionKeys[0]).toBe(revisionKeys[1]);
+		expect(revisionKeys[0]).not.toBe(revisionKeys[1]);
 		expect(revisionKeys[2]).not.toBe(revisionKeys[1]);
+		expect(loader).toHaveBeenCalledTimes(3);
 	});
 
 	it('expires KV envelopes beyond the seven-day LKG window', async () => {

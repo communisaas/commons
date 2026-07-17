@@ -24,6 +24,7 @@ import {
 } from "./lib/templateInputBudget";
 import {
   PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+  PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
   PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
   commitPublicDiscoveryListPublication,
   commitPublicDiscoveryRelationsPublication,
@@ -97,12 +98,63 @@ const rebuildRelationSnapshotForCronAttemptRef = makeFunctionReference<"mutation
   | { status: "invalid" }
   | { status: "failed" }
 >;
+const rebuildHomepageSnapshotsForCronAttemptRef = makeFunctionReference<"mutation">(
+  "templates:rebuildHomepageSnapshotsForCronAttempt",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  Record<string, never>,
+  { status: "rebuilt"; rebuilt: HomepageSnapshotRebuildResult }
+>;
 const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<"mutation">(
   "templates:recordPublicDiscoverySnapshotRuntimeFailure",
 ) as unknown as FunctionReference<
   "mutation",
   "internal",
   { family: "list" | "relations"; code: string; failedAt: number },
+  unknown
+>;
+type ScheduledPublicDiscoveryRefreshArgs = { scheduledAt: number };
+const scheduledPublicDiscoveryRefreshAttemptStateRef = makeFunctionReference<"query">(
+  "templates:scheduledPublicDiscoveryRefreshAttemptState",
+) as unknown as FunctionReference<
+  "query",
+  "internal",
+  ScheduledPublicDiscoveryRefreshArgs & { family: "list" | "relations" },
+  {
+    current: boolean;
+    rebuildsRelations: boolean;
+    relationsScheduledAt?: number;
+  }
+>;
+const flushScheduledPublicTemplateRefreshRef = makeFunctionReference<"mutation">(
+  "templates:flushScheduledPublicTemplateRefresh",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  ScheduledPublicDiscoveryRefreshArgs,
+  unknown
+>;
+const flushScheduledPublicTemplateRelationsRefreshRef = makeFunctionReference<"mutation">(
+  "templates:flushScheduledPublicTemplateRelationsRefresh",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  ScheduledPublicDiscoveryRefreshArgs,
+  unknown
+>;
+const recoverPublicDiscoveryScheduledRefreshFailureRef = makeFunctionReference<"mutation">(
+  "templates:recoverPublicDiscoveryScheduledRefreshFailure",
+) as unknown as FunctionReference<
+  "mutation",
+  "internal",
+  {
+    family: "list" | "relations";
+    scheduledAt: number;
+    relationsScheduledAt?: number;
+    code: string;
+    failedAt: number;
+  },
   unknown
 >;
 
@@ -396,6 +448,156 @@ export const recordPublicDiscoverySnapshotRuntimeFailure = internalMutation({
   },
 });
 
+/**
+ * Capture the tokens a supervised scheduled attempt is about to consume.
+ *
+ * The action/mutation boundary is intentional: if the rebuild transaction
+ * rolls back after a database-write failure, the supervising action still has
+ * the exact pre-attempt tokens needed to record the failure without clearing a
+ * newer generation scheduled by a concurrent source write.
+ */
+export const scheduledPublicDiscoveryRefreshAttemptState = internalQuery({
+  args: {
+    family: v.union(v.literal("list"), v.literal("relations")),
+    scheduledAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const manifest = await ctx.db
+      .query("publicDiscoveryManifest")
+      .withIndex("by_key", (q) => q.eq("key", "public"))
+      .unique();
+    const current =
+      args.family === "list"
+        ? manifest?.listRefreshScheduledAt === args.scheduledAt
+        : manifest?.relationsRefreshScheduledAt === args.scheduledAt;
+    const rebuildsRelations =
+      args.family === "list" && current && manifest?.relationsDirtyAt !== undefined;
+
+    return {
+      current,
+      rebuildsRelations,
+      ...(rebuildsRelations && manifest?.relationsRefreshScheduledAt !== undefined
+        ? { relationsScheduledAt: manifest.relationsRefreshScheduledAt }
+        : {}),
+    };
+  },
+});
+
+/**
+ * Persist an unknown scheduled rebuild failure after its mutation rolled back.
+ * Token equality is the authority to clear a job: a newer writer-owned token
+ * is never touched. A failed composite list attempt records both affected
+ * families so neither elapsed token can spin or silently disappear.
+ */
+export const recoverPublicDiscoveryScheduledRefreshFailure = internalMutation({
+  args: {
+    family: v.union(v.literal("list"), v.literal("relations")),
+    scheduledAt: v.number(),
+    relationsScheduledAt: v.optional(v.number()),
+    code: v.string(),
+    failedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const manifest = await getPublicDiscoveryManifestRow(ctx);
+    if (!manifest) return { recorded: [] as Array<"list" | "relations"> };
+
+    const recorded: Array<"list" | "relations"> = [];
+    if (args.family === "list" && manifest.listRefreshScheduledAt === args.scheduledAt) {
+      await recordPublicDiscoverySnapshotFailure(
+        ctx,
+        manifest,
+        "list",
+        new Error(args.code.slice(0, 500)),
+        args.failedAt,
+      );
+      recorded.push("list");
+    }
+
+    if (args.family === "relations" && manifest.relationsRefreshScheduledAt === args.scheduledAt) {
+      await recordPublicDiscoverySnapshotFailure(
+        ctx,
+        manifest,
+        "relations",
+        new Error(args.code.slice(0, 500)),
+        args.failedAt,
+      );
+      recorded.push("relations");
+    } else if (
+      args.family === "list" &&
+      args.relationsScheduledAt !== undefined &&
+      manifest.relationsRefreshScheduledAt === args.relationsScheduledAt
+    ) {
+      await recordPublicDiscoverySnapshotFailure(
+        ctx,
+        manifest,
+        "relations",
+        new Error(`PUBLIC_DISCOVERY_RELATIONS_COMPOSITE_REBUILD_FAILED:${args.code}`.slice(0, 500)),
+        args.failedAt,
+      );
+      recorded.push("relations");
+    }
+
+    return { recorded };
+  },
+});
+
+async function superviseScheduledPublicDiscoveryRefresh(
+  ctx: ActionCtx,
+  family: "list" | "relations",
+  attempt: FunctionReference<"mutation", "internal", ScheduledPublicDiscoveryRefreshArgs, unknown>,
+  args: ScheduledPublicDiscoveryRefreshArgs,
+) {
+  let relationsScheduledAt: number | undefined;
+  try {
+    const state = await ctx.runQuery(scheduledPublicDiscoveryRefreshAttemptStateRef, {
+      family,
+      scheduledAt: args.scheduledAt,
+    });
+    if (state.current && state.rebuildsRelations) {
+      relationsScheduledAt = state.relationsScheduledAt;
+    }
+    return await ctx.runMutation(attempt, args);
+  } catch (error) {
+    const failedAt = Date.now();
+    const message = error instanceof Error ? error.message : String(error);
+    await ctx.runMutation(recoverPublicDiscoveryScheduledRefreshFailureRef, {
+      family,
+      scheduledAt: args.scheduledAt,
+      ...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {}),
+      code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_SCHEDULED_REBUILD_FAILED:${message}`.slice(
+        0,
+        500,
+      ),
+      failedAt,
+    });
+    throw error;
+  }
+}
+
+/** Durable supervisor for the list token scheduled by publicDiscovery.ts. */
+export const superviseScheduledPublicTemplateRefresh = internalAction({
+  args: { scheduledAt: v.number() },
+  handler: async (ctx, args) =>
+    await superviseScheduledPublicDiscoveryRefresh(
+      ctx,
+      "list",
+      flushScheduledPublicTemplateRefreshRef,
+      args,
+    ),
+});
+
+/** Durable supervisor for the relation token scheduled by publicDiscovery.ts. */
+export const superviseScheduledPublicTemplateRelationsRefresh = internalAction({
+  args: { scheduledAt: v.number() },
+  handler: async (ctx, args) =>
+    await superviseScheduledPublicDiscoveryRefresh(
+      ctx,
+      "relations",
+      flushScheduledPublicTemplateRelationsRefreshRef,
+      args,
+    ),
+});
+
 async function supervisePublicDiscoveryCronRebuild<Result>(
   ctx: ActionCtx,
   family: "list" | "relations",
@@ -560,7 +762,7 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       description: template.description,
       domain: resolveDomain(template),
       domainHue: template.domainHue ?? undefined,
-      topics: template.topics ?? [],
+      topics: normalizeTags(template.topics).slice(0, 200),
       type: template.type,
       deliveryMethod: template.deliveryMethod,
       subject: template.title,
@@ -674,18 +876,35 @@ type SnapshotField =
   | { kind: "array"; value: SnapshotField; maxItems: number }
   | { kind: "object"; fields: Record<string, SnapshotField> };
 
-const SNAPSHOT_STRING: SnapshotField = { kind: "string" };
-const SNAPSHOT_NUMBER: SnapshotField = { kind: "number" };
-const SNAPSHOT_BOOLEAN: SnapshotField = { kind: "boolean" };
-const SNAPSHOT_CONFIG: SnapshotField = { kind: "config" };
-const snapshotOptional = (value: SnapshotField): SnapshotField => ({ kind: "optional", value });
-const snapshotNullable = (value: SnapshotField): SnapshotField => ({ kind: "nullable", value });
-const snapshotArray = (value: SnapshotField, maxItems: number): SnapshotField => ({
+type SnapshotSchemaFor<T> = {
+  [K in keyof T]-?: undefined extends T[K]
+    ? Extract<SnapshotField, { kind: "optional" }>
+    : Exclude<SnapshotField, { kind: "optional" }>;
+};
+
+const SNAPSHOT_STRING = { kind: "string" } as const satisfies SnapshotField;
+const SNAPSHOT_NUMBER = { kind: "number" } as const satisfies SnapshotField;
+const SNAPSHOT_BOOLEAN = { kind: "boolean" } as const satisfies SnapshotField;
+const SNAPSHOT_CONFIG = { kind: "config" } as const satisfies SnapshotField;
+const snapshotOptional = <T extends SnapshotField>(value: T): { kind: "optional"; value: T } => ({
+  kind: "optional",
+  value,
+});
+const snapshotNullable = <T extends SnapshotField>(value: T): { kind: "nullable"; value: T } => ({
+  kind: "nullable",
+  value,
+});
+const snapshotArray = <T extends SnapshotField>(
+  value: T,
+  maxItems: number,
+): { kind: "array"; value: T; maxItems: number } => ({
   kind: "array",
   value,
   maxItems,
 });
-const snapshotObject = (fields: Record<string, SnapshotField>): SnapshotField => ({
+const snapshotObject = <T extends Record<string, SnapshotField>>(
+  fields: T,
+): { kind: "object"; fields: T } => ({
   kind: "object",
   fields,
 });
@@ -777,7 +996,7 @@ const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
   scopes: snapshotArray(SNAPSHOT_SCOPE, MAX_PUBLIC_TEMPLATE_SCOPES),
   recipientEmails: snapshotArray(SNAPSHOT_STRING, 200),
   createdAt: SNAPSHOT_STRING,
-} satisfies Record<keyof PublicTemplatePayload, SnapshotField>;
+} satisfies SnapshotSchemaFor<PublicTemplatePayload>;
 
 const INVALID_SNAPSHOT_VALUE = Symbol("INVALID_SNAPSHOT_VALUE");
 
@@ -1066,6 +1285,8 @@ type PublicTemplateSnapshotPlan = {
   aggregateShedIds: string[];
   exclusionCodes: string[];
 };
+
+type PublicTemplateRelationSelection = Pick<PublicTemplateSnapshotPlan, "candidates" | "sources">;
 
 /**
  * Build and atomically upsert both `listPublic` materializations.
@@ -1381,8 +1602,14 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
     }
 
     const now = Date.now();
-    const nextAllowedAt =
+    const rebuildsRelations = manifest.relationsDirtyAt !== undefined;
+    const listNextAllowedAt =
       (manifest.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
+    const relationsNextAllowedAt = rebuildsRelations
+      ? (manifest.relationsUpdatedAt ?? 0) +
+        PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS
+      : 0;
+    const nextAllowedAt = Math.max(listNextAllowedAt, relationsNextAllowedAt);
     if (now < nextAllowedAt) {
       const nextScheduledAt = await reschedulePublicDiscoveryListRefresh(
         ctx,
@@ -1390,14 +1617,45 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
         now,
         nextAllowedAt,
       );
-      return { status: "deferred" as const, scheduledAt: nextScheduledAt };
+      // The list job owns this deferred composite generation. Point the
+      // relation token at the same supervised action without queuing another
+      // relation job; any previously queued relation invocation becomes a
+      // cheap superseded no-op unless it already owns this exact timestamp.
+      const relationsScheduledAt = rebuildsRelations ? nextScheduledAt : undefined;
+      if (relationsScheduledAt !== undefined) {
+        await ctx.db.patch(manifest._id, {
+          relationsRefreshScheduledAt: relationsScheduledAt,
+        });
+      }
+      return {
+        status: "deferred" as const,
+        scheduledAt: nextScheduledAt,
+        ...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {}),
+      };
     }
 
     try {
-      const rebuilt = await rebuildPublicTemplateSnapshotsImpl(ctx);
+      const rebuilt = rebuildsRelations
+        ? await rebuildHomepageSnapshotsImpl(ctx)
+        : await rebuildPublicTemplateSnapshotsImpl(ctx);
       const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
-      if (publishedManifest?.listRefreshScheduledAt === scheduledAt) {
-        await ctx.db.patch(publishedManifest._id, { listRefreshScheduledAt: undefined });
+      if (publishedManifest) {
+        const patch: {
+          listRefreshScheduledAt?: undefined;
+          relationsRefreshScheduledAt?: undefined;
+        } = {};
+        if (publishedManifest.listRefreshScheduledAt === scheduledAt) {
+          patch.listRefreshScheduledAt = undefined;
+        }
+        if (
+          rebuildsRelations &&
+          publishedManifest.relationsRefreshScheduledAt === manifest.relationsRefreshScheduledAt
+        ) {
+          patch.relationsRefreshScheduledAt = undefined;
+        }
+        if (Object.keys(patch).length > 0) {
+          await ctx.db.patch(publishedManifest._id, patch);
+        }
       }
       return { status: "rebuilt" as const, rebuilt };
     } catch (error) {
@@ -1409,6 +1667,19 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
       const status = classifyPublicTemplateSnapshotFreeze(error);
       if (!status) throw error;
       await freezePublicDiscoverySnapshotFailure(ctx, "list", error as Error, now);
+      if (rebuildsRelations) {
+        await freezePublicDiscoverySnapshotFailure(
+          ctx,
+          "relations",
+          new Error(
+            `PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${(error as Error).message}`.slice(
+              0,
+              500,
+            ),
+          ),
+          now,
+        );
+      }
       return { status };
     }
   },
@@ -1440,11 +1711,14 @@ const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
  * database-I/O failure mode this materialization exists to remove.
  */
 export const relatednessEdges = query({
-  args: {},
-  handler: async (ctx): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
+  args: { excludeCwc: v.optional(v.boolean()) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .withIndex("by_key", (q) => q.eq("key", relationSnapshotKey(args.excludeCwc)))
       .unique();
     return snapshot?.twinEdges ?? [];
   },
@@ -1533,16 +1807,17 @@ export const recomputeRelatednessCalibration = internalMutation({
  * NEVER leave; only labels and `{a,b,concept,kind}` tuples cross the boundary.
  */
 export const conceptRelations = query({
-  args: {},
+  args: { excludeCwc: v.optional(v.boolean()) },
   handler: async (
     ctx,
+    args,
   ): Promise<{
     edges: Array<{ a: string; b: string; concept: string; kind: "concept" }>;
     conceptMap: Record<string, string>;
   }> => {
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .withIndex("by_key", (q) => q.eq("key", relationSnapshotKey(args.excludeCwc)))
       .unique();
     if (!snapshot) return { edges: [], conceptMap: {} };
 
@@ -1855,9 +2130,14 @@ type RelationSnapshotRebuildResult = {
   excludeCwc: RelationSnapshotVariantRebuildResult;
 };
 
+type HomepageSnapshotRebuildResult = {
+  list: PublicTemplateSnapshotRebuildResult;
+  relations: RelationSnapshotRebuildResult;
+};
+
 type PreparedRelationSnapshotRebuild = {
   publication: PublicDiscoveryPublication;
-  selection: PublicTemplateSnapshotPlan;
+  selection: PublicTemplateRelationSelection;
   variants: Record<RelationSnapshotKey, RelationSnapshotVariantBuild>;
   existingRows: Record<RelationSnapshotKey, Doc<"templateRelationSnapshots"> | null>;
 };
@@ -1874,13 +2154,91 @@ function classifyRelationSnapshotFreeze(error: Error): "oversize" | "invalid" | 
   return "failed";
 }
 
+type PublicDiscoveryDatabaseReader = QueryCtx["db"];
+
+/**
+ * Resolve the exact template IDs in the currently published list generation.
+ * Relation rebuilds and tag maintenance share this tiny control/list read so
+ * neither needs another published-corpus index scan.
+ */
+async function readPublishedPublicTemplateIds(ctx: {
+  db: PublicDiscoveryDatabaseReader;
+}): Promise<Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>> {
+  const manifest = await ctx.db
+    .query("publicDiscoveryManifest")
+    .withIndex("by_key", (q) => q.eq("key", "public"))
+    .unique();
+  if (!manifest?.listReady || manifest.listUpdatedAt === undefined) {
+    throw new Error("PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready");
+  }
+
+  const rows = {
+    all: await ctx.db
+      .query("publicTemplateSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", "all"))
+      .unique(),
+    excludeCwc: await ctx.db
+      .query("publicTemplateSnapshots")
+      .withIndex("by_key", (q) => q.eq("key", "excludeCwc"))
+      .unique(),
+  };
+  const idsByKey = {} as Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>;
+  for (const key of ["all", "excludeCwc"] as const) {
+    const row = rows[key];
+    if (
+      !row ||
+      row.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION ||
+      row.revision !== manifest.listRevision ||
+      row.updatedAt !== manifest.listUpdatedAt
+    ) {
+      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:published-generation:${key}`);
+    }
+    idsByKey[key] = projectStoredPublicTemplates(row.templates, {
+      key,
+      revision: row.revision,
+    }).map((template) => {
+      const id = ctx.db.normalizeId("templates", String(template.id));
+      if (!id) {
+        throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:template-id:${key}`);
+      }
+      return id;
+    });
+  }
+
+  return idsByKey;
+}
+
+async function preparePublishedPublicTemplateRelationSelection(
+  ctx: MutationCtx,
+): Promise<PublicTemplateRelationSelection> {
+  const idsByKey = await readPublishedPublicTemplateIds(ctx);
+
+  const uniqueIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
+  const hydrated = await Promise.all(uniqueIds.map(async (id) => await ctx.db.get(id)));
+  const templatesById = new Map(
+    hydrated.flatMap((template) => (template ? [[template._id, template] as const] : [])),
+  );
+  const sources = {
+    all: idsByKey.all.flatMap((id) => {
+      const template = templatesById.get(id);
+      return template ? [template] : [];
+    }),
+    excludeCwc: idsByKey.excludeCwc.flatMap((id) => {
+      const template = templatesById.get(id);
+      return template ? [template] : [];
+    }),
+  };
+
+  return { candidates: [...templatesById.values()], sources };
+}
+
 async function prepareRelationSnapshotRebuild(
   ctx: MutationCtx,
-  selection?: PublicTemplateSnapshotPlan,
+  selection?: PublicTemplateRelationSelection,
 ): Promise<PreparedRelationSnapshotRebuild> {
   // Reserve without advancing either manifest revision. A relation-only rebuild
-  // runs the exact list selector (including validation, backfill, and aggregate
-  // shedding); the composite rebuild supplies its already-computed plan.
+  // hydrates the exact IDs in the currently published list generation; the
+  // composite rebuild supplies its already-computed plan.
   const publication = await preparePublicDiscoveryRelationsPublication(ctx);
   const existingRows = {
     all: await ctx.db
@@ -1893,11 +2251,7 @@ async function prepareRelationSnapshotRebuild(
       .unique(),
   };
   const resolvedSelection =
-    selection ??
-    (await preparePublicTemplateSnapshotPlan(
-      ctx,
-      await preparePublicDiscoveryListPublication(ctx, publication.updatedAt),
-    ));
+    selection ?? (await preparePublishedPublicTemplateRelationSelection(ctx));
 
   // Building both variants performs every size check before the first write.
   const variants = {
@@ -1966,7 +2320,7 @@ async function publishRelationSnapshotRebuild(
 
 async function rebuildRelationSnapshotImpl(
   ctx: MutationCtx,
-  selection?: PublicTemplateSnapshotPlan,
+  selection?: PublicTemplateRelationSelection,
 ): Promise<RelationSnapshotRebuildResult> {
   return await publishRelationSnapshotRebuild(
     ctx,
@@ -2047,6 +2401,28 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
     }
 
     const now = Date.now();
+    if (manifest.listDirtyAt !== undefined) {
+      if (manifest.listRefreshScheduledAt === undefined) {
+        const blocked = new Error(
+          `PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${manifest.listFailureCode ?? "UNSCHEDULED_DIRTY"}`.slice(
+            0,
+            500,
+          ),
+        );
+        await freezePublicDiscoverySnapshotFailure(ctx, "relations", blocked, now);
+        return { status: "blocked-by-list" as const };
+      }
+      const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
+        ctx,
+        manifest,
+        now,
+        manifest.listRefreshScheduledAt + PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
+      );
+      return {
+        status: "deferred-for-list" as const,
+        scheduledAt: nextScheduledAt,
+      };
+    }
     const nextAllowedAt =
       (manifest.relationsUpdatedAt ?? 0) +
       PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
@@ -2084,7 +2460,9 @@ export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
   },
 });
 
-async function rebuildHomepageSnapshotsImpl(ctx: MutationCtx) {
+async function rebuildHomepageSnapshotsImpl(
+  ctx: MutationCtx,
+): Promise<HomepageSnapshotRebuildResult> {
   const listPublication = await preparePublicDiscoveryListPublication(ctx);
   const selection = await preparePublicTemplateSnapshotPlan(ctx, listPublication);
   const preparedRelations = await prepareRelationSnapshotRebuild(ctx, selection);
@@ -2109,6 +2487,43 @@ async function rebuildHomepageSnapshotsImpl(ctx: MutationCtx) {
 export const rebuildHomepageSnapshots = internalMutation({
   args: {},
   handler: rebuildHomepageSnapshotsImpl,
+});
+
+/** One atomic list+relations attempt used by the consolidated daily cron. */
+export const rebuildHomepageSnapshotsForCronAttempt = internalMutation({
+  args: {},
+  handler: async (ctx) => ({
+    status: "rebuilt" as const,
+    rebuilt: await rebuildHomepageSnapshotsImpl(ctx),
+  }),
+});
+
+/**
+ * Persist failures outside the rolled-back composite transaction. Both
+ * families are marked because neither generation advances when any prepare or
+ * publish stage fails.
+ */
+export const rebuildHomepageSnapshotsForCron = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    try {
+      return await ctx.runMutation(rebuildHomepageSnapshotsForCronAttemptRef, {});
+    } catch (error) {
+      const failedAt = Date.now();
+      const message = error instanceof Error ? error.message : String(error);
+      for (const family of ["list", "relations"] as const) {
+        await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+          family,
+          code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_COMPOSITE_CRON_REBUILD_FAILED:${message}`.slice(
+            0,
+            500,
+          ),
+          failedAt,
+        });
+      }
+      throw error;
+    }
+  },
 });
 
 /**
@@ -2225,6 +2640,27 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
   return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
 }
 
+function projectPublicHttpUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const candidate = value.trim();
+  if (candidate.length === 0 || candidate.length > 2_048) return undefined;
+  try {
+    const url = new URL(candidate);
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username.length > 0 ||
+      url.password.length > 0 ||
+      url.search.length > 0 ||
+      url.hash.length > 0
+    ) {
+      return undefined;
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Construct the exact public roster shape used by anonymous detail/send pages.
  *
@@ -2236,8 +2672,10 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
 function projectPublicDetailRecipientConfig(
   recipientConfig: unknown,
 ): Record<string, unknown> & { emails: string[] } {
+  const publicEmails = extractRecipientEmailsConvex(recipientConfig).slice(0, 50);
+  const allowedEmails = new Set(publicEmails);
   const projected: Record<string, unknown> & { emails: string[] } = {
-    emails: extractRecipientEmailsConvex(recipientConfig).slice(0, 50),
+    emails: publicEmails,
   };
   if (!recipientConfig || typeof recipientConfig !== "object" || Array.isArray(recipientConfig)) {
     return projected;
@@ -2278,40 +2716,33 @@ function projectPublicDetailRecipientConfig(
           "role",
           "shortName",
           "organization",
-          "email",
           "roleCategory",
           "personalPrompt",
           "accountabilityOpener",
-          "provenance",
-          "source",
-          "source_url",
-          "recencyCheck",
-          "positionSourceDate",
-          "emailSource",
-          "emailSourceTitle",
         ] as const) {
           if (typeof decisionMaker[field] === "string") {
             publicDecisionMaker[field] = decisionMaker[field];
           }
         }
-        for (const field of ["isAiResolved", "emailGrounded"] as const) {
-          if (typeof decisionMaker[field] === "boolean") {
-            publicDecisionMaker[field] = decisionMaker[field];
+        if (typeof decisionMaker.email === "string") {
+          const email = decisionMaker.email.trim();
+          if (allowedEmails.has(email)) publicDecisionMaker.email = email;
+        }
+        if (
+          typeof publicDecisionMaker.email === "string" &&
+          decisionMaker.emailGrounded === true
+        ) {
+          const emailSource = projectPublicHttpUrl(decisionMaker.emailSource);
+          if (emailSource) {
+            publicDecisionMaker.emailGrounded = true;
+            publicDecisionMaker.emailSource = emailSource;
           }
         }
         if (
-          decisionMaker.emailVerified === "deliverable" ||
-          decisionMaker.emailVerified === "risky"
+          typeof decisionMaker.relevanceRank === "number" &&
+          Number.isFinite(decisionMaker.relevanceRank)
         ) {
-          publicDecisionMaker.emailVerified = decisionMaker.emailVerified;
-        }
-        if (typeof decisionMaker.relevanceRank === "number" && Number.isFinite(decisionMaker.relevanceRank)) {
           publicDecisionMaker.relevanceRank = decisionMaker.relevanceRank;
-        }
-        if (Array.isArray(decisionMaker.publicActions)) {
-          publicDecisionMaker.publicActions = decisionMaker.publicActions
-            .filter((value): value is string => typeof value === "string")
-            .slice(0, 20);
         }
         return Object.keys(publicDecisionMaker).length > 0 ? publicDecisionMaker : null;
       })
@@ -3544,25 +3975,26 @@ export const setCwcVerification = mutation({
 export const listMissingTagEmbeddings = internalQuery({
   args: {},
   handler: async (ctx) => {
-    const candidates = await ctx.db
-      .query("templates")
-      .withIndex("by_status_isPublic", (q) =>
-        q.eq("status", "published").eq("isPublic", true),
-      )
-      .order("desc")
-      // Match the one bounded candidate scan used to derive both relation
-      // variants; older rows need no Gemini work until a variant can display
-      // them.
-      .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+    let idsByKey: Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>;
+    try {
+      idsByKey = await readPublishedPublicTemplateIds(ctx);
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message === "PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready"
+      ) {
+        // Cold start has no truthful displayed corpus yet. The consolidated
+        // homepage rebuild publishes it later in the same daily maintenance
+        // window; the next tag pass then embeds only those displayed IDs.
+        return [];
+      }
+      throw error;
+    }
 
-    const selectedIds = new Set([
-      ...candidates.slice(0, RELATION_SNAPSHOT_VARIANT_CAP).map(({ _id }) => _id),
-      ...candidates
-        .filter(({ deliveryMethod }) => deliveryMethod !== "cwc")
-        .slice(0, RELATION_SNAPSHOT_VARIANT_CAP)
-        .map(({ _id }) => _id),
-    ]);
-    const templates = candidates.filter(({ _id }) => selectedIds.has(_id));
+    const selectedIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
+    const templates = (
+      await Promise.all(selectedIds.map(async (id) => await ctx.db.get(id)))
+    ).filter((template): template is Doc<"templates"> => template !== null);
 
     return templates
       .map((t) => ({ doc: t, tags: normalizeTags(t.topics) }))

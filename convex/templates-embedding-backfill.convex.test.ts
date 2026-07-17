@@ -155,6 +155,40 @@ describe('bounded embedding backfill discovery', () => {
 		expect(rows.every((row) => !('topicEmbedding' in row))).toBe(true);
 	});
 
+	it('discovers missing tag embeddings only from the published list generation', async () => {
+		const t = writeHarness();
+		const { emailId, cwcId } = await t.run(async (ctx) => ({
+			emailId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('published-email-tags', { topics: ['libraries'] })
+			),
+			cwcId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('published-cwc-tags', {
+					deliveryMethod: 'cwc',
+					topics: ['district access']
+				})
+			)
+		}));
+
+		// A cold deployment has no truthful displayed generation and must not
+		// fall back to an embedding-heavy live corpus scan.
+		await expect(t.query(internal.templates.listMissingTagEmbeddings, {})).resolves.toEqual([]);
+		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+
+		const liveEntrant = await t.run((ctx) =>
+			ctx.db.insert(
+				'templates',
+				missingTemplateValue('not-yet-published-tags', { topics: ['live entrant'] })
+			)
+		);
+		const missing = await t.query(internal.templates.listMissingTagEmbeddings, {});
+		expect(new Set(missing.map(({ _id }) => String(_id)))).toEqual(
+			new Set([String(emailId), String(cwcId)])
+		);
+		expect(missing.map(({ _id }) => _id)).not.toContain(liveEntrant);
+	});
+
 	it('serializes Pages isolates with an expiring token-checked lease', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));

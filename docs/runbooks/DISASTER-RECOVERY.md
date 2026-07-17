@@ -22,9 +22,13 @@
 - **TEE recovery is not yet covered**: TEE is Planned; witness
   decryption currently runs in `LocalConstituentResolver` (CF Worker
   process). No HSM / sealed recovery yet.
-- **Deploy cutover:** restore Convex with `npx convex deploy --env-file
-  .env.production`, rebuild and verify the v4 discovery snapshots, then use the
-  gated `.github/workflows/deploy.yml` workflow for the exact release SHA.
+- **Deploy cutover:** recover Convex documents first through point-in-time
+  restore or an explicitly targeted backup ZIP import. Restore the deployment's
+  environment variables separately; backups do not contain them. From the exact
+  recovery release SHA, deploy its functions, schema, and indexes to that same
+  target with `npx convex deploy --env-file .env.production`; this command does
+  not restore documents. Rebuild and verify the v4 discovery snapshots, then use
+  the gated `.github/workflows/deploy.yml` workflow for the exact release SHA.
   Direct `wrangler pages deploy` is prohibited because it bypasses recovery
   readiness and immutable-SHA evidence. (`-y` silently fails for Convex prod —
   always pass `--env-file`.)
@@ -65,24 +69,37 @@ needed.
 
 1. Provision a new Convex deployment (dashboard → Projects → New
    deployment).
-2. Export the latest snapshot:
+2. Download the selected clean backup ZIP from the Convex dashboard. If the
+   source deployment is reachable and known-clean, the CLI equivalent is:
    ```bash
-   npx convex export --path ./convex-snapshot.zip
+   npx convex export --deployment <source-deployment> --include-file-storage --path ./convex-snapshot.zip
    ```
-   (From the Convex dashboard if the old deployment is unreachable.)
-3. Import into the new deployment:
+3. Import the untouched backup ZIP into the explicitly selected new deployment:
    ```bash
-   npx convex import --table <tableName> ./convex-snapshot/<tableName>.jsonl
+   npx convex import --deployment <new-deployment> --replace ./convex-snapshot.zip
    ```
-   Repeat for each table, or use the dashboard's import UI.
+   Importing the whole ZIP preserves document IDs, references, Convex value
+   types, and any included file-storage metadata. Do not restore a full backup
+   by iterating over per-table JSONL files.
+4. Restore the new deployment's environment variables from the secrets manager.
+   Convex backups contain documents and optional file storage, not environment
+   variables, deployed code/configuration, or pending scheduled functions.
 
 ## 4. Validate
 
 After restore completes:
 
+Check out the exact recovery release SHA. Ensure `.env.production` contains a
+deployment-scoped key for the restored target, and restore that deployment's
+environment variables before invoking its functions.
+
 ```bash
-# Deploy the current schema + functions against the restored data
+# Deploy this release's functions, schema, and indexes. Data was restored above.
 npx convex deploy --env-file .env.production
+
+# Rebuild the derived discovery rows required by the frontend readiness gate
+npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
+npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
 
 # Run the integration test suite against the restored deployment
 PUBLIC_CONVEX_URL=<restored-url> npm run test:integration
@@ -98,14 +115,21 @@ Spot-check these tables via the Convex dashboard or a quick query:
 
 ## 5. Cutover
 
-1. If you restored to a new Convex deployment, update the Cloudflare
-   Pages env:
-   ```bash
-   wrangler pages secret put PUBLIC_CONVEX_URL    # new deployment URL
-   ```
+1. If you restored to a new Convex deployment, update the reviewed production
+   `PUBLIC_CONVEX_URL` mapping in `.github/workflows/deploy.yml` and
+   `wrangler.toml` in the recovery release. Update any same-named Cloudflare
+   Pages binding too. Changing only a Pages secret is insufficient: the gated
+   workflow verifies its approved backend URL before upload and syncs that URL
+   into the Wrangler configuration.
 2. Redeploy the frontend so it picks up the new env:
    ```bash
+   set -euo pipefail
+   git fetch --no-tags origin production
    RELEASE_SHA=$(git rev-parse HEAD)
+   if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/production; then
+     echo "Refusing deploy: $RELEASE_SHA is not contained in origin/production." >&2
+     exit 1
+   fi
    gh workflow run deploy.yml --ref production \
      -f branch=production \
      -f ref="$RELEASE_SHA"

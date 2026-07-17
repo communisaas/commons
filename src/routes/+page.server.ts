@@ -17,11 +17,13 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	// connect-timeout) should render an empty homepage, not a hard 500. Mirrors
 	// the guarded Convex calls in +layout.server.ts.
 	const cacheContext = { url, platform };
+	let templatesLoadFailed = false;
 	const templatesPromise = getCachedPublicTemplates(
 		cacheContext,
 		// Keep CWC templates out of public discovery until congressional launch.
 		excludeCwc
 	).catch((err) => {
+		templatesLoadFailed = true;
 		console.error(
 			'[Page] templates.listPublic failed (transient):',
 			err instanceof Error ? err.message : String(err)
@@ -61,6 +63,7 @@ export const load: PageServerLoad = async ({ depends, url, platform }) => {
 
 	return {
 		templates,
+		templatesLoadFailed,
 		relationEdges: relations.twinEdges,
 		conceptRelations: relations.conceptRelations
 	};

@@ -23,13 +23,13 @@ type Manifest = Doc<'publicDiscoveryManifest'>;
 type ScheduledListRefreshArgs = { scheduledAt: number };
 type ScheduledRelationsRefreshArgs = { scheduledAt: number };
 
-const flushScheduledListRefreshRef = makeFunctionReference<'mutation'>(
-	'templates:flushScheduledPublicTemplateRefresh'
-) as unknown as FunctionReference<'mutation', 'internal', ScheduledListRefreshArgs, unknown>;
+const flushScheduledListRefreshRef = makeFunctionReference<'action'>(
+	'templates:superviseScheduledPublicTemplateRefresh'
+) as unknown as FunctionReference<'action', 'internal', ScheduledListRefreshArgs, unknown>;
 
-const flushScheduledRelationsRefreshRef = makeFunctionReference<'mutation'>(
-	'templates:flushScheduledPublicTemplateRelationsRefresh'
-) as unknown as FunctionReference<'mutation', 'internal', ScheduledRelationsRefreshArgs, unknown>;
+const flushScheduledRelationsRefreshRef = makeFunctionReference<'action'>(
+	'templates:superviseScheduledPublicTemplateRelationsRefresh'
+) as unknown as FunctionReference<'action', 'internal', ScheduledRelationsRefreshArgs, unknown>;
 
 export type PublicDiscoveryManifestPayload = {
 	list: {
@@ -239,6 +239,9 @@ async function markPublicDiscoveryFamiliesDirty(
 	list?: { scheduled: boolean; scheduledAt: number };
 	relations?: { scheduled: boolean; scheduledAt: number };
 }> {
+	// LOAD-BEARING NO-DROP READ: even when an existing future token makes the
+	// resulting patch empty, this unconditional singleton read must stay in the
+	// transaction read set so Convex OCC serializes it with an eligible flush.
 	const manifest = await getPublicDiscoveryManifestRow(ctx);
 	const listPlan = families.list ? planListRefresh(manifest, now) : undefined;
 	const relationsPlan = families.relations ? planRelationsRefresh(manifest, now) : undefined;

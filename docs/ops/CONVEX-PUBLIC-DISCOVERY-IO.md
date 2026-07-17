@@ -67,10 +67,15 @@ The protection has two independent data layers and one small control plane:
    `recipient_count` scalar crosses that anonymous cache boundary. The indexed,
    published-only `getBySlugPublic` detail/send query constructs an explicit
    public recipient-roster allowlist for `/s/[slug]` and
-   `/template-modal/[slug]`; opaque authoring fields and provider/CWC configs
-   remain redacted. Both responses are explicitly `private, no-store` to avoid
-   retention, though that policy is not an access-control boundary for the
-   directly public Convex query.
+   `/template-modal/[slug]`. Up to 50 normalized public-official addresses,
+   identity/role fields, send-page prompts, rank, and a validated credential-free
+   HTTP(S) email-verification link are intentionally public and scrapeable;
+   free-form provenance, opaque authoring fields, and provider/CWC configs remain
+   redacted. Verification links must be bare HTTP(S) URLs with no userinfo,
+   query, or fragment so signed tokens and URL-carried credentials cannot cross
+   the public boundary. Both responses are explicitly `private, no-store` to
+   avoid retention, though that policy is not an access-control boundary for
+   the directly public Convex query.
 3. `templates:publicDiscoveryManifest` distinguishes a never-built cold state
    (`ready:false`, revision `0`) from a successful build of a legitimately empty
    corpus. List and relation payloads fail closed when their stored revision and
@@ -87,15 +92,21 @@ Cloudflare-only policy for a future or externally configured route-scoped
 front cache, but correctness and the Convex-I/O cost bound do not assume that
 such a cache is enabled.
 
+The mounted landing page does not poll. It reconciles its client template store
+from every later SvelteKit page-data load, including client-side navigation, so
+the next navigation or reload after a published generation becomes visible
+cannot remain pinned to the first hydrated list. A tab left untouched keeps its
+current view; that avoids turning every open browser into background traffic.
+
 ### Cost-minimal Cloudflare posture
 
 The cache owns five logical families: the manifest, two list variants, and two
 combined-relation variants. Cache API stores origin-local immutable generation
 entries plus a last-known-good pointer. KV keeps immutable revision-qualified
-payload entries, scoped by Convex backend rather than preview hostname, so
-production and staging cannot contaminate each other while aliases of one
-backend share the shield. On recovery, the highest logical revision wins even
-if an older request finishes later in another Worker isolate.
+payload entries scoped by both request origin and Convex backend. Preview,
+staging, and production therefore cannot contaminate one another even when they
+share the zero-cost namespace and backend. On recovery, the highest logical
+revision wins even if an older request finishes later in another Worker isolate.
 Query strings do not create keys, so random-parameter traffic cannot force
 Convex payload misses. Cache API is the request hot path; Workers KV is the
 cross-location shield, and writes occur only after a successful load or healthy
@@ -317,13 +328,12 @@ cold state. The scoped execution graph is
 
 ## Ongoing refresh
 
-- The bounded public-list snapshot refresh runs daily in the `essential` cron
-  profile. This updates reach/debate/endorsement fields and the seven-day
-  `isNew` flag.
-- The bounded relation snapshot refresh runs daily in the `essential` profile.
-  One newest-250 scan derives the exact top-50 `all` and top-50 non-CWC
-  generations. Each variant computes its calibration inline, after the optional
-  operational tag-embedding maintenance when that tier is enabled.
+- One bounded homepage snapshot refresh runs daily at 04:17 UTC in the
+  `essential` profile. A single newest-250 plan atomically updates the exact
+  top-50 `all` and top-50 non-CWC list and relation generations, including
+  reach/debate/endorsement fields and the seven-day `isNew` flag. Each relation
+  variant computes its calibration inline after optional operational
+  tag-embedding maintenance.
 - Template, reach, endorsement, and debate writes coalesce behind one 60-second
   scheduler token, and scheduled heavy list rebuilds run no more often than
   every six hours. On a quiet site, the first change after that cost window is
@@ -335,7 +345,7 @@ cold state. The scoped execution graph is
   changes, and public template deletion) use a separate 60-second token and the
   same six-hour scheduled-rebuild ceiling. List-only reach/debate/endorsement
   traffic never triggers the embedding-heavy relation rebuild. The daily
-  relation job remains the missed-write backstop.
+  composite homepage job remains the missed-write backstop.
 - Initial and later public-template embedding updates use the same coalesced
   relation token. No authoring path can bypass the six-hour relation rebuild
   ceiling. If embedding completion commits before the pending flush, it lands in

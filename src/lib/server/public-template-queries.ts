@@ -187,9 +187,21 @@ function pickFields(value: unknown, fields: readonly string[]): Record<string, u
 	return projected;
 }
 
-function projectObjectArray(value: unknown, fields: readonly string[]): unknown {
-	if (!Array.isArray(value)) return value;
-	return value.map((item) => pickFields(item, fields) ?? item);
+function projectObjectArray(
+	value: unknown,
+	fields: readonly string[],
+	fieldName: string
+): Record<string, unknown>[] {
+	if (!Array.isArray(value)) {
+		throw new PublicDiscoverySnapshotContractError(`unsafe-${fieldName}`);
+	}
+	return value.map((item, index) => {
+		const projected = pickFields(item, fields);
+		if (!projected) {
+			throw new PublicDiscoverySnapshotContractError(`unsafe-${fieldName}:${index}`);
+		}
+		return projected;
+	});
 }
 
 /**
@@ -221,7 +233,11 @@ function projectPublicTemplateCard(rawTemplate: unknown, index: number): PublicT
 				: pickFields(rawTemplate.endorsingOrg, PUBLIC_ORG_FIELDS);
 	}
 	if (rawTemplate.endorsingOrgs !== undefined) {
-		projected.endorsingOrgs = projectObjectArray(rawTemplate.endorsingOrgs, PUBLIC_ORG_FIELDS);
+		projected.endorsingOrgs = projectObjectArray(
+			rawTemplate.endorsingOrgs,
+			PUBLIC_ORG_FIELDS,
+			'endorsingOrgs'
+		);
 	}
 	if (rawTemplate.debateSummary !== undefined) {
 		projected.debateSummary = pickFields(rawTemplate.debateSummary, PUBLIC_DEBATE_FIELDS);
@@ -229,13 +245,15 @@ function projectPublicTemplateCard(rawTemplate: unknown, index: number): PublicT
 	if (rawTemplate.district_counts !== undefined) {
 		projected.district_counts = projectObjectArray(
 			rawTemplate.district_counts,
-			PUBLIC_DISTRICT_COUNT_FIELDS
+			PUBLIC_DISTRICT_COUNT_FIELDS,
+			'district_counts'
 		);
 	}
 	if (rawTemplate.jurisdictions !== undefined) {
 		projected.jurisdictions = projectObjectArray(
 			rawTemplate.jurisdictions,
-			PUBLIC_JURISDICTION_FIELDS
+			PUBLIC_JURISDICTION_FIELDS,
+			'jurisdictions'
 		);
 	}
 	if (rawTemplate.scope !== undefined) {
@@ -243,7 +261,7 @@ function projectPublicTemplateCard(rawTemplate: unknown, index: number): PublicT
 			rawTemplate.scope === null ? null : pickFields(rawTemplate.scope, PUBLIC_SCOPE_FIELDS);
 	}
 	if (rawTemplate.scopes !== undefined) {
-		projected.scopes = projectObjectArray(rawTemplate.scopes, PUBLIC_SCOPE_FIELDS);
+		projected.scopes = projectObjectArray(rawTemplate.scopes, PUBLIC_SCOPE_FIELDS, 'scopes');
 	}
 	projected.delivery_config = {};
 	projected.cwc_config = null;

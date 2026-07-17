@@ -93,6 +93,7 @@ describe('home page load', () => {
 			});
 			expect(result).toMatchObject({
 				templates: [{ id: 'template_1' }],
+				templatesLoadFailed: false,
 				relationEdges: [],
 				conceptRelations: { edges: [], conceptMap: {} }
 			});
@@ -111,6 +112,7 @@ describe('home page load', () => {
 		});
 		expect(result).toMatchObject({
 			templates: [{ id: 'template_1' }],
+			templatesLoadFailed: false,
 			relationEdges: [{ kind: 'twin', score: 0.9 }],
 			conceptRelations: {
 				edges: [{ kind: 'concept', concept: 'libraries' }],
@@ -132,6 +134,7 @@ describe('home page load', () => {
 
 		expect(result).toMatchObject({
 			templates: [],
+			templatesLoadFailed: true,
 			relationEdges: [{ kind: 'twin', score: 0.9 }],
 			conceptRelations: {
 				edges: [{ kind: 'concept', concept: 'libraries' }],
@@ -154,6 +157,7 @@ describe('home page load', () => {
 
 		expect(result).toEqual({
 			templates: [publicCard('template_1')],
+			templatesLoadFailed: false,
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
@@ -169,6 +173,7 @@ describe('home page load', () => {
 		expect(mockServerQuery).toHaveBeenCalledTimes(1);
 		expect(result).toEqual({
 			templates: [],
+			templatesLoadFailed: true,
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
@@ -185,8 +190,8 @@ describe('home page load', () => {
 		const first = await load(loadEvent('/'));
 		const second = await load(loadEvent('/'));
 
-		expect(first).toMatchObject({ templates: [] });
-		expect(second).toMatchObject({ templates: [] });
+		expect(first).toMatchObject({ templates: [], templatesLoadFailed: true });
+		expect(second).toMatchObject({ templates: [], templatesLoadFailed: true });
 		expect(mockServerQuery).toHaveBeenCalledTimes(1);
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
 		expect(mockServerQuery).not.toHaveBeenCalledWith(
@@ -194,6 +199,21 @@ describe('home page load', () => {
 			expect.anything()
 		);
 		expect(consoleError).toHaveBeenCalledTimes(2);
+	});
+
+	it('distinguishes a valid empty published corpus from an SSR load failure', async () => {
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			const result = readyQueryResult(ref);
+			if (ref === api.templates.publicDiscoveryList) {
+				return { ...result, templates: [] };
+			}
+			return result;
+		});
+
+		await expect(load(loadEvent('/'))).resolves.toMatchObject({
+			templates: [],
+			templatesLoadFailed: false
+		});
 	});
 
 	it('reloads a payload when updatedAt changes even if a reseed reuses the revision number', async () => {

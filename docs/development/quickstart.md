@@ -358,7 +358,13 @@ Note: `npx convex deploy -y` silently no-ops against prod. Always pass `--env-fi
 **Frontend (Cloudflare Pages):**
 
 ```bash
+set -euo pipefail
+git fetch --no-tags origin production
 RELEASE_SHA=$(git rev-parse HEAD)
+if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/production; then
+  echo "Refusing deploy: $RELEASE_SHA is not contained in origin/production." >&2
+  exit 1
+fi
 gh workflow run deploy.yml --ref production \
   -f branch=production \
   -f ref="$RELEASE_SHA"

@@ -348,7 +348,17 @@ describe('POST /api/templates authoring cost gate', () => {
 
 	it.each([
 		['a missing trust score', { id: 'user_1', is_verified: false }],
-		['a below-threshold trust score', { id: 'user_1', is_verified: false, trust_score: 99 }]
+		['a below-threshold trust score', { id: 'user_1', is_verified: false, trust_score: 99 }],
+		['a NaN trust score', { id: 'user_1', is_verified: false, trust_score: Number.NaN }],
+		[
+			'a positive-infinity trust score',
+			{ id: 'user_1', is_verified: false, trust_score: Number.POSITIVE_INFINITY }
+		],
+		[
+			'a negative-infinity trust score',
+			{ id: 'user_1', is_verified: false, trust_score: Number.NEGATIVE_INFINITY }
+		],
+		['a string trust score', { id: 'user_1', is_verified: false, trust_score: '100' }]
 	])('rejects an authenticated user with %s before parsing or moderation', async (_label, user) => {
 		const response = await POST({
 			request: new Request('https://commons.email/api/templates', {
@@ -402,6 +412,34 @@ describe('POST /api/templates authoring cost gate', () => {
 			title: 'Protect the public library',
 			message_body: 'Please preserve funding for the public library.'
 		});
+	});
+
+	it('allows a verified user with a NaN trust score to reach mocked moderation', async () => {
+		mockModerateTemplate.mockResolvedValue({
+			approved: false,
+			rejection_reason: 'test control',
+			summary: 'Rejected by the mocked moderation control',
+			latency_ms: 1
+		});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const response = await POST({
+			request: new Request('https://commons.email/api/templates', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(VALID_TEMPLATE)
+			}),
+			locals: {
+				user: { id: 'user_1', is_verified: true, trust_score: Number.NaN }
+			}
+		} as never);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code: 'CONTENT_FLAGGED' }
+		});
+		expect(mockModerateTemplate).toHaveBeenCalledOnce();
 	});
 
 	it('creates an approved template and runs deferred embedding work through waitUntil', async () => {

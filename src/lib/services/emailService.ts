@@ -245,6 +245,23 @@ interface MailtoUrlResult {
 }
 
 /**
+ * Encode one mailbox for the path portion of a mailto URI.
+ *
+ * The final `@` is the addr-spec separator and remains literal. Encoding the
+ * local and domain components independently prevents mailbox data from
+ * introducing URI headers while still handling quoted local parts that contain
+ * their own `@` characters.
+ */
+export function encodeMailboxForMailto(mailbox: string): string {
+	const separatorIndex = mailbox.lastIndexOf('@');
+	if (separatorIndex === -1) return encodeURIComponent(mailbox);
+
+	const localPart = mailbox.slice(0, separatorIndex);
+	const domainPart = mailbox.slice(separatorIndex + 1);
+	return `${encodeURIComponent(localPart)}@${encodeURIComponent(domainPart)}`;
+}
+
+/**
  * Generate Mailto URL for Template
  *
  * Creates a properly formatted mailto URL with resolved template content.
@@ -348,7 +365,10 @@ export function generateMailtoUrl(
 		}
 
 		// Direct recipient delivery
-		const recipients = resolved.recipients.join(',');
+		// Encode each mailbox independently while retaining the comma separator.
+		// A stored address must never be able to inject `?bcc=`, `&body=`, or a
+		// fragment into the mailto URI's header section.
+		const recipients = resolved.recipients.map(encodeMailboxForMailto).join(',');
 
 		const bodyEncoded = encodeURIComponent(resolved.body || '');
 
@@ -416,7 +436,7 @@ export function generatePersonalizedMailto(params: {
 	}
 
 	const body = bodyParts.join('\n\n');
-	const url = `mailto:${encodeURIComponent(params.recipient.email)}?subject=${encodeURIComponent(params.subject)}&body=${encodeURIComponent(body)}`;
+	const url = `mailto:${encodeMailboxForMailto(params.recipient.email)}?subject=${encodeURIComponent(params.subject)}&body=${encodeURIComponent(body)}`;
 
 	if (url.length > 8000) {
 		return {

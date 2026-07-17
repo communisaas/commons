@@ -110,7 +110,8 @@ function configuredBackend(platform?: App.Platform): string | undefined {
 
 function cacheScope(url: URL, platform?: App.Platform): string {
 	const backend = configuredBackend(platform);
-	return backend ? `backend=${backend}` : `origin=${url.origin.toLowerCase()}`;
+	const origin = url.origin.toLowerCase();
+	return backend ? `origin=${origin}|backend=${backend}` : `origin=${origin}`;
 }
 
 function storageIdentity(logicalKey: string, url: URL, platform?: App.Platform): string {

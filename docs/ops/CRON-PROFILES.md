@@ -39,7 +39,7 @@ than silently running the full fleet.
 
 ---
 
-## 1. Tier classification (31 crons)
+## 1. Tier classification (30 crons)
 
 Tiers are: **ESSENTIAL** (always on — correctness / recovery / data-integrity;
 cheap or event-gated; mostly no-op when their source tables are empty),
@@ -51,7 +51,7 @@ until a consumer/customer exists).
 `essential` = ESSENTIAL only. `operational` = ESSENTIAL + OPERATIONAL. `full` =
 all three tiers.
 
-### ESSENTIAL (18) — on in every profile (correctness / safety / privacy; cheap no-op at zero traffic)
+### ESSENTIAL (17) — on in every profile (correctness / safety / privacy; cheap no-op at zero traffic)
 
 | Cron                              | Cadence     | Rationale                                                              |
 | --------------------------------- | ----------- | --------------------------------------------------------------------- |
@@ -71,8 +71,7 @@ all three tiers.
 | `sweep-stranded-donations`        | :23,:53     | Money-audit recovery. No-op with no donations.                     |
 | `agent-traces-expire`             | hourly :37  | Trace TTL. Writer off-by-default → usually empty.                  |
 | `org-events-expire`               | hourly :47  | SSE event TTL.                                                     |
-| `public-template-snapshot-rebuild` | daily 04:07 | Bounded top-50 public-list freshness; hard-capped at 250 source rows. |
-| `template-relation-snapshot-rebuild` | daily 04:17 | Bounded graph freshness with inline calibration after optional tag maintenance; hard-capped at 50 source rows. |
+| `public-homepage-snapshot-rebuild` | daily 04:17 | One bounded newest-250 plan atomically refreshes top-50 list and graph variants after optional tag maintenance. |
 
 **Do NOT disable ESSENTIAL crons.** Disabling a recovery sweep
 (`sweep-stuck-processing`, `sweep-stranded-*`, `reschedule-stuck-revocations`, or
@@ -240,7 +239,7 @@ only, no redeploy) is flagged at step (c).
    > **EARLY-RETURN BRANCH:** if the gating fix uses handler early-return, **skip
    > step (c)** — the `env set` in (b) takes effect on the next tick. Do steps
    > (b) + (5) only.
-5. **Verify** (section 5). Confirm 29 crons are registered and `CRON_PROFILE`
+5. **Verify** (section 5). Confirm 27 crons are registered and `CRON_PROFILE`
    reads `operational`. Verify a real drain result reports provider `stripe` as
    required by the launch-activation runbook.
 6. **Leave `outstanding-firefly-831` at `essential`** — it backs staging/preview
@@ -264,15 +263,15 @@ npx convex env get CRON_PROFILE --env-file /tmp/cvx-prod.env
 #     function-spec lists the deployment's registered functions/crons. These
 #     representatives distinguish essential, operational, and speculative tiers.
 npx convex function-spec --deployment quirky-chinchilla-352 \
-  | grep -E 'public-template-snapshot-rebuild|template-relation-snapshot-rebuild|drain-usage|legislation-sync|vote-tracker|scorecard-compute|webhook-retry|process-bounces'
-#     At essential: both snapshot-rebuild names match.
+  | grep -E 'public-homepage-snapshot-rebuild|drain-usage|legislation-sync|vote-tracker|scorecard-compute|webhook-retry|process-bounces'
+#     At essential: the single homepage snapshot-rebuild name matches.
 #     At operational: drain, webhook retry, and process-bounces also match; the
 #     three speculative names remain absent.
 ```
 
 - **Dashboard alternative:** Convex dashboard → the target deployment →
   Schedules / Crons tab. Under conditional registration, only ESSENTIAL crons
-  appear at `essential`, 29 at `operational`, and all 32 at `full`. This is the
+  appear at `essential`, 27 at `operational`, and all 30 at `full`. This is the
   authoritative tick-elimination check.
 - **Under conditional registration, `env get` alone is NOT sufficient** — it
   confirms the value, not that registration actually dropped the crons. Always
@@ -283,7 +282,7 @@ npx convex function-spec --deployment quirky-chinchilla-352 \
   fetch + embed (6h) being off.
 
 > **Expectation-setting:** `essential` REDUCES but does not zero the function-call
-> floor — 18 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
+> floor — 17 ESSENTIAL crons still tick (`sweep-stuck-processing` every 2m =
 > 720/day/backend alone). If you need to go lower, widen ESSENTIAL recovery-sweep
 > cadences (registration-time change, owned by the gating fix) — never disable
 > them.

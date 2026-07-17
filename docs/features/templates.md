@@ -13,8 +13,12 @@
   public boundary wholesale. Cacheable discovery projections return
   `recipient_config: null`, `recipientEmails: []`, and only the non-identifying
   `recipient_count` scalar. The indexed, published-only detail query constructs
-  an explicit public roster allowlist for the anonymous mailto flow; delivery,
-  CWC, authoring, and unknown recipient-config fields remain redacted.
+  an explicit public roster allowlist for the anonymous mailto flow. Up to 50
+  normalized public-official addresses, identity/role fields, send-page prompts,
+  rank, and a validated credential-free bare HTTP(S) email-verification link
+  (no userinfo, query, or fragment) are intentionally public and scrapeable.
+  Delivery, CWC, free-form provenance,
+  authoring, and unknown recipient-config fields remain redacted.
 
 ---
 

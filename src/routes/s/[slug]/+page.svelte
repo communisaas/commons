@@ -9,7 +9,11 @@
 	// import { extractRecipientEmails } from '$lib/types/templateConfig';
 	import { modalActions, modalSystem } from '$lib/stores/modalSystem.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
-	import { analyzeEmailFlow, generatePersonalizedMailto } from '$lib/services/emailService';
+	import {
+		analyzeEmailFlow,
+		encodeMailboxForMailto,
+		generatePersonalizedMailto
+	} from '$lib/services/emailService';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
 	import {
 		trackTemplateView,
@@ -695,8 +699,8 @@
 				bodyParts.push(attestation.trim());
 			}
 
-			const emails = emailMembers.map((m) => m.email!).join(',');
-			const url = `mailto:${encodeURIComponent(emails)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
+			const emails = emailMembers.map((m) => encodeMailboxForMailto(m.email!)).join(',');
+			const url = `mailto:${emails}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
 
 			if (url.length <= 8000) {
 				// Set departing only — the send peak promotes to contacted on an explicit confirm

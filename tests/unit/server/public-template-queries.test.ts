@@ -228,7 +228,9 @@ describe('public template snapshot queries', () => {
 	it.each([
 		['legacy projection version', { projectionVersion: 3 }],
 		['raw recipient config', { recipient_config: { recipients: ['private'] } }],
-		['recipient address', { recipientEmails: ['private@example.test'] }]
+		['recipient address', { recipientEmails: ['private@example.test'] }],
+		['non-array object-list field', { jurisdictions: { private: 'value' } }],
+		['malformed object-list element', { scopes: [['private@example.test']] }]
 	] as const)('rejects %s before the list payload can enter KV', async (_label, patch) => {
 		const context = contextWithKv();
 		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);

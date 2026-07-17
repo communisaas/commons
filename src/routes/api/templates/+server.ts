@@ -143,6 +143,16 @@ function isPublicHttpUrl(value: string): boolean {
 	}
 }
 
+/** Fail closed when a persisted trust score is missing, malformed, or non-finite. */
+function hasTemplateCreationTrust(user: { is_verified?: unknown; trust_score?: unknown }): boolean {
+	return (
+		user.is_verified === true ||
+		(typeof user.trust_score === 'number' &&
+			Number.isFinite(user.trust_score) &&
+			user.trust_score >= 100)
+	);
+}
+
 function inputBudgetError(
 	failure: Exclude<TemplateInputBudgetResult, { ok: true }>
 ): ValidationError {
@@ -548,7 +558,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		}
 		// `handleAuth` calls authOps.validateSession for every request and hydrates
 		// these fields from the current Convex user document, not from JWT claims.
-		if (requestUser.is_verified !== true && (requestUser.trust_score ?? 0) < 100) {
+		if (!hasTemplateCreationTrust(requestUser)) {
 			const response: StructuredApiResponse = {
 				success: false,
 				error: createApiError(
@@ -679,9 +689,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		const user = locals.user;
 
 		if (user) {
-			const isVerified = user.is_verified === true;
-			const hasSufficientReputation = (user.trust_score ?? 0) >= 100;
-			if (!isVerified && !hasSufficientReputation) {
+			if (!hasTemplateCreationTrust(user)) {
 				const response: StructuredApiResponse = {
 					success: false,
 					error: createApiError(

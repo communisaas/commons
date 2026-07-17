@@ -257,7 +257,13 @@ cannot defeat the gate with a workflow input.
 ### Staging/manual preview deploy
 
 ```bash
+set -euo pipefail
+git fetch --no-tags origin staging
 RELEASE_SHA=$(git rev-parse HEAD)
+if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/staging; then
+  echo "Refusing deploy: $RELEASE_SHA is not contained in origin/staging." >&2
+  exit 1
+fi
 gh workflow run deploy.yml --ref main \
   -f branch=staging \
   -f ref="$RELEASE_SHA"

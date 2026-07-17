@@ -108,8 +108,9 @@ id = "90772b3f79d945d5b5f0df3d6d2ca732"
 # the hot layer; this namespace prevents one Convex cold fill per Cloudflare PoP.
 # Provisioned namespace verified in the configured Cloudflare account on
 # 2026-07-18. The gated deploy independently checks this exact ID and title.
-# Preview and production intentionally share this zero-cost namespace; every
-# key is scoped by the configured Convex backend, and quotas remain shared.
+# Preview and production share this zero-cost namespace, but every key is scoped
+# by both request origin and configured Convex backend so a preview cannot mutate
+# production's last-known-good state. Namespace quotas remain shared.
 [[kv_namespaces]]
 binding = "PUBLIC_DISCOVERY_KV"
 id = "4517015752384e0f8628b85142c69221"

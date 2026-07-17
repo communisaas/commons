@@ -18,9 +18,10 @@ is safe.
 | Legacy unqualified KV entry | Rollout compatibility only | Never proves the latest revision | Mutable legacy state |
 
 The application cache stores anonymous public projections only. Its keys are
-scoped by the configured Convex backend when present, so aliases of one backend
-share KV while production and staging remain isolated. Request paths and query
-strings must not create new identities in these application-managed layers. The
+scoped by both the request origin and configured Convex backend, so a preview
+origin cannot mutate production's last-known-good state even when both use the
+same zero-cost namespace and Convex deployment. Request paths and query strings
+must not create new identities in these application-managed layers. The
 anonymous projection fixes `recipient_config` to `null` and `recipientEmails`
 to an empty array; only `recipient_count` may represent targets. Raw recipient
 configuration or addresses in a cache envelope are a security invariant
