@@ -344,8 +344,45 @@ describe('bounded embedding backfill discovery', () => {
 		}
 	});
 
+	it('explicitly restarts a marker migration whose continuation stopped', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));
+		try {
+			const t = writeHarness();
+			await t.run((ctx) =>
+				ctx.db.insert('publicDiscoveryManifest', {
+					key: 'public',
+					listReady: false,
+					relationsReady: false,
+					listRevision: 0,
+					relationsRevision: 0,
+					topicEmbeddingMarkerMigrationStartedAt: Date.now() - 60_000,
+					topicEmbeddingMarkerMigrationScanned: 100,
+					topicEmbeddingMarkerMigrationMarked: 50
+				})
+			);
+
+			await expect(
+				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
+			).resolves.toMatchObject({ status: 'already-running', scanned: 100, marked: 50 });
+			await expect(
+				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, { restart: true })
+			).resolves.toMatchObject({ status: 'complete', scanned: 0, marked: 0, isDone: true });
+			await expect(
+				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
+			).resolves.toMatchObject({ status: 'complete', scanned: 0, marked: 0 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it('rejects embedding payloads that could bloat public source documents', async () => {
-		const t = harness();
+		const t = writeHarness();
+		const leaseToken = 'dimension-guard-lease-token';
+		await t.mutation(api.templates.claimEmbeddingBackfillLease, {
+			_secret: SECRET,
+			token: leaseToken
+		});
 		const templateId = await t.run((ctx) =>
 			ctx.db.insert('templates', {
 				slug: 'dimension-guard',
@@ -372,89 +409,64 @@ describe('bounded embedding backfill discovery', () => {
 		);
 
 		await expect(
-			t.mutation(api.templates.updateEmbeddings, {
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
 				templateId,
 				locationEmbedding: [1, 0],
 				topicEmbedding: [1, 0],
-				_secret: SECRET
+				_secret: SECRET,
+				leaseToken
 			})
 		).rejects.toThrow('INVALID_EMBEDDING_DIMENSION:expected=768');
 	});
 
-	it('keeps direct embedding updates authenticated and owner-only', async () => {
+	it('rejects non-finite embedding components and bounds domain hues to 0..360', async () => {
 		const t = writeHarness();
-		const ownerToken = 'https://issuer.example|embedding-owner';
-		const attackerToken = 'https://issuer.example|embedding-attacker';
-		const { templateId } = await t.run(async (ctx) => {
-			const baseUser = {
-				updatedAt: 1_800_000_000_000,
-				isVerified: true,
-				authorityLevel: 1,
-				trustTier: 1,
-				trustScore: 100,
-				reputationTier: 'novice' as const,
-				districtVerified: false,
-				templatesContributed: 0,
-				templateAdoptionRate: 0,
-				peerEndorsements: 0,
-				activeMonths: 0,
-				profileVisibility: 'private' as const
-			};
-			const ownerId = await ctx.db.insert('users', {
-				...baseUser,
-				tokenIdentifier: ownerToken
-			});
-			await ctx.db.insert('users', {
-				...baseUser,
-				tokenIdentifier: attackerToken
-			});
-			const templateId = await ctx.db.insert(
-				'templates',
-				missingTemplateValue('owned-embedding', { userId: ownerId })
+		const leaseToken = 'finite-value-guard-lease-token';
+		await t.mutation(api.templates.claimEmbeddingBackfillLease, {
+			_secret: SECRET,
+			token: leaseToken
+		});
+		let fixtureIndex = 0;
+		const insertFixture = () =>
+			t.run((ctx) =>
+				ctx.db.insert('templates', missingTemplateValue(`finite-embedding-guard-${fixtureIndex++}`))
 			);
-			return { templateId };
-		});
-		const args = {
-			templateId,
-			locationEmbedding: validEmbedding(),
-			topicEmbedding: validEmbedding(),
-			_secret: SECRET
-		};
-
-		await expect(t.mutation(api.templates.updateEmbeddings, args)).rejects.toThrow(
-			'Not authenticated'
-		);
-		await expect(
-			t
-				.withIdentity({
-					subject: 'embedding-attacker',
-					issuer: 'https://issuer.example',
-					tokenIdentifier: attackerToken
-				})
-				.mutation(api.templates.updateEmbeddings, args)
-		).rejects.toThrow('Unauthorized');
+		const nonFiniteEmbedding = validEmbedding();
+		nonFiniteEmbedding[20] = Number.NaN;
 
 		await expect(
-			t
-				.withIdentity({
-					subject: 'embedding-owner',
-					issuer: 'https://issuer.example',
-					tokenIdentifier: ownerToken
+			t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+				templateId: await insertFixture(),
+				locationEmbedding: nonFiniteEmbedding,
+				topicEmbedding: validEmbedding(),
+				_secret: SECRET,
+				leaseToken
+			})
+		).rejects.toThrow('INVALID_EMBEDDING_VALUE:finite-numbers-required');
+		for (const domainHue of [Number.POSITIVE_INFINITY, -0.01, 360.01]) {
+			await expect(
+				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+					templateId: await insertFixture(),
+					locationEmbedding: validEmbedding(),
+					topicEmbedding: validEmbedding(),
+					domainHue,
+					_secret: SECRET,
+					leaseToken
 				})
-				.mutation(api.templates.updateEmbeddings, args)
-		).resolves.toBeNull();
-
-		expect(await t.run((ctx) => ctx.db.get(templateId))).toMatchObject({
-			topicEmbeddingsUpdatedAt: expect.any(Number)
-		});
-		const manifest = await t.run((ctx) =>
-			ctx.db
-				.query('publicDiscoveryManifest')
-				.withIndex('by_key', (q) => q.eq('key', 'public'))
-				.unique()
-		);
-		expect(manifest?.relationsDirtyAt).toEqual(expect.any(Number));
-		expect(manifest?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
+			).rejects.toThrow('INVALID_DOMAIN_HUE:expected=0..360');
+		}
+		for (const domainHue of [0, 360]) {
+			await expect(
+				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+					templateId: await insertFixture(),
+					locationEmbedding: validEmbedding(),
+					topicEmbedding: validEmbedding(),
+					domainHue,
+					_secret: SECRET,
+					leaseToken
+				})
+			).resolves.toEqual({ updated: true });
+		}
 	});
 
 	it('completes deferred creator embeddings without request auth and reuses the bounded refresh tokens', async () => {
@@ -554,7 +566,14 @@ describe('bounded embedding backfill discovery', () => {
 	});
 
 	it('keeps the secret-gated backfill bridge missing-only', async () => {
-		const t = harness();
+		const t = writeHarness();
+		const leaseToken = 'trusted-backfill-lease-token';
+		await expect(
+			t.mutation(api.templates.claimEmbeddingBackfillLease, {
+				_secret: SECRET,
+				token: leaseToken
+			})
+		).resolves.toMatchObject({ acquired: true });
 		const { templateId, legacyValidId, privateId } = await t.run(async (ctx) => ({
 			templateId: await ctx.db.insert('templates', missingTemplateValue('trusted-backfill')),
 			legacyValidId: await ctx.db.insert(
@@ -572,7 +591,8 @@ describe('bounded embedding backfill discovery', () => {
 		const args = {
 			templateId,
 			locationEmbedding: validEmbedding(),
-			topicEmbedding: validEmbedding()
+			topicEmbedding: validEmbedding(),
+			leaseToken
 		};
 
 		await expect(
@@ -617,6 +637,71 @@ describe('bounded embedding backfill discovery', () => {
 		expect(manifest?.listDirtyAt).toBeUndefined();
 		expect(manifest?.relationsDirtyAt).toEqual(expect.any(Number));
 		expect(manifest?.relationsRefreshScheduledAt).toEqual(expect.any(Number));
+	});
+
+	it('rejects expired and superseded lease generations at each backfill write and rebuild', async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));
+		try {
+			const t = writeHarness();
+			const templateId = await t.run((ctx) =>
+				ctx.db.insert('templates', missingTemplateValue('authoritative-backfill-lease'))
+			);
+			const firstToken = 'authoritative-lease-first';
+			const successorToken = 'authoritative-lease-successor';
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: firstToken
+				})
+			).resolves.toMatchObject({ acquired: true });
+
+			vi.advanceTimersByTime(15 * 60 * 1000 + 1);
+			const writeArgs = {
+				templateId,
+				locationEmbedding: validEmbedding(),
+				topicEmbedding: validEmbedding(),
+				_secret: SECRET,
+				leaseToken: firstToken
+			};
+			await expect(
+				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, writeArgs)
+			).rejects.toThrow('EMBEDDING_BACKFILL_LEASE_EXPIRED');
+			expect(await t.run((ctx) => ctx.db.get(templateId))).not.toHaveProperty(
+				'topicEmbeddingsUpdatedAt'
+			);
+
+			await expect(
+				t.mutation(api.templates.claimEmbeddingBackfillLease, {
+					_secret: SECRET,
+					token: successorToken
+				})
+			).resolves.toMatchObject({ acquired: true });
+			await expect(
+				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, writeArgs)
+			).rejects.toThrow('EMBEDDING_BACKFILL_LEASE_NOT_OWNED');
+			await expect(
+				t.mutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
+					_secret: SECRET,
+					leaseToken: firstToken
+				})
+			).rejects.toThrow('EMBEDDING_BACKFILL_LEASE_NOT_OWNED');
+
+			await expect(
+				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
+					...writeArgs,
+					leaseToken: successorToken
+				})
+			).resolves.toEqual({ updated: true });
+			await expect(
+				t.mutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
+					_secret: SECRET,
+					leaseToken: successorToken
+				})
+			).resolves.toMatchObject({ list: expect.any(Object), relations: expect.any(Object) });
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('does not trust direct callers to self-publish server-derived content', async () => {

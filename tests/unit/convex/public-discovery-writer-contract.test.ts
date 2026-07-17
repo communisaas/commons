@@ -476,10 +476,8 @@ const CONTRACT: Record<string, RegExp> = {
 };
 
 const DELEGATE_CONTRACT: Record<string, RegExp> = {
-	'templates.ts:updateEmbeddings': /patchTemplateEmbeddingValues\s*\(/,
 	'templates.ts:completePublicTemplateEmbeddings': /patchTemplateEmbeddingValues\s*\(/,
-	'templates.ts:updateMissingEmbeddingsForBackfill': /patchTemplateEmbeddingValues\s*\(/,
-	'templates.ts:patchEmbeddings': /patchTemplateEmbeddingValues\s*\(/
+	'templates.ts:updateMissingEmbeddingsForBackfill': /patchTemplateEmbeddingValues\s*\(/
 };
 
 describe('public-discovery source writer contract', () => {
@@ -614,5 +612,22 @@ export const replaced = mutation({
 			'synthetic.ts:typedPatch:projected-patch'
 		]);
 		expect(synthetic).not.toMatch(DIRTY_HELPER_RE);
+	});
+
+	it('fails the blocking ratchet when a projection-source writer omits same-transaction dirtying', () => {
+		const omittedDirtyCall = `
+export const newlyAddedWriter = mutation({
+  args: { templateId: v.id("templates") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.templateId, { title: "changed without invalidation" });
+  },
+});`;
+		const unclassified = boundaries('synthetic-omission.ts', omittedDirtyCall)
+			.flatMap(analyzeBoundary)
+			.map(({ key }) => key)
+			.filter((key) => !Object.prototype.hasOwnProperty.call(CONTRACT, key));
+
+		expect(unclassified).toEqual(['synthetic-omission.ts:newlyAddedWriter']);
+		expect(omittedDirtyCall).not.toMatch(DIRTY_HELPER_RE);
 	});
 });

@@ -22,8 +22,8 @@ recovery, then repoint it to `/api/health`. The health endpoint calls the
 `observability.servicePing` query, which tests both function execution and an
 indexed read of the tiny discovery-manifest singleton without hydrating an
 embedding-bearing row. It also returns `discoveryProducerHealthy:false` while a
-snapshot family is cold, structurally orphaned, or retaining a last-good
-revision after a failure. Its deterministic `discoveryProducerOverdueAt`
+snapshot family is cold, structurally orphaned, or retaining durable failure
+evidence after a frozen or deliberately degraded publication. Its deterministic `discoveryProducerOverdueAt`
 coordinate lets `/api/health` detect a dirty refresh more than 15 minutes past
 its token without putting `Date.now()` in the cacheable Convex query.
 `/api/health` returns 503 when that producer signal is overdue, Convex is
@@ -52,7 +52,17 @@ The protection has two independent data layers and one small control plane:
    or `excludeCwc` relation row. A request never scans
    embedding-bearing template documents. Snapshot rebuilds use the exact
    `(status, isPublic)` index, one hard-capped 250-row candidate scan, top-50
-   limits per list/relation variant, and a 900,000-byte document guard.
+   limits per list/relation variant, a 16,000-byte public-card limit, and an
+   exact 900,000-byte document guard. List candidates are validated newest-first
+   before either top-50 cap is applied, so later safe cards backfill invalid or
+   oversized newer cards within the same bounded scan. An excluded card is
+   omitted from both variants as one unit; the healthy remainder publishes and
+   the manifest stays unhealthy with an alert until a clean rebuild. If a
+   non-empty corpus yields no safe card, publication freezes the last-good list
+   instead of replacing it with an accidental empty snapshot. Public
+   cards and detail responses retain compatibility fields as
+   `recipient_config:null` and `recipientEmails:[]`; only the non-identifying
+   `recipient_count` scalar crosses the anonymous boundary.
 3. `templates:publicDiscoveryManifest` distinguishes a never-built cold state
    (`ready:false`, revision `0`) from a successful build of a legitimately empty
    corpus. List and relation payloads fail closed when their stored revision and
@@ -188,8 +198,11 @@ cold state. The scoped execution graph is
    `list.ready` and `relations.ready`, nonzero revisions, and timestamps no more
    than 26 hours old. This allows two hours of scheduling tolerance beyond the
    daily `essential` cron cadence. The persisted snapshot revisions and
-   timestamps must match the manifest. A size or compute failure is atomic and
-   leaves the prior committed snapshots unchanged.
+   timestamps must match the manifest. Relation size or unknown compute failures
+   are atomic and leave the prior committed snapshots unchanged. A list-card
+   exclusion instead publishes the healthy remainder and is not release-ready:
+   `servicePing.discoveryProducerHealthy` remains false until the offending
+   source is repaired and a clean revision publishes.
    `servicePing.discoveryProducerHealthy` must be true. If it is false, inspect
    the durable family and size code with:
 
@@ -212,8 +225,10 @@ cold state. The scoped execution graph is
    ```
 
    Each payload's `revision` must equal its corresponding ready manifest
-   revision, and the payload should match the current corpus without returning
-   vectors. Reads may touch `publicDiscoveryManifest`,
+   revision. Both list payloads must report `projectionVersion:4`; every card
+   must carry `recipient_config:null`, `recipientEmails:[]`, and a non-negative
+   integer `recipient_count`. The payload should match the current corpus
+   without returning vectors. Reads may touch `publicDiscoveryManifest`,
    `publicTemplateSnapshots`, or `templateRelationSnapshots`; they must not scan
    the `templates` corpus. The legacy split queries remain compatible but do not
    constitute the version/readiness gate.
@@ -235,8 +250,12 @@ cold state. The scoped execution graph is
    ```
 
    Manual dispatch cannot bypass source provenance, branch ancestry, focused and
-   full checks, type checks, or producer readiness. Every production release runs
-   `scripts/verify-public-discovery-readiness.mjs` against production. That
+   full checks, type checks, or producer readiness. Every Pages branch runs
+   `scripts/verify-public-discovery-readiness.mjs` against its configured Convex
+   backend before upload. Production additionally requires a non-empty corpus
+   and timestamps no more than 26 hours old; non-production still requires
+   ready, revision-matched v4/redacted payloads but permits an empty or stale
+   fixture corpus. That
    executable gate re-reads the manifest and all versioned payloads and rejects
    cold, empty, oversized, revision-skewed, or more-than-26-hour-old state before
    upload. There is no dispatch-time bypass: an exceptional temporary relaxation
@@ -310,48 +329,55 @@ cold state. The scoped execution graph is
   that roughly one-minute generation; if the flush serialized first, it waits
   for the remainder of the current six-hour cost window.
 - An operator can safely repeat the activation command at any time. Rebuilds
-  upsert deterministic singleton rows and preserve the last good snapshot on
-  failure.
-- The daily list and relation entry points turn a known oversize failure into a
-  durable manifest failure code, retain the previous committed revision, queue
-  an out-of-band Sentry event, and clear the elapsed scheduler token. A
-  deterministic oversize payload is retried by the next projection-affecting
-  write (subject to the six-hour rebuild ceiling) or the next daily cron, not by
-  a four-times-per-day rescan loop. The service ping stays unhealthy until a
-  successful publication clears that family's failure fields. An operator can
-  inspect the exact code with `templates:publicDiscoveryFailureStatus`.
+  upsert deterministic singleton rows. Every exact-key manifest, list,
+  relation, and calibration read uses fail-loud singleton semantics; duplicate
+  rows are an invariant violation, never a silent "newest row wins" fallback.
+- A list rebuild validates newest-first before filling either variant and
+  measures every projected card, excluding any invalid card or card above
+  16,000 bytes from both variants. Later safe candidates backfill exclusions
+  within the fixed newest-250 scan. Fifty compliant cards fit below the row
+  limit with headroom; the exact 900,000-byte guard remains authoritative and
+  deterministically sheds the largest remaining whole card if future envelope
+  growth consumes that headroom. The healthy remainder publishes immediately,
+  `sourceCount` reports only served cards, and every exclusion persists a
+  bounded manifest code and queues an out-of-band Sentry event. There is no
+  indefinite aggregate-size freeze and no content truncation. A later clean
+  source write or daily rebuild automatically restores the card and clears the
+  unhealthy signal. If no valid card survives a non-empty corpus, the rebuild
+  records `PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS` and retains the previous
+  list revision atomically. Relation oversize and unknown rebuild failures also
+  retain the previous committed revision. Inspect all family codes with
+  `templates:publicDiscoveryFailureStatus`.
 - Daily cron actions supervise their rebuild mutations. If an unknown database,
   limit, or runtime failure rolls the attempt back, the action records a generic
   durable failure and alert in a separate mutation before rethrowing. This keeps
   mutation atomicity without allowing a system-limit failure to stay green.
-- A structurally invalid producer card is excluded from both list variants while
-  the remaining valid cards publish under the new revision. The stored
-  `sourceCount` counts only served cards; the manifest retains
-  `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:<id...>`, queues the same Sentry action, and
-  keeps the service ping unhealthy until the source is repaired and a clean
-  rebuild clears the failure. If a manual edit or migration corrupts an already
-  stored snapshot row, public readers retain its valid cards and emit one
-  counted `PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID` error per read for Convex log
-  alerting. Queries cannot schedule a Sentry action without violating query
-  purity.
+- A structurally invalid producer card follows the same explicit exclusion path
+  with `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:<id...>`. If a manual edit or migration
+  corrupts an already stored snapshot row, public readers retain its valid cards
+  and emit one counted `PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID` error per read
+  for Convex log alerting. Legacy stored recipient configuration is force-redacted
+  by that reader before projection, so rematerialization is not required to close
+  the anonymous leak. Queries cannot schedule a Sentry action without violating
+  query purity.
 - Public authoring is constrained before moderation and again at the direct
   Convex boundary: 16,384 UTF-8 bytes for the stored authoring input, 12,288 for
   its public projection, and 8,192 across all three configuration objects, plus
   depth, node, fanout, and exact geographic-scope limits. Metadata patches
   re-evaluate the resulting document, and CI validates every committed seed.
-  These controls reduce author-controlled oversize risk; they do not prove that
-  every future snapshot fits. Derived reach histograms, internal maintenance,
-  and aggregate corpus growth can still cross the document guard, so the
-  900,000-byte atomic last-good freeze, alert, and readiness failure remain the
-  authoritative availability boundary.
-- Do not automatically truncate `message_body` or drop a structurally valid
-  template to make a snapshot fit. Advocacy content is semantic data, and
-  arbitrary list truncation can invalidate relation endpoints. The explicit
-  invalid-card path above is the only exclusion: it is counted, alerted, and
-  keeps readiness unhealthy. Repair the source/projection budget and republish.
-  The operator composite rebuild deliberately commits list and relation
-  generations in one transaction, so a failed graph cannot accompany a newly
-  published list.
+  These controls and the exact per-card measurement make the normal 50-card
+  payload fit with headroom; the aggregate guard still protects against future
+  projection growth.
+- Never truncate `message_body` or another semantic field. Oversize recovery
+  removes the offending whole card, counts and alerts the exclusion, and keeps
+  readiness unhealthy until repair. The operator composite rebuild still
+  commits list and relation generations in one transaction, so a failed graph
+  cannot accompany a newly published list.
+- CI and manual deploy verification run
+  `public-discovery-writer-contract.test.ts` as an explicit blocking step. Its
+  AST inventory detects projected source inserts, replaces, deletes, and
+  field-sensitive/dynamic patches across Convex; an omitted same-transaction
+  dirty helper produces an unclassified writer and fails the workflow.
 - Each verified-send aggregation performs one indexed read of the tiny manifest;
   only the first dirty write in a window patches it, while later writes reuse the
   token. Before materially increasing send volume, load-test the target peak QPS
@@ -372,9 +398,14 @@ defense in depth, but its warning-only result is not the correctness boundary.
 
 ### Retention and removal contract
 
-The cached template body, delivery/recipient configuration, and intended
-recipient contacts are the same anonymous public projection already exposed by
-the public template API; sender/customer identity is not part of this cache.
+The cached template body and safe delivery projection are the same anonymous
+public projection exposed by the public template API. Raw recipient
+configuration and contact addresses are never cacheable: compatibility fields
+are fixed to `recipient_config:null` and `recipientEmails:[]`, with only
+`recipient_count` retained. This contract cut moved the application namespace
+from `v3` to `v4`, so a post-deploy read cannot select a legacy envelope; purge
+outer CDN state during rollout as the immediate-recall backstop.
+Sender/customer identity is not part of this cache.
 Revision-qualified KV rows are retained for up to eight days and remain eligible
 as an active LKG for the deliberate seven-day outage window. A normal deletion
 or de-publication reaches the next materialized revision after the bounded

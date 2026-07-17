@@ -23,6 +23,7 @@ type SnapshotCoordinates = {
 type PublicDiscoveryManifest = FunctionReturnType<typeof api.templates.publicDiscoveryManifest>;
 type PublicTemplateSnapshot = FunctionReturnType<typeof api.templates.publicDiscoveryList>;
 type PublicRelationsSnapshot = FunctionReturnType<typeof api.templates.publicDiscoveryRelations>;
+const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
 
 function snapshotGeneration(revision: number, updatedAt: number | null): string {
 	return `${revision}:${updatedAt ?? 'cold'}`;
@@ -35,6 +36,13 @@ export class PublicDiscoverySnapshotNotReadyError extends Error {
 		super(`PUBLIC_DISCOVERY_SNAPSHOT_NOT_READY:${family}`);
 		this.name = 'PublicDiscoverySnapshotNotReadyError';
 		this.family = family;
+	}
+}
+
+export class PublicDiscoverySnapshotContractError extends Error {
+	constructor(detail: string) {
+		super(`PUBLIC_DISCOVERY_SNAPSHOT_CONTRACT:list:${detail}`);
+		this.name = 'PublicDiscoverySnapshotContractError';
 	}
 }
 
@@ -55,6 +63,34 @@ class PublicDiscoveryGenerationMismatchError extends Error {
 
 function matchesGeneration(snapshot: SnapshotCoordinates, expected: SnapshotCoordinates): boolean {
 	return snapshot.revision === expected.revision && snapshot.updatedAt === expected.updatedAt;
+}
+
+/** Refuse a legacy or recipient-bearing producer payload before any cache write. */
+function assertPublicTemplateSnapshotContract(snapshot: PublicTemplateSnapshot): void {
+	if (snapshot.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION) {
+		throw new PublicDiscoverySnapshotContractError(
+			`projection-version:${String(snapshot.projectionVersion)}`
+		);
+	}
+	if (!Array.isArray(snapshot.templates)) {
+		throw new PublicDiscoverySnapshotContractError('templates-not-array');
+	}
+	for (const [index, rawTemplate] of snapshot.templates.entries()) {
+		const template = rawTemplate as unknown as Record<string, unknown>;
+		if (
+			rawTemplate === null ||
+			typeof rawTemplate !== 'object' ||
+			Array.isArray(rawTemplate) ||
+			template.recipient_config !== null ||
+			!Array.isArray(template.recipientEmails) ||
+			template.recipientEmails.length !== 0 ||
+			typeof template.recipient_count !== 'number' ||
+			!Number.isInteger(template.recipient_count) ||
+			template.recipient_count < 0
+		) {
+			throw new PublicDiscoverySnapshotContractError(`unsafe-template:${index}`);
+		}
+	}
 }
 
 /**
@@ -151,7 +187,10 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 					(await serverQuery(api.templates.publicDiscoveryList, {
 						excludeCwc
 					}))) as PublicTemplateSnapshot,
-			(snapshot) => snapshot.templates
+			(snapshot) => {
+				assertPublicTemplateSnapshotContract(snapshot);
+				return snapshot.templates;
+			}
 		);
 
 	try {

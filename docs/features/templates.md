@@ -9,7 +9,9 @@
 - **Nested arrays, not separate tables:** `jurisdictions` and `scopes` are flattened onto the template record as `v.array(v.object({...}))`.
 - **Category is deprecated:** `category` remains as a backward-compat string; the primary grouping fields are `domain` + `topics`.
 - **Draft store encrypts DM emails separately:** `templateDraftStore` (`src/lib/stores/templateDraft.ts`) strips decision-maker emails from the plaintext draft and encrypts them in a separate localStorage key to avoid plaintext PII.
-- **`recipientConfig`** is stored as opaque `v.any()`; there is no typed `recipientEmails` computed field on current responses.
+- **`recipientConfig`** is stored as opaque `v.any()` but is private source data.
+  Anonymous projections return `recipient_config: null`, `recipientEmails: []`,
+  and the non-identifying `recipient_count` scalar only.
 
 ---
 
@@ -99,7 +101,8 @@ Response includes computed fields:
 - `isNew` -- true if created within the last 7 days
 - `hasActiveDebate` -- cross-referenced from the Debate table
 - `scopes` -- joined from `TemplateScope` table for hierarchical location filtering
-- `recipientEmails` -- extracted from `recipient_config` JSON
+- `recipient_count` -- non-identifying target cardinality; raw recipient config
+  and email addresses are stripped from anonymous responses
 
 ### `POST /api/templates`
 

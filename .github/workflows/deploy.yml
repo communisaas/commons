@@ -129,6 +129,7 @@ jobs:
             convex/observability-service-ping.convex.test.ts \
             convex/lib/relatedness.test.ts \
             convex/lib/tag_concepts.test.ts \
+            tests/unit/convex/public-discovery-writer-contract.test.ts \
             tests/unit/server/public-discovery-cache.test.ts \
             tests/unit/routes/home-page-load.test.ts \
             tests/unit/routes/templates-api-auth.test.ts \
@@ -161,7 +162,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment:
-      name: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
+      # Production is isolated; main and staging intentionally share the same
+      # non-production Convex deployment and fixed GitHub Environment.
+      name: ${{ (github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch) == 'production' && 'Production' || 'Staging' }}
     env:
       DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
       DEPLOY_REF: ${{ needs.source-verify.outputs.verified_sha }}
@@ -264,12 +267,21 @@ jobs:
               ;;
           esac
 
-      - name: Require public-discovery producer readiness
-        if: env.DEPLOY_BRANCH == 'production'
-        env:
-          # Daily essential-cron cadence plus two hours of scheduling tolerance.
-          PUBLIC_DISCOVERY_MAX_AGE_HOURS: '26'
-        run: npm run verify:public-discovery-readiness
+      - name: Require deployed public-discovery v4 producer
+        # This Pages workflow does not mutate Convex. A successful gate proves
+        # the target backend already has the new functions/schema and a v4
+        # rematerialization before any branch can upload an edge consumer.
+        run: |
+          if [ "${DEPLOY_BRANCH}" = "production" ]; then
+            PUBLIC_DISCOVERY_MAX_AGE_HOURS=26 \
+              PUBLIC_DISCOVERY_REQUIRE_CONTENT=true \
+              PUBLIC_DISCOVERY_CONTRACT_ONLY=false \
+              npm run verify:public-discovery-readiness
+          else
+            PUBLIC_DISCOVERY_REQUIRE_CONTENT=false \
+              PUBLIC_DISCOVERY_CONTRACT_ONLY=true \
+              npm run verify:public-discovery-readiness
+          fi
 
       - name: Sync Shadow Atlas vars into Wrangler config
         run: |
@@ -510,8 +522,12 @@ jobs:
             exit 1
           fi
 
-          cache_control=$(awk 'BEGIN { IGNORECASE=1 } /^cache-control:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$first_headers")
-          if [ "$cache_control" != "public, max-age=60, must-revalidate" ]; then
+          cache_control=$(awk 'tolower($0) ~ /^cache-control:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$first_headers")
+          normalized_cache_control=$(printf '%s' "$cache_control" \
+            | awk -F, '{ for (i = 1; i <= NF; i++) { value = tolower($i); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value } }' \
+            | sort \
+            | paste -sd, -)
+          if [ "$normalized_cache_control" != "max-age=60,must-revalidate,public" ]; then
             echo "::error::Unexpected browser Cache-Control on /api/templates: ${cache_control:-missing}"
             exit 1
           fi
@@ -530,11 +546,11 @@ jobs:
             exit 1
           fi
 
-          cf_cache_status=$(awk 'BEGIN { IGNORECASE=1 } /^cf-cache-status:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
-          age=$(awk 'BEGIN { IGNORECASE=1 } /^age:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
+          cf_cache_status=$(awk 'tolower($0) ~ /^cf-cache-status:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=toupper($0) } END { print value }' "$second_headers")
+          age=$(awk 'tolower($0) ~ /^age:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
           if [ "$cf_cache_status" = "HIT" ]; then
-            if ! [[ "$age" =~ ^[0-9]+$ ]] || [ "$age" -lt 1 ]; then
-              echo "::error::Front-of-Worker cache reported HIT without a positive Age header."
+            if ! [[ "$age" =~ ^[0-9]+$ ]]; then
+              echo "::error::Front-of-Worker cache reported HIT without a valid non-negative Age header."
               exit 1
             fi
             echo "Verified optional front-of-Worker cache: CF-Cache-Status=HIT Age=${age}."

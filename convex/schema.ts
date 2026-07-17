@@ -3197,6 +3197,9 @@ export default defineSchema({
 	// templates (and therefore never pay to read their server-only embeddings).
 	publicTemplateSnapshots: defineTable({
 		key: v.union(v.literal('all'), v.literal('excludeCwc')),
+		// Optional only for the live v3→v4 migration. Every v4 rebuild writes 4,
+		// and the pre-Pages readiness gate rejects legacy/missing versions.
+		projectionVersion: v.optional(v.number()),
 		// Both list variants receive the same revision in one transaction. Keep
 		// optional during the live-row migration; every rebuild supplies it.
 		revision: v.optional(v.number()),

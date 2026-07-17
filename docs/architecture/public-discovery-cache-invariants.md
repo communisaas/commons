@@ -21,6 +21,15 @@ The application cache stores anonymous public projections only. Its keys are
 scoped by the configured Convex backend when present, so aliases of one backend
 share KV while production and staging remain isolated. Request paths and query
 strings must not create new identities in these application-managed layers. The
+anonymous projection fixes `recipient_config` to `null` and `recipientEmails`
+to an empty array; only `recipient_count` may represent targets. Raw recipient
+configuration or addresses in a cache envelope are a security invariant
+violation, even if the origin template row is public. Before a list origin load
+can enter memory, Cache API, or KV, the consumer requires producer
+`projectionVersion:4` and rechecks those exact redaction fields plus a
+non-negative integer `recipient_count` on every card. A failed contract check
+may fall back only to an already stored v4 last-known-good envelope; it never
+persists the rejected payload. The
 current single-entrypoint Pages deployment does not source-configure a
 front-of-Worker cache. If a route-scoped rule or future public entrypoint enables
 one, that outer cache uses its own URL key (including query variants) and is
@@ -55,6 +64,13 @@ selection tests, and this document together.
    from overwriting a newer generation's selected value. Producers must advance
    the revision coordinate for every payload change; the cache uses that
    coordinate instead of deep-comparing large snapshot bodies.
+
+1a. **List cache fills are producer-versioned and anonymously projected.** The
+   Convex schema/functions and a v4 rematerialization must precede the Pages
+   consumer. The deploy gate verifies both list variants, and the runtime loader
+   repeats the v4 and recipient-redaction checks before returning a value to the
+   cache state machine. Revision equality alone cannot authorize an older or
+   recipient-bearing payload.
 
 2. **A request-specific hit cannot certify global latest.** An exact KV hit may
    warm only the matching physical Cache API entry. A successful origin load may

@@ -9,6 +9,10 @@ import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const BATCH_SIZE = 20;
 
+type BackfillError =
+	| { stage: 'embedding_generation' | 'embedding_write'; id: string; error: string }
+	| { stage: 'snapshot_rebuild'; error: string };
+
 /** Admin user IDs — populated from ADMIN_USER_IDS env var (comma-separated) */
 const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Boolean));
 
@@ -57,7 +61,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 
 		const batch = missing.slice(0, BATCH_SIZE);
 		let totalProcessed = 0;
-		const errors: Array<{ id: string; error: string }> = [];
+		const errors: BackfillError[] = [];
 
 		// Build text pairs: [location0, topic0, location1, topic1, ...]
 		const texts: string[] = [];
@@ -82,20 +86,27 @@ export const POST: RequestHandler = async ({ locals }) => {
 						templateId,
 						locationEmbedding: embeddings[j * 2],
 						topicEmbedding: embeddings[j * 2 + 1],
-						_secret: internalSecret
+						_secret: internalSecret,
+						leaseToken
 					});
 					totalProcessed++;
 				} catch (writeErr) {
+					const message = writeErr instanceof Error ? writeErr.message : String(writeErr);
 					errors.push({
+						stage: 'embedding_write',
 						id: templateId,
-						error: writeErr instanceof Error ? writeErr.message : String(writeErr)
+						error: message
 					});
+					// Once this worker loses or outlives its lease, every later write
+					// would fail the same authoritative Convex check.
+					if (message.includes('EMBEDDING_BACKFILL_LEASE_')) break;
 				}
 			}
 		} catch (batchErr) {
 			// Entire batch failed (Gemini API error)
 			for (const t of batch) {
 				errors.push({
+					stage: 'embedding_generation',
 					id: t._id,
 					error: batchErr instanceof Error ? batchErr.message : String(batchErr)
 				});
@@ -103,9 +114,16 @@ export const POST: RequestHandler = async ({ locals }) => {
 		}
 
 		if (totalProcessed > 0) {
-			await serverMutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
-				_secret: internalSecret
-			});
+			try {
+				await serverMutation(api.templates.rebuildHomepageSnapshotsAfterBackfill, {
+					_secret: internalSecret,
+					leaseToken
+				});
+			} catch (rebuildError) {
+				const message = rebuildError instanceof Error ? rebuildError.message : String(rebuildError);
+				errors.push({ stage: 'snapshot_rebuild', error: message });
+				console.error('[backfill] Immediate snapshot rebuild failed', rebuildError);
+			}
 		}
 
 		console.log(

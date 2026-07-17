@@ -60,14 +60,14 @@ const templateGeographicScopeValidator = v.union(
 const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal">;
 const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unknown as FunctionReference<"query", "internal">;
 const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
-const listMissingEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingEmbeddingsInternal") as unknown as FunctionReference<"query", "internal">;
-const patchEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
-const migrateTopicEmbeddingMarkersRef = makeFunctionReference<"mutation">("templates:migrateTopicEmbeddingMarkers") as unknown as FunctionReference<"mutation", "internal">;
+const migrateTopicEmbeddingMarkersRef = makeFunctionReference<"mutation">("templates:migrateTopicEmbeddingMarkers") as unknown as FunctionReference<
+  "mutation",
+  "internal"
+>;
 const listMissingTagEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingTagEmbeddings") as unknown as FunctionReference<"query", "internal">;
 const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchTagEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
 const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
 const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
-const rebuildHomepageSnapshotsRef = makeFunctionReference<"mutation">("templates:rebuildHomepageSnapshots") as unknown as FunctionReference<"mutation", "internal">;
 const reportPublicDiscoverySnapshotFailureRef = makeFunctionReference<"action">(
   "templates:reportPublicDiscoverySnapshotFailure",
 ) as unknown as FunctionReference<
@@ -247,21 +247,29 @@ export const getBySlug = query({
 type PublicTemplateSnapshotKey = "all" | "excludeCwc";
 type RelationSnapshotKey = PublicTemplateSnapshotKey;
 const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
+const PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP = 50;
+const PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH = 50;
+const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
 // TemplateCard renders three avatars. Read the newest six endorsement rows so
 // filtering a possible owner endorsement still leaves a bounded display sample.
-// Across the at-most 100 unique list sources this permits <=600 endorsement
-// rows and <=600 endorsement-org gets. The authoritative counter travels
-// separately; this array is never a total.
+// Across the worst-case 250-row validation scan this permits <=1,500 endorsement
+// rows and <=1,500 endorsement-org gets. Normal healthy corpora stop after the
+// first 50-card batch. The authoritative counter travels separately; this array
+// is never a total.
 const PUBLIC_TEMPLATE_ENDORSEMENT_CAP = 6;
 const RELATION_SNAPSHOT_VARIANT_CAP = 50;
+// Fifty cards at this cap leave roughly 100 KB for the row envelope and array
+// metadata below the 900 KB document guard. Exact aggregate sizing below is
+// still authoritative and deterministically sheds the largest remaining card
+// if a future schema expansion consumes that headroom.
+const MAX_PUBLIC_TEMPLATE_CARD_BYTES = 16_000;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
 const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
 
-function classifyPublicTemplateSnapshotFreeze(
-  error: unknown,
-): "oversize" | "invalid" | null {
+function classifyPublicTemplateSnapshotFreeze(error: unknown): "oversize" | "invalid" | null {
   if (!(error instanceof Error)) return null;
   if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:")) return "oversize";
+  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:")) return "invalid";
   if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_INVALID:")) return "invalid";
   return null;
 }
@@ -554,7 +562,10 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
       tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
       delivery_config: template.deliveryConfig ?? {},
       cwc_config: template.cwcConfig ?? null,
-      recipient_config: template.recipientConfig ?? {},
+      // Recipient addresses and decision-maker configuration are private source
+      // data. Anonymous discovery needs only the non-identifying target count.
+      recipient_config: null,
+      recipient_count: countRecipientsConvex(template.recipientConfig),
       campaign_id: template.campaignId ?? null,
       status: template.status,
       is_public: template.isPublic,
@@ -605,7 +616,7 @@ async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates
         confidence: s.confidence,
         extraction_method: s.extractionMethod,
       })),
-      recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
+      recipientEmails: [],
       createdAt: new Date(creationTime).toISOString(),
     };
   });
@@ -725,7 +736,8 @@ const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
   tier_counts: snapshotArray(SNAPSHOT_NUMBER, 6),
   delivery_config: SNAPSHOT_CONFIG,
   cwc_config: snapshotNullable(SNAPSHOT_CONFIG),
-  recipient_config: SNAPSHOT_CONFIG,
+  recipient_config: snapshotNullable(SNAPSHOT_CONFIG),
+  recipient_count: SNAPSHOT_NUMBER,
   campaign_id: snapshotNullable(SNAPSHOT_STRING),
   status: SNAPSHOT_STRING,
   is_public: SNAPSHOT_BOOLEAN,
@@ -831,6 +843,22 @@ function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | nu
   const stored = value as Record<string, unknown>;
   const projected: Record<string, unknown> = {};
   for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
+    // Redact legacy snapshots at the public read boundary as well as in the
+    // producer. This closes exposure immediately, before every live row has
+    // been rematerialized, while retaining the old compatibility fields.
+    if (name === "recipient_config") {
+      projected[name] = null;
+      continue;
+    }
+    if (name === "recipientEmails") {
+      projected[name] = [];
+      continue;
+    }
+    if (name === "recipient_count" && (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined)) {
+      const legacyEmailCount = Array.isArray(stored.recipientEmails) ? stored.recipientEmails.filter((email) => typeof email === "string").length : 0;
+      projected[name] = Math.max(countRecipientsConvex(stored.recipient_config), legacyEmailCount);
+      continue;
+    }
     if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
       if (field.kind === "optional") continue;
       return null;
@@ -885,8 +913,7 @@ export const publicDiscoveryManifest = query({
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
-      .order("desc")
-      .first();
+      .unique();
     return toPublicDiscoveryManifestPayload(manifest);
   },
 });
@@ -898,13 +925,9 @@ export const publicDiscoveryFailureStatus = internalQuery({
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
-      .order("desc")
-      .first();
+      .unique();
     return {
-      list:
-        manifest?.listFailureAt === undefined
-          ? null
-          : { failedAt: manifest.listFailureAt, code: manifest.listFailureCode ?? "UNKNOWN" },
+      list: manifest?.listFailureAt === undefined ? null : { failedAt: manifest.listFailureAt, code: manifest.listFailureCode ?? "UNKNOWN" },
       relations:
         manifest?.relationsFailureAt === undefined
           ? null
@@ -932,8 +955,7 @@ export const listPublic = query({
     const snapshot = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .order("desc")
-      .first();
+      .unique();
     return projectStoredPublicTemplates(snapshot?.templates, {
       key,
       revision: snapshot?.revision ?? 0,
@@ -954,9 +976,9 @@ export const publicDiscoveryList = query({
     const snapshot = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .order("desc")
-      .first();
+      .unique();
     return {
+      projectionVersion: snapshot?.projectionVersion ?? 0,
       revision: snapshot?.revision ?? 0,
       updatedAt: snapshot?.updatedAt ?? null,
       templates: projectStoredPublicTemplates(snapshot?.templates, {
@@ -973,6 +995,9 @@ type PublicTemplateSnapshotRebuildResult = {
   allCount: number;
   excludeCwcCount: number;
   invalidCount: number;
+  oversizedCardCount: number;
+  aggregateShedCount: number;
+  excludedCount: number;
   allSnapshotBytes: number;
   excludeCwcSnapshotBytes: number;
 };
@@ -981,11 +1006,11 @@ type PublicTemplateSnapshotRebuildResult = {
  * Build and atomically upsert both `listPublic` materializations.
  *
  * The exact `(published, public)` index removes drafts/private rows before any
- * document hydration. The descending source scan is hard-capped at 250 rows:
- * `all` is therefore the exact newest 50, while `excludeCwc` is the newest 50
- * non-CWC rows found inside that explicit I/O budget. The two selected sets are
- * de-duplicated before enrichment so their overlapping debate/endorsement/org
- * joins are paid only once.
+ * document hydration. The descending source scan is hard-capped at 250 rows.
+ * Candidates are enriched and validated in newest-first batches before either
+ * variant takes its 50-card limit, so an invalid/oversized card is backfilled by
+ * the next valid candidate within the same explicit I/O budget. Shared cards
+ * are enriched once per batch.
  */
 async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<PublicTemplateSnapshotRebuildResult> {
   // Reserve the revision without mutating the manifest. It becomes visible only
@@ -997,70 +1022,145 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
     .order("desc")
     .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
 
-  const allSources = candidates.slice(0, 50);
-  const excludeCwcSources = candidates.filter((template) => template.deliveryMethod !== "cwc").slice(0, 50);
-
-  const selectedIds = new Set([...allSources.map((template) => template._id), ...excludeCwcSources.map((template) => template._id)]);
-  const selectedSources = candidates.filter((template) => selectedIds.has(template._id));
-  const enriched = await enrichPublicTemplates(ctx, selectedSources);
   const invalidTemplateIds: string[] = [];
-  const validatedEnriched = enriched.flatMap((template) => {
-    const projected = projectStoredPublicTemplate(template);
-    if (!projected) {
-      invalidTemplateIds.push(String(template.id));
-      return [];
+  const oversizedTemplateIds: string[] = [];
+  const aggregateShedIds: string[] = [];
+  const exclusionCodes: string[] = [];
+  const cardBytesById = new Map<string, number>();
+  const enrichedById = new Map<Id<"templates">, PublicTemplatePayload>();
+  const allTemplateIds: Array<Id<"templates">> = [];
+  const excludeCwcTemplateIds: Array<Id<"templates">> = [];
+  const allTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.length);
+  const excludeCwcTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.filter((template) => template.deliveryMethod !== "cwc").length);
+  let validatedCandidateCount = 0;
+
+  candidateScan: for (let offset = 0; offset < candidates.length; offset += PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH) {
+    const needsAll = allTemplateIds.length < allTargetCount;
+    const needsExcludeCwc = excludeCwcTemplateIds.length < excludeCwcTargetCount;
+    if (!needsAll && !needsExcludeCwc) break;
+
+    // Once the normal variant is full, do not pay enrichment joins for CWC
+    // candidates that cannot backfill the gated variant.
+    const batch = candidates
+      .slice(offset, offset + PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH)
+      .filter((template) => needsAll || template.deliveryMethod !== "cwc");
+    const enrichedBatch = await enrichPublicTemplates(ctx, batch);
+    for (const template of enrichedBatch) {
+      const canFillAll = allTemplateIds.length < allTargetCount;
+      const canFillExcludeCwc = template.deliveryMethod !== "cwc" && excludeCwcTemplateIds.length < excludeCwcTargetCount;
+      if (!canFillAll && !canFillExcludeCwc) continue;
+      validatedCandidateCount += 1;
+
+      const projected = projectStoredPublicTemplate(template);
+      if (!projected) {
+        const id = String(template.id);
+        invalidTemplateIds.push(id);
+        exclusionCodes.push(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${id}`);
+        continue;
+      }
+      const cardBytes = getConvexSize(projected as unknown as Value);
+      if (cardBytes > MAX_PUBLIC_TEMPLATE_CARD_BYTES) {
+        const id = String(projected.id);
+        oversizedTemplateIds.push(id);
+        exclusionCodes.push(`PUBLIC_TEMPLATE_CARD_TOO_LARGE:${id}:${cardBytes}>${MAX_PUBLIC_TEMPLATE_CARD_BYTES}`);
+        continue;
+      }
+
+      cardBytesById.set(String(projected.id), cardBytes);
+      enrichedById.set(projected.id, projected);
+      if (canFillAll) allTemplateIds.push(projected.id);
+      if (canFillExcludeCwc) excludeCwcTemplateIds.push(projected.id);
+      if (allTemplateIds.length >= allTargetCount && excludeCwcTemplateIds.length >= excludeCwcTargetCount) {
+        break candidateScan;
+      }
     }
-    return [projected];
-  });
-  const enrichedById = new Map(validatedEnriched.map((template) => [template.id, template]));
-  const projectValidSources = (sources: Doc<"templates">[]) =>
-    sources.flatMap((template) => {
-      const projected = enrichedById.get(template._id);
+  }
+
+  const noValidCardsError = () =>
+    new Error(
+      `PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:candidates=${candidates.length}:validated=${validatedCandidateCount}:` + exclusionCodes.slice(0, 3).join("|"),
+    );
+  if (candidates.length > 0 && allTemplateIds.length === 0) {
+    throw noValidCardsError();
+  }
+
+  const projectSelectedIds = (ids: Array<Id<"templates">>) =>
+    ids.flatMap((id) => {
+      const projected = enrichedById.get(id);
       return projected ? [projected] : [];
     });
-  const allTemplates = projectValidSources(allSources);
-  const excludeCwcTemplates = projectValidSources(excludeCwcSources);
-
-  const rows: Array<{
+  type SnapshotRow = {
     key: PublicTemplateSnapshotKey;
+    projectionVersion: number;
     revision: number;
     templates: PublicTemplatePayload[];
     sourceCount: number;
     updatedAt: number;
-  }> = [
-    {
-      key: "all",
-      revision: publication.revision,
-      templates: allTemplates,
-      sourceCount: allTemplates.length,
-      updatedAt: publication.updatedAt,
-    },
-    {
-      key: "excludeCwc",
-      revision: publication.revision,
-      templates: excludeCwcTemplates,
-      sourceCount: excludeCwcTemplates.length,
-      updatedAt: publication.updatedAt,
-    },
-  ];
+  };
+  const buildRows = (): SnapshotRow[] => {
+    const allTemplates = projectSelectedIds(allTemplateIds);
+    const excludeCwcTemplates = projectSelectedIds(excludeCwcTemplateIds);
+    return [
+      {
+        key: "all",
+        projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
+        revision: publication.revision,
+        templates: allTemplates,
+        sourceCount: allTemplates.length,
+        updatedAt: publication.updatedAt,
+      },
+      {
+        key: "excludeCwc",
+        projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
+        revision: publication.revision,
+        templates: excludeCwcTemplates,
+        sourceCount: excludeCwcTemplates.length,
+        updatedAt: publication.updatedAt,
+      },
+    ];
+  };
 
-  // Validate BOTH payloads before either upsert. A too-large rebuild therefore
-  // writes nothing and preserves both last-good rows as a matched pair.
+  // Per-card bounds make the normal 50-card case fit with headroom. The exact
+  // row guard remains authoritative: if future envelope growth crosses it,
+  // remove the largest card from both variants and recompute until the matched
+  // revision is publishable. Every exclusion is durable failure evidence, so
+  // availability recovers without silently corrupting or truncating content.
+  let rows = buildRows();
   const rowSizes = new Map<PublicTemplateSnapshotKey, number>();
-  for (const row of rows) {
-    const bytes = getConvexSize(row as unknown as Value);
-    if (bytes > MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES) {
-      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:${row.key}:${bytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
+  while (true) {
+    rowSizes.clear();
+    const oversizedRow = rows.find((row) => {
+      const bytes = getConvexSize(row as unknown as Value);
+      rowSizes.set(row.key, bytes);
+      return bytes > MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES;
+    });
+    if (!oversizedRow) break;
+
+    const oversizedBytes = rowSizes.get(oversizedRow.key)!;
+    const largest = [...oversizedRow.templates].sort((a, b) => {
+      const sizeDelta = (cardBytesById.get(String(b.id)) ?? 0) - (cardBytesById.get(String(a.id)) ?? 0);
+      return sizeDelta || String(a.id).localeCompare(String(b.id));
+    })[0];
+    if (!largest) {
+      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
     }
-    rowSizes.set(row.key, bytes);
+
+    const id = String(largest.id);
+    enrichedById.delete(largest.id);
+    aggregateShedIds.push(id);
+    exclusionCodes.push(`PUBLIC_TEMPLATE_SNAPSHOT_AGGREGATE_SHED:${id}:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
+    rows = buildRows();
+  }
+
+  if (candidates.length > 0 && rows.every((row) => row.templates.length === 0)) {
+    throw noValidCardsError();
   }
 
   for (const row of rows) {
     const existing = await ctx.db
       .query("publicTemplateSnapshots")
       .withIndex("by_key", (q) => q.eq("key", row.key))
-      .order("desc")
-      .first();
+      .unique();
     if (existing) {
       await ctx.db.patch(existing._id, row);
     } else {
@@ -1072,23 +1172,24 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
   // a later failure in the composite list+relations rebuild rolls this back too.
   await commitPublicDiscoveryListPublication(ctx, publication);
 
-  if (invalidTemplateIds.length > 0) {
+  if (exclusionCodes.length > 0) {
     const manifest = await getPublicDiscoveryManifestRow(ctx);
     if (!manifest) throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION");
-    const failure = new Error(
-      `PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${invalidTemplateIds.join(",")}`,
-    );
-    await recordPublicDiscoverySnapshotFailure(
-      ctx,
-      manifest,
-      "list",
-      failure,
-      publication.updatedAt,
-    );
-    console.error(
-      `[public-discovery] list revision ${publication.revision} excluded ${invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
-    );
+    const failure = new Error(exclusionCodes.length === 1 ? exclusionCodes[0] : `PUBLIC_TEMPLATE_SNAPSHOT_EXCLUDED:${exclusionCodes.join("|")}`);
+    await recordPublicDiscoverySnapshotFailure(ctx, manifest, "list", failure, publication.updatedAt);
+    if (oversizedTemplateIds.length === 0 && aggregateShedIds.length === 0) {
+      console.error(
+        `[public-discovery] list revision ${publication.revision} excluded ${invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
+      );
+    } else {
+      console.error(
+        `[public-discovery] list revision ${publication.revision} excluded ${exclusionCodes.length} unsafe or oversized template card(s); valid cards remain available`,
+      );
+    }
   }
+
+  const allTemplates = rows.find((row) => row.key === "all")!.templates;
+  const excludeCwcTemplates = rows.find((row) => row.key === "excludeCwc")!.templates;
 
   return {
     sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
@@ -1096,6 +1197,9 @@ async function rebuildPublicTemplateSnapshotsImpl(ctx: MutationCtx): Promise<Pub
     allCount: allTemplates.length,
     excludeCwcCount: excludeCwcTemplates.length,
     invalidCount: invalidTemplateIds.length,
+    oversizedCardCount: oversizedTemplateIds.length,
+    aggregateShedCount: aggregateShedIds.length,
+    excludedCount: exclusionCodes.length,
     allSnapshotBytes: rowSizes.get("all")!,
     excludeCwcSnapshotBytes: rowSizes.get("excludeCwc")!,
   };
@@ -1230,8 +1334,7 @@ export const relatednessEdges = query({
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
       .withIndex("by_key", (q) => q.eq("key", "all"))
-      .order("desc")
-      .first();
+      .unique();
     return snapshot?.twinEdges ?? [];
   },
 });
@@ -1275,8 +1378,7 @@ export const recomputeRelatednessCalibration = internalMutation({
     const existing = await ctx.db
       .query("relatednessCalibration")
       .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
-      .order("desc")
-      .first();
+      .unique();
 
     const row = {
       key: RELATEDNESS_CALIBRATION_KEY,
@@ -1330,8 +1432,7 @@ export const conceptRelations = query({
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
       .withIndex("by_key", (q) => q.eq("key", "all"))
-      .order("desc")
-      .first();
+      .unique();
     if (!snapshot) return { edges: [], conceptMap: {} };
 
     return {
@@ -1353,8 +1454,7 @@ export const publicDiscoveryRelations = query({
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .order("desc")
-      .first();
+      .unique();
     if (!snapshot) {
       return {
         revision: 0,
@@ -1553,8 +1653,7 @@ async function rebuildRelationSnapshotImpl(ctx: MutationCtx): Promise<RelationSn
     const existing = await ctx.db
       .query("templateRelationSnapshots")
       .withIndex("by_key", (q) => q.eq("key", key))
-      .order("desc")
-      .first();
+      .unique();
     if (existing) {
       await ctx.db.patch(existing._id, variants[key].snapshot);
     } else {
@@ -1686,8 +1785,13 @@ export const rebuildHomepageSnapshots = internalMutation({
 });
 
 /**
- * Public: Get a single public template by slug with enriched data.
- * Returns the full template shape expected by the detail page layout.
+ * Public: Get one published template for an explicit detail/send route.
+ *
+ * This indexed query is deliberately separate from the materialized discovery
+ * snapshots. Detail/send pages need the target roster to render the power
+ * landscape and construct a mailto action; homepage/list snapshots must never
+ * contain it. SvelteKit callers mark responses private + no-store so this
+ * purpose-bound payload cannot enter browser or Cloudflare caches.
  */
 export const getBySlugPublic = query({
   args: { slug: v.string() },
@@ -1742,6 +1846,7 @@ export const getBySlugPublic = query({
       send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
       delivery_config: template.deliveryConfig,
       recipient_config: template.recipientConfig,
+      recipient_count: countRecipientsConvex(template.recipientConfig),
       recipientEmails: extractRecipientEmailsConvex(template.recipientConfig),
       topics: template.topics ?? [],
       author,
@@ -1768,6 +1873,14 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
       }
     }
   }
+  if (Array.isArray(config.decisionMakers)) {
+    for (const decisionMaker of config.decisionMakers) {
+      if (decisionMaker && typeof decisionMaker === "object") {
+        const email = (decisionMaker as { email?: unknown }).email;
+        if (typeof email === "string") emails.push(email);
+      }
+    }
+  }
   if (typeof config.email === "string") emails.push(config.email);
   if (Array.isArray(config.emails)) {
     for (const e of config.emails) {
@@ -1775,7 +1888,18 @@ function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
     }
   }
 
-  return emails;
+  // Authoring stores commonly carry the same target in both `emails` and
+  // `decisionMakers`. Keep the compatibility projection and recipient count
+  // stable instead of double-counting that denormalized representation.
+  return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
+}
+
+/** Return only the non-identifying cardinality needed by anonymous UI. */
+function countRecipientsConvex(recipientConfig: unknown): number {
+  if (!recipientConfig || typeof recipientConfig !== "object") return 0;
+  const config = recipientConfig as Record<string, unknown>;
+  const decisionMakerCount = Array.isArray(config.decisionMakers) ? config.decisionMakers.length : 0;
+  return Math.max(decisionMakerCount, extractRecipientEmailsConvex(recipientConfig).length);
 }
 
 /**
@@ -2205,6 +2329,20 @@ function assertEmbeddingBackfillLeaseToken(token: string): void {
   }
 }
 
+async function requireActiveEmbeddingBackfillLease(ctx: MutationCtx, token: string): Promise<void> {
+  assertEmbeddingBackfillLeaseToken(token);
+  const lease = await ctx.db
+    .query("embeddingBackfillLeases")
+    .withIndex("by_key", (q) => q.eq("key", "topic"))
+    .unique();
+  if (!lease || lease.token !== token) {
+    throw new Error("EMBEDDING_BACKFILL_LEASE_NOT_OWNED");
+  }
+  if (lease.expiresAt <= Date.now()) {
+    throw new Error("EMBEDDING_BACKFILL_LEASE_EXPIRED");
+  }
+}
+
 /**
  * Claim one distributed repair lease before the Pages route spends Gemini I/O.
  *
@@ -2291,12 +2429,6 @@ export const listMissingEmbeddings = query({
   },
 });
 
-/** Internal bounded batch used by the Convex-native backfill action. */
-export const listMissingEmbeddingsInternal = internalQuery({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, args) => await listMissingEmbeddingsImpl(ctx, args.limit),
-});
-
 /**
  * One-time bounded migration for rows created before the topic-specific marker.
  * It never calls Gemini: already-valid vectors inherit their existing update
@@ -2316,10 +2448,7 @@ export const migrateTopicEmbeddingMarkers = internalMutation({
   },
   handler: async (ctx, args) => {
     const isContinuation = args.startedAt !== undefined;
-    if (
-      !isContinuation &&
-      (args.cursor !== undefined || args.scanned !== undefined || args.marked !== undefined)
-    ) {
+    if (!isContinuation && (args.cursor !== undefined || args.scanned !== undefined || args.marked !== undefined)) {
       throw new Error("TOPIC_EMBEDDING_MARKER_MIGRATION_INVALID_CONTINUATION");
     }
 
@@ -2383,17 +2512,16 @@ export const migrateTopicEmbeddingMarkers = internalMutation({
       };
     }
 
-    const page = await ctx.db.query("templates").order("asc").paginate({
-      cursor: args.cursor ?? null,
-      numItems: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT,
-    });
+    const page = await ctx.db
+      .query("templates")
+      .order("asc")
+      .paginate({
+        cursor: args.cursor ?? null,
+        numItems: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT,
+      });
     let pageMarked = 0;
     for (const template of page.page) {
-      if (
-        template.topicEmbeddingsUpdatedAt === undefined &&
-        Array.isArray(template.topicEmbedding) &&
-        template.topicEmbedding.length === 768
-      ) {
+      if (template.topicEmbeddingsUpdatedAt === undefined && isFiniteEmbeddingVector(template.topicEmbedding)) {
         await ctx.db.patch(template._id, {
           topicEmbeddingsUpdatedAt: template.embeddingsUpdatedAt ?? template.updatedAt,
         });
@@ -2440,8 +2568,7 @@ export const topicEmbeddingMarkerMigrationStatus = internalQuery({
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
-      .order("desc")
-      .first();
+      .unique();
     const startedAt = manifest?.topicEmbeddingMarkerMigrationStartedAt ?? null;
     const completedAt = manifest?.topicEmbeddingMarkerMigrationCompletedAt ?? null;
     return {
@@ -2460,9 +2587,19 @@ type TemplateEmbeddingWrite = {
   domainHue?: number;
 };
 
+function isFiniteEmbeddingVector(value: unknown): value is number[] {
+  return Array.isArray(value) && value.length === 768 && value.every((component) => typeof component === "number" && Number.isFinite(component));
+}
+
 function assertEmbeddingDimensions(args: TemplateEmbeddingWrite): void {
   if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
     throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
+  }
+  if (!isFiniteEmbeddingVector(args.locationEmbedding) || !isFiniteEmbeddingVector(args.topicEmbedding)) {
+    throw new Error("INVALID_EMBEDDING_VALUE:finite-numbers-required");
+  }
+  if (args.domainHue !== undefined && (!Number.isFinite(args.domainHue) || args.domainHue < 0 || args.domainHue > 360)) {
+    throw new Error("INVALID_DOMAIN_HUE:expected=0..360");
   }
 }
 
@@ -2494,32 +2631,6 @@ async function patchTemplateEmbeddingValues(
     await markPublicDiscoveryRelationsDirty(ctx);
   }
 }
-
-/**
- * Update embeddings for one template owned by the authenticated caller.
- * Snapshot publication always travels through the bounded dirty/coalescing
- * path in `patchTemplateEmbeddingValues`; this mutation never starts a direct
- * relation rebuild.
- */
-export const updateEmbeddings = mutation({
-  args: {
-    templateId: v.id("templates"),
-    locationEmbedding: v.array(v.float64()),
-    topicEmbedding: v.array(v.float64()),
-    domainHue: v.optional(v.float64()),
-    _secret: v.string(),
-  },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    assertEmbeddingDimensions(args);
-    const { userId } = await requireAuth(ctx);
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    if (template.userId !== userId) throw new Error("Unauthorized");
-
-    await patchTemplateEmbeddingValues(ctx, template, args, "v1");
-  },
-});
 
 /**
  * Complete the one missing embedding write started by an authenticated template
@@ -2554,10 +2665,7 @@ export const completePublicTemplateEmbeddings = mutation({
     if (template.status !== "published" || !template.isPublic) {
       throw new Error("EMBEDDING_COMPLETION_PUBLIC_TEMPLATE_REQUIRED");
     }
-    if (
-      template.topicEmbeddingsUpdatedAt !== undefined ||
-      (Array.isArray(template.topicEmbedding) && template.topicEmbedding.length === 768)
-    ) {
+    if (template.topicEmbeddingsUpdatedAt !== undefined || isFiniteEmbeddingVector(template.topicEmbedding)) {
       throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
     }
 
@@ -2569,10 +2677,10 @@ export const completePublicTemplateEmbeddings = mutation({
 /**
  * Narrow secret-gated bridge for the SvelteKit repair batch.
  *
- * Unlike `updateEmbeddings`, this path deliberately has no end-user ownership
- * context. It can only fill a row still selected by the missing-topic marker;
- * it cannot overwrite an existing embedding. The batch publishes once through
- * `rebuildHomepageSnapshotsAfterBackfill` after all bounded writes complete.
+ * This path deliberately has no end-user ownership context. It can only fill a
+ * row still selected by the missing-topic marker and only while the caller owns
+ * the unexpired distributed lease; it cannot overwrite an existing embedding.
+ * The batch publishes once through `rebuildHomepageSnapshotsAfterBackfill`.
  */
 export const updateMissingEmbeddingsForBackfill = mutation({
   args: {
@@ -2581,19 +2689,18 @@ export const updateMissingEmbeddingsForBackfill = mutation({
     topicEmbedding: v.array(v.float64()),
     domainHue: v.optional(v.float64()),
     _secret: v.string(),
+    leaseToken: v.string(),
   },
   handler: async (ctx, args) => {
     requireInternalSecret(args._secret);
+    await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
     assertEmbeddingDimensions(args);
     const template = await ctx.db.get(args.templateId);
     if (!template) throw new Error("Template not found");
     if (template.status !== "published" || !template.isPublic) {
       throw new Error("EMBEDDING_BACKFILL_PUBLIC_TEMPLATE_REQUIRED");
     }
-    if (
-      template.topicEmbeddingsUpdatedAt !== undefined ||
-      (Array.isArray(template.topicEmbedding) && template.topicEmbedding.length === 768)
-    ) {
+    if (template.topicEmbeddingsUpdatedAt !== undefined || isFiniteEmbeddingVector(template.topicEmbedding)) {
       throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
     }
 
@@ -2604,9 +2711,10 @@ export const updateMissingEmbeddingsForBackfill = mutation({
 
 /** Publish exactly once after a server-side embedding repair batch. */
 export const rebuildHomepageSnapshotsAfterBackfill = mutation({
-  args: { _secret: v.string() },
+  args: { _secret: v.string(), leaseToken: v.string() },
   handler: async (ctx, args) => {
     requireInternalSecret(args._secret);
+    await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
     const list = await rebuildPublicTemplateSnapshotsImpl(ctx);
     const relations = await rebuildRelationSnapshotImpl(ctx);
     return { list, relations };
@@ -2984,103 +3092,6 @@ export const setCwcVerification = mutation({
       countryCode: args.countryCode,
       reputationApplied: args.reputationApplied,
     });
-  },
-});
-
-// =============================================================================
-// BACKFILL: Generate embeddings via Gemini (no auth — internal only)
-// =============================================================================
-
-export const backfillEmbeddings = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const missing = await ctx.runQuery(listMissingEmbeddingsRef, {
-      limit: EMBEDDING_BACKFILL_BATCH_LIMIT,
-    });
-
-    if (missing.length === 0) {
-      console.log("[backfill] All templates have embeddings.");
-      return { processed: 0 };
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("[backfill] GEMINI_API_KEY not configured in Convex env vars.");
-      return { processed: 0, error: "GEMINI_API_KEY missing" };
-    }
-
-    let processed = 0;
-
-    async function embed(text: string): Promise<number[] | null> {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: { parts: [{ text }] },
-            taskType: "RETRIEVAL_DOCUMENT",
-            outputDimensionality: 768,
-          }),
-        },
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.embedding?.values ?? null;
-    }
-
-    for (const t of missing) {
-      const locationText = `${t.title} ${t.description || ""} ${resolveDomain(t)}`;
-      const topicText = `${t.title} ${t.description || ""} ${t.messageBody}`;
-
-      try {
-        const [locEmb, topEmb] = await Promise.all([embed(locationText), embed(topicText)]);
-
-        if (!locEmb || !topEmb) {
-          console.error(`[backfill] Gemini returned null embeddings for ${t._id}`);
-          continue;
-        }
-
-        const domainHue = projectToHue(topEmb);
-
-        await ctx.runMutation(patchEmbeddingsRef, {
-          templateId: t._id,
-          locationEmbedding: locEmb,
-          topicEmbedding: topEmb,
-          domainHue,
-        });
-
-        processed++;
-        console.log(`[backfill] Embedded ${t._id} (hue=${domainHue.toFixed(1)}, ${t.title.slice(0, 40)}...)`);
-      } catch (err) {
-        console.error(`[backfill] Failed for ${t._id}:`, err);
-      }
-    }
-
-    if (processed > 0) {
-      await ctx.runMutation(rebuildHomepageSnapshotsRef, {});
-    }
-
-    console.log(`[backfill] Done: ${processed}/${missing.length} templates embedded.`);
-    return { processed, total: missing.length, cappedAt: EMBEDDING_BACKFILL_BATCH_LIMIT };
-  },
-});
-
-/**
- * Internal mutation: Patch embeddings without auth check (for backfill action).
- */
-export const patchEmbeddings = internalMutation({
-  args: {
-    templateId: v.id("templates"),
-    locationEmbedding: v.array(v.float64()),
-    topicEmbedding: v.array(v.float64()),
-    domainHue: v.optional(v.float64()),
-  },
-  handler: async (ctx, args) => {
-    assertEmbeddingDimensions(args);
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    await patchTemplateEmbeddingValues(ctx, template, args, "gemini-001-768");
   },
 });
 

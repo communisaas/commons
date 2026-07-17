@@ -16,6 +16,7 @@ vi.mock('convex/browser', () => ({
 
 import {
 	DEFAULT_MAX_SNAPSHOT_AGE_MS,
+	readinessOptionsFromEnv,
 	validatePublicDiscoveryReadiness,
 	verifyPublicDiscoveryReadiness
 } from '../../../scripts/verify-public-discovery-readiness.mjs';
@@ -31,10 +32,21 @@ type ReadinessState = {
 };
 
 type ListPayload = {
+	projectionVersion: number;
 	revision: number;
 	updatedAt: number;
 	templates: Array<Record<string, unknown>>;
 };
+
+function publicCard(id: string, deliveryMethod: 'email' | 'cwc') {
+	return {
+		id,
+		deliveryMethod,
+		recipient_config: null,
+		recipientEmails: [],
+		recipient_count: 0
+	};
+}
 
 type RelationsPayload = {
 	revision: number;
@@ -64,18 +76,20 @@ function readyFixture(): ReadinessFixture {
 			relations: { ready: true, revision: 7, updatedAt: RELATIONS_UPDATED_AT }
 		},
 		allList: {
+			projectionVersion: 4,
 			revision: 4,
 			updatedAt: LIST_UPDATED_AT,
 			templates: [
-				{ id: 'a', deliveryMethod: 'email' },
-				{ id: 'b', deliveryMethod: 'cwc' },
-				{ id: 'c', deliveryMethod: 'email' }
+				publicCard('a', 'email'),
+				publicCard('b', 'cwc'),
+				publicCard('c', 'email')
 			]
 		},
 		excludeCwcList: {
+			projectionVersion: 4,
 			revision: 4,
 			updatedAt: LIST_UPDATED_AT,
-			templates: [{ id: 'a', deliveryMethod: 'email' }]
+			templates: [publicCard('a', 'email')]
 		},
 		allRelations: {
 			revision: 7,
@@ -153,10 +167,28 @@ describe('public discovery producer readiness', () => {
 
 	it('rejects a CWC template in the exclude-CWC list', () => {
 		const fixture = readyFixture();
-		fixture.excludeCwcList.templates.push({ id: 'hidden', deliveryMethod: 'cwc' });
+		fixture.excludeCwcList.templates.push(publicCard('hidden', 'cwc'));
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
 			/excludeCwcList\.templates\[1\] leaks a CWC template/
 		);
+	});
+
+	it('rejects a legacy projection generation before an edge deploy', () => {
+		const fixture = readyFixture();
+		fixture.allList.projectionVersion = 0;
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/allList\.projectionVersion is not 4/
+		);
+	});
+
+	it.each([
+		['raw recipient config', { recipient_config: { recipients: ['private'] } }, /recipient_config is not null/],
+		['recipient addresses', { recipientEmails: ['private@example.test'] }, /recipientEmails is not an empty array/],
+		['invalid recipient count', { recipient_count: -1 }, /recipient_count is not a non-negative integer/]
+	] as const)('rejects %s in a supposedly anonymous projection', (_label, patch, expected) => {
+		const fixture = readyFixture();
+		Object.assign(fixture.allList.templates[0], patch);
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(expected);
 	});
 
 	it('rejects relation endpoints that are absent from the matching list', () => {
@@ -186,6 +218,30 @@ describe('public discovery producer readiness', () => {
 				maxAgeMs: 45 * 60 * 1000
 			})
 		).toThrow(/manifest\.list\.updatedAt is stale/);
+	});
+
+	it('permits stale timestamps only in explicit non-production contract-only mode', () => {
+		const fixture = readyFixture();
+		const staleUpdatedAt = NOW - DEFAULT_MAX_SNAPSHOT_AGE_MS - 1;
+		fixture.manifest.list.updatedAt = staleUpdatedAt;
+		fixture.allList.updatedAt = staleUpdatedAt;
+		fixture.excludeCwcList.updatedAt = staleUpdatedAt;
+
+		expect(
+			validatePublicDiscoveryReadiness(fixture, {
+				contractOnly: true,
+				requireContent: false,
+				now: NOW
+			})
+		).toMatchObject({ listRevision: 4 });
+		fixture.excludeCwcList.projectionVersion = 3;
+		expect(() =>
+			validatePublicDiscoveryReadiness(fixture, {
+				contractOnly: true,
+				requireContent: false,
+				now: NOW
+			})
+		).toThrow(/excludeCwcList\.projectionVersion is not 4/);
 	});
 
 	it('rejects a serialized snapshot above the document safety bound', () => {
@@ -220,6 +276,28 @@ describe('public discovery producer readiness', () => {
 		expect(
 			validatePublicDiscoveryReadiness(fixture, { requireContent: false, now: NOW })
 		).toMatchObject({ allCount: 0, excludeCwcCount: 0 });
+	});
+
+	it('parses production and contract-only deploy policy from exact boolean env values', () => {
+		expect(readinessOptionsFromEnv({})).toEqual({
+			maxAgeMs: DEFAULT_MAX_SNAPSHOT_AGE_MS,
+			requireContent: true,
+			contractOnly: false
+		});
+		expect(
+			readinessOptionsFromEnv({
+				PUBLIC_DISCOVERY_MAX_AGE_HOURS: '12',
+				PUBLIC_DISCOVERY_REQUIRE_CONTENT: 'false',
+				PUBLIC_DISCOVERY_CONTRACT_ONLY: 'true'
+			})
+		).toEqual({
+			maxAgeMs: 12 * 60 * 60 * 1000,
+			requireContent: false,
+			contractOnly: true
+		});
+		expect(() =>
+			readinessOptionsFromEnv({ PUBLIC_DISCOVERY_CONTRACT_ONLY: '1' })
+		).toThrow(/PUBLIC_DISCOVERY_CONTRACT_ONLY must be true or false/);
 	});
 
 	it.each([

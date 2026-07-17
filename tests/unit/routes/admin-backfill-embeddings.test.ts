@@ -98,11 +98,17 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			([ref]) => ref === api.templates.updateMissingEmbeddingsForBackfill
 		);
 		expect(updates).toHaveLength(20);
-		expect(updates[0][1]).toMatchObject({ templateId: 'template-0' });
-		expect(updates[19][1]).toMatchObject({ templateId: 'template-19' });
+		expect(updates[0][1]).toMatchObject({
+			templateId: 'template-0',
+			leaseToken: expect.any(String)
+		});
+		expect(updates[19][1]).toMatchObject({
+			templateId: 'template-19',
+			leaseToken: expect.any(String)
+		});
 		expect(mockServerMutation).toHaveBeenCalledWith(
 			api.templates.rebuildHomepageSnapshotsAfterBackfill,
-			{ _secret: 'route-backfill-secret' }
+			{ _secret: 'route-backfill-secret', leaseToken: expect.any(String) }
 		);
 
 		const claim = mockServerMutation.mock.calls.find(
@@ -112,6 +118,12 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			([ref]) => ref === api.templates.releaseEmbeddingBackfillLease
 		)?.[1];
 		expect(claim).toMatchObject({ _secret: 'route-backfill-secret', token: expect.any(String) });
+		expect(updates.every(([, args]) => args.leaseToken === claim.token)).toBe(true);
+		expect(
+			mockServerMutation.mock.calls.find(
+				([ref]) => ref === api.templates.rebuildHomepageSnapshotsAfterBackfill
+			)?.[1].leaseToken
+		).toBe(claim.token);
 		expect(release).toEqual(claim);
 	});
 
@@ -128,7 +140,7 @@ describe('POST /api/admin/backfill-embeddings', () => {
 		);
 	});
 
-	it('releases the same lease token when a post-write immediate rebuild fails', async () => {
+	it('returns processed results and releases the same lease when the immediate rebuild fails', async () => {
 		mockServerQuery.mockResolvedValue([missingTemplate(0)]);
 		mockGenerateBatchEmbeddings.mockResolvedValue([[1], [2]]);
 		mockServerMutation.mockImplementation(async (ref: string) => {
@@ -143,7 +155,12 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			throw new Error(`Unexpected mutation: ${ref}`);
 		});
 
-		await expect(POST(event)).rejects.toThrow('snapshot rebuild failed');
+		const response = await POST(event);
+		await expect(response.json()).resolves.toMatchObject({
+			processed: 1,
+			total_missing: 1,
+			errors: [{ stage: 'snapshot_rebuild', error: 'snapshot rebuild failed' }]
+		});
 		const claim = mockServerMutation.mock.calls.find(
 			([ref]) => ref === api.templates.claimEmbeddingBackfillLease
 		)?.[1];

@@ -165,22 +165,36 @@ refresh, so eviction before the route's immediate composite rebuild cannot
 strand a stale generation. Lease release is token-checked so a late old worker
 cannot clear a reclaimed lease.
 
-Production Pages deployments enforce the producer gate mechanically with
-`scripts/verify-public-discovery-readiness.mjs`: both snapshot families must be
-ready, both list variants and both relation variants must match their manifest
-revisions, the known production corpus must be non-empty, every payload must be
-below 900,000 bytes, and both materialization timestamps must be no more than
-26 hours old before upload. The 26-hour bound allows two hours of scheduling
-tolerance beyond the daily `essential` cron cadence.
+Every Pages branch enforces the producer gate mechanically with
+`scripts/verify-public-discovery-readiness.mjs` before upload. This is a proof
+gate, not a backend deployment step: deploy the Convex schema/functions and run
+`templates:rebuildHomepageSnapshots` from the same release SHA first. Both list
+payloads must then report `projectionVersion:4`, exact recipient redaction, and
+the manifest-matched revision. Production also requires the known corpus to be
+non-empty and both materialization timestamps to be no more than 26 hours old;
+non-production uses contract-only mode, which permits stale or empty fixture
+data but not cold, revision-skewed, legacy, or recipient-bearing payloads. The
+26-hour production bound allows two hours of scheduling tolerance beyond the
+daily `essential` cron cadence.
 `PUBLIC_DISCOVERY_MAX_AGE_HOURS` is the verifier's deliberate override; the
 production workflow pins it to `26`.
 
 Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
 Cloudflare's native Git production deployment must remain disabled; the GitHub Actions
 workflow's gated Wrangler job is the sole standard production uploader so CI, producer
-readiness, immutable Pages health, and deployment health are recorded together. No GitHub
-Environment reviewer rule is assumed, so do not push or dispatch the frontend release
-until the backend manifest and persisted snapshots are ready.
+readiness, immutable Pages health, and deployment health are recorded together.
+No GitHub Environment reviewer gate is currently configured, so treat backend
+readiness as mandatory: do not push or dispatch the frontend release until the
+backend manifest and persisted snapshots are ready.
+
+The workflow maps deployment branches to fixed GitHub Environments instead of
+deriving environment names from branch text: `production` uses `Production`,
+while `main` and `staging` use `Staging` because they share the non-production
+Convex deployment. A read-only environment audit on 2026-07-17 found only those
+two environments and both had empty `protection_rules` with administrator
+bypass enabled. Adding required reviewers, branch policies, or disabling admin
+bypass is an external repository-administration action; this workflow does not
+claim those protections already exist.
 
 Verify that native production uploads are still disabled while preview deployments remain
 enabled:

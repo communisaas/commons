@@ -15,6 +15,7 @@ vi.mock('convex-sveltekit', () => ({ serverQuery: mockServerQuery }));
 vi.mock('$lib/convex', () => ({ api }));
 
 import {
+	PublicDiscoverySnapshotContractError,
 	PublicDiscoverySnapshotNotReadyError,
 	getCachedPublicRelations,
 	getCachedPublicTemplates
@@ -53,6 +54,24 @@ function manifest(
 	relations = list
 ) {
 	return { list, relations };
+}
+
+function publicCard(id: string) {
+	return {
+		id,
+		recipient_config: null,
+		recipientEmails: [],
+		recipient_count: 0
+	};
+}
+
+function listSnapshot(revision: number, updatedAt: number, id: string) {
+	return {
+		projectionVersion: 4,
+		revision,
+		updatedAt,
+		templates: [publicCard(id)]
+	};
 }
 
 describe('public template snapshot queries', () => {
@@ -127,17 +146,13 @@ describe('public template snapshot queries', () => {
 				return manifest({ ready: true, ...generation });
 			}
 			if (ref === api.templates.publicDiscoveryList) {
-				return {
-					revision: 2,
-					updatedAt: 200,
-					templates: [{ id: 'new-generation' }]
-				};
+				return listSnapshot(2, 200, 'new-generation');
 			}
 			throw new Error(`Unexpected query: ${ref}`);
 		});
 
 		await expect(getCachedPublicTemplates(CONTEXT, true)).resolves.toEqual([
-			{ id: 'new-generation' }
+			publicCard('new-generation')
 		]);
 		expect(
 			mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryManifest)
@@ -164,16 +179,14 @@ describe('public template snapshot queries', () => {
 				return manifest({ ready: true, ...generation });
 			}
 			if (ref === api.templates.publicDiscoveryList) {
-				return {
-					revision: 3,
-					updatedAt: 300,
-					templates: [{ id: 'current' }]
-				};
+				return listSnapshot(3, 300, 'current');
 			}
 			throw new Error(`Unexpected query: ${ref}`);
 		});
 
-		await expect(getCachedPublicTemplates(CONTEXT, true)).resolves.toEqual([{ id: 'current' }]);
+		await expect(getCachedPublicTemplates(CONTEXT, true)).resolves.toEqual([
+			publicCard('current')
+		]);
 		expect(manifestReads).toBe(2);
 		expect(
 			mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryList)
@@ -193,15 +206,45 @@ describe('public template snapshot queries', () => {
 			if (ref === api.templates.publicDiscoveryList) {
 				listReads += 1;
 				return listReads === 1
-					? { revision: 2, updatedAt: 200, templates: [{ id: 'overtaken' }] }
-					: { revision: 3, updatedAt: 300, templates: [{ id: 'current' }] };
+					? listSnapshot(2, 200, 'overtaken')
+					: listSnapshot(3, 300, 'current');
 			}
 			throw new Error(`Unexpected query: ${ref}`);
 		});
 
-		await expect(getCachedPublicTemplates(CONTEXT, true)).resolves.toEqual([{ id: 'current' }]);
+		await expect(getCachedPublicTemplates(CONTEXT, true)).resolves.toEqual([
+			publicCard('current')
+		]);
 		expect(manifestReads).toBe(2);
 		expect(listReads).toBe(2);
+	});
+
+	it.each([
+		['legacy projection version', { projectionVersion: 3 }],
+		['raw recipient config', { recipient_config: { recipients: ['private'] } }],
+		['recipient address', { recipientEmails: ['private@example.test'] }]
+	] as const)('rejects %s before the list payload can enter KV', async (_label, patch) => {
+		const context = contextWithKv();
+		const kvPut = vi.mocked(context.platform?.env?.PUBLIC_DISCOVERY_KV?.put!);
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return manifest({ ready: true, revision: 4, updatedAt: 400 });
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				const snapshot = listSnapshot(4, 400, 'unsafe');
+				if ('projectionVersion' in patch) Object.assign(snapshot, patch);
+				else Object.assign(snapshot.templates[0], patch);
+				return snapshot;
+			}
+			throw new Error(`Unexpected query: ${ref}`);
+		});
+
+		await expect(getCachedPublicTemplates(context, false)).rejects.toBeInstanceOf(
+			PublicDiscoverySnapshotContractError
+		);
+		expect(
+			kvPut.mock.calls.some(([key]) => String(key).includes('templates%3Aexclude-cwc%3D0'))
+		).toBe(false);
 	});
 
 	it('refreshes the manifest and reuses the observed relation snapshot across a publish race', async () => {

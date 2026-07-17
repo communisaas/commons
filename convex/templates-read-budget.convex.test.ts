@@ -33,10 +33,7 @@ function newRebuildHarness(): Harness {
 	return convexTest({ schema, modules });
 }
 
-function storedPublicCard(
-	id: string,
-	deliveryMethod: 'email' | 'cwc'
-): Record<string, unknown> {
+function storedPublicCard(id: string, deliveryMethod: 'email' | 'cwc'): Record<string, unknown> {
 	return {
 		id,
 		slug: `${id}-template`,
@@ -63,7 +60,8 @@ function storedPublicCard(
 		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
-		recipient_config: {},
+		recipient_config: null,
+		recipient_count: 0,
 		campaign_id: null,
 		status: 'published',
 		is_public: true,
@@ -202,6 +200,7 @@ describe('public template query read budgets', () => {
 		await t.run(async (ctx) => {
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'all',
+				projectionVersion: 4,
 				revision: 7,
 				templates: [allCard, nonCwcCard],
 				sourceCount: 20,
@@ -241,6 +240,7 @@ describe('public template query read budgets', () => {
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(versioned.result).toEqual({
+			projectionVersion: 4,
 			revision: 7,
 			updatedAt: 1_800_000_000_000,
 			templates: [allCard, nonCwcCard]

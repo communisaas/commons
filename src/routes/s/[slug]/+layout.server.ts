@@ -5,8 +5,13 @@ import type { LayoutServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
-export const load: LayoutServerLoad = async ({ params, request }) => {
+export const load: LayoutServerLoad = async ({ params, request, setHeaders }) => {
 	const { slug } = params;
+
+	// This is an explicit detail/send response, not anonymous discovery data.
+	// It contains the recipient roster needed by the power landscape and mailto
+	// flow, so never allow a browser or Cloudflare cache to retain it.
+	setHeaders({ 'Cache-Control': 'private, no-store, max-age=0' });
 
 	// Country detection from CF / Vercel / generic headers — US default
 	const headers = request.headers;

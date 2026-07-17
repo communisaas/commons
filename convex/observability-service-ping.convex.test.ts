@@ -15,6 +15,23 @@ type TransactionMetrics = {
 };
 
 describe('observability service ping', () => {
+	it('fails loudly when the manifest singleton invariant is violated', async () => {
+		const t = convexTest({ schema, modules });
+		await t.run(async (ctx) => {
+			for (const revision of [1, 2]) {
+				await ctx.db.insert('publicDiscoveryManifest', {
+					key: 'public',
+					listReady: true,
+					listRevision: revision,
+					relationsReady: true,
+					relationsRevision: revision
+				});
+			}
+		});
+
+		await expect(t.query(api.observability.servicePing, {})).rejects.toThrow();
+	});
+
 	it('proves indexed data-plane readability without hydrating an application row', async () => {
 		const t = convexTest({ schema, modules });
 		await t.run((ctx) =>

@@ -12,7 +12,9 @@
  * revision remains available with a retry backoff.
  */
 
-const CACHE_SCHEMA_VERSION = 'v3';
+// v4 is a privacy boundary: v3 envelopes may contain legacy recipient_config
+// or recipientEmails fields and must never be selected after public redaction.
+const CACHE_SCHEMA_VERSION = 'v4';
 
 /** Safety revalidation for callers that do not provide a materialization revision. */
 export const PUBLIC_DISCOVERY_FRESH_MS = 6 * 60 * 60 * 1000;

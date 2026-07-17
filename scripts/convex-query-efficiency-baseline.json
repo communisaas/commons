@@ -20,6 +20,12 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
+		"convex/blasts.ts::getEncryptedSupportersForBlast": {
+			"rules": { "collect": 3 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
 		"convex/campaigns.ts::getDebateSnapshotForCampaign": {
 			"rules": { "collect": 1 },
 			"owner": "@ejmockler",
@@ -122,6 +128,12 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
+		"convex/email.ts::countRecipientsForFilter": {
+			"rules": { "collect": 3 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
 		"convex/email.ts::findUnresolvedReport": {
 			"rules": { "queryFilter": 1 },
 			"owner": "@ejmockler",
@@ -133,6 +145,18 @@
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+		},
+		"convex/email.ts::resolveRecipientHashesForFilter": {
+			"rules": { "collect": 3 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
+		"convex/ground.ts::getMyGroundRestoreState": {
+			"rules": { "collect": 1, "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/ground.ts::getMyGroundState": {
 			"rules": { "collect": 1 },
@@ -177,10 +201,16 @@
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
 		"convex/legislation.ts::getDmPublicProfile": {
+			"rules": { "collect": 2 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
+		"convex/legislation.ts::getDmScorecard": {
 			"rules": { "collect": 1 },
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
-			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/legislation.ts::listMyReceipts": {
 			"rules": { "collect": 4, "queryFilter": 2 },
@@ -206,6 +236,12 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
+		"convex/messageJobs.ts::getForUser": {
+			"rules": { "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
 		"convex/networks.ts::checkMembership": {
 			"rules": { "queryFilter": 1 },
 			"owner": "@ejmockler",
@@ -225,10 +261,10 @@
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
 		"convex/networks.ts::getProofPressure": {
-			"rules": { "collect": 1, "queryFilter": 1 },
+			"rules": { "collect": 2, "queryFilter": 2 },
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
-			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/networks.ts::getPublicCharter": {
 			"rules": { "collect": 1 },
@@ -237,10 +273,10 @@
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
 		"convex/networks.ts::getStats": {
-			"rules": { "collect": 4, "queryFilter": 1 },
+			"rules": { "collect": 5, "queryFilter": 2 },
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
-			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/networks.ts::list": {
 			"rules": { "collect": 2 },
@@ -259,6 +295,12 @@
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+		},
+		"convex/organizations.ts::getDashboardStats": {
+			"rules": { "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/organizations.ts::getMembers": {
 			"rules": { "collect": 1 },
@@ -302,6 +344,12 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
+		"convex/passkeys.ts::getAuthMaterialByEmail": {
+			"rules": { "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
 		"convex/positions.ts::getCounts": {
 			"rules": { "collect": 1 },
 			"owner": "@ejmockler",
@@ -331,6 +379,18 @@
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+		},
+		"convex/sms.ts::countEligibleRecipientsForFilter": {
+			"rules": { "collect": 4 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
+		"convex/sms.ts::getEncryptedRecipientsForBlast": {
+			"rules": { "collect": 4 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/sms.ts::getReplySummary": {
 			"rules": { "collect": 1 },
@@ -428,6 +488,18 @@
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
 		},
+		"convex/users.ts::getActiveCredentialDistrictCommitment": {
+			"rules": { "collect": 1, "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
+		"convex/users.ts::getActiveCredentialHash": {
+			"rules": { "collect": 1, "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
+		},
 		"convex/users.ts::getMyRepresentatives": {
 			"rules": { "collect": 1 },
 			"owner": "@ejmockler",
@@ -475,6 +547,12 @@
 			"owner": "@ejmockler",
 			"expires": "2027-01-31",
 			"reason": "Pre-existing debt captured by the 2026-07-16 app-wide Convex query audit."
+		},
+		"convex/v1api.ts::getDmScorecard": {
+			"rules": { "collect": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Pre-existing helper-factored debt discovered by the module-aware query audit."
 		},
 		"convex/v1api.ts::getEventStats": {
 			"rules": { "collect": 1 },

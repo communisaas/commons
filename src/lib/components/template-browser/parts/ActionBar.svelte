@@ -42,6 +42,7 @@
 
 	// Recipient count from template config
 	const recipientCount = $derived.by(() => {
+		if (typeof template.recipient_count === 'number') return template.recipient_count;
 		const config = parseRecipientConfig(template?.recipient_config);
 		const dms = config?.decisionMakers?.length ?? 0;
 		const emails = extractRecipientEmails(template?.recipient_config)?.length ?? 0;
@@ -49,19 +50,21 @@
 	});
 
 	// Button text and variant based on trust tier + delivery method
-	const buttonVariant = $derived(
-		isCwcTemplate && isVerifiedConstituent ? 'verified' : 'primary'
-	);
+	const buttonVariant = $derived(isCwcTemplate && isVerifiedConstituent ? 'verified' : 'primary');
 	const buttonText = $derived.by(() => {
 		if (isModerating) return 'Checking...';
 		const count = recipientCount;
 		if (isCwcTemplate && isVerifiedConstituent) {
-			return count > 0 ? `Deliver as verified constituent to ${count}` : 'Deliver as verified constituent';
+			return count > 0
+				? `Deliver as verified constituent to ${count}`
+				: 'Deliver as verified constituent';
 		}
 		if (isCwcTemplate) {
 			return `Deliver to ${labels.legislativeBody}`;
 		}
-		return count > 0 ? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}` : 'Send to Decision-Makers';
+		return count > 0
+			? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}`
+			: 'Send to Decision-Makers';
 	});
 
 	// Circuit breaker for moderation service (CI-004 hardening)
@@ -102,7 +105,8 @@
 				});
 				const result = await res.json();
 				if (!result.approved) {
-					moderationError = result.summary || 'Personalization text was not approved. Please edit and try again.';
+					moderationError =
+						result.summary || 'Personalization text was not approved. Please edit and try again.';
 					isModerating = false;
 					return;
 				}
@@ -119,7 +123,6 @@
 				console.warn('[ActionBar] Circuit breaker open — sending without moderation (audited)');
 			}
 			isModerating = false;
-
 		}
 
 		// Save personalization for all users

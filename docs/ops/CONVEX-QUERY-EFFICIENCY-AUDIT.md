@@ -10,19 +10,20 @@ the largest _remaining_ read risk once it is deployed and populated.
 
 ## Static inventory
 
-The committed guardrail currently sees:
+The module-aware guardrail currently sees:
 
-- 232 exported public Convex queries in 36 modules;
-- 106 syntactic `.collect()` calls across 80 public queries;
-- 11 Convex query-builder `.filter()` calls across 10 public queries; and
-- 15 direct `Date.now()` calls across 13 public queries.
+- 231 exported public Convex queries in 36 modules;
+- 131 syntactic `.collect()` calls across 90 public queries;
+- 13 Convex query-builder `.filter()` calls across 10 public queries; and
+- 23 clock reads across 20 public queries.
 
 These figures are a debt inventory, not a claim that every occurrence costs the
 same. An indexed collection of three rows is different from a full scan of
-embedding-bearing documents. Conversely, the static count does not see a
-`Date.now()` hidden in a called helper, a large `.take(10_001)`, repeated SSR
-queries, or an N+1 loop. The ranked findings below include those manually traced
-dependencies.
+embedding-bearing documents. The scanner follows statically resolved local and
+relative-import helper calls, so these totals include helper-factored hazards.
+It still cannot measure a large `.take(10_001)`, repeated SSR queries, dynamic
+dispatch, or an N+1 loop. The ranked findings below include those manually
+traced dependencies.
 
 The completion audit removed one especially dangerous baseline exception:
 `templates.listMissingEmbeddings` is now secret-gated and uses the exact
@@ -232,10 +233,13 @@ layout. Membership checking must remain inside every public function.
 
 ## Guardrail now enforced
 
-`scripts/check-convex-query-efficiency.mjs` parses TypeScript ASTs and scans only
-exported public `query({...})` declarations. It distinguishes query-builder
-`.filter()` from JavaScript array filtering. The exact existing debt lives in
-`scripts/convex-query-efficiency-baseline.json`.
+`scripts/check-convex-query-efficiency.mjs` parses TypeScript modules and finds
+exported public queries through direct, renamed, or namespace imports of the
+generated `query` factory and named export forms. It follows reachable top-level
+local and relative-import helpers, propagates destructured/aliased `db` and
+query-builder parameters, and distinguishes query-builder `.filter()` from
+JavaScript array filtering. An unresolved delegated handler fails closed. The
+exact existing debt lives in `scripts/convex-query-efficiency-baseline.json`.
 
 Each baseline entry contains rule counts, an owner, a reason, and an expiry. The
 check fails when:
@@ -253,14 +257,28 @@ Run it locally with:
 npm run check:convex-queries
 ```
 
-`--print-current` prints a mechanically generated candidate baseline for review.
-Do not replace the baseline wholesale: delete fixed entries, assign a real owner,
-write the reason for any new exception, and choose a near-term expiry. The npm
-`ci` aggregate and `.github/workflows/ci.yml` both run the guardrail.
+Baseline regeneration is deliberately not a one-command rubber stamp. It
+requires an explicit acknowledgement plus owner, reason, and future expiry; it
+preserves metadata for unchanged entries and applies the supplied metadata only
+to new or changed debt:
+
+```sh
+CONVEX_QUERY_BASELINE_OWNER='@your-handle' \
+CONVEX_QUERY_BASELINE_REASON='Specific reviewed reason for retaining this debt.' \
+CONVEX_QUERY_BASELINE_EXPIRES='2026-09-30' \
+node scripts/check-convex-query-efficiency.mjs \
+  --print-current --accept-baseline-update \
+  | npx prettier --parser json
+```
+
+`CONVEX_QUERY_EFFICIENCY_TODAY` is rejected; expiry always uses the runner's UTC
+clock. Review and apply only the intended baseline delta. The npm `ci` aggregate
+and `.github/workflows/ci.yml` both run the guardrail.
 
 The AST guard deliberately does not pretend to prove efficiency. It cannot see
-transitive helper behavior, document byte size, N+1 joins, `.take(10_001)`, or
-route-level repetition. Those require transaction budgets and runtime logs.
+computed/dynamic dispatch, runtime package behavior, document byte size, N+1
+joins, `.take(10_001)`, or route-level repetition. Those require transaction
+budgets and runtime logs.
 
 ## Transaction-budget follow-ups
 

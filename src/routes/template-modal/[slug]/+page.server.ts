@@ -4,8 +4,12 @@ import type { PageServerLoad } from './$types';
 import { serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 
-export const load: PageServerLoad = async ({ params, locals }) => {
+export const load: PageServerLoad = async ({ params, locals, setHeaders }) => {
 	const { slug } = params;
+
+	// Modal detail data includes direct-email targets. Keep this purpose-bound
+	// response out of browser and Cloudflare caches.
+	setHeaders({ 'Cache-Control': 'private, no-store, max-age=0' });
 
 	const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
 
@@ -33,15 +37,20 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 			preview: convexTemplate.preview,
 			metrics: (convexTemplate as { metrics?: unknown }).metrics,
 			delivery_config: convexTemplate.delivery_config,
+			// Unlike anonymous list cards, an explicit detail/send route needs this
+			// roster to construct the user's mailto action.
 			recipient_config: convexTemplate.recipient_config,
 			recipientEmails: convexTemplate.recipientEmails ?? [],
+			recipient_count: convexTemplate.recipient_count,
 			author: convexTemplate.author,
 			createdAt: convexTemplate.createdAt
 		},
-		user: locals.user ? {
-			id: locals.user.id,
-			name: locals.user.name
-		} : null,
+		user: locals.user
+			? {
+					id: locals.user.id,
+					name: locals.user.name
+				}
+			: null,
 		modalMode: true
 	};
 };

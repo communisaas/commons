@@ -71,7 +71,8 @@ function storedPublicCard(id: string, overrides: Record<string, unknown> = {}) {
 		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
-		recipient_config: {},
+		recipient_config: null,
+		recipient_count: 0,
 		campaign_id: null,
 		status: 'published',
 		is_public: true,
@@ -143,6 +144,7 @@ describe('templates materialized public snapshots', () => {
 			relations: { ready: false, revision: 0, updatedAt: null }
 		});
 		expect(await t.query(api.templates.publicDiscoveryList, {})).toEqual({
+			projectionVersion: 0,
 			revision: 0,
 			updatedAt: null,
 			templates: []
@@ -159,6 +161,7 @@ describe('templates materialized public snapshots', () => {
 		expect(afterList.list).toMatchObject({ ready: true, revision: 1 });
 		expect(afterList.relations).toEqual({ ready: false, revision: 0, updatedAt: null });
 		expect(await t.query(api.templates.publicDiscoveryList, {})).toMatchObject({
+			projectionVersion: 4,
 			revision: 1,
 			templates: []
 		});
@@ -172,8 +175,8 @@ describe('templates materialized public snapshots', () => {
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
 
-		// A failed composite publication must advance neither family. The list size
-		// guard fires before any row/manifest write and Convex rolls the mutation back.
+		// A non-empty source corpus with no safe card must not replace the healthy
+		// empty generation or advance either family.
 		await t.run(async (ctx) => {
 			for (let index = 0; index < 50; index++) {
 				await ctx.db.insert(
@@ -183,9 +186,10 @@ describe('templates materialized public snapshots', () => {
 			}
 		});
 		await expect(t.mutation(internal.templates.rebuildHomepageSnapshots, {})).rejects.toThrow(
-			/PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all/
+			/PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:/
 		);
 		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual(afterRelations);
+		expect(await t.query(api.templates.listPublic, {})).toEqual([]);
 
 		// Even if a legacy/manual row edit creates a mismatch, the payload exposes
 		// its own revision so the edge can reject it against manifest revision 1.
@@ -217,9 +221,68 @@ describe('templates materialized public snapshots', () => {
 		});
 	});
 
-	it('degrades to the newest snapshot and logs counted invalid stored cards', async () => {
+	it('fails loudly when any exact-key discovery singleton has duplicate rows', async () => {
 		const t = newHarness();
-		const older = storedPublicCard('older', { title: 'Older', subject: 'Older' });
+		await t.run(async (ctx) => {
+			for (const revision of [1, 2]) {
+				await ctx.db.insert('publicTemplateSnapshots', {
+					key: 'all',
+					revision,
+					templates: [],
+					sourceCount: 0,
+					updatedAt: revision
+				});
+				await ctx.db.insert('templateRelationSnapshots', {
+					key: 'all',
+					revision,
+					twinEdges: [],
+					conceptEdges: [],
+					conceptEntries: [],
+					sourceCap: 50,
+					sourceTemplateCount: 0,
+					embeddedTemplateCount: 0,
+					tagVectorCount: 0,
+					updatedAt: revision
+				});
+				await ctx.db.insert('publicDiscoveryManifest', {
+					key: 'public',
+					listReady: true,
+					listRevision: revision,
+					listUpdatedAt: revision,
+					relationsReady: true,
+					relationsRevision: revision,
+					relationsUpdatedAt: revision
+				});
+			}
+		});
+
+		await expect(t.query(api.templates.listPublic, {})).rejects.toThrow();
+		await expect(t.query(api.templates.publicDiscoveryList, {})).rejects.toThrow();
+		await expect(t.query(api.templates.relatednessEdges, {})).rejects.toThrow();
+		await expect(t.query(api.templates.conceptRelations, {})).rejects.toThrow();
+		await expect(t.query(api.templates.publicDiscoveryRelations, {})).rejects.toThrow();
+		await expect(t.query(api.templates.publicDiscoveryManifest, {})).rejects.toThrow();
+		await expect(t.query(internal.templates.publicDiscoveryFailureStatus, {})).rejects.toThrow();
+		await expect(
+			t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {})
+		).rejects.toThrow();
+		await t.run(async (ctx) => {
+			const manifests = await ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.collect();
+			if (!manifests[1]) throw new Error('missing duplicate manifest fixture');
+			await ctx.db.delete(manifests[1]._id);
+		});
+		await expect(
+			t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {})
+		).rejects.toThrow();
+		await expect(t.mutation(internal.templates.rebuildRelationSnapshot, {})).rejects.toThrow();
+	});
+
+	it('projects stored rows through a strict allowlist and redacts legacy recipient data', async () => {
+		const t = newHarness();
+		const sensitiveEmail = 'legacy-private-target@example.test';
 		const publicOrg = { name: 'Public org', slug: 'public-org', avatar: null };
 		const publicScope = {
 			id: 'newer_s0',
@@ -237,10 +300,18 @@ describe('templates materialized public snapshots', () => {
 			title: 'Newer',
 			subject: 'Newer',
 			endorsingOrg: publicOrg,
-			scopes: [publicScope]
+			scopes: [publicScope],
+			recipient_count: 2
 		});
+		const legacyNewer: Record<string, unknown> = { ...newer };
+		delete legacyNewer.recipient_count;
 		const storedNewer = {
-			...newer,
+			...legacyNewer,
+			recipient_config: {
+				recipients: [{ email: sensitiveEmail }],
+				decisionMakers: [{ name: 'Private target' }, { name: 'Private target 2' }]
+			},
+			recipientEmails: [sensitiveEmail],
 			endorsingOrg: {
 				...publicOrg,
 				encryptedBillingEmail: 'producer-private-fixture'
@@ -261,13 +332,6 @@ describe('templates materialized public snapshots', () => {
 			await ctx.db.insert('publicTemplateSnapshots', {
 				key: 'all',
 				revision: 1,
-				templates: [older],
-				sourceCount: 1,
-				updatedAt: 1
-			});
-			await ctx.db.insert('publicTemplateSnapshots', {
-				key: 'all',
-				revision: 2,
 				templates: [
 					storedNewer,
 					'malformed-producer-row',
@@ -275,23 +339,11 @@ describe('templates materialized public snapshots', () => {
 					missingDisplaySpine
 				],
 				sourceCount: 2,
-				updatedAt: 2
-			});
-			await ctx.db.insert('templateRelationSnapshots', {
-				key: 'all',
-				revision: 1,
-				twinEdges: [],
-				conceptEdges: [],
-				conceptEntries: [],
-				sourceCap: 50,
-				sourceTemplateCount: 0,
-				embeddedTemplateCount: 0,
-				tagVectorCount: 0,
 				updatedAt: 1
 			});
 			await ctx.db.insert('templateRelationSnapshots', {
 				key: 'all',
-				revision: 2,
+				revision: 1,
 				twinEdges: [newerTwin],
 				conceptEdges: [],
 				conceptEntries: [],
@@ -299,54 +351,70 @@ describe('templates materialized public snapshots', () => {
 				sourceTemplateCount: 2,
 				embeddedTemplateCount: 2,
 				tagVectorCount: 0,
-				updatedAt: 2
-			});
-			await ctx.db.insert('publicDiscoveryManifest', {
-				key: 'public',
-				listReady: true,
-				listRevision: 1,
-				listUpdatedAt: 1,
-				relationsReady: true,
-				relationsRevision: 1,
-				relationsUpdatedAt: 1
-			});
-			await ctx.db.insert('publicDiscoveryManifest', {
-				key: 'public',
-				listReady: true,
-				listRevision: 2,
-				listUpdatedAt: 2,
-				relationsReady: true,
-				relationsRevision: 2,
-				relationsUpdatedAt: 2
+				updatedAt: 1
 			});
 		});
 
 		const storedProjectionError = vi.spyOn(console, 'error').mockImplementation(() => {});
-		await expect(t.query(api.templates.listPublic, {})).resolves.toEqual([newer]);
+		const publicList = await t.query(api.templates.listPublic, {});
+		expect(publicList).toEqual([newer]);
 		await expect(t.query(api.templates.publicDiscoveryList, {})).resolves.toEqual({
-			revision: 2,
-			updatedAt: 2,
+			projectionVersion: 0,
+			revision: 1,
+			updatedAt: 1,
 			templates: [newer]
 		});
+		expect(JSON.stringify(publicList)).not.toContain(sensitiveEmail);
 		expect(storedProjectionError).toHaveBeenCalledTimes(2);
 		expect(storedProjectionError).toHaveBeenNthCalledWith(
 			1,
-			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=2:dropped=3:stored=4'
+			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=1:dropped=3:stored=4'
 		);
 		expect(storedProjectionError).toHaveBeenNthCalledWith(
 			2,
-			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=2:dropped=3:stored=4'
+			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=1:dropped=3:stored=4'
 		);
 		storedProjectionError.mockRestore();
 		await expect(t.query(api.templates.publicDiscoveryRelations, {})).resolves.toMatchObject({
-			revision: 2,
-			updatedAt: 2,
+			revision: 1,
+			updatedAt: 1,
 			twinEdges: [newerTwin]
 		});
-		await expect(t.query(api.templates.publicDiscoveryManifest, {})).resolves.toEqual({
-			list: { ready: true, revision: 2, updatedAt: 2 },
-			relations: { ready: true, revision: 2, updatedAt: 2 }
+	});
+
+	it('redacts discovery recipients while preserving the uncached detail/send roster', async () => {
+		const t = newHarness();
+		const targetEmail = 'public-action-target@example.test';
+		await t.run((ctx) =>
+			ctx.db.insert(
+				'templates',
+				templateValue(9_000, {
+					recipientConfig: {
+						emails: [targetEmail],
+						decisionMakers: [{ name: 'Target one', email: targetEmail }, { name: 'Target two' }]
+					}
+				})
+			)
+		);
+
+		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+		const [listCard] = await t.query(api.templates.listPublic, {});
+		const detail = await t.query(api.templates.getBySlugPublic, { slug: 'template-9000' });
+
+		expect(listCard).toMatchObject({
+			recipient_config: null,
+			recipientEmails: [],
+			recipient_count: 2
 		});
+		expect(detail).toMatchObject({
+			recipient_config: {
+				emails: [targetEmail],
+				decisionMakers: [{ name: 'Target one', email: targetEmail }, { name: 'Target two' }]
+			},
+			recipientEmails: [targetEmail],
+			recipient_count: 2
+		});
+		expect(JSON.stringify(listCard)).not.toContain(targetEmail);
 	});
 
 	it('coalesces dirty writes for 60 seconds and enforces six hours between scheduled list rebuilds', async () => {
@@ -702,7 +770,7 @@ describe('templates materialized public snapshots', () => {
 		}
 	});
 
-	it('rebuilds both bounded list variants once, preserves order, and retains last-good rows on oversize', async () => {
+	it('validates before the top-50 limit and backfills invalid or oversized cards', async () => {
 		const t = newHarness();
 
 		await t.run(async (ctx) => {
@@ -764,24 +832,45 @@ describe('templates materialized public snapshots', () => {
 			Array.from({ length: 50 }, (_, offset) => `template-${259 - offset * 2}`)
 		);
 
-		const beforeOversize = all.map((template) => template.id);
-		await t.run(async (ctx) => {
-			for (let index = 0; index < 50; index++) {
-				await ctx.db.insert(
-					'templates',
-					templateValue(2_000 + index, {
-						messageBody: 'x'.repeat(22_000)
-					})
-				);
-			}
+		const { oversizedId, invalidId, validPeerId } = await t.run(async (ctx) => {
+			const oversizedId = await ctx.db.insert(
+				'templates',
+				templateValue(2_000, { messageBody: 'x'.repeat(22_000) })
+			);
+			const invalidId = await ctx.db.insert(
+				'templates',
+				templateValue(2_001, {
+					scopes: Array.from({ length: 101 }, (_, index) => ({
+						countryCode: 'US',
+						regionCode: `US-${index}`,
+						displayText: `Region ${index}`,
+						scopeLevel: 'region',
+						confidence: 1,
+						extractionMethod: 'test'
+					}))
+				})
+			);
+			const validPeerId = await ctx.db.insert('templates', templateValue(2_002));
+			return { oversizedId, invalidId, validPeerId };
 		});
 
-		await expect(t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {})).rejects.toThrow(
-			/PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all/
-		);
-		expect((await t.query(api.templates.listPublic, {})).map((template) => template.id)).toEqual(
-			beforeOversize
-		);
+		const degraded = await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+		expect(degraded).toMatchObject({
+			allCount: 50,
+			excludeCwcCount: 50,
+			invalidCount: 1,
+			oversizedCardCount: 1,
+			aggregateShedCount: 0,
+			excludedCount: 2
+		});
+		const afterOversize = await t.query(api.templates.listPublic, {});
+		expect(afterOversize).toHaveLength(50);
+		expect(afterOversize.map((template) => template.id)).toContain(validPeerId);
+		expect(afterOversize.map((template) => template.id)).not.toContain(oversizedId);
+		expect(afterOversize.map((template) => template.id)).not.toContain(invalidId);
+		const failure = await t.query(internal.templates.publicDiscoveryFailureStatus, {});
+		expect(failure.list?.code).toContain(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${invalidId}`);
+		expect(failure.list?.code).toContain(`PUBLIC_TEMPLATE_CARD_TOO_LARGE:${oversizedId}:`);
 	});
 
 	it('publishes valid cards while recording and alerting invalid producer cards', async () => {
@@ -841,7 +930,7 @@ describe('templates materialized public snapshots', () => {
 		consoleError.mockRestore();
 	});
 
-	it('records and clears an alerted last-good freeze around a scheduled oversize rebuild', async () => {
+	it('freezes the last-good snapshot when no valid card survives and clears after repair', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
 		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -849,12 +938,13 @@ describe('templates materialized public snapshots', () => {
 		vi.stubEnv('SENTRY_DSN', 'invalid-test-dsn');
 		try {
 			const t = newHarness();
-			await t.run((ctx) => ctx.db.insert('templates', templateValue(4_000)));
+			const healthyId = await t.run((ctx) => ctx.db.insert('templates', templateValue(4_000)));
 			await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
 			await t.mutation(internal.templates.rebuildRelationSnapshot, {});
+			const lastGoodManifest = await t.query(api.templates.publicDiscoveryManifest, {});
 			const lastGoodIds = (await t.query(api.templates.listPublic, {})).map(({ id }) => id);
-
 			await t.run(async (ctx) => {
+				await ctx.db.patch(healthyId, { messageBody: 'x'.repeat(22_000) });
 				for (let index = 0; index < 50; index++) {
 					await ctx.db.insert(
 						'templates',
@@ -864,15 +954,22 @@ describe('templates materialized public snapshots', () => {
 			});
 			const failedAt = Date.now();
 			const failure = await t.action(internal.templates.rebuildPublicTemplateSnapshotsForCron, {});
-			expect(failure).toEqual({ status: 'oversize' });
-			if (failure.status !== 'oversize') throw new Error('expected oversize refresh result');
+			expect(failure).toEqual({ status: 'invalid' });
 			expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).toEqual(
 				lastGoodIds
 			);
+			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+				list: {
+					ready: true,
+					revision: lastGoodManifest.list.revision,
+					updatedAt: lastGoodManifest.list.updatedAt
+				},
+				relations: lastGoodManifest.relations
+			});
 			await expect(t.query(internal.templates.publicDiscoveryFailureStatus, {})).resolves.toEqual({
 				list: {
 					failedAt,
-					code: expect.stringMatching(/^PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:all:/)
+					code: expect.stringMatching(/^PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:/)
 				},
 				relations: null
 			});
@@ -889,9 +986,10 @@ describe('templates materialized public snapshots', () => {
 				for (const row of await ctx.db
 					.query('templates')
 					.withIndex('by_status_isPublic', (q) => q.eq('status', 'published').eq('isPublic', true))
-					.take(50)) {
+					.take(100)) {
 					if (row.slug.startsWith('template-5')) await ctx.db.delete(row._id);
 				}
+				await ctx.db.patch(healthyId, { messageBody: 'Message 4000' });
 			});
 			const retry = await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
 			expect(retry.scheduled).toBe(true);

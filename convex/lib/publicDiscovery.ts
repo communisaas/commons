@@ -71,8 +71,7 @@ export async function getPublicDiscoveryManifestRow(ctx: MutationCtx): Promise<M
 	return await ctx.db
 		.query('publicDiscoveryManifest')
 		.withIndex('by_key', (q) => q.eq('key', PUBLIC_DISCOVERY_MANIFEST_KEY))
-		.order('desc')
-		.first();
+		.unique();
 }
 
 function manifestInsertBase(): Omit<Manifest, '_id' | '_creationTime'> {

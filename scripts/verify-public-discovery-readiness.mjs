@@ -7,6 +7,7 @@ import { anyApi } from 'convex/server';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_SNAPSHOT_BYTES = 900_000;
+const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
 export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
 
 /**
@@ -21,6 +22,7 @@ export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
 /**
  * @typedef {object} ReadinessOptions
  * @property {boolean} [requireContent]
+ * @property {boolean} [contractOnly]
  * @property {number} [maxAgeMs]
  * @property {number} [now]
  */
@@ -71,6 +73,19 @@ function validateTemplateProjection(name, templates, excludeCwc, errors) {
 		} else if (excludeCwc && template.deliveryMethod === 'cwc') {
 			errors.push(`${name}.templates[${index}] leaks a CWC template`);
 		}
+		if (template.recipient_config !== null) {
+			errors.push(`${name}.templates[${index}].recipient_config is not null`);
+		}
+		if (!Array.isArray(template.recipientEmails) || template.recipientEmails.length !== 0) {
+			errors.push(`${name}.templates[${index}].recipientEmails is not an empty array`);
+		}
+		if (
+			typeof template.recipient_count !== 'number' ||
+			!Number.isInteger(template.recipient_count) ||
+			template.recipient_count < 0
+		) {
+			errors.push(`${name}.templates[${index}].recipient_count is not a non-negative integer`);
+		}
 	}
 	return ids;
 }
@@ -105,6 +120,37 @@ function configuredMaxAgeMs(value) {
 	return hours * 60 * 60 * 1000;
 }
 
+/** @param {string | undefined} value @param {string} name @param {boolean} fallback */
+function configuredBoolean(value, name, fallback) {
+	if (value === undefined || value === '') return fallback;
+	if (value === 'true') return true;
+	if (value === 'false') return false;
+	throw new Error(`${name} must be true or false`);
+}
+
+/**
+ * Parse the fail-closed release policy used by the CLI and deploy workflow.
+ * Production uses the defaults; non-production explicitly opts into the
+ * contract-only mode and permits a legitimately empty corpus.
+ *
+ * @param {NodeJS.ProcessEnv | Record<string, string | undefined>} env
+ */
+export function readinessOptionsFromEnv(env) {
+	return {
+		maxAgeMs: configuredMaxAgeMs(env.PUBLIC_DISCOVERY_MAX_AGE_HOURS),
+		requireContent: configuredBoolean(
+			env.PUBLIC_DISCOVERY_REQUIRE_CONTENT,
+			'PUBLIC_DISCOVERY_REQUIRE_CONTENT',
+			true
+		),
+		contractOnly: configuredBoolean(
+			env.PUBLIC_DISCOVERY_CONTRACT_ONLY,
+			'PUBLIC_DISCOVERY_CONTRACT_ONLY',
+			false
+		)
+	};
+}
+
 /**
  * Validate the producer-readiness hyperedge before an edge consumer deploys.
  * A valid empty materialization is supported by Convex, but production release
@@ -116,7 +162,12 @@ function configuredMaxAgeMs(value) {
  */
 export function validatePublicDiscoveryReadiness(
 	{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
-	{ requireContent = true, maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS, now = Date.now() } = {}
+	{
+		requireContent = true,
+		contractOnly = false,
+		maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS,
+		now = Date.now()
+	} = {}
 ) {
 	if (!Number.isFinite(maxAgeMs) || maxAgeMs <= 0) {
 		throw new Error('maxAgeMs must be a positive finite number');
@@ -150,6 +201,7 @@ export function validatePublicDiscoveryReadiness(
 	];
 	for (const [name, updatedAt] of manifestTimestamps) {
 		if (!currentTimestamp(updatedAt)) continue;
+		if (contractOnly) continue;
 		const ageMs = now - updatedAt;
 		if (ageMs < 0) {
 			errors.push(`${name}.updatedAt is in the future`);
@@ -175,6 +227,9 @@ export function validatePublicDiscoveryReadiness(
 		}
 		if (payload.updatedAt !== listState?.updatedAt) {
 			errors.push(`${name}.updatedAt does not match manifest.list.updatedAt`);
+		}
+		if (payload.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION) {
+			errors.push(`${name}.projectionVersion is not ${PUBLIC_TEMPLATE_PROJECTION_VERSION}`);
 		}
 		if (!Array.isArray(payload.templates)) {
 			errors.push(`${name}.templates is not an array`);
@@ -311,6 +366,7 @@ export async function verifyPublicDiscoveryReadiness(
 	{
 		timeoutMs = DEFAULT_TIMEOUT_MS,
 		requireContent = true,
+		contractOnly = false,
 		maxAgeMs = DEFAULT_MAX_SNAPSHOT_AGE_MS,
 		now = Date.now()
 	} = {}
@@ -367,15 +423,15 @@ export async function verifyPublicDiscoveryReadiness(
 
 	return validatePublicDiscoveryReadiness(
 		{ manifest, allList, excludeCwcList, allRelations, excludeCwcRelations },
-		{ requireContent, maxAgeMs, now }
+		{ requireContent, contractOnly, maxAgeMs, now }
 	);
 }
 
 async function main() {
 	const convexUrl = process.argv[2] || process.env.PUBLIC_CONVEX_URL;
 	try {
-		const maxAgeMs = configuredMaxAgeMs(process.env.PUBLIC_DISCOVERY_MAX_AGE_HOURS);
-		const report = await verifyPublicDiscoveryReadiness(convexUrl, { maxAgeMs });
+		const options = readinessOptionsFromEnv(process.env);
+		const report = await verifyPublicDiscoveryReadiness(convexUrl, options);
 		console.log(`Public discovery producer ready: ${JSON.stringify(report)}`);
 	} catch (error) {
 		console.error(

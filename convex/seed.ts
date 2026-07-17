@@ -2765,7 +2765,8 @@ const SEED_TABLES = [
   // Leaf tables (no dependents)
   // Public-discovery control/read models must be removed before any source
   // corpus table so a partial operator clear can never leave a ready stale page.
-  "publicTemplateSnapshots", "templateRelationSnapshots",
+  "embeddingBackfillLeases", "publicTemplateSnapshots",
+  "templateRelationSnapshots",
   "publicDiscoveryManifest", "relatednessCalibration",
   "delegationReviews", "delegatedActions", "delegationGrants",
   "scorecardSnapshots", "orgDmFollows", "orgBillWatches", "orgBillRelevances",
@@ -2831,6 +2832,7 @@ const PUBLIC_DISCOVERY_SOURCE_TABLES = new Set<string>([
 ]);
 
 const PUBLIC_DISCOVERY_STATE_TABLES = [
+  "embeddingBackfillLeases",
   "publicTemplateSnapshots",
   "templateRelationSnapshots",
   "publicDiscoveryManifest",

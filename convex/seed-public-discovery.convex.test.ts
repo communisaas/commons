@@ -12,6 +12,11 @@ describe('seed maintenance public-discovery safety', () => {
 	it('clearing a source corpus table also removes ready discovery state atomically', async () => {
 		const t = convexTest({ schema, modules });
 		await t.run(async (ctx) => {
+			await ctx.db.insert('embeddingBackfillLeases', {
+				key: 'topic',
+				token: 'stale-seed-backfill-lease',
+				expiresAt: 1_900_000_000_000
+			});
 			await ctx.db.insert('templates', {
 				slug: 'stale-seed-template',
 				title: 'Stale seed template',
@@ -79,6 +84,7 @@ describe('seed maintenance public-discovery safety', () => {
 
 		await t.run(async (ctx) => {
 			expect(await ctx.db.query('templates').collect()).toEqual([]);
+			expect(await ctx.db.query('embeddingBackfillLeases').collect()).toEqual([]);
 			expect(await ctx.db.query('publicTemplateSnapshots').collect()).toEqual([]);
 			expect(await ctx.db.query('templateRelationSnapshots').collect()).toEqual([]);
 			expect(await ctx.db.query('publicDiscoveryManifest').collect()).toEqual([]);
@@ -88,8 +94,8 @@ describe('seed maintenance public-discovery safety', () => {
 
 	it('rejects the generic clear primitive for tables outside the seed allowlist', async () => {
 		const t = convexTest({ schema, modules });
-		await expect(
-			t.mutation(internal.seed.clearTable, { table: 'anchorStatus' })
-		).rejects.toThrow('CLEAR_TABLE_NOT_ALLOWED');
+		await expect(t.mutation(internal.seed.clearTable, { table: 'anchorStatus' })).rejects.toThrow(
+			'CLEAR_TABLE_NOT_ALLOWED'
+		);
 	});
 });

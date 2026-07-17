@@ -27,6 +27,15 @@ function loadEvent(href: string) {
 	} as never;
 }
 
+function publicCard(id: string) {
+	return {
+		id,
+		recipient_config: null,
+		recipientEmails: [],
+		recipient_count: 0
+	};
+}
+
 function readyQueryResult(ref: string) {
 	if (ref === api.templates.publicDiscoveryManifest) {
 		return {
@@ -36,9 +45,10 @@ function readyQueryResult(ref: string) {
 	}
 	if (ref === api.templates.publicDiscoveryList) {
 		return {
+			projectionVersion: 4,
 			revision: 4,
 			updatedAt: 1_800_000_000_000,
-			templates: [{ id: 'template_1' }]
+			templates: [publicCard('template_1')]
 		};
 	}
 	if (ref === api.templates.publicDiscoveryRelations) {
@@ -141,7 +151,7 @@ describe('home page load', () => {
 		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
 
 		expect(result).toEqual({
-			templates: [{ id: 'template_1' }],
+			templates: [publicCard('template_1')],
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
@@ -196,7 +206,12 @@ describe('home page load', () => {
 				};
 			}
 			if (ref === api.templates.publicDiscoveryList) {
-				return { revision: 1, updatedAt, templates: [{ id: templateId }] };
+				return {
+					projectionVersion: 4,
+					revision: 1,
+					updatedAt,
+					templates: [publicCard(templateId)]
+				};
 			}
 			throw new Error(`Unexpected query: ${ref}`);
 		});
@@ -229,9 +244,10 @@ describe('home page load', () => {
 			}
 			if (ref === api.templates.publicDiscoveryList) {
 				return {
+					projectionVersion: 4,
 					revision: 1,
 					updatedAt: snapshotUpdatedAt,
-					templates: [{ id: 'new-epoch' }]
+					templates: [publicCard('new-epoch')]
 				};
 			}
 			throw new Error(`Unexpected query: ${ref}`);

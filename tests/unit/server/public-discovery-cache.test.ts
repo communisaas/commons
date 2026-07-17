@@ -293,6 +293,8 @@ describe('public discovery cache', () => {
 
 		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, loader);
 		expect(kv.put).toHaveBeenCalledTimes(1);
+		expect(kv.put.mock.calls[0][0]).toContain('public-discovery:v4:');
+		expect(kv.put.mock.calls[0][0]).not.toContain('public-discovery:v3:');
 
 		clearPublicDiscoveryCache();
 		installEdgeCache();
@@ -307,6 +309,54 @@ describe('public discovery cache', () => {
 		expect(kv.get).toHaveBeenCalledTimes(2);
 		expect(kv.list).not.toHaveBeenCalled();
 		expect(loader).toHaveBeenCalledTimes(1);
+	});
+
+	it('never serves a pre-v4 recipient-bearing envelope or pointer during origin failure', async () => {
+		const edge = installEdgeCache();
+		const kv = installKv();
+		const platform = platformWithKv(kv);
+		const legacyPayload = {
+			recipient_config: { recipients: [{ email: 'legacy-private@example.test' }] },
+			recipientEmails: ['legacy-private@example.test']
+		};
+
+		await getCachedPublicData(
+			'templates',
+			{ url: TEST_URL, platform, revision: 7 },
+			async () => legacyPayload
+		);
+
+		for (const [url, response] of [...edge.entries]) {
+			edge.entries.delete(url);
+			edge.entries.set(url.replace('/v4/', '/v3/'), response);
+		}
+		for (const [key, value] of [...kv.entries]) {
+			kv.entries.delete(key);
+			kv.entries.set(key.replace(':v4:', ':v3:'), value);
+		}
+		expect([...edge.entries.keys()].some((url) => url.includes('/v3/') && url.endsWith('/lkg-pointer'))).toBe(true);
+		expect([...kv.entries.keys()].some((key) => key.includes('public-discovery:v3:'))).toBe(true);
+
+		clearPublicDiscoveryCache();
+		await expect(
+			getCachedPublicDataLastKnownGood<typeof legacyPayload>('templates', {
+				url: TEST_URL,
+				platform
+			})
+		).resolves.toBeUndefined();
+
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 8 }, () =>
+				Promise.reject(new Error('origin unavailable'))
+			)
+		).rejects.toThrow('origin unavailable');
+		expect(warn).toHaveBeenCalledWith(
+			'[public-discovery-cache] revision refresh failed:',
+			'origin unavailable'
+		);
+		expect(edge.match.mock.calls.every(([request]) => request.url.includes('/v4/'))).toBe(true);
+		expect(kv.get.mock.calls.every(([key]) => String(key).includes(':v4:'))).toBe(true);
 	});
 
 	it('does not list older generations during a healthy cross-isolate revision transition', async () => {
