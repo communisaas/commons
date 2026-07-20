@@ -1,0 +1,3 @@
+# Trusted launch-review operator public keys are enrolled here by a separate,
+# explicit bootstrap change. Never add a private key and never copy an existing
+# personal SSH identity into this trust domain.
