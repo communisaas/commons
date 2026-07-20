@@ -13,7 +13,20 @@ import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import {
+	PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS,
+	PUBLIC_DISCOVERY_LIST_FRESHNESS_MAX_DELAY_MS,
+	PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_RETRY_MAX_SECONDS,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_BODY,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_HEADER,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_PROTOCOL,
+	PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
 	PUBLIC_DISCOVERY_SOURCE_FAMILIES,
+	publicDiscoveryManifestControlAttemptCoordinates,
+	publicDiscoveryManifestControlRetryDelayMs,
+	publicDiscoveryManifestControlRetryDisposition,
 	type PublicDiscoverySourceTable
 } from '../../../convex/lib/publicDiscovery';
 
@@ -41,6 +54,8 @@ const SOURCE_FIELDS: Record<SourceTable, ReadonlySet<string>> = {
 		'dailyArrivals',
 		'dailyArrivalsLastDay',
 		'districtCounts',
+		'districtCountsSuppressedDistricts',
+		'districtCountsSuppressedCount',
 		'tierCounts',
 		'deliveryConfig',
 		'cwcConfig',
@@ -69,7 +84,23 @@ const SOURCE_TABLES = new Set<SourceTable>(
 	Object.keys(PUBLIC_DISCOVERY_SOURCE_FAMILIES) as SourceTable[]
 );
 const DIRTY_HELPER_RE =
-	/markPublicDiscovery(?:ListDirty|RelationsDirty|ListAndRelationsDirty)\s*\(/;
+	/(?:markPublicDiscovery(?:ListDirty|RelationsDirty|ListAndRelationsDirty)|invalidatePublicDiscoveryAfterDestructiveSourceChange)\s*\(/;
+const AGGREGATE_LIST_DIRTY_RE =
+	/markPublicDiscoveryListDirty\s*\(\s*ctx,\s*['"]aggregate['"]/;
+const AUTHORED_LIST_DIRTY_RE =
+	/markPublicDiscoveryList(?:AndRelations)?Dirty\s*\(\s*ctx,\s*['"]authored['"]/;
+const VISIBILITY_LIST_DIRTY_RE =
+	/markPublicDiscoveryListDirty\s*\(\s*ctx,\s*['"]visibility['"]/;
+const DISCRETE_STATUS_LIST_DIRTY_RE =
+	/markPublicDiscoveryListDirty\s*\(\s*ctx,\s*['"]discreteStatus['"]/;
+const AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE =
+	/markPublicDiscoveryListAndRelationsDirty\s*\(\s*ctx,\s*['"]aggregate['"]/;
+const AGGREGATE_DEBATE_SYNC_RE =
+	/syncDebateReadModel\s*\([\s\S]*['"]aggregate['"]\s*\)/;
+const VISIBILITY_DEBATE_SYNC_RE =
+	/syncDebateReadModel\s*\([\s\S]*['"]visibility['"]\s*\)/;
+const DISCRETE_STATUS_DEBATE_SYNC_RE =
+	/syncDebateReadModel\s*\([\s\S]*['"]discreteStatus['"]\s*\)/;
 
 type Boundary = { file: string; name: string; body: string };
 type Detection = { key: string; table: SourceTable | 'dynamic'; operation: string };
@@ -476,12 +507,20 @@ function analyzeBoundary(boundary: Boundary): Detection[] {
 			if (ts.isForOfStatement(node) && ts.isVariableDeclarationList(node.initializer)) {
 				const declaration = node.initializer.declarations[0];
 				if (declaration && ts.isIdentifier(declaration.name)) {
+					const iterable = unwrap(node.expression);
+					const pagedContainerTables =
+						ts.isPropertyAccessExpression(iterable) &&
+						['page', 'items', 'rows'].includes(iterable.name.text) &&
+						ts.isIdentifier(iterable.expression)
+							? tableByVariable.get(iterable.expression.text)
+							: undefined;
 					addCandidates(
 						tableByVariable,
 						declaration.name.text,
 						mergeTableCandidates(
 							literalTableCalls(node.expression, parsed, 'query', dbAliases),
-							inferTables(node.expression)
+							inferTables(node.expression),
+							pagedContainerTables
 						)
 					);
 				}
@@ -664,32 +703,34 @@ function directPropertyReads(boundary: Boundary, receivers: ReadonlySet<string>)
 }
 
 const CONTRACT: Record<string, RegExp> = {
-	'templates.ts:endorse': /markPublicDiscoveryListDirty\s*\(/,
-	'templates.ts:removeEndorsement': /markPublicDiscoveryListDirty\s*\(/,
-	'templates.ts:patchTemplateEmbeddingValues': DIRTY_HELPER_RE,
-	'templates.ts:createTemplate': /markPublicDiscoveryListAndRelationsDirty\s*\(/,
-	'templates.ts:deleteTemplate': /markPublicDiscoveryListAndRelationsDirty\s*\(/,
-	'templates.ts:patchMetadata': /markPublicDiscoveryListAndRelationsDirty\s*\(/,
+	'templates.ts:endorse': /persistEndorsementCount\s*\(/,
+	'templates.ts:removeEndorsement': /persistEndorsementCount\s*\(/,
+	'templates.ts:patchTemplateEmbeddingValues': AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE,
+	'templates.ts:createTemplate': AUTHORED_LIST_DIRTY_RE,
+	'templates.ts:deleteTemplate': /invalidatePublicDiscoveryAfterDestructiveSourceChange\s*\(/,
+	'templates.ts:patchMetadata': AUTHORED_LIST_DIRTY_RE,
 	'templates.ts:patchTagEmbeddings': /markPublicDiscoveryRelationsDirty\s*\(/,
-	'templates.ts:_patchDomainHue': /markPublicDiscoveryListDirty\s*\(/,
-	'submissions.ts:incrementTemplateReach': /markPublicDiscoveryListDirty\s*\(/,
-	'submissions.ts:_backfillOneTemplate': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:createArgument': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:cosign': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:updateStatus': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:insertDebate': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:_spawnDebateIfEligibleForce': /markPublicDiscoveryListDirty\s*\(/,
-	'debates.ts:_spawnDebateIfEligible': /markPublicDiscoveryListDirty\s*\(/,
+	'templates.ts:_patchDomainHue': AGGREGATE_LIST_DIRTY_RE,
+	'templates.ts:persistEndorsementCount': AGGREGATE_LIST_DIRTY_RE,
+	'templates.ts:migrateEndorsementCounts': AGGREGATE_LIST_DIRTY_RE,
+	'submissions.ts:incrementTemplateReach': AGGREGATE_LIST_DIRTY_RE,
+	'submissions.ts:_backfillOneTemplate': AGGREGATE_LIST_DIRTY_RE,
+	'debates.ts:createArgument': AGGREGATE_DEBATE_SYNC_RE,
+	'debates.ts:cosign': AGGREGATE_DEBATE_SYNC_RE,
+	'debates.ts:updateStatus': DISCRETE_STATUS_DEBATE_SYNC_RE,
+	'debates.ts:insertDebate': VISIBILITY_DEBATE_SYNC_RE,
+	'debates.ts:_spawnDebateIfEligibleForce': VISIBILITY_DEBATE_SYNC_RE,
+	'debates.ts:_spawnDebateIfEligible': VISIBILITY_DEBATE_SYNC_RE,
 	// A newly-created organization ID cannot already be referenced by a template;
 	// the later template/endorsement writer owns invalidation when it links one.
 	'organizations.ts:create': /ctx\.db\.insert\(\s*['"]organizations['"]/,
-	'organizations.ts:update': /markPublicDiscoveryListDirty\s*\(/,
-	'seed.ts:zeroTemplateMetrics': /markPublicDiscoveryListDirty\s*\(/,
+	'organizations.ts:update': VISIBILITY_LIST_DIRTY_RE,
+	'seed.ts:zeroTemplateMetrics': AGGREGATE_LIST_DIRTY_RE,
 	'seed.ts:insertOrgs': /ctx\.db\.insert\(\s*['"]organizations['"]/,
-	'seed.ts:insertTemplates': /markPublicDiscoveryListAndRelationsDirty\s*\(/,
-	'seed.ts:insertTemplatesPublic': /markPublicDiscoveryListAndRelationsDirty\s*\(/,
-	'seed.ts:insertDebates': /markPublicDiscoveryListDirty\s*\(/,
-	'seed.ts:backfillScopes': /markPublicDiscoveryListDirty\s*\(/
+	'seed.ts:insertTemplates': AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE,
+	'seed.ts:insertTemplatesPublic': AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE,
+	'seed.ts:insertDebates': AGGREGATE_LIST_DIRTY_RE,
+	'seed.ts:backfillScopes': AGGREGATE_LIST_DIRTY_RE
 };
 
 const DELEGATE_CONTRACT: Record<string, RegExp> = {
@@ -697,27 +738,112 @@ const DELEGATE_CONTRACT: Record<string, RegExp> = {
 	'templates.ts:updateMissingEmbeddingsForBackfill': /patchTemplateEmbeddingValues\s*\(/
 };
 
+const COMPACT_TEMPLATE_SOURCE_CONTRACT: Record<string, RegExp> = {
+	'templates.ts:persistEndorsementCount': /upsertCompactDiscoveryProjection\s*\(/,
+	'templates.ts:migrateEndorsementCounts': /upsertCompactDiscoveryProjection\s*\(/,
+	'templates.ts:patchMetadata': /upsertCompactDiscoveryProjection\s*\(/,
+	'templates.ts:setCwcVerification': /upsertCompactDiscoveryProjection\s*\(/,
+	'templates.ts:_patchDomainHue': /upsertCompactDiscoveryProjection\s*\(/,
+	'templates.ts:migratePublicDiscoverySourcePage': /upsertCompactDiscoverySource\s*\(/,
+	'templates.ts:patchTemplateEmbeddingValues': /upsertCompactDiscoverySource\s*\(/,
+	'templates.ts:createTemplate': /upsertCompactDiscoverySource\s*\(/,
+	'templates.ts:patchTagEmbeddings': /upsertCompactDiscoverySource\s*\(/,
+	'submissions.ts:incrementTemplateReach': /syncCompactPublicDiscoveryProjection\s*\(/,
+	'submissions.ts:_backfillOneTemplate': /syncCompactPublicDiscoveryProjection\s*\(/,
+	'seed.ts:zeroTemplateMetrics': /syncCompactPublicDiscoveryProjection\s*\(/,
+	'seed.ts:insertTemplates': /syncCompactPublicDiscoverySource\s*\(/,
+	'seed.ts:insertTemplatesPublic': /syncCompactPublicDiscoverySource\s*\(/,
+	'seed.ts:backfillScopes': /syncCompactPublicDiscoveryProjection\s*\(/,
+	'seed.ts:clearTable': /deleteCompactPublicDiscoverySource\s*\(/
+};
+
 const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
+	'_rateLimit.ts:cleanupExpired:unresolved-delete-target:row._id':
+		/query\(["']rateLimits["']\)[\s\S]*ctx\.db\.delete\(row\._id\)/,
+	'accountabilityReadModel.ts:activate:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'accountabilityReadModel.ts:migrate:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'accountabilityReadModel.ts:reprojectSupporterIdentityReceipts:unresolved-patch-target:_id':
+		/ctx\.db\.patch\(\s*_id/,
+	'analytics.ts:activateSnapshotPlane:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'analytics.ts:blockSnapshotRun:unresolved-patch-target:run._id':
+		/ctx\.db\.patch\(\s*run\._id/,
+	'analytics.ts:migrateAggregateRowsPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'analytics.ts:migrateBudgetRowsPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'analytics.ts:migrateBudgetRowsPage:unresolved-patch-target:run._id':
+		/ctx\.db\.patch\(\s*run\._id/,
+	'analytics.ts:migrateSnapshotPlane:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'analytics.ts:migrateSnapshotRowsPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
 	'authOps.ts:backfillTokenIdentifier:unresolved-patch-target:user._id':
 		/db\.patch\(user\._id/,
 	'authOps.ts:upsertFromOAuth:unresolved-patch-target:existingAccount.userId':
 		/db\.patch\(existingAccount\.userId/,
 	'backfill.ts:patchRow:unresolved-patch-target:normalizedId':
 		/ALLOWED_BACKFILL_TABLES\.includes/,
+	'donations.ts:activateDonationConfirmationSummaries:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
 	'donations.ts:updateStatus:unresolved-patch-target:donation.campaignId':
 		/ctx\.db\.patch\(donation\.campaignId/,
 	'email.ts:queueExactServerDispatch:unresolved-patch-target:args.blastId':
 		/ctx\.db\.patch\(args\.blastId/,
+	'email.ts:suppressReportedBounce:unresolved-patch-target:fanout.jobId':
+		/ctx\.db\.patch\(\s*fanout\.jobId/,
 	'ground.ts:persistGroundBundle:unresolved-patch-target:vault._id':
 		/ctx\.db\.patch\(vault\._id/,
+	'legislation.ts:backfillVoteReceiptResponses:unresolved-patch-target:receipt._id':
+		/ctx\.db\.patch\(\s*receipt\._id/,
 	'legislation.ts:importRepresentatives:unresolved-patch-target:dm._id':
 		/ctx\.db\.patch\(dm\._id/,
-	'legislation.ts:pruneBillsBatch:unresolved-delete-target:bill._id':
-		/ctx\.db\.delete\(bill\._id/,
 	'legislation.ts:pruneDependentTableBatch:unresolved-delete-target:row._id':
 		/PRUNE_ALL_DEPENDENT_TABLES\.includes/,
 	'legislation.ts:pruneDependentTableBatch:unresolved-patch-target:row._id':
 		/PRUNE_ALL_DEPENDENT_TABLES\.includes/,
+	'lib/accountabilityReadModelDb.ts:writeUserProjectionForIdentity:unresolved-delete-target:existing._id':
+		/ctx\.db\.delete\(\s*existing\._id/,
+	'lib/accountabilityReadModelDb.ts:writeUserProjectionForIdentity:unresolved-patch-target:existing._id':
+		/ctx\.db\.patch\(\s*existing\._id/,
+	'lib/campaignReadModelDb.ts:applyCampaignActionReadModel:unresolved-patch-target:model._id':
+		/ctx\.db\.patch\(\s*model\._id/,
+	'lib/campaignReadModelDb.ts:applyCampaignDeliveryTransitionReadModel:unresolved-patch-target:baseline.model._id':
+		/ctx\.db\.patch\(\s*baseline\.model\._id/,
+	'lib/campaignReadModelDb.ts:applyCampaignVerifyClickReadModel:unresolved-patch-target:baseline.model._id':
+		/ctx\.db\.patch\(\s*baseline\.model\._id/,
+	'lib/campaignReadModelDb.ts:baselineDelivery:unresolved-patch-target:model._id':
+		/ctx\.db\.patch\(\s*model\._id/,
+	'lib/coalitionMetrics.ts:applyCoalitionActionTransition:unresolved-patch-target:after._id':
+		/ctx\.db\.patch\(\s*after\._id/,
+	'lib/coalitionMetrics.ts:applyCoalitionReceiptProjection:unresolved-patch-target:receipt._id':
+		/ctx\.db\.patch\(\s*receipt\._id/,
+	'lib/coalitionMetrics.ts:applyCoalitionSupporterTransition:unresolved-patch-target:mergedAfter._id':
+		/ctx\.db\.patch\(\s*mergedAfter\._id/,
+	'lib/coalitionMetrics.ts:applyCoalitionSupporterTransitionsBatch:unresolved-patch-target:mergedAfter._id':
+		/ctx\.db\.patch\(\s*mergedAfter\._id/,
+	'lib/coalitionMetrics.ts:applyOrgMetricDelta:unresolved-patch-target:current._id':
+		/ctx\.db\.patch\(\s*current\._id/,
+	'lib/contactAuthority.ts:writeContactAuthority:unresolved-patch-target:existing._id':
+		/ctx\.db\.patch\(\s*existing\._id/,
+	'lib/debateReadModel.ts:syncDebateReadModel:unresolved-replace-target:existing._id':
+		/ctx\.db\.replace\(\s*existing\._id/,
+	'lib/orgWebhookPolicy.ts:deleteDeliveryPage:unresolved-delete-target:row._id':
+		/ctx\.db\.delete\(\s*row\._id/,
+	'lib/orgWebhookPolicy.ts:deleteOwnedOrgWebhook:unresolved-delete-target:webhook._id':
+		/ctx\.db\.delete\(\s*webhook\._id/,
+	'lib/orgWebhookPolicy.ts:rotateOwnedOrgWebhookSecret:unresolved-patch-target:webhook._id':
+		/ctx\.db\.patch\(\s*webhook\._id/,
+	'lib/orgWebhookPolicy.ts:updateOwnedOrgWebhook:unresolved-patch-target:webhook._id':
+		/ctx\.db\.patch\(\s*webhook\._id/,
+	'lib/planUsageReservations.ts:reconcileEmailReservation:unresolved-patch-target:reservation._id':
+		/ctx\.db\.patch\(\s*reservation\._id/,
+	'lib/publicDiscovery.ts:activatePublicDiscoveryManifestAuthority:unresolved-replace-target:authority._id':
+		/toPublicDiscoveryManifestAuthorityProjection\(manifest\)[\s\S]*ctx\.db\.replace\(authority\._id/,
+	'lib/publicDiscovery.ts:assertPublicDiscoveryCoordinatedRebuildAuthorized:unresolved-patch-target:manifest._id':
+		/getPublicDiscoveryManifestRow\(ctx\)[\s\S]*ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:commitPublicDiscoveryListPublication:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:commitPublicDiscoveryRelationsPublication:unresolved-patch-target:manifest._id':
@@ -734,21 +860,122 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(manifest\._id/,
 	'lib/publicDiscovery.ts:reschedulePublicDiscoveryRelationsRefresh:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:schedulePublicDiscoveryManifestControlPush:unresolved-patch-target:manifest._id':
+		/manifestControlPushToken[\s\S]*ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:supervisePublicDiscoveryCoordinatedRebuildLeaseRow:unresolved-patch-target:manifest._id':
+		/coordinatedRebuildFailureAt[\s\S]*ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:supervisePublicDiscoveryCoordinatedRebuildWatchdog:unresolved-patch-target:manifest._id':
+		/getPublicDiscoveryManifestRow\(ctx\)[\s\S]*coordinatedRebuildWatchdogScheduledAt[\s\S]*ctx\.db\.patch\(manifest\._id/,
+	'lib/publicDiscovery.ts:syncPublicDiscoveryManifestAuthorityIfActive:unresolved-replace-target:authority._id':
+		/toPublicDiscoveryManifestAuthorityProjection\(manifest\)[\s\S]*ctx\.db\.replace\(authority\._id/,
+	'templates.ts:claimPublicDiscoveryManifestControlPush:unresolved-patch-target:manifest._id':
+		/manifestControlPushToken[\s\S]*ctx\.db\.patch\(manifest\._id/,
+	'templates.ts:requeuePublicDiscoveryManifestControlPush:unresolved-patch-target:manifest._id':
+		/manifestControlPushToken[\s\S]*ctx\.db\.patch\(manifest\._id/,
+	'lib/publicOrganizationDirectory.ts:syncPublicOrganizationDirectory:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'lib/publicTemplateDiscoverySource.ts:deleteCompactPublicDiscoverySource:unresolved-delete-target:source._id':
+		/query\(["']publicTemplateDiscoverySources["']\)[\s\S]*ctx\.db\.delete\(source\._id/,
+	'lib/publicTemplateDiscoverySource.ts:deleteCompactPublicDiscoverySource:unresolved-delete-target:topic._id':
+		/query\(["']publicTemplateTopicVectors["']\)[\s\S]*ctx\.db\.delete\(topic\._id/,
+	'lib/publicTemplateDiscoverySource.ts:deleteCompactPublicDiscoverySource:unresolved-delete-target:detail._id':
+		/query\(["']publicTemplateDetailProjections["']\)[\s\S]*ctx\.db\.delete\(detail\._id/,
+	'lib/publicTemplateDiscoverySource.ts:deleteCompactPublicDiscoverySource:unresolved-delete-target:pageCoordinate._id':
+		/query\(["']publicTemplatePageArtifactCoordinates["']\)[\s\S]*ctx\.db\.delete\(pageCoordinate\._id/,
+	'lib/publicTemplateDiscoverySource.ts:syncCompactPublicDiscoveryProjectionRow:unresolved-delete-target:existingDetail._id':
+		/query\(["']publicTemplateDetailProjections["']\)[\s\S]*ctx\.db\.delete\(existingDetail\._id/,
+	'lib/publicTemplateDiscoverySource.ts:syncCompactPublicDiscoveryProjectionRow:unresolved-delete-target:existingSource._id':
+		/query\(["']publicTemplateDiscoverySources["']\)[\s\S]*ctx\.db\.delete\(existingSource\._id/,
+	'lib/publicTemplateDiscoverySource.ts:syncCompactPublicDiscoveryProjectionRow:unresolved-patch-target:existingDetail._id':
+		/query\(["']publicTemplateDetailProjections["']\)[\s\S]*ctx\.db\.patch\(existingDetail\._id/,
+	'lib/publicTemplateDiscoverySource.ts:syncCompactPublicDiscoveryProjectionRow:unresolved-patch-target:existingSource._id':
+		/query\(["']publicTemplateDiscoverySources["']\)[\s\S]*ctx\.db\.patch\(existingSource\._id/,
+	'lib/recipientMetrics.ts:persistSummary:unresolved-patch-target:existing._id':
+		/existing: Awaited<ReturnType<typeof metricSummary>>[\s\S]*ctx\.db\.patch\(existing\._id[\s\S]*ctx\.db\.insert\(["']templateRecipientMetrics["']/,
+	'lib/sessionAuthority.ts:syncSessionAuthority:unresolved-delete-target:existing._id':
+		/ctx\.db\.delete\(\s*existing\._id/,
+	'lib/sessionAuthority.ts:syncSessionAuthority:unresolved-patch-target:existing._id':
+		/ctx\.db\.patch\(\s*existing\._id/,
+	'lib/supporterBrowse.ts:attachSupporterTagProjection:unresolved-patch-target:supporter._id':
+		/ctx\.db\.patch\(\s*supporter\._id/,
+	'lib/supporterBrowse.ts:detachAllSupporterTagProjections:unresolved-delete-target:link._id':
+		/ctx\.db\.delete\(\s*link\._id/,
+	'lib/supporterBrowse.ts:detachSupporterTagProjection:unresolved-patch-target:supporter._id':
+		/ctx\.db\.patch\(\s*supporter\._id/,
 	'messageJobs.ts:checkpointPhase:unresolved-patch-target:job._id': /ctx\.db\.patch\(job\._id/,
 	'messageJobs.ts:completeEncrypted:unresolved-patch-target:job._id':
 		/ctx\.db\.patch\(job\._id/,
 	'messageJobs.ts:expireJob:unresolved-patch-target:job._id': /ctx\.db\.patch\(job\._id/,
 	'messageJobs.ts:fail:unresolved-patch-target:job._id': /ctx\.db\.patch\(job\._id/,
 	'messageJobs.ts:markRunning:unresolved-patch-target:job._id': /ctx\.db\.patch\(job\._id/,
+	'networks.ts:continueCoalitionCleanup:unresolved-delete-target:row._id':
+		/ctx\.db\.delete\(\s*row\._id/,
+	'networks.ts:remove:unresolved-patch-target:m._id': /ctx\.db\.patch\(\s*m\._id/,
+	'orgWebhooks.ts:expireOldDeliveryHistory:unresolved-delete-target:row._id':
+		/ctx\.db\.delete\(\s*row\._id/,
+	'orgWebhooks.ts:expireOldEvents:unresolved-delete-target:row._id':
+		/ctx\.db\.delete\(\s*row\._id/,
 	'orgWebhooks.ts:markDeliveryDead:unresolved-patch-target:delivery.webhookId':
 		/ctx\.db\.patch\(delivery\.webhookId/,
 	'orgWebhooks.ts:markDeliverySuccess:unresolved-patch-target:delivery.webhookId':
 		/ctx\.db\.patch\(delivery\.webhookId/,
+	'organizations.ts:activatePublicOrganizationDirectory:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:adoptCampaignDeliveriesPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:adoptWorkflowEmailsPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:applyCarrierEvidenceToSource:unresolved-patch-target:row._id':
+		/ctx\.db\.patch\(\s*row\._id/,
+	'planUsage.ts:auditLegacyEmailBlastsPage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:finalizeRepair:unresolved-patch-target:repair._id':
+		/ctx\.db\.patch\(\s*repair\._id/,
+	'planUsage.ts:restartOrFinalizeOrganization:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:restartRepair:unresolved-patch-target:repair._id':
+		/ctx\.db\.patch\(\s*repair\._id/,
+	'planUsage.ts:scanRepairPage:unresolved-patch-target:repair._id':
+		/ctx\.db\.patch\(\s*repair\._id/,
+	'planUsage.ts:scanSourcePage:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'planUsage.ts:scheduleRepair:unresolved-patch-target:repair._id':
+		/ctx\.db\.patch\(\s*repair\._id/,
+	'planUsage.ts:selectOrganization:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
 	'seed.ts:clearTable:unresolved-delete-target:doc._id':
 		/SEED_TABLES\.includes/,
+	'seed.ts:clearTable:unresolved-patch-target:templateId':
+		/table === ["']templateEndorsements["'][\s\S]*ctx\.db\.patch\(templateId[\s\S]*syncCompactPublicDiscoveryProjection/,
 	'seed.ts:patchSeedRecord:unresolved-patch-target:normalizedId': /ALLOWED_SEED_TABLES\.includes/,
+	'seed.ts:patchSeedRecord:unresolved-patch-target:supporterId':
+		/table === ['"]supporters['"][\s\S]*ctx\.db\.patch\(\s*supporterId/,
+	'sessionAuthority.ts:activateSessionAuthorities:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'sessionAuthority.ts:migrateSessionAuthorities:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'sms.ts:activateSmsReplySummaries:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'subscriptions.ts:updateByStripeId:unresolved-patch-target:sub._id':
+		/ctx\.db\.patch\(\s*sub\._id/,
 	'subscriptions.ts:updateMyStripeCustomerId:unresolved-patch-target:userId':
 		/ctx\.db\.patch\(userId/,
+	'subscriptions.ts:upsertFromStripe:unresolved-patch-target:existing._id':
+		/ctx\.db\.patch\(\s*existing\._id/,
+	'subscriptions.ts:upsertIndividualFromStripe:unresolved-patch-target:existing._id':
+		/ctx\.db\.patch\(\s*existing\._id/,
+	'supporters.ts:migrateSupporterBrowse:unresolved-delete-target:link._id':
+		/ctx\.db\.delete\(\s*link\._id/,
+	'supporters.ts:migrateSupporterBrowse:unresolved-patch-target:link._id':
+		/ctx\.db\.patch\(\s*link\._id/,
+	'supporters.ts:migrateSupporterBrowse:unresolved-patch-target:supporter._id':
+		/ctx\.db\.patch\(\s*supporter\._id/,
+	'supporters.ts:migrateSupporterBrowse:unresolved-patch-target:tag._id':
+		/ctx\.db\.patch\(\s*tag\._id/,
+	'templates.ts:activatePublicDiscoverySourcePlane:unresolved-patch-target:migration._id':
+		/publicDiscoverySourceMigrationRow\(ctx\)[\s\S]*ctx\.db\.patch\(migration\._id/,
+	'templates.ts:activateTemplateListProjection:unresolved-patch-target:migration._id':
+		/getTemplateListProjectionMigration\(ctx\)[\s\S]*ctx\.db\.patch\(migration\._id/,
 	'templates.ts:flushScheduledPublicTemplateRefresh:unresolved-patch-target:manifest._id':
 		/ctx\.db\.patch\(manifest\._id/,
 	'templates.ts:flushScheduledPublicTemplateRefresh:unresolved-patch-target:publishedManifest._id':
@@ -757,28 +984,63 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(manifest\._id/,
 	'templates.ts:flushScheduledPublicTemplateRelationsRefresh:unresolved-patch-target:publishedManifest._id':
 		/ctx\.db\.patch\(publishedManifest\._id/,
+	'templates.ts:migratePublicDiscoverySourcePage:unresolved-patch-target:existing._id':
+		/publicDiscoverySourceMigrationRow\(ctx\)[\s\S]*ctx\.db\.patch\(existing\._id/,
+	'templates.ts:migratePublicDiscoverySourcePage:unresolved-patch-target:migration._id':
+		/publicDiscoverySourceMigrationRow\(ctx\)[\s\S]*ctx\.db\.patch\(migration\._id/,
+	'templates.ts:migrateTemplateListProjection:unresolved-patch-target:migration._id':
+		/getTemplateListProjectionMigration\(ctx\)[\s\S]*ctx\.db\.patch\(migration\._id/,
+	'templates.ts:publishPublicTemplateSnapshotPlan:unresolved-patch-target:committedManifest._id':
+		/getPublicDiscoveryManifestRow\(ctx\)[\s\S]*ctx\.db\.patch\(committedManifest\._id/,
+	'templatePage.ts:migrateRecipientMetrics:unresolved-patch-target:message._id':
+		/query\(["']messages["']\)[\s\S]*ctx\.db\.patch\(message\._id/,
+	'templatePage.ts:migrateRecipientMetrics:unresolved-patch-target:registration._id':
+		/query\(["']positionRegistrations["']\)[\s\S]*ctx\.db\.patch\(registration\._id/,
 	'templates.ts:publishRelationSnapshotRebuild:unresolved-patch-target:existing._id':
 		/ctx\.db\.patch\(existing\._id/,
 	'users.ts:connectWallet:unresolved-patch-target:userId': /ctx\.db\.patch\(userId/,
 	'users.ts:disconnectWallet:unresolved-patch-target:userId': /ctx\.db\.patch\(userId/,
 	'users.ts:updateProfile:unresolved-patch-target:userId': /ctx\.db\.patch\(userId/,
-	'v1api.ts:confirmEmailDelivery:unresolved-patch-target:submission._id':
-		/ctx\.db\.patch\(submission\._id/,
-	'v1api.ts:submitDelegationReview:unresolved-patch-target:review._id':
-		/ctx\.db\.patch\(review\._id/,
-	'v1api.ts:updateDelegationGrant:unresolved-patch-target:grant._id':
-		/ctx\.db\.patch\(grant\._id/,
+	'users.ts:verifyAddress:unresolved-patch-target:cred._id': /ctx\.db\.patch\(\s*cred\._id/,
+	'v1api.ts:authenticateApiKey:unresolved-patch-target:keyBucket._id':
+		/ctx\.db\.patch\(\s*keyBucket\._id/,
 	'webhooks.ts:completeDonation:unresolved-patch-target:campaign._id':
 		/ctx\.db\.patch\(campaign\._id/,
+	'webhooks.ts:handleInboundSms:unresolved-patch-target:result.jobId':
+		/ctx\.db\.patch\(\s*result\.jobId/,
+	'webhooks.ts:recordSoftBounces:unresolved-patch-target:result.jobId':
+		/ctx\.db\.patch\(\s*result\.jobId/,
 	'webhooks.ts:refundDonation:unresolved-patch-target:campaign._id':
 		/ctx\.db\.patch\(campaign\._id/,
+	'webhooks.ts:resetSoftBounce:unresolved-patch-target:result.jobId':
+		/ctx\.db\.patch\(\s*result\.jobId/,
 	'webhooks.ts:updateSmsStatus:unresolved-patch-target:blast._id':
-		/ctx\.db\.patch\(blast\._id/
+		/ctx\.db\.patch\(blast\._id/,
+	'webhooks.ts:updateSupporterEmailStatus:unresolved-patch-target:result.jobId':
+		/ctx\.db\.patch\(\s*result\.jobId/,
+	'workflows.ts:activateWorkflowExecutionCounts:unresolved-patch-target:migration._id':
+		/ctx\.db\.patch\(\s*migration\._id/,
+	'workflows.ts:migrateWorkflowExecutionCounts:unresolved-patch-target:execution._id':
+		/ctx\.db\.patch\(\s*execution\._id/,
+	'workflows.ts:migrateWorkflowExecutionCounts:unresolved-patch-target:workflow._id':
+		/ctx\.db\.patch\(\s*workflow\._id/
 };
 
 describe('public-discovery source writer contract', () => {
 	const allBoundaries = listConvexSources().flatMap(({ file, src }) => boundaries(file, src));
 	const boundaryByKey = new Map(allBoundaries.map((boundary) => [`${boundary.file}:${boundary.name}`, boundary]));
+
+	it('codifies prompt product freshness separately from aggregate cost ceilings', () => {
+		expect(PUBLIC_DISCOVERY_LIST_FRESHNESS_MAX_DELAY_MS).toEqual({
+			authored: PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS,
+			visibility: PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS,
+			discreteStatus: PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS,
+			aggregate: PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS
+		});
+		expect(PUBLIC_DISCOVERY_LIST_DEBOUNCE_MS).toBe(60_000);
+		expect(PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
+		expect(PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS).toBe(6 * 60 * 60 * 1000);
+	});
 
 	it('detects every projection-source writer across Convex and requires an explicit contract', () => {
 		const detections = allBoundaries.flatMap(analyzeBoundary);
@@ -808,6 +1070,81 @@ describe('public-discovery source writer contract', () => {
 			expect(boundary, `${key} is classified but no longer exists`).toBeDefined();
 			expect(boundary!.body).toMatch(required);
 		}
+	});
+
+	it('keeps template-owned compact sources atomic with submission and seed writers', () => {
+		for (const [key, required] of Object.entries(COMPACT_TEMPLATE_SOURCE_CONTRACT)) {
+			const boundary = boundaryByKey.get(key);
+			expect(boundary, `${key} is classified but no longer exists`).toBeDefined();
+			expect(boundary!.body, `${key} no longer maintains its compact source row`).toMatch(
+				required
+			);
+		}
+
+		for (const key of [
+			'templates.ts:persistEndorsementCount',
+			'templates.ts:migrateEndorsementCounts',
+			'templates.ts:patchMetadata',
+			'templates.ts:_patchDomainHue',
+			'submissions.ts:incrementTemplateReach',
+			'submissions.ts:_backfillOneTemplate',
+			'seed.ts:zeroTemplateMetrics',
+			'seed.ts:backfillScopes'
+		]) {
+			const body = boundaryByKey.get(key)!.body;
+			expect(body.indexOf('ctx.db.patch'), `${key} must patch the template first`).toBeLessThan(
+				Math.max(
+					body.indexOf('syncCompactPublicDiscoveryProjection'),
+					body.indexOf('upsertCompactDiscoveryProjection')
+				)
+			);
+			const syncIndex = Math.max(
+				body.indexOf('syncCompactPublicDiscoveryProjection'),
+				body.indexOf('upsertCompactDiscoveryProjection')
+			);
+			expect(
+				syncIndex,
+				`${key} must sync before it dirties the materialized view`
+			).toBeLessThan(body.indexOf('markPublicDiscoveryList'));
+		}
+
+		const cwcVerification = boundaryByKey.get('templates.ts:setCwcVerification')!.body;
+		expect(cwcVerification.indexOf('ctx.db.patch')).toBeLessThan(
+			cwcVerification.indexOf('upsertCompactDiscoveryProjection')
+		);
+
+		const clear = boundaryByKey.get('seed.ts:clearTable')!.body;
+		expect(clear).toMatch(
+			/table === ["']templates["'][\s\S]*deleteCompactPublicDiscoverySource\(ctx, doc\._id/
+		);
+		expect(clear.indexOf('deleteCompactPublicDiscoverySource')).toBeLessThan(
+			clear.indexOf('ctx.db.delete')
+		);
+		expect(clear).toMatch(/catch \(err\)[\s\S]*table === ["']templates["'][\s\S]*throw err/);
+		expect(clear).toMatch(/publicTemplateDiscoverySources/);
+		expect(clear).toMatch(/publicTemplateTopicVectors/);
+		expect(clear).not.toMatch(/publicTagEmbeddingVectors/);
+	});
+
+	it('routes published deletion through immediate fail-closed list and relation invalidation', () => {
+		const deletion = boundaryByKey.get('templates.ts:deleteTemplate')!.body;
+		const sourceDeleteAt = deletion.indexOf('deleteCompactDiscoveryRows');
+		const templateDeleteAt = deletion.indexOf('ctx.db.delete');
+		const invalidateAt = deletion.indexOf('invalidatePublicDiscoveryAfterDestructiveSourceChange');
+		expect(sourceDeleteAt).toBeGreaterThanOrEqual(0);
+		expect(sourceDeleteAt).toBeLessThan(templateDeleteAt);
+		expect(templateDeleteAt).toBeLessThan(invalidateAt);
+		expect(deletion).toMatch(
+			/invalidatePublicDiscoveryAfterDestructiveSourceChange\(ctx,\s*\{\s*list:\s*true,\s*relations:\s*true\s*\}\)/
+		);
+
+		const destructive = boundaryByKey.get(
+			'lib/publicDiscovery.ts:invalidatePublicDiscoveryAfterDestructiveSourceChange'
+		)!.body;
+		expect(destructive).toMatch(/listReady:\s*false/);
+		expect(destructive).toMatch(/relationsReady:\s*false/);
+		expect(destructive).toMatch(/listRefreshUrgency:\s*['"]urgent['"]/);
+		expect(destructive).toMatch(/relationsRefreshUrgency:\s*['"]urgent['"]/);
 	});
 
 	it('requires an exact classification for every unresolved database target', () => {
@@ -852,13 +1189,152 @@ describe('public-discovery source writer contract', () => {
 		);
 		expect(manifestSchema).toMatch(/coordinatedRebuildToken:\s*v\.optional\(v\.string\(\)\)/);
 		expect(manifestSchema).toMatch(/coordinatedRebuildStartedAt:\s*v\.optional\(v\.number\(\)\)/);
+		expect(manifestSchema).toMatch(
+			/coordinatedRebuildWatchdogScheduledAt:\s*v\.optional\(v\.number\(\)\)/
+		);
 
 		const discoverySource = source('lib/publicDiscovery.ts');
 		const publicProjection = discoverySource.slice(
 			discoverySource.indexOf('export function toPublicDiscoveryManifestPayload'),
 			discoverySource.indexOf('export async function getPublicDiscoveryManifestRow')
 		);
-		expect(publicProjection).not.toMatch(/coordinatedRebuildToken|coordinatedRebuildStartedAt/);
+		expect(publicProjection).not.toMatch(
+			/coordinatedRebuildToken|coordinatedRebuildStartedAt|coordinatedRebuildWatchdogScheduledAt/
+		);
+	});
+
+	it('coalesces producer manifest pushes through one durable, token-fenced slot', () => {
+		const schemaSource = source('schema.ts');
+		expect(schemaSource).toMatch(/manifestControlPushToken:\s*v\.optional\(v\.string\(\)\)/);
+		expect(schemaSource).toMatch(
+			/manifestControlPushLastOutcome:\s*v\.optional\([\s\S]*v\.literal\('contained'\)[\s\S]*v\.literal\('attemptsExhausted'\)[\s\S]*v\.literal\('ageExhausted'\)/
+		);
+		for (const coordinate of [
+			'manifestControlPushLastOutcomeAt',
+			'manifestControlPushLastOutcomeAttempt',
+			'manifestControlPushLastOutcomeStartedAt'
+		]) {
+			expect(schemaSource).toMatch(new RegExp(`${coordinate}:\\s*v\\.optional\\(v\\.number\\(\\)\\)`));
+		}
+
+		const scheduler = boundaryByKey.get(
+			'lib/publicDiscovery.ts:schedulePublicDiscoveryManifestControlPush'
+		);
+		expect(scheduler).toBeDefined();
+		expect(scheduler!.body).toMatch(/manifestControlPushToken\s*!==\s*undefined[\s\S]*return/);
+		expect(scheduler!.body).toMatch(/crypto\.randomUUID\(\)/);
+		expect(scheduler!.body).toMatch(
+			/ctx\.db\.patch\(manifest\._id,\s*\{\s*manifestControlPushToken:\s*token\s*\}\)/
+		);
+		expect(scheduler!.body).toMatch(
+			/ctx\.scheduler\.runAfter\(0,\s*pushPublicDiscoveryManifestControlRef,\s*\{[\s\S]*attempt:\s*1[\s\S]*startedAt[\s\S]*token/
+		);
+
+		const claim = boundaryByKey.get('templates.ts:claimPublicDiscoveryManifestControlPush');
+		expect(claim).toBeDefined();
+		expect(claim!.body).toMatch(/manifestControlPushToken\s*!==\s*args\.token[\s\S]*return false/);
+		expect(claim!.body).toMatch(/manifestControlPushToken:\s*undefined/);
+		const requeue = boundaryByKey.get('templates.ts:requeuePublicDiscoveryManifestControlPush');
+		expect(requeue).toBeDefined();
+		expect(requeue!.body).toMatch(
+			/manifestControlPushToken\s*!==\s*undefined[\s\S]*superseded:\s*true/
+		);
+		expect(requeue!.body).toMatch(/manifestControlPushToken:\s*args\.token/);
+		expect(requeue!.body).toMatch(
+			/ctx\.scheduler\.runAfter\(args\.delayMs,\s*pushPublicDiscoveryManifestControlRef/
+		);
+		expect(requeue!.body).toMatch(
+			/args\.outcome\s*!==\s*undefined[\s\S]*manifestControlPushLastOutcome:\s*args\.outcome/
+		);
+		const action = boundaryByKey.get('templates.ts:pushPublicDiscoveryManifestControl');
+		expect(action).toBeDefined();
+		expect(action!.body.indexOf('ctx.runMutation')).toBeLessThan(
+			action!.body.indexOf('process.env.PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL')
+		);
+		expect(action!.body).toMatch(/DISCOVERY_MANIFEST_REFRESH_SECRET/);
+		expect(action!.body).not.toMatch(/DISCOVERY_MANIFEST_REFRESH_SECRET_PREVIOUS/);
+		expect(action!.body).toMatch(/new TextEncoder\(\)\.encode\(secret\)\.byteLength\s*<\s*32/);
+		expect(action!.body).not.toMatch(/process\.env\.INTERNAL_API_SECRET/);
+		expect(action!.body).toMatch(/readBoundedManifestRefreshFailure\(response\)/);
+		expect(action!.body).not.toMatch(/response\.text\(\)/);
+		expect(action!.body).toMatch(
+			/response\.status\s*===\s*202[\s\S]*PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER[\s\S]*publicDiscoveryManifestControlRetryDelayMs[\s\S]*requeuePublicDiscoveryManifestControlPushRef/
+		);
+		expect(action!.body).toMatch(
+			/isExactPublicDiscoveryManifestRefreshContainment\(response\)[\s\S]*settle\('contained'\)[\s\S]*retryScheduled:\s*false/
+		);
+		expect(action!.body).toMatch(
+			/publicDiscoveryManifestControlAttemptCoordinates[\s\S]*publicDiscoveryManifestControlRetryDisposition/
+		);
+		expect(action!.body).toMatch(
+			/PUBLIC_DISCOVERY_MANIFEST_REFRESH_PAGE_CONTINUATION_PURPOSE[\s\S]*PUBLIC_DISCOVERY_PAGE_BACKFILL_CONTINUATION_HEADER[\s\S]*continuation:\s*true/
+		);
+		expect(action!.body).toMatch(
+			/response\.ok[\s\S]*PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER[\s\S]*refreshed:\s*true/
+		);
+		expect(action!.body).toMatch(
+			/catch\s*\(error\)[\s\S]*PUBLIC_DISCOVERY_MANIFEST_CONTROL_RETRY_MAX_SECONDS[\s\S]*requeuePublicDiscoveryManifestControlPushRef[\s\S]*throw error/
+		);
+	});
+
+	it('bounds a cadence-coalesced producer retry to the gate contract', () => {
+		expect(publicDiscoveryManifestControlRetryDelayMs(null)).toBeNull();
+		expect(publicDiscoveryManifestControlRetryDelayMs('0')).toBeNull();
+		expect(publicDiscoveryManifestControlRetryDelayMs('001')).toBeNull();
+		expect(publicDiscoveryManifestControlRetryDelayMs('301')).toBeNull();
+		expect(publicDiscoveryManifestControlRetryDelayMs('1.5')).toBeNull();
+		expect(publicDiscoveryManifestControlRetryDelayMs('1')).toBe(2_000);
+		expect(
+			publicDiscoveryManifestControlRetryDelayMs(
+				String(PUBLIC_DISCOVERY_MANIFEST_CONTROL_RETRY_MAX_SECONDS)
+			)
+		).toBe(301_000);
+	});
+
+	it('caps every producer chain and defaults legacy coordinates to one terminal attempt', () => {
+		expect(PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS).toBe(19);
+		expect(PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS).toBe(2 * 60 * 60 * 1_000);
+		expect(publicDiscoveryManifestControlAttemptCoordinates(undefined, undefined, 10_000)).toEqual({
+			attempt: PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS,
+			legacy: true,
+			startedAt: 10_000
+		});
+		expect(publicDiscoveryManifestControlAttemptCoordinates(1, 9_000, 10_000)).toEqual({
+			attempt: 1,
+			legacy: false,
+			startedAt: 9_000
+		});
+		expect(
+			publicDiscoveryManifestControlRetryDisposition({
+				attempt: 1,
+				delayMs: 301_000,
+				now: 10_000,
+				startedAt: 9_000
+			})
+		).toEqual({ retry: true, nextAttempt: 2 });
+		expect(
+			publicDiscoveryManifestControlRetryDisposition({
+				attempt: PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS,
+				delayMs: 1_000,
+				now: 10_000,
+				startedAt: 9_000
+			})
+		).toEqual({ retry: false, outcome: 'attemptsExhausted' });
+		expect(
+			publicDiscoveryManifestControlRetryDisposition({
+				attempt: 1,
+				delayMs: 1_000,
+				now: PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS - 1,
+				startedAt: 0
+			})
+		).toEqual({ retry: false, outcome: 'ageExhausted' });
+		expect(PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_HEADER).toBe(
+			'x-public-discovery-manifest-refresh-contained'
+		);
+		expect(PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_PROTOCOL).toBe('1');
+		expect(PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_BODY).toBe(
+			'{"status":"maintenance","mode":"containment","code":"PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED","retry":false}\n'
+		);
 	});
 
 	it('authorizes both sides of publication and releases only a complete composite', () => {
@@ -888,13 +1364,44 @@ describe('public-discovery source writer contract', () => {
 		);
 	});
 
-	it('pins newest-first source membership required by the no-drop OCC proof', () => {
+	it('pins newest-first compact source membership required by the no-drop OCC proof', () => {
 		const boundary = boundaryByKey.get('templates.ts:preparePublicTemplateSnapshotPlan');
 		expect(boundary).toBeDefined();
 		expect(boundary!.body).toMatch(
-			/query\(['"]templates['"]\)[\s\S]*withIndex\(['"]by_status_isPublic['"][\s\S]*\.order\(['"]desc['"]\)[\s\S]*\.take\(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP\)/
+			/query\(['"]publicTemplateDiscoverySources['"]\)[\s\S]*withIndex\(['"]by_generation_templateCreatedAt_templateId['"][\s\S]*q\.eq\(['"]generation['"],\s*migration\.runToken\)[\s\S]*\.order\(['"]desc['"]\)[\s\S]*\.take\(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP\)/
 		);
 		expect(boundary!.body).not.toMatch(/\bcandidates\s*\.\s*(?:sort|toSorted)\s*\(/);
+	});
+
+	it('reuses the verified source-plane generation without duplicate control-row reads', () => {
+		const ready = boundaryByKey.get('templates.ts:compactDiscoveryPlaneReady');
+		expect(ready).toBeDefined();
+		expect(ready!.body.match(/publicDiscoverySourceMigrationRow\(ctx\)/g)).toHaveLength(1);
+		expect(ready!.body).toMatch(/return migration/);
+
+		for (const key of [
+			'templates.ts:preparePublicTemplateSnapshotPlan',
+			'templates.ts:recomputeRelatednessCalibration',
+			'templates.ts:preparePublishedPublicTemplateRelationSelection',
+			'templates.ts:getByIds',
+			'templates.ts:textSearch',
+			'templates.ts:listMissingTagEmbeddings'
+		]) {
+			const boundary = boundaryByKey.get(key);
+			expect(boundary, `${key} source-plane reader is missing`).toBeDefined();
+			expect(boundary!.body.match(/compactDiscoveryPlaneReady\(ctx\)/g)).toHaveLength(1);
+			expect(boundary!.body).not.toMatch(/publicDiscoverySourceMigrationRow\(ctx\)/);
+		}
+
+		const relationInput = boundaryByKey.get('templates.ts:prepareRelationVariantInput')!;
+		expect(relationInput.body).not.toMatch(
+			/compactDiscoveryPlaneReady|publicDiscoverySourceMigrationRow/
+		);
+		expect(relationInput.body).toMatch(/row\?\.generation === sourceGeneration/);
+
+		const relationRebuild = boundaryByKey.get('templates.ts:prepareRelationSnapshotRebuild')!;
+		expect(relationRebuild.body).not.toMatch(/compactDiscoveryPlaneReady/);
+		expect(relationRebuild.body).toMatch(/resolvedSelection\.sourceGeneration/);
 	});
 
 	it('couples materializer source reads to the field-sensitive writer classifier', () => {
@@ -914,7 +1421,9 @@ describe('public-discovery source writer contract', () => {
 		};
 		// `id` is read only from the already-enriched public payload map; Convex
 		// source documents use `_id`.
-		const systemFields = new Set(['_id', '_creationTime', 'id']);
+		// `recipientCount` is derived once from recipientConfig when the compact
+		// source is synchronized; it is not a writable templates-table field.
+		const systemFields = new Set(['_id', '_creationTime', 'id', 'recipientCount']);
 
 		for (const [table, reads] of Object.entries(projectedReads) as Array<
 			[SourceTable, Array<[string, ReadonlySet<string>]>]
@@ -944,10 +1453,10 @@ describe('public-discovery source writer contract', () => {
 
 	it('keeps generic dynamic patch primitives unable to target discovery sources', () => {
 		expect(source('backfill.ts')).toMatch(
-			/const ALLOWED_BACKFILL_TABLES = \["supporters"\] as const/
+			/const ALLOWED_BACKFILL_TABLES = \[['"]supporters['"]\] as const/
 		);
 		expect(source('seed.ts')).toMatch(
-			/const ALLOWED_SEED_TABLES = \["supporters", "donations", "orgInvites"\] as const/
+			/const ALLOWED_SEED_TABLES = \[['"]supporters['"], ['"]donations['"], ['"]orgInvites['"]\] as const/
 		);
 		const clearTable = boundaryByKey.get('seed.ts:clearTable')!.body;
 		expect(clearTable).toMatch(/PUBLIC_DISCOVERY_SOURCE_FAMILIES/);
@@ -986,16 +1495,22 @@ describe('public-discovery source writer contract', () => {
 
 	it('pins clearSeed to one gated publication around suppressed table clears', () => {
 		const clearSeed = boundaryByKey.get('seed.ts:clearSeed')!.body;
+		const drainSeedTable = boundaryByKey.get('seed.ts:drainSeedTable')!.body;
 		const invalidateAt = clearSeed.indexOf('beginCoordinatedPublicDiscoveryRebuild');
 		const clearLoopAt = clearSeed.indexOf('for (const table of SEED_TABLES)');
 		const publishAt = clearSeed.indexOf('internal.templates.rebuildHomepageSnapshots');
 		expect(invalidateAt).toBeGreaterThanOrEqual(0);
 		expect(invalidateAt).toBeLessThan(clearLoopAt);
 		expect(clearLoopAt).toBeLessThan(publishAt);
-		expect(clearSeed).toMatch(/suppressDiscoveryRefresh:\s*true/);
 		expect(clearSeed).toMatch(/crypto\.randomUUID\(\)/);
-		expect(clearSeed).toMatch(/suppressDiscoveryRefresh:\s*true,\s*coordinatedRebuildToken/);
-		expect(clearSeed.indexOf('if (totalFailed > 0)')).toBeLessThan(publishAt);
+		expect(clearSeed).toMatch(/drainSeedTable\(ctx,\s*table,\s*coordinatedRebuildToken\)/);
+		expect(drainSeedTable).toMatch(
+			/suppressDiscoveryRefresh:\s*true,\s*coordinatedRebuildToken/
+		);
+		expect(drainSeedTable).toMatch(/if \(result\.isDone\)/);
+		const failureGateAt = clearSeed.indexOf('if (totalFailed > 0 || failedTables > 0)');
+		expect(failureGateAt).toBeGreaterThanOrEqual(0);
+		expect(failureGateAt).toBeLessThan(publishAt);
 		expect(clearSeed).toMatch(/CLEAR_SEED_PARTIAL_FAILURE/);
 	});
 
@@ -1011,7 +1526,9 @@ describe('public-discovery source writer contract', () => {
 		expect(suppressions.length).toBeGreaterThan(0);
 		expect(authorizedSuppressions).toHaveLength(suppressions.length);
 		expect(reseed).toMatch(/rebuildHomepageSnapshots[\s\S]*coordinatedRebuildToken/);
-		expect(reseed).toMatch(/if \(result\.failed > 0\)[\s\S]*RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE/);
+		expect(reseed).toMatch(
+			/if \(!result\.isDone \|\| result\.failed > 0\)[\s\S]*RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE/
+		);
 		expect(reseed.indexOf('RESEED_TEMPLATES_CLEAR_PARTIAL_FAILURE')).toBeLessThan(
 			reseed.indexOf('rebuildHomepageSnapshots')
 		);
@@ -1028,11 +1545,58 @@ describe('public-discovery source writer contract', () => {
 		expect(begin).toMatch(/coordinatedRebuildStartedAt/);
 		expect(begin).toMatch(/PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS/);
 		expect(begin).toMatch(/PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED/);
+		expect(begin).toMatch(/coordinatedRebuildWatchdogScheduledAt/);
+		expect(begin).toMatch(
+			/scheduler\.runAt\([\s\S]*superviseCoordinatedPublicDiscoveryRebuildWatchdogRef[\s\S]*coordinatedRebuildToken[\s\S]*coordinatedRebuildAttempt[\s\S]*scheduledAt/
+		);
 		const destructive = boundaryByKey.get(
 			'lib/publicDiscovery.ts:invalidatePublicDiscoveryAfterDestructiveSourceChange'
 		)!.body;
 		expect(destructive).toMatch(/coordinatedRebuildToken[\s\S]*COORDINATED_REBUILD_LOCKED/);
 		expect(destructive).not.toMatch(/LOCK_TTL|coordinatedRebuildStartedAt/);
+	});
+
+	it('fences the zero-idle rebuild watchdog by token, attempt, and durable slot', () => {
+		const discoverySource = source('lib/publicDiscovery.ts');
+		const watchdogStart = discoverySource.indexOf(
+			'export async function supervisePublicDiscoveryCoordinatedRebuildWatchdog'
+		);
+		const watchdog = discoverySource.slice(
+			watchdogStart,
+			discoverySource.indexOf('function manifestInsertBase', watchdogStart)
+		);
+		expect(watchdogStart).toBeGreaterThanOrEqual(0);
+		expect(watchdog.match(/getPublicDiscoveryManifestRow\(ctx\)/g)).toHaveLength(1);
+		for (const coordinate of [
+			'coordinatedRebuildToken',
+			'coordinatedRebuildAttempt',
+			'coordinatedRebuildWatchdogScheduledAt'
+		]) {
+			expect(watchdog).toContain(coordinate);
+		}
+		expect(watchdog).toMatch(/now < coordinates\.scheduledAt[\s\S]*status: 'early'/);
+		expect(watchdog).toMatch(
+			/coordinatedRebuildWatchdogScheduledAt: leaseExpiresAt[\s\S]*scheduler\.runAt\([\s\S]*scheduledAt: leaseExpiresAt/
+		);
+		expect(watchdog).toMatch(
+			/supervisePublicDiscoveryCoordinatedRebuildLeaseRow\([\s\S]*manifest[\s\S]*now[\s\S]*true/
+		);
+		expect(watchdog).not.toMatch(/\b(?:for|while)\s*\(/);
+
+		const observability = source('observability.ts');
+		const endpointStart = observability.indexOf(
+			'export const superviseCoordinatedPublicDiscoveryRebuildWatchdog'
+		);
+		const endpoint = observability.slice(
+			endpointStart,
+			observability.indexOf(
+				'export const reportCoordinatedPublicDiscoveryRebuildLeaseFailure',
+				endpointStart
+			)
+		);
+		expect(endpoint).toMatch(/internalMutation\([\s\S]*supervisePublicDiscoveryCoordinatedRebuildWatchdog/);
+		expect(endpoint).toMatch(/result\.status === 'stale'[\s\S]*result\.shouldAlert/);
+		expect(endpoint).toMatch(/enqueueCoordinatedPublicDiscoveryRebuildLeaseAlert/);
 	});
 
 	it('detects synthetic typed, helper, inserted, replaced, and dynamic unmarked writers', () => {

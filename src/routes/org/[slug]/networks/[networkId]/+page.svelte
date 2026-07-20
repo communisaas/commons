@@ -88,6 +88,10 @@
 		}).format(new Date(iso));
 	}
 
+	function nextMemberPageHref(cursor: string): string {
+		return `?memberCursor=${encodeURIComponent(cursor)}#network-members`;
+	}
+
 	async function inviteOrg() {
 		const trimmed = inviteSlug.trim();
 		if (!trimmed) return;
@@ -248,9 +252,7 @@
 				>
 					<span>
 						<span class="font-mono text-emerald-400 tabular-nums">
-							<Datum
-								value={reportStats.verifiedCampaignActions}
-							/>
+							<Datum value={reportStats.verifiedCampaignActions} />
 						</span> verified actions
 					</span>
 					<span>
@@ -299,10 +301,7 @@
 										<span class="text-text-quaternary block font-mono text-xs">{slug}</span>
 									</td>
 									<td class="text-text-secondary px-4 py-3"
-										><Datum value={dm.orgCount} /> org{dm.orgCount !==
-										1
-											? 's'
-											: ''}</td
+										><Datum value={dm.orgCount} /> org{dm.orgCount !== 1 ? 's' : ''}</td
 									>
 									<td class="min-w-[140px] px-4 py-3">
 										<div class="flex items-center gap-2">
@@ -313,20 +312,17 @@
 												></div>
 											</div>
 											<span class="text-text-secondary font-mono text-xs tabular-nums"
-												><Datum
-													value={Number(dm.combinedProofWeight.toFixed(2))}
-												/></span
+												><Datum value={Number(dm.combinedProofWeight.toFixed(2))} /></span
 											>
 										</div>
 									</td>
 									<td class="text-text-secondary px-4 py-3 font-mono text-xs tabular-nums">
-										<Datum
-											value={dm.verifiedActionEvidence}
-										/>
+										<Datum value={dm.verifiedActionEvidence} />
 										<span class="text-text-quaternary"
-											>across <Datum
-												value={dm.districtSignalCount}
-											/> district signal{dm.districtSignalCount !== 1 ? 's' : ''}</span
+											>across <Datum value={dm.districtSignalCount} /> district signal{dm.districtSignalCount !==
+											1
+												? 's'
+												: ''}</span
 										>
 									</td>
 									<td class="px-4 py-3">
@@ -365,9 +361,7 @@
 					Proof weight sums each active org's strongest receipt for the decision-maker, preventing
 					one org from inflating pressure by splitting deliveries. <Datum
 						value={data.proofPressure.reduce((s, d) => s + d.receiptCount, 0)}
-					/> receipt rows across <Datum
-						value={data.proofPressure.length}
-					/> decision-makers.
+					/> receipt rows across <Datum value={data.proofPressure.length} /> decision-makers.
 				</p>
 			</div>
 		{:else}
@@ -467,6 +461,14 @@
 								</tbody>
 							</table>
 						</div>
+						{#if data.membersHasMore && data.memberNextCursor}
+							<a
+								href={nextMemberPageHref(data.memberNextCursor)}
+								class="text-text-secondary border-surface-border hover:text-text-primary mt-3 inline-flex rounded border px-3 py-1.5 text-xs"
+							>
+								Next member page
+							</a>
+						{/if}
 					{/if}
 				</div>
 

@@ -1,6 +1,6 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { Actions, PageServerLoad } from './$types';

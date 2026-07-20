@@ -1,8 +1,7 @@
 name = "communique-site"
 compatibility_date = "2025-04-01"
-compatibility_flags = ["nodejs_compat", "nodejs_als"]
+compatibility_flags = ["nodejs_compat", "nodejs_als", "global_fetch_strictly_public"]
 pages_build_output_dir = ".svelte-kit/cloudflare"
-
 
 # NOTE (source of truth): because this file carries `pages_build_output_dir`,
 # Cloudflare treats it as the Pages project configuration — every git deploy
@@ -103,14 +102,77 @@ id = "c59a1c7ec019425095b848a054f0b252"
 binding = "REGISTRATION_RETRY_KV"
 id = "90772b3f79d945d5b5f0df3d6d2ca732"
 
-# PUBLIC_DISCOVERY_KV: global source shield + last-known-good store for the
-# anonymous homepage/API snapshot payloads. The per-location Cache API remains
-# the hot layer; this namespace prevents one Convex cold fill per Cloudflare PoP.
-# The gated deploy checks this exact ID and title live in the configured account.
-# Preview and production keys are scoped by request origin and Convex backend,
-# preventing payload/LKG collisions. They still consume one account-wide Workers
-# KV operation and storage allowance; another namespace in this account would
-# improve operational separation, not create an independent Free quota pool.
-[[kv_namespaces]]
-binding = "PUBLIC_DISCOVERY_KV"
-id = "4517015752384e0f8628b85142c69221"
+# PUBLIC_DISCOVERY_R2: strongly consistent manifest authority plus immutable
+# producer-published production snapshots. Anonymous readers are exact-key GET-only;
+# they never claim, list, mutate, clean up, or fall through to Convex. This
+# production-only bucket must be provisioned before deploy; do not reuse shadow-atlas.
+[[r2_buckets]]
+binding = "PUBLIC_DISCOVERY_R2"
+bucket_name = "commons-public-discovery-cache"
+
+[[queues.producers]]
+binding = "PUBLIC_TEMPLATE_OG_QUEUE"
+queue = "commons-public-template-og"
+
+# Pages cannot define Durable Object classes. This external binding targets
+# the separately deployed production SQLite coordination Worker below.
+[[durable_objects.bindings]]
+name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
+class_name = "PublicDiscoveryManifestRefreshGate"
+script_name = "commons-public-discovery-manifest-gate"
+
+# A second external SQLite authority serializes conservative weighted
+# Pages-to-Convex work reservations. It is intentionally isolated from the
+# refresh cadence gate because their state machines and failure domains differ.
+[[durable_objects.bindings]]
+name = "CONVEX_WORK_BUDGET"
+class_name = "ConvexWorkBudget"
+script_name = "commons-convex-work-budget"
+
+# Pages has only production and preview configuration realms. Every branch
+# other than the configured production branch uses this complete preview
+# override. Because bindings and vars are non-inheritable Pages keys, the
+# preview realm repeats every such top-level key and changes only the Convex,
+# R2, and Durable Object authorities. Production and preview therefore never
+# share either writable discovery resource.
+[env.preview.vars]
+PUBLIC_CONVEX_URL = "https://outstanding-firefly-831.convex.cloud"
+PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
+ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
+VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
+EXPECTED_CELL_MAP_ROOT = "0x14a6fc8eb8f8643bf420290e9d65059006b194ee335ab1cc1664838e5bc56cd3"
+EXPECTED_CELL_MAP_DEPTH = "22"
+
+[[env.preview.kv_namespaces]]
+binding = "DC_SESSION_KV"
+id = "93471f3e763c4c4f85404fa288dc56e1"
+
+[[env.preview.kv_namespaces]]
+binding = "REJECTION_MONITOR_KV"
+id = "78f28254453d4ecf87a54796326bef71"
+
+[[env.preview.kv_namespaces]]
+binding = "VICAL_KV"
+id = "cfd3e3ddc4cc405dbdbc5ecfe2721e50"
+
+[[env.preview.kv_namespaces]]
+binding = "REGISTRATION_RETRY_KV"
+id = "741d9c87ce424a33a33c29ddfcfac0ca"
+
+[[env.preview.r2_buckets]]
+binding = "PUBLIC_DISCOVERY_R2"
+bucket_name = "commons-public-discovery-cache-nonprod"
+
+[[env.preview.queues.producers]]
+binding = "PUBLIC_TEMPLATE_OG_QUEUE"
+queue = "commons-public-template-og-nonprod"
+
+[[env.preview.durable_objects.bindings]]
+name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
+class_name = "PublicDiscoveryManifestRefreshGate"
+script_name = "commons-public-discovery-manifest-gate-nonprod"
+
+[[env.preview.durable_objects.bindings]]
+name = "CONVEX_WORK_BUDGET"
+class_name = "ConvexWorkBudget"
+script_name = "commons-convex-work-budget"

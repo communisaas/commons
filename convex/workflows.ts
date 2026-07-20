@@ -8,14 +8,39 @@ import {
 } from './_generated/server';
 import { v } from 'convex/values';
 import { internal } from './_generated/api';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
-import { sendViaSes } from './email';
+import { sendViaSesWithResult } from './email';
+import { attachSupporterTagProjection, detachSupporterTagProjection } from './lib/supporterBrowse';
+import {
+	getWorkflowExecutionCountMigration,
+	incrementWorkflowExecutionCount,
+	WORKFLOW_EXECUTION_COUNT_MIGRATION_KEY,
+	WORKFLOW_EXECUTION_COUNT_VERSION
+} from './lib/workflowExecutionCount';
+import {
+	PLANS,
+	durablePlanUsagePeriodStart,
+	durablyActive,
+	readProjectedPlanUsage,
+	uniqueSubscriptionForOrg
+} from './subscriptions';
+import { enqueuePlanUsageRepair } from './lib/planUsage';
+import {
+	blockEmailReservation,
+	EMAIL_RESERVATION_LEASE_MS,
+	reconcileEmailReservation,
+	reserveEmailUsage
+} from './lib/planUsageReservations';
+import { assertEmailSupporterSendAuthorized } from './lib/contactAuthority';
 
 const MAX_ITERATIONS = 200;
+export const MAX_WORKFLOWS_PER_ORG = 100;
+const WORKFLOW_MIGRATION_PAGE_SIZE = 64;
+const WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE = 100;
 const CONDITION_FIELD_MAX_LENGTH = 128;
 const CONDITION_VALUE_MAX_JSON_LENGTH = 2_000;
 declare const process: { env: Record<string, string | undefined> };
@@ -320,33 +345,183 @@ export const list = query({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'member');
+		const migration = await getWorkflowExecutionCountMigration(ctx);
+		if (migration?.status !== 'ready') {
+			throw new Error('WORKFLOW_EXECUTION_COUNTS_NOT_READY');
+		}
 
 		const workflows = await ctx.db
 			.query('workflows')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+			.order('desc')
+			.take(MAX_WORKFLOWS_PER_ORG + 1);
+		if (workflows.length > MAX_WORKFLOWS_PER_ORG) {
+			throw new Error('WORKFLOW_CARDINALITY_REPAIR_REQUIRED');
+		}
 
-		const rows = [];
-		for (const w of workflows) {
-			const executions = await ctx.db
-				.query('workflowExecutions')
-				.withIndex('by_workflowId', (q) => q.eq('workflowId', w._id))
-				.collect();
-
-			rows.push({
+		return workflows.map((w) => {
+			if (w.executionCountVersion !== WORKFLOW_EXECUTION_COUNT_VERSION) {
+				throw new Error('WORKFLOW_EXECUTION_COUNT_ROW_NOT_READY');
+			}
+			return {
 				_id: w._id,
 				name: w.name,
 				description: w.description ?? null,
 				trigger: w.trigger,
 				steps: w.steps,
 				enabled: w.enabled,
-				executionCount: executions.length,
+				executionCount: w.executionCount ?? 0,
 				updatedAt: w.updatedAt,
 				_creationTime: w._creationTime
+			};
+		});
+	}
+});
+
+export const workflowExecutionCountMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => await getWorkflowExecutionCountMigration(ctx)
+});
+
+/** Two-phase, marker-safe adoption of legacy workflows and executions. */
+export const migrateWorkflowExecutionCounts = internalMutation({
+	args: {
+		cursor: v.optional(v.union(v.string(), v.null())),
+		restart: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const now = Date.now();
+		let migration = await getWorkflowExecutionCountMigration(ctx);
+		if (!migration) {
+			const id = await ctx.db.insert('workflowExecutionCountMigrations', {
+				key: WORKFLOW_EXECUTION_COUNT_MIGRATION_KEY,
+				status: 'running',
+				phase: 'workflows',
+				scanned: 0,
+				projected: 0,
+				startedAt: now,
+				updatedAt: now
 			});
+			migration = await ctx.db.get(id);
+		} else if (migration.status === 'ready') {
+			return migration;
+		} else if (args.restart && (args.cursor ?? null) === null) {
+			await ctx.db.patch(migration._id, {
+				status: 'running',
+				phase: 'workflows',
+				cursor: undefined,
+				scanned: 0,
+				projected: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				completedAt: undefined,
+				startedAt: now,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(migration._id);
+		}
+		if (!migration) throw new Error('WORKFLOW_EXECUTION_COUNT_MIGRATION_STATE_MISSING');
+		if (migration.status === 'migrated') return migration;
+		if (migration.status === 'blocked' && !args.restart) return migration;
+		const expectedCursor = migration.cursor ?? null;
+		if ((args.cursor ?? null) !== expectedCursor) {
+			throw new Error('WORKFLOW_EXECUTION_COUNT_MIGRATION_CURSOR_MISMATCH');
 		}
 
-		return rows;
+		const page =
+			migration.phase === 'workflows'
+				? await ctx.db.query('workflows').paginate({
+						numItems: WORKFLOW_MIGRATION_PAGE_SIZE,
+						cursor: expectedCursor,
+						maximumRowsRead: WORKFLOW_MIGRATION_PAGE_SIZE + 1,
+						maximumBytesRead: 4 * 1024 * 1024
+					})
+				: await ctx.db.query('workflowExecutions').paginate({
+						numItems: WORKFLOW_MIGRATION_PAGE_SIZE,
+						cursor: expectedCursor,
+						maximumRowsRead: WORKFLOW_MIGRATION_PAGE_SIZE + 1,
+						maximumBytesRead: 4 * 1024 * 1024
+					});
+		let projected = 0;
+		let failureSourceId: string | undefined;
+		try {
+			if (migration.phase === 'workflows') {
+				for (const workflow of page.page as Array<Doc<'workflows'>>) {
+					failureSourceId = String(workflow._id);
+					if (workflow.executionCountVersion === WORKFLOW_EXECUTION_COUNT_VERSION) continue;
+					await ctx.db.patch(workflow._id, {
+						executionCount: 0,
+						executionCountVersion: WORKFLOW_EXECUTION_COUNT_VERSION
+					});
+					projected += 1;
+				}
+			} else {
+				for (const execution of page.page as Array<Doc<'workflowExecutions'>>) {
+					failureSourceId = String(execution._id);
+					if (execution.workflowCountVersion === WORKFLOW_EXECUTION_COUNT_VERSION) continue;
+					const counted = await incrementWorkflowExecutionCount(ctx, execution.workflowId);
+					await ctx.db.patch(execution._id, {
+						workflowCountVersion: WORKFLOW_EXECUTION_COUNT_VERSION
+					});
+					if (counted) projected += 1;
+				}
+			}
+		} catch (error) {
+			const failureCode =
+				error instanceof Error ? error.message.slice(0, 200) : 'WORKFLOW_COUNT_PROJECTION_FAILED';
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode,
+				failureSourceId,
+				updatedAt: now
+			});
+			return { ...migration, status: 'blocked' as const, failureCode, failureSourceId };
+		}
+
+		const phaseDone = page.isDone;
+		const nextPhase =
+			migration.phase === 'workflows' && phaseDone
+				? ('executions' as const)
+				: migration.phase === 'executions' && phaseDone
+					? ('complete' as const)
+					: migration.phase;
+		const migrated = nextPhase === 'complete';
+		const patch = {
+			status: migrated ? ('migrated' as const) : ('running' as const),
+			phase: nextPhase,
+			cursor: phaseDone ? undefined : page.continueCursor,
+			scanned: migration.scanned + page.page.length,
+			projected: migration.projected + projected,
+			completedAt: migrated ? now : undefined,
+			updatedAt: now
+		};
+		await ctx.db.patch(migration._id, patch);
+		if (!migrated) {
+			await ctx.scheduler.runAfter(0, internal.workflows.migrateWorkflowExecutionCounts, {
+				cursor: phaseDone ? null : page.continueCursor
+			});
+		}
+		return { ...migration, ...patch };
+	}
+});
+
+export const activateWorkflowExecutionCounts = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await getWorkflowExecutionCountMigration(ctx);
+		if (migration?.status === 'ready') return migration;
+		if (
+			!migration ||
+			migration.status !== 'migrated' ||
+			migration.phase !== 'complete' ||
+			migration.cursor !== undefined ||
+			migration.completedAt === undefined ||
+			migration.failureCode !== undefined
+		) {
+			throw new Error('WORKFLOW_EXECUTION_COUNT_MIGRATION_INCOMPLETE');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { ...migration, status: 'ready' as const };
 	}
 });
 
@@ -400,7 +575,7 @@ export const getExecutions = query({
 			.query('workflowExecutions')
 			.withIndex('by_workflowId', (q) => q.eq('workflowId', args.workflowId))
 			.order('desc')
-			.take(args.limit ?? 50);
+			.take(Math.min(Math.max(Math.floor(args.limit ?? 50), 1), 100));
 
 		return executions.map((e) => ({
 			_id: e._id,
@@ -528,8 +703,18 @@ export const create = mutation({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 
-		if (!args.name.trim()) {
+		if (!args.name.trim() || args.name.length > 200) {
 			throw new Error('Workflow name is required');
+		}
+		if (args.description !== undefined && args.description.length > 2_000) {
+			throw new Error('Workflow description is too large');
+		}
+		const existing = await ctx.db
+			.query('workflows')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_WORKFLOWS_PER_ORG + 1);
+		if (existing.length >= MAX_WORKFLOWS_PER_ORG) {
+			throw new Error(`WORKFLOW_LIMIT_EXCEEDED (max ${MAX_WORKFLOWS_PER_ORG})`);
 		}
 
 		const triggerStr = JSON.stringify(args.trigger);
@@ -550,6 +735,8 @@ export const create = mutation({
 			trigger: args.trigger,
 			steps: args.steps,
 			enabled: false,
+			executionCount: 0,
+			executionCountVersion: WORKFLOW_EXECUTION_COUNT_VERSION,
 			updatedAt: Date.now()
 		});
 	}
@@ -578,6 +765,12 @@ export const update = mutation({
 		if (args.trigger !== undefined) {
 			const triggerStr = JSON.stringify(args.trigger);
 			if (triggerStr.length > 10_000) throw new Error('Trigger definition too large');
+		}
+		if (args.name !== undefined && (!args.name.trim() || args.name.length > 200)) {
+			throw new Error('Workflow name is required');
+		}
+		if (args.description !== undefined && args.description.length > 2_000) {
+			throw new Error('Workflow description is too large');
 		}
 		if (args.steps !== undefined) {
 			const stepsStr = JSON.stringify(args.steps);
@@ -640,16 +833,42 @@ export const remove = mutation({
 			throw new Error('Workflow not found');
 		}
 
-		// Delete executions first (cascade)
+		// Delete one fixed page immediately, then continue orphan cleanup in
+		// self-scheduled bounded transactions after the workflow disappears.
 		const executions = await ctx.db
 			.query('workflowExecutions')
 			.withIndex('by_workflowId', (q) => q.eq('workflowId', args.workflowId))
-			.collect();
+			.take(WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE);
 		for (const exec of executions) {
 			await ctx.db.delete(exec._id);
 		}
 
 		await ctx.db.delete(args.workflowId);
+		if (executions.length === WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE) {
+			await ctx.scheduler.runAfter(0, internal.workflows.cleanupRemovedWorkflowExecutions, {
+				workflowId: args.workflowId
+			});
+		}
+	}
+});
+
+export const cleanupRemovedWorkflowExecutions = internalMutation({
+	args: { workflowId: v.id('workflows') },
+	handler: async (ctx, { workflowId }) => {
+		const executions = await ctx.db
+			.query('workflowExecutions')
+			.withIndex('by_workflowId', (q) => q.eq('workflowId', workflowId))
+			.take(WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE);
+		for (const execution of executions) await ctx.db.delete(execution._id);
+		if (executions.length === WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE) {
+			await ctx.scheduler.runAfter(0, internal.workflows.cleanupRemovedWorkflowExecutions, {
+				workflowId
+			});
+		}
+		return {
+			deleted: executions.length,
+			done: executions.length < WORKFLOW_EXECUTION_CLEANUP_PAGE_SIZE
+		};
 	}
 });
 
@@ -663,12 +882,15 @@ export const createExecution = internalMutation({
 		triggerEvent: v.any()
 	},
 	handler: async (ctx, args) => {
+		const counted = await incrementWorkflowExecutionCount(ctx, args.workflowId);
+		if (!counted) throw new Error('Workflow not found');
 		return await ctx.db.insert('workflowExecutions', {
 			workflowId: args.workflowId,
 			supporterId: args.supporterId,
 			triggerEvent: args.triggerEvent,
 			status: 'pending',
-			currentStep: 0
+			currentStep: 0,
+			workflowCountVersion: WORKFLOW_EXECUTION_COUNT_VERSION
 		});
 	}
 });
@@ -696,7 +918,10 @@ export const dispatchTrigger = internalMutation({
 		const workflows = await ctx.db
 			.query('workflows')
 			.withIndex('by_orgId', (q) => q.eq('orgId', args.orgId))
-			.collect();
+			.take(MAX_WORKFLOWS_PER_ORG + 1);
+		if (workflows.length > MAX_WORKFLOWS_PER_ORG) {
+			throw new Error('WORKFLOW_CARDINALITY_REPAIR_REQUIRED');
+		}
 
 		let matched = 0;
 		const executionIds: Id<'workflowExecutions'>[] = [];
@@ -705,12 +930,14 @@ export const dispatchTrigger = internalMutation({
 			if (!workflowTriggerMatches(workflow.trigger, args.triggerType, args.triggerEvent)) continue;
 
 			matched++;
+			await incrementWorkflowExecutionCount(ctx, workflow._id);
 			const executionId = await ctx.db.insert('workflowExecutions', {
 				workflowId: workflow._id,
 				supporterId: args.supporterId,
 				triggerEvent: args.triggerEvent,
 				status: 'pending',
-				currentStep: 0
+				currentStep: 0,
+				workflowCountVersion: WORKFLOW_EXECUTION_COUNT_VERSION
 			});
 			executionIds.push(executionId);
 			await ctx.scheduler.runAfter(0, internal.workflows.execute, { executionId });
@@ -879,7 +1106,7 @@ export const applySupporterTagStep = internalMutation({
 				};
 			}
 
-			const supporterTagId = await ctx.db.insert('supporterTags', {
+			const { linkId: supporterTagId } = await attachSupporterTagProjection(ctx, {
 				supporterId: execution.supporterId,
 				tagId: args.tagId
 			});
@@ -895,7 +1122,7 @@ export const applySupporterTagStep = internalMutation({
 		}
 
 		if (existing) {
-			await ctx.db.delete(existing._id);
+			await detachSupporterTagProjection(ctx, existing);
 			return {
 				success: true,
 				mode: args.mode,
@@ -974,6 +1201,198 @@ export const getWorkflowEmailContext = internalQuery({
 	}
 });
 
+/**
+ * Last serializable boundary before a workflow email may call SES. The source
+ * row and one-recipient quota hold are created in the same transaction. The
+ * durable (execution, stepIndex) identity makes action retries idempotent.
+ */
+export const claimWorkflowEmailDispatch = internalMutation({
+	args: {
+		executionId: v.id('workflowExecutions'),
+		stepIndex: v.number()
+	},
+	handler: async (ctx, args) => {
+		if (!Number.isSafeInteger(args.stepIndex) || args.stepIndex < 0) {
+			throw new Error('WORKFLOW_EMAIL_STEP_INDEX_INVALID');
+		}
+		const existing = await ctx.db
+			.query('workflowEmailDispatches')
+			.withIndex('by_executionId_stepIndex', (q) =>
+				q.eq('executionId', args.executionId).eq('stepIndex', args.stepIndex)
+			)
+			.take(2);
+		if (existing.length > 1) {
+			throw new Error('WORKFLOW_EMAIL_DISPATCH_CARDINALITY_REPAIR_REQUIRED');
+		}
+		if (existing[0]) {
+			if (existing[0].status === 'sent' && existing[0].sesMessageId) {
+				return {
+					ok: true as const,
+					alreadySent: true,
+					dispatchId: existing[0]._id,
+					reservationId: existing[0].reservationId,
+					messageId: existing[0].sesMessageId
+				};
+			}
+			if (
+				existing[0].status === 'failed' &&
+				existing[0].reservationId === undefined &&
+				existing[0].failureCode?.startsWith('WORKFLOW_EMAIL_RECIPIENT_NOT_AUTHORIZED:')
+			) {
+				return {
+					ok: false as const,
+					skipped: true as const,
+					dispatchId: existing[0]._id,
+					reason: existing[0].failureCode.slice('WORKFLOW_EMAIL_RECIPIENT_NOT_AUTHORIZED:'.length)
+				};
+			}
+			throw new Error(`WORKFLOW_EMAIL_DISPATCH_NOT_RETRYABLE:${existing[0].status}`);
+		}
+
+		const execution = await ctx.db.get(args.executionId);
+		if (!execution) throw new Error('WORKFLOW_EXECUTION_NOT_FOUND');
+		if (execution.status !== 'running' || execution.currentStep !== args.stepIndex) {
+			throw new Error('WORKFLOW_EMAIL_EXECUTION_COORDINATE_CHANGED');
+		}
+		const workflow = await ctx.db.get(execution.workflowId);
+		if (!workflow) throw new Error('WORKFLOW_NOT_FOUND');
+		const step = Array.isArray(workflow.steps) ? workflow.steps[args.stepIndex] : null;
+		if (!step || typeof step !== 'object' || (step as { type?: unknown }).type !== 'send_email') {
+			throw new Error('WORKFLOW_EMAIL_SOURCE_STEP_DIVERGED');
+		}
+		const org = await ctx.db.get(workflow.orgId);
+		if (!org) throw new Error('WORKFLOW_ORGANIZATION_NOT_FOUND');
+		if (!execution.supporterId) throw new Error('WORKFLOW_EMAIL_SUPPORTER_CURSOR_REQUIRED');
+		const supporter = await ctx.db.get(execution.supporterId);
+		if (!supporter || supporter.orgId !== workflow.orgId) {
+			throw new Error('WORKFLOW_EMAIL_SUPPORTER_SCOPE_DIVERGED');
+		}
+		try {
+			// Consent/contact authority is read in the same serializable transaction
+			// that creates the quota hold. A concurrent unsubscribe, complaint, or
+			// suppression therefore conflicts before SES authority can be granted.
+			await assertEmailSupporterSendAuthorized(ctx, supporter);
+		} catch (error) {
+			if (!(error instanceof Error) || !error.message.startsWith('CONTACT_AUTHORITY_')) {
+				throw error;
+			}
+			const authorityCode = error.message.slice(0, 192);
+			const now = Date.now();
+			const failureCode = `WORKFLOW_EMAIL_RECIPIENT_NOT_AUTHORIZED:${authorityCode}`;
+			const dispatchId = await ctx.db.insert('workflowEmailDispatches', {
+				executionId: args.executionId,
+				stepIndex: args.stepIndex,
+				orgId: org._id,
+				status: 'failed',
+				failureCode,
+				createdAt: now,
+				updatedAt: now
+			});
+			return {
+				ok: false as const,
+				skipped: true as const,
+				dispatchId,
+				reason: authorityCode
+			};
+		}
+		const subscription = await uniqueSubscriptionForOrg(ctx, org._id);
+		const paid = durablyActive(subscription);
+		const plan = paid ? (subscription?.plan ?? 'inactive') : 'inactive';
+		const limits = PLANS[plan] ?? PLANS.inactive;
+		const periodStart = durablePlanUsagePeriodStart(org, subscription, paid);
+		const projection = await readProjectedPlanUsage(ctx, org, periodStart, limits);
+		if (!projection.ready) {
+			if (projection.repairRequired) {
+				await enqueuePlanUsageRepair(ctx, org._id);
+			}
+			throw new Error(projection.failureCode ?? 'PLAN_USAGE_NOT_READY');
+		}
+
+		const reservation = await reserveEmailUsage(ctx, {
+			orgId: org._id,
+			sourceType: 'workflowEmail',
+			sourceId: String(args.executionId),
+			sourceStepIndex: args.stepIndex,
+			requestedCount: 1,
+			admission: {
+				periodStart,
+				currentEmailsSent: projection.usage.emailsSent,
+				maxEmails: limits.maxEmails
+			},
+			leaseExpiresAt: Date.now() + EMAIL_RESERVATION_LEASE_MS
+		});
+		const now = Date.now();
+		const dispatchId = await ctx.db.insert('workflowEmailDispatches', {
+			executionId: args.executionId,
+			stepIndex: args.stepIndex,
+			orgId: org._id,
+			reservationId: reservation._id,
+			status: 'sending',
+			createdAt: now,
+			updatedAt: now
+		});
+		return {
+			ok: true as const,
+			alreadySent: false,
+			dispatchId,
+			reservationId: reservation._id,
+			messageId: null
+		};
+	}
+});
+
+export const settleWorkflowEmailDispatch = internalMutation({
+	args: {
+		dispatchId: v.id('workflowEmailDispatches'),
+		messageId: v.string()
+	},
+	handler: async (ctx, args) => {
+		if (args.messageId.length < 1 || args.messageId.length > 256) {
+			throw new Error('WORKFLOW_EMAIL_MESSAGE_ID_INVALID');
+		}
+		const dispatch = await ctx.db.get(args.dispatchId);
+		if (!dispatch) throw new Error('WORKFLOW_EMAIL_DISPATCH_NOT_FOUND');
+		if (dispatch.status === 'sent' && dispatch.sesMessageId === args.messageId) return;
+		if (dispatch.status !== 'sending' || !dispatch.reservationId) {
+			throw new Error(`WORKFLOW_EMAIL_DISPATCH_NOT_SETTLEABLE:${dispatch.status}`);
+		}
+		await reconcileEmailReservation(ctx, {
+			reservationId: dispatch.reservationId,
+			absoluteSentCount: 1,
+			terminal: true,
+			terminalReason: 'WORKFLOW_SES_ACCEPTED'
+		});
+		const now = Date.now();
+		await ctx.db.patch(dispatch._id, {
+			status: 'sent',
+			sesMessageId: args.messageId,
+			sentAt: now,
+			updatedAt: now
+		});
+	}
+});
+
+export const blockWorkflowEmailDispatch = internalMutation({
+	args: {
+		dispatchId: v.id('workflowEmailDispatches'),
+		failureCode: v.string()
+	},
+	handler: async (ctx, args) => {
+		const dispatch = await ctx.db.get(args.dispatchId);
+		if (!dispatch) throw new Error('WORKFLOW_EMAIL_DISPATCH_NOT_FOUND');
+		if (dispatch.status === 'sent' || dispatch.status === 'failed') return;
+		if (!dispatch.reservationId) throw new Error('WORKFLOW_EMAIL_RESERVATION_MISSING');
+		const failureCode = args.failureCode.slice(0, 256);
+		if (!failureCode) throw new Error('WORKFLOW_EMAIL_FAILURE_CODE_INVALID');
+		await blockEmailReservation(ctx, dispatch.reservationId, failureCode);
+		await ctx.db.patch(dispatch._id, {
+			status: 'blocked',
+			failureCode,
+			updatedAt: Date.now()
+		});
+	}
+});
+
 // =============================================================================
 // ACTIONS
 // =============================================================================
@@ -981,6 +1400,7 @@ export const getWorkflowEmailContext = internalQuery({
 async function sendWorkflowEmailStep(
 	ctx: any,
 	executionId: Id<'workflowExecutions'>,
+	stepIndex: number,
 	step: { emailSubject?: string; emailBody?: string }
 ): Promise<Record<string, unknown>> {
 	const context = await ctx.runQuery(internal.workflows.getWorkflowEmailContext, { executionId });
@@ -1065,23 +1485,82 @@ async function sendWorkflowEmailStep(
 		applyWorkflowMergeFields(step.emailBody ?? '', mergeContext)
 	);
 
-	const delivered = await sendViaSes(
-		recipientEmail,
-		fromEmail,
-		context.org.name,
-		subject,
-		htmlBody,
-		awsAccessKeyId,
-		awsSecretAccessKey,
-		awsRegion
-	);
-	if (!delivered) throw new Error('WORKFLOW_EMAIL_SES_FAILED');
+	const claim:
+		| {
+				ok: true;
+				alreadySent: boolean;
+				dispatchId: Id<'workflowEmailDispatches'>;
+				reservationId?: Id<'planUsageReservations'>;
+				messageId: string | null;
+		  }
+		| {
+				ok: false;
+				skipped: true;
+				dispatchId: Id<'workflowEmailDispatches'>;
+				reason: string;
+		  } = await ctx.runMutation(internal.workflows.claimWorkflowEmailDispatch, {
+		executionId,
+		stepIndex
+	});
+	if (!claim.ok) {
+		return {
+			success: true,
+			delivered: false,
+			skipped: true,
+			reason: claim.reason,
+			supporterId: context.supporter._id
+		};
+	}
+	if (claim.alreadySent) {
+		return {
+			success: true,
+			delivered: true,
+			idempotentReplay: true,
+			supporterId: context.supporter._id,
+			provider: 'ses',
+			messageId: claim.messageId
+		};
+	}
+
+	let result: Awaited<ReturnType<typeof sendViaSesWithResult>>;
+	try {
+		result = await sendViaSesWithResult(
+			recipientEmail,
+			fromEmail,
+			context.org.name,
+			subject,
+			htmlBody,
+			awsAccessKeyId,
+			awsSecretAccessKey,
+			awsRegion
+		);
+	} catch {
+		await ctx.runMutation(internal.workflows.blockWorkflowEmailDispatch, {
+			dispatchId: claim.dispatchId,
+			failureCode: 'WORKFLOW_SES_OUTCOME_AMBIGUOUS'
+		});
+		throw new Error('WORKFLOW_EMAIL_SES_OUTCOME_AMBIGUOUS');
+	}
+	if (!result.ok || !result.messageId) {
+		await ctx.runMutation(internal.workflows.blockWorkflowEmailDispatch, {
+			dispatchId: claim.dispatchId,
+			failureCode: result.ambiguous
+				? 'WORKFLOW_SES_OUTCOME_AMBIGUOUS'
+				: 'WORKFLOW_SES_RESULT_INVALID'
+		});
+		throw new Error('WORKFLOW_EMAIL_SES_OUTCOME_AMBIGUOUS');
+	}
+	await ctx.runMutation(internal.workflows.settleWorkflowEmailDispatch, {
+		dispatchId: claim.dispatchId,
+		messageId: result.messageId
+	});
 
 	return {
 		success: true,
 		delivered: true,
 		supporterId: context.supporter._id,
 		provider: 'ses',
+		messageId: result.messageId,
 		fromConfigured: true
 	};
 }
@@ -1245,7 +1724,7 @@ export const execute = internalAction({
 
 					currentStep = nextStep;
 				} else if (step.type === 'send_email') {
-					const result = await sendWorkflowEmailStep(ctx, executionId, step);
+					const result = await sendWorkflowEmailStep(ctx, executionId, currentStep, step);
 
 					await ctx.runMutation(internal.workflows.logAction, {
 						executionId,

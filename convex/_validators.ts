@@ -6,7 +6,7 @@
  * defense at every read site, and a TypeScript interface in the
  * SvelteKit compose route — three places that could drift.
  */
-import { v } from "convex/values";
+import { v } from 'convex/values';
 
 /**
  * Canonical recipient-filter shape for emailBlasts (and any other
@@ -31,11 +31,9 @@ import { v } from "convex/values";
  * added here, NOT bolted on via a separate v.any() field.
  */
 export const recipientFilterValidator = v.object({
-	tagIds: v.optional(v.array(v.id("tags"))),
-	segmentIds: v.optional(v.array(v.id("segments"))),
-	verified: v.optional(
-		v.union(v.literal("any"), v.literal("verified"), v.literal("unverified"))
-	),
+	tagIds: v.optional(v.array(v.id('tags'))),
+	segmentIds: v.optional(v.array(v.id('segments'))),
+	verified: v.optional(v.union(v.literal('any'), v.literal('verified'), v.literal('unverified'))),
 	includeEmailHashes: v.optional(v.array(v.string())),
 	excludeEmailHashes: v.optional(v.array(v.string()))
 });
@@ -55,9 +53,9 @@ export const recipientFilterValidator = v.object({
  * 'SMS recipient filtering TODO'), the typed Ids will pay off.
  */
 export const smsRecipientFilterValidator = v.object({
-	tags: v.optional(v.array(v.id("tags"))),
-	segments: v.optional(v.array(v.id("segments"))),
-	excludeTags: v.optional(v.array(v.id("tags")))
+	tags: v.optional(v.array(v.id('tags'))),
+	segments: v.optional(v.array(v.id('segments'))),
+	excludeTags: v.optional(v.array(v.id('tags')))
 });
 
 /**
@@ -85,11 +83,7 @@ export const campaignStatus = v.union(
 	v.literal('COMPLETE')
 );
 
-export const eventType = v.union(
-	v.literal('IN_PERSON'),
-	v.literal('VIRTUAL'),
-	v.literal('HYBRID')
-);
+export const eventType = v.union(v.literal('IN_PERSON'), v.literal('VIRTUAL'), v.literal('HYBRID'));
 
 export const eventStatus = v.union(
 	v.literal('DRAFT'),
@@ -122,10 +116,7 @@ export const subscriptionStatus = v.union(
 	v.literal('trialing')
 );
 
-export const subscriptionPaymentMethod = v.union(
-	v.literal('stripe'),
-	v.literal('crypto')
-);
+export const subscriptionPaymentMethod = v.union(v.literal('stripe'), v.literal('crypto'));
 
 export const donationStatus = v.union(
 	v.literal('pending'),
@@ -149,7 +140,10 @@ export const emailBlastStatus = v.union(
 	v.literal('scheduled'),
 	v.literal('sending'),
 	v.literal('sent'),
-	v.literal('failed')
+	v.literal('failed'),
+	// Carrier request may have crossed the boundary without an exact receipt.
+	// Capacity remains blocked until audited operator reconciliation.
+	v.literal('outcome_unknown')
 );
 
 export const smsBlastStatus = v.union(

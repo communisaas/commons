@@ -1,4 +1,4 @@
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
@@ -27,12 +27,11 @@ export const load: PageServerLoad = async ({ parent }) => {
 			totalRecipients: asNumber(b.totalRecipients),
 			totalSent: asNumber(b.totalSent),
 			totalBounced: asNumber(b.totalBounced),
-			sentAt: typeof b.sentAt === 'number'
-				? new Date(b.sentAt).toISOString()
-				: null,
-			createdAt: typeof b._creationTime === 'number'
-				? new Date(b._creationTime).toISOString()
-				: new Date().toISOString(),
+			sentAt: typeof b.sentAt === 'number' ? new Date(b.sentAt).toISOString() : null,
+			createdAt:
+				typeof b._creationTime === 'number'
+					? new Date(b._creationTime).toISOString()
+					: new Date().toISOString(),
 			campaignId: typeof b.campaignId === 'string' ? b.campaignId : null,
 			campaignTitle: null,
 			isAbTest: b.isAbTest === true,

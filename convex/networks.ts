@@ -5,13 +5,92 @@
  * Other orgs are invited and can accept/decline.
  */
 
-import { query, mutation } from './_generated/server';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
-import { requireOrgRole, loadOrg, requireAuth } from './_authHelpers';
+import { internalMutation, internalQuery, mutation, query } from './_generated/server';
+import { requireOrgRole, loadOrg } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { effectivePlan, isCoalitionPlan } from './_brandingGate';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import type { MutationCtx, QueryCtx } from './_generated/server';
+import {
+	COALITION_DIMENSION_KINDS,
+	COALITION_MAX_ACTIVE_MEMBERS,
+	COALITION_MAX_ACTIVE_NETWORKS_PER_ORG,
+	COALITION_MAX_PRESSURE_BILLS,
+	COALITION_METRICS_MIGRATION_KEY,
+	COALITION_METRICS_VERSION,
+	applyCoalitionActionTransition,
+	applyCoalitionReceiptProjection,
+	applyCoalitionSupporterTransition,
+	boundedStateDistribution,
+	markCoalitionNetworkDirty,
+	readCoalitionPressure,
+	readCoalitionStats,
+	xLog2X
+} from './lib/coalitionMetrics';
+
+const continueCoalitionNetworkRebuildRef = makeFunctionReference<'mutation'>(
+	'networks:continueCoalitionNetworkRebuild'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ networkId: Id<'orgNetworks'> },
+	unknown
+>;
+
+const migrateCoalitionMetricsRef = makeFunctionReference<'mutation'>(
+	'networks:migrateCoalitionMetrics'
+) as unknown as FunctionReference<'mutation', 'internal', { runToken: string }, unknown>;
+
+const COALITION_REBUILD_PAGE_ROWS = 24;
+const COALITION_REBUILD_PAGE_BYTES = 512 * 1024;
+const COALITION_MIGRATION_SUPPORTER_ROWS = 8;
+const COALITION_MIGRATION_ACTION_ROWS = 24;
+const COALITION_MIGRATION_RECEIPT_ROWS = 8;
+const COALITION_MIGRATION_PAGE_BYTES = 2 * 1024 * 1024;
+const COALITION_MAX_PENDING_NETWORKS_PER_ORG = 8;
+const COALITION_ROSTER_PAGE_DEFAULT = 50;
+const COALITION_ROSTER_PAGE_MAX = 50;
+const COALITION_ROSTER_PAGE_MAX_BYTES = 256 * 1024;
+const COALITION_CURSOR_MAX_BYTES = 2 * 1024;
+
+function normalizeCoalitionRosterPageSize(value: number | undefined): number {
+	const resolved = value ?? COALITION_ROSTER_PAGE_DEFAULT;
+	if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > COALITION_ROSTER_PAGE_MAX) {
+		throw new Error('COALITION_ROSTER_PAGE_SIZE_INVALID');
+	}
+	return resolved;
+}
+
+function normalizeCoalitionCursor(value: string | undefined): string | null {
+	if (!value) return null;
+	if (utf8Bytes(value) > COALITION_CURSOR_MAX_BYTES) {
+		throw new Error('COALITION_ROSTER_CURSOR_INVALID');
+	}
+	return value;
+}
+
+type CoalitionRebuildAccumulator = {
+	totalSupporters: number;
+	verifiedSupporters: number;
+	totalCampaignActions: number;
+	verifiedCampaignActions: number;
+	messageHashedTotal: number;
+	uniqueSupporters: number;
+	uniqueMessages: number;
+	districtCount: number;
+	districtSquareSum: number;
+	hourCountXLogXSum: number;
+	tier1: number;
+	tier3: number;
+	tier4: number;
+	stateCounts: Record<string, number>;
+	previousGeneration?: number;
+	cleanupGeneration?: number;
+	restartAfterCleanup?: boolean;
+};
 
 /**
  * Resolve an org's effective billing plan from its subscription row. Only
@@ -23,10 +102,12 @@ async function resolveOrgPlan(
 	ctx: MutationCtx | QueryCtx,
 	orgId: Id<'organizations'>
 ): Promise<string> {
-	const sub = await ctx.db
+	const rows = await ctx.db
 		.query('subscriptions')
 		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
-		.first();
+		.take(2);
+	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	const sub = rows[0] ?? null;
 	return effectivePlan(sub);
 }
 
@@ -44,29 +125,44 @@ export const list = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-		const memberships = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
-
-		// Filter to active/pending
-		const activeMemberships = memberships.filter(
-			(m) => m.status === 'active' || m.status === 'pending'
-		);
-
+		const [activeMemberships, pendingMemberships] = await Promise.all([
+			ctx.db
+				.query('orgNetworkMembers')
+				.withIndex('by_orgId_status', (idx) => idx.eq('orgId', org._id).eq('status', 'active'))
+				.take(COALITION_MAX_ACTIVE_NETWORKS_PER_ORG + 1),
+			ctx.db
+				.query('orgNetworkMembers')
+				.withIndex('by_orgId_status', (idx) => idx.eq('orgId', org._id).eq('status', 'pending'))
+				.take(COALITION_MAX_PENDING_NETWORKS_PER_ORG + 1)
+		]);
+		if (activeMemberships.length > COALITION_MAX_ACTIVE_NETWORKS_PER_ORG) {
+			throw new Error('COALITION_ORG_ACTIVE_NETWORK_LEGACY_OVERFLOW');
+		}
+		if (pendingMemberships.length > COALITION_MAX_PENDING_NETWORKS_PER_ORG) {
+			throw new Error('COALITION_ORG_PENDING_NETWORK_LEGACY_OVERFLOW');
+		}
+		const memberships = [...activeMemberships, ...pendingMemberships];
 		const results = await Promise.all(
-			activeMemberships.map(async (m) => {
+			memberships.map(async (m) => {
 				const network = await ctx.db.get(m.networkId);
 				if (!network) return null;
 
-				const ownerOrg = await ctx.db.get(network.ownerOrgId);
-
-				// Count active members
-				const allMembers = await ctx.db
-					.query('orgNetworkMembers')
-					.withIndex('by_networkId', (idx) => idx.eq('networkId', network._id))
-					.collect();
-				const activeCount = allMembers.filter((mem) => mem.status === 'active').length;
+				const [ownerOrg, legacyAggregate] = await Promise.all([
+					ctx.db
+						.query('publicOrganizationDirectory')
+						.withIndex('by_orgId', (idx) => idx.eq('orgId', network.ownerOrgId))
+						.unique(),
+					network.activeMemberCount === undefined
+						? ctx.db
+								.query('coalitionNetworkAggregates')
+								.withIndex('by_networkId', (idx) => idx.eq('networkId', network._id))
+								.unique()
+						: Promise.resolve(null)
+				]);
+				const memberCount = network.activeMemberCount ?? legacyAggregate?.memberCount;
+				if (memberCount === undefined) {
+					throw new Error('COALITION_NETWORK_BROWSE_PROJECTION_NOT_READY');
+				}
 
 				return {
 					_id: network._id,
@@ -77,7 +173,7 @@ export const list = query({
 					status: network.status,
 					role: m.role,
 					memberStatus: m.status,
-					memberCount: activeCount,
+					memberCount,
 					ownerOrg: ownerOrg
 						? { _id: ownerOrg._id, name: ownerOrg.name, slug: ownerOrg.slug }
 						: null
@@ -95,10 +191,14 @@ export const list = query({
 export const get = query({
 	args: {
 		orgSlug: v.string(),
-		networkId: v.id('orgNetworks')
+		networkId: v.id('orgNetworks'),
+		memberCursor: v.optional(v.string()),
+		memberLimit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const memberLimit = normalizeCoalitionRosterPageSize(args.memberLimit);
+		const memberCursor = normalizeCoalitionCursor(args.memberCursor);
 
 		// Verify caller org is an active member
 		const callerMembership = await ctx.db
@@ -115,18 +215,33 @@ export const get = query({
 		const network = await ctx.db.get(args.networkId);
 		if (!network) throw new Error('Network not found');
 
-		const ownerOrg = await ctx.db.get(network.ownerOrgId);
+		const ownerOrg = await ctx.db
+			.query('publicOrganizationDirectory')
+			.withIndex('by_orgId', (idx) => idx.eq('orgId', network.ownerOrgId))
+			.unique();
 
-		const allMembers = await ctx.db
+		const activeMembers = await ctx.db
 			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', network._id))
-			.collect();
-
-		const activeMembers = allMembers.filter((m) => m.status === 'active');
+			.withIndex('by_networkId_status_joinedAt', (idx) =>
+				idx.eq('networkId', network._id).eq('status', 'active')
+			)
+			.order('asc')
+			.paginate({
+				cursor: memberCursor,
+				numItems: memberLimit,
+				maximumRowsRead: memberLimit + 1,
+				maximumBytesRead: COALITION_ROSTER_PAGE_MAX_BYTES
+			});
+		if (activeMembers.pageStatus === 'SplitRequired') {
+			throw new Error('COALITION_ROSTER_PAGE_TOO_LARGE');
+		}
 
 		const memberDetails = await Promise.all(
-			activeMembers.map(async (m) => {
-				const memberOrg = await ctx.db.get(m.orgId);
+			activeMembers.page.map(async (m) => {
+				const memberOrg = await ctx.db
+					.query('publicOrganizationDirectory')
+					.withIndex('by_orgId', (idx) => idx.eq('orgId', m.orgId))
+					.unique();
 				return {
 					_id: m._id,
 					orgId: m.orgId,
@@ -137,6 +252,17 @@ export const get = query({
 				};
 			})
 		);
+		const legacyAggregate =
+			network.activeMemberCount === undefined
+				? await ctx.db
+						.query('coalitionNetworkAggregates')
+						.withIndex('by_networkId', (idx) => idx.eq('networkId', network._id))
+						.unique()
+				: null;
+		const memberCount = network.activeMemberCount ?? legacyAggregate?.memberCount;
+		if (memberCount === undefined) {
+			throw new Error('COALITION_NETWORK_BROWSE_PROJECTION_NOT_READY');
+		}
 
 		return {
 			_id: network._id,
@@ -147,160 +273,452 @@ export const get = query({
 			status: network.status,
 			ownerOrg: ownerOrg ? { _id: ownerOrg._id, name: ownerOrg.name, slug: ownerOrg.slug } : null,
 			members: memberDetails,
-			memberCount: activeMembers.length
+			memberCount,
+			callerRole: callerMembership.role,
+			membersHasMore: !activeMembers.isDone,
+			memberNextCursor: activeMembers.isDone ? null : activeMembers.continueCursor
 		};
 	}
 });
 
-/**
- * Public founding-charter view, slug-keyed. Returns identity + the published
- * charter text + the founding cohort (orgs whose membership joinedAt <
- * charterPublishedAt). 404-shaped null when the slug is unknown OR the charter
- * has not been published; the network's existence is not surfaced publicly
- * until the founding charter is on the record.
- *
- * Founding-charter substrate citation `charterHash` is computed here from a
- * versioned canonical preimage covering identity (slug + name), substantive
- * content (mission + principles + charterText), scope (applicableCountries),
- * binding moment (charterPublishedAt), and signatories (orderedfounder slug +
- * joinedAt + role). A reader who recomputes the same preimage with the same
- * canonical sort order arrives at the same hash; a single field change shifts
- * the hash. The current-state `activeMemberCount` is intentionally excluded
- * — the charter is a frozen artifact, current membership belongs on the
- * members-only surface.
- */
-export const getPublicCharter = query({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		if (slug.length === 0 || slug.length > 256) return null;
+const NETWORK_CHARTER_PROJECTION_VERSION = 1;
+const NETWORK_CHARTER_MIGRATION_KEY = 'v1';
+const NETWORK_CHARTER_MAX_BYTES = 64 * 1024;
+const NETWORK_CHARTER_MIGRATION_PAGE_SIZE = 1;
+const NETWORK_CHARTER_MIGRATION_MAX_BYTES = 1024 * 1024;
+const migrateNetworkChartersRef = makeFunctionReference<'mutation'>(
+	'networks:migrateNetworkCharters'
+) as unknown as FunctionReference<'mutation', 'internal', { runToken: string }, unknown>;
 
-		const network = await ctx.db
-			.query('orgNetworks')
-			.withIndex('by_slug', (idx) => idx.eq('slug', slug))
-			.first();
-		if (!network || !network.charterPublishedAt) return null;
+function utf8Bytes(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
 
-		const ownerOrg = await ctx.db.get(network.ownerOrgId);
+function assertBoundedCharterText(value: string | undefined, maximum: number, code: string): void {
+	if (value !== undefined && utf8Bytes(value) > maximum) throw new Error(code);
+}
 
-		const allMembers = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', network._id))
-			.collect();
+async function requirePublicOrganizationDirectoryReady(ctx: MutationCtx): Promise<void> {
+	const migration = await ctx.db
+		.query('publicOrganizationDirectoryMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+	if (migration?.status !== 'ready') throw new Error('PUBLIC_ORG_DIRECTORY_NOT_READY');
+}
 
-		const founders = allMembers.filter(
-			(m) => m.status === 'active' && m.joinedAt < network.charterPublishedAt!
-		);
+async function buildNetworkCharterProjection(ctx: MutationCtx, network: Doc<'orgNetworks'>) {
+	if (!network.charterPublishedAt || !Number.isFinite(network.charterPublishedAt)) {
+		throw new Error('NETWORK_CHARTER_NOT_PUBLISHED');
+	}
+	assertBoundedCharterText(network.name, 256, 'NETWORK_CHARTER_NAME_TOO_LARGE');
+	assertBoundedCharterText(network.slug, 128, 'NETWORK_CHARTER_SLUG_TOO_LARGE');
+	assertBoundedCharterText(network.mission, 500, 'NETWORK_CHARTER_MISSION_TOO_LARGE');
+	assertBoundedCharterText(network.charterText, 10_000, 'NETWORK_CHARTER_TEXT_TOO_LARGE');
+	if ((network.principles?.length ?? 0) > 20) {
+		throw new Error('NETWORK_CHARTER_PRINCIPLES_TOO_MANY');
+	}
+	for (const principle of network.principles ?? []) {
+		assertBoundedCharterText(principle, 200, 'NETWORK_CHARTER_PRINCIPLE_TOO_LARGE');
+	}
+	if (
+		network.applicableCountries.length === 0 ||
+		network.applicableCountries.length > 32 ||
+		network.applicableCountries.some((country) => !/^[A-Z]{2}$/.test(country)) ||
+		new Set(network.applicableCountries).size !== network.applicableCountries.length
+	) {
+		throw new Error('NETWORK_CHARTER_COUNTRIES_INVALID');
+	}
 
-		const founderDetails = (
-			await Promise.all(
-				founders.map(async (m) => {
-					const org = await ctx.db.get(m.orgId);
-					return org
-						? {
-								orgName: org.name,
-								orgSlug: org.slug,
-								role: m.role,
-								joinedAt: m.joinedAt
-							}
-						: null;
-				})
-			)
+	await requirePublicOrganizationDirectoryReady(ctx);
+	const founders = await ctx.db
+		.query('orgNetworkMembers')
+		.withIndex('by_networkId_status_joinedAt', (q) =>
+			q
+				.eq('networkId', network._id)
+				.eq('status', 'active')
+				.lte('joinedAt', network.charterPublishedAt!)
 		)
-			.filter((f): f is NonNullable<typeof f> => f !== null)
-			// Stable order: joinedAt asc, then orgSlug asc as tiebreaker so charters
-			// do not reshuffle their signatory list across renders when two orgs
-			// share a millisecond stamp from a seed/import.
-			.sort((a, b) =>
-				a.joinedAt !== b.joinedAt ? a.joinedAt - b.joinedAt : a.orgSlug.localeCompare(b.orgSlug)
-			);
+		.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+	if (founders.length > COALITION_MAX_ACTIVE_MEMBERS) {
+		throw new Error('NETWORK_CHARTER_FOUNDER_LIMIT_EXCEEDED');
+	}
+	const founderDetails = await Promise.all(
+		founders.map(async (membership) => {
+			const identity = await ctx.db
+				.query('publicOrganizationDirectory')
+				.withIndex('by_orgId', (q) => q.eq('orgId', membership.orgId))
+				.unique();
+			if (!identity) {
+				throw new Error(`NETWORK_CHARTER_FOUNDER_NOT_PUBLIC:${membership.orgId}`);
+			}
+			return {
+				orgName: identity.name,
+				orgSlug: identity.slug,
+				role: membership.role,
+				joinedAt: membership.joinedAt
+			};
+		})
+	);
+	founderDetails.sort((left, right) =>
+		left.joinedAt !== right.joinedAt
+			? left.joinedAt - right.joinedAt
+			: left.orgSlug.localeCompare(right.orgSlug)
+	);
+	const owner = await ctx.db
+		.query('publicOrganizationDirectory')
+		.withIndex('by_orgId', (q) => q.eq('orgId', network.ownerOrgId))
+		.unique();
+	if (!owner) throw new Error('NETWORK_CHARTER_OWNER_NOT_PUBLIC');
 
-		// Versioned canonical preimage. New domain string + version cuts a clean
-		// line if the structure ever changes; readers must recompute under the
-		// same version to verify.
-		const canonical = [
-			'voter-protocol-charter-v1',
-			network.slug,
-			network.name,
-			String(network.charterPublishedAt),
-			network.applicableCountries.slice().sort().join('|'),
-			network.mission ?? '',
-			(network.principles ?? []).join('\n'),
-			network.charterText ?? '',
-			founderDetails.map((f) => `${f.orgSlug}\t${f.joinedAt}\t${f.role}`).join('\n')
-		].join('\n---\n');
-		const canonicalBytes = new TextEncoder().encode(canonical);
-		const digest = await crypto.subtle.digest('SHA-256', canonicalBytes);
-		const charterHash = Array.from(new Uint8Array(digest))
-			.map((b) => b.toString(16).padStart(2, '0'))
-			.join('');
+	const countries = [...network.applicableCountries].sort();
+	const canonical = [
+		'voter-protocol-charter-v1',
+		network.slug,
+		network.name,
+		String(network.charterPublishedAt),
+		countries.join('|'),
+		`${owner.slug}\t${owner.name}`,
+		network.mission ?? '',
+		(network.principles ?? []).join('\n'),
+		network.charterText ?? '',
+		founderDetails
+			.map(
+				(founder) => `${founder.orgSlug}\t${founder.orgName}\t${founder.joinedAt}\t${founder.role}`
+			)
+			.join('\n')
+	].join('\n---\n');
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+	const charterHash = Array.from(new Uint8Array(digest))
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join('');
+	const value = {
+		networkId: network._id,
+		slug: network.slug,
+		name: network.name,
+		applicableCountries: countries,
+		mission: network.mission,
+		principles: network.principles ?? [],
+		charterText: network.charterText,
+		charterPublishedAt: network.charterPublishedAt,
+		charterHash,
+		ownerOrg: { name: owner.name, slug: owner.slug },
+		founders: founderDetails,
+		projectionVersion: NETWORK_CHARTER_PROJECTION_VERSION,
+		payloadBytes: 0,
+		createdAt: Date.now()
+	};
+	value.payloadBytes = utf8Bytes(JSON.stringify(value));
+	if (value.payloadBytes > NETWORK_CHARTER_MAX_BYTES) {
+		throw new Error(`NETWORK_CHARTER_PROJECTION_TOO_LARGE:${value.payloadBytes}`);
+	}
+	return value;
+}
 
+async function writeNetworkCharterProjection(ctx: MutationCtx, network: Doc<'orgNetworks'>) {
+	const value = await buildNetworkCharterProjection(ctx, network);
+	const existing = await ctx.db
+		.query('publicNetworkCharters')
+		.withIndex('by_networkId', (q) => q.eq('networkId', network._id))
+		.unique();
+	if (existing) {
+		if (existing.charterHash !== value.charterHash) {
+			throw new Error('NETWORK_CHARTER_IMMUTABLE_CONFLICT');
+		}
+		return existing;
+	}
+	await ctx.db.insert('publicNetworkCharters', value);
+	return value;
+}
+
+/** Publish charter fields and their immutable compact artifact atomically. */
+export const publishCharter = mutation({
+	args: {
+		orgSlug: v.string(),
+		networkId: v.id('orgNetworks'),
+		mission: v.optional(v.string()),
+		principles: v.array(v.string()),
+		charterText: v.optional(v.string()),
+		applicableCountries: v.array(v.string())
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		const membership = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId_orgId', (q) =>
+				q.eq('networkId', args.networkId).eq('orgId', org._id)
+			)
+			.unique();
+		if (membership?.status !== 'active' || membership.role !== 'admin') {
+			throw new Error('Network admin role required');
+		}
+		const network = await ctx.db.get(args.networkId);
+		if (!network) throw new Error('Network not found');
+		if (network.charterPublishedAt) throw new Error('NETWORK_CHARTER_ALREADY_PUBLISHED');
+		const activeMembers = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId_status', (q) =>
+				q.eq('networkId', args.networkId).eq('status', 'active')
+			)
+			.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+		if (activeMembers.length > COALITION_MAX_ACTIVE_MEMBERS) {
+			throw new Error('NETWORK_CHARTER_FOUNDER_LIMIT_EXCEEDED');
+		}
+		const charterPublishedAt = Math.max(
+			Date.now(),
+			...activeMembers.map((member) => member.joinedAt + 1)
+		);
+		const next = {
+			...network,
+			mission: args.mission,
+			principles: args.principles,
+			charterText: args.charterText,
+			applicableCountries: args.applicableCountries,
+			charterPublishedAt
+		};
+		await writeNetworkCharterProjection(ctx, next);
+		await ctx.db.patch(network._id, {
+			mission: args.mission,
+			principles: args.principles,
+			charterText: args.charterText,
+			applicableCountries: args.applicableCountries,
+			charterPublishedAt,
+			updatedAt: Date.now()
+		});
+		return { charterPublishedAt };
+	}
+});
+
+/** Secret-gated, exact immutable charter lookup. Never joins live members. */
+export const getPublicCharter = query({
+	args: { _secret: v.string(), slug: v.string() },
+	handler: async (ctx, { _secret, slug }) => {
+		requireInternalSecret(_secret);
+		if (slug.length === 0 || utf8Bytes(slug) > 128) return null;
+		const migration = await ctx.db
+			.query('networkCharterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', NETWORK_CHARTER_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready' || migration.scanned !== migration.projected) {
+			throw new Error('NETWORK_CHARTER_PROJECTION_NOT_READY');
+		}
+		const charter = await ctx.db
+			.query('publicNetworkCharters')
+			.withIndex('by_slug', (q) => q.eq('slug', slug))
+			.unique();
+		return charter
+			? {
+					_id: charter.networkId,
+					name: charter.name,
+					slug: charter.slug,
+					applicableCountries: charter.applicableCountries,
+					mission: charter.mission ?? null,
+					principles: charter.principles,
+					charterText: charter.charterText ?? null,
+					charterPublishedAt: charter.charterPublishedAt,
+					charterHash: charter.charterHash,
+					ownerOrg: charter.ownerOrg ?? null,
+					founders: charter.founders
+				}
+			: null;
+	}
+});
+
+/** Durable one-row/one-network legacy charter migration. */
+export const migrateNetworkCharters = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		restart: v.optional(v.boolean()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		if (args.runToken !== undefined && args.restart) {
+			throw new Error('NETWORK_CHARTER_MIGRATION_INVALID_CONTROL');
+		}
+		let migration = await ctx.db
+			.query('networkCharterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', NETWORK_CHARTER_MIGRATION_KEY))
+			.unique();
+		let runToken: string;
+		if (args.runToken !== undefined) {
+			if (!migration || migration.status !== 'running' || migration.runToken !== args.runToken) {
+				return { status: 'superseded' as const, runToken: args.runToken };
+			}
+			runToken = args.runToken;
+		} else if (!args.restart && migration?.status === 'ready') {
+			return { status: 'already-ready' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'migrated') {
+			return { status: 'already-migrated' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'running') {
+			return { status: 'already-running' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'blocked') {
+			return {
+				status: 'blocked' as const,
+				runToken: migration.runToken,
+				failureCode: migration.failureCode ?? null
+			};
+		} else {
+			runToken = crypto.randomUUID();
+			const initial = {
+				key: NETWORK_CHARTER_MIGRATION_KEY,
+				status: 'running',
+				runToken,
+				cursor: undefined,
+				scanned: 0,
+				projected: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				startedAt: Date.now(),
+				completedAt: undefined,
+				updatedAt: Date.now()
+			};
+			if (migration) await ctx.db.patch(migration._id, initial);
+			else await ctx.db.insert('networkCharterMigrations', initial);
+			migration = await ctx.db
+				.query('networkCharterMigrations')
+				.withIndex('by_key', (q) => q.eq('key', NETWORK_CHARTER_MIGRATION_KEY))
+				.unique();
+		}
+		if (!migration || migration.runToken !== runToken || migration.status !== 'running') {
+			throw new Error('NETWORK_CHARTER_MIGRATION_STATE_MISSING');
+		}
+		const page = await ctx.db
+			.query('orgNetworks')
+			.order('asc')
+			.paginate({
+				cursor: migration.cursor ?? null,
+				numItems: NETWORK_CHARTER_MIGRATION_PAGE_SIZE,
+				maximumRowsRead: NETWORK_CHARTER_MIGRATION_PAGE_SIZE + 1,
+				maximumBytesRead: NETWORK_CHARTER_MIGRATION_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode: 'NETWORK_CHARTER_MIGRATION_PAGE_SPLIT_REQUIRED',
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const, runToken };
+		}
+		let projected = migration.projected;
+		for (const network of page.page) {
+			try {
+				if (network.charterPublishedAt) await writeNetworkCharterProjection(ctx, network);
+				projected += 1;
+			} catch (error) {
+				const failureCode = error instanceof Error ? error.message : String(error);
+				await ctx.db.patch(migration._id, {
+					status: 'blocked',
+					failureCode: failureCode.slice(0, 500),
+					failureSourceId: String(network._id),
+					updatedAt: Date.now()
+				});
+				return { status: 'blocked' as const, runToken, failureCode };
+			}
+		}
+		const scanned = migration.scanned + page.page.length;
+		const completedAt = page.isDone ? Date.now() : undefined;
+		await ctx.db.patch(migration._id, {
+			status: page.isDone ? 'migrated' : 'running',
+			cursor: page.isDone ? undefined : page.continueCursor,
+			scanned,
+			projected,
+			completedAt,
+			updatedAt: Date.now()
+		});
+		if (!page.isDone && args.scheduleContinuation !== false) {
+			await ctx.scheduler.runAfter(0, migrateNetworkChartersRef, { runToken });
+		}
 		return {
-			_id: network._id,
-			name: network.name,
-			slug: network.slug,
-			applicableCountries: network.applicableCountries,
-			mission: network.mission ?? null,
-			principles: network.principles ?? [],
-			charterText: network.charterText ?? null,
-			charterPublishedAt: network.charterPublishedAt,
-			charterHash,
-			ownerOrg: ownerOrg ? { name: ownerOrg.name, slug: ownerOrg.slug } : null,
-			founders: founderDetails
+			status: page.isDone ? ('migrated' as const) : ('running' as const),
+			runToken,
+			scanned,
+			projected
 		};
 	}
 });
 
+export const activateNetworkCharters = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('networkCharterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', NETWORK_CHARTER_MIGRATION_KEY))
+			.unique();
+		if (migration?.status === 'ready') return { status: 'ready' as const };
+		if (!migration || migration.status !== 'migrated' || !migration.completedAt) {
+			throw new Error('NETWORK_CHARTER_MIGRATION_INCOMPLETE');
+		}
+		if (migration.scanned !== migration.projected) {
+			throw new Error('NETWORK_CHARTER_MIGRATION_INEXACT');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { status: 'ready' as const, scanned: migration.scanned };
+	}
+});
+
+export const networkCharterMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('networkCharterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', NETWORK_CHARTER_MIGRATION_KEY))
+			.unique();
+		return migration
+			? {
+					status: migration.status,
+					runToken: migration.runToken,
+					scanned: migration.scanned,
+					projected: migration.projected,
+					failureCode: migration.failureCode ?? null,
+					failureSourceId: migration.failureSourceId ?? null,
+					startedAt: migration.startedAt,
+					completedAt: migration.completedAt ?? null
+				}
+			: { status: 'not-started' as const };
+	}
+});
+
 /**
- * Get members of a network (convenience query).
+ * Removed launch surface. `get` is the sole roster browser and carries an
+ * opaque cursor, byte ceiling, exact member count, and active-only index. Keep
+ * this tombstone exported for old clients so they fail before any database
+ * read instead of silently reintroducing a two-status full-roster fan-out.
  */
 export const getMembers = query({
 	args: {
 		orgSlug: v.string(),
 		networkId: v.id('orgNetworks')
 	},
-	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
-
-		// Verify caller is active member
-		const callerMembership = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId_orgId', (idx) =>
-				idx.eq('networkId', args.networkId).eq('orgId', org._id)
-			)
-			.first();
-
-		if (!callerMembership || callerMembership.status !== 'active') {
-			throw new Error('Your organization is not an active member of this network');
-		}
-
-		const allMembers = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', args.networkId))
-			.collect();
-
-		const memberDetails = await Promise.all(
-			allMembers.map(async (m) => {
-				const memberOrg = await ctx.db.get(m.orgId);
-				return {
-					_id: m._id,
-					orgId: m.orgId,
-					orgName: memberOrg?.name ?? 'Unknown',
-					orgSlug: memberOrg?.slug ?? '',
-					role: m.role,
-					status: m.status,
-					joinedAt: m.joinedAt,
-					invitedBy: m.invitedBy ?? null
-				};
-			})
-		);
-
-		return memberDetails;
+	handler: async () => {
+		throw new Error('NETWORK_GET_MEMBERS_REMOVED_USE_PAGINATED_GET');
 	}
 });
 
 // =============================================================================
 // MUTATIONS
 // =============================================================================
+
+async function invalidateCoalitionRoster(
+	ctx: MutationCtx,
+	networkId: Id<'orgNetworks'>
+): Promise<void> {
+	const network = await ctx.db.get(networkId);
+	if (!network) throw new Error('Network not found');
+	const activeMembers = await ctx.db
+		.query('orgNetworkMembers')
+		.withIndex('by_networkId_status', (q) => q.eq('networkId', networkId).eq('status', 'active'))
+		.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+	if (activeMembers.length > COALITION_MAX_ACTIVE_MEMBERS) {
+		throw new Error('COALITION_NETWORK_ACTIVE_MEMBER_LEGACY_OVERFLOW');
+	}
+	await ctx.db.patch(networkId, {
+		coalitionMembershipRevision: (network.coalitionMembershipRevision ?? 0) + 1,
+		activeMemberCount: activeMembers.length,
+		lastPacketHash: undefined,
+		lastPacketComputedAt: undefined,
+		updatedAt: Date.now()
+	});
+	await markCoalitionNetworkDirty(ctx, networkId);
+}
 
 /**
  * Create a new coalition network. The creating org becomes admin.
@@ -342,6 +760,13 @@ export const create = mutation({
 		if (existingSlug) {
 			throw new Error('A network with this slug already exists');
 		}
+		const activeNetworks = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_orgId_status', (q) => q.eq('orgId', org._id).eq('status', 'active'))
+			.take(COALITION_MAX_ACTIVE_NETWORKS_PER_ORG + 1);
+		if (activeNetworks.length >= COALITION_MAX_ACTIVE_NETWORKS_PER_ORG) {
+			throw new Error('COALITION_ORG_ACTIVE_NETWORK_LIMIT_EXCEEDED');
+		}
 
 		const now = Date.now();
 
@@ -352,6 +777,8 @@ export const create = mutation({
 			ownerOrgId: org._id,
 			status: 'active',
 			applicableCountries: [org.countryCode],
+			coalitionMembershipRevision: 1,
+			activeMemberCount: 1,
 			updatedAt: now
 		});
 
@@ -364,6 +791,7 @@ export const create = mutation({
 			joinedAt: now,
 			invitedBy: userId
 		});
+		await markCoalitionNetworkDirty(ctx, networkId);
 
 		return networkId;
 	}
@@ -399,6 +827,28 @@ export const invite = mutation({
 
 		// Find target org
 		const targetOrg = await loadOrg(ctx, args.targetOrgSlug);
+		const targetPendingNetworks = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_orgId_status', (q) => q.eq('orgId', targetOrg._id).eq('status', 'pending'))
+			.take(COALITION_MAX_PENDING_NETWORKS_PER_ORG + 1);
+		if (targetPendingNetworks.length >= COALITION_MAX_PENDING_NETWORKS_PER_ORG) {
+			throw new Error('COALITION_ORG_PENDING_NETWORK_LIMIT_EXCEEDED');
+		}
+		const activeRoster = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId_status', (q) =>
+				q.eq('networkId', args.networkId).eq('status', 'active')
+			)
+			.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+		const pendingRoster = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId_status', (q) =>
+				q.eq('networkId', args.networkId).eq('status', 'pending')
+			)
+			.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+		if (activeRoster.length + pendingRoster.length >= COALITION_MAX_ACTIVE_MEMBERS) {
+			throw new Error('COALITION_NETWORK_MEMBERSHIP_LIMIT_EXCEEDED');
+		}
 
 		// Check not already a member
 		const existing = await ctx.db
@@ -486,6 +936,7 @@ export const updateMemberStatus = mutation({
 		if (!membership) {
 			throw new Error('Membership not found');
 		}
+		if (membership.status === args.status) return { success: true, changed: false };
 
 		if (isSelfAction) {
 			// Self-actions: can only accept (pending→active) or leave (active→removed)
@@ -497,9 +948,67 @@ export const updateMemberStatus = mutation({
 				throw new Error(`Self-action not allowed: ${membership.status} → ${args.status}`);
 			}
 		}
+		if (args.status === 'pending' && membership.status !== 'pending') {
+			const targetPendingNetworks = await ctx.db
+				.query('orgNetworkMembers')
+				.withIndex('by_orgId_status', (q) =>
+					q.eq('orgId', effectiveTargetOrgId).eq('status', 'pending')
+				)
+				.take(COALITION_MAX_PENDING_NETWORKS_PER_ORG + 1);
+			if (targetPendingNetworks.length >= COALITION_MAX_PENDING_NETWORKS_PER_ORG) {
+				throw new Error('COALITION_ORG_PENDING_NETWORK_LIMIT_EXCEEDED');
+			}
+		}
+		if (
+			membership.status === 'removed' &&
+			(args.status === 'active' || args.status === 'pending')
+		) {
+			const [activeRoster, pendingRoster] = await Promise.all([
+				ctx.db
+					.query('orgNetworkMembers')
+					.withIndex('by_networkId_status', (q) =>
+						q.eq('networkId', args.networkId).eq('status', 'active')
+					)
+					.take(COALITION_MAX_ACTIVE_MEMBERS + 1),
+				ctx.db
+					.query('orgNetworkMembers')
+					.withIndex('by_networkId_status', (q) =>
+						q.eq('networkId', args.networkId).eq('status', 'pending')
+					)
+					.take(COALITION_MAX_ACTIVE_MEMBERS + 1)
+			]);
+			if (activeRoster.length + pendingRoster.length >= COALITION_MAX_ACTIVE_MEMBERS) {
+				throw new Error('COALITION_NETWORK_MEMBERSHIP_LIMIT_EXCEEDED');
+			}
+		}
 
-		await ctx.db.patch(membership._id, { status: args.status });
-		return { success: true };
+		const activeRosterChanged = (membership.status === 'active') !== (args.status === 'active');
+		if (args.status === 'active' && membership.status !== 'active') {
+			const activeMembers = await ctx.db
+				.query('orgNetworkMembers')
+				.withIndex('by_networkId_status', (q) =>
+					q.eq('networkId', args.networkId).eq('status', 'active')
+				)
+				.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+			if (activeMembers.length >= COALITION_MAX_ACTIVE_MEMBERS) {
+				throw new Error('COALITION_NETWORK_ACTIVE_MEMBER_LIMIT_EXCEEDED');
+			}
+			const targetNetworks = await ctx.db
+				.query('orgNetworkMembers')
+				.withIndex('by_orgId_status', (q) =>
+					q.eq('orgId', effectiveTargetOrgId).eq('status', 'active')
+				)
+				.take(COALITION_MAX_ACTIVE_NETWORKS_PER_ORG + 1);
+			if (targetNetworks.length >= COALITION_MAX_ACTIVE_NETWORKS_PER_ORG) {
+				throw new Error('COALITION_ORG_ACTIVE_NETWORK_LIMIT_EXCEEDED');
+			}
+		}
+		await ctx.db.patch(membership._id, {
+			status: args.status,
+			joinedAt: args.status === 'active' ? Date.now() : membership.joinedAt
+		});
+		if (activeRosterChanged) await invalidateCoalitionRoster(ctx, args.networkId);
+		return { success: true, changed: true };
 	}
 });
 
@@ -571,6 +1080,11 @@ export const update = mutation({
 		if (args.name === undefined && args.description === undefined) {
 			throw new Error('At least one field (name or description) is required');
 		}
+		const network = await ctx.db.get(args.networkId);
+		if (!network) throw new Error('Network not found');
+		if (args.name !== undefined && network.charterPublishedAt) {
+			throw new Error('NETWORK_CHARTER_IDENTITY_IMMUTABLE');
+		}
 
 		// Verify caller is admin
 		const callerMembership = await ctx.db
@@ -599,11 +1113,11 @@ export const update = mutation({
 
 		await ctx.db.patch(args.networkId, updates);
 
-		const network = await ctx.db.get(args.networkId);
+		const updatedNetwork = await ctx.db.get(args.networkId);
 		return {
 			_id: args.networkId,
-			name: network!.name,
-			description: network!.description ?? null
+			name: updatedNetwork!.name,
+			description: updatedNetwork!.description ?? null
 		};
 	}
 });
@@ -625,17 +1139,30 @@ export const remove = mutation({
 			throw new Error('Only the network owner can delete it');
 		}
 
-		// Delete all memberships
-		const members = await ctx.db
+		// Logical removal lets the generation materializer swap to an empty
+		// roster and delete the prior high-cardinality generation in bounded
+		// pages. The immutable public charter, if any, remains an audit record.
+		const activeMembers = await ctx.db
 			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', args.networkId))
-			.collect();
-
-		for (const m of members) {
-			await ctx.db.delete(m._id);
+			.withIndex('by_networkId_status', (q) =>
+				q.eq('networkId', args.networkId).eq('status', 'active')
+			)
+			.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+		const pendingMembers = await ctx.db
+			.query('orgNetworkMembers')
+			.withIndex('by_networkId_status', (q) =>
+				q.eq('networkId', args.networkId).eq('status', 'pending')
+			)
+			.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+		if (activeMembers.length + pendingMembers.length > COALITION_MAX_ACTIVE_MEMBERS) {
+			throw new Error('COALITION_NETWORK_MEMBERSHIP_LIMIT_EXCEEDED');
 		}
 
-		await ctx.db.delete(args.networkId);
+		for (const m of [...activeMembers, ...pendingMembers]) {
+			if (m.status !== 'removed') await ctx.db.patch(m._id, { status: 'removed' });
+		}
+		await ctx.db.patch(args.networkId, { status: 'removed', updatedAt: Date.now() });
+		await invalidateCoalitionRoster(ctx, args.networkId);
 		return { deleted: true };
 	}
 });
@@ -649,101 +1176,1144 @@ export const checkMembership = query({
 		requireInternalSecret(_secret);
 		const member = await ctx.db
 			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', networkId))
-			.filter((q) => q.and(q.eq(q.field('orgId'), orgId), q.eq(q.field('status'), 'active')))
-			.first();
-		return member ? { _id: member._id } : null;
+			.withIndex('by_networkId_orgId', (idx) => idx.eq('networkId', networkId).eq('orgId', orgId))
+			.unique();
+		return member?.status === 'active' ? { _id: member._id } : null;
 	}
 });
 
 /**
- * Coalition packet attestation hash (T7-5). Deterministic SHA-256 over
- * sorted (orgId, campaignId, packetDigest) tuples for all active member
- * orgs. Writes orgNetworks.lastPacketHash + lastPacketComputedAt so /v/[hash]
- * can resolve coalition attestations. Pure mutation — recomputes on call;
- * cron schedule TBD if cost dominates.
+ * @deprecated The launch-safe coalition projection is rebuilt by the bounded,
+ * cursor-driven coordinator below. Keeping the historical public mutation live
+ * would permit one request to scan every member, campaign, and delivery.
  */
 export const refreshCoalitionPacketHash = mutation({
 	args: {
 		orgSlug: v.string(),
 		networkId: v.id('orgNetworks')
 	},
-	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+	handler: async () => {
+		throw new Error('COALITION_PACKET_HASH_RETIRED');
+	}
+});
 
-		// Caller must be active member (or network admin)
-		const membership = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId_orgId', (idx) =>
-				idx.eq('networkId', args.networkId).eq('orgId', org._id)
-			)
-			.first();
-		if (!membership || membership.status !== 'active') {
-			throw new Error('Not an active member of this network');
-		}
+function rebuildAccumulator(rebuild: Doc<'coalitionNetworkRebuilds'>): CoalitionRebuildAccumulator {
+	return rebuild.accumulator as CoalitionRebuildAccumulator;
+}
 
-		const network = await ctx.db.get(args.networkId);
-		if (!network) throw new Error('Network not found');
+async function scheduleCoalitionRebuild(
+	ctx: MutationCtx,
+	networkId: Id<'orgNetworks'>,
+	delay = 0
+): Promise<void> {
+	await ctx.scheduler.runAfter(delay, continueCoalitionNetworkRebuildRef, { networkId });
+}
 
-		const members = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', args.networkId))
-			.filter((q) => q.eq(q.field('status'), 'active'))
-			.collect();
-
-		// Collect (orgId, campaignId, packetDigest) tuples for each active member.
-		// Source of truth for packetDigest is campaignDeliveries.packetDigest
-		// (per-delivery cached digest) — we take the most recent per campaign per
-		// org. Falls back to "" when a campaign has no delivered digests yet,
-		// which keeps the hash stable for in-flight campaigns rather than
-		// mutating on each new delivery.
-		const tuples: Array<{ orgId: string; campaignId: string; packetDigest: string }> = [];
-		for (const m of members) {
-			const campaigns = await ctx.db
-				.query('campaigns')
-				.withIndex('by_orgId', (q) => q.eq('orgId', m.orgId))
-				.collect();
-			for (const c of campaigns) {
-				const deliveries = await ctx.db
-					.query('campaignDeliveries')
-					.withIndex('by_campaignId', (q) => q.eq('campaignId', c._id))
-					.order('desc')
-					.take(1);
-				const digest = deliveries[0]?.packetDigest ?? '';
-				tuples.push({
-					orgId: String(m.orgId),
-					campaignId: String(c._id),
-					packetDigest: digest
-				});
-			}
-		}
-
-		// Canonical preimage — sort lexicographically for determinism.
-		tuples.sort((a, b) => {
-			if (a.orgId !== b.orgId) return a.orgId.localeCompare(b.orgId);
-			if (a.campaignId !== b.campaignId) return a.campaignId.localeCompare(b.campaignId);
-			return a.packetDigest.localeCompare(b.packetDigest);
+async function blockCoalitionRebuild(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>,
+	failureCode: string
+): Promise<void> {
+	const aggregate = await ctx.db
+		.query('coalitionNetworkAggregates')
+		.withIndex('by_networkId', (q) => q.eq('networkId', rebuild.networkId))
+		.unique();
+	await ctx.db.patch(rebuild._id, {
+		status: 'blocked',
+		failureCode: failureCode.slice(0, 500),
+		completedAt: Date.now(),
+		updatedAt: Date.now()
+	});
+	if (aggregate) {
+		await ctx.db.patch(aggregate._id, {
+			status: aggregate.activeGeneration ? 'ready' : 'blocked',
+			failureCode: failureCode.slice(0, 500),
+			refreshScheduledAt: undefined,
+			updatedAt: Date.now()
 		});
-		const preimage = [
-			'voter-protocol-coalition-v1',
-			`network:${args.networkId}`,
-			...tuples.map((t) => `${t.orgId}|${t.campaignId}|${t.packetDigest}`)
-		].join('\n---\n');
+	}
+}
 
-		const bytes = new TextEncoder().encode(preimage);
-		const digestBuf = await crypto.subtle.digest('SHA-256', bytes);
-		const lastPacketHash = Array.from(new Uint8Array(digestBuf))
-			.map((b) => b.toString(16).padStart(2, '0'))
-			.join('');
-
+async function startCoalitionNetworkRebuild(
+	ctx: MutationCtx,
+	networkId: Id<'orgNetworks'>
+): Promise<{ status: 'started' | 'missing' | 'blocked' }> {
+	const network = await ctx.db.get(networkId);
+	if (!network) return { status: 'missing' };
+	const members = await ctx.db
+		.query('orgNetworkMembers')
+		.withIndex('by_networkId_status', (q) => q.eq('networkId', networkId).eq('status', 'active'))
+		.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+	const previous = await ctx.db
+		.query('coalitionNetworkRebuilds')
+		.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+		.unique();
+	if (members.length > COALITION_MAX_ACTIVE_MEMBERS) {
 		const now = Date.now();
-		await ctx.db.patch(args.networkId, {
-			lastPacketHash,
-			lastPacketComputedAt: now,
+		const blocked = {
+			networkId,
+			status: 'blocked',
+			runToken: crypto.randomUUID(),
+			targetGeneration: Math.max((previous?.targetGeneration ?? 0) + 1, 1),
+			phase: 'blocked',
+			memberOrgIds: [],
+			memberRevisions: [],
+			membershipRevision: network.coalitionMembershipRevision ?? 0,
+			memberIndex: 0,
+			kindIndex: 0,
+			cursor: undefined,
+			accumulator: {},
+			failureCode: 'COALITION_NETWORK_ACTIVE_MEMBER_LIMIT_EXCEEDED',
+			startedAt: now,
+			completedAt: now,
+			updatedAt: now
+		};
+		if (previous) await ctx.db.patch(previous._id, blocked);
+		else await ctx.db.insert('coalitionNetworkRebuilds', blocked);
+		const aggregate = await ctx.db
+			.query('coalitionNetworkAggregates')
+			.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+			.unique();
+		if (aggregate) {
+			await ctx.db.patch(aggregate._id, {
+				status: aggregate.activeGeneration ? 'ready' : 'blocked',
+				failureCode: blocked.failureCode,
+				refreshScheduledAt: undefined,
+				updatedAt: now
+			});
+		}
+		return { status: 'blocked' };
+	}
+
+	const memberOrgIds = members
+		.map((member) => member.orgId)
+		.sort((left, right) => String(left).localeCompare(String(right)));
+	const inputs = await Promise.all(
+		memberOrgIds.map(
+			async (orgId) =>
+				await ctx.db
+					.query('coalitionOrgMetricInputs')
+					.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+					.unique()
+		)
+	);
+	const aggregate = await ctx.db
+		.query('coalitionNetworkAggregates')
+		.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+		.unique();
+	const accumulator: CoalitionRebuildAccumulator = {
+		totalSupporters: inputs.reduce((sum, row) => sum + (row?.totalSupporters ?? 0), 0),
+		verifiedSupporters: inputs.reduce((sum, row) => sum + (row?.verifiedSupporters ?? 0), 0),
+		totalCampaignActions: inputs.reduce((sum, row) => sum + (row?.totalCampaignActions ?? 0), 0),
+		verifiedCampaignActions: inputs.reduce(
+			(sum, row) => sum + (row?.verifiedCampaignActions ?? 0),
+			0
+		),
+		messageHashedTotal: inputs.reduce((sum, row) => sum + (row?.messageHashedTotal ?? 0), 0),
+		uniqueSupporters: 0,
+		uniqueMessages: 0,
+		districtCount: 0,
+		districtSquareSum: 0,
+		hourCountXLogXSum: 0,
+		tier1: inputs.reduce((sum, row) => sum + (row?.tier1 ?? 0), 0),
+		tier3: inputs.reduce((sum, row) => sum + (row?.tier3 ?? 0), 0),
+		tier4: inputs.reduce((sum, row) => sum + (row?.tier4 ?? 0), 0),
+		stateCounts: {},
+		previousGeneration: aggregate?.activeGeneration
+	};
+	const targetGeneration = Math.max(
+		(aggregate?.activeGeneration ?? 0) + 1,
+		(previous?.targetGeneration ?? 0) + 1
+	);
+	const now = Date.now();
+	const next = {
+		networkId,
+		status: 'running',
+		runToken: crypto.randomUUID(),
+		targetGeneration,
+		phase: 'dimensions',
+		memberOrgIds,
+		memberRevisions: inputs.map((row) => row?.revision ?? 0),
+		membershipRevision: network.coalitionMembershipRevision ?? 0,
+		memberIndex: 0,
+		kindIndex: 0,
+		cursor: undefined,
+		accumulator,
+		failureCode: undefined,
+		startedAt: now,
+		completedAt: undefined,
+		updatedAt: now
+	};
+	if (previous) await ctx.db.patch(previous._id, next);
+	else await ctx.db.insert('coalitionNetworkRebuilds', next);
+	if (aggregate) {
+		await ctx.db.patch(aggregate._id, {
+			status: aggregate.activeGeneration ? 'ready' : 'building',
+			failureCode: undefined,
+			refreshScheduledAt: now,
 			updatedAt: now
 		});
+	}
+	await scheduleCoalitionRebuild(ctx, networkId);
+	return { status: 'started' };
+}
 
-		return { coalitionAttestationHash: lastPacketHash, tupleCount: tuples.length };
+async function beginCoalitionGenerationCleanup(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>,
+	generation: number | undefined,
+	restartAfterCleanup: boolean,
+	failureCode?: string
+): Promise<void> {
+	const accumulator = rebuildAccumulator(rebuild);
+	if (generation === undefined) {
+		await ctx.db.patch(rebuild._id, {
+			status: restartAfterCleanup ? 'superseded' : 'complete',
+			phase: 'complete',
+			failureCode,
+			completedAt: Date.now(),
+			updatedAt: Date.now()
+		});
+		if (restartAfterCleanup) {
+			const aggregate = await ctx.db
+				.query('coalitionNetworkAggregates')
+				.withIndex('by_networkId', (q) => q.eq('networkId', rebuild.networkId))
+				.unique();
+			if (aggregate) {
+				await ctx.db.patch(aggregate._id, { refreshScheduledAt: undefined });
+				await markCoalitionNetworkDirty(ctx, rebuild.networkId);
+			}
+		}
+		return;
+	}
+	await ctx.db.patch(rebuild._id, {
+		status: 'cleanup',
+		phase: 'cleanup_dimensions',
+		memberIndex: 0,
+		kindIndex: 0,
+		cursor: undefined,
+		accumulator: {
+			...accumulator,
+			cleanupGeneration: generation,
+			restartAfterCleanup
+		},
+		failureCode,
+		updatedAt: Date.now()
+	});
+	await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+}
+
+async function continueCoalitionDimensions(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>
+): Promise<void> {
+	if (rebuild.memberIndex >= rebuild.memberOrgIds.length) {
+		await ctx.db.patch(rebuild._id, {
+			phase: 'pressure',
+			memberIndex: 0,
+			kindIndex: 0,
+			cursor: undefined,
+			updatedAt: Date.now()
+		});
+		await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		return;
+	}
+	const kind = COALITION_DIMENSION_KINDS[rebuild.kindIndex];
+	if (!kind) {
+		await ctx.db.patch(rebuild._id, {
+			memberIndex: rebuild.memberIndex + 1,
+			kindIndex: 0,
+			cursor: undefined,
+			updatedAt: Date.now()
+		});
+		await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		return;
+	}
+	const orgId = rebuild.memberOrgIds[rebuild.memberIndex]!;
+	const page = await ctx.db
+		.query('coalitionOrgMetricDimensions')
+		.withIndex('by_orgId_kind', (q) => q.eq('orgId', orgId).eq('kind', kind))
+		.paginate({
+			cursor: rebuild.cursor ?? null,
+			numItems: COALITION_REBUILD_PAGE_ROWS,
+			maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+			maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+		});
+	if (page.pageStatus === 'SplitRequired') {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_DIMENSION_PAGE_SPLIT_REQUIRED');
+		return;
+	}
+	const accumulator = rebuildAccumulator(rebuild);
+	for (const source of page.page) {
+		const current = await ctx.db
+			.query('coalitionNetworkMetricDimensions')
+			.withIndex('by_networkId_generation_kind_key', (q) =>
+				q
+					.eq('networkId', rebuild.networkId)
+					.eq('generation', rebuild.targetGeneration)
+					.eq('kind', kind)
+					.eq('key', source.key)
+			)
+			.unique();
+		const oldCount = current?.count ?? 0;
+		const count = oldCount + source.count;
+		if (current) await ctx.db.patch(current._id, { count, updatedAt: Date.now() });
+		else {
+			await ctx.db.insert('coalitionNetworkMetricDimensions', {
+				networkId: rebuild.networkId,
+				generation: rebuild.targetGeneration,
+				kind,
+				key: source.key,
+				count,
+				updatedAt: Date.now()
+			});
+		}
+		if (kind === 'supporter_hash' && oldCount === 0) accumulator.uniqueSupporters += 1;
+		else if (kind === 'action_message' && oldCount === 0) accumulator.uniqueMessages += 1;
+		else if (kind === 'action_district') {
+			if (oldCount === 0) accumulator.districtCount += 1;
+			accumulator.districtSquareSum += count * count - oldCount * oldCount;
+		} else if (kind === 'action_hour') {
+			accumulator.hourCountXLogXSum += xLog2X(count) - xLog2X(oldCount);
+		} else if (kind === 'country') {
+			accumulator.stateCounts[source.key] = count;
+		}
+	}
+	await ctx.db.patch(rebuild._id, {
+		memberIndex: page.isDone ? rebuild.memberIndex : rebuild.memberIndex,
+		kindIndex: page.isDone ? rebuild.kindIndex + 1 : rebuild.kindIndex,
+		cursor: page.isDone ? undefined : page.continueCursor,
+		accumulator,
+		updatedAt: Date.now()
+	});
+	await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+}
+
+async function continueCoalitionPressure(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>
+): Promise<void> {
+	if (rebuild.memberIndex >= rebuild.memberOrgIds.length) {
+		await ctx.db.patch(rebuild._id, {
+			phase: 'bills',
+			memberIndex: 0,
+			cursor: undefined,
+			updatedAt: Date.now()
+		});
+		await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		return;
+	}
+	const orgId = rebuild.memberOrgIds[rebuild.memberIndex]!;
+	const page = await ctx.db
+		.query('coalitionOrgPressureInputs')
+		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+		.paginate({
+			cursor: rebuild.cursor ?? null,
+			numItems: COALITION_REBUILD_PAGE_ROWS,
+			maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+			maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+		});
+	if (page.pageStatus === 'SplitRequired') {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_PRESSURE_PAGE_SPLIT_REQUIRED');
+		return;
+	}
+	for (const source of page.page) {
+		const current = await ctx.db
+			.query('coalitionNetworkPressureRows')
+			.withIndex('by_networkId_generation_decisionMakerId', (q) =>
+				q
+					.eq('networkId', rebuild.networkId)
+					.eq('generation', rebuild.targetGeneration)
+					.eq('decisionMakerId', source.decisionMakerId)
+			)
+			.unique();
+		const patch = {
+			canonicalSlug: current?.canonicalSlug ?? source.canonicalSlug,
+			dmName:
+				!current || source.latestReceiptAt >= current.latestReceiptAt
+					? source.dmName
+					: current.dmName,
+			orgCount: (current?.orgCount ?? 0) + 1,
+			combinedProofWeight: (current?.combinedProofWeight ?? 0) + source.maxProofWeight,
+			verifiedActionEvidence:
+				(current?.verifiedActionEvidence ?? 0) + source.verifiedActionEvidence,
+			districtSignalCount: (current?.districtSignalCount ?? 0) + source.districtSignalCount,
+			receiptCount: (current?.receiptCount ?? 0) + source.receiptCount,
+			latestReceiptAt: Math.max(current?.latestReceiptAt ?? 0, source.latestReceiptAt),
+			updatedAt: Date.now()
+		};
+		if (current) await ctx.db.patch(current._id, patch);
+		else {
+			await ctx.db.insert('coalitionNetworkPressureRows', {
+				networkId: rebuild.networkId,
+				generation: rebuild.targetGeneration,
+				decisionMakerId: source.decisionMakerId,
+				bills: [],
+				...patch
+			});
+		}
+	}
+	await ctx.db.patch(rebuild._id, {
+		memberIndex: page.isDone ? rebuild.memberIndex + 1 : rebuild.memberIndex,
+		cursor: page.isDone ? undefined : page.continueCursor,
+		updatedAt: Date.now()
+	});
+	await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+}
+
+async function continueCoalitionBills(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>
+): Promise<void> {
+	if (rebuild.memberIndex >= rebuild.memberOrgIds.length) {
+		await ctx.db.patch(rebuild._id, {
+			phase: 'commit',
+			memberIndex: 0,
+			cursor: undefined,
+			updatedAt: Date.now()
+		});
+		await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		return;
+	}
+	const orgId = rebuild.memberOrgIds[rebuild.memberIndex]!;
+	const page = await ctx.db
+		.query('coalitionOrgPressureBillInputs')
+		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+		.paginate({
+			cursor: rebuild.cursor ?? null,
+			numItems: COALITION_REBUILD_PAGE_ROWS,
+			maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+			maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+		});
+	if (page.pageStatus === 'SplitRequired') {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_BILL_PAGE_SPLIT_REQUIRED');
+		return;
+	}
+	for (const source of page.page) {
+		const current = await ctx.db
+			.query('coalitionNetworkPressureBills')
+			.withIndex('by_networkId_generation_decisionMakerId_billId', (q) =>
+				q
+					.eq('networkId', rebuild.networkId)
+					.eq('generation', rebuild.targetGeneration)
+					.eq('decisionMakerId', source.decisionMakerId)
+					.eq('billId', source.billId)
+			)
+			.unique();
+		const merged = {
+			billTitle:
+				!current || source.latestReceiptAt >= current.latestReceiptAt
+					? source.billTitle
+					: current.billTitle,
+			alignmentNumerator: (current?.alignmentNumerator ?? 0) + source.alignmentNumerator,
+			alignmentWeight: (current?.alignmentWeight ?? 0) + source.alignmentWeight,
+			dmAction:
+				!current || source.latestReceiptAt >= current.latestReceiptAt
+					? (source.dmAction ?? current?.dmAction)
+					: (current.dmAction ?? source.dmAction),
+			receiptCount: (current?.receiptCount ?? 0) + source.receiptCount,
+			latestReceiptAt: Math.max(current?.latestReceiptAt ?? 0, source.latestReceiptAt),
+			updatedAt: Date.now()
+		};
+		if (current) await ctx.db.patch(current._id, merged);
+		else {
+			await ctx.db.insert('coalitionNetworkPressureBills', {
+				networkId: rebuild.networkId,
+				generation: rebuild.targetGeneration,
+				decisionMakerId: source.decisionMakerId,
+				billId: source.billId,
+				...merged
+			});
+		}
+		const pressure = await ctx.db
+			.query('coalitionNetworkPressureRows')
+			.withIndex('by_networkId_generation_decisionMakerId', (q) =>
+				q
+					.eq('networkId', rebuild.networkId)
+					.eq('generation', rebuild.targetGeneration)
+					.eq('decisionMakerId', source.decisionMakerId)
+			)
+			.unique();
+		if (!pressure) {
+			await blockCoalitionRebuild(ctx, rebuild, 'COALITION_PRESSURE_PARENT_MISSING');
+			return;
+		}
+		const candidate = {
+			billId: String(source.billId),
+			billTitle: merged.billTitle,
+			alignment:
+				merged.alignmentWeight > 0 ? merged.alignmentNumerator / merged.alignmentWeight : 0,
+			dmAction: merged.dmAction,
+			receiptCount: merged.receiptCount
+		};
+		const bills = pressure.bills
+			.filter((bill) => bill.billId !== candidate.billId)
+			.concat(candidate)
+			.sort(
+				(left, right) =>
+					right.receiptCount - left.receiptCount || left.billId.localeCompare(right.billId)
+			)
+			.slice(0, COALITION_MAX_PRESSURE_BILLS);
+		await ctx.db.patch(pressure._id, { bills, updatedAt: Date.now() });
+	}
+	await ctx.db.patch(rebuild._id, {
+		memberIndex: page.isDone ? rebuild.memberIndex + 1 : rebuild.memberIndex,
+		cursor: page.isDone ? undefined : page.continueCursor,
+		updatedAt: Date.now()
+	});
+	await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+}
+
+async function commitCoalitionNetworkGeneration(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>
+): Promise<void> {
+	const network = await ctx.db.get(rebuild.networkId);
+	if (!network) {
+		await beginCoalitionGenerationCleanup(
+			ctx,
+			rebuild,
+			rebuild.targetGeneration,
+			false,
+			'COALITION_NETWORK_REMOVED'
+		);
+		return;
+	}
+	const activeMembers = await ctx.db
+		.query('orgNetworkMembers')
+		.withIndex('by_networkId_status', (q) =>
+			q.eq('networkId', rebuild.networkId).eq('status', 'active')
+		)
+		.take(COALITION_MAX_ACTIVE_MEMBERS + 1);
+	const currentMemberIds = activeMembers
+		.map((member) => member.orgId)
+		.sort((left, right) => String(left).localeCompare(String(right)));
+	const rosterMatches =
+		(network.coalitionMembershipRevision ?? 0) === rebuild.membershipRevision &&
+		currentMemberIds.length === rebuild.memberOrgIds.length &&
+		currentMemberIds.every((orgId, index) => orgId === rebuild.memberOrgIds[index]);
+	let inputsMatch = rosterMatches;
+	if (inputsMatch) {
+		for (let index = 0; index < rebuild.memberOrgIds.length; index += 1) {
+			const input = await ctx.db
+				.query('coalitionOrgMetricInputs')
+				.withIndex('by_orgId', (q) => q.eq('orgId', rebuild.memberOrgIds[index]!))
+				.unique();
+			if ((input?.revision ?? 0) !== rebuild.memberRevisions[index]) {
+				inputsMatch = false;
+				break;
+			}
+		}
+	}
+	if (!inputsMatch) {
+		await beginCoalitionGenerationCleanup(
+			ctx,
+			rebuild,
+			rebuild.targetGeneration,
+			true,
+			'COALITION_REBUILD_SOURCE_REVISION_CHANGED'
+		);
+		return;
+	}
+
+	const accumulator = rebuildAccumulator(rebuild);
+	const distribution = boundedStateDistribution(new Map(Object.entries(accumulator.stateCounts)));
+	const totalActions = accumulator.totalCampaignActions;
+	const gds =
+		accumulator.districtCount > 0 && totalActions > 0
+			? Math.max(0, Math.min(1, 1 - accumulator.districtSquareSum / (totalActions * totalActions)))
+			: undefined;
+	const ald =
+		accumulator.messageHashedTotal > 0
+			? Math.max(0, Math.min(1, accumulator.uniqueMessages / accumulator.messageHashedTotal))
+			: undefined;
+	const temporalEntropy =
+		totalActions > 0
+			? Math.max(0, Math.log2(totalActions) - accumulator.hourCountXLogXSum / totalActions)
+			: undefined;
+	const cai =
+		accumulator.tier1 + accumulator.tier3 + accumulator.tier4 > 0
+			? Math.round(
+					((accumulator.tier3 + accumulator.tier4) / Math.max(accumulator.tier1, 1)) * 100
+				) / 100
+			: undefined;
+	const aggregate = await ctx.db
+		.query('coalitionNetworkAggregates')
+		.withIndex('by_networkId', (q) => q.eq('networkId', rebuild.networkId))
+		.unique();
+	if (!aggregate) {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_NETWORK_AGGREGATE_MISSING');
+		return;
+	}
+	await ctx.db.patch(aggregate._id, {
+		version: COALITION_METRICS_VERSION,
+		status: 'ready',
+		activeGeneration: rebuild.targetGeneration,
+		revision: aggregate.revision + 1,
+		memberCount: rebuild.memberOrgIds.length,
+		totalSupporters: accumulator.totalSupporters,
+		uniqueSupporters: accumulator.uniqueSupporters,
+		verifiedSupporters: accumulator.verifiedSupporters,
+		totalCampaignActions: accumulator.totalCampaignActions,
+		verifiedCampaignActions: accumulator.verifiedCampaignActions,
+		messageHashedTotal: accumulator.messageHashedTotal,
+		uniqueMessages: accumulator.uniqueMessages,
+		districtCount: accumulator.districtCount,
+		districtSquareSum: accumulator.districtSquareSum,
+		hourCountXLogXSum: accumulator.hourCountXLogXSum,
+		tier1: accumulator.tier1,
+		tier3: accumulator.tier3,
+		tier4: accumulator.tier4,
+		stateDistribution: distribution.buckets,
+		stateDistributionOtherCount: distribution.otherCount,
+		gds,
+		ald,
+		temporalEntropy,
+		cai,
+		dirtyAt: undefined,
+		refreshScheduledAt: undefined,
+		failureCode: undefined,
+		updatedAt: Date.now()
+	});
+	await beginCoalitionGenerationCleanup(ctx, rebuild, accumulator.previousGeneration, false);
+}
+
+async function continueCoalitionCleanup(
+	ctx: MutationCtx,
+	rebuild: Doc<'coalitionNetworkRebuilds'>
+): Promise<void> {
+	const accumulator = rebuildAccumulator(rebuild);
+	const generation = accumulator.cleanupGeneration;
+	if (generation === undefined) {
+		await beginCoalitionGenerationCleanup(
+			ctx,
+			rebuild,
+			undefined,
+			accumulator.restartAfterCleanup ?? false,
+			rebuild.failureCode
+		);
+		return;
+	}
+	let page:
+		| Awaited<
+				ReturnType<ReturnType<typeof ctx.db.query<'coalitionNetworkMetricDimensions'>>['paginate']>
+		  >
+		| undefined;
+	if (rebuild.phase === 'cleanup_dimensions') {
+		page = await ctx.db
+			.query('coalitionNetworkMetricDimensions')
+			.withIndex('by_networkId_generation_kind', (q) =>
+				q.eq('networkId', rebuild.networkId).eq('generation', generation)
+			)
+			.paginate({
+				cursor: rebuild.cursor ?? null,
+				numItems: COALITION_REBUILD_PAGE_ROWS,
+				maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+				maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+			});
+	} else if (rebuild.phase === 'cleanup_pressure') {
+		const pressurePage = await ctx.db
+			.query('coalitionNetworkPressureRows')
+			.withIndex('by_networkId_generation_decisionMakerId', (q) =>
+				q.eq('networkId', rebuild.networkId).eq('generation', generation)
+			)
+			.paginate({
+				cursor: rebuild.cursor ?? null,
+				numItems: COALITION_REBUILD_PAGE_ROWS,
+				maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+				maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+			});
+		if (pressurePage.pageStatus === 'SplitRequired') {
+			await blockCoalitionRebuild(ctx, rebuild, 'COALITION_CLEANUP_PAGE_SPLIT_REQUIRED');
+			return;
+		}
+		for (const row of pressurePage.page) await ctx.db.delete(row._id);
+		await ctx.db.patch(rebuild._id, {
+			phase: pressurePage.isDone ? 'cleanup_bills' : rebuild.phase,
+			cursor: pressurePage.isDone ? undefined : pressurePage.continueCursor,
+			updatedAt: Date.now()
+		});
+		await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		return;
+	} else if (rebuild.phase === 'cleanup_bills') {
+		const billPage = await ctx.db
+			.query('coalitionNetworkPressureBills')
+			.withIndex('by_networkId_generation', (q) =>
+				q.eq('networkId', rebuild.networkId).eq('generation', generation)
+			)
+			.paginate({
+				cursor: rebuild.cursor ?? null,
+				numItems: COALITION_REBUILD_PAGE_ROWS,
+				maximumRowsRead: COALITION_REBUILD_PAGE_ROWS + 1,
+				maximumBytesRead: COALITION_REBUILD_PAGE_BYTES
+			});
+		if (billPage.pageStatus === 'SplitRequired') {
+			await blockCoalitionRebuild(ctx, rebuild, 'COALITION_CLEANUP_PAGE_SPLIT_REQUIRED');
+			return;
+		}
+		for (const row of billPage.page) await ctx.db.delete(row._id);
+		if (!billPage.isDone) {
+			await ctx.db.patch(rebuild._id, {
+				cursor: billPage.continueCursor,
+				updatedAt: Date.now()
+			});
+			await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+			return;
+		}
+		await ctx.db.patch(rebuild._id, {
+			status: accumulator.restartAfterCleanup ? 'superseded' : 'complete',
+			phase: 'complete',
+			cursor: undefined,
+			completedAt: Date.now(),
+			updatedAt: Date.now()
+		});
+		const aggregate = await ctx.db
+			.query('coalitionNetworkAggregates')
+			.withIndex('by_networkId', (q) => q.eq('networkId', rebuild.networkId))
+			.unique();
+		if (accumulator.restartAfterCleanup && aggregate) {
+			await ctx.db.patch(aggregate._id, { refreshScheduledAt: undefined });
+			await markCoalitionNetworkDirty(ctx, rebuild.networkId);
+		} else if (aggregate?.dirtyAt) {
+			await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+		}
+		return;
+	}
+	if (!page) {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_CLEANUP_PHASE_INVALID');
+		return;
+	}
+	if (page.pageStatus === 'SplitRequired') {
+		await blockCoalitionRebuild(ctx, rebuild, 'COALITION_CLEANUP_PAGE_SPLIT_REQUIRED');
+		return;
+	}
+	for (const row of page.page) await ctx.db.delete(row._id);
+	await ctx.db.patch(rebuild._id, {
+		phase: page.isDone ? 'cleanup_pressure' : rebuild.phase,
+		cursor: page.isDone ? undefined : page.continueCursor,
+		updatedAt: Date.now()
+	});
+	await scheduleCoalitionRebuild(ctx, rebuild.networkId);
+}
+
+/** Durable, row/byte-bounded network generation materializer. */
+export const continueCoalitionNetworkRebuild = internalMutation({
+	args: { networkId: v.id('orgNetworks') },
+	handler: async (ctx, { networkId }) => {
+		const rebuild = await ctx.db
+			.query('coalitionNetworkRebuilds')
+			.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+			.unique();
+		if (!rebuild || rebuild.status === 'complete' || rebuild.status === 'superseded') {
+			const aggregate = await ctx.db
+				.query('coalitionNetworkAggregates')
+				.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+				.unique();
+			if (aggregate && aggregate.dirtyAt === undefined) {
+				return { status: 'idle' as const };
+			}
+			return await startCoalitionNetworkRebuild(ctx, networkId);
+		}
+		if (rebuild.status === 'blocked') {
+			const aggregate = await ctx.db
+				.query('coalitionNetworkAggregates')
+				.withIndex('by_networkId', (q) => q.eq('networkId', networkId))
+				.unique();
+			if (aggregate?.refreshScheduledAt !== undefined) {
+				return await startCoalitionNetworkRebuild(ctx, networkId);
+			}
+			return { status: 'blocked' as const };
+		}
+		if (rebuild.phase.startsWith('cleanup_')) {
+			await continueCoalitionCleanup(ctx, rebuild);
+			return { status: 'cleanup' as const, phase: rebuild.phase };
+		}
+		if (rebuild.phase === 'dimensions') await continueCoalitionDimensions(ctx, rebuild);
+		else if (rebuild.phase === 'pressure') await continueCoalitionPressure(ctx, rebuild);
+		else if (rebuild.phase === 'bills') await continueCoalitionBills(ctx, rebuild);
+		else if (rebuild.phase === 'commit') await commitCoalitionNetworkGeneration(ctx, rebuild);
+		else await blockCoalitionRebuild(ctx, rebuild, 'COALITION_REBUILD_PHASE_INVALID');
+		return { status: 'running' as const, phase: rebuild.phase };
+	}
+});
+
+async function scheduleCoalitionMigration(
+	ctx: MutationCtx,
+	runToken: string,
+	delay = 0
+): Promise<void> {
+	await ctx.scheduler.runAfter(delay, migrateCoalitionMetricsRef, { runToken });
+}
+
+async function blockCoalitionMigration(
+	ctx: MutationCtx,
+	migration: Doc<'coalitionMetricsMigrations'>,
+	failureCode: string,
+	failureSourceId?: string
+): Promise<{ status: 'blocked'; runToken: string; failureCode: string }> {
+	await ctx.db.patch(migration._id, {
+		status: 'blocked',
+		failureCode: failureCode.slice(0, 500),
+		failureSourceId,
+		updatedAt: Date.now()
+	});
+	return { status: 'blocked', runToken: migration.runToken, failureCode };
+}
+
+/**
+ * Exact legacy cutover. Every invocation handles one row/byte-bounded source
+ * page or one network readiness check; run tokens make stale continuations
+ * harmless and restartable.
+ */
+export const migrateCoalitionMetrics = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		restart: v.optional(v.boolean()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		if (args.runToken !== undefined && args.restart) {
+			throw new Error('COALITION_MIGRATION_INVALID_CONTROL');
+		}
+		let migration = await ctx.db
+			.query('coalitionMetricsMigrations')
+			.withIndex('by_key', (q) => q.eq('key', COALITION_METRICS_MIGRATION_KEY))
+			.unique();
+		let runToken: string;
+		if (args.runToken !== undefined) {
+			if (!migration || migration.status !== 'running' || migration.runToken !== args.runToken) {
+				return { status: 'superseded' as const, runToken: args.runToken };
+			}
+			runToken = args.runToken;
+		} else if (!args.restart && migration?.status === 'ready') {
+			return { status: 'already-ready' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'migrated') {
+			return { status: 'already-migrated' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'running') {
+			return { status: 'already-running' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'blocked') {
+			return {
+				status: 'blocked' as const,
+				runToken: migration.runToken,
+				failureCode: migration.failureCode ?? null
+			};
+		} else {
+			runToken = crypto.randomUUID();
+			const initial = {
+				key: COALITION_METRICS_MIGRATION_KEY,
+				status: 'running',
+				runToken,
+				phase: 'supporters',
+				cursor: undefined,
+				scannedSupporters: 0,
+				projectedSupporters: 0,
+				scannedActions: 0,
+				projectedActions: 0,
+				scannedReceipts: 0,
+				projectedReceipts: 0,
+				networksScheduled: 0,
+				networksReady: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				startedAt: Date.now(),
+				completedAt: undefined,
+				updatedAt: Date.now()
+			};
+			if (migration) await ctx.db.patch(migration._id, initial);
+			else await ctx.db.insert('coalitionMetricsMigrations', initial);
+			migration = await ctx.db
+				.query('coalitionMetricsMigrations')
+				.withIndex('by_key', (q) => q.eq('key', COALITION_METRICS_MIGRATION_KEY))
+				.unique();
+		}
+		if (!migration || migration.status !== 'running' || migration.runToken !== runToken) {
+			throw new Error('COALITION_MIGRATION_STATE_MISSING');
+		}
+
+		if (migration.phase === 'supporters') {
+			const page = await ctx.db
+				.query('supporters')
+				.order('asc')
+				.paginate({
+					cursor: migration.cursor ?? null,
+					numItems: COALITION_MIGRATION_SUPPORTER_ROWS,
+					maximumRowsRead: COALITION_MIGRATION_SUPPORTER_ROWS + 1,
+					maximumBytesRead: COALITION_MIGRATION_PAGE_BYTES
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				return await blockCoalitionMigration(
+					ctx,
+					migration,
+					'COALITION_SUPPORTER_PAGE_SPLIT_REQUIRED'
+				);
+			}
+			for (const supporter of page.page) {
+				try {
+					if (supporter.coalitionMetricsVersion !== COALITION_METRICS_VERSION) {
+						await applyCoalitionSupporterTransition(ctx, supporter.orgId, null, supporter, {
+							suppressNetworkRefresh: true
+						});
+					}
+				} catch (error) {
+					return await blockCoalitionMigration(
+						ctx,
+						migration,
+						error instanceof Error ? error.message : String(error),
+						String(supporter._id)
+					);
+				}
+			}
+			await ctx.db.patch(migration._id, {
+				phase: page.isDone ? 'actions' : 'supporters',
+				cursor: page.isDone ? undefined : page.continueCursor,
+				scannedSupporters: migration.scannedSupporters + page.page.length,
+				projectedSupporters: migration.projectedSupporters + page.page.length,
+				updatedAt: Date.now()
+			});
+		} else if (migration.phase === 'actions') {
+			const page = await ctx.db
+				.query('campaignActions')
+				.order('asc')
+				.paginate({
+					cursor: migration.cursor ?? null,
+					numItems: COALITION_MIGRATION_ACTION_ROWS,
+					maximumRowsRead: COALITION_MIGRATION_ACTION_ROWS + 1,
+					maximumBytesRead: COALITION_MIGRATION_PAGE_BYTES
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				return await blockCoalitionMigration(
+					ctx,
+					migration,
+					'COALITION_ACTION_PAGE_SPLIT_REQUIRED'
+				);
+			}
+			for (const action of page.page) {
+				try {
+					if (action.coalitionMetricsVersion !== COALITION_METRICS_VERSION) {
+						const campaign = action.orgId ? null : await ctx.db.get(action.campaignId);
+						const orgId = action.orgId ?? campaign?.orgId;
+						if (!orgId) throw new Error('COALITION_ACTION_ORG_MISSING');
+						await applyCoalitionActionTransition(
+							ctx,
+							null,
+							{ ...action, orgId },
+							{ suppressNetworkRefresh: true }
+						);
+					}
+				} catch (error) {
+					return await blockCoalitionMigration(
+						ctx,
+						migration,
+						error instanceof Error ? error.message : String(error),
+						String(action._id)
+					);
+				}
+			}
+			await ctx.db.patch(migration._id, {
+				phase: page.isDone ? 'receipts' : 'actions',
+				cursor: page.isDone ? undefined : page.continueCursor,
+				scannedActions: migration.scannedActions + page.page.length,
+				projectedActions: migration.projectedActions + page.page.length,
+				updatedAt: Date.now()
+			});
+		} else if (migration.phase === 'receipts') {
+			const page = await ctx.db
+				.query('accountabilityReceipts')
+				.order('asc')
+				.paginate({
+					cursor: migration.cursor ?? null,
+					numItems: COALITION_MIGRATION_RECEIPT_ROWS,
+					maximumRowsRead: COALITION_MIGRATION_RECEIPT_ROWS + 1,
+					maximumBytesRead: COALITION_MIGRATION_PAGE_BYTES
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				return await blockCoalitionMigration(
+					ctx,
+					migration,
+					'COALITION_RECEIPT_PAGE_SPLIT_REQUIRED'
+				);
+			}
+			for (const receipt of page.page) {
+				try {
+					if (receipt.coalitionMetricsVersion !== COALITION_METRICS_VERSION) {
+						const bill = await ctx.db.get(receipt.billId);
+						await applyCoalitionReceiptProjection(
+							ctx,
+							receipt,
+							bill?.title ?? String(receipt.billId),
+							{ suppressNetworkRefresh: true }
+						);
+					}
+				} catch (error) {
+					return await blockCoalitionMigration(
+						ctx,
+						migration,
+						error instanceof Error ? error.message : String(error),
+						String(receipt._id)
+					);
+				}
+			}
+			await ctx.db.patch(migration._id, {
+				phase: page.isDone ? 'networks' : 'receipts',
+				cursor: page.isDone ? undefined : page.continueCursor,
+				scannedReceipts: migration.scannedReceipts + page.page.length,
+				projectedReceipts: migration.projectedReceipts + page.page.length,
+				updatedAt: Date.now()
+			});
+		} else if (migration.phase === 'networks') {
+			const page = await ctx.db
+				.query('orgNetworks')
+				.order('asc')
+				.paginate({
+					cursor: migration.cursor ?? null,
+					numItems: 4,
+					maximumRowsRead: 5,
+					maximumBytesRead: COALITION_MIGRATION_PAGE_BYTES
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				return await blockCoalitionMigration(
+					ctx,
+					migration,
+					'COALITION_NETWORK_PAGE_SPLIT_REQUIRED'
+				);
+			}
+			for (const network of page.page) {
+				await markCoalitionNetworkDirty(ctx, network._id);
+			}
+			await ctx.db.patch(migration._id, {
+				phase: page.isDone ? 'network_wait' : 'networks',
+				cursor: page.isDone ? undefined : page.continueCursor,
+				networksScheduled: migration.networksScheduled + page.page.length,
+				updatedAt: Date.now()
+			});
+		} else if (migration.phase === 'network_wait') {
+			const page = await ctx.db
+				.query('orgNetworks')
+				.order('asc')
+				.paginate({
+					cursor: migration.cursor ?? null,
+					numItems: 1,
+					maximumRowsRead: 2,
+					maximumBytesRead: COALITION_MIGRATION_PAGE_BYTES
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				return await blockCoalitionMigration(
+					ctx,
+					migration,
+					'COALITION_NETWORK_WAIT_PAGE_SPLIT_REQUIRED'
+				);
+			}
+			const network = page.page[0];
+			if (network) {
+				const aggregate = await ctx.db
+					.query('coalitionNetworkAggregates')
+					.withIndex('by_networkId', (q) => q.eq('networkId', network._id))
+					.unique();
+				if (aggregate?.status === 'blocked') {
+					return await blockCoalitionMigration(
+						ctx,
+						migration,
+						aggregate.failureCode ?? 'COALITION_NETWORK_REBUILD_BLOCKED',
+						String(network._id)
+					);
+				}
+				if (
+					aggregate?.status !== 'ready' ||
+					aggregate.activeGeneration === undefined ||
+					aggregate.dirtyAt !== undefined
+				) {
+					await markCoalitionNetworkDirty(ctx, network._id);
+					if (args.scheduleContinuation !== false) {
+						await scheduleCoalitionMigration(ctx, runToken, 100);
+					}
+					return { status: 'waiting' as const, runToken, networkId: network._id };
+				}
+			}
+			const networksReady = migration.networksReady + page.page.length;
+			const done = page.isDone;
+			await ctx.db.patch(migration._id, {
+				status: done ? 'migrated' : 'running',
+				phase: done ? 'complete' : 'network_wait',
+				cursor: done ? undefined : page.continueCursor,
+				networksReady,
+				completedAt: done ? Date.now() : undefined,
+				updatedAt: Date.now()
+			});
+			if (done) {
+				return {
+					status: 'migrated' as const,
+					runToken,
+					networksReady
+				};
+			}
+		} else {
+			return await blockCoalitionMigration(ctx, migration, 'COALITION_MIGRATION_PHASE_INVALID');
+		}
+
+		if (args.scheduleContinuation !== false) {
+			await scheduleCoalitionMigration(ctx, runToken);
+		}
+		return { status: 'running' as const, runToken, phase: migration.phase };
+	}
+});
+
+/** Explicit cutover: readers stay closed until exact parity is proven. */
+export const activateCoalitionMetrics = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('coalitionMetricsMigrations')
+			.withIndex('by_key', (q) => q.eq('key', COALITION_METRICS_MIGRATION_KEY))
+			.unique();
+		if (migration?.status === 'ready') return { status: 'ready' as const };
+		if (!migration || migration.status !== 'migrated' || migration.phase !== 'complete') {
+			throw new Error('COALITION_MIGRATION_INCOMPLETE');
+		}
+		if (
+			migration.scannedSupporters !== migration.projectedSupporters ||
+			migration.scannedActions !== migration.projectedActions ||
+			migration.scannedReceipts !== migration.projectedReceipts ||
+			migration.networksScheduled !== migration.networksReady
+		) {
+			throw new Error('COALITION_MIGRATION_INEXACT');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return {
+			status: 'ready' as const,
+			supporters: migration.projectedSupporters,
+			actions: migration.projectedActions,
+			receipts: migration.projectedReceipts,
+			networks: migration.networksReady
+		};
+	}
+});
+
+export const coalitionMetricsMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('coalitionMetricsMigrations')
+			.withIndex('by_key', (q) => q.eq('key', COALITION_METRICS_MIGRATION_KEY))
+			.unique();
+		return migration
+			? {
+					status: migration.status,
+					phase: migration.phase,
+					runToken: migration.runToken,
+					scannedSupporters: migration.scannedSupporters,
+					projectedSupporters: migration.projectedSupporters,
+					scannedActions: migration.scannedActions,
+					projectedActions: migration.projectedActions,
+					scannedReceipts: migration.scannedReceipts,
+					projectedReceipts: migration.projectedReceipts,
+					networksScheduled: migration.networksScheduled,
+					networksReady: migration.networksReady,
+					failureCode: migration.failureCode ?? null,
+					failureSourceId: migration.failureSourceId ?? null,
+					startedAt: migration.startedAt,
+					completedAt: migration.completedAt ?? null
+				}
+			: { status: 'not-started' as const };
 	}
 });
 
@@ -755,352 +2325,58 @@ export const refreshCoalitionPacketHash = mutation({
  * own org-membership proof before calling).
  */
 async function requireNetworkAccess(
-	ctx: { auth: any; db: any },
+	ctx: QueryCtx,
 	networkId: Id<'orgNetworks'>,
+	orgSlug: string | undefined,
 	secret: string | undefined
 ): Promise<void> {
 	if (secret !== undefined) {
+		// Deliberately before the first database access. An invalid internal
+		// credential cannot be amplified into even a one-row Convex read.
 		requireInternalSecret(secret);
 		return;
 	}
-	const { userId } = await requireAuth(ctx as any);
-	const userOrgs = await (ctx as any).db
-		.query('orgMemberships')
-		.withIndex('by_userId_orgId', (q: any) => q.eq('userId', userId))
-		.collect();
-	for (const m of userOrgs) {
-		const networkMembership = await (ctx as any).db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (q: any) => q.eq('networkId', networkId))
-			.filter((q: any) => q.and(q.eq(q.field('orgId'), m.orgId), q.eq(q.field('status'), 'active')))
-			.first();
-		if (networkMembership) return;
+	if (!orgSlug) throw new Error('Organization context required');
+	const { org } = await requireOrgRole(ctx, orgSlug, 'member');
+	const membership = await ctx.db
+		.query('orgNetworkMembers')
+		.withIndex('by_networkId_orgId', (q) => q.eq('networkId', networkId).eq('orgId', org._id))
+		.unique();
+	if (membership?.status !== 'active') {
+		throw new Error('Access denied — no active membership in this network');
 	}
-	throw new Error('Access denied — no active membership in this network');
 }
 
 /**
- * Sub-K suppression on coalition aggregates, mirroring the public-receipt
- * floors: counts of 1-4 (districts: 1-2) suppress to null. Zero stays zero —
- * an honest absence reveals no individual, and the coalition zero state
- * renders as a plain sentence.
- */
-function coalitionFloor5(n: number): number | null {
-	return n > 0 && n < 5 ? null : n;
-}
-function coalitionFloor3(n: number): number | null {
-	return n > 0 && n < 3 ? null : n;
-}
-
-/**
- * Coalition stats — union of verified campaignActions across all active
- * member orgs, district-deduped via districtHash. Computes the same packet
- * scalars as a single-org packet (GDS / ALD / temporal entropy / CAI) so the
- * coalition surface is comparable to the per-org one. T7-1.
+ * Constant-read coalition stats. Source cardinality only affects the durable
+ * writer/materializer plane; this query reads one readiness row and one active
+ * aggregate after authorization.
  */
 export const getStats = query({
-	args: { networkId: v.id('orgNetworks'), _secret: v.optional(v.string()) },
-	handler: async (ctx, { networkId, _secret }) => {
-		await requireNetworkAccess(ctx, networkId, _secret);
-		const members = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', networkId))
-			.filter((q) => q.eq(q.field('status'), 'active'))
-			.collect();
-
-		const memberOrgIds = members.map((m) => m.orgId);
-		if (memberOrgIds.length === 0) {
-			return {
-				memberCount: 0,
-				totalSupporters: 0,
-				uniqueSupporters: 0,
-				verifiedSupporters: 0,
-				totalCampaignActions: 0,
-				verifiedCampaignActions: 0,
-				stateDistribution: {} as Record<string, number>,
-				gds: null,
-				ald: null,
-				temporalEntropy: null,
-				cai: null,
-				districtCount: 0
-			};
-		}
-
-		let totalSupporters = 0;
-		let verifiedSupporters = 0;
-		const uniqueEmailHashes = new Set<string>();
-		const stateDistribution: Record<string, number> = {};
-
-		for (const orgId of memberOrgIds) {
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
-				.collect();
-			totalSupporters += supporters.length;
-			for (const s of supporters) {
-				if (s.verified) verifiedSupporters++;
-				if (s.globalEmailHash) uniqueEmailHashes.add(s.globalEmailHash);
-				if (s.country) {
-					stateDistribution[s.country] = (stateDistribution[s.country] ?? 0) + 1;
-				}
-			}
-		}
-
-		let totalCampaignActions = 0;
-		let verifiedCampaignActions = 0;
-		const districtHashes = new Set<string>();
-		const messageHashes = new Set<string>();
-		let messageHashedTotal = 0;
-		const hourlyBins = new Map<number, number>();
-		let firstTime = Infinity;
-		let lastTime = -Infinity;
-		let tier1 = 0;
-		let tier3 = 0;
-		let tier4 = 0;
-
-		for (const orgId of memberOrgIds) {
-			const actions = await ctx.db
-				.query('campaignActions')
-				.withIndex('by_orgId_verified', (q) => q.eq('orgId', orgId))
-				.collect();
-			for (const a of actions) {
-				totalCampaignActions++;
-				if (a.verified) verifiedCampaignActions++;
-				if (a.districtHash) districtHashes.add(a.districtHash);
-				if (a.messageHash) {
-					messageHashes.add(a.messageHash);
-					messageHashedTotal++;
-				}
-				const hour = Math.floor(a.sentAt / (3600 * 1000));
-				hourlyBins.set(hour, (hourlyBins.get(hour) ?? 0) + 1);
-				if (a.sentAt < firstTime) firstTime = a.sentAt;
-				if (a.sentAt > lastTime) lastTime = a.sentAt;
-				if (a.engagementTier === 1) tier1++;
-				else if (a.engagementTier === 3) tier3++;
-				else if (a.engagementTier === 4) tier4++;
-			}
-		}
-
-		// GDS — 1 - HHI over per-district action share. Sparse: collect per-hash
-		// counts, then sum (count / total)^2.
-		let gds: number | null = null;
-		if (districtHashes.size > 0 && totalCampaignActions > 0) {
-			const perDistrict = new Map<string, number>();
-			for (const orgId of memberOrgIds) {
-				const actions = await ctx.db
-					.query('campaignActions')
-					.withIndex('by_orgId_verified', (q) => q.eq('orgId', orgId))
-					.collect();
-				for (const a of actions) {
-					if (!a.districtHash) continue;
-					perDistrict.set(a.districtHash, (perDistrict.get(a.districtHash) ?? 0) + 1);
-				}
-			}
-			let hhi = 0;
-			for (const count of perDistrict.values()) {
-				const share = count / totalCampaignActions;
-				hhi += share * share;
-			}
-			gds = Math.max(0, Math.min(1, 1 - hhi));
-		}
-
-		const ald: number | null =
-			messageHashedTotal > 0
-				? Math.max(0, Math.min(1, messageHashes.size / messageHashedTotal))
-				: null;
-
-		let temporalEntropy: number | null = null;
-		if (hourlyBins.size > 0 && totalCampaignActions > 0) {
-			let h = 0;
-			for (const count of hourlyBins.values()) {
-				const p = count / totalCampaignActions;
-				if (p > 0) h -= p * Math.log2(p);
-			}
-			temporalEntropy = h;
-		}
-
-		const cai: number | null =
-			tier1 + tier3 + tier4 === 0
-				? null
-				: Math.round(((tier3 + tier4) / Math.max(tier1, 1)) * 100) / 100;
-
-		const flooredStateDistribution: Record<string, number> = {};
-		for (const [state, count] of Object.entries(stateDistribution)) {
-			if (count >= 5) flooredStateDistribution[state] = count;
-		}
-
-		return {
-			memberCount: members.length,
-			totalSupporters: coalitionFloor5(totalSupporters),
-			uniqueSupporters: coalitionFloor5(uniqueEmailHashes.size),
-			verifiedSupporters: coalitionFloor5(verifiedSupporters),
-			totalCampaignActions: coalitionFloor5(totalCampaignActions),
-			verifiedCampaignActions: coalitionFloor5(verifiedCampaignActions),
-			stateDistribution: flooredStateDistribution,
-			gds,
-			ald,
-			temporalEntropy,
-			cai,
-			districtCount: coalitionFloor3(districtHashes.size)
-		};
+	args: {
+		networkId: v.id('orgNetworks'),
+		orgSlug: v.optional(v.string()),
+		_secret: v.optional(v.string())
+	},
+	handler: async (ctx, { networkId, orgSlug, _secret }) => {
+		await requireNetworkAccess(ctx, networkId, orgSlug, _secret);
+		return await readCoalitionStats(ctx, networkId);
 	}
 });
 
 /**
- * Bounded cross-org proof pressure for a network detail route.
- *
- * This is receipt-backed operating evidence, not durable coalition artifact
- * proof and not globally deduped constituent reach. For each decision-maker we
- * sum each active member org's strongest receipt weight, which prevents a
- * single org from inflating pressure by splitting deliveries while preserving
- * the cross-org signal.
+ * Constant-read proof-pressure ranking backed by the active immutable
+ * generation. The result cap is enforced before the indexed read.
  */
 export const getProofPressure = query({
 	args: {
 		networkId: v.id('orgNetworks'),
+		orgSlug: v.optional(v.string()),
 		limit: v.optional(v.number()),
 		_secret: v.optional(v.string())
 	},
-	handler: async (ctx, { networkId, limit, _secret }) => {
-		await requireNetworkAccess(ctx, networkId, _secret);
-		const cappedLimit = Math.max(1, Math.min(Math.floor(limit ?? 12), 25));
-		const members = await ctx.db
-			.query('orgNetworkMembers')
-			.withIndex('by_networkId', (idx) => idx.eq('networkId', networkId))
-			.filter((q) => q.eq(q.field('status'), 'active'))
-			.collect();
-
-		type BillAccumulator = {
-			billId: Id<'bills'>;
-			billTitle: string;
-			alignmentNumerator: number;
-			alignmentWeight: number;
-			dmAction: string | null;
-			receiptCount: number;
-		};
-
-		type PressureAccumulator = {
-			decisionMakerId: Id<'decisionMakers'>;
-			dmName: string;
-			orgWeights: Map<string, number>;
-			verifiedActionEvidence: number;
-			districtSignalCount: number;
-			receiptCount: number;
-			bills: Map<string, BillAccumulator>;
-			latestAt: number;
-		};
-
-		const pressureByDm = new Map<string, PressureAccumulator>();
-
-		for (const member of members) {
-			const receipts = await ctx.db
-				.query('accountabilityReceipts')
-				.withIndex('by_orgId', (idx) => idx.eq('orgId', member.orgId))
-				.order('desc')
-				.take(200);
-
-			for (const receipt of receipts) {
-				const dmKey = String(receipt.decisionMakerId);
-				let entry = pressureByDm.get(dmKey);
-				if (!entry) {
-					entry = {
-						decisionMakerId: receipt.decisionMakerId,
-						dmName: receipt.dmName,
-						orgWeights: new Map(),
-						verifiedActionEvidence: 0,
-						districtSignalCount: 0,
-						receiptCount: 0,
-						bills: new Map(),
-						latestAt: 0
-					};
-					pressureByDm.set(dmKey, entry);
-				}
-
-				const orgKey = String(receipt.orgId);
-				entry.orgWeights.set(
-					orgKey,
-					Math.max(entry.orgWeights.get(orgKey) ?? 0, receipt.proofWeight)
-				);
-				entry.verifiedActionEvidence += receipt.verifiedCount;
-				entry.districtSignalCount += receipt.districtCount;
-				entry.receiptCount += 1;
-				entry.latestAt = Math.max(entry.latestAt, receipt.proofDeliveredAt);
-
-				const billKey = String(receipt.billId);
-				let billEntry = entry.bills.get(billKey);
-				if (!billEntry) {
-					const bill = await ctx.db.get(receipt.billId);
-					billEntry = {
-						billId: receipt.billId,
-						billTitle: bill?.title ?? billKey,
-						alignmentNumerator: 0,
-						alignmentWeight: 0,
-						dmAction: null,
-						receiptCount: 0
-					};
-					entry.bills.set(billKey, billEntry);
-				}
-				const alignmentWeight = Math.max(receipt.proofWeight, 1);
-				billEntry.alignmentNumerator += receipt.alignment * alignmentWeight;
-				billEntry.alignmentWeight += alignmentWeight;
-				billEntry.dmAction = billEntry.dmAction ?? receipt.dmAction ?? null;
-				billEntry.receiptCount += 1;
-			}
-		}
-
-		const rows = await Promise.all(
-			Array.from(pressureByDm.values()).map(async (entry) => {
-				const canonicalSlug = await (async () => {
-					for (const system of ['bioguide', 'constituency', 'openstates', 'wikidata']) {
-						const ext = await ctx.db
-							.query('externalIds')
-							.withIndex('by_decisionMakerId_system', (idx) =>
-								idx.eq('decisionMakerId', entry.decisionMakerId).eq('system', system)
-							)
-							.first();
-						if (ext?.value) return ext.value;
-					}
-					return null;
-				})();
-
-				const combinedProofWeight = Array.from(entry.orgWeights.values()).reduce(
-					(sum, weight) => sum + weight,
-					0
-				);
-
-				const bills = Array.from(entry.bills.values())
-					.sort((a, b) => b.receiptCount - a.receiptCount)
-					.slice(0, 4)
-					.map((bill) => ({
-						billId: String(bill.billId),
-						billTitle: bill.billTitle,
-						alignment:
-							bill.alignmentWeight > 0 ? bill.alignmentNumerator / bill.alignmentWeight : 0,
-						dmAction: bill.dmAction
-					}));
-
-				return {
-					decisionMakerId: String(entry.decisionMakerId),
-					canonicalSlug,
-					dmName: entry.dmName,
-					orgCount: entry.orgWeights.size,
-					combinedProofWeight,
-					verifiedActionEvidence: coalitionFloor5(entry.verifiedActionEvidence),
-					districtSignalCount: coalitionFloor3(entry.districtSignalCount),
-					receiptCount: entry.receiptCount,
-					bills,
-					latestReceiptAt: entry.latestAt
-				};
-			})
-		);
-
-		return rows
-			.sort((a, b) => {
-				if (b.combinedProofWeight !== a.combinedProofWeight) {
-					return b.combinedProofWeight - a.combinedProofWeight;
-				}
-				return b.latestReceiptAt - a.latestReceiptAt;
-			})
-			.slice(0, cappedLimit);
+	handler: async (ctx, { networkId, orgSlug, limit, _secret }) => {
+		await requireNetworkAccess(ctx, networkId, orgSlug, _secret);
+		return await readCoalitionPressure(ctx, networkId, limit ?? 12);
 	}
 });

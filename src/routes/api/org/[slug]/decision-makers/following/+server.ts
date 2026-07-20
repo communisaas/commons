@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -9,7 +9,7 @@ import type { RequestHandler } from './$types';
  *
  * List all decision-makers this org follows.
  */
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, locals, url }) => {
 	if (!FEATURES.LEGISLATION) {
 		throw error(404, 'Legislation features not enabled');
 	}
@@ -18,6 +18,17 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const result = await serverQuery(api.legislation.listOrgDmFollows, { slug: params.slug });
-	return json({ follows: result.followed, total: result.followedCount, limit: 50, offset: 0 });
+	const cursor = url.searchParams.get('cursor') || undefined;
+	const result = await serverQuery(api.legislation.listOrgDmFollows, {
+		slug: params.slug,
+		limit: 50,
+		cursor
+	});
+	return json({
+		follows: result.followed,
+		total: result.followedCount,
+		limit: 50,
+		nextCursor: result.nextCursor,
+		hasMore: result.hasMore
+	});
 };

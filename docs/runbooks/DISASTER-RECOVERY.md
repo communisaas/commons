@@ -130,9 +130,12 @@ Spot-check these tables via the Convex dashboard or a quick query:
      echo "Refusing deploy: $RELEASE_SHA is not contained in origin/production." >&2
      exit 1
    fi
-   gh workflow run deploy.yml --ref production \
+   # The workflow definition and secret authority always come from protected main;
+   # branch/ref identify only the inert candidate source.
+   gh workflow run deploy.yml --ref main \
      -f branch=production \
-     -f ref="$RELEASE_SHA"
+     -f ref="$RELEASE_SHA" \
+     -f mode=normal
    ```
 3. Verify the live site is operational: check `commons.email` health.
 

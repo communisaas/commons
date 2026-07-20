@@ -14,8 +14,48 @@ import type { Doc, Id } from './_generated/dataModel';
 import { requireAuth, requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { upsertExternalId } from './_externalIds';
+import {
+	getAccountabilityReadModelMigration,
+	requireAccountabilityReadModelReady,
+	syncAccountabilityOrgDmFollowProjection,
+	syncAccountabilityReceiptProjection,
+	syncAccountabilityScorecardProjection
+} from './lib/accountabilityReadModelDb';
+import {
+	ACCOUNTABILITY_RESPONSE_MAX,
+	isAccountabilityReadModelReady,
+	normalizeAccountabilityCursor,
+	normalizeAccountabilityIdentityCommitment,
+	normalizeAccountabilityPageSize
+} from './lib/accountabilityReadModel';
 
 declare const process: { env: Record<string, string | undefined> };
+
+const ORG_DM_FOLLOW_MAX = 100;
+const DM_DISCOVERY_PAGE_MAX = 25;
+const ACCOUNTABILITY_PAGE_MAX_BYTES = 512 * 1024;
+const LEGISLATION_BROWSE_MAX_BYTES = 512 * 1024;
+const LEGISLATION_CURSOR_MAX_CHARS = 2 * 1024;
+const DM_FEED_MAX_FOLLOWS = 12;
+
+function normalizeLegislationLimit(
+	value: number | undefined,
+	fallback: number,
+	maximum: number,
+	code: string
+): number {
+	const resolved = value ?? fallback;
+	if (!Number.isSafeInteger(resolved) || resolved < 1) throw new Error(code);
+	return Math.min(resolved, maximum);
+}
+
+function normalizeLegislationCursor(value: string | null | undefined): string | null {
+	if (value === undefined || value === null || value === '') return null;
+	if (value.length > LEGISLATION_CURSOR_MAX_CHARS) {
+		throw new Error('LEGISLATION_CURSOR_INVALID');
+	}
+	return value;
+}
 
 const upsertBillRef = makeFunctionReference<'mutation'>(
 	'legislation:upsertBill'
@@ -31,12 +71,27 @@ const upsertRelevanceRef = makeFunctionReference<'mutation'>(
 ) as unknown as FunctionReference<'mutation', 'internal'>;
 const listDmsWithReceiptsSinceRef = makeFunctionReference<'query'>(
 	'legislation:listDmsWithReceiptsSince'
-) as unknown as FunctionReference<'query', 'internal'>;
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ since: number; cursor?: string },
+	ScorecardDmPage
+>;
 const aggregateReceiptsForDmRef = makeFunctionReference<'query'>(
 	'legislation:aggregateReceiptsForDm'
-) as unknown as FunctionReference<'query', 'internal'>;
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{
+		decisionMakerId: Id<'decisionMakers'>;
+		periodStart: number;
+		periodEnd: number;
+		cursor?: string;
+	},
+	ScorecardReceiptPage
+>;
 const upsertScorecardSnapshotRef = makeFunctionReference<'mutation'>(
-	'legislation:upsertScorecardSnapshot'
+	'legislation:saveScorecard'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
 const scoreBillRelevanceRef = makeFunctionReference<'action'>(
 	'legislation:scoreBillRelevance'
@@ -44,6 +99,21 @@ const scoreBillRelevanceRef = makeFunctionReference<'action'>(
 const requireRescoreBillsAuthRef = makeFunctionReference<'query'>(
 	'legislation:requireRescoreBillsAuth'
 ) as unknown as FunctionReference<'query', 'internal', { slug: string }, { ok: true }>;
+const backfillVoteReceiptResponsesRef = makeFunctionReference<'mutation'>(
+	'legislation:backfillVoteReceiptResponses'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{
+		decisionMakerId: Id<'decisionMakers'>;
+		billId: Id<'bills'>;
+		action: string;
+		occurredAt: number;
+		cursor?: string;
+		waitAttempts?: number;
+	},
+	unknown
+>;
 
 // One-off bill-prune function references (see PRUNE section at EOF).
 const pruneBillsBatchRef = makeFunctionReference<'mutation'>(
@@ -77,40 +147,8 @@ export const listBills = query({
 		limit: v.optional(v.number()),
 		cursor: v.optional(v.union(v.string(), v.null()))
 	},
-	handler: async (ctx, args) => {
-		const limit = args.limit ?? 50;
-
-		const q =
-			args.jurisdiction && args.status
-				? ctx.db
-						.query('bills')
-						.withIndex('by_jurisdiction_status', (idx) =>
-							idx.eq('jurisdiction', args.jurisdiction!).eq('status', args.status!)
-						)
-				: ctx.db.query('bills').withIndex('by_statusDate');
-
-		const results = await q
-			.order('desc')
-			.paginate({ numItems: limit, cursor: args.cursor ?? null });
-
-		return {
-			page: results.page.map((b) => ({
-				_id: b._id,
-				externalId: b.externalId,
-				title: b.title,
-				status: b.status,
-				statusDate: b.statusDate,
-				jurisdiction: b.jurisdiction,
-				jurisdictionLevel: b.jurisdictionLevel,
-				chamber: b.chamber ?? null,
-				sourceUrl: b.sourceUrl,
-				topics: b.topics,
-				sponsors: b.sponsors ?? null,
-				_creationTime: b._creationTime
-			})),
-			isDone: results.isDone,
-			continueCursor: results.continueCursor
-		};
+	handler: async () => {
+		throw new Error('LEGISLATION_PUBLIC_BILL_LIST_RETIRED');
 	}
 });
 
@@ -119,30 +157,8 @@ export const listBills = query({
  */
 export const getBill = query({
 	args: { billId: v.id('bills') },
-	handler: async (ctx, { billId }) => {
-		const bill = await ctx.db.get(billId);
-		if (!bill) return null;
-
-		// Get all actions for this bill
-		const actions = await ctx.db
-			.query('legislativeActions')
-			.withIndex('by_billId', (q) => q.eq('billId', billId))
-			.order('desc')
-			.take(100);
-
-		return {
-			...bill,
-			topicEmbedding: undefined, // strip large vector from response
-			actions: actions.map((a) => ({
-				_id: a._id,
-				name: a.name,
-				action: a.action,
-				detail: a.detail ?? null,
-				occurredAt: a.occurredAt,
-				decisionMakerId: a.decisionMakerId ?? null,
-				sourceUrl: a.sourceUrl ?? null
-			}))
-		};
+	handler: async () => {
+		throw new Error('LEGISLATION_PUBLIC_BILL_DETAIL_RETIRED');
 	}
 });
 
@@ -157,7 +173,7 @@ export const listAlerts = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = args.limit ?? 50;
+		const limit = normalizeLegislationLimit(args.limit, 50, 100, 'ALERT_LIST_LIMIT_INVALID');
 
 		let q;
 		if (args.status) {
@@ -243,42 +259,8 @@ export const getScorecard = query({
 		// canonical changelog lives at docs/design/SCORECARD-METHODOLOGY-CHANGELOG.md.
 		methodologyVersion: v.optional(v.number())
 	},
-	handler: async (ctx, { decisionMakerId, methodologyVersion }) => {
-		const dm = await ctx.db.get(decisionMakerId);
-		if (!dm) return null;
-
-		const version = methodologyVersion ?? SCORECARD_METHODOLOGY_VERSION;
-		const snapshots = await ctx.db
-			.query('scorecardSnapshots')
-			.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
-			.order('desc')
-			.take(48) // wider take so version filter still yields 12 results when v1+v2 coexist
-			.then((rows) => rows.filter((r) => r.methodologyVersion === version).slice(0, 12));
-
-		return {
-			decisionMaker: {
-				_id: dm._id,
-				name: dm.name,
-				party: dm.party ?? null,
-				jurisdiction: dm.jurisdiction ?? null,
-				district: dm.district ?? null
-			},
-			snapshots: snapshots.map((s) => ({
-				_id: s._id,
-				periodStart: s.periodStart,
-				periodEnd: s.periodEnd,
-				responsiveness: s.responsiveness ?? null,
-				alignment: s.alignment ?? null,
-				composite: s.composite ?? null,
-				proofWeightTotal: s.proofWeightTotal,
-				deliveriesSent: s.deliveriesSent,
-				deliveriesOpened: s.deliveriesOpened,
-				repliesReceived: s.repliesReceived,
-				alignedVotes: s.alignedVotes,
-				totalScoredVotes: s.totalScoredVotes,
-				methodologyVersion: s.methodologyVersion
-			}))
-		};
+	handler: async () => {
+		throw new Error('LEGISLATION_PUBLIC_SCORECARD_HISTORY_RETIRED');
 	}
 });
 
@@ -290,32 +272,8 @@ export const listActions = query({
 		billId: v.id('bills'),
 		limit: v.optional(v.number())
 	},
-	handler: async (ctx, args) => {
-		const actions = await ctx.db
-			.query('legislativeActions')
-			.withIndex('by_billId', (q) => q.eq('billId', args.billId))
-			.order('desc')
-			.take(args.limit ?? 100);
-
-		return Promise.all(
-			actions.map(async (a) => {
-				let dmName: string | null = null;
-				if (a.decisionMakerId) {
-					const dm = await ctx.db.get(a.decisionMakerId);
-					dmName = dm?.name ?? null;
-				}
-				return {
-					_id: a._id,
-					name: a.name,
-					action: a.action,
-					detail: a.detail ?? null,
-					occurredAt: a.occurredAt,
-					decisionMakerId: a.decisionMakerId ?? null,
-					decisionMakerName: dmName,
-					sourceUrl: a.sourceUrl ?? null
-				};
-			})
-		);
+	handler: async () => {
+		throw new Error('LEGISLATION_PUBLIC_ACTION_LIST_RETIRED');
 	}
 });
 
@@ -352,7 +310,19 @@ export const followDm = mutation({
 			.first();
 
 		if (existing) {
+			await syncAccountabilityOrgDmFollowProjection(ctx, org._id, args.decisionMakerId);
 			return { ...existing, created: false };
+		}
+
+		// A follow is a durable per-org resource. This bounded range read is part
+		// of the same mutation as the insert, so Convex OCC serializes concurrent
+		// creators and the public read surfaces can rely on a hard maximum.
+		const currentFollows = await ctx.db
+			.query('orgDmFollows')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(ORG_DM_FOLLOW_MAX + 1);
+		if (currentFollows.length >= ORG_DM_FOLLOW_MAX) {
+			throw new Error('ORG_DM_FOLLOW_LIMIT_EXCEEDED');
 		}
 
 		const now = Date.now();
@@ -365,6 +335,7 @@ export const followDm = mutation({
 			followedBy: userId,
 			followedAt: now
 		});
+		await syncAccountabilityOrgDmFollowProjection(ctx, org._id, args.decisionMakerId);
 
 		return { _id: id, created: true };
 	}
@@ -397,6 +368,7 @@ export const updateDmFollow = mutation({
 		if (args.note !== undefined) updates.note = args.note.slice(0, 1000);
 
 		await ctx.db.patch(existing._id, updates);
+		await syncAccountabilityOrgDmFollowProjection(ctx, org._id, args.decisionMakerId);
 		return { _id: existing._id };
 	}
 });
@@ -422,6 +394,7 @@ export const unfollowDm = mutation({
 		if (existing) {
 			await ctx.db.delete(existing._id);
 		}
+		await syncAccountabilityOrgDmFollowProjection(ctx, org._id, args.decisionMakerId);
 
 		return { success: true };
 	}
@@ -438,10 +411,11 @@ export const getDmActivity = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 20, 50);
+		const limit = normalizeLegislationLimit(args.limit, 20, 50, 'DM_ACTIVITY_LIMIT_INVALID');
 
 		const dm = await ctx.db.get(args.decisionMakerId);
 		if (!dm) throw new Error('Decision-maker not found');
+		await requireAccountabilityReadModelReady(ctx);
 
 		// Fetch legislative actions
 		const actions = await ctx.db
@@ -454,15 +428,12 @@ export const getDmActivity = query({
 
 		// Fetch accountability receipts scoped to org
 		const receipts = await ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_decisionMakerId_proofDeliveredAt', (q) =>
-				q.eq('decisionMakerId', args.decisionMakerId)
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_orgId_decisionMakerId_proofDeliveredAt', (q) =>
+				q.eq('orgId', org._id).eq('decisionMakerId', args.decisionMakerId)
 			)
 			.order('desc')
 			.take(limit);
-
-		// Filter receipts by org
-		const orgReceipts = receipts.filter((r) => r.orgId === org._id);
 
 		// Normalize into timeline items
 		type TimelineItem = {
@@ -491,16 +462,15 @@ export const getDmActivity = query({
 			});
 		}
 
-		for (const r of orgReceipts) {
-			const bill = await ctx.db.get(r.billId);
+		for (const r of receipts) {
 			items.push({
 				type: 'receipt',
-				id: r._id,
+				id: r.receiptId,
 				date: r.proofDeliveredAt,
-				receiptId: r._id,
+				receiptId: r.receiptId,
 				billId: r.billId,
-				billExternalId: bill?.externalId ?? null,
-				billTitle: bill?.title ?? null,
+				billExternalId: r.billExternalId,
+				billTitle: r.billTitle,
 				proofWeight: r.proofWeight,
 				dmAction: r.dmAction ?? null,
 				alignment: r.alignment,
@@ -513,7 +483,7 @@ export const getDmActivity = query({
 		items.sort((a, b) => b.date - a.date);
 		const page = items.slice(0, limit);
 
-		return { items: page, total: actions.length + orgReceipts.length };
+		return { items: page, total: actions.length + receipts.length };
 	}
 });
 
@@ -527,13 +497,21 @@ export const getDmFeed = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 20, 50);
+		const limit = normalizeLegislationLimit(args.limit, 20, 20, 'DM_FEED_LIMIT_INVALID');
+		await requireAccountabilityReadModelReady(ctx);
 
-		// Get followed DM IDs
+		// The merged vote/receipt feed has no global chronological source yet.
+		// Keep the interim fan-out explicit and fixed instead of scanning every
+		// follow ever; orgs above the ceiling must use the paged scorecard surface.
 		const follows = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('followed', true)
+			)
+			.take(DM_FEED_MAX_FOLLOWS + 1);
+		if (follows.length > DM_FEED_MAX_FOLLOWS) {
+			throw new Error('DM_FEED_FOLLOW_CARDINALITY_EXCEEDED');
+		}
 
 		const followedDmIds = follows.map((f) => f.decisionMakerId);
 
@@ -552,7 +530,7 @@ export const getDmFeed = query({
 		const items: FeedItem[] = [];
 
 		for (const dmId of followedDmIds) {
-			const dm = await ctx.db.get(dmId);
+			const dm = follows.find((row) => row.decisionMakerId === dmId) ?? null;
 
 			const actions = await ctx.db
 				.query('legislativeActions')
@@ -575,7 +553,7 @@ export const getDmFeed = query({
 					detail: a.detail ?? null,
 					decisionMaker: dm
 						? {
-								_id: dm._id,
+								_id: dm.decisionMakerId,
 								type: dm.type,
 								title: dm.title ?? null,
 								name: dm.name,
@@ -589,23 +567,22 @@ export const getDmFeed = query({
 			}
 
 			const receipts = await ctx.db
-				.query('accountabilityReceipts')
-				.withIndex('by_decisionMakerId_proofDeliveredAt', (q) => q.eq('decisionMakerId', dmId))
+				.query('accountabilityReceiptProjections')
+				.withIndex('by_orgId_decisionMakerId_proofDeliveredAt', (q) =>
+					q.eq('orgId', org._id).eq('decisionMakerId', dmId)
+				)
 				.order('desc')
 				.take(limit);
 
-			const orgReceipts = receipts.filter((r) => r.orgId === org._id);
-
-			for (const r of orgReceipts) {
-				const bill = await ctx.db.get(r.billId);
+			for (const r of receipts) {
 				items.push({
 					type: 'receipt',
-					id: r._id,
+					id: r.receiptId,
 					date: r.proofDeliveredAt,
-					receiptId: r._id,
+					receiptId: r.receiptId,
 					billId: r.billId,
-					billExternalId: bill?.externalId ?? null,
-					billTitle: bill?.title ?? null,
+					billExternalId: r.billExternalId,
+					billTitle: r.billTitle,
 					proofWeight: r.proofWeight,
 					dmAction: r.dmAction ?? null,
 					alignment: r.alignment,
@@ -613,7 +590,7 @@ export const getDmFeed = query({
 					status: r.status,
 					decisionMaker: dm
 						? {
-								_id: dm._id,
+								_id: dm.decisionMakerId,
 								type: dm.type,
 								title: dm.title ?? null,
 								name: dm.name,
@@ -750,13 +727,19 @@ export const browseBills = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 20, 50);
+		const limit = normalizeLegislationLimit(args.limit, 20, 50, 'BILL_BROWSE_LIMIT_INVALID');
+		const cursor = normalizeLegislationCursor(args.cursor);
 
 		const results = await ctx.db
 			.query('orgBillRelevances')
 			.withIndex('by_orgId_score', (q) => q.eq('orgId', org._id))
 			.order('desc')
-			.paginate({ numItems: limit, cursor: args.cursor ?? null });
+			.paginate({
+				numItems: limit,
+				cursor,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: LEGISLATION_BROWSE_MAX_BYTES
+			});
 
 		const bills = await Promise.all(
 			results.page.map(async (r) => {
@@ -799,8 +782,8 @@ export const searchBills = query({
 		limit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
-		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 20, 50);
+		await requireOrgRole(ctx, args.slug, 'member');
+		const limit = normalizeLegislationLimit(args.limit, 20, 50, 'BILL_SEARCH_LIMIT_INVALID');
 
 		if (!args.q.trim()) throw new Error('Query parameter "q" is required');
 		if (args.q.length > 200) throw new Error('Search query must be 200 characters or fewer');
@@ -944,22 +927,45 @@ export const listRepresentatives = query({
 	},
 	handler: async (ctx, args) => {
 		await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 50, 100);
+		const limit = normalizeLegislationLimit(
+			args.limit,
+			50,
+			100,
+			'REPRESENTATIVE_PAGE_SIZE_INVALID'
+		);
+		const cursor = normalizeLegislationCursor(args.cursor);
+		const country = args.country?.trim() || undefined;
+		const constituency = args.constituency?.trim() || undefined;
+		if (!country && !constituency) {
+			throw new Error('REPRESENTATIVE_BROWSE_SCOPE_REQUIRED');
+		}
+		if ((country?.length ?? 0) > 8 || (constituency?.length ?? 0) > 128) {
+			throw new Error('REPRESENTATIVE_BROWSE_SCOPE_INVALID');
+		}
 
 		// If filtering by constituency, look up external IDs first
-		if (args.constituency) {
+		if (constituency) {
 			const extIds = await ctx.db
 				.query('externalIds')
 				.withIndex('by_system_value', (q) =>
-					q.eq('system', 'constituency').eq('value', args.constituency!)
+					q.eq('system', 'constituency').eq('value', constituency)
 				)
-				.collect();
+				.order('asc')
+				.paginate({
+					cursor,
+					numItems: limit,
+					maximumRowsRead: limit + 1,
+					maximumBytesRead: LEGISLATION_BROWSE_MAX_BYTES
+				});
+			if (extIds.pageStatus === 'SplitRequired') {
+				throw new Error('REPRESENTATIVE_PAGE_TOO_LARGE');
+			}
 
 			const dms = await Promise.all(
-				extIds.map(async (ext) => {
+				extIds.page.map(async (ext) => {
 					const dm = await ctx.db.get(ext.decisionMakerId);
 					if (!dm) return null;
-					if (args.country && dm.jurisdiction !== args.country) return null;
+					if (country && dm.jurisdiction !== country) return null;
 					return {
 						_id: dm._id,
 						countryCode: dm.jurisdiction ?? null,
@@ -978,28 +984,29 @@ export const listRepresentatives = query({
 
 			return {
 				data: dms.filter((d): d is NonNullable<typeof d> => d !== null),
-				hasMore: false,
-				cursor: null
+				hasMore: !extIds.isDone,
+				cursor: extIds.isDone ? null : extIds.continueCursor
 			};
 		}
 
-		// General listing by jurisdiction level
-		let q = ctx.db.query('decisionMakers').withIndex('by_jurisdiction_jurisdictionLevel', (idx) => {
-			if (args.country) {
-				return idx.eq('jurisdiction', args.country).eq('jurisdictionLevel', 'international');
-			}
-			return idx;
-		});
-
-		const results = await q.order('asc').paginate({ numItems: limit, cursor: args.cursor ?? null });
-
-		// Filter to international only if no country specified
-		const filtered = args.country
-			? results.page
-			: results.page.filter((dm) => dm.jurisdictionLevel === 'international');
+		const results = await ctx.db
+			.query('decisionMakers')
+			.withIndex('by_jurisdiction_jurisdictionLevel', (idx) =>
+				idx.eq('jurisdiction', country!).eq('jurisdictionLevel', 'international')
+			)
+			.order('asc')
+			.paginate({
+				cursor,
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: LEGISLATION_BROWSE_MAX_BYTES
+			});
+		if (results.pageStatus === 'SplitRequired') {
+			throw new Error('REPRESENTATIVE_PAGE_TOO_LARGE');
+		}
 
 		const data = await Promise.all(
-			filtered.map(async (dm) => {
+			results.page.map(async (dm) => {
 				const ext = await ctx.db
 					.query('externalIds')
 					.withIndex('by_decisionMakerId_system', (q) =>
@@ -1026,7 +1033,7 @@ export const listRepresentatives = query({
 		return {
 			data,
 			hasMore: !results.isDone,
-			cursor: results.continueCursor
+			cursor: results.isDone ? null : results.continueCursor
 		};
 	}
 });
@@ -1168,6 +1175,26 @@ export const dismissAlert = mutation({
  * the requested campaign. Returns attestation digest + key audit fields (no
  * PII). T6-5.
  */
+function receiptProjectionDto(row: Doc<'accountabilityReceiptProjections'>) {
+	return {
+		id: row.receiptId,
+		decisionMakerId: row.decisionMakerId,
+		dmName: row.dmName,
+		billId: row.billId,
+		attestationDigest: row.attestationDigest,
+		proofWeight: row.proofWeight,
+		verifiedCount: row.verifiedCount,
+		totalCount: row.totalCount,
+		districtCount: row.districtCount,
+		alignment: row.alignment,
+		causalityClass: row.causalityClass,
+		proofDeliveredAt: row.proofDeliveredAt,
+		proofVerifiedAt: row.proofVerifiedAt ?? null,
+		anchorCid: row.anchorCid ?? null,
+		anchorRoot: row.anchorRoot ?? null
+	};
+}
+
 export const listReceiptsByCampaign = query({
 	args: {
 		slug: v.string(),
@@ -1181,56 +1208,26 @@ export const listReceiptsByCampaign = query({
 		if (!campaign || campaign.orgId !== org._id) {
 			throw new Error('Campaign not found');
 		}
-		const limit = Math.min(args.limit ?? 50, 200);
-
-		// Receipts have orgId denormalized — use by_orgId for read, filter campaignId in memory via deliveryId join.
-		const receipts = await ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(args.limit, 'browse');
+		const page = await ctx.db
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_orgId_campaignId_proofDeliveredAt', (q) =>
+				q.eq('orgId', org._id).eq('campaignId', args.campaignId)
+			)
 			.order('desc')
-			.take(limit * 4); // overfetch to absorb the campaign filter
-
-		// Join via deliveryId → campaignDeliveries → campaignId match. Bound the
-		// join by overfetched batch.
-		const matched: typeof receipts = [];
-		for (const r of receipts) {
-			if (!r.deliveryId) continue;
-			const delivery = await ctx.db.get(r.deliveryId as Id<'campaignDeliveries'>);
-			if (delivery && delivery.campaignId === args.campaignId) {
-				matched.push(r);
-				if (matched.length >= limit + 1) break;
-			}
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
-
-		let startIdx = 0;
-		if (args.cursor) {
-			const idx = matched.findIndex((r) => r._id === args.cursor);
-			if (idx >= 0) startIdx = idx + 1;
-		}
-		const page = matched.slice(startIdx, startIdx + limit + 1);
-		const hasMore = page.length > limit;
-		const items = page.slice(0, limit);
-		const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
-
 		return {
-			items: items.map((r) => ({
-				id: r._id,
-				decisionMakerId: r.decisionMakerId,
-				dmName: r.dmName,
-				billId: r.billId,
-				attestationDigest: r.attestationDigest,
-				proofWeight: r.proofWeight,
-				verifiedCount: r.verifiedCount,
-				totalCount: r.totalCount,
-				districtCount: r.districtCount,
-				alignment: r.alignment,
-				causalityClass: r.causalityClass,
-				proofDeliveredAt: r.proofDeliveredAt,
-				proofVerifiedAt: r.proofVerifiedAt ?? null,
-				anchorCid: r.anchorCid ?? null,
-				anchorRoot: r.anchorRoot ?? null
-			})),
-			nextCursor
+			items: page.page.map(receiptProjectionDto),
+			nextCursor: page.isDone ? null : page.continueCursor
 		};
 	}
 });
@@ -1246,53 +1243,60 @@ export const listReceiptsByOrg = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(args.limit ?? 200, 500);
-
-		const receipts = await ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(args.limit, 'browse');
+		const page = await ctx.db
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_orgId_proofDeliveredAt', (q) => q.eq('orgId', org._id))
 			.order('desc')
-			.take(limit + 1);
-
-		let startIdx = 0;
-		if (args.cursor) {
-			const idx = receipts.findIndex((r) => r._id === args.cursor);
-			if (idx >= 0) startIdx = idx + 1;
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
-		const page = receipts.slice(startIdx, startIdx + limit + 1);
-		const hasMore = page.length > limit;
-		const items = page.slice(0, limit);
-		const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
-
 		return {
-			items: items.map((r) => ({
-				id: r._id,
-				decisionMakerId: r.decisionMakerId,
-				dmName: r.dmName,
-				billId: r.billId,
-				attestationDigest: r.attestationDigest,
-				proofWeight: r.proofWeight,
-				verifiedCount: r.verifiedCount,
-				totalCount: r.totalCount,
-				districtCount: r.districtCount,
-				alignment: r.alignment,
-				causalityClass: r.causalityClass,
-				proofDeliveredAt: r.proofDeliveredAt,
-				proofVerifiedAt: r.proofVerifiedAt ?? null,
-				anchorCid: r.anchorCid ?? null,
-				anchorRoot: r.anchorRoot ?? null
-			})),
-			nextCursor
+			items: page.page.map(receiptProjectionDto),
+			nextCursor: page.isDone ? null : page.continueCursor
 		};
 	}
 });
 
-/**
- * Bounded accountability receipt summary for org OS surfaces. This is not an
- * all-time exact count; it summarizes the most recent receipt rows loaded from
- * the org index so the Capability Map can cite real source-row evidence without
- * scanning an unbounded table.
- */
+/** One explicit CSV/export page. Callers advance only with continueCursor. */
+export const exportReceiptsByOrg = query({
+	args: {
+		slug: v.string(),
+		cursor: v.optional(v.string()),
+		limit: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'member');
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(args.limit, 'export');
+		const page = await ctx.db
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_orgId_proofDeliveredAt', (q) => q.eq('orgId', org._id))
+			.order('desc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 1024 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_RECEIPT_EXPORT_PAGE_SPLIT_REQUIRED');
+		}
+		return {
+			items: page.page.map(receiptProjectionDto),
+			nextCursor: page.isDone ? null : page.continueCursor
+		};
+	}
+});
+
+/** Exact all-time accountability summary from one write-maintained org row. */
 export const getOrgReceiptSummary = query({
 	args: {
 		slug: v.string(),
@@ -1300,38 +1304,21 @@ export const getOrgReceiptSummary = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = Math.min(Math.max(args.limit ?? 200, 1), 500);
-
-		const rows = await ctx.db
-			.query('accountabilityReceipts')
+		await requireAccountabilityReadModelReady(ctx);
+		const row = await ctx.db
+			.query('accountabilityOrganizationAggregates')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.order('desc')
-			.take(limit);
-
-		let pendingCount = 0;
-		let responseLoggedCount = 0;
-		let anchorFieldCount = 0;
-		let proofWeightTotal = 0;
-		let latestProofDeliveredAt: number | null = null;
-
-		for (const row of rows) {
-			if (row.status === 'pending_response') pendingCount++;
-			if ((row.responses ?? []).length > 0) responseLoggedCount++;
-			if (row.anchorCid || row.anchorRoot) anchorFieldCount++;
-			proofWeightTotal += row.proofWeight;
-			if (latestProofDeliveredAt === null || row.proofDeliveredAt > latestProofDeliveredAt) {
-				latestProofDeliveredAt = row.proofDeliveredAt;
-			}
-		}
-
+			.unique();
 		return {
-			loadedCount: rows.length,
-			pendingCount,
-			responseLoggedCount,
-			anchorFieldCount,
-			proofWeightTotal,
-			latestProofDeliveredAt,
-			sampleLimit: limit
+			loadedCount: row?.receiptCount ?? 0,
+			receiptCount: row?.receiptCount ?? 0,
+			pendingCount: row?.pendingCount ?? 0,
+			responseLoggedCount: row?.responseLoggedCount ?? 0,
+			anchorFieldCount: row?.anchorFieldCount ?? 0,
+			proofWeightTotal: row?.proofWeightTotal ?? 0,
+			latestProofDeliveredAt: row?.latestProofDeliveredAt ?? null,
+			exact: true as const,
+			sampleLimit: null
 		};
 	}
 });
@@ -1340,9 +1327,9 @@ export const getOrgReceiptSummary = query({
  * Constituent receipt access — list (bill, DM, alignment, causality)
  * tuples for the calling user's verified actions, K-anonymized.
  *
- * Path: users.identityCommitment → supporters with same commitment (cross-org)
- *   → campaignActions for those supporters → campaignDeliveries via actionId
- *   → accountabilityReceipts via deliveryId.
+ * Path: users.identityCommitment → one cursor page of compact, K-safe
+ * accountabilityUserReceiptProjections. Writer-side attribution retains the
+ * supporter id for bounded identity rebinding without replaying action history.
  *
  * K-anon: only return receipts where receipt.totalCount >= 5 (the same
  * K-anonymity floor the public verification packet uses). Below-K receipts
@@ -1351,81 +1338,47 @@ export const getOrgReceiptSummary = query({
  * campaign. T6-4.
  */
 export const listMyReceipts = query({
-	args: {},
-	handler: async (ctx) => {
+	args: {
+		cursor: v.optional(v.string()),
+		limit: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
 		const { userId } = await requireAuth(ctx);
-		const user = await ctx.db
-			.query('users')
-			.filter((q) => q.eq(q.field('_id'), userId))
-			.first();
-		const identityCommitment = user?.identityCommitment;
+		const user = await ctx.db.get(userId);
+		const identityCommitment = normalizeAccountabilityIdentityCommitment(user?.identityCommitment);
 		if (!identityCommitment) {
-			return { items: [], total: 0 };
+			return { items: [], total: null, nextCursor: null };
 		}
-
-		// Cross-org supporters tied to this user's identity commitment.
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_identityCommitment', (q) => q.eq('identityCommitment', identityCommitment))
-			.collect();
-		const supporterIds = supporters.map((s) => s._id);
-		if (supporterIds.length === 0) return { items: [], total: 0 };
-
-		// Verified actions by those supporters (per-campaign index — scan
-		// bounded by the user's actual activity).
-		const actionIds: Id<'campaignActions'>[] = [];
-		for (const sid of supporterIds) {
-			const actions = await ctx.db
-				.query('campaignActions')
-				.filter((q) => q.eq(q.field('supporterId'), sid))
-				.collect();
-			for (const a of actions) if (a.verified) actionIds.push(a._id);
-		}
-		if (actionIds.length === 0) return { items: [], total: 0 };
-
-		// Deliveries for those actions
-		const deliveryIds: string[] = [];
-		for (const aid of actionIds) {
-			const ds = await ctx.db
-				.query('campaignDeliveries')
-				.withIndex('by_actionId', (q) => q.eq('actionId', aid))
-				.collect();
-			for (const d of ds) deliveryIds.push(d._id);
-		}
-		if (deliveryIds.length === 0) return { items: [], total: 0 };
-
-		// Receipts via deliveryId — accountabilityReceipts has by_deliveryId.
-		const receipts = [];
-		for (const did of deliveryIds) {
-			const rs = await ctx.db
-				.query('accountabilityReceipts')
-				.withIndex('by_deliveryId', (q) => q.eq('deliveryId', did))
-				.collect();
-			for (const r of rs) {
-				// K-anonymity floor: only surface receipts the public packet would
-				// also surface. K=5 matches verification-packet.ts.
-				if (r.totalCount >= 5) receipts.push(r);
-			}
-		}
-
-		// De-duplicate (a receipt might join via multiple deliveries) and shape.
-		const seen = new Set<string>();
-		const items = [];
-		for (const r of receipts) {
-			if (seen.has(r._id)) continue;
-			seen.add(r._id);
-			items.push({
-				receiptId: r._id,
-				billId: r.billId,
-				decisionMakerId: r.decisionMakerId,
-				dmName: r.dmName,
-				alignment: r.alignment,
-				causalityClass: r.causalityClass,
-				proofDeliveredAt: r.proofDeliveredAt
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(args.limit, 'browse');
+		const page = await ctx.db
+			.query('accountabilityUserReceiptProjections')
+			.withIndex('by_identityCommitment_proofDeliveredAt', (q) =>
+				q.eq('identityCommitment', identityCommitment)
+			)
+			.order('desc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 256 * 1024
 			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_USER_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
-		items.sort((a, b) => b.proofDeliveredAt - a.proofDeliveredAt);
-		return { items, total: items.length };
+		return {
+			items: page.page.map((row) => ({
+				receiptId: row.receiptId,
+				billId: row.billId,
+				decisionMakerId: row.decisionMakerId,
+				dmName: row.dmName,
+				alignment: row.alignment,
+				causalityClass: row.causalityClass,
+				proofDeliveredAt: row.proofDeliveredAt
+			})),
+			total: null,
+			nextCursor: page.isDone ? null : page.continueCursor
+		};
 	}
 });
 
@@ -1466,37 +1419,103 @@ export const createAction = internalMutation({
 			args.decisionMakerId !== undefined &&
 			(args.action.startsWith('voted_') || args.action === 'abstained');
 		if (isVote && args.decisionMakerId) {
-			const receipts = await ctx.db
-				.query('accountabilityReceipts')
-				.withIndex('by_decisionMakerId', (q) =>
-					q.eq('decisionMakerId', args.decisionMakerId as Id<'decisionMakers'>)
-				)
-				.collect();
-			const matching = receipts.filter((r) => r.billId === args.billId);
-			for (const r of matching) {
-				const existing = r.responses ?? [];
-				// Skip if a vote_cast already recorded at the same occurredAt — keeps
-				// the dedup tight without over-broadening (a re-vote in a later session
-				// would carry a different occurredAt and still append).
-				const alreadyRecorded = existing.some(
-					(resp) => resp.type === 'vote_cast' && resp.occurredAt === args.occurredAt
-				);
-				if (alreadyRecorded) continue;
-				await ctx.db.patch(r._id, {
-					responses: [
-						...existing,
-						{
-							type: 'vote_cast',
-							detail: args.action,
-							confidence: 'observed',
-							occurredAt: args.occurredAt
-						}
-					]
-				});
-			}
+			await ctx.scheduler.runAfter(0, backfillVoteReceiptResponsesRef, {
+				decisionMakerId: args.decisionMakerId,
+				billId: args.billId,
+				action: args.action,
+				occurredAt: args.occurredAt
+			});
 		}
 
 		return id;
+	}
+});
+
+/** Bounded continuation for one vote's receipt-response fan-out. */
+export const backfillVoteReceiptResponses = internalMutation({
+	args: {
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		action: v.string(),
+		occurredAt: v.number(),
+		cursor: v.optional(v.string()),
+		waitAttempts: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const migration = await getAccountabilityReadModelMigration(ctx);
+		if (!isAccountabilityReadModelReady(migration)) {
+			const waitAttempts = (args.waitAttempts ?? 0) + 1;
+			if (waitAttempts > 120) throw new Error('ACCOUNTABILITY_READ_MODEL_NOT_READY');
+			await ctx.scheduler.runAfter(5_000, backfillVoteReceiptResponsesRef, {
+				decisionMakerId: args.decisionMakerId,
+				billId: args.billId,
+				action: args.action,
+				occurredAt: args.occurredAt,
+				cursor: args.cursor,
+				waitAttempts
+			});
+			return { status: 'deferred' as const, waitAttempts };
+		}
+
+		const page = await ctx.db
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_decisionMakerId_billId_proofDeliveredAt', (q) =>
+				q.eq('decisionMakerId', args.decisionMakerId).eq('billId', args.billId)
+			)
+			.order('asc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 16,
+				maximumRowsRead: 17,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_VOTE_BACKFILL_PAGE_SPLIT_REQUIRED');
+		}
+		let updated = 0;
+		for (const projection of page.page) {
+			const receipt = await ctx.db.get(projection.receiptId);
+			if (!receipt) throw new Error('ACCOUNTABILITY_RECEIPT_NOT_FOUND');
+			const responses = receipt.responses ?? [];
+			if (
+				responses.some(
+					(response) => response.type === 'vote_cast' && response.occurredAt === args.occurredAt
+				)
+			) {
+				continue;
+			}
+			if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+				throw new Error(`ACCOUNTABILITY_RESPONSE_LIMIT_EXCEEDED:${receipt._id}`);
+			}
+			await ctx.db.patch(receipt._id, {
+				responses: [
+					...responses,
+					{
+						type: 'vote_cast',
+						detail: args.action.slice(0, 2_048),
+						confidence: 'observed',
+						occurredAt: args.occurredAt
+					}
+				],
+				updatedAt: Date.now()
+			});
+			await syncAccountabilityReceiptProjection(ctx, receipt._id);
+			updated++;
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, backfillVoteReceiptResponsesRef, {
+				decisionMakerId: args.decisionMakerId,
+				billId: args.billId,
+				action: args.action,
+				occurredAt: args.occurredAt,
+				cursor: page.continueCursor
+			});
+		}
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			updated,
+			continueCursor: page.isDone ? null : page.continueCursor
+		};
 	}
 });
 
@@ -1548,10 +1567,13 @@ export const saveScorecard = internalMutation({
 				totalScoredVotes: args.totalScoredVotes,
 				snapshotHash: args.snapshotHash
 			});
+			await syncAccountabilityScorecardProjection(ctx, existing._id);
 			return existing._id;
 		}
 
-		return await ctx.db.insert('scorecardSnapshots', args);
+		const snapshotId = await ctx.db.insert('scorecardSnapshots', args);
+		await syncAccountabilityScorecardProjection(ctx, snapshotId);
+		return snapshotId;
 	}
 });
 
@@ -1835,7 +1857,7 @@ export const listWatchedBills = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = args.limit ?? 10;
+		const limit = normalizeLegislationLimit(args.limit, 10, 50, 'WATCHED_BILL_LIMIT_INVALID');
 
 		const watches = await ctx.db
 			.query('orgBillWatches')
@@ -1880,7 +1902,7 @@ export const listRelevantBills = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = args.limit ?? 10;
+		const limit = normalizeLegislationLimit(args.limit, 10, 50, 'RELEVANT_BILL_LIMIT_INVALID');
 
 		const relevances = await ctx.db
 			.query('orgBillRelevances')
@@ -1922,59 +1944,65 @@ export const listRelevantBills = query({
 export const listOrgDmFollows = query({
 	args: {
 		slug: v.string(),
-		limit: v.optional(v.number())
+		limit: v.optional(v.number()),
+		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = args.limit ?? 20;
+		const limit = normalizeAccountabilityPageSize(args.limit, 'browse');
+		const cursor = normalizeAccountabilityCursor(args.cursor);
+		await requireAccountabilityReadModelReady(ctx);
 
 		const follows = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.order('desc')
-			.take(limit + 1);
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('followed', true)
+			)
+			.order('asc')
+			.paginate({
+				cursor,
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: ACCOUNTABILITY_PAGE_MAX_BYTES
+			});
+		if (follows.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_FOLLOW_PAGE_TOO_LARGE');
+		}
+		const totalRows = await ctx.db
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('followed', true)
+			)
+			.take(ORG_DM_FOLLOW_MAX + 1);
+		if (totalRows.length > ORG_DM_FOLLOW_MAX) {
+			throw new Error('ORG_DM_FOLLOW_LEGACY_OVERFLOW');
+		}
 
-		const hasMore = follows.length > limit;
-		const page = follows.slice(0, limit);
-
-		const enriched = await Promise.all(
-			page.map(async (f) => {
-				const dm = await ctx.db.get(f.decisionMakerId);
-				return {
-					_id: f._id,
-					reason: f.reason,
-					alertsEnabled: f.alertsEnabled,
-					followedAt: f.followedAt,
-					decisionMaker: dm
-						? {
-								_id: dm._id,
-								type: dm.type,
-								title: dm.title ?? null,
-								name: dm.name,
-								firstName: dm.firstName ?? null,
-								lastName: dm.lastName ?? null,
-								party: dm.party ?? null,
-								jurisdiction: dm.jurisdiction ?? null,
-								district: dm.district ?? null,
-								photoUrl: dm.photoUrl ?? null,
-								active: dm.active
-							}
-						: null
-				};
-			})
-		);
-
-		const followedCount = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect()
-			.then((rows) => rows.length);
+		const enriched = follows.page.map((follow) => ({
+			_id: follow._id,
+			reason: follow.followReason ?? 'manual',
+			alertsEnabled: follow.alertsEnabled ?? false,
+			followedAt: follow.followedAt ?? follow.updatedAt,
+			decisionMaker: {
+				_id: follow.decisionMakerId,
+				type: follow.type,
+				title: follow.title ?? null,
+				name: follow.name,
+				firstName: null,
+				lastName: null,
+				party: follow.party ?? null,
+				jurisdiction: follow.jurisdiction ?? null,
+				district: follow.district ?? null,
+				photoUrl: follow.photoUrl ?? null,
+				active: true
+			}
+		}));
 
 		return {
 			followed: enriched,
-			followedCount,
-			hasMore,
-			nextCursor: hasMore ? (page[page.length - 1]?._id ?? null) : null
+			followedCount: totalRows.length,
+			hasMore: !follows.isDone,
+			nextCursor: follows.isDone ? null : follows.continueCursor
 		};
 	}
 });
@@ -1985,40 +2013,56 @@ export const listOrgDmFollows = query({
 export const discoverDms = query({
 	args: {
 		slug: v.string(),
-		limit: v.optional(v.number())
+		limit: v.optional(v.number()),
+		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const limit = args.limit ?? 12;
-
-		// Get all followed DM IDs for this org
-		const followedRows = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-		const followedIds = new Set(followedRows.map((f) => f.decisionMakerId));
-
-		// Get active DMs, filtering out followed ones
-		const allActive = await ctx.db
+		const requested = args.limit ?? 12;
+		if (!Number.isSafeInteger(requested) || requested < 1 || requested > DM_DISCOVERY_PAGE_MAX) {
+			throw new Error('DM_DISCOVERY_PAGE_SIZE_INVALID');
+		}
+		const cursor = normalizeAccountabilityCursor(args.cursor);
+		const activePage = await ctx.db
 			.query('decisionMakers')
 			.withIndex('by_active', (q) => q.eq('active', true))
-			.take(limit + followedIds.size + 10);
-
-		const discovered = allActive.filter((dm) => !followedIds.has(dm._id)).slice(0, limit);
-
-		return discovered.map((dm) => ({
-			_id: dm._id,
-			type: dm.type,
-			title: dm.title ?? null,
-			name: dm.name,
-			firstName: dm.firstName ?? null,
-			lastName: dm.lastName ?? null,
-			party: dm.party ?? null,
-			jurisdiction: dm.jurisdiction ?? null,
-			district: dm.district ?? null,
-			photoUrl: dm.photoUrl ?? null,
-			active: dm.active
-		}));
+			.paginate({
+				cursor,
+				numItems: requested,
+				maximumRowsRead: requested + 1,
+				maximumBytesRead: ACCOUNTABILITY_PAGE_MAX_BYTES
+			});
+		if (activePage.pageStatus === 'SplitRequired') throw new Error('DM_DISCOVERY_PAGE_TOO_LARGE');
+		const followed = await Promise.all(
+			activePage.page.map((dm) =>
+				ctx.db
+					.query('orgDmFollows')
+					.withIndex('by_orgId_decisionMakerId', (q) =>
+						q.eq('orgId', org._id).eq('decisionMakerId', dm._id)
+					)
+					.unique()
+			)
+		);
+		const items = activePage.page
+			.filter((_, index) => !followed[index])
+			.map((dm) => ({
+				_id: dm._id,
+				type: dm.type,
+				title: dm.title ?? null,
+				name: dm.name,
+				firstName: dm.firstName ?? null,
+				lastName: dm.lastName ?? null,
+				party: dm.party ?? null,
+				jurisdiction: dm.jurisdiction ?? null,
+				district: dm.district ?? null,
+				photoUrl: dm.photoUrl ?? null,
+				active: dm.active
+			}));
+		return {
+			items,
+			hasMore: !activePage.isDone,
+			nextCursor: activePage.isDone ? null : activePage.continueCursor
+		};
 	}
 });
 
@@ -2028,7 +2072,9 @@ export const discoverDms = query({
 export const getDmDetail = query({
 	args: {
 		slug: v.string(),
-		dmId: v.id('decisionMakers')
+		dmId: v.id('decisionMakers'),
+		receiptCursor: v.optional(v.string()),
+		receiptLimit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
@@ -2066,38 +2112,45 @@ export const getDmDetail = query({
 			})
 		);
 
-		// Accountability receipts for this DM + org
-		const receipts = await ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const dmReceipts = receipts.filter((r) => r.decisionMakerId === args.dmId);
-
-		const enrichedReceipts = await Promise.all(
-			dmReceipts.map(async (r) => {
-				const bill = await ctx.db.get(r.billId);
-				return {
-					_id: r._id,
-					proofWeight: r.proofWeight,
-					dmAction: r.dmAction ?? null,
-					alignment: r.alignment,
-					causalityClass: r.causalityClass ?? null,
-					status: r.status,
-					proofDeliveredAt: r.proofDeliveredAt,
-					bill: bill ? { _id: bill._id, externalId: bill.externalId, title: bill.title } : null
-				};
-			})
-		);
-
-		// Accountability summary
-		const receiptCount = enrichedReceipts.length;
-		const avgProofWeight =
-			receiptCount > 0
-				? enrichedReceipts.reduce((sum, r) => sum + r.proofWeight, 0) / receiptCount
-				: 0;
-		const alignedCount = enrichedReceipts.filter((r) => r.alignment > 0).length;
-		const opposedCount = enrichedReceipts.filter((r) => r.alignment < 0).length;
+		await requireAccountabilityReadModelReady(ctx);
+		const receiptLimit = normalizeAccountabilityPageSize(args.receiptLimit, 'browse');
+		const receiptPage = await ctx.db
+			.query('accountabilityReceiptProjections')
+			.withIndex('by_orgId_decisionMakerId_proofDeliveredAt', (q) =>
+				q.eq('orgId', org._id).eq('decisionMakerId', args.dmId)
+			)
+			.order('desc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.receiptCursor),
+				numItems: receiptLimit,
+				maximumRowsRead: receiptLimit + 1,
+				maximumBytesRead: 512 * 1024
+			});
+		if (receiptPage.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_DM_RECEIPT_PAGE_SPLIT_REQUIRED');
+		}
+		const enrichedReceipts = receiptPage.page.map((row) => ({
+			_id: row.receiptId,
+			proofWeight: row.proofWeight,
+			dmAction: row.dmAction ?? null,
+			alignment: row.alignment,
+			causalityClass: row.causalityClass,
+			status: row.status,
+			proofDeliveredAt: row.proofDeliveredAt,
+			bill: {
+				_id: row.billId,
+				externalId: row.billExternalId,
+				title: row.billTitle
+			}
+		}));
+		const aggregate = await ctx.db
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('decisionMakerId', args.dmId)
+			)
+			.unique();
+		const receiptCount = aggregate?.receiptCount ?? 0;
+		const avgProofWeight = receiptCount > 0 ? (aggregate?.proofWeightTotal ?? 0) / receiptCount : 0;
 
 		return {
 			decisionMaker: {
@@ -2131,11 +2184,12 @@ export const getDmDetail = query({
 				: null,
 			actions: enrichedActions,
 			receipts: enrichedReceipts,
+			nextReceiptCursor: receiptPage.isDone ? null : receiptPage.continueCursor,
 			accountability: {
 				receiptCount,
 				avgProofWeight: Math.round(avgProofWeight * 100) / 100,
-				alignedCount,
-				opposedCount
+				alignedCount: aggregate?.alignedCount ?? 0,
+				opposedCount: aggregate?.opposedCount ?? 0
 			}
 		};
 	}
@@ -2200,7 +2254,10 @@ export async function resolveDmAndCanonical(
 	const externalIdsForDm = await ctx.db
 		.query('externalIds')
 		.withIndex('by_decisionMakerId_system', (q) => q.eq('decisionMakerId', decisionMakerId!))
-		.collect();
+		.take(17);
+	if (externalIdsForDm.length > 16) {
+		throw new Error('DECISION_MAKER_EXTERNAL_ID_CARDINALITY_EXCEEDED');
+	}
 	let canonicalSlug: string | null = null;
 	for (const system of slugPriority) {
 		const ext = externalIdsForDm.find((row) => row.system === system);
@@ -2214,98 +2271,45 @@ export async function resolveDmAndCanonical(
 }
 
 export const getDmPublicProfile = query({
-	args: { identifier: v.string() },
-	handler: async (ctx, { identifier }) => {
+	args: {
+		_secret: v.string(),
+		identifier: v.string(),
+		cursor: v.optional(v.string()),
+		limit: v.optional(v.number())
+	},
+	handler: async (ctx, { _secret, identifier, cursor, limit: requestedLimit }) => {
+		requireInternalSecret(_secret);
 		const resolved = await resolveDmAndCanonical(ctx, identifier);
 		if (!resolved) return null;
 		const { decisionMakerId, dm, canonicalSlug } = resolved;
-
-		// All accountability receipts for this DM (cross-org aggregate)
-		const receipts = await ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_decisionMakerId_proofDeliveredAt', (q) =>
-				q.eq('decisionMakerId', decisionMakerId!)
-			)
-			.order('desc')
-			.collect();
-
-		// Identity is honored even when no receipts exist yet — substrate accepts
-		// institutions and citizens alike (CONSTITUTION.md §3.2). Callers that
-		// require receipt-detail (the accountability route) check `bills.length`
-		// themselves; the public /dm/[id] route shows identity + an empty state.
-		if (receipts.length === 0) {
-			return {
-				decisionMakerId: dm._id,
-				canonicalSlug,
-				dmName: dm.name,
-				decisionMaker: {
-					_id: dm._id,
-					name: dm.name,
-					title: dm.title ?? null,
-					party: dm.party ?? null,
-					jurisdiction: dm.jurisdiction ?? null,
-					district: dm.district ?? null,
-					photoUrl: dm.photoUrl ?? null
-				},
-				summary: {
-					accountabilityScore: 50,
-					weightedAlignment: 0,
-					totalReceipts: 0,
-					totalVerifiedConstituents: null as number | null,
-					uniqueBills: 0,
-					causalityRate: 0,
-					avgProofWeight: 0
-				},
-				bills: [] as Array<{
-					bill: {
-						_id: Id<'bills'>;
-						externalId: string;
-						title: string;
-						status: string;
-						jurisdiction: string;
-					} | null;
-					receipts: Array<{
-						_id: Id<'accountabilityReceipts'>;
-						proofWeight: number;
-						verifiedCount: number | null;
-						districtCount: number | null;
-						causalityClass: string;
-						dmAction: string | null;
-						alignment: number;
-						proofDeliveredAt: number;
-						actionOccurredAt: number | null;
-						attestationDigest: string;
-					}>;
-					maxProofWeight: number;
-					totalVerified: number;
-					latestAction: string | null;
-				}>
-			};
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(requestedLimit, 'browse');
+		const [aggregate, receiptPage] = await Promise.all([
+			ctx.db
+				.query('accountabilityDecisionMakerAggregates')
+				.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
+				.unique(),
+			ctx.db
+				.query('accountabilityReceiptProjections')
+				.withIndex('by_decisionMakerId_publicEligible_proofDeliveredAt', (q) =>
+					q.eq('decisionMakerId', decisionMakerId).eq('publicEligible', true)
+				)
+				.order('desc')
+				.paginate({
+					cursor: normalizeAccountabilityCursor(cursor),
+					numItems: limit,
+					maximumRowsRead: limit + 1,
+					maximumBytesRead: 512 * 1024
+				})
+		]);
+		if (receiptPage.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_PUBLIC_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
-
-		// Enrich with bill info
-		const enrichedReceipts = await Promise.all(
-			receipts.map(async (r) => {
-				const bill = await ctx.db.get(r.billId);
-				return { ...r, bill };
-			})
-		);
-
-		// Aggregate stats
-		const totalWeight = receipts.reduce((sum, r) => sum + r.proofWeight, 0);
+		const totalReceipts = aggregate?.publicReceiptCount ?? 0;
+		const totalWeight = aggregate?.publicProofWeightTotal ?? 0;
 		const weightedAlignment =
-			totalWeight > 0
-				? receipts.reduce((sum, r) => sum + r.alignment * r.proofWeight, 0) / totalWeight
-				: 0;
+			totalWeight > 0 ? (aggregate?.publicWeightedAlignmentTotal ?? 0) / totalWeight : 0;
 
-		const causalReceipts = receipts.filter(
-			(r) => r.causalityClass === 'strong' || r.causalityClass === 'moderate'
-		);
-
-		const totalVerified = receipts.reduce((sum, r) => sum + r.verifiedCount, 0);
-		const uniqueBills = new Set(receipts.map((r) => r.billId)).size;
-
-		// Group by bill for display
 		const billMap = new Map<
 			string,
 			{
@@ -2315,7 +2319,7 @@ export const getDmPublicProfile = query({
 					title: string;
 					status: string;
 					jurisdiction: string;
-				} | null;
+				};
 				receipts: Array<{
 					_id: Id<'accountabilityReceipts'>;
 					proofWeight: number;
@@ -2333,20 +2337,17 @@ export const getDmPublicProfile = query({
 				latestAction: string | null;
 			}
 		>();
-
-		for (const r of enrichedReceipts) {
+		for (const r of receiptPage.page) {
 			const billIdStr = r.billId as string;
 			if (!billMap.has(billIdStr)) {
 				billMap.set(billIdStr, {
-					bill: r.bill
-						? {
-								_id: r.bill._id,
-								externalId: r.bill.externalId,
-								title: r.bill.title,
-								status: r.bill.status,
-								jurisdiction: r.bill.jurisdiction
-							}
-						: null,
+					bill: {
+						_id: r.billId,
+						externalId: r.billExternalId,
+						title: r.billTitle,
+						status: r.billStatus,
+						jurisdiction: r.billJurisdiction
+					},
 					receipts: [],
 					maxProofWeight: 0,
 					totalVerified: 0,
@@ -2355,9 +2356,9 @@ export const getDmPublicProfile = query({
 			}
 			const entry = billMap.get(billIdStr)!;
 			entry.receipts.push({
-				_id: r._id,
+				_id: r.receiptId,
 				proofWeight: r.proofWeight,
-				verifiedCount: r.verifiedCount >= 5 ? r.verifiedCount : null, // k-anonymity
+				verifiedCount: r.verifiedCount >= 5 ? r.verifiedCount : null,
 				districtCount: r.districtCount >= 3 ? r.districtCount : null,
 				causalityClass: r.causalityClass,
 				dmAction: r.dmAction ?? null,
@@ -2387,13 +2388,16 @@ export const getDmPublicProfile = query({
 			summary: {
 				accountabilityScore: Math.round((weightedAlignment + 1) * 50),
 				weightedAlignment,
-				totalReceipts: receipts.length,
-				totalVerifiedConstituents: totalVerified >= 5 ? totalVerified : null,
-				uniqueBills,
-				causalityRate: causalReceipts.length / receipts.length,
-				avgProofWeight: totalWeight / receipts.length
+				totalReceipts,
+				totalVerifiedConstituents:
+					(aggregate?.publicVerifiedCount ?? 0) >= 5 ? (aggregate?.publicVerifiedCount ?? 0) : null,
+				uniqueBills: aggregate?.uniquePublicBillCount ?? 0,
+				causalityRate:
+					totalReceipts > 0 ? (aggregate?.publicCausalReceiptCount ?? 0) / totalReceipts : 0,
+				avgProofWeight: totalReceipts > 0 ? totalWeight / totalReceipts : 0
 			},
-			bills: Array.from(billMap.values()).sort((a, b) => b.maxProofWeight - a.maxProofWeight)
+			bills: Array.from(billMap.values()).sort((a, b) => b.maxProofWeight - a.maxProofWeight),
+			nextCursor: receiptPage.isDone ? null : receiptPage.continueCursor
 		};
 	}
 });
@@ -2402,17 +2406,18 @@ export const getDmPublicProfile = query({
  * Get DM + scorecard snapshots (public, no org auth needed).
  */
 export const getDmScorecard = query({
-	args: { identifier: v.string() },
-	handler: async (ctx, { identifier }) => {
+	args: { _secret: v.string(), identifier: v.string() },
+	handler: async (ctx, { _secret, identifier }) => {
+		requireInternalSecret(_secret);
 		const resolved = await resolveDmAndCanonical(ctx, identifier);
 		if (!resolved) return null;
 		const { decisionMakerId, dm, canonicalSlug } = resolved;
+		await requireAccountabilityReadModelReady(ctx);
 
 		const latest = await ctx.db
-			.query('scorecardSnapshots')
+			.query('accountabilityScorecardProjections')
 			.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
-			.order('desc')
-			.first();
+			.unique();
 
 		const history = await ctx.db
 			.query('scorecardSnapshots')
@@ -2464,77 +2469,80 @@ export const getDmScorecard = query({
 /**
  * List scorecards for all DMs relevant to an org (for org scorecards page).
  */
+async function scorecardForOrgDmProjection(
+	ctx: QueryCtx,
+	row: Doc<'accountabilityOrgDmProjections'>
+) {
+	const latest = await ctx.db
+		.query('accountabilityScorecardProjections')
+		.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', row.decisionMakerId))
+		.unique();
+	return {
+		decisionMaker: {
+			_id: row.decisionMakerId,
+			name: row.name,
+			title: row.title ?? null,
+			party: row.party ?? null,
+			district: row.district ?? null,
+			jurisdiction: row.jurisdiction ?? null,
+			photoUrl: row.photoUrl ?? null
+		},
+		scorecard: latest
+			? {
+					composite: latest.composite ?? null,
+					responsiveness: latest.responsiveness ?? null,
+					alignment: latest.alignment ?? null,
+					proofWeightTotal: latest.proofWeightTotal,
+					deliveriesSent: latest.deliveriesSent,
+					deliveriesOpened: latest.deliveriesOpened,
+					deliveriesVerified: latest.deliveriesVerified,
+					repliesReceived: latest.repliesReceived,
+					alignedVotes: latest.alignedVotes,
+					totalScoredVotes: latest.totalScoredVotes,
+					methodologyVersion: latest.methodologyVersion,
+					periodEnd: latest.periodEnd,
+					snapshotHash: latest.snapshotHash
+				}
+			: null,
+		receiptCount: row.receiptCount,
+		latestProofDeliveredAt: row.latestProofDeliveredAt ?? null
+	};
+}
+
 export const listOrgScorecards = query({
 	args: {
 		slug: v.string(),
 		sortBy: v.optional(v.string()),
-		minReports: v.optional(v.number())
+		minReports: v.optional(v.number()),
+		cursor: v.optional(v.string()),
+		limit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-		const minReports = args.minReports ?? 1;
-
-		// Get all DMs followed by org
-		const follows = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
+		await requireAccountabilityReadModelReady(ctx);
+		const minReports = Math.max(0, Math.trunc(args.minReports ?? 1));
+		const limit = normalizeAccountabilityPageSize(args.limit, 'browse');
+		const page = await ctx.db
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('followed', true)
+			)
+			.order('asc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 256 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_SCORECARD_PAGE_SPLIT_REQUIRED');
+		}
 		const scorecards = await Promise.all(
-			follows.map(async (f) => {
-				const dm = await ctx.db.get(f.decisionMakerId);
-				if (!dm) return null;
-
-				const latest = await ctx.db
-					.query('scorecardSnapshots')
-					.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', f.decisionMakerId))
-					.order('desc')
-					.first();
-
-				// Count accountability receipts for this DM + org
-				const receipts = await ctx.db
-					.query('accountabilityReceipts')
-					.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', f.decisionMakerId))
-					.collect();
-				const orgReceipts = receipts.filter((r) => r.orgId === org._id);
-
-				if (orgReceipts.length < minReports && !latest) return null;
-
-				return {
-					decisionMaker: {
-						_id: dm._id,
-						name: dm.name,
-						title: dm.title ?? null,
-						party: dm.party ?? null,
-						district: dm.district ?? null,
-						jurisdiction: dm.jurisdiction ?? null,
-						photoUrl: dm.photoUrl ?? null
-					},
-					scorecard: latest
-						? {
-								composite: latest.composite ?? null,
-								responsiveness: latest.responsiveness ?? null,
-								alignment: latest.alignment ?? null,
-								proofWeightTotal: latest.proofWeightTotal,
-								deliveriesSent: latest.deliveriesSent,
-								deliveriesOpened: latest.deliveriesOpened,
-								deliveriesVerified: latest.deliveriesVerified,
-								repliesReceived: latest.repliesReceived,
-								alignedVotes: latest.alignedVotes,
-								totalScoredVotes: latest.totalScoredVotes,
-								methodologyVersion: latest.methodologyVersion,
-								periodEnd: latest.periodEnd,
-								snapshotHash: latest.snapshotHash
-							}
-						: null,
-					receiptCount: orgReceipts.length
-				};
-			})
+			page.page.map((row) => scorecardForOrgDmProjection(ctx, row))
 		);
-
-		const filtered = scorecards.filter((s): s is NonNullable<typeof s> => s !== null);
-
-		// Sort
+		const filtered = scorecards.filter(
+			(row) => row.receiptCount >= minReports || row.scorecard !== null
+		);
 		if (args.sortBy === 'score' || !args.sortBy) {
 			filtered.sort((a, b) => (b.scorecard?.composite ?? 0) - (a.scorecard?.composite ?? 0));
 		}
@@ -2542,8 +2550,11 @@ export const listOrgScorecards = query({
 		return {
 			scorecards: filtered,
 			meta: {
-				totalFollowed: follows.length,
-				withScorecards: filtered.filter((s) => s.scorecard).length
+				pageFollowed: page.page.length,
+				withScorecards: filtered.filter((s) => s.scorecard).length,
+				hasMore: !page.isDone,
+				nextCursor: page.isDone ? null : page.continueCursor,
+				sortScope: 'page' as const
 			}
 		};
 	}
@@ -2679,59 +2690,54 @@ export const updateAlertPreferences = mutation({
  */
 export const exportScorecards = query({
 	args: {
-		slug: v.string()
+		slug: v.string(),
+		cursor: v.optional(v.string()),
+		limit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'member');
-
-		// Get all DMs followed by org
-		const follows = await ctx.db
-			.query('orgDmFollows')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const scorecards = await Promise.all(
-			follows.map(async (f) => {
-				const dm = await ctx.db.get(f.decisionMakerId);
-				if (!dm) return null;
-
-				const latest = await ctx.db
-					.query('scorecardSnapshots')
-					.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', f.decisionMakerId))
-					.order('desc')
-					.first();
-
-				// Count accountability receipts for this DM + org
-				const receipts = await ctx.db
-					.query('accountabilityReceipts')
-					.withIndex('by_orgId_billId_decisionMakerId', (q) => q.eq('orgId', org._id))
-					.collect();
-				const dmReceipts = receipts.filter((r) => r.decisionMakerId === f.decisionMakerId);
-
-				if (!latest && dmReceipts.length === 0) return null;
-
-				return {
-					name: dm.name,
-					title: dm.title ?? '',
-					district: dm.district ?? '',
-					reportsReceived: latest?.deliveriesSent ?? dmReceipts.length,
-					reportsOpened: latest?.deliveriesOpened ?? null,
-					verifyLinksClicked: latest?.deliveriesVerified ?? null,
-					repliesLogged: latest?.repliesReceived ?? null,
-					relevantVotes: latest?.totalScoredVotes ?? null,
-					alignedVotes: latest?.alignedVotes ?? null,
-					alignmentRate: latest?.alignment ?? null,
-					avgResponseTime:
-						latest?.responsiveness != null
-							? Math.round((1 - latest.responsiveness) * 168 * 10) / 10
-							: null,
-					lastContactDate: null as string | null,
-					score: latest?.composite != null ? Math.round(latest.composite * 100) : null
-				};
-			})
+		await requireAccountabilityReadModelReady(ctx);
+		const limit = normalizeAccountabilityPageSize(args.limit, 'export');
+		const page = await ctx.db
+			.query('accountabilityOrgDmProjections')
+			.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+				q.eq('orgId', org._id).eq('followed', true)
+			)
+			.order('asc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: limit,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_SCORECARD_EXPORT_PAGE_SPLIT_REQUIRED');
+		}
+		const projected = await Promise.all(
+			page.page.map((row) => scorecardForOrgDmProjection(ctx, row))
 		);
-
-		const filtered = scorecards.filter((s): s is NonNullable<typeof s> => s !== null);
+		const filtered = projected
+			.filter((row) => row.scorecard !== null || row.receiptCount > 0)
+			.map((row) => ({
+				name: row.decisionMaker.name,
+				title: row.decisionMaker.title ?? '',
+				district: row.decisionMaker.district ?? '',
+				reportsReceived: row.scorecard?.deliveriesSent ?? row.receiptCount,
+				reportsOpened: row.scorecard?.deliveriesOpened ?? null,
+				verifyLinksClicked: row.scorecard?.deliveriesVerified ?? null,
+				repliesLogged: row.scorecard?.repliesReceived ?? null,
+				relevantVotes: row.scorecard?.totalScoredVotes ?? null,
+				alignedVotes: row.scorecard?.alignedVotes ?? null,
+				alignmentRate: row.scorecard?.alignment ?? null,
+				avgResponseTime:
+					row.scorecard?.responsiveness != null
+						? Math.round((1 - row.scorecard.responsiveness) * 168 * 10) / 10
+						: null,
+				lastContactDate: row.latestProofDeliveredAt
+					? new Date(row.latestProofDeliveredAt).toISOString()
+					: null,
+				score: row.scorecard?.composite != null ? Math.round(row.scorecard.composite * 100) : null
+			}));
 
 		// Sort by score descending
 		filtered.sort((a, b) => (b.score ?? -1) - (a.score ?? -1));
@@ -2746,9 +2752,11 @@ export const exportScorecards = query({
 			scorecards: filtered,
 			meta: {
 				orgId: org._id as string,
-				computedAt: new Date().toISOString(),
 				decisionMakers: filtered.length,
-				avgScore
+				avgScore,
+				hasMore: !page.isDone,
+				nextCursor: page.isDone ? null : page.continueCursor,
+				scope: 'page' as const
 			}
 		};
 	}
@@ -2809,61 +2817,78 @@ export const computeScorecards = internalAction({
 		const periodEnd = now;
 		const periodStart = now - SCORECARD_WINDOW_MS;
 
-		const dmIds: Id<'decisionMakers'>[] = await ctx.runQuery(listDmsWithReceiptsSinceRef, {
-			since: periodStart
-		});
-
 		let computed = 0;
 		let skipped = 0;
+		let decisionMakersScanned = 0;
 		const errors: string[] = [];
+		let dmCursor: string | undefined;
+		let dmScanDone = false;
+		do {
+			const dmPage = await ctx.runQuery(listDmsWithReceiptsSinceRef, {
+				since: periodStart,
+				cursor: dmCursor
+			});
+			for (const dmId of dmPage.items) {
+				decisionMakersScanned++;
+				try {
+					let receiptCursor: string | undefined;
+					let receiptScanDone = false;
+					let fold = emptyScorecardReceiptFold();
+					do {
+						const receiptPage = await ctx.runQuery(aggregateReceiptsForDmRef, {
+							decisionMakerId: dmId,
+							periodStart,
+							periodEnd,
+							cursor: receiptCursor
+						});
+						fold = mergeScorecardReceiptFolds(fold, receiptPage.fold);
+						receiptCursor = receiptPage.continueCursor ?? undefined;
+						receiptScanDone = receiptPage.isDone;
+					} while (!receiptScanDone);
 
-		for (const dmId of dmIds) {
-			try {
-				const aggregate: ScorecardAggregate | null = await ctx.runQuery(aggregateReceiptsForDmRef, {
-					decisionMakerId: dmId,
-					periodStart,
-					periodEnd
-				});
+					const aggregate = finalizeScorecardAggregate(fold);
+					if (!aggregate) {
+						skipped++;
+						continue;
+					}
 
-				if (!aggregate || aggregate.deliveriesSent === 0) {
-					skipped++;
-					continue;
+					const snapshotHash = await hashScorecardSnapshot({
+						decisionMakerId: String(dmId),
+						periodStart,
+						periodEnd,
+						methodologyVersion: SCORECARD_METHODOLOGY_VERSION,
+						...aggregate
+					});
+
+					await ctx.runMutation(upsertScorecardSnapshotRef, {
+						decisionMakerId: dmId,
+						periodStart,
+						periodEnd,
+						responsiveness: aggregate.responsiveness ?? undefined,
+						alignment: aggregate.alignment ?? undefined,
+						composite: aggregate.composite ?? undefined,
+						proofWeightTotal: aggregate.proofWeightTotal,
+						deliveriesSent: aggregate.deliveriesSent,
+						deliveriesOpened: aggregate.deliveriesOpened,
+						deliveriesVerified: aggregate.deliveriesVerified,
+						repliesReceived: aggregate.repliesReceived,
+						alignedVotes: aggregate.alignedVotes,
+						totalScoredVotes: aggregate.totalScoredVotes,
+						methodologyVersion: SCORECARD_METHODOLOGY_VERSION,
+						snapshotHash
+					});
+					computed++;
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					errors.push(`${dmId}: ${msg}`);
 				}
-
-				const snapshotHash = await hashScorecardSnapshot({
-					decisionMakerId: String(dmId),
-					periodStart,
-					periodEnd,
-					methodologyVersion: SCORECARD_METHODOLOGY_VERSION,
-					...aggregate
-				});
-
-				await ctx.runMutation(upsertScorecardSnapshotRef, {
-					decisionMakerId: dmId,
-					periodStart,
-					periodEnd,
-					responsiveness: aggregate.responsiveness ?? undefined,
-					alignment: aggregate.alignment ?? undefined,
-					composite: aggregate.composite ?? undefined,
-					proofWeightTotal: aggregate.proofWeightTotal,
-					deliveriesSent: aggregate.deliveriesSent,
-					deliveriesOpened: aggregate.deliveriesOpened,
-					deliveriesVerified: aggregate.deliveriesVerified,
-					repliesReceived: aggregate.repliesReceived,
-					alignedVotes: aggregate.alignedVotes,
-					totalScoredVotes: aggregate.totalScoredVotes,
-					methodologyVersion: SCORECARD_METHODOLOGY_VERSION,
-					snapshotHash
-				});
-				computed++;
-			} catch (err) {
-				const msg = err instanceof Error ? err.message : String(err);
-				errors.push(`${dmId}: ${msg}`);
 			}
-		}
+			dmCursor = dmPage.continueCursor ?? undefined;
+			dmScanDone = dmPage.isDone;
+		} while (!dmScanDone);
 
 		console.log(
-			`[scorecard-compute] periodEnd=${periodEnd} dms=${dmIds.length} computed=${computed} skipped=${skipped} errors=${errors.length}`
+			`[scorecard-compute] periodEnd=${periodEnd} dms=${decisionMakersScanned} computed=${computed} skipped=${skipped} errors=${errors.length}`
 		);
 		return { computed, skipped, errors };
 	}
@@ -2882,26 +2907,110 @@ interface ScorecardAggregate {
 	composite: number | null;
 }
 
+interface ScorecardReceiptFold {
+	deliveriesSent: number;
+	deliveriesOpened: number;
+	deliveriesVerified: number;
+	repliesReceived: number;
+	proofWeightTotal: number;
+	alignedVotes: number;
+	totalScoredVotes: number;
+	weightedAlignmentNumerator: number;
+	scoredProofWeight: number;
+}
+
+interface ScorecardDmPage {
+	items: Id<'decisionMakers'>[];
+	continueCursor: string | null;
+	isDone: boolean;
+}
+
+interface ScorecardReceiptPage {
+	fold: ScorecardReceiptFold;
+	continueCursor: string | null;
+	isDone: boolean;
+}
+
+const SCORECARD_READ_PAGE_SIZE = 100;
+const SCORECARD_READ_MAX_BYTES = 1024 * 1024;
+
+function emptyScorecardReceiptFold(): ScorecardReceiptFold {
+	return {
+		deliveriesSent: 0,
+		deliveriesOpened: 0,
+		deliveriesVerified: 0,
+		repliesReceived: 0,
+		proofWeightTotal: 0,
+		alignedVotes: 0,
+		totalScoredVotes: 0,
+		weightedAlignmentNumerator: 0,
+		scoredProofWeight: 0
+	};
+}
+
+function mergeScorecardReceiptFolds(
+	left: ScorecardReceiptFold,
+	right: ScorecardReceiptFold
+): ScorecardReceiptFold {
+	return {
+		deliveriesSent: left.deliveriesSent + right.deliveriesSent,
+		deliveriesOpened: left.deliveriesOpened + right.deliveriesOpened,
+		deliveriesVerified: left.deliveriesVerified + right.deliveriesVerified,
+		repliesReceived: left.repliesReceived + right.repliesReceived,
+		proofWeightTotal: left.proofWeightTotal + right.proofWeightTotal,
+		alignedVotes: left.alignedVotes + right.alignedVotes,
+		totalScoredVotes: left.totalScoredVotes + right.totalScoredVotes,
+		weightedAlignmentNumerator: left.weightedAlignmentNumerator + right.weightedAlignmentNumerator,
+		scoredProofWeight: left.scoredProofWeight + right.scoredProofWeight
+	};
+}
+
+function finalizeScorecardAggregate(fold: ScorecardReceiptFold): ScorecardAggregate | null {
+	if (fold.deliveriesSent === 0) return null;
+	const responsiveness = fold.deliveriesOpened / fold.deliveriesSent;
+	const alignment =
+		fold.scoredProofWeight > 0 ? fold.weightedAlignmentNumerator / fold.scoredProofWeight : null;
+	const composite = alignment === null ? responsiveness : 0.5 * responsiveness + 0.5 * alignment;
+	return {
+		deliveriesSent: fold.deliveriesSent,
+		deliveriesOpened: fold.deliveriesOpened,
+		deliveriesVerified: fold.deliveriesVerified,
+		repliesReceived: fold.repliesReceived,
+		proofWeightTotal: fold.proofWeightTotal,
+		alignedVotes: fold.alignedVotes,
+		totalScoredVotes: fold.totalScoredVotes,
+		responsiveness,
+		alignment,
+		composite
+	};
+}
+
 /**
- * Returns all DMs that have at least one accountability receipt in the given
- * period. Uses the by_decisionMakerId_proofDeliveredAt index and dedupes in
- * memory. Paginates in case a single period has a very large receipt set.
+ * One compact page of DMs whose latest receipt falls inside the scorecard
+ * window. The action advances the opaque cursor; no receipt table scan or
+ * in-memory de-duplication is needed.
  */
 export const listDmsWithReceiptsSince = internalQuery({
-	args: { since: v.number() },
-	handler: async (ctx, args): Promise<Id<'decisionMakers'>[]> => {
-		const dms = new Set<string>();
-		// Range scan via `by_proofDeliveredAt` reads only rows whose
-		// proofDeliveredAt >= args.since — bounded by the time window, not by
-		// table cardinality. The previous `.collect()` was an unbounded
-		// append-only scan that would hit Convex's row-scan cap (~16K) and
-		// throw silently inside the vote-tracker cron, breaking correlation.
-		for await (const r of ctx.db
-			.query('accountabilityReceipts')
-			.withIndex('by_proofDeliveredAt', (q) => q.gte('proofDeliveredAt', args.since))) {
-			dms.add(r.decisionMakerId);
+	args: { since: v.number(), cursor: v.optional(v.string()) },
+	handler: async (ctx, args): Promise<ScorecardDmPage> => {
+		const page = await ctx.db
+			.query('accountabilityDecisionMakerAggregates')
+			.withIndex('by_latestProofDeliveredAt', (q) => q.gte('latestProofDeliveredAt', args.since))
+			.order('asc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: SCORECARD_READ_PAGE_SIZE,
+				maximumRowsRead: SCORECARD_READ_PAGE_SIZE + 1,
+				maximumBytesRead: SCORECARD_READ_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_SCORECARD_DM_PAGE_SPLIT_REQUIRED');
 		}
-		return Array.from(dms) as Id<'decisionMakers'>[];
+		return {
+			items: page.page.map((row) => row.decisionMakerId),
+			continueCursor: page.isDone ? null : page.continueCursor,
+			isDone: page.isDone
+		};
 	}
 });
 
@@ -2909,73 +3018,47 @@ export const aggregateReceiptsForDm = internalQuery({
 	args: {
 		decisionMakerId: v.id('decisionMakers'),
 		periodStart: v.number(),
-		periodEnd: v.number()
+		periodEnd: v.number(),
+		cursor: v.optional(v.string())
 	},
-	handler: async (ctx, args): Promise<ScorecardAggregate | null> => {
-		const receipts = await ctx.db
-			.query('accountabilityReceipts')
+	handler: async (ctx, args): Promise<ScorecardReceiptPage> => {
+		const page = await ctx.db
+			.query('accountabilityReceiptProjections')
 			.withIndex('by_decisionMakerId_proofDeliveredAt', (q) =>
 				q
 					.eq('decisionMakerId', args.decisionMakerId)
 					.gte('proofDeliveredAt', args.periodStart)
 					.lte('proofDeliveredAt', args.periodEnd)
 			)
-			.collect();
-
-		if (receipts.length === 0) return null;
-
-		let deliveriesOpened = 0;
-		let deliveriesVerified = 0;
-		let repliesReceived = 0;
-		let proofWeightTotal = 0;
-		let alignedVotes = 0;
-		let totalScoredVotes = 0;
-		let weightedAlignmentNumerator = 0;
-		let scoredProofWeight = 0;
-
-		for (const r of receipts) {
-			proofWeightTotal += r.proofWeight;
-
-			const responses = r.responses ?? [];
-			if (responses.some((rx) => rx.type === 'opened' || rx.type === 'clicked_verify')) {
-				deliveriesOpened++;
-			}
-			if (responses.some((rx) => rx.type === 'clicked_verify')) {
-				deliveriesVerified++;
-			}
-			if (responses.some((rx) => rx.type === 'replied')) {
-				repliesReceived++;
-			}
-
-			// `alignment` is set on the receipt itself (per-bill DM action).
-			// 0 is the neutral/unknown value; anything non-zero counts as scored.
-			if (r.alignment !== 0) {
-				totalScoredVotes++;
-				weightedAlignmentNumerator += r.alignment * r.proofWeight;
-				scoredProofWeight += r.proofWeight;
-				if (r.alignment > 0.5) alignedVotes++;
-			}
+			.order('asc')
+			.paginate({
+				cursor: normalizeAccountabilityCursor(args.cursor),
+				numItems: SCORECARD_READ_PAGE_SIZE,
+				maximumRowsRead: SCORECARD_READ_PAGE_SIZE + 1,
+				maximumBytesRead: SCORECARD_READ_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('ACCOUNTABILITY_SCORECARD_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
 
-		const deliveriesSent = receipts.length;
-		const responsiveness = deliveriesSent > 0 ? deliveriesOpened / deliveriesSent : null;
-		const alignment = scoredProofWeight > 0 ? weightedAlignmentNumerator / scoredProofWeight : null;
-		const composite =
-			responsiveness !== null && alignment !== null
-				? 0.5 * responsiveness + 0.5 * alignment
-				: (responsiveness ?? alignment ?? null);
-
+		const fold = emptyScorecardReceiptFold();
+		for (const receipt of page.page) {
+			fold.deliveriesSent++;
+			fold.deliveriesOpened += Number(receipt.deliveryOpened);
+			fold.deliveriesVerified += Number(receipt.deliveryVerified);
+			fold.repliesReceived += Number(receipt.replyReceived);
+			fold.proofWeightTotal += receipt.proofWeight;
+			if (receipt.alignment !== 0) {
+				fold.totalScoredVotes++;
+				fold.weightedAlignmentNumerator += receipt.alignment * receipt.proofWeight;
+				fold.scoredProofWeight += receipt.proofWeight;
+				if (receipt.alignment > 0.5) fold.alignedVotes++;
+			}
+		}
 		return {
-			deliveriesSent,
-			deliveriesOpened,
-			deliveriesVerified,
-			repliesReceived,
-			proofWeightTotal,
-			alignedVotes,
-			totalScoredVotes,
-			responsiveness,
-			alignment,
-			composite
+			fold,
+			continueCursor: page.isDone ? null : page.continueCursor,
+			isDone: page.isDone
 		};
 	}
 });
@@ -3024,7 +3107,7 @@ export const getPendingAlertsByOrgId = query({
 	args: { _secret: v.string(), orgId: v.id('organizations'), limit: v.optional(v.number()) },
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
-		const limit = args.limit ?? 10;
+		const limit = normalizeLegislationLimit(args.limit, 10, 50, 'PENDING_ALERT_LIMIT_INVALID');
 		const alerts = await ctx.db
 			.query('legislativeAlerts')
 			.withIndex('by_orgId_status', (idx) => idx.eq('orgId', args.orgId).eq('status', 'pending'))
@@ -3057,7 +3140,7 @@ export const listRecentBills = query({
 	args: { slug: v.string(), limit: v.optional(v.number()) },
 	handler: async (ctx, { slug, limit }) => {
 		await requireOrgRole(ctx, slug, 'editor');
-		const max = Math.min(limit ?? 100, 200);
+		const max = normalizeLegislationLimit(limit, 100, 200, 'RECENT_BILL_LIMIT_INVALID');
 		const bills = await ctx.db
 			.query('bills')
 			.order('desc')
@@ -3176,6 +3259,22 @@ const PRUNE_ALL_DEPENDENT_TABLES = [
 
 type PruneDependentTable = (typeof PRUNE_ALL_DEPENDENT_TABLES)[number];
 
+const PRUNE_BATCH_SIZE_MAX = 200;
+
+function pruneBatchSize(requested: number | undefined): number {
+	const value = requested ?? PRUNE_BATCH_SIZE_MAX;
+	if (!Number.isSafeInteger(value) || value < 1) {
+		throw new Error('PRUNE_BATCH_SIZE_INVALID');
+	}
+	return Math.min(value, PRUNE_BATCH_SIZE_MAX);
+}
+
+function assertPruneCursor(cursor: string | null | undefined): void {
+	if (cursor !== undefined && cursor !== null && cursor.length > 2_048) {
+		throw new Error('PRUNE_CURSOR_TOO_LARGE');
+	}
+}
+
 /**
  * Process one page of a single bill-dependent table.
  *
@@ -3197,10 +3296,12 @@ export const pruneDependentTableBatch = internalMutation({
 		if (!PRUNE_ALL_DEPENDENT_TABLES.includes(table)) {
 			throw new Error(`UNKNOWN_DEPENDENT_TABLE: ${args.table}`);
 		}
+		assertPruneCursor(args.cursor);
+		const batchSize = pruneBatchSize(args.batchSize);
 
 		const page = await ctx.db
 			.query(table)
-			.paginate({ numItems: args.batchSize ?? 200, cursor: args.cursor ?? null });
+			.paginate({ numItems: batchSize, cursor: args.cursor ?? null });
 
 		let counted = 0;
 		let deleted = 0;
@@ -3250,9 +3351,11 @@ export const pruneBillsBatch = internalMutation({
 		dryRun: v.optional(v.boolean())
 	},
 	handler: async (ctx, args) => {
+		assertPruneCursor(args.cursor);
+		const batchSize = pruneBatchSize(args.batchSize);
 		const page = await ctx.db
 			.query('bills')
-			.paginate({ numItems: args.batchSize ?? 200, cursor: args.cursor ?? null });
+			.paginate({ numItems: batchSize, cursor: args.cursor ?? null });
 
 		let deleted = 0;
 		if (!args.dryRun) {

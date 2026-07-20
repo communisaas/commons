@@ -26,9 +26,12 @@
  */
 
 import { parseSSEStream } from '$lib/utils/sse-stream';
-import type { OrgOS, AuthoringIntent } from '$lib/components/org/os/orgOS.svelte';
-import type { ReasoningStage } from '$lib/components/org/studio/StudioReasoning.svelte';
-import type { StudioSource } from '$lib/components/org/studio/StudioSources.svelte';
+import type {
+	OrgOS,
+	AuthoringIntent,
+	ResolvedDecisionMaker
+} from '$lib/components/org/os/orgOS.svelte';
+import type { ReasoningStage, StudioSource } from '$lib/components/org/studio/types';
 import type { GeoScope } from '$lib/core/agents/types';
 import type { SourceEvidenceUpdate } from '$lib/core/agents/agents/message-writer';
 import type { ResolutionStopReason } from '$lib/types/studio-process';
@@ -41,13 +44,9 @@ import {
 } from '$lib/core/agents/message-job-recovery';
 import { displayGeoScope } from '$lib/core/location/location-resolver';
 import { getStateName, US_STATES } from '$lib/core/location/state-codes';
+import { processDecisionMakers } from '$lib/utils/decision-maker-processing';
 
-type ResolvedList = Array<{
-	name: string;
-	title: string;
-	organization: string;
-	email?: string;
-}>;
+type ResolvedList = ResolvedDecisionMaker[];
 
 type ScopeEvidenceSource = 'resolved-targets' | 'audience-guidance' | 'fallback';
 
@@ -382,20 +381,12 @@ async function runResolve(
 			}
 			case 'complete': {
 				const r = event.data as {
-					decision_makers?: Array<{
-						name: string;
-						title: string;
-						organization: string;
-						email?: string;
-					}>;
+					decision_makers?: unknown[];
 					pipeline_stats?: { total_resolved?: number; verified_emails?: number };
 				};
-				decisionMakers = (r.decision_makers || []).map((d) => ({
-					name: d.name,
-					title: d.title,
-					organization: d.organization,
-					email: d.email
-				}));
+				decisionMakers = processDecisionMakers(
+					(r.decision_makers || []) as Parameters<typeof processDecisionMakers>[0]
+				);
 				const total = r.pipeline_stats?.total_resolved ?? decisionMakers.length;
 				const dropped = Math.max(0, total - decisionMakers.length);
 				droppedTargetCount = dropped;

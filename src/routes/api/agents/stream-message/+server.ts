@@ -38,12 +38,13 @@ import {
 import type { DecisionMaker } from '$lib/core/agents';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
 import { getMessageGenerationReadiness } from '$lib/server/agents/message-generation-readiness';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
 import { traceStart, traceEnd, traceEvent } from '$lib/server/agent-trace';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const TRACE_ENDPOINT = 'message-generation';
 
@@ -399,6 +400,8 @@ export const POST: RequestHandler = async (event) => {
 			if (body.template_id) {
 				try {
 					const template = await serverQuery(api.templates.getSourceCache, {
+						_secret: getInternalSecret(),
+						userId: session.userId as Id<'users'>,
 						templateId: body.template_id as Id<'templates'>
 					});
 
@@ -534,6 +537,8 @@ export const POST: RequestHandler = async (event) => {
 				result.evaluatedSources.length > 0
 			) {
 				serverMutation(api.templates.updateSourceCache, {
+					_secret: getInternalSecret(),
+					userId: session.userId as Id<'users'>,
 					templateId: body.template_id as Id<'templates'>,
 					cachedSources: result.evaluatedSources,
 					sourcesCachedAt: Date.now()

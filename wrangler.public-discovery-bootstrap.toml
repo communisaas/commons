@@ -1,0 +1,49 @@
+name = "commons-public-discovery-bootstrap"
+# This intentionally absent path makes a bare `wrangler deploy` fail. The
+# release workflow must pass the digest-proved `pages/_worker.js` from its
+# immutable finalization kit as Wrangler's explicit positional entrypoint.
+main = "__FINALIZED_PAGES_ARTIFACT_REQUIRED__/pages/_worker.js"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat", "nodejs_als", "global_fetch_strictly_public"]
+workers_dev = false
+preview_urls = false
+
+# The production account remains on Workers Free. Make the HTTP CPU ceiling an
+# executable part of the bootstrap contract rather than relying on an ambient
+# dashboard default. Network/storage wait time is outside this CPU budget.
+[limits]
+cpu_ms = 10
+
+[vars]
+PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
+PUBLIC_DISCOVERY_BOOTSTRAP_MODE = "v1"
+# The trusted workflow replaces this sentinel with one exact GitHub run tuple.
+PUBLIC_RELEASE_TRANSACTION_ID = "__PUBLIC_RELEASE_TRANSACTION_ID__"
+
+# This no-wildcard route temporarily precedes the existing Access-protected
+# Pages custom-domain origin for the one canonical URL only. Cloudflare does
+# not match query strings without a trailing wildcard; non-canonical URLs stay
+# on the existing Access boundary and are rejected by the Pages adapter.
+[[routes]]
+pattern = "pages-origin.commons.email/api/internal/public-discovery-manifest-refresh"
+zone_name = "commons.email"
+
+[[r2_buckets]]
+binding = "PUBLIC_DISCOVERY_R2"
+bucket_name = "commons-public-discovery-cache"
+
+[[queues.producers]]
+binding = "PUBLIC_TEMPLATE_OG_QUEUE"
+queue = "commons-public-template-og"
+
+# Reuse the existing production coordination authorities. Bootstrap adds state
+# inside the current SQLite class; it does not provision another namespace.
+[[durable_objects.bindings]]
+name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
+class_name = "PublicDiscoveryManifestRefreshGate"
+script_name = "commons-public-discovery-manifest-gate"
+
+[[durable_objects.bindings]]
+name = "CONVEX_WORK_BUDGET"
+class_name = "ConvexWorkBudget"
+script_name = "commons-convex-work-budget"

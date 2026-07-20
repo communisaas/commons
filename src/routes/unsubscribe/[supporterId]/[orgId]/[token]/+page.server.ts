@@ -1,5 +1,5 @@
 // CONVEX: Keep SvelteKit — security-critical HMAC token verification + emailStatus update
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { verifyUnsubscribeToken } from '$lib/server/email/unsubscribe';

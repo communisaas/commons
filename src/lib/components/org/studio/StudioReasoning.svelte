@@ -21,32 +21,10 @@
   (text is not a coordination signal); the pulse is a CSS animation gated on
   prefers-reduced-motion. Counts are Mono via <Datum>.
 -->
-<script lang="ts" module>
-	export type ReasoningStage = 'ground' | 'author' | 'resolve';
-
-	export interface ThoughtEntry {
-		kind: 'thought';
-		stage: ReasoningStage;
-		content: string;
-		ts: number;
-	}
-
-	export interface ActionEntry {
-		kind: 'action';
-		stage: ReasoningStage;
-		action: string; // 'search' | 'analyze' | ...
-		title: string;
-		status: 'in_progress' | 'complete' | 'error';
-		statusMessage?: string;
-		ts: number;
-	}
-
-	export type ReasoningEntry = ThoughtEntry | ActionEntry;
-</script>
-
 <script lang="ts">
 	import { Datum } from '$lib/design';
 	import { TIMING, EASING } from '$lib/design/motion';
+	import type { ReasoningEntry, ReasoningStage } from './types';
 
 	let {
 		entries,

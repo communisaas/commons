@@ -35,6 +35,23 @@ import { internal } from './_generated/api';
 import { requireOrgRole } from './_authHelpers';
 import type { Id } from './_generated/dataModel';
 import { WEBHOOK_EVENT_SET } from './_webhookEvents';
+import {
+	WEBHOOK_ERROR_MAX_BYTES,
+	WEBHOOK_SUBSCRIPTION_MAX,
+	cleanupWebhookDeliveryPage,
+	createOrgWebhook,
+	deleteOwnedOrgWebhook,
+	getOwnedOrgWebhook,
+	normalizeWebhookDestination,
+	normalizeWebhookPayload,
+	publicWebhook,
+	recordWebhookOverflow,
+	repairOrgWebhookOverflowPage,
+	rotateOwnedOrgWebhookSecret,
+	truncateWebhookString,
+	updateOwnedOrgWebhook,
+	validateWebhookDeliveryEnvelope
+} from './lib/orgWebhookPolicy';
 
 const MAX_ATTEMPTS = 5;
 const RETRY_BASE_MS = 60_000; // 1 minute; backoff is 2^attempt * RETRY_BASE_MS
@@ -57,11 +74,7 @@ type WebhookTestDeliveryResult =
  *
  * Convex V8 runtime doesn't expose `node:crypto`. Use Web Crypto subtle.
  */
-async function signPayload(
-	payload: string,
-	timestamp: number,
-	secret: string
-): Promise<string> {
+async function signPayload(payload: string, timestamp: number, secret: string): Promise<string> {
 	const enc = new TextEncoder();
 	const key = await crypto.subtle.importKey(
 		'raw',
@@ -70,11 +83,7 @@ async function signPayload(
 		false,
 		['sign']
 	);
-	const sig = await crypto.subtle.sign(
-		'HMAC',
-		key,
-		enc.encode(`${timestamp}.${payload}`)
-	);
+	const sig = await crypto.subtle.sign('HMAC', key, enc.encode(`${timestamp}.${payload}`));
 	// Hex-encode for the X-Commons-Signature-256 header
 	return Array.from(new Uint8Array(sig))
 		.map((b) => b.toString(16).padStart(2, '0'))
@@ -85,17 +94,14 @@ async function signPayload(
  * Emit an event for an org. Called inline from mutations across campaigns,
  * supporters, donations, events (T9-3.4 event emission at call sites).
  *
- * Atomic in the calling mutation's transaction: writes orgEvents row (always)
- * and orgWebhookDeliveries rows for each enabled subscriber. Each delivery
+ * Writes one bounded orgEvents row and at most WEBHOOK_SUBSCRIPTION_MAX
+ * delivery rows. Each delivery
  * gets a scheduler.runAfter(0, ...) call so the actual HTTP send happens out
  * of the transaction (mutations can't do fetch).
  *
- * Throttle policy (per T9-3 key_decisions):
- * - campaign_action.created is the high-frequency event; we DON'T cap here
- *   because per-emission delivery scheduling is bounded. The throttle decision
- *   (100/org/min OR batch into campaign_action.bulk every 30s) is enforced
- *   at the emit site in T9-3.4 by checking a `recentEmitCount` denormalized
- *   field on org and either batching or dropping if over.
+ * A legacy cap violation never expands fan-out. We read only MAX+1, deliver
+ * to the first canonical MAX, persist one coalesced evidence row, and schedule
+ * a one-subscription repair step.
  */
 export const queueEvent = internalMutation({
 	args: {
@@ -104,39 +110,51 @@ export const queueEvent = internalMutation({
 		payload: v.string() // JSON-serialized event payload
 	},
 	handler: async (ctx, { orgId, event, payload }) => {
+		if (!WEBHOOK_EVENT_SET.has(event)) {
+			return { queued: 0, overflow: false, dropped: 'invalid_event' as const };
+		}
+		const normalized = normalizeWebhookPayload(event, payload);
+		if (!normalized.ok) {
+			return { queued: 0, overflow: false, dropped: normalized.error };
+		}
 		const now = Date.now();
 
 		// Always write to orgEvents for SSE polling consumers (T9-7)
 		await ctx.db.insert('orgEvents', {
 			orgId,
-			event,
-			payload,
+			event: normalized.event,
+			payload: normalized.payload,
 			emittedAt: now
 		});
 
-		// Fan out to enabled webhook subscribers whose events array includes this event
-		const subscribers = await ctx.db
+		const observed = await ctx.db
 			.query('orgWebhooks')
 			.withIndex('by_orgId_enabled', (q) => q.eq('orgId', orgId).eq('enabled', true))
-			.collect();
+			.take(WEBHOOK_SUBSCRIPTION_MAX + 1);
+		const overflow = observed.length > WEBHOOK_SUBSCRIPTION_MAX;
+		if (overflow) await recordWebhookOverflow(ctx, orgId, observed.length);
+		const subscribers = observed.slice(0, WEBHOOK_SUBSCRIPTION_MAX);
 
+		let queued = 0;
 		for (const sub of subscribers) {
-			if (!sub.events.includes(event)) continue;
+			if (!sub.events.includes(normalized.event)) continue;
 
 			const deliveryId = await ctx.db.insert('orgWebhookDeliveries', {
 				webhookId: sub._id,
 				orgId,
-				event,
-				payload,
+				event: normalized.event,
+				payload: normalized.payload,
 				attempt: 1,
 				isDead: false
 			});
+			queued += 1;
 
 			// Schedule the actual HTTP send out of the mutation transaction
 			await ctx.scheduler.runAfter(0, internal.orgWebhooks.deliverWebhook, {
 				deliveryId
 			});
 		}
+		return { queued, overflow, dropped: null };
 	}
 });
 
@@ -236,19 +254,37 @@ export const deliverWebhook = internalAction({
 			});
 			return;
 		}
+		const destination = normalizeWebhookDestination(webhook.url);
+		if (!destination.ok) {
+			await ctx.runMutation(internal.orgWebhooks.markDeliveryDead, {
+				deliveryId,
+				errorMessage: `destination rejected before delivery: ${destination.error}`
+			});
+			return;
+		}
+		const envelope = validateWebhookDeliveryEnvelope({
+			event: delivery.event,
+			payload: delivery.payload,
+			deliveryId,
+			attempt: delivery.attempt,
+			signingSecret: webhook.signingSecret
+		});
+		if (!envelope.ok) {
+			await ctx.runMutation(internal.orgWebhooks.markDeliveryDead, {
+				deliveryId,
+				errorMessage: `delivery envelope rejected: ${envelope.error}`
+			});
+			return;
+		}
 
 		const timestamp = Math.floor(Date.now() / 1000);
-		const signature = await signPayload(
-			delivery.payload,
-			timestamp,
-			webhook.signingSecret
-		);
+		const signature = await signPayload(delivery.payload, timestamp, webhook.signingSecret);
 
 		let statusCode: number | undefined;
 		let errorMessage: string | undefined;
 
 		try {
-			const res = await fetch(webhook.url, {
+			const res = await fetch(destination.url, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json',
@@ -259,6 +295,9 @@ export const deliverWebhook = internalAction({
 					'X-Commons-Attempt': String(delivery.attempt)
 				},
 				body: delivery.payload,
+				// A trusted endpoint cannot redirect the worker toward an untrusted
+				// or private destination after validation.
+				redirect: 'manual',
 				// Receivers should respond within 10s; we abort after to free worker
 				signal: AbortSignal.timeout(10_000)
 			});
@@ -272,13 +311,16 @@ export const deliverWebhook = internalAction({
 			}
 			errorMessage = `HTTP ${res.status}`;
 		} catch (e: unknown) {
-			errorMessage = e instanceof Error ? e.message : 'fetch failed';
+			errorMessage = truncateWebhookString(
+				e instanceof Error ? e.message : 'fetch failed',
+				WEBHOOK_ERROR_MAX_BYTES
+			);
 		}
 
-		// Determine retry vs dead. 4xx = permanent (config error). 5xx/network = retry.
-		const isClientError =
-			statusCode !== undefined && statusCode >= 400 && statusCode < 500;
-		if (isClientError || delivery.attempt >= MAX_ATTEMPTS) {
+		// Redirects and 4xx are permanent configuration failures. 5xx/network
+		// failures retry within the fixed attempt ceiling.
+		const isPermanentResponse = statusCode !== undefined && statusCode >= 300 && statusCode < 500;
+		if (isPermanentResponse || delivery.attempt >= MAX_ATTEMPTS) {
 			await ctx.runMutation(internal.orgWebhooks.markDeliveryDead, {
 				deliveryId,
 				statusCode,
@@ -343,60 +385,79 @@ export const retryPendingDeliveries = internalAction({
 export const _listDueRetries = internalQuery({
 	args: { now: v.number() },
 	handler: async (ctx, { now }) => {
-		return await ctx.db
+		const candidates = await ctx.db
 			.query('orgWebhookDeliveries')
 			.withIndex('by_nextRetryAt', (q) => q.lte('nextRetryAt', now))
-			.filter((q) =>
-				q.and(
-					q.eq(q.field('isDead'), false),
-					q.eq(q.field('deliveredAt'), undefined)
-				)
-			)
 			.take(RETRY_BATCH * 2);
+		return candidates.filter((row) => !row.isDead && row.deliveredAt === undefined);
 	}
 });
 
 /**
- * Daily housekeeping: delete orgEvents rows older than 7 days. The SSE
- * subscription endpoint (T9-7) only ever queries from a since-cursor in the
- * recent window, so retention beyond 7d is dead weight. Per tick: scan, take
- * 1000 oldest, delete. If >1000 rows are due, next tick continues — cron
- * will catch up.
+ * Delete one indexed page of orgEvents older than 7 days. Every continuation
+ * carries the original cutoff, so cleanup terminates instead of chasing new
+ * writes.
  */
 const EVENT_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const DELIVERY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const HISTORY_CLEANUP_BATCH = 500;
 
 export const expireOldEvents = internalMutation({
-	args: {},
-	handler: async (ctx) => {
-		const cutoff = Date.now() - EVENT_RETENTION_MS;
-		const stale = await ctx.db
+	args: { cutoff: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const cutoff = args.cutoff ?? Date.now() - EVENT_RETENTION_MS;
+		const observed = await ctx.db
 			.query('orgEvents')
-			.filter((q) => q.lt(q.field('emittedAt'), cutoff))
-			.take(1000);
-		for (const row of stale) {
-			await ctx.db.delete(row._id);
+			.withIndex('by_emittedAt', (q) => q.lt('emittedAt', cutoff))
+			.take(HISTORY_CLEANUP_BATCH + 1);
+		const page = observed.slice(0, HISTORY_CLEANUP_BATCH);
+		await Promise.all(page.map((row) => ctx.db.delete(row._id)));
+		const hasMore = observed.length > HISTORY_CLEANUP_BATCH;
+		if (hasMore) {
+			await ctx.scheduler.runAfter(0, internal.orgWebhooks.expireOldEvents, { cutoff });
 		}
+		return { deleted: page.length, hasMore };
 	}
+});
+
+/** Delivery payload/error history is retained for 30 days and drained in pages. */
+export const expireOldDeliveryHistory = internalMutation({
+	args: { cutoff: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const cutoff = args.cutoff ?? Date.now() - DELIVERY_RETENTION_MS;
+		// Default table order is the system creation-time index. Reading the
+		// oldest fixed page gives a cardinality bound without a filter scan.
+		const observed = await ctx.db
+			.query('orgWebhookDeliveries')
+			.order('asc')
+			.take(HISTORY_CLEANUP_BATCH + 1);
+		const stale = observed.filter((row) => row._creationTime < cutoff);
+		const page = stale.slice(0, HISTORY_CLEANUP_BATCH);
+		await Promise.all(page.map((row) => ctx.db.delete(row._id)));
+		const hasMore = stale.length > HISTORY_CLEANUP_BATCH;
+		if (hasMore) {
+			await ctx.scheduler.runAfter(0, internal.orgWebhooks.expireOldDeliveryHistory, {
+				cutoff
+			});
+		}
+		return { deleted: page.length, hasMore };
+	}
+});
+
+export const cleanupDeletedWebhookDeliveries = internalMutation({
+	args: { webhookId: v.id('orgWebhooks') },
+	handler: async (ctx, { webhookId }) => await cleanupWebhookDeliveryPage(ctx, webhookId)
+});
+
+export const repairLegacySubscriptionOverflow = internalMutation({
+	args: { orgId: v.id('organizations') },
+	handler: async (ctx, { orgId }) => await repairOrgWebhookOverflowPage(ctx, orgId)
 });
 
 // ---- session-auth CRUD for settings UI (T9-3.6) ----
 //
-// These mirror the v1api wrappers but use requireOrgRole instead of
-// requireInternalSecret — session-authenticated users with editor+ role can
-// manage webhooks via the settings page without an API key. The validation
-// logic (URL parse, scheme allowlist, events allowlist) is repeated here so
-// the session path and the v1 path enforce the same rules.
-
-// Session-auth and v1 API paths both validate against the canonical catalog.
-const SESSION_ALLOWED_EVENTS = WEBHOOK_EVENT_SET;
-
-function generateSecretSession(): string {
-	const bytes = new Uint8Array(32);
-	crypto.getRandomValues(bytes);
-	return Array.from(bytes)
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
+// These use session authority, but share the same transactional policy helpers
+// as v1 API-key adapters. There is no second cap or validation implementation.
 
 export const sessionListWebhooks = query({
 	args: { slug: v.string() },
@@ -405,17 +466,8 @@ export const sessionListWebhooks = query({
 		const hooks = await ctx.db
 			.query('orgWebhooks')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-		return hooks.map((h) => ({
-			id: h._id,
-			url: h.url,
-			events: h.events,
-			enabled: h.enabled,
-			description: h.description ?? null,
-			createdAt: h.createdAt,
-			lastDeliveredAt: h.lastDeliveredAt ?? null,
-			failureCount: h.failureCount
-		}));
+			.take(WEBHOOK_SUBSCRIPTION_MAX + 1);
+		return hooks.slice(0, WEBHOOK_SUBSCRIPTION_MAX).map(publicWebhook);
 	}
 });
 
@@ -423,15 +475,17 @@ export const sessionListRecentDeliveries = query({
 	args: { slug: v.string(), webhookId: v.string(), limit: v.optional(v.number()) },
 	handler: async (ctx, { slug, webhookId, limit }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const webhook = await getOwnedOrgWebhook(ctx, org._id, webhookId);
+		if (!webhook) return [];
+		const resolvedLimit = limit ?? 20;
+		if (!Number.isSafeInteger(resolvedLimit) || resolvedLimit < 1) {
+			throw new Error('WEBHOOK_HISTORY_LIMIT_INVALID');
+		}
 		const deliveries = await ctx.db
 			.query('orgWebhookDeliveries')
-			.withIndex('by_webhookId', (q) =>
-				q.eq('webhookId', webhookId as unknown as never)
-			)
+			.withIndex('by_webhookId', (q) => q.eq('webhookId', webhook._id))
 			.order('desc')
-			.take(Math.min(limit ?? 20, 100));
-		// Defense-in-depth org scoping (index is by webhookId; we filter to be
-		// sure deliveries belong to this org)
+			.take(Math.min(resolvedLimit, 50));
 		return deliveries
 			.filter((d) => d.orgId === org._id)
 			.map((d) => ({
@@ -452,11 +506,15 @@ export const sessionListRecentEvents = query({
 	args: { slug: v.string(), limit: v.optional(v.number()) },
 	handler: async (ctx, { slug, limit }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'member');
+		const resolvedLimit = limit ?? 8;
+		if (!Number.isSafeInteger(resolvedLimit) || resolvedLimit < 1) {
+			throw new Error('WEBHOOK_EVENT_HISTORY_LIMIT_INVALID');
+		}
 		const rows = await ctx.db
 			.query('orgEvents')
 			.withIndex('by_orgId_emittedAt', (q) => q.eq('orgId', org._id))
 			.order('desc')
-			.take(Math.min(limit ?? 8, 40));
+			.take(Math.min(resolvedLimit, 40));
 
 		return rows.map((row) => ({
 			id: row._id,
@@ -475,39 +533,7 @@ export const sessionCreateWebhook = mutation({
 	},
 	handler: async (ctx, { slug, url, events, description }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
-
-		let parsed: URL;
-		try {
-			parsed = new URL(url);
-		} catch {
-			return { error: 'invalid_url' as const };
-		}
-		if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-			return { error: 'invalid_url_scheme' as const };
-		}
-		if (events.length === 0) return { error: 'empty_events' as const };
-		for (const e of events) {
-			if (!SESSION_ALLOWED_EVENTS.has(e))
-				return { error: 'unknown_event' as const, event: e };
-		}
-
-		const signingSecret = generateSecretSession();
-		const id = await ctx.db.insert('orgWebhooks', {
-			orgId: org._id,
-			url: parsed.toString(),
-			events,
-			signingSecret,
-			enabled: true,
-			description,
-			createdAt: Date.now(),
-			failureCount: 0
-		});
-		// signingSecret returned ONCE on create — caller must persist
-		return {
-			error: null,
-			webhook: { id, url: parsed.toString(), events, enabled: true, description: description ?? null },
-			signingSecret
-		};
+		return await createOrgWebhook(ctx, { orgId: org._id, url, events, description });
 	}
 });
 
@@ -515,9 +541,11 @@ export const sessionTestWebhook = mutation({
 	args: { slug: v.string(), webhookId: v.string() },
 	handler: async (ctx, { slug, webhookId }): Promise<WebhookTestDeliveryResult> => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const webhook = await getOwnedOrgWebhook(ctx, org._id, webhookId);
+		if (!webhook) return { error: 'not_found' };
 		return (await ctx.runMutation(internal.orgWebhooks.enqueueTestDelivery, {
 			orgId: org._id,
-			webhookId: webhookId as Id<'orgWebhooks'>,
+			webhookId: webhook._id,
 			trigger: 'session'
 		})) as WebhookTestDeliveryResult;
 	}
@@ -534,41 +562,14 @@ export const sessionUpdateWebhook = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
-		const h = await ctx.db
-			.query('orgWebhooks')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect()
-			.then((rows) => rows.find((x) => x._id === args.webhookId));
-		if (!h) return { error: 'not_found' as const };
-
-		const patch: Record<string, unknown> = {};
-		if (args.url !== undefined) {
-			let parsed: URL;
-			try {
-				parsed = new URL(args.url);
-			} catch {
-				return { error: 'invalid_url' as const };
-			}
-			if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:')
-				return { error: 'invalid_url_scheme' as const };
-			patch.url = parsed.toString();
-		}
-		if (args.events !== undefined) {
-			if (args.events.length === 0) return { error: 'empty_events' as const };
-			for (const e of args.events) {
-				if (!SESSION_ALLOWED_EVENTS.has(e))
-					return { error: 'unknown_event' as const, event: e };
-			}
-			patch.events = args.events;
-		}
-		if (args.enabled !== undefined) {
-			patch.enabled = args.enabled;
-			if (args.enabled && !h.enabled) patch.failureCount = 0;
-		}
-		if (args.description !== undefined) patch.description = args.description;
-
-		await ctx.db.patch(h._id, patch);
-		return { error: null };
+		return await updateOwnedOrgWebhook(ctx, {
+			orgId: org._id,
+			webhookId: args.webhookId,
+			url: args.url,
+			events: args.events,
+			enabled: args.enabled,
+			description: args.description
+		});
 	}
 });
 
@@ -576,19 +577,7 @@ export const sessionRotateWebhookSecret = mutation({
 	args: { slug: v.string(), webhookId: v.string() },
 	handler: async (ctx, { slug, webhookId }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
-		const h = await ctx.db
-			.query('orgWebhooks')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect()
-			.then((rows) => rows.find((x) => x._id === webhookId));
-		if (!h) return { error: 'not_found' as const };
-
-		const newSecret = generateSecretSession();
-		await ctx.db.patch(h._id, {
-			signingSecret: newSecret,
-			signingSecretPrevious: h.signingSecret
-		});
-		return { error: null, signingSecret: newSecret };
+		return await rotateOwnedOrgWebhookSecret(ctx, org._id, webhookId);
 	}
 });
 
@@ -596,22 +585,7 @@ export const sessionDeleteWebhook = mutation({
 	args: { slug: v.string(), webhookId: v.string() },
 	handler: async (ctx, { slug, webhookId }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
-		const h = await ctx.db
-			.query('orgWebhooks')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect()
-			.then((rows) => rows.find((x) => x._id === webhookId));
-		if (!h) return false;
-
-		const deliveries = await ctx.db
-			.query('orgWebhookDeliveries')
-			.withIndex('by_webhookId', (q) =>
-				q.eq('webhookId', h._id)
-			)
-			.collect();
-		for (const d of deliveries) await ctx.db.delete(d._id);
-		await ctx.db.delete(h._id);
-		return true;
+		return await deleteOwnedOrgWebhook(ctx, org._id, webhookId);
 	}
 });
 
@@ -651,7 +625,10 @@ export const markDeliveryDead = internalMutation({
 		await ctx.db.patch(deliveryId, {
 			isDead: true,
 			statusCode,
-			errorMessage,
+			errorMessage:
+				errorMessage === undefined
+					? undefined
+					: truncateWebhookString(errorMessage, WEBHOOK_ERROR_MAX_BYTES),
 			nextRetryAt: undefined
 		});
 		// Increment parent failureCount; auto-disable on N consecutive dead deliveries
@@ -679,7 +656,10 @@ export const markDeliveryRetryable = internalMutation({
 		if (!delivery) return;
 		await ctx.db.patch(deliveryId, {
 			statusCode,
-			errorMessage,
+			errorMessage:
+				errorMessage === undefined
+					? undefined
+					: truncateWebhookString(errorMessage, WEBHOOK_ERROR_MAX_BYTES),
 			attempt: delivery.attempt + 1,
 			nextRetryAt
 		});

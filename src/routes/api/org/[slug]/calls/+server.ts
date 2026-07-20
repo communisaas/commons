@@ -6,7 +6,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { env as privateEnv } from '$env/dynamic/private';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -102,7 +102,10 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 		throw error(400, 'Invalid callerPhone format (E.164 required)');
 	}
 	// districtHash is SHA-256 hex (64 chars) optionally with 0x prefix.
-	if (districtHash !== undefined && (typeof districtHash !== 'string' || districtHash.length > 128)) {
+	if (
+		districtHash !== undefined &&
+		(typeof districtHash !== 'string' || districtHash.length > 128)
+	) {
 		throw error(400, 'Invalid districtHash format');
 	}
 
@@ -128,12 +131,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 
 	// Initiate the call via Twilio
 	const callbackUrl = `${url.origin}/api/sms/call-status`;
-	const result = await initiatePatchThroughCall(
-		callerPhone,
-		targetPhone,
-		callbackUrl,
-		targetName
-	);
+	const result = await initiatePatchThroughCall(callerPhone, targetPhone, callbackUrl, targetName);
 
 	if (result.success) {
 		const updated = await serverMutation(api.calls.updateCallSid, {
@@ -169,7 +167,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1),
+		100
+	);
 	const statusFilter = url.searchParams.get('status') || undefined;
 	const campaignIdFilter = url.searchParams.get('campaignId') || undefined;
 

@@ -49,6 +49,12 @@ describe('createExecution', () => {
 	it('inserts a pending workflow execution', async () => {
 		const ctx = {
 			db: {
+				get: vi.fn().mockResolvedValue({
+					_id: 'wf-1',
+					executionCount: 4,
+					executionCountVersion: 1
+				}),
+				patch: vi.fn().mockResolvedValue(undefined),
 				insert: vi.fn().mockResolvedValue('exec-new')
 			}
 		};
@@ -63,12 +69,18 @@ describe('createExecution', () => {
 		});
 
 		expect(result).toBe('exec-new');
+		expect(ctx.db.get).toHaveBeenCalledWith('wf-1');
+		expect(ctx.db.patch).toHaveBeenCalledWith('wf-1', {
+			executionCount: 5,
+			executionCountVersion: 1
+		});
 		expect(ctx.db.insert).toHaveBeenCalledWith('workflowExecutions', {
 			workflowId: 'wf-1',
 			supporterId: 'sup-1',
 			triggerEvent: { type: 'supporter_created', entityId: 'sup-1' },
 			status: 'pending',
-			currentStep: 0
+			currentStep: 0,
+			workflowCountVersion: 1
 		});
 	});
 });

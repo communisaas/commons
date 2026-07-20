@@ -1,225 +1,413 @@
-import { query, mutation, action, internalAction, internalQuery, internalMutation, type ActionCtx, type MutationCtx, type QueryCtx } from "./_generated/server";
-import { makeFunctionReference } from "convex/server";
-import type { FunctionReference } from "convex/server";
-import { ConvexError, getConvexSize, v, type Value } from "convex/values";
-import type { Doc, Id } from "./_generated/dataModel";
-import { requireAuth, requireOrgRole, loadOrg } from "./_authHelpers";
-import { requireInternalSecret } from "./_internalAuth";
 import {
-  startOfMonthUTC,
-  decideIndividualAuthoring,
-  authoredLimitForPlan,
-  AUTHORING_QUOTA_EXCEEDED,
-} from "./_individualAuthoringCap";
-import anchorsData from "./domain-anchors.json";
-import { computeTwinEdges, computeCalibration } from "./lib/relatedness";
-import { clusterTagConcepts, conceptEdges, tagConceptMap } from "./lib/tag_concepts";
-import { captureToSentry } from "./_sentry";
+	query,
+	mutation,
+	action,
+	internalAction,
+	internalQuery,
+	internalMutation,
+	type ActionCtx,
+	type MutationCtx,
+	type QueryCtx
+} from './_generated/server';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
+import { ConvexError, getConvexSize, v, type Value } from 'convex/values';
+import type { Doc, Id } from './_generated/dataModel';
+import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import {
-  MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
-  MAX_PUBLIC_TEMPLATE_SCOPES,
-  validateTemplateInputBudgets,
-} from "./lib/templateInputBudget";
+	startOfMonthUTC,
+	decideIndividualAuthoring,
+	authoredLimitForPlan,
+	AUTHORING_QUOTA_EXCEEDED
+} from './_individualAuthoringCap';
+import anchorsData from './domain-anchors.json';
+import { computeTwinEdges, computeCalibration } from './lib/relatedness';
+import { clusterTagConcepts, conceptEdges, tagConceptMap } from './lib/tag_concepts';
+import { captureToSentry } from './_sentry';
 import {
-  PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED,
-  PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH,
-  PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
-  PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
-  PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
-  completePublicDiscoveryCoordinatedRebuild,
-  commitPublicDiscoveryListPublication,
-  commitPublicDiscoveryRelationsPublication,
-  getPublicDiscoveryManifestRow,
-  markPublicDiscoveryListAndRelationsDirty,
-  markPublicDiscoveryListDirty,
-  markPublicDiscoveryRelationsDirty,
-  preparePublicDiscoveryListPublication,
-  preparePublicDiscoveryRelationsPublication,
-  reschedulePublicDiscoveryListRefresh,
-  reschedulePublicDiscoveryRelationsRefresh,
-  toPublicDiscoveryManifestPayload,
-} from "./lib/publicDiscovery";
+	MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
+	MAX_PUBLIC_TEMPLATE_SCOPES,
+	MAX_TEMPLATE_SLUG_BYTES,
+	validateBoundedJson,
+	validateTemplateInputBudgets,
+	validateTemplateMetadataBudgets
+} from './lib/templateInputBudget';
+import {
+	PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES,
+	PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_NOT_READY,
+	PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_PROJECTION_VERSION,
+	PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED,
+	PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH,
+	PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS,
+	PUBLIC_DISCOVERY_MANIFEST_CONTROL_RETRY_MAX_SECONDS,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_BODY,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_HEADER,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_PROTOCOL,
+	PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
+	PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS,
+	activatePublicDiscoveryManifestAuthority,
+	completePublicDiscoveryCoordinatedRebuild,
+	commitPublicDiscoveryListPublication,
+	commitPublicDiscoveryRelationsPublication,
+	assertPublicDiscoveryDirectSourceServingReady,
+	getPublicDiscoveryManifestAuthorityRow,
+	getPublicDiscoveryManifestRow,
+	invalidatePublicDiscoveryAfterDestructiveSourceChange,
+	markPublicDiscoveryListAndRelationsDirty,
+	markPublicDiscoveryListDirty,
+	markPublicDiscoveryRelationsDirty,
+	preparePublicDiscoveryListPublication,
+	preparePublicDiscoveryRelationsPublication,
+	publicDiscoveryManifestControlAttemptCoordinates,
+	publicDiscoveryManifestControlRetryDelayMs,
+	publicDiscoveryManifestControlRetryDisposition,
+	publicDiscoveryManifestAuthorityMatches,
+	publicDiscoveryManifestAuthoritySerializedBytes,
+	publicDiscoveryListRefreshBypassesMinInterval,
+	publicDiscoveryListRefreshRebuildsRelations,
+	publicDiscoveryRelationsRefreshBypassesMinInterval,
+	reschedulePublicDiscoveryListRefresh,
+	reschedulePublicDiscoveryRelationsRefresh,
+	toPublicDiscoveryManifestPayloadFromAuthority
+} from './lib/publicDiscovery';
+import {
+	MAX_PUBLIC_RELATION_TAG_VECTORS,
+	PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION,
+	PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION,
+	PUBLIC_TEMPLATE_PAGE_ARTIFACT_COORDINATE_VERSION,
+	assertCompactPublicTemplateSource,
+	deleteCompactPublicDiscoverySource,
+	normalizePublicDiscoveryTags,
+	publicRecipientIntentCount,
+	publicRecipientIntentHash,
+	publicRecipientMigrationIntegrityReady,
+	publicTemplateDetailProjectionBytes,
+	readPublicTemplateDetailProjection,
+	syncCompactPublicDiscoveryProjection,
+	syncCompactPublicDiscoverySource,
+	type CompactPublicTemplateSource
+} from './lib/publicTemplateDiscoverySource';
+import {
+	TEMPLATE_LIST_MAX_PAGE_SIZE,
+	TEMPLATE_LIST_PROJECTION_KEY,
+	deleteTemplateListProjection,
+	getTemplateListProjectionMigration,
+	readTemplateListPageByOrg,
+	readTemplateListPageByUser,
+	requireTemplateListProjectionReady,
+	syncTemplateListProjection,
+	templateListPaginationValidator,
+	toAuthenticatedTemplateListItem,
+	toOrgTemplateListItem
+} from './lib/templateListProjection';
+import {
+	LEGACY_ENDORSEMENT_COUNT_REPAIR_LIMIT,
+	boundedExactEndorsementCount,
+	isAuthoritativeEndorsementCount,
+	throwEndorsementCountRepairRequired
+} from './lib/templateEndorsementCount';
+import {
+	PUBLIC_RECIPIENT_PAGE_METRICS_BATCH_MAX,
+	readPublicRecipientPageMetricsBatch
+} from './lib/recipientMetrics';
+import {
+	PUBLIC_TEMPLATE_PAGE_DEBATE_BATCH_MAX,
+	readPublicTemplatePageDebatesBatch
+} from './debates';
 
 declare const process: { env: Record<string, string | undefined> };
 
+const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL = '3';
+const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER =
+	'x-public-discovery-refresh-gate-protocol';
+const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PURPOSE_HEADER = 'x-public-discovery-refresh-purpose';
+const PUBLIC_DISCOVERY_MANIFEST_REFRESH_PAGE_CONTINUATION_PURPOSE = 'page-backfill-continuation';
+const PUBLIC_DISCOVERY_PAGE_BACKFILL_CONTINUATION_HEADER =
+	'x-public-discovery-page-backfill-continuation';
+
 const templateGeographicScopeValidator = v.union(
-  v.object({ type: v.literal("international") }),
-  v.object({
-    type: v.literal("nationwide"),
-    country: v.string(),
-    displayName: v.optional(v.string()),
-  }),
-  v.object({
-    type: v.literal("subnational"),
-    country: v.string(),
-    subdivision: v.optional(v.string()),
-    subdivisionName: v.optional(v.string()),
-    locality: v.optional(v.string()),
-    displayName: v.optional(v.string()),
-  }),
+	v.object({ type: v.literal('international') }),
+	v.object({
+		type: v.literal('nationwide'),
+		country: v.string(),
+		displayName: v.optional(v.string())
+	}),
+	v.object({
+		type: v.literal('subnational'),
+		country: v.string(),
+		subdivision: v.optional(v.string()),
+		subdivisionName: v.optional(v.string()),
+		locality: v.optional(v.string()),
+		displayName: v.optional(v.string())
+	})
 );
 
-const rateLimitCheckRef = makeFunctionReference<"mutation">("_rateLimit:check") as unknown as FunctionReference<"mutation", "internal">;
-const getByIdsRef = makeFunctionReference<"query">("templates:getByIds") as unknown as FunctionReference<"query", "internal">;
-const textSearchRef = makeFunctionReference<"query">("templates:textSearch") as unknown as FunctionReference<"query", "internal">;
-const migrateTopicEmbeddingMarkersRef = makeFunctionReference<"mutation">("templates:migrateTopicEmbeddingMarkers") as unknown as FunctionReference<
-  "mutation",
-  "internal"
->;
-const listMissingTagEmbeddingsRef = makeFunctionReference<"query">("templates:listMissingTagEmbeddings") as unknown as FunctionReference<"query", "internal">;
-const patchTagEmbeddingsRef = makeFunctionReference<"mutation">("templates:patchTagEmbeddings") as unknown as FunctionReference<"mutation", "internal">;
-const listMissingDomainHueRef = makeFunctionReference<"query">("templates:_listMissingDomainHue") as unknown as FunctionReference<"query", "internal">;
-const patchDomainHueRef = makeFunctionReference<"mutation">("templates:_patchDomainHue") as unknown as FunctionReference<"mutation", "internal">;
-const reportPublicDiscoverySnapshotFailureRef = makeFunctionReference<"action">(
-  "templates:reportPublicDiscoverySnapshotFailure",
+const rateLimitCheckRef = makeFunctionReference<'mutation'>(
+	'_rateLimit:check'
+) as unknown as FunctionReference<'mutation', 'internal'>;
+const getByIdsRef = makeFunctionReference<'query'>(
+	'templates:getByIds'
+) as unknown as FunctionReference<'query', 'internal'>;
+const textSearchRef = makeFunctionReference<'query'>(
+	'templates:textSearch'
+) as unknown as FunctionReference<'query', 'internal'>;
+const publicDiscoverySearchReadinessRef = makeFunctionReference<'query'>(
+	'templates:publicDiscoverySearchReadiness'
+) as unknown as FunctionReference<'query', 'internal', Record<string, never>, unknown>;
+const migrateTopicEmbeddingMarkersRef = makeFunctionReference<'mutation'>(
+	'templates:migrateTopicEmbeddingMarkers'
+) as unknown as FunctionReference<'mutation', 'internal'>;
+const listMissingTagEmbeddingsRef = makeFunctionReference<'query'>(
+	'templates:listMissingTagEmbeddings'
+) as unknown as FunctionReference<'query', 'internal'>;
+const patchTagEmbeddingsRef = makeFunctionReference<'mutation'>(
+	'templates:patchTagEmbeddings'
+) as unknown as FunctionReference<'mutation', 'internal'>;
+type MissingDomainHuePage = {
+	candidates: Array<{ _id: Id<'templates'>; topicEmbedding: number[] }>;
+	scanned: number;
+	continueCursor: string | null;
+	isDone: boolean;
+};
+const listMissingDomainHueRef = makeFunctionReference<'query'>(
+	'templates:_listMissingDomainHue'
+) as unknown as FunctionReference<'query', 'internal', { cursor?: string }, MissingDomainHuePage>;
+const patchDomainHueRef = makeFunctionReference<'mutation'>(
+	'templates:_patchDomainHue'
+) as unknown as FunctionReference<'mutation', 'internal'>;
+const reportPublicDiscoverySnapshotFailureRef = makeFunctionReference<'action'>(
+	'templates:reportPublicDiscoverySnapshotFailure'
 ) as unknown as FunctionReference<
-  "action",
-  "internal",
-  { family: "list" | "relations"; code: string; failedAt: number },
-  unknown
+	'action',
+	'internal',
+	{ family: 'list' | 'relations'; code: string; failedAt: number },
+	unknown
 >;
-const rebuildPublicTemplateSnapshotsForCronAttemptRef = makeFunctionReference<"mutation">(
-  "templates:rebuildPublicTemplateSnapshotsForCronAttempt",
+const claimPublicDiscoveryManifestControlPushRef = makeFunctionReference<'mutation'>(
+	'templates:claimPublicDiscoveryManifestControlPush'
+) as unknown as FunctionReference<'mutation', 'internal', { token: string }, boolean>;
+type PublicDiscoveryManifestControlOutcome =
+	| 'succeeded'
+	| 'contained'
+	| 'attemptsExhausted'
+	| 'ageExhausted';
+const requeuePublicDiscoveryManifestControlPushRef = makeFunctionReference<'mutation'>(
+	'templates:requeuePublicDiscoveryManifestControlPush'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  Record<string, never>,
-  | { status: "rebuilt"; rebuilt: PublicTemplateSnapshotRebuildResult }
-  | { status: "oversize" }
-  | { status: "invalid" }
+	'mutation',
+	'internal',
+	{
+		attempt: number;
+		continuation?: boolean;
+		delayMs?: number;
+		outcome?: PublicDiscoveryManifestControlOutcome;
+		startedAt: number;
+		token: string;
+	},
+	{ requeued: boolean; superseded: boolean }
 >;
-const rebuildRelationSnapshotForCronAttemptRef = makeFunctionReference<"mutation">(
-  "templates:rebuildRelationSnapshotForCronAttempt",
+const pushPublicDiscoveryManifestControlRef = makeFunctionReference<'action'>(
+	'templates:pushPublicDiscoveryManifestControl'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  Record<string, never>,
-  | { status: "rebuilt"; rebuilt: RelationSnapshotRebuildResult }
-  | { status: "oversize" }
-  | { status: "invalid" }
-  | { status: "failed" }
+	'action',
+	'internal',
+	{ attempt?: number; continuation?: boolean; startedAt?: number; token: string },
+	unknown
 >;
-const rebuildHomepageSnapshotsForCronAttemptRef = makeFunctionReference<"mutation">(
-  "templates:rebuildHomepageSnapshotsForCronAttempt",
+const rebuildPublicTemplateSnapshotsForCronAttemptRef = makeFunctionReference<'mutation'>(
+	'templates:rebuildPublicTemplateSnapshotsForCronAttempt'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  Record<string, never>,
-  { status: "rebuilt"; rebuilt: HomepageSnapshotRebuildResult }
+	'mutation',
+	'internal',
+	Record<string, never>,
+	| { status: 'rebuilt'; rebuilt: PublicTemplateSnapshotRebuildResult }
+	| { status: 'oversize' }
+	| { status: 'invalid' }
+>;
+const rebuildRelationSnapshotForCronAttemptRef = makeFunctionReference<'mutation'>(
+	'templates:rebuildRelationSnapshotForCronAttempt'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	Record<string, never>,
+	| { status: 'rebuilt'; rebuilt: RelationSnapshotRebuildResult }
+	| { status: 'oversize' }
+	| { status: 'invalid' }
+	| { status: 'failed' }
+>;
+const rebuildHomepageSnapshotsForCronAttemptRef = makeFunctionReference<'mutation'>(
+	'templates:rebuildHomepageSnapshotsForCronAttempt'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	Record<string, never>,
+	{ status: 'rebuilt'; rebuilt: HomepageSnapshotRebuildResult }
 >;
 type PublicDiscoveryCronAttemptState = {
-  manifestId: Id<"publicDiscoveryManifest"> | null;
-  listRevision: number;
-  listUpdatedAt: number | null;
-  listScheduledAt: number | null;
-  relationsRevision: number;
-  relationsUpdatedAt: number | null;
-  relationsScheduledAt: number | null;
+	manifestId: Id<'publicDiscoveryManifest'> | null;
+	listReady: boolean;
+	listRevision: number;
+	listUpdatedAt: number | null;
+	listScheduledAt: number | null;
+	listDirtyAt: number | null;
+	listFailureCode: string | null;
+	relationsReady: boolean;
+	relationsRevision: number;
+	relationsUpdatedAt: number | null;
+	relationsScheduledAt: number | null;
+	relationsDirtyAt: number | null;
+	relationsFailureCode: string | null;
+	nextTemporalRebuildAt: number | null;
+	temporalScheduleVersion: number | null;
 };
 type PublicDiscoveryCronFailure = {
-  family: "list" | "relations";
-  code: string;
+	family: 'list' | 'relations';
+	code: string;
 };
-const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<"mutation">(
-  "templates:recordPublicDiscoverySnapshotRuntimeFailure",
+const recordPublicDiscoverySnapshotRuntimeFailureRef = makeFunctionReference<'mutation'>(
+	'templates:recordPublicDiscoverySnapshotRuntimeFailure'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  {
-    failures: PublicDiscoveryCronFailure[];
-    failedAt: number;
-    attempt: PublicDiscoveryCronAttemptState;
-  },
-  unknown
+	'mutation',
+	'internal',
+	{
+		failures: PublicDiscoveryCronFailure[];
+		failedAt: number;
+		attempt: PublicDiscoveryCronAttemptState;
+	},
+	unknown
 >;
-const publicDiscoveryCronAttemptStateRef = makeFunctionReference<"query">(
-  "templates:publicDiscoveryCronAttemptState",
+const publicDiscoveryCronAttemptStateRef = makeFunctionReference<'query'>(
+	'templates:publicDiscoveryCronAttemptState'
 ) as unknown as FunctionReference<
-  "query",
-  "internal",
-  Record<string, never>,
-  PublicDiscoveryCronAttemptState
+	'query',
+	'internal',
+	Record<string, never>,
+	PublicDiscoveryCronAttemptState
 >;
 type ScheduledPublicDiscoveryRefreshArgs = {
-  scheduledAt: number;
-  bypassMinInterval?: boolean;
+	scheduledAt: number;
+	bypassMinInterval?: boolean;
 };
-const scheduledPublicDiscoveryRefreshAttemptStateRef = makeFunctionReference<"query">(
-  "templates:scheduledPublicDiscoveryRefreshAttemptState",
+const scheduledPublicDiscoveryRefreshAttemptStateRef = makeFunctionReference<'query'>(
+	'templates:scheduledPublicDiscoveryRefreshAttemptState'
 ) as unknown as FunctionReference<
-  "query",
-  "internal",
-  ScheduledPublicDiscoveryRefreshArgs & { family: "list" | "relations" },
-  {
-    current: boolean;
-    rebuildsRelations: boolean;
-    relationsScheduledAt?: number;
-  }
+	'query',
+	'internal',
+	ScheduledPublicDiscoveryRefreshArgs & { family: 'list' | 'relations' },
+	{
+		current: boolean;
+		rebuildsRelations: boolean;
+		relationsScheduledAt?: number;
+	}
 >;
-const flushScheduledPublicTemplateRefreshRef = makeFunctionReference<"mutation">(
-  "templates:flushScheduledPublicTemplateRefresh",
+const flushScheduledPublicTemplateRefreshRef = makeFunctionReference<'mutation'>(
+	'templates:flushScheduledPublicTemplateRefresh'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  ScheduledPublicDiscoveryRefreshArgs,
-  unknown
+	'mutation',
+	'internal',
+	ScheduledPublicDiscoveryRefreshArgs,
+	unknown
 >;
-const flushScheduledPublicTemplateRelationsRefreshRef = makeFunctionReference<"mutation">(
-  "templates:flushScheduledPublicTemplateRelationsRefresh",
+const flushScheduledPublicTemplateRelationsRefreshRef = makeFunctionReference<'mutation'>(
+	'templates:flushScheduledPublicTemplateRelationsRefresh'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  ScheduledPublicDiscoveryRefreshArgs,
-  unknown
+	'mutation',
+	'internal',
+	ScheduledPublicDiscoveryRefreshArgs,
+	unknown
 >;
-const recoverPublicDiscoveryScheduledRefreshFailureRef = makeFunctionReference<"mutation">(
-  "templates:recoverPublicDiscoveryScheduledRefreshFailure",
+const recoverPublicDiscoveryScheduledRefreshFailureRef = makeFunctionReference<'mutation'>(
+	'templates:recoverPublicDiscoveryScheduledRefreshFailure'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  {
-    family: "list" | "relations";
-    scheduledAt: number;
-    relationsScheduledAt?: number;
-    code: string;
-    failedAt: number;
-  },
-  unknown
+	'mutation',
+	'internal',
+	{
+		family: 'list' | 'relations';
+		scheduledAt: number;
+		relationsScheduledAt?: number;
+		code: string;
+		failedAt: number;
+	},
+	unknown
 >;
+const migratePublicDiscoverySourcePageRef = makeFunctionReference<'mutation'>(
+	'templates:migratePublicDiscoverySourcePage'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{
+		runToken: string;
+		cursor?: string;
+		startedAt: number;
+		listDirtyAtAtStart?: number;
+		relationsDirtyAtAtStart?: number;
+		scanned: number;
+		eligible: number;
+		sourcesWritten: number;
+		topicVectorsWritten: number;
+		tagVectorsWritten: number;
+		rejected: number;
+		scheduleContinuation?: boolean;
+	},
+	unknown
+>;
+const migrateEndorsementCountsRef = makeFunctionReference<'mutation'>(
+	'templates:migrateEndorsementCounts'
+) as unknown as FunctionReference<'mutation', 'internal', { runToken: string }, unknown>;
+const migrateTemplateListProjectionRef = makeFunctionReference<'mutation'>(
+	'templates:migrateTemplateListProjection'
+) as unknown as FunctionReference<'mutation', 'internal', { runToken: string }, unknown>;
 
 // ── Domain hue projection (cosine similarity → circular hue interpolation) ──
 
-interface DomainAnchor { label: string; hue: number; embedding: number[] }
+interface DomainAnchor {
+	label: string;
+	hue: number;
+	embedding: number[];
+}
 const DOMAIN_ANCHORS: DomainAnchor[] = anchorsData as DomainAnchor[];
 
 function cosineSim(a: number[], b: number[]): number {
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
+	let dot = 0,
+		magA = 0,
+		magB = 0;
+	for (let i = 0; i < a.length; i++) {
+		dot += a[i] * b[i];
+		magA += a[i] * a[i];
+		magB += b[i] * b[i];
+	}
+	const denom = Math.sqrt(magA) * Math.sqrt(magB);
+	return denom === 0 ? 0 : dot / denom;
 }
 
 function projectToHue(embedding: number[], topK = 3): number {
-  if (!embedding?.length || DOMAIN_ANCHORS.length === 0) return 0;
-  const scored = DOMAIN_ANCHORS.map((a) => ({ hue: a.hue, similarity: cosineSim(embedding, a.embedding) }));
-  scored.sort((a, b) => b.similarity - a.similarity);
-  const top = scored.slice(0, topK);
-  const minSim = Math.min(...top.map((t) => t.similarity));
-  const shifted = top.map((t) => ({ hue: t.hue, weight: Math.max(0, t.similarity - minSim + 0.01) }));
-  let sinSum = 0, cosSum = 0, weightSum = 0;
-  for (const s of shifted) {
-    const rad = (s.hue * Math.PI) / 180;
-    sinSum += s.weight * Math.sin(rad);
-    cosSum += s.weight * Math.cos(rad);
-    weightSum += s.weight;
-  }
-  if (weightSum === 0) return 0;
-  const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
-  return ((angle % 360) + 360) % 360;
+	if (!embedding?.length || DOMAIN_ANCHORS.length === 0) return 0;
+	const scored = DOMAIN_ANCHORS.map((a) => ({
+		hue: a.hue,
+		similarity: cosineSim(embedding, a.embedding)
+	}));
+	scored.sort((a, b) => b.similarity - a.similarity);
+	const top = scored.slice(0, topK);
+	const minSim = Math.min(...top.map((t) => t.similarity));
+	const shifted = top.map((t) => ({
+		hue: t.hue,
+		weight: Math.max(0, t.similarity - minSim + 0.01)
+	}));
+	let sinSum = 0,
+		cosSum = 0,
+		weightSum = 0;
+	for (const s of shifted) {
+		const rad = (s.hue * Math.PI) / 180;
+		sinSum += s.weight * Math.sin(rad);
+		cosSum += s.weight * Math.cos(rad);
+		weightSum += s.weight;
+	}
+	if (weightSum === 0) return 0;
+	const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
+	return ((angle % 360) + 360) % 360;
 }
 
 // =============================================================================
@@ -229,10 +417,10 @@ function projectToHue(embedding: number[], topK = 3): number {
 /** Resolve domain from document, falling back to pre-migration category field.
  *  Filters out "General" — the old meaningless deriveCategory() default. */
 function resolveDomain(doc: any): string {
-  if (doc.domain) return doc.domain;
-  const cat = doc.category;
-  if (cat && cat !== 'General') return cat;
-  return '';
+	if (doc.domain) return doc.domain;
+	const cat = doc.category;
+	if (cat && cat !== 'General') return cat;
+	return '';
 }
 
 /**
@@ -242,92 +430,108 @@ function resolveDomain(doc: any): string {
  * vocabulary regardless of how the raw field was authored.
  */
 function normalizeTags(topics: unknown): string[] {
-  if (!Array.isArray(topics)) return [];
-  const seen = new Set<string>();
-  for (const t of topics) {
-    if (typeof t !== 'string') continue;
-    const tag = t.trim();
-    if (tag.length > 0) seen.add(tag);
-  }
-  return Array.from(seen).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+	return normalizePublicDiscoveryTags(topics);
 }
 
-function toPublicTemplate(t: Doc<"templates">, score?: number | null) {
-  const projected = {
-    _id: t._id,
-    slug: t.slug,
-    title: t.title,
-    description: t.description,
-    domain: resolveDomain(t),
-    domainHue: t.domainHue ?? undefined,
-    type: t.type,
-    deliveryMethod: t.deliveryMethod,
-    status: t.status,
-    isPublic: t.isPublic,
-    verifiedSends: t.verifiedSends < 5 ? null : t.verifiedSends,
-    uniqueDistricts: t.uniqueDistricts < 3 ? null : t.uniqueDistricts,
-    createdAt: new Date(t._creationTime).toISOString(),
-  };
-  return score === undefined ? projected : { ...projected, _score: score };
+function toPublicTemplate(t: PublicTemplateEnrichmentSource, score?: number | null) {
+	const projected = {
+		_id: t._id,
+		slug: t.slug,
+		title: t.title,
+		description: t.description,
+		domain: resolveDomain(t),
+		domainHue: t.domainHue ?? undefined,
+		type: t.type,
+		deliveryMethod: t.deliveryMethod,
+		status: t.status,
+		isPublic: t.isPublic,
+		verifiedSends: t.verifiedSends < 5 ? null : t.verifiedSends,
+		uniqueDistricts: t.uniqueDistricts < 3 ? null : t.uniqueDistricts,
+		createdAt: new Date(t._creationTime).toISOString()
+	};
+	return score === undefined ? projected : { ...projected, _score: score };
 }
 
 /**
- * Public: List published templates, ordered by creation time (newest first).
- * Paginated via Convex's built-in pagination. Embedding vectors are stripped —
- * they are server-only and must not reach the client.
+ * Retired legacy surface. It used to hydrate 50 canonical, embedding-bearing
+ * rows and selected published-but-private templates. Keeping only an internal
+ * coded tombstone makes accidental callers fail before any database I/O.
  */
-export const list = query({
-  args: {
-    paginationOpts: v.object({
-      numItems: v.number(),
-      cursor: v.union(v.string(), v.null()),
-    }),
-  },
-  handler: async (ctx, args) => {
-    const result = await ctx.db
-      .query("templates")
-      .withIndex("by_status", (q) => q.eq("status", "published"))
-      .order("desc")
-      .paginate({
-        numItems: Math.min(args.paginationOpts.numItems, 50),
-        cursor: args.paginationOpts.cursor ?? null,
-      });
-    return {
-      ...result,
-      page: result.page.map((template) => toPublicTemplate(template)),
-    };
-  },
+export const list = internalQuery({
+	args: {},
+	handler: async () => {
+		throw new ConvexError({ code: 'TEMPLATES_LIST_RETIRED' });
+	}
 });
 
 /**
  * Public: Get a single template by slug.
  */
 export const getBySlug = query({
-  args: { slug: v.string() },
-  handler: async (ctx, args) => {
-    const template = await ctx.db
-      .query("templates")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
-      .first();
+	args: { _secret: v.optional(v.string()), slug: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		if (
+			args.slug.length === 0 ||
+			new TextEncoder().encode(args.slug).byteLength > MAX_TEMPLATE_SLUG_BYTES
+		) {
+			throw new ConvexError({
+				code: 'TEMPLATE_SLUG_VALUE_INVALID',
+				maxBytes: MAX_TEMPLATE_SLUG_BYTES
+			});
+		}
+		await requireTemplateListProjectionReady(ctx);
+		const template = await ctx.db
+			.query('templateListProjections')
+			.withIndex('by_slug', (q) => q.eq('slug', args.slug))
+			.unique();
 
-    if (!template) return null;
+		if (!template) return null;
 
-    // Only return published or public templates to unauthenticated users
-    if (template.status !== "published" && !template.isPublic) {
-      return null;
-    }
+		// A public surface requires both publication and explicit visibility.
+		if (template.status !== 'published' || !template.isPublic) {
+			return null;
+		}
 
-    return {
-      id: template._id,
-      slug: template.slug,
-      title: template.title,
-      status: template.status,
-      isPublic: template.isPublic,
-    };
-  },
+		return {
+			id: template.templateId,
+			slug: template.slug,
+			title: template.title,
+			status: template.status,
+			isPublic: template.isPublic
+		};
+	}
 });
 
-type PublicTemplateSnapshotKey = "all" | "excludeCwc";
+/** One server call for the requested slug plus up to five collision candidates. */
+export const templateSlugsExist = query({
+	args: { _secret: v.optional(v.string()), slugs: v.array(v.string()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		if (args.slugs.length < 1 || args.slugs.length > 6) {
+			throw new ConvexError({ code: 'TEMPLATE_SLUG_BATCH_SIZE_INVALID', max: 6 });
+		}
+		if (new Set(args.slugs).size !== args.slugs.length) {
+			throw new ConvexError({ code: 'TEMPLATE_SLUG_BATCH_DUPLICATE' });
+		}
+		const encoder = new TextEncoder();
+		if (args.slugs.some((slug) => slug.length === 0 || encoder.encode(slug).byteLength > 400)) {
+			throw new ConvexError({ code: 'TEMPLATE_SLUG_BATCH_VALUE_INVALID', maxBytes: 400 });
+		}
+		await requireTemplateListProjectionReady(ctx);
+		return await Promise.all(
+			args.slugs.map(async (slug) => {
+				const row = await ctx.db
+					.query('templateListProjections')
+					.withIndex('by_slug', (q) => q.eq('slug', slug))
+					.first();
+				return row !== null;
+			})
+		);
+	}
+});
+
+type PublicTemplateSnapshotKey = 'all' | 'excludeCwc';
 type RelationSnapshotKey = PublicTemplateSnapshotKey;
 const PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP = 250;
 const PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP = 50;
@@ -348,212 +552,617 @@ const RELATION_SNAPSHOT_VARIANT_CAP = 50;
 const MAX_PUBLIC_TEMPLATE_CARD_BYTES = 16_000;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
 const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
+const PUBLIC_DISCOVERY_SOURCE_MIGRATION_KEY = 'v1' as const;
+const PUBLIC_DISCOVERY_SOURCE_MIGRATION_PAGE_SIZE = 4;
 
-function classifyPublicTemplateSnapshotFreeze(error: unknown): "oversize" | "invalid" | null {
-  if (!(error instanceof Error)) return null;
-  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:")) return "oversize";
-  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:")) return "invalid";
-  if (error.message.startsWith("PUBLIC_TEMPLATE_SNAPSHOT_INVALID:")) return "invalid";
-  return null;
+async function publicDiscoverySourceMigrationRow(ctx: { db: QueryCtx['db'] }) {
+	return await ctx.db
+		.query('publicDiscoverySourceMigrations')
+		.withIndex('by_key', (q) => q.eq('key', PUBLIC_DISCOVERY_SOURCE_MIGRATION_KEY))
+		.unique();
+}
+
+/**
+ * A completed migration is the explicit producer cutover. Until it is ready,
+ * every compact-plane consumer fails closed; there is no legacy template-scan
+ * fallback. After cutover, template-owned projection writers dual-write this
+ * plane in the same transaction. General discovery dirty timestamps also cover
+ * live joins and therefore are not a source-freshness signal.
+ */
+async function compactDiscoveryPlaneReady(ctx: { db: QueryCtx['db'] }) {
+	const migration = await publicDiscoverySourceMigrationRow(ctx);
+	if (
+		migration?.status !== 'ready' ||
+		migration.completedAt === undefined ||
+		migration.projectionVersion !== PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION ||
+		migration.pageArtifactCoordinatesWritten !== migration.sourcesWritten ||
+		!publicRecipientMigrationIntegrityReady(migration)
+	) {
+		throw new Error('PUBLIC_DISCOVERY_SOURCE_PLANE_NOT_READY');
+	}
+	return migration;
+}
+
+async function upsertCompactDiscoveryProjection(
+	ctx: MutationCtx,
+	template: Doc<'templates'>,
+	requestedGeneration?: string
+): Promise<{ source: boolean }> {
+	return await syncCompactPublicDiscoveryProjection(ctx, template, requestedGeneration);
+}
+
+async function upsertCompactDiscoverySource(
+	ctx: MutationCtx,
+	template: Doc<'templates'>,
+	requestedGeneration?: string
+): Promise<{
+	source: boolean;
+	topic: boolean;
+	tags: number;
+	publicRecipientCount: number;
+}> {
+	return await syncCompactPublicDiscoverySource(ctx, template, requestedGeneration);
+}
+
+async function deleteCompactDiscoveryRows(
+	ctx: MutationCtx,
+	templateId: Id<'templates'>
+): Promise<void> {
+	await deleteCompactPublicDiscoverySource(ctx, templateId);
+}
+
+function classifyPublicTemplateSnapshotFreeze(error: unknown): 'oversize' | 'invalid' | null {
+	if (!(error instanceof Error)) return null;
+	if (error.message.startsWith('PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:')) return 'oversize';
+	if (error.message.startsWith('PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:')) return 'invalid';
+	if (error.message.startsWith('PUBLIC_TEMPLATE_SNAPSHOT_INVALID:')) return 'invalid';
+	return null;
 }
 
 /** Emit the out-of-band alert scheduled by a failed snapshot mutation. */
 export const reportPublicDiscoverySnapshotFailure = internalAction({
-  args: {
-    family: v.union(v.literal("list"), v.literal("relations")),
-    code: v.string(),
-    failedAt: v.number(),
-  },
-  handler: async (_ctx, args) => {
-    await captureToSentry(new Error(args.code), {
-      action: "templates:publicDiscoverySnapshotRebuild",
-      level: "error",
-      extra: { family: args.family, failedAt: args.failedAt, code: args.code },
-    });
-    return { reported: true };
-  },
+	args: {
+		family: v.union(v.literal('list'), v.literal('relations')),
+		code: v.string(),
+		failedAt: v.number()
+	},
+	handler: async (_ctx, args) => {
+		await captureToSentry(new Error(args.code), {
+			action: 'templates:publicDiscoverySnapshotRebuild',
+			level: 'error',
+			extra: { family: args.family, failedAt: args.failedAt, code: args.code }
+		});
+		return { reported: true };
+	}
+});
+
+/**
+ * Push a committed ready/withdrawn control state to the authenticated Pages
+ * writer. The minute Cloudflare cron is the recovery backstop; this producer
+ * hook keeps ordinary publication visibility inside the 60-second lease.
+ */
+async function readBoundedManifestRefreshFailure(
+	response: Response,
+	maximumBytes = 512
+): Promise<string> {
+	const declared = response.headers.get('content-length');
+	if (declared !== null) {
+		if (!/^\d+$/.test(declared)) return '<invalid-content-length>';
+		const declaredBytes = Number(declared);
+		if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maximumBytes) {
+			return '<response-too-large>';
+		}
+	}
+	if (!response.body) return '';
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let received = 0;
+	let detail = '';
+	try {
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			received += chunk.value.byteLength;
+			if (received > maximumBytes) {
+				await reader.cancel('manifest refresh failure response too large').catch(() => undefined);
+				return '<response-too-large>';
+			}
+			detail += decoder.decode(chunk.value, { stream: true });
+		}
+		detail += decoder.decode();
+		return detail;
+	} finally {
+		reader.releaseLock();
+	}
+}
+
+/**
+ * Containment is terminal only when the trusted artifact's entire small wire
+ * contract agrees. A generic 503, a copied header, or a protocol/body drift is
+ * an ordinary bounded failure and cannot silently suppress producer recovery.
+ */
+async function isExactPublicDiscoveryManifestRefreshContainment(
+	response: Response
+): Promise<boolean> {
+	if (
+		response.status !== 503 ||
+		response.headers.get(PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_HEADER) !==
+			PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_SIGNAL_PROTOCOL ||
+		response.headers.get('content-type') !== 'application/json; charset=utf-8' ||
+		response.headers.get('cache-control') !== 'no-store' ||
+		response.headers.get(PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER) !== null ||
+		response.headers.get(PUBLIC_DISCOVERY_PAGE_BACKFILL_CONTINUATION_HEADER) !== null ||
+		response.headers.get('retry-after') !== null
+	) {
+		return false;
+	}
+	return (
+		(await readBoundedManifestRefreshFailure(response)) ===
+		PUBLIC_DISCOVERY_MANIFEST_REFRESH_CONTAINED_BODY
+	);
+}
+
+/**
+ * Claim and clear one queued producer notification before network I/O. A
+ * publication racing the action observes the cleared slot and schedules one
+ * successor; an obsolete/duplicate action cannot clear that successor token.
+ */
+export const claimPublicDiscoveryManifestControlPush = internalMutation({
+	args: { token: v.string() },
+	handler: async (ctx, args) => {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest || manifest.manifestControlPushToken !== args.token) return false;
+		await ctx.db.patch(manifest._id, { manifestControlPushToken: undefined });
+		return true;
+	}
+});
+
+/**
+ * Settle a completed chain or restore one bounded notification only when no
+ * newer publication already owns the durable slot. Terminal settlement never
+ * touches the slot, so a racing successor remains authoritative. Retry state
+ * and its scheduler write commit atomically.
+ */
+export const requeuePublicDiscoveryManifestControlPush = internalMutation({
+	args: {
+		attempt: v.number(),
+		continuation: v.optional(v.boolean()),
+		delayMs: v.optional(v.number()),
+		outcome: v.optional(
+			v.union(
+				v.literal('succeeded'),
+				v.literal('contained'),
+				v.literal('attemptsExhausted'),
+				v.literal('ageExhausted')
+			)
+		),
+		startedAt: v.number(),
+		token: v.string()
+	},
+	handler: async (ctx, args) => {
+		const now = Date.now();
+		if (
+			!Number.isSafeInteger(args.attempt) ||
+			args.attempt < 1 ||
+			args.attempt > PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_ATTEMPTS ||
+			!Number.isSafeInteger(args.startedAt) ||
+			args.startedAt < 0 ||
+			args.startedAt > now
+		) {
+			throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_RETRY_COORDINATE_INVALID');
+		}
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest) return { requeued: false, superseded: true };
+		if (args.outcome !== undefined) {
+			if (args.delayMs !== undefined || args.continuation !== undefined) {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_OUTCOME_INVALID');
+			}
+			await ctx.db.patch(manifest._id, {
+				manifestControlPushLastOutcome: args.outcome,
+				manifestControlPushLastOutcomeAt: now,
+				manifestControlPushLastOutcomeAttempt: args.attempt,
+				manifestControlPushLastOutcomeStartedAt: args.startedAt
+			});
+			return {
+				requeued: false,
+				superseded: manifest.manifestControlPushToken !== undefined
+			};
+		}
+		if (
+			args.delayMs === undefined ||
+			!Number.isSafeInteger(args.delayMs) ||
+			args.delayMs < 1_000 ||
+			args.delayMs > 301_000 ||
+			args.attempt < 2 ||
+			now + args.delayMs - args.startedAt >= PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS
+		) {
+			throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_RETRY_DELAY_INVALID');
+		}
+		if (manifest.manifestControlPushToken !== undefined) {
+			return { requeued: false, superseded: true };
+		}
+		await ctx.db.patch(manifest._id, { manifestControlPushToken: args.token });
+		await ctx.scheduler.runAfter(args.delayMs, pushPublicDiscoveryManifestControlRef, {
+			attempt: args.attempt,
+			...(args.continuation === true ? { continuation: true } : {}),
+			startedAt: args.startedAt,
+			token: args.token
+		});
+		return { requeued: true, superseded: false };
+	}
+});
+
+export const pushPublicDiscoveryManifestControl = internalAction({
+	args: {
+		attempt: v.optional(v.number()),
+		continuation: v.optional(v.boolean()),
+		startedAt: v.optional(v.number()),
+		token: v.string()
+	},
+	handler: async (ctx, args) => {
+		const claimed = await ctx.runMutation(claimPublicDiscoveryManifestControlPushRef, {
+			token: args.token
+		});
+		if (!claimed) return { refreshed: false, superseded: true };
+		const coordinates = publicDiscoveryManifestControlAttemptCoordinates(
+			args.attempt,
+			args.startedAt,
+			Date.now()
+		);
+		const settle = async (outcome: PublicDiscoveryManifestControlOutcome) =>
+			await ctx.runMutation(requeuePublicDiscoveryManifestControlPushRef, {
+				attempt: coordinates.attempt,
+				outcome,
+				startedAt: coordinates.startedAt,
+				token: args.token
+			});
+		if (
+			!coordinates.legacy &&
+			Date.now() - coordinates.startedAt >= PUBLIC_DISCOVERY_MANIFEST_CONTROL_MAX_AGE_MS
+		) {
+			const terminal = await settle('ageExhausted');
+			return {
+				exhausted: true,
+				outcome: 'ageExhausted' as const,
+				refreshed: false,
+				retryScheduled: false,
+				superseded: terminal.superseded
+			};
+		}
+		try {
+			const endpoint = process.env.PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL;
+			const secret = process.env.DISCOVERY_MANIFEST_REFRESH_SECRET;
+			if (!endpoint || !secret || new TextEncoder().encode(secret).byteLength < 32) {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_NOT_CONFIGURED');
+			}
+			let url: URL;
+			try {
+				url = new URL(endpoint);
+			} catch {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL_INVALID');
+			}
+			if (
+				url.protocol !== 'https:' ||
+				url.username ||
+				url.password ||
+				url.pathname !== '/api/internal/public-discovery-manifest-refresh' ||
+				url.search ||
+				url.hash
+			) {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL_INVALID');
+			}
+			const response = await fetch(url, {
+				body: '{}',
+				headers: {
+					'content-type': 'application/json',
+					...(args.continuation === true
+						? {
+								[PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PURPOSE_HEADER]:
+									PUBLIC_DISCOVERY_MANIFEST_REFRESH_PAGE_CONTINUATION_PURPOSE
+							}
+						: {}),
+					'x-public-discovery-manifest-refresh-secret': secret
+				},
+				method: 'POST',
+				signal: AbortSignal.timeout(10_000)
+			});
+			if (await isExactPublicDiscoveryManifestRefreshContainment(response)) {
+				const terminal = await settle('contained');
+				return {
+					contained: true,
+					refreshed: false,
+					retryScheduled: false,
+					superseded: terminal.superseded
+				};
+			}
+			if (response.status === 202) {
+				if (
+					response.headers.get(PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER) !==
+					PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL
+				) {
+					throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_INVALID');
+				}
+				const continuationHeader = response.headers.get(
+					PUBLIC_DISCOVERY_PAGE_BACKFILL_CONTINUATION_HEADER
+				);
+				if (continuationHeader !== null && continuationHeader !== '1') {
+					throw new Error('PUBLIC_DISCOVERY_PAGE_BACKFILL_CONTINUATION_PROTOCOL_INVALID');
+				}
+				const delayMs = publicDiscoveryManifestControlRetryDelayMs(
+					response.headers.get('retry-after')
+				);
+				if (delayMs === null) {
+					throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_RETRY_AFTER_INVALID');
+				}
+				const disposition = publicDiscoveryManifestControlRetryDisposition({
+					attempt: coordinates.attempt,
+					delayMs,
+					now: Date.now(),
+					startedAt: coordinates.startedAt
+				});
+				if (!disposition.retry) {
+					const terminal = await settle(disposition.outcome);
+					return {
+						exhausted: true,
+						outcome: disposition.outcome,
+						refreshed: false,
+						retryScheduled: false,
+						superseded: terminal.superseded
+					};
+				}
+				const retry = await ctx.runMutation(requeuePublicDiscoveryManifestControlPushRef, {
+					attempt: disposition.nextAttempt,
+					...(args.continuation === true || continuationHeader === '1'
+						? { continuation: true }
+						: {}),
+					delayMs,
+					startedAt: coordinates.startedAt,
+					token: args.token
+				});
+				return {
+					refreshed: false,
+					retryScheduled: retry.requeued,
+					superseded: retry.superseded
+				};
+			}
+			if (!response.ok) {
+				const detail = await readBoundedManifestRefreshFailure(response);
+				throw new Error(`PUBLIC_DISCOVERY_MANIFEST_REFRESH_FAILED:${response.status}:${detail}`);
+			}
+			if (
+				response.headers.get(PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER) !==
+				PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL
+			) {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_INVALID');
+			}
+			const completed = await settle('succeeded');
+			return completed.superseded ? { refreshed: true, superseded: true } : { refreshed: true };
+		} catch (error) {
+			// Claim-before-I/O lets a racing publication install a successor token.
+			// Every ordinary failure either preserves that successor, restores one
+			// bounded retry, or stamps terminal singleton evidence. The independent
+			// Cloudflare cron is eventual recovery after a terminal producer chain.
+			const delayMs = publicDiscoveryManifestControlRetryDelayMs(
+				String(PUBLIC_DISCOVERY_MANIFEST_CONTROL_RETRY_MAX_SECONDS)
+			);
+			if (delayMs === null) {
+				throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_RETRY_DELAY_INVALID', {
+					cause: error
+				});
+			}
+			const disposition = publicDiscoveryManifestControlRetryDisposition({
+				attempt: coordinates.attempt,
+				delayMs,
+				now: Date.now(),
+				startedAt: coordinates.startedAt
+			});
+			if (disposition.retry) {
+				await ctx.runMutation(requeuePublicDiscoveryManifestControlPushRef, {
+					attempt: disposition.nextAttempt,
+					...(args.continuation === true ? { continuation: true } : {}),
+					delayMs,
+					startedAt: coordinates.startedAt,
+					token: args.token
+				});
+			} else {
+				await settle(disposition.outcome);
+			}
+			throw error;
+		}
+	}
 });
 
 async function recordPublicDiscoverySnapshotFailure(
-  ctx: MutationCtx,
-  manifest: Doc<"publicDiscoveryManifest">,
-  family: "list" | "relations",
-  error: Error,
-  failedAt: number,
-  previousFailure?: { code?: string; failedAt?: number },
-  expectedScheduledAt?: number | null,
+	ctx: MutationCtx,
+	manifest: Doc<'publicDiscoveryManifest'>,
+	family: 'list' | 'relations',
+	error: Error,
+	failedAt: number,
+	previousFailure?: { code?: string; failedAt?: number },
+	expectedScheduledAt?: number | null
 ): Promise<void> {
-  const code = error.message.slice(0, 500);
-  const currentCode =
-    family === "list" ? manifest.listFailureCode : manifest.relationsFailureCode;
-  const currentFailedAt =
-    family === "list" ? manifest.listFailureAt : manifest.relationsFailureAt;
-  const priorCode = previousFailure === undefined ? currentCode : previousFailure.code;
-  const priorFailedAt =
-    previousFailure === undefined ? currentFailedAt : previousFailure.failedAt;
-  const repeatedFailure = priorCode === code && priorFailedAt !== undefined;
-  const durableFailedAt = repeatedFailure ? priorFailedAt : failedAt;
-  const currentScheduledAt =
-    family === "list" ? manifest.listRefreshScheduledAt : manifest.relationsRefreshScheduledAt;
-  const mayClearScheduledToken =
-    expectedScheduledAt === undefined ||
-    currentScheduledAt === (expectedScheduledAt === null ? undefined : expectedScheduledAt);
+	const code = error.message.slice(0, 500);
+	const currentCode = family === 'list' ? manifest.listFailureCode : manifest.relationsFailureCode;
+	const currentFailedAt = family === 'list' ? manifest.listFailureAt : manifest.relationsFailureAt;
+	const priorCode = previousFailure === undefined ? currentCode : previousFailure.code;
+	const priorFailedAt = previousFailure === undefined ? currentFailedAt : previousFailure.failedAt;
+	const repeatedFailure = priorCode === code && priorFailedAt !== undefined;
+	const durableFailedAt = repeatedFailure ? priorFailedAt : failedAt;
+	const currentScheduledAt =
+		family === 'list' ? manifest.listRefreshScheduledAt : manifest.relationsRefreshScheduledAt;
+	const mayClearScheduledToken =
+		expectedScheduledAt === undefined ||
+		currentScheduledAt === (expectedScheduledAt === null ? undefined : expectedScheduledAt);
 
-  // A successful-but-degraded publication first clears the old failure in its
-  // commit marker, then calls this helper with `previousFailure`. If the exact
-  // same unsafe source rows are still present, retain their original evidence
-  // without re-dirtying the just-published revision or emitting another alert.
-  // A source write will dirty the family again, while the daily supervisor can
-  // still prove whether the degradation has been repaired.
-  const listDirtyAt =
-    repeatedFailure && previousFailure !== undefined
-      ? undefined
-      : manifest.listDirtyAt ?? failedAt;
-  const relationsDirtyAt =
-    repeatedFailure && previousFailure !== undefined
-      ? undefined
-      : manifest.relationsDirtyAt ?? failedAt;
-  await ctx.db.patch(
-    manifest._id,
-    family === "list"
-      ? {
-          listDirtyAt,
-          ...(mayClearScheduledToken ? { listRefreshScheduledAt: undefined } : {}),
-          listFailureAt: durableFailedAt,
-          listFailureCode: code,
-        }
-      : {
-          relationsDirtyAt,
-          ...(mayClearScheduledToken ? { relationsRefreshScheduledAt: undefined } : {}),
-          relationsFailureAt: durableFailedAt,
-          relationsFailureCode: code,
-        },
-  );
-  if (!repeatedFailure) {
-    await ctx.scheduler.runAfter(0, reportPublicDiscoverySnapshotFailureRef, {
-      family,
-      code,
-      failedAt,
-    });
-  }
+	// A successful-but-degraded publication first clears the old failure in its
+	// commit marker, then calls this helper with `previousFailure`. If the exact
+	// same unsafe source rows are still present, retain their original evidence
+	// without re-dirtying the just-published revision or emitting another alert.
+	// A source write will dirty the family again, while the daily supervisor can
+	// still prove whether the degradation has been repaired.
+	const listDirtyAt =
+		repeatedFailure && previousFailure !== undefined
+			? undefined
+			: (manifest.listDirtyAt ?? failedAt);
+	const relationsDirtyAt =
+		repeatedFailure && previousFailure !== undefined
+			? undefined
+			: (manifest.relationsDirtyAt ?? failedAt);
+	await ctx.db.patch(
+		manifest._id,
+		family === 'list'
+			? {
+					listDirtyAt,
+					...(mayClearScheduledToken ? { listRefreshScheduledAt: undefined } : {}),
+					listFailureAt: durableFailedAt,
+					listFailureCode: code
+				}
+			: {
+					relationsDirtyAt,
+					...(mayClearScheduledToken ? { relationsRefreshScheduledAt: undefined } : {}),
+					relationsFailureAt: durableFailedAt,
+					relationsFailureCode: code
+				}
+	);
+	if (!repeatedFailure) {
+		await ctx.scheduler.runAfter(0, reportPublicDiscoverySnapshotFailureRef, {
+			family,
+			code,
+			failedAt
+		});
+	}
 }
 
 async function freezePublicDiscoverySnapshotFailure(
-  ctx: MutationCtx,
-  family: "list" | "relations",
-  error: Error,
-  failedAt: number,
-  expectedScheduledAt?: number | null,
+	ctx: MutationCtx,
+	family: 'list' | 'relations',
+	error: Error,
+	failedAt: number,
+	expectedScheduledAt?: number | null
 ): Promise<void> {
-  let manifest = await getPublicDiscoveryManifestRow(ctx);
-  if (manifest?.coordinatedRebuildToken !== undefined) {
-    // A cron/operator attempt without the owning token must not translate the
-    // lock rejection into failure metadata or clear coordinated dirty state.
-    throw error;
-  }
-  if (!manifest) {
-    // A first-ever cron can fail before a manifest exists. Create the tiny
-    // dirty control row through the normal scheduler path. An in-transaction
-    // deterministic freeze clears that token; guarded action recovery retains
-    // it because the cron observed no token before the failed attempt.
-    if (family === "list") {
-      await markPublicDiscoveryListDirty(ctx, failedAt);
-    } else {
-      await markPublicDiscoveryRelationsDirty(ctx, failedAt);
-    }
-    manifest = await getPublicDiscoveryManifestRow(ctx);
-  }
-  if (!manifest) throw error;
+	let manifest = await getPublicDiscoveryManifestRow(ctx);
+	if (manifest?.coordinatedRebuildToken !== undefined) {
+		// A cron/operator attempt without the owning token must not translate the
+		// lock rejection into failure metadata or clear coordinated dirty state.
+		throw error;
+	}
+	if (!manifest) {
+		// A first-ever cron can fail before a manifest exists. Create the tiny
+		// dirty control row through the normal scheduler path. An in-transaction
+		// deterministic freeze clears that token; guarded action recovery retains
+		// it because the cron observed no token before the failed attempt.
+		if (family === 'list') {
+			await markPublicDiscoveryListDirty(ctx, 'aggregate', failedAt);
+		} else {
+			await markPublicDiscoveryRelationsDirty(ctx, failedAt);
+		}
+		manifest = await getPublicDiscoveryManifestRow(ctx);
+	}
+	if (!manifest) throw error;
 
-  await recordPublicDiscoverySnapshotFailure(
-    ctx,
-    manifest,
-    family,
-    error,
-    failedAt,
-    undefined,
-    expectedScheduledAt,
-  );
-  console.error(
-    `[public-discovery] ${family} snapshot frozen at last-good until the next source write or daily cron: ${error.message}`,
-  );
+	await recordPublicDiscoverySnapshotFailure(
+		ctx,
+		manifest,
+		family,
+		error,
+		failedAt,
+		undefined,
+		expectedScheduledAt
+	);
+	console.error(
+		`[public-discovery] ${family} snapshot frozen at last-good until the next source write or daily cron: ${error.message}`
+	);
 }
 
 /** Persist a failure observed outside the failed rebuild mutation transaction. */
 export const recordPublicDiscoverySnapshotRuntimeFailure = internalMutation({
-  args: {
-    failures: v.array(
-      v.object({
-        family: v.union(v.literal("list"), v.literal("relations")),
-        code: v.string(),
-      }),
-    ),
-    failedAt: v.number(),
-    attempt: v.object({
-      manifestId: v.union(v.id("publicDiscoveryManifest"), v.null()),
-      listRevision: v.number(),
-      listUpdatedAt: v.union(v.number(), v.null()),
-      listScheduledAt: v.union(v.number(), v.null()),
-      relationsRevision: v.number(),
-      relationsUpdatedAt: v.union(v.number(), v.null()),
-      relationsScheduledAt: v.union(v.number(), v.null()),
-    }),
-  },
-  handler: async (ctx, args) => {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (manifest?.coordinatedRebuildToken !== undefined) {
-      return { recorded: [] as Array<"list" | "relations"> };
-    }
-    const sameManifest = (manifest?._id ?? null) === args.attempt.manifestId;
-    const eligible = sameManifest
-      ? args.failures.filter(({ family }, index, failures) => {
-          if (failures.findIndex((failure) => failure.family === family) !== index) return false;
-          return family === "list"
-            ? (manifest?.listRevision ?? 0) === args.attempt.listRevision &&
-                (manifest?.listUpdatedAt ?? null) === args.attempt.listUpdatedAt
-            : (manifest?.relationsRevision ?? 0) === args.attempt.relationsRevision &&
-                (manifest?.relationsUpdatedAt ?? null) === args.attempt.relationsUpdatedAt;
-        })
-      : [];
+	args: {
+		failures: v.array(
+			v.object({
+				family: v.union(v.literal('list'), v.literal('relations')),
+				code: v.string()
+			})
+		),
+		failedAt: v.number(),
+		attempt: v.object({
+			manifestId: v.union(v.id('publicDiscoveryManifest'), v.null()),
+			listReady: v.boolean(),
+			listRevision: v.number(),
+			listUpdatedAt: v.union(v.number(), v.null()),
+			listScheduledAt: v.union(v.number(), v.null()),
+			listDirtyAt: v.union(v.number(), v.null()),
+			listFailureCode: v.union(v.string(), v.null()),
+			relationsReady: v.boolean(),
+			relationsRevision: v.number(),
+			relationsUpdatedAt: v.union(v.number(), v.null()),
+			relationsScheduledAt: v.union(v.number(), v.null()),
+			relationsDirtyAt: v.union(v.number(), v.null()),
+			relationsFailureCode: v.union(v.string(), v.null()),
+			nextTemporalRebuildAt: v.union(v.number(), v.null()),
+			temporalScheduleVersion: v.union(v.number(), v.null())
+		})
+	},
+	handler: async (ctx, args) => {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (manifest?.coordinatedRebuildToken !== undefined) {
+			return { recorded: [] as Array<'list' | 'relations'> };
+		}
+		const sameManifest = (manifest?._id ?? null) === args.attempt.manifestId;
+		const eligible = sameManifest
+			? args.failures.filter(({ family }, index, failures) => {
+					if (failures.findIndex((failure) => failure.family === family) !== index) return false;
+					return family === 'list'
+						? (manifest?.listRevision ?? 0) === args.attempt.listRevision &&
+								(manifest?.listUpdatedAt ?? null) === args.attempt.listUpdatedAt
+						: (manifest?.relationsRevision ?? 0) === args.attempt.relationsRevision &&
+								(manifest?.relationsUpdatedAt ?? null) === args.attempt.relationsUpdatedAt;
+				})
+			: [];
 
-    // Compute eligibility before the first freeze. A first-ever composite cron
-    // has no manifest; recording the list failure creates one, but the sibling
-    // relation failure still belongs to the same absent-manifest attempt.
-    const recorded: Array<"list" | "relations"> = [];
-    for (const failure of eligible) {
-      await freezePublicDiscoverySnapshotFailure(
-        ctx,
-        failure.family,
-        new Error(failure.code.slice(0, 500)),
-        args.failedAt,
-        failure.family === "list"
-          ? args.attempt.listScheduledAt
-          : args.attempt.relationsScheduledAt,
-      );
-      recorded.push(failure.family);
-    }
-    return { recorded };
-  },
+		// Compute eligibility before the first freeze. A first-ever composite cron
+		// has no manifest; recording the list failure creates one, but the sibling
+		// relation failure still belongs to the same absent-manifest attempt.
+		const recorded: Array<'list' | 'relations'> = [];
+		for (const failure of eligible) {
+			await freezePublicDiscoverySnapshotFailure(
+				ctx,
+				failure.family,
+				new Error(failure.code.slice(0, 500)),
+				args.failedAt,
+				failure.family === 'list' ? args.attempt.listScheduledAt : args.attempt.relationsScheduledAt
+			);
+			recorded.push(failure.family);
+		}
+		return { recorded };
+	}
 });
 
 /** Capture publication identity, coordinates, and tokens before a cron attempt. */
 export const publicDiscoveryCronAttemptState = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const manifest = await ctx.db
-      .query("publicDiscoveryManifest")
-      .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
-    return {
-      manifestId: manifest?._id ?? null,
-      listRevision: manifest?.listRevision ?? 0,
-      listUpdatedAt: manifest?.listUpdatedAt ?? null,
-      listScheduledAt: manifest?.listRefreshScheduledAt ?? null,
-      relationsRevision: manifest?.relationsRevision ?? 0,
-      relationsUpdatedAt: manifest?.relationsUpdatedAt ?? null,
-      relationsScheduledAt: manifest?.relationsRefreshScheduledAt ?? null,
-    };
-  },
+	args: {},
+	handler: async (ctx) => {
+		const manifest = await ctx.db
+			.query('publicDiscoveryManifest')
+			.withIndex('by_key', (q) => q.eq('key', 'public'))
+			.unique();
+		return {
+			manifestId: manifest?._id ?? null,
+			listReady: manifest?.listReady ?? false,
+			listRevision: manifest?.listRevision ?? 0,
+			listUpdatedAt: manifest?.listUpdatedAt ?? null,
+			listScheduledAt: manifest?.listRefreshScheduledAt ?? null,
+			listDirtyAt: manifest?.listDirtyAt ?? null,
+			listFailureCode: manifest?.listFailureCode ?? null,
+			relationsReady: manifest?.relationsReady ?? false,
+			relationsRevision: manifest?.relationsRevision ?? 0,
+			relationsUpdatedAt: manifest?.relationsUpdatedAt ?? null,
+			relationsScheduledAt: manifest?.relationsRefreshScheduledAt ?? null,
+			relationsDirtyAt: manifest?.relationsDirtyAt ?? null,
+			relationsFailureCode: manifest?.relationsFailureCode ?? null,
+			nextTemporalRebuildAt: manifest?.nextTemporalRebuildAt ?? null,
+			temporalScheduleVersion: manifest?.temporalScheduleVersion ?? null
+		};
+	}
 });
 
 /**
@@ -565,30 +1174,30 @@ export const publicDiscoveryCronAttemptState = internalQuery({
  * newer generation scheduled by a concurrent source write.
  */
 export const scheduledPublicDiscoveryRefreshAttemptState = internalQuery({
-  args: {
-    family: v.union(v.literal("list"), v.literal("relations")),
-    scheduledAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const manifest = await ctx.db
-      .query("publicDiscoveryManifest")
-      .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
-    const current =
-      args.family === "list"
-        ? manifest?.listRefreshScheduledAt === args.scheduledAt
-        : manifest?.relationsRefreshScheduledAt === args.scheduledAt;
-    const rebuildsRelations =
-      args.family === "list" && current && manifest?.relationsDirtyAt !== undefined;
+	args: {
+		family: v.union(v.literal('list'), v.literal('relations')),
+		scheduledAt: v.number()
+	},
+	handler: async (ctx, args) => {
+		const manifest = await ctx.db
+			.query('publicDiscoveryManifest')
+			.withIndex('by_key', (q) => q.eq('key', 'public'))
+			.unique();
+		const current =
+			args.family === 'list'
+				? manifest?.listRefreshScheduledAt === args.scheduledAt
+				: manifest?.relationsRefreshScheduledAt === args.scheduledAt;
+		const rebuildsRelations =
+			args.family === 'list' && current && publicDiscoveryListRefreshRebuildsRelations(manifest);
 
-    return {
-      current,
-      rebuildsRelations,
-      ...(rebuildsRelations && manifest?.relationsRefreshScheduledAt !== undefined
-        ? { relationsScheduledAt: manifest.relationsRefreshScheduledAt }
-        : {}),
-    };
-  },
+		return {
+			current,
+			rebuildsRelations,
+			...(rebuildsRelations && manifest?.relationsRefreshScheduledAt !== undefined
+				? { relationsScheduledAt: manifest.relationsRefreshScheduledAt }
+				: {})
+		};
+	}
 });
 
 /**
@@ -598,143 +1207,143 @@ export const scheduledPublicDiscoveryRefreshAttemptState = internalQuery({
  * families so neither elapsed token can spin or silently disappear.
  */
 export const recoverPublicDiscoveryScheduledRefreshFailure = internalMutation({
-  args: {
-    family: v.union(v.literal("list"), v.literal("relations")),
-    scheduledAt: v.number(),
-    relationsScheduledAt: v.optional(v.number()),
-    code: v.string(),
-    failedAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!manifest) return { recorded: [] as Array<"list" | "relations"> };
-    if (manifest.coordinatedRebuildToken !== undefined) {
-      return { recorded: [] as Array<"list" | "relations"> };
-    }
+	args: {
+		family: v.union(v.literal('list'), v.literal('relations')),
+		scheduledAt: v.number(),
+		relationsScheduledAt: v.optional(v.number()),
+		code: v.string(),
+		failedAt: v.number()
+	},
+	handler: async (ctx, args) => {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest) return { recorded: [] as Array<'list' | 'relations'> };
+		if (manifest.coordinatedRebuildToken !== undefined) {
+			return { recorded: [] as Array<'list' | 'relations'> };
+		}
 
-    const recorded: Array<"list" | "relations"> = [];
-    if (args.family === "list" && manifest.listRefreshScheduledAt === args.scheduledAt) {
-      await recordPublicDiscoverySnapshotFailure(
-        ctx,
-        manifest,
-        "list",
-        new Error(args.code.slice(0, 500)),
-        args.failedAt,
-      );
-      recorded.push("list");
-    }
+		const recorded: Array<'list' | 'relations'> = [];
+		if (args.family === 'list' && manifest.listRefreshScheduledAt === args.scheduledAt) {
+			await recordPublicDiscoverySnapshotFailure(
+				ctx,
+				manifest,
+				'list',
+				new Error(args.code.slice(0, 500)),
+				args.failedAt
+			);
+			recorded.push('list');
+		}
 
-    if (args.family === "relations" && manifest.relationsRefreshScheduledAt === args.scheduledAt) {
-      await recordPublicDiscoverySnapshotFailure(
-        ctx,
-        manifest,
-        "relations",
-        new Error(args.code.slice(0, 500)),
-        args.failedAt,
-      );
-      recorded.push("relations");
-    } else if (
-      args.family === "list" &&
-      args.relationsScheduledAt !== undefined &&
-      manifest.relationsRefreshScheduledAt === args.relationsScheduledAt
-    ) {
-      await recordPublicDiscoverySnapshotFailure(
-        ctx,
-        manifest,
-        "relations",
-        new Error(`PUBLIC_DISCOVERY_RELATIONS_COMPOSITE_REBUILD_FAILED:${args.code}`.slice(0, 500)),
-        args.failedAt,
-      );
-      recorded.push("relations");
-    }
+		if (args.family === 'relations' && manifest.relationsRefreshScheduledAt === args.scheduledAt) {
+			await recordPublicDiscoverySnapshotFailure(
+				ctx,
+				manifest,
+				'relations',
+				new Error(args.code.slice(0, 500)),
+				args.failedAt
+			);
+			recorded.push('relations');
+		} else if (
+			args.family === 'list' &&
+			args.relationsScheduledAt !== undefined &&
+			manifest.relationsRefreshScheduledAt === args.relationsScheduledAt
+		) {
+			await recordPublicDiscoverySnapshotFailure(
+				ctx,
+				manifest,
+				'relations',
+				new Error(`PUBLIC_DISCOVERY_RELATIONS_COMPOSITE_REBUILD_FAILED:${args.code}`.slice(0, 500)),
+				args.failedAt
+			);
+			recorded.push('relations');
+		}
 
-    return { recorded };
-  },
+		return { recorded };
+	}
 });
 
 async function superviseScheduledPublicDiscoveryRefresh(
-  ctx: ActionCtx,
-  family: "list" | "relations",
-  attempt: FunctionReference<"mutation", "internal", ScheduledPublicDiscoveryRefreshArgs, unknown>,
-  args: ScheduledPublicDiscoveryRefreshArgs,
+	ctx: ActionCtx,
+	family: 'list' | 'relations',
+	attempt: FunctionReference<'mutation', 'internal', ScheduledPublicDiscoveryRefreshArgs, unknown>,
+	args: ScheduledPublicDiscoveryRefreshArgs
 ) {
-  let relationsScheduledAt: number | undefined;
-  try {
-    const state = await ctx.runQuery(scheduledPublicDiscoveryRefreshAttemptStateRef, {
-      family,
-      scheduledAt: args.scheduledAt,
-    });
-    if (state.current && state.rebuildsRelations) {
-      relationsScheduledAt = state.relationsScheduledAt;
-    }
-    return await ctx.runMutation(attempt, args);
-  } catch (error) {
-    const failedAt = Date.now();
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.runMutation(recoverPublicDiscoveryScheduledRefreshFailureRef, {
-      family,
-      scheduledAt: args.scheduledAt,
-      ...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {}),
-      code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_SCHEDULED_REBUILD_FAILED:${message}`.slice(
-        0,
-        500,
-      ),
-      failedAt,
-    });
-    throw error;
-  }
+	let relationsScheduledAt: number | undefined;
+	try {
+		const state = await ctx.runQuery(scheduledPublicDiscoveryRefreshAttemptStateRef, {
+			family,
+			scheduledAt: args.scheduledAt
+		});
+		if (state.current && state.rebuildsRelations) {
+			relationsScheduledAt = state.relationsScheduledAt;
+		}
+		return await ctx.runMutation(attempt, args);
+	} catch (error) {
+		const failedAt = Date.now();
+		const message = error instanceof Error ? error.message : String(error);
+		await ctx.runMutation(recoverPublicDiscoveryScheduledRefreshFailureRef, {
+			family,
+			scheduledAt: args.scheduledAt,
+			...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {}),
+			code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_SCHEDULED_REBUILD_FAILED:${message}`.slice(
+				0,
+				500
+			),
+			failedAt
+		});
+		throw error;
+	}
 }
 
 /** Durable supervisor for the list token scheduled by publicDiscovery.ts. */
 export const superviseScheduledPublicTemplateRefresh = internalAction({
-  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
-  handler: async (ctx, args) =>
-    await superviseScheduledPublicDiscoveryRefresh(
-      ctx,
-      "list",
-      flushScheduledPublicTemplateRefreshRef,
-      args,
-    ),
+	args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+	handler: async (ctx, args) =>
+		await superviseScheduledPublicDiscoveryRefresh(
+			ctx,
+			'list',
+			flushScheduledPublicTemplateRefreshRef,
+			args
+		)
 });
 
 /** Durable supervisor for the relation token scheduled by publicDiscovery.ts. */
 export const superviseScheduledPublicTemplateRelationsRefresh = internalAction({
-  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
-  handler: async (ctx, args) =>
-    await superviseScheduledPublicDiscoveryRefresh(
-      ctx,
-      "relations",
-      flushScheduledPublicTemplateRelationsRefreshRef,
-      args,
-    ),
+	args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+	handler: async (ctx, args) =>
+		await superviseScheduledPublicDiscoveryRefresh(
+			ctx,
+			'relations',
+			flushScheduledPublicTemplateRelationsRefreshRef,
+			args
+		)
 });
 
 async function supervisePublicDiscoveryCronRebuild<Result>(
-  ctx: ActionCtx,
-  family: "list" | "relations",
-  attempt: FunctionReference<"mutation", "internal", Record<string, never>, Result>,
+	ctx: ActionCtx,
+	family: 'list' | 'relations',
+	attempt: FunctionReference<'mutation', 'internal', Record<string, never>, Result>
 ): Promise<Result> {
-  // The failed attempt rolls back, then recovery runs in a fresh transaction.
-  // Capture publication coordinates first so recovery cannot re-dirty a newer
-  // successful generation or clear a successor token from a source writer.
-  const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
-  try {
-    return await ctx.runMutation(attempt, {});
-  } catch (error) {
-    const failedAt = Date.now();
-    const message = error instanceof Error ? error.message : String(error);
-    await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
-      failures: [
-        {
-          family,
-          code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_REBUILD_FAILED:${message}`.slice(0, 500),
-        },
-      ],
-      failedAt,
-      attempt: attemptState,
-    });
-    throw error;
-  }
+	// The failed attempt rolls back, then recovery runs in a fresh transaction.
+	// Capture publication coordinates first so recovery cannot re-dirty a newer
+	// successful generation or clear a successor token from a source writer.
+	const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
+	try {
+		return await ctx.runMutation(attempt, {});
+	} catch (error) {
+		const failedAt = Date.now();
+		const message = error instanceof Error ? error.message : String(error);
+		await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+			failures: [
+				{
+					family,
+					code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_REBUILD_FAILED:${message}`.slice(0, 500)
+				}
+			],
+			failedAt,
+			attempt: attemptState
+		});
+		throw error;
+	}
 }
 
 /**
@@ -746,23 +1355,20 @@ async function supervisePublicDiscoveryCronRebuild<Result>(
  * there is no truthful anchor from which to infer elapsed days.
  */
 function normalizeDailyArrivalsForSnapshot(
-  arrivals: number[] | undefined,
-  lastDay: number | undefined,
-  materializedAt: number,
+	arrivals: number[] | undefined,
+	lastDay: number | undefined,
+	materializedAt: number
 ): number[] {
-  if (!arrivals || arrivals.length === 0) return [];
-  if (lastDay === undefined || !Number.isFinite(lastDay)) return [...arrivals];
+	if (!arrivals || arrivals.length === 0) return [];
+	if (lastDay === undefined || !Number.isFinite(lastDay)) return [...arrivals];
 
-  const currentDay = Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
-  const anchoredDay = Math.floor(lastDay / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
-  const elapsedDays = Math.floor((currentDay - anchoredDay) / DAILY_ARRIVALS_DAY_MS);
-  if (elapsedDays <= 0) return [...arrivals];
-  if (elapsedDays >= arrivals.length) return new Array<number>(arrivals.length).fill(0);
+	const currentDay = Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
+	const anchoredDay = Math.floor(lastDay / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
+	const elapsedDays = Math.floor((currentDay - anchoredDay) / DAILY_ARRIVALS_DAY_MS);
+	if (elapsedDays <= 0) return [...arrivals];
+	if (elapsedDays >= arrivals.length) return new Array<number>(arrivals.length).fill(0);
 
-  return [
-    ...arrivals.slice(elapsedDays),
-    ...new Array<number>(elapsedDays).fill(0),
-  ];
+	return [...arrivals.slice(elapsedDays), ...new Array<number>(elapsedDays).fill(0)];
 }
 
 /**
@@ -770,209 +1376,278 @@ function normalizeDailyArrivalsForSnapshot(
  * source set. This helper is mutation-only: public requests must read the
  * materialized payload and never call it.
  */
-async function enrichPublicTemplates(ctx: MutationCtx, templates: Doc<"templates">[]) {
-  const templateIds = templates.map((t) => t._id);
+type PublicTemplateEnrichmentSource = Doc<'templates'> | CompactPublicTemplateSource;
 
-  // Batch-fetch related data in parallel
-  const [allDebates, allEndorsements, orgMap] = await Promise.all([
-    // Debates for these templates
-    Promise.all(
-      templateIds.map((tid) =>
-        ctx.db
-          .query("debates")
-          .withIndex("by_templateId", (q) => q.eq("templateId", tid))
-          .order("desc")
-          .first(),
-      ),
-    ),
-    // Endorsements for these templates
-    Promise.all(
-      templateIds.map((tid) =>
-        ctx.db
-          .query("templateEndorsements")
-          .withIndex("by_templateId", (q) => q.eq("templateId", tid))
-          .order("desc")
-          .take(PUBLIC_TEMPLATE_ENDORSEMENT_CAP),
-      ),
-    ),
-    // Collect unique orgIds and batch-fetch orgs
-    (async () => {
-      const orgIds = new Set<Id<"organizations">>();
-      for (const t of templates) {
-        if (t.orgId) orgIds.add(t.orgId);
-      }
-      const orgs = await Promise.all([...orgIds].map((id) => ctx.db.get(id)));
-      const map = new Map<string, { name: string; slug: string; avatar: string | null }>();
-      for (const org of orgs) {
-        if (org) {
-          map.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
-        }
-      }
-      return map;
-    })(),
-  ]);
+/** Earliest clock-only instant at which an unchanged selected card can differ. */
+function nextPublicTemplateTemporalRebuildAt(
+	templates: PublicTemplateEnrichmentSource[],
+	materializedAt: number
+): number | null {
+	let next: number | null = null;
+	const consider = (candidate: number): void => {
+		if (!Number.isSafeInteger(candidate) || candidate <= materializedAt) return;
+		next = next === null ? candidate : Math.min(next, candidate);
+	};
+	for (const template of templates) {
+		const newUntil = template._creationTime + 7 * DAILY_ARRIVALS_DAY_MS;
+		if (materializedAt <= newUntil) consider(Math.floor(newUntil) + 1);
 
-  // Also fetch orgs from endorsements
-  const endorsementOrgIds = new Set<Id<"organizations">>();
-  for (const endorsements of allEndorsements) {
-    for (const e of endorsements) {
-      endorsementOrgIds.add(e.orgId);
-    }
-  }
-  // Remove already-fetched orgIds
-  for (const key of orgMap.keys()) {
-    endorsementOrgIds.delete(key as Id<"organizations">);
-  }
-  // Fetch remaining endorsement orgs
-  const extraOrgs = await Promise.all([...endorsementOrgIds].map((id) => ctx.db.get(id)));
-  for (const org of extraOrgs) {
-    if (org) {
-      orgMap.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
-    }
-  }
+		const arrivals = normalizeDailyArrivalsForSnapshot(
+			template.dailyArrivals,
+			template.dailyArrivalsLastDay,
+			materializedAt
+		);
+		if (arrivals.some((count) => Number.isFinite(count) && count !== 0)) {
+			consider(
+				Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS +
+					DAILY_ARRIVALS_DAY_MS
+			);
+		}
+	}
+	return next;
+}
 
-  // Build enriched results
-  const materializedAt = Date.now();
-  return templates.map((template, i) => {
-    const debate = allDebates[i];
-    const endorsements = allEndorsements[i] ?? [];
-    const endorsementCount = template.endorsementCount ?? endorsements.length;
+function requireAuthoritativeEndorsementCount(template: PublicTemplateEnrichmentSource): number {
+	const count = template.endorsementCount;
+	if (!Number.isSafeInteger(count) || (count ?? -1) < 0) {
+		throw new Error(
+			`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${template._id}:endorsement-count-not-materialized`
+		);
+	}
+	return count as number;
+}
 
-    // Endorsing org (template owner)
-    const endorsingOrg = template.orgId ? (orgMap.get(template.orgId) ?? null) : null;
+async function enrichPublicTemplates(
+	ctx: MutationCtx,
+	templates: PublicTemplateEnrichmentSource[]
+) {
+	const templateIds = templates.map((t) => t._id);
 
-    // Additional endorsing orgs (excluding the template owner)
-    const endorsingOrgs = endorsements
-      .filter((e) => e.orgId !== template.orgId)
-      .map((e) => orgMap.get(e.orgId))
-      .filter((o): o is NonNullable<typeof o> => o != null);
+	// Batch-fetch related data in parallel
+	const [allDebates, allEndorsements, orgMap] = await Promise.all([
+		// Debates for these templates
+		Promise.all(
+			templateIds.map((tid) =>
+				ctx.db
+					.query('debates')
+					.withIndex('by_templateId', (q) => q.eq('templateId', tid))
+					.order('desc')
+					.first()
+			)
+		),
+		// Endorsements for these templates
+		Promise.all(
+			templateIds.map((tid) =>
+				ctx.db
+					.query('templateEndorsements')
+					.withIndex('by_templateId', (q) => q.eq('templateId', tid))
+					.order('desc')
+					.take(PUBLIC_TEMPLATE_ENDORSEMENT_CAP)
+			)
+		),
+		// Collect unique orgIds and batch-fetch orgs
+		(async () => {
+			const orgIds = new Set<Id<'organizations'>>();
+			for (const t of templates) {
+				if (t.orgId) orgIds.add(t.orgId);
+			}
+			const orgs = await Promise.all([...orgIds].map((id) => ctx.db.get(id)));
+			const map = new Map<string, { name: string; slug: string; avatar: string | null }>();
+			for (const org of orgs) {
+				if (org) {
+					map.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+				}
+			}
+			return map;
+		})()
+	]);
 
-    // Debate summary
-    const hasActiveDebate = debate?.status === "active";
-    // debate.status was tightened to a closed union; the prior
-    // `!== "cancelled"` defensive check is now dead (the validator
-    // would reject any row with that value at write time). Keep the
-    // null-guard on `debate` itself; drop the obsolete value check.
-    const debateSummary = debate
-      ? {
-          status: debate.status,
-          winningStance: debate.winningStance ?? undefined,
-          uniqueParticipants: (debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
-          argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
-          deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined,
-        }
-      : undefined;
+	// Also fetch orgs from endorsements
+	const endorsementOrgIds = new Set<Id<'organizations'>>();
+	for (const endorsements of allEndorsements) {
+		for (const e of endorsements) {
+			endorsementOrgIds.add(e.orgId);
+		}
+	}
+	// Remove already-fetched orgIds
+	for (const key of orgMap.keys()) {
+		endorsementOrgIds.delete(key as Id<'organizations'>);
+	}
+	// Fetch remaining endorsement orgs
+	const extraOrgs = await Promise.all([...endorsementOrgIds].map((id) => ctx.db.get(id)));
+	for (const org of extraOrgs) {
+		if (org) {
+			orgMap.set(org._id, { name: org.name, slug: org.slug, avatar: org.avatar ?? null });
+		}
+	}
 
-    // Coordination scale
-    const sendCount = template.verifiedSends || 0;
-    const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
-    const creationTime = template._creationTime;
-    const daysSinceCreation = (materializedAt - creationTime) / (1000 * 60 * 60 * 24);
-    const isNew = daysSinceCreation <= 7;
-    const dailyArrivals = normalizeDailyArrivalsForSnapshot(
-      template.dailyArrivals,
-      template.dailyArrivalsLastDay,
-      materializedAt,
-    );
+	// Build enriched results
+	const materializedAt = Date.now();
+	return templates.map((template, i) => {
+		const debate = allDebates[i];
+		const endorsements = allEndorsements[i] ?? [];
+		// `endorsements` is only the newest display sample. Publishing its bounded
+		// length as the total silently undercounts legacy templates, so retain the
+		// last-good snapshot until the authoritative counter migration completes.
+		const endorsementCount = requireAuthoritativeEndorsementCount(template);
 
-    return {
-      id: template._id,
-      slug: template.slug,
-      title: template.title,
-      description: template.description,
-      domain: resolveDomain(template),
-      domainHue: template.domainHue ?? undefined,
-      topics: normalizeTags(template.topics).slice(0, 200),
-      type: template.type,
-      deliveryMethod: template.deliveryMethod,
-      subject: template.title,
-      message_body: template.messageBody,
-      preview: template.preview,
-      endorsingOrg,
-      endorsingOrgs,
-      endorsementCount,
-      coordinationScale,
-      isNew,
-      hasActiveDebate,
-      debateSummary,
-      // Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
-      // sizes name specific submitters. Above the floor, counts are exact —
-      // template visibility is the product. daily_arrivals zeroes sub-K days
-      // so a singleton-day doesn't reveal the day's only sender.
-      verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
-      unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-      send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-      daily_arrivals: dailyArrivals.map((c: number) => (c < 5 ? 0 : c)),
-      // K-anon at trust boundary: filter districts with count < 5 out of
-      // the public payload, zero tier counts below the same threshold.
-      // Consumers still see the visible-shape but not the thin-cohort
-      // contributions. earlier hero work applied this; the per-template path
-      // mirrors it so all consumers (org pages, share cards, public API,
-      // future surfaces) inherit the floor without re-implementing.
-      district_counts: (template.districtCounts ?? []).filter((d: { code: string; count: number }) => d.count >= 5),
-      tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
-      // Discovery cards never execute delivery. Provider routing and CWC
-      // workflow configuration are not part of any anonymous public payload.
-      delivery_config: {},
-      cwc_config: null,
-      // Recipient addresses and decision-maker configuration are private source
-      // data. Anonymous discovery needs only the non-identifying target count.
-      recipient_config: null,
-      recipient_count: countRecipientsConvex(template.recipientConfig),
-      campaign_id: template.campaignId ?? null,
-      status: template.status,
-      is_public: template.isPublic,
-      jurisdictions: (template.jurisdictions ?? []).map((j, ji) => ({
-        id: template._id + "_j" + ji,
-        template_id: template._id,
-        jurisdiction_type: j.jurisdictionType,
-        congressional_district: j.congressionalDistrict ?? null,
-        senate_class: j.senateClass ?? null,
-        state_code: j.stateCode ?? null,
-        state_senate_district: j.stateSenateDistrict ?? null,
-        state_house_district: j.stateHouseDistrict ?? null,
-        county_fips: j.countyFips ?? null,
-        county_name: j.countyName ?? null,
-        city_name: j.cityName ?? null,
-        city_fips: j.cityFips ?? null,
-        school_district_id: j.schoolDistrictId ?? null,
-        school_district_name: j.schoolDistrictName ?? null,
-        latitude: j.latitude ?? null,
-        longitude: j.longitude ?? null,
-        estimated_population: j.estimatedPopulation ?? null,
-        coverage_notes: j.coverageNotes ?? null,
-      })),
-      scope:
-        (template.scopes ?? []).length > 0
-          ? {
-              id: template._id + "_s0",
-              template_id: template._id,
-              country_code: template.scopes![0].countryCode,
-              region_code: template.scopes![0].regionCode ?? null,
-              locality_code: template.scopes![0].localityCode ?? null,
-              district_code: template.scopes![0].districtCode ?? null,
-              display_text: template.scopes![0].displayText,
-              scope_level: template.scopes![0].scopeLevel,
-              confidence: template.scopes![0].confidence,
-              extraction_method: template.scopes![0].extractionMethod,
-            }
-          : null,
-      scopes: (template.scopes ?? []).map((s, si) => ({
-        id: template._id + "_s" + si,
-        template_id: template._id,
-        country_code: s.countryCode,
-        region_code: s.regionCode ?? null,
-        locality_code: s.localityCode ?? null,
-        district_code: s.districtCode ?? null,
-        display_text: s.displayText,
-        scope_level: s.scopeLevel,
-        confidence: s.confidence,
-        extraction_method: s.extractionMethod,
-      })),
-      recipientEmails: [],
-      createdAt: new Date(creationTime).toISOString(),
-    };
-  });
+		// Endorsing org (template owner)
+		const endorsingOrg = template.orgId ? (orgMap.get(template.orgId) ?? null) : null;
+
+		// Additional endorsing orgs (excluding the template owner)
+		const endorsingOrgs = endorsements
+			.filter((e) => e.orgId !== template.orgId)
+			.map((e) => orgMap.get(e.orgId))
+			.filter((o): o is NonNullable<typeof o> => o != null);
+
+		// Debate summary
+		const hasActiveDebate = debate?.status === 'active';
+		// debate.status was tightened to a closed union; the prior
+		// `!== "cancelled"` defensive check is now dead (the validator
+		// would reject any row with that value at write time). Keep the
+		// null-guard on `debate` itself; drop the obsolete value check.
+		const debateSummary = debate
+			? {
+					status: debate.status,
+					winningStance: debate.winningStance ?? undefined,
+					uniqueParticipants:
+						(debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
+					argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
+					deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined
+				}
+			: undefined;
+
+		// Coordination scale
+		const sendCount = template.verifiedSends || 0;
+		const coordinationScale = Math.min(1.0, Math.log10(Math.max(1, sendCount)) / 3);
+		const creationTime = template._creationTime;
+		const daysSinceCreation = (materializedAt - creationTime) / (1000 * 60 * 60 * 24);
+		const isNew = daysSinceCreation <= 7;
+		const dailyArrivals = normalizeDailyArrivalsForSnapshot(
+			template.dailyArrivals,
+			template.dailyArrivalsLastDay,
+			materializedAt
+		);
+		const retainedDistrictCounts = template.districtCounts ?? [];
+		const visibleDistrictCounts = retainedDistrictCounts.filter(
+			(district: { code: string; count: number }) => district.count >= 5
+		);
+		const privacySuppressedDistrictCounts = retainedDistrictCounts.filter(
+			(district: { code: string; count: number }) => district.count < 5
+		);
+		const projectionSuppressedDistricts =
+			'districtCountsSuppressedDistricts' in template
+				? template.districtCountsSuppressedDistricts
+				: 0;
+		const projectionSuppressedCount =
+			'districtCountsSuppressedCount' in template ? template.districtCountsSuppressedCount : 0;
+
+		return {
+			id: template._id,
+			slug: template.slug,
+			title: template.title,
+			description: template.description,
+			domain: resolveDomain(template),
+			domainHue: template.domainHue ?? undefined,
+			topics: normalizeTags(template.topics).slice(0, 200),
+			type: template.type,
+			deliveryMethod: template.deliveryMethod,
+			subject: template.title,
+			message_body: template.messageBody,
+			preview: template.preview,
+			endorsingOrg,
+			endorsingOrgs,
+			endorsementCount,
+			coordinationScale,
+			isNew,
+			hasActiveDebate,
+			debateSummary,
+			// Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
+			// sizes name specific submitters. Above the floor, counts are exact —
+			// template visibility is the product. daily_arrivals zeroes sub-K days
+			// so a singleton-day doesn't reveal the day's only sender.
+			verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
+			unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
+			send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
+			daily_arrivals: dailyArrivals.map((c: number) => (c < 5 ? 0 : c)),
+			// K-anon at trust boundary: filter districts with count < 5 out of
+			// the public payload, zero tier counts below the same threshold.
+			// Consumers still see the visible-shape but not the thin-cohort
+			// contributions. earlier hero work applied this; the per-template path
+			// mirrors it so all consumers (org pages, share cards, public API,
+			// future surfaces) inherit the floor without re-implementing.
+			district_counts: visibleDistrictCounts,
+			district_counts_suppressed_districts:
+				projectionSuppressedDistricts + privacySuppressedDistrictCounts.length,
+			district_counts_suppressed_count:
+				projectionSuppressedCount +
+				privacySuppressedDistrictCounts.reduce((total, district) => total + district.count, 0),
+			tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
+			// Discovery cards never execute delivery. Provider routing and CWC
+			// workflow configuration are not part of any anonymous public payload.
+			delivery_config: {},
+			cwc_config: null,
+			// Recipient addresses and decision-maker configuration are private source
+			// data. Anonymous discovery needs only the non-identifying target count.
+			recipient_config: null,
+			recipient_count:
+				'recipientCount' in template
+					? template.recipientCount
+					: countRecipientsConvex(template.recipientConfig),
+			campaign_id: template.campaignId ?? null,
+			status: template.status,
+			is_public: template.isPublic,
+			jurisdictions: (template.jurisdictions ?? []).map((j, ji) => ({
+				id: template._id + '_j' + ji,
+				template_id: template._id,
+				jurisdiction_type: j.jurisdictionType,
+				congressional_district: j.congressionalDistrict ?? null,
+				senate_class: j.senateClass ?? null,
+				state_code: j.stateCode ?? null,
+				state_senate_district: j.stateSenateDistrict ?? null,
+				state_house_district: j.stateHouseDistrict ?? null,
+				county_fips: j.countyFips ?? null,
+				county_name: j.countyName ?? null,
+				city_name: j.cityName ?? null,
+				city_fips: j.cityFips ?? null,
+				school_district_id: j.schoolDistrictId ?? null,
+				school_district_name: j.schoolDistrictName ?? null,
+				latitude: j.latitude ?? null,
+				longitude: j.longitude ?? null,
+				estimated_population: j.estimatedPopulation ?? null,
+				coverage_notes: j.coverageNotes ?? null
+			})),
+			scope:
+				(template.scopes ?? []).length > 0
+					? {
+							id: template._id + '_s0',
+							template_id: template._id,
+							country_code: template.scopes![0].countryCode,
+							region_code: template.scopes![0].regionCode ?? null,
+							locality_code: template.scopes![0].localityCode ?? null,
+							district_code: template.scopes![0].districtCode ?? null,
+							display_text: template.scopes![0].displayText,
+							scope_level: template.scopes![0].scopeLevel,
+							confidence: template.scopes![0].confidence,
+							extraction_method: template.scopes![0].extractionMethod
+						}
+					: null,
+			scopes: (template.scopes ?? []).map((s, si) => ({
+				id: template._id + '_s' + si,
+				template_id: template._id,
+				country_code: s.countryCode,
+				region_code: s.regionCode ?? null,
+				locality_code: s.localityCode ?? null,
+				district_code: s.districtCode ?? null,
+				display_text: s.displayText,
+				scope_level: s.scopeLevel,
+				confidence: s.confidence,
+				extraction_method: s.extractionMethod
+			})),
+			recipientEmails: [],
+			createdAt: new Date(creationTime).toISOString()
+		};
+	});
 }
 
 type PublicTemplatePayload = Awaited<ReturnType<typeof enrichPublicTemplates>>[number];
@@ -987,293 +1662,807 @@ type PublicTemplatePayload = Awaited<ReturnType<typeof enrichPublicTemplates>>[n
  * public exposure and runtime shape are reviewed.
  */
 type SnapshotField =
-  | { kind: "string" }
-  | { kind: "number" }
-  | { kind: "boolean" }
-  | { kind: "redacted"; replacement: "emptyObject" | "emptyArray" | "null" }
-  | { kind: "optional"; value: SnapshotField }
-  | { kind: "nullable"; value: SnapshotField }
-  | { kind: "array"; value: SnapshotField; maxItems: number }
-  | { kind: "object"; fields: Record<string, SnapshotField> };
+	| { kind: 'string' }
+	| { kind: 'number' }
+	| { kind: 'boolean' }
+	| { kind: 'redacted'; replacement: 'emptyObject' | 'emptyArray' | 'null' }
+	| { kind: 'optional'; value: SnapshotField }
+	| { kind: 'nullable'; value: SnapshotField }
+	| { kind: 'array'; value: SnapshotField; maxItems: number }
+	| { kind: 'object'; fields: Record<string, SnapshotField> };
 
 type SnapshotSchemaFor<T> = {
-  [K in keyof T]-?: undefined extends T[K]
-    ? Extract<SnapshotField, { kind: "optional" }>
-    : Exclude<SnapshotField, { kind: "optional" }>;
+	[K in keyof T]-?: undefined extends T[K]
+		? Extract<SnapshotField, { kind: 'optional' }>
+		: Exclude<SnapshotField, { kind: 'optional' }>;
 };
 
-const SNAPSHOT_STRING = { kind: "string" } as const satisfies SnapshotField;
-const SNAPSHOT_NUMBER = { kind: "number" } as const satisfies SnapshotField;
-const SNAPSHOT_BOOLEAN = { kind: "boolean" } as const satisfies SnapshotField;
+const SNAPSHOT_STRING = { kind: 'string' } as const satisfies SnapshotField;
+const SNAPSHOT_NUMBER = { kind: 'number' } as const satisfies SnapshotField;
+const SNAPSHOT_BOOLEAN = { kind: 'boolean' } as const satisfies SnapshotField;
 const snapshotRedacted = (
-  replacement: "emptyObject" | "emptyArray" | "null",
-): Extract<SnapshotField, { kind: "redacted" }> => ({ kind: "redacted", replacement });
-const snapshotOptional = <T extends SnapshotField>(value: T): { kind: "optional"; value: T } => ({
-  kind: "optional",
-  value,
+	replacement: 'emptyObject' | 'emptyArray' | 'null'
+): Extract<SnapshotField, { kind: 'redacted' }> => ({ kind: 'redacted', replacement });
+const snapshotOptional = <T extends SnapshotField>(value: T): { kind: 'optional'; value: T } => ({
+	kind: 'optional',
+	value
 });
-const snapshotNullable = <T extends SnapshotField>(value: T): { kind: "nullable"; value: T } => ({
-  kind: "nullable",
-  value,
+const snapshotNullable = <T extends SnapshotField>(value: T): { kind: 'nullable'; value: T } => ({
+	kind: 'nullable',
+	value
 });
 const snapshotArray = <T extends SnapshotField>(
-  value: T,
-  maxItems: number,
-): { kind: "array"; value: T; maxItems: number } => ({
-  kind: "array",
-  value,
-  maxItems,
+	value: T,
+	maxItems: number
+): { kind: 'array'; value: T; maxItems: number } => ({
+	kind: 'array',
+	value,
+	maxItems
 });
 const snapshotObject = <T extends Record<string, SnapshotField>>(
-  fields: T,
-): { kind: "object"; fields: T } => ({
-  kind: "object",
-  fields,
+	fields: T
+): { kind: 'object'; fields: T } => ({
+	kind: 'object',
+	fields
 });
 
 const SNAPSHOT_ORG = snapshotObject({
-  name: SNAPSHOT_STRING,
-  slug: SNAPSHOT_STRING,
-  avatar: snapshotNullable(SNAPSHOT_STRING),
+	name: SNAPSHOT_STRING,
+	slug: SNAPSHOT_STRING,
+	avatar: snapshotNullable(SNAPSHOT_STRING)
 });
 const SNAPSHOT_SCOPE = snapshotObject({
-  id: SNAPSHOT_STRING,
-  template_id: SNAPSHOT_STRING,
-  country_code: SNAPSHOT_STRING,
-  region_code: snapshotNullable(SNAPSHOT_STRING),
-  locality_code: snapshotNullable(SNAPSHOT_STRING),
-  district_code: snapshotNullable(SNAPSHOT_STRING),
-  display_text: SNAPSHOT_STRING,
-  scope_level: SNAPSHOT_STRING,
-  confidence: SNAPSHOT_NUMBER,
-  extraction_method: SNAPSHOT_STRING,
+	id: SNAPSHOT_STRING,
+	template_id: SNAPSHOT_STRING,
+	country_code: SNAPSHOT_STRING,
+	region_code: snapshotNullable(SNAPSHOT_STRING),
+	locality_code: snapshotNullable(SNAPSHOT_STRING),
+	district_code: snapshotNullable(SNAPSHOT_STRING),
+	display_text: SNAPSHOT_STRING,
+	scope_level: SNAPSHOT_STRING,
+	confidence: SNAPSHOT_NUMBER,
+	extraction_method: SNAPSHOT_STRING
 });
 const SNAPSHOT_JURISDICTION = snapshotObject({
-  id: SNAPSHOT_STRING,
-  template_id: SNAPSHOT_STRING,
-  jurisdiction_type: SNAPSHOT_STRING,
-  congressional_district: snapshotNullable(SNAPSHOT_STRING),
-  senate_class: snapshotNullable(SNAPSHOT_STRING),
-  state_code: snapshotNullable(SNAPSHOT_STRING),
-  state_senate_district: snapshotNullable(SNAPSHOT_STRING),
-  state_house_district: snapshotNullable(SNAPSHOT_STRING),
-  county_fips: snapshotNullable(SNAPSHOT_STRING),
-  county_name: snapshotNullable(SNAPSHOT_STRING),
-  city_name: snapshotNullable(SNAPSHOT_STRING),
-  city_fips: snapshotNullable(SNAPSHOT_STRING),
-  school_district_id: snapshotNullable(SNAPSHOT_STRING),
-  school_district_name: snapshotNullable(SNAPSHOT_STRING),
-  latitude: snapshotNullable(SNAPSHOT_NUMBER),
-  longitude: snapshotNullable(SNAPSHOT_NUMBER),
-  estimated_population: snapshotNullable(SNAPSHOT_NUMBER),
-  coverage_notes: snapshotNullable(SNAPSHOT_STRING),
+	id: SNAPSHOT_STRING,
+	template_id: SNAPSHOT_STRING,
+	jurisdiction_type: SNAPSHOT_STRING,
+	congressional_district: snapshotNullable(SNAPSHOT_STRING),
+	senate_class: snapshotNullable(SNAPSHOT_STRING),
+	state_code: snapshotNullable(SNAPSHOT_STRING),
+	state_senate_district: snapshotNullable(SNAPSHOT_STRING),
+	state_house_district: snapshotNullable(SNAPSHOT_STRING),
+	county_fips: snapshotNullable(SNAPSHOT_STRING),
+	county_name: snapshotNullable(SNAPSHOT_STRING),
+	city_name: snapshotNullable(SNAPSHOT_STRING),
+	city_fips: snapshotNullable(SNAPSHOT_STRING),
+	school_district_id: snapshotNullable(SNAPSHOT_STRING),
+	school_district_name: snapshotNullable(SNAPSHOT_STRING),
+	latitude: snapshotNullable(SNAPSHOT_NUMBER),
+	longitude: snapshotNullable(SNAPSHOT_NUMBER),
+	estimated_population: snapshotNullable(SNAPSHOT_NUMBER),
+	coverage_notes: snapshotNullable(SNAPSHOT_STRING)
 });
 
 const PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA = {
-  id: SNAPSHOT_STRING,
-  slug: SNAPSHOT_STRING,
-  title: SNAPSHOT_STRING,
-  description: SNAPSHOT_STRING,
-  domain: SNAPSHOT_STRING,
-  domainHue: snapshotOptional(SNAPSHOT_NUMBER),
-  topics: snapshotArray(SNAPSHOT_STRING, 200),
-  type: SNAPSHOT_STRING,
-  deliveryMethod: SNAPSHOT_STRING,
-  subject: SNAPSHOT_STRING,
-  message_body: SNAPSHOT_STRING,
-  preview: SNAPSHOT_STRING,
-  endorsingOrg: snapshotNullable(SNAPSHOT_ORG),
-  endorsingOrgs: snapshotArray(SNAPSHOT_ORG, PUBLIC_TEMPLATE_ENDORSEMENT_CAP),
-  endorsementCount: SNAPSHOT_NUMBER,
-  coordinationScale: SNAPSHOT_NUMBER,
-  isNew: SNAPSHOT_BOOLEAN,
-  hasActiveDebate: SNAPSHOT_BOOLEAN,
-  debateSummary: snapshotOptional(
-    snapshotObject({
-      status: SNAPSHOT_STRING,
-      winningStance: snapshotOptional(SNAPSHOT_STRING),
-      uniqueParticipants: snapshotNullable(SNAPSHOT_NUMBER),
-      argumentCount: snapshotNullable(SNAPSHOT_NUMBER),
-      deadline: snapshotOptional(SNAPSHOT_STRING),
-    }),
-  ),
-  verified_sends: snapshotNullable(SNAPSHOT_NUMBER),
-  unique_districts: snapshotNullable(SNAPSHOT_NUMBER),
-  send_count: snapshotNullable(SNAPSHOT_NUMBER),
-  daily_arrivals: snapshotArray(SNAPSHOT_NUMBER, 30),
-  district_counts: snapshotArray(
-    snapshotObject({ code: SNAPSHOT_STRING, count: SNAPSHOT_NUMBER }),
-    500,
-  ),
-  tier_counts: snapshotArray(SNAPSHOT_NUMBER, 6),
-  // These compatibility keys are deliberately represented as redactions in
-  // the schema itself. There is no generic "config" projector that a future
-  // field can accidentally use to clone producer secrets into public output.
-  delivery_config: snapshotRedacted("emptyObject"),
-  cwc_config: snapshotRedacted("null"),
-  recipient_config: snapshotRedacted("null"),
-  recipient_count: SNAPSHOT_NUMBER,
-  campaign_id: snapshotNullable(SNAPSHOT_STRING),
-  status: SNAPSHOT_STRING,
-  is_public: SNAPSHOT_BOOLEAN,
-  jurisdictions: snapshotArray(SNAPSHOT_JURISDICTION, MAX_PUBLIC_TEMPLATE_JURISDICTIONS),
-  scope: snapshotNullable(SNAPSHOT_SCOPE),
-  scopes: snapshotArray(SNAPSHOT_SCOPE, MAX_PUBLIC_TEMPLATE_SCOPES),
-  recipientEmails: snapshotRedacted("emptyArray"),
-  createdAt: SNAPSHOT_STRING,
+	id: SNAPSHOT_STRING,
+	slug: SNAPSHOT_STRING,
+	title: SNAPSHOT_STRING,
+	description: SNAPSHOT_STRING,
+	domain: SNAPSHOT_STRING,
+	domainHue: snapshotOptional(SNAPSHOT_NUMBER),
+	topics: snapshotArray(SNAPSHOT_STRING, 200),
+	type: SNAPSHOT_STRING,
+	deliveryMethod: SNAPSHOT_STRING,
+	subject: SNAPSHOT_STRING,
+	message_body: SNAPSHOT_STRING,
+	preview: SNAPSHOT_STRING,
+	endorsingOrg: snapshotNullable(SNAPSHOT_ORG),
+	endorsingOrgs: snapshotArray(SNAPSHOT_ORG, PUBLIC_TEMPLATE_ENDORSEMENT_CAP),
+	endorsementCount: SNAPSHOT_NUMBER,
+	coordinationScale: SNAPSHOT_NUMBER,
+	isNew: SNAPSHOT_BOOLEAN,
+	hasActiveDebate: SNAPSHOT_BOOLEAN,
+	debateSummary: snapshotOptional(
+		snapshotObject({
+			status: SNAPSHOT_STRING,
+			winningStance: snapshotOptional(SNAPSHOT_STRING),
+			uniqueParticipants: snapshotNullable(SNAPSHOT_NUMBER),
+			argumentCount: snapshotNullable(SNAPSHOT_NUMBER),
+			deadline: snapshotOptional(SNAPSHOT_STRING)
+		})
+	),
+	verified_sends: snapshotNullable(SNAPSHOT_NUMBER),
+	unique_districts: snapshotNullable(SNAPSHOT_NUMBER),
+	send_count: snapshotNullable(SNAPSHOT_NUMBER),
+	daily_arrivals: snapshotArray(SNAPSHOT_NUMBER, 30),
+	district_counts: snapshotArray(
+		snapshotObject({ code: SNAPSHOT_STRING, count: SNAPSHOT_NUMBER }),
+		6
+	),
+	district_counts_suppressed_districts: SNAPSHOT_NUMBER,
+	district_counts_suppressed_count: SNAPSHOT_NUMBER,
+	tier_counts: snapshotArray(SNAPSHOT_NUMBER, 6),
+	// These compatibility keys are deliberately represented as redactions in
+	// the schema itself. There is no generic "config" projector that a future
+	// field can accidentally use to clone producer secrets into public output.
+	delivery_config: snapshotRedacted('emptyObject'),
+	cwc_config: snapshotRedacted('null'),
+	recipient_config: snapshotRedacted('null'),
+	recipient_count: SNAPSHOT_NUMBER,
+	campaign_id: snapshotNullable(SNAPSHOT_STRING),
+	status: SNAPSHOT_STRING,
+	is_public: SNAPSHOT_BOOLEAN,
+	jurisdictions: snapshotArray(SNAPSHOT_JURISDICTION, MAX_PUBLIC_TEMPLATE_JURISDICTIONS),
+	scope: snapshotNullable(SNAPSHOT_SCOPE),
+	scopes: snapshotArray(SNAPSHOT_SCOPE, MAX_PUBLIC_TEMPLATE_SCOPES),
+	recipientEmails: snapshotRedacted('emptyArray'),
+	createdAt: SNAPSHOT_STRING
 } satisfies SnapshotSchemaFor<PublicTemplatePayload>;
 
-const INVALID_SNAPSHOT_VALUE = Symbol("INVALID_SNAPSHOT_VALUE");
+const INVALID_SNAPSHOT_VALUE = Symbol('INVALID_SNAPSHOT_VALUE');
 
 function projectSnapshotField(
-  value: unknown,
-  field: SnapshotField,
+	value: unknown,
+	field: SnapshotField
 ): unknown | typeof INVALID_SNAPSHOT_VALUE {
-  switch (field.kind) {
-    case "string":
-      return typeof value === "string" ? value : INVALID_SNAPSHOT_VALUE;
-    case "number":
-      return typeof value === "number" && Number.isFinite(value)
-        ? value
-        : INVALID_SNAPSHOT_VALUE;
-    case "boolean":
-      return typeof value === "boolean" ? value : INVALID_SNAPSHOT_VALUE;
-    case "redacted":
-      return field.replacement === "emptyObject"
-        ? {}
-        : field.replacement === "emptyArray"
-          ? []
-          : null;
-    case "optional":
-      return projectSnapshotField(value, field.value);
-    case "nullable":
-      return value === null ? null : projectSnapshotField(value, field.value);
-    case "array": {
-      if (!Array.isArray(value) || value.length > field.maxItems) return INVALID_SNAPSHOT_VALUE;
-      const projected: unknown[] = [];
-      for (const item of value) {
-        const next = projectSnapshotField(item, field.value);
-        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
-        projected.push(next);
-      }
-      return projected;
-    }
-    case "object": {
-      if (value === null || typeof value !== "object" || Array.isArray(value)) {
-        return INVALID_SNAPSHOT_VALUE;
-      }
-      const stored = value as Record<string, unknown>;
-      const projected: Record<string, unknown> = {};
-      for (const [name, nestedField] of Object.entries(field.fields)) {
-        if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
-          if (nestedField.kind === "optional") continue;
-          return INVALID_SNAPSHOT_VALUE;
-        }
-        const next = projectSnapshotField(stored[name], nestedField);
-        if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
-        projected[name] = next;
-      }
-      return projected;
-    }
-  }
+	switch (field.kind) {
+		case 'string':
+			return typeof value === 'string' ? value : INVALID_SNAPSHOT_VALUE;
+		case 'number':
+			return typeof value === 'number' && Number.isFinite(value) ? value : INVALID_SNAPSHOT_VALUE;
+		case 'boolean':
+			return typeof value === 'boolean' ? value : INVALID_SNAPSHOT_VALUE;
+		case 'redacted':
+			return field.replacement === 'emptyObject'
+				? {}
+				: field.replacement === 'emptyArray'
+					? []
+					: null;
+		case 'optional':
+			return projectSnapshotField(value, field.value);
+		case 'nullable':
+			return value === null ? null : projectSnapshotField(value, field.value);
+		case 'array': {
+			if (!Array.isArray(value) || value.length > field.maxItems) return INVALID_SNAPSHOT_VALUE;
+			const projected: unknown[] = [];
+			for (const item of value) {
+				const next = projectSnapshotField(item, field.value);
+				if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+				projected.push(next);
+			}
+			return projected;
+		}
+		case 'object': {
+			if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+				return INVALID_SNAPSHOT_VALUE;
+			}
+			const stored = value as Record<string, unknown>;
+			const projected: Record<string, unknown> = {};
+			for (const [name, nestedField] of Object.entries(field.fields)) {
+				if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
+					if (nestedField.kind === 'optional') continue;
+					return INVALID_SNAPSHOT_VALUE;
+				}
+				const next = projectSnapshotField(stored[name], nestedField);
+				if (next === INVALID_SNAPSHOT_VALUE) return INVALID_SNAPSHOT_VALUE;
+				projected[name] = next;
+			}
+			return projected;
+		}
+	}
 }
 
 function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | null {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return null;
-  const stored = value as Record<string, unknown>;
-  const projected: Record<string, unknown> = {};
-  for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
-    // Redact/minimize legacy snapshots at the public read boundary as well as
-    // in the producer. The replacement travels with the field descriptor, so a
-    // rename or newly reviewed config field cannot fall through to generic JSON
-    // cloning merely because a hard-coded field-name list was not updated.
-    if (field.kind === "redacted") {
-      projected[name] = projectSnapshotField(undefined, field);
-      continue;
-    }
-    if (name === "recipient_count" && (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined)) {
-      const legacyEmailCount = Array.isArray(stored.recipientEmails) ? stored.recipientEmails.filter((email) => typeof email === "string").length : 0;
-      projected[name] = Math.max(countRecipientsConvex(stored.recipient_config), legacyEmailCount);
-      continue;
-    }
-    if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
-      if (field.kind === "optional") continue;
-      return null;
-    }
-    const next = projectSnapshotField(stored[name], field);
-    if (next === INVALID_SNAPSHOT_VALUE) return null;
-    projected[name] = next;
-  }
-  return projected as PublicTemplatePayload;
+	if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+	const stored = value as Record<string, unknown>;
+	const projected: Record<string, unknown> = {};
+	for (const [name, field] of Object.entries(PUBLIC_TEMPLATE_SNAPSHOT_SCHEMA)) {
+		// Redact/minimize legacy snapshots at the public read boundary as well as
+		// in the producer. The replacement travels with the field descriptor, so a
+		// rename or newly reviewed config field cannot fall through to generic JSON
+		// cloning merely because a hard-coded field-name list was not updated.
+		if (field.kind === 'redacted') {
+			projected[name] = projectSnapshotField(undefined, field);
+			continue;
+		}
+		if (
+			name === 'recipient_count' &&
+			(!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined)
+		) {
+			const legacyEmailCount = Array.isArray(stored.recipientEmails)
+				? stored.recipientEmails.filter((email) => typeof email === 'string').length
+				: 0;
+			projected[name] = Math.max(countRecipientsConvex(stored.recipient_config), legacyEmailCount);
+			continue;
+		}
+		if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
+			if (field.kind === 'optional') continue;
+			return null;
+		}
+		const next = projectSnapshotField(stored[name], field);
+		if (next === INVALID_SNAPSHOT_VALUE) return null;
+		projected[name] = next;
+	}
+	const template = projected as PublicTemplatePayload;
+	// The stored snapshot is a denormalized trust boundary, not proof that the
+	// source selector was correct. Manual corruption or a future migration must
+	// never make a well-shaped draft/private card anonymously visible.
+	if (template.status !== 'published' || template.is_public !== true) return null;
+	return template;
 }
 
 function projectStoredPublicTemplates(
-  value: unknown,
-  context: { key: PublicTemplateSnapshotKey; revision: number },
+	value: unknown,
+	context: { key: PublicTemplateSnapshotKey; revision: number }
 ): PublicTemplatePayload[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) {
-    console.error(
-      `[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:container=non_array`,
-    );
-    return [];
-  }
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) {
+		console.error(
+			`[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:container=non_array`
+		);
+		return [];
+	}
 
-  const templates: PublicTemplatePayload[] = [];
-  let dropped = 0;
-  for (const stored of value) {
-    const template = projectStoredPublicTemplate(stored);
-    if (template) templates.push(template);
-    else dropped += 1;
-  }
-  if (dropped > 0) {
-    // Queries cannot schedule the Sentry action without violating Convex query
-    // purity. Emit one stable, counted error per read so Convex log alerts can
-    // detect at-rest/manual corruption without sacrificing the valid cards.
-    console.error(
-      `[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:dropped=${dropped}:stored=${value.length}`,
-    );
-  }
-  return templates;
+	const templates: PublicTemplatePayload[] = [];
+	let dropped = 0;
+	for (const stored of value) {
+		const template = projectStoredPublicTemplate(stored);
+		if (template) templates.push(template);
+		else dropped += 1;
+	}
+	if (dropped > 0) {
+		// Queries cannot schedule the Sentry action without violating Convex query
+		// purity. Emit one stable, counted error per read so Convex log alerts can
+		// detect at-rest/manual corruption without sacrificing the valid cards.
+		console.error(
+			`[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=${context.key}:revision=${context.revision}:dropped=${dropped}:stored=${value.length}`
+		);
+	}
+	return templates;
 }
 
 /**
- * Tiny public control plane for edge versioning and honest cold starts.
- *
- * No manifest row means neither snapshot family has ever published. That is
- * intentionally distinct from a successful rebuild over an empty corpus,
- * which returns `ready:true` with revision 1 and an empty payload.
+ * One bounded operator cutover from the legacy control row to its compact
+ * public authority projection. The compact insert/replace is the activation
+ * event; the public reader never falls back to the wide row.
+ */
+export const migratePublicDiscoveryManifestAuthority = internalMutation({
+	args: {},
+	handler: async (ctx) => await activatePublicDiscoveryManifestAuthority(ctx)
+});
+
+async function readPublicDiscoveryManifestAuthorityStatus(ctx: QueryCtx) {
+	const [manifest, authority] = await Promise.all([
+		getPublicDiscoveryManifestRow(ctx),
+		getPublicDiscoveryManifestAuthorityRow(ctx)
+	]);
+	const bytes = authority ? publicDiscoveryManifestAuthoritySerializedBytes(authority) : null;
+	let matches = false;
+	if (authority) {
+		try {
+			matches = publicDiscoveryManifestAuthorityMatches(authority, manifest);
+		} catch {
+			matches = false;
+		}
+	}
+	return {
+		ready:
+			authority !== null &&
+			authority.projectionVersion === PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_PROJECTION_VERSION &&
+			bytes !== null &&
+			bytes <= PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES &&
+			matches,
+		bytes,
+		maxBytes: PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES,
+		projectionVersion: authority?.projectionVersion ?? null,
+		matches
+	};
+}
+
+/** Read-only pre-Pages proof using the existing server-read secret. */
+export const publicDiscoveryManifestAuthorityStatus = query({
+	args: { _secret: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		return await readPublicDiscoveryManifestAuthorityStatus(ctx);
+	}
+});
+
+/** CLI-safe operator proof; avoids putting the server secret in process args. */
+export const publicDiscoveryManifestAuthorityOperatorStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => await readPublicDiscoveryManifestAuthorityStatus(ctx)
+});
+
+/**
+ * Tiny compact control plane for edge versioning and honest cold starts.
+ * Missing authority means the one-time cutover has not completed and fails
+ * closed. A successful empty-corpus rebuild remains `ready:true`, revision 1.
  */
 export const publicDiscoveryManifest = query({
-  args: {},
-  handler: async (ctx) => {
-    const manifest = await ctx.db
-      .query("publicDiscoveryManifest")
-      .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
-    return toPublicDiscoveryManifestPayload(manifest);
-  },
+	args: { _secret: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		const authority = await getPublicDiscoveryManifestAuthorityRow(ctx);
+		if (!authority) throw new Error(PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_NOT_READY);
+		return toPublicDiscoveryManifestPayloadFromAuthority(authority);
+	}
 });
 
 /** Operator detail for a producer serving a frozen or explicitly degraded revision. */
 export const publicDiscoveryFailureStatus = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const manifest = await ctx.db
-      .query("publicDiscoveryManifest")
-      .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
-    return {
-      list: manifest?.listFailureAt === undefined ? null : { failedAt: manifest.listFailureAt, code: manifest.listFailureCode ?? "UNKNOWN" },
-      relations:
-        manifest?.relationsFailureAt === undefined
-          ? null
-          : {
-              failedAt: manifest.relationsFailureAt,
-              code: manifest.relationsFailureCode ?? "UNKNOWN",
-            },
-    };
-  },
+	args: {},
+	handler: async (ctx) => {
+		const manifest = await ctx.db
+			.query('publicDiscoveryManifest')
+			.withIndex('by_key', (q) => q.eq('key', 'public'))
+			.unique();
+		return {
+			list:
+				manifest?.listFailureAt === undefined
+					? null
+					: { failedAt: manifest.listFailureAt, code: manifest.listFailureCode ?? 'UNKNOWN' },
+			relations:
+				manifest?.relationsFailureAt === undefined
+					? null
+					: {
+							failedAt: manifest.relationsFailureAt,
+							code: manifest.relationsFailureCode ?? 'UNKNOWN'
+						}
+		};
+	}
+});
+
+/** Observable state for the additive compact-source/vector cutover. */
+export const publicDiscoverySourceMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await publicDiscoverySourceMigrationRow(ctx);
+		return migration
+			? {
+					status: migration.status,
+					projectionVersion: migration.projectionVersion ?? null,
+					runToken: migration.runToken,
+					startedAt: migration.startedAt,
+					completedAt: migration.completedAt ?? null,
+					scanned: migration.scanned,
+					eligible: migration.eligible,
+					sourcesWritten: migration.sourcesWritten,
+					pageArtifactCoordinatesWritten: migration.pageArtifactCoordinatesWritten ?? null,
+					topicVectorsWritten: migration.topicVectorsWritten,
+					tagVectorsWritten: migration.tagVectorsWritten,
+					rejected: migration.rejected,
+					recipientIntentTemplates: migration.recipientIntentTemplates ?? null,
+					recipientIntentRecipients: migration.recipientIntentRecipients ?? null,
+					recipientProjectedRecipients: migration.recipientProjectedRecipients ?? null,
+					recipientLossTemplates: migration.recipientLossTemplates ?? null,
+					recipientLossRecipients: migration.recipientLossRecipients ?? null,
+					recipientLossClassifiedTemplates: migration.recipientLossClassifiedTemplates ?? null,
+					recipientLossClassifiedRecipients: migration.recipientLossClassifiedRecipients ?? null
+				}
+			: { status: 'not-started' as const };
+	}
+});
+
+type PublicRecipientMigrationDisposition =
+	| 'no_intent'
+	| 're_attested'
+	| 'pending'
+	| 'intentionally_redacted';
+
+async function recordPublicRecipientMigrationReview(
+	ctx: MutationCtx,
+	template: Doc<'templates'>,
+	runToken: string,
+	projectedCount: number
+) {
+	const intentCount = publicRecipientIntentCount(template.recipientConfig);
+	const intentHash = await publicRecipientIntentHash(template.recipientConfig);
+	const lostRecipients = Math.max(0, intentCount - projectedCount);
+	const existing = await ctx.db
+		.query('publicRecipientMigrationReviews')
+		.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+		.unique();
+	let disposition: PublicRecipientMigrationDisposition;
+	if (intentCount === 0) disposition = 'no_intent';
+	else if (lostRecipients === 0) disposition = 're_attested';
+	else if (
+		existing?.projectionVersion === PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION &&
+		existing.intentHash === intentHash &&
+		existing.disposition === 'intentionally_redacted'
+	) {
+		disposition = 'intentionally_redacted';
+	} else {
+		disposition = 'pending';
+	}
+	const now = Date.now();
+	const row = {
+		templateId: template._id,
+		projectionVersion: PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION,
+		runToken,
+		intentHash,
+		intentCount,
+		projectedCount,
+		disposition,
+		operatorReference:
+			disposition === 'intentionally_redacted' ? existing?.operatorReference : undefined,
+		classifiedAt: disposition === 'intentionally_redacted' ? existing?.classifiedAt : undefined,
+		updatedAt: now
+	};
+	if (existing) await ctx.db.patch(existing._id, row);
+	else await ctx.db.insert('publicRecipientMigrationReviews', row);
+	const classified = disposition === 'intentionally_redacted';
+	return {
+		intentTemplates: intentCount > 0 ? 1 : 0,
+		intentRecipients: intentCount,
+		projectedRecipients: projectedCount,
+		lossTemplates: lostRecipients > 0 ? 1 : 0,
+		lossRecipients: lostRecipients,
+		classifiedTemplates: classified ? 1 : 0,
+		classifiedRecipients: classified ? lostRecipients : 0
+	};
+}
+
+/** Bounded operator queue; it exposes IDs, counts, and hashes, never raw recipient PII. */
+export const listPublicRecipientMigrationBlockers = internalQuery({
+	args: { cursor: v.optional(v.string()), limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		if ((args.cursor?.length ?? 0) > 2_048) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_CURSOR_INVALID');
+		}
+		const limit = args.limit ?? 25;
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_LIMIT_INVALID');
+		}
+		const migration = await publicDiscoverySourceMigrationRow(ctx);
+		if (
+			!migration ||
+			migration.status !== 'migrated' ||
+			migration.projectionVersion !== PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION
+		) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_REVIEW_NOT_READY');
+		}
+		const page = await ctx.db
+			.query('publicRecipientMigrationReviews')
+			.withIndex('by_disposition_runToken', (q) =>
+				q.eq('disposition', 'pending').eq('runToken', migration.runToken)
+			)
+			.order('asc')
+			.paginate({ cursor: args.cursor ?? null, numItems: limit });
+		return {
+			page: page.page.map((review) => ({
+				templateId: review.templateId,
+				intentHash: review.intentHash,
+				intentCount: review.intentCount,
+				projectedCount: review.projectedCount
+			})),
+			continueCursor: page.isDone ? null : page.continueCursor
+		};
+	}
+});
+
+/**
+ * Explicitly accept redaction for one exact current private-intent hash. The
+ * source migration must be rerun afterward so activation proves every loss
+ * against a complete bounded scan rather than trusting mutable review rows.
+ */
+export const classifyPublicRecipientMigrationRedaction = internalMutation({
+	args: {
+		templateId: v.id('templates'),
+		expectedIntentHash: v.string(),
+		operatorReference: v.string()
+	},
+	handler: async (ctx, args) => {
+		if (!/^[a-f0-9]{64}$/.test(args.expectedIntentHash)) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_HASH_INVALID');
+		}
+		const operatorReference = args.operatorReference.trim();
+		if (operatorReference.length === 0 || operatorReference.length > 512) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_REFERENCE_INVALID');
+		}
+		const migration = await publicDiscoverySourceMigrationRow(ctx);
+		if (
+			!migration ||
+			migration.status !== 'migrated' ||
+			migration.projectionVersion !== PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION
+		) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_REVIEW_NOT_READY');
+		}
+		const template = await ctx.db.get(args.templateId);
+		if (!template || template.status !== 'published' || template.isPublic !== true) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_TEMPLATE_INELIGIBLE');
+		}
+		const intentHash = await publicRecipientIntentHash(template.recipientConfig);
+		if (intentHash !== args.expectedIntentHash) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_INTENT_CHANGED');
+		}
+		const intentCount = publicRecipientIntentCount(template.recipientConfig);
+		const detailRow = await ctx.db
+			.query('publicTemplateDetailProjections')
+			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+			.unique();
+		if (!detailRow || detailRow.projectionVersion !== PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_DETAIL_NOT_READY');
+		}
+		const projectedCount = readPublicTemplateDetailProjection(detailRow.detail).recipient_count;
+		if (intentCount <= projectedCount) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_NO_LOSS');
+		}
+		const existing = await ctx.db
+			.query('publicRecipientMigrationReviews')
+			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+			.unique();
+		if (
+			!existing ||
+			existing.runToken !== migration.runToken ||
+			existing.disposition !== 'pending' ||
+			existing.intentHash !== intentHash
+		) {
+			throw new Error('PUBLIC_RECIPIENT_MIGRATION_REVIEW_STALE');
+		}
+		const now = Date.now();
+		const row = {
+			templateId: template._id,
+			projectionVersion: PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION,
+			runToken: migration?.runToken ?? 'operator-preflight',
+			intentHash,
+			intentCount,
+			projectedCount,
+			disposition: 'intentionally_redacted' as const,
+			operatorReference,
+			classifiedAt: now,
+			updatedAt: now
+		};
+		await ctx.db.patch(existing._id, row);
+		return {
+			status: 'classified' as const,
+			templateId: template._id,
+			intentHash,
+			lostRecipients: intentCount - projectedCount,
+			requiresRemigration: true
+		};
+	}
+});
+
+/**
+ * Self-paging, idempotent cutover. Four legacy documents per transaction keep
+ * even near-1 MiB embedding-bearing rows comfortably below Convex's 16 MiB
+ * transaction-read ceiling. A run token is stamped into every compact row; the
+ * producer reads only the completed generation, so rows orphaned by a restart
+ * or legacy destructive operation cannot re-enter discovery.
+ */
+export const migratePublicDiscoverySourcePage = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		cursor: v.optional(v.string()),
+		startedAt: v.optional(v.number()),
+		listDirtyAtAtStart: v.optional(v.number()),
+		relationsDirtyAtAtStart: v.optional(v.number()),
+		scanned: v.optional(v.number()),
+		eligible: v.optional(v.number()),
+		sourcesWritten: v.optional(v.number()),
+		pageArtifactCoordinatesWritten: v.optional(v.number()),
+		topicVectorsWritten: v.optional(v.number()),
+		tagVectorsWritten: v.optional(v.number()),
+		rejected: v.optional(v.number()),
+		recipientIntentTemplates: v.optional(v.number()),
+		recipientIntentRecipients: v.optional(v.number()),
+		recipientProjectedRecipients: v.optional(v.number()),
+		recipientLossTemplates: v.optional(v.number()),
+		recipientLossRecipients: v.optional(v.number()),
+		recipientLossClassifiedTemplates: v.optional(v.number()),
+		recipientLossClassifiedRecipients: v.optional(v.number()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const continuation = args.runToken !== undefined;
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		const existing = await publicDiscoverySourceMigrationRow(ctx);
+		const runToken = args.runToken ?? crypto.randomUUID();
+		const startedAt = continuation ? (existing?.startedAt ?? Date.now()) : Date.now();
+		const listDirtyAtAtStart = continuation ? existing?.listDirtyAtAtStart : manifest?.listDirtyAt;
+		const relationsDirtyAtAtStart = continuation
+			? existing?.relationsDirtyAtAtStart
+			: manifest?.relationsDirtyAt;
+
+		if (continuation) {
+			if (!existing || existing.status !== 'running' || existing.runToken !== runToken) {
+				return { status: 'superseded' as const, runToken };
+			}
+		} else {
+			const initial = {
+				key: PUBLIC_DISCOVERY_SOURCE_MIGRATION_KEY,
+				status: 'running' as const,
+				projectionVersion: PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION,
+				runToken,
+				cursor: undefined,
+				startedAt,
+				completedAt: undefined,
+				listDirtyAtAtStart,
+				relationsDirtyAtAtStart,
+				scanned: 0,
+				eligible: 0,
+				sourcesWritten: 0,
+				pageArtifactCoordinatesWritten: 0,
+				topicVectorsWritten: 0,
+				tagVectorsWritten: 0,
+				rejected: 0,
+				recipientIntentTemplates: 0,
+				recipientIntentRecipients: 0,
+				recipientProjectedRecipients: 0,
+				recipientLossTemplates: 0,
+				recipientLossRecipients: 0,
+				recipientLossClassifiedTemplates: 0,
+				recipientLossClassifiedRecipients: 0,
+				updatedAt: Date.now()
+			};
+			if (existing) await ctx.db.patch(existing._id, initial);
+			else await ctx.db.insert('publicDiscoverySourceMigrations', initial);
+		}
+
+		const page = await ctx.db
+			.query('templates')
+			.withIndex('by_status_isPublic', (q) => q.eq('status', 'published').eq('isPublic', true))
+			.order('asc')
+			.paginate({
+				cursor: continuation ? (existing?.cursor ?? null) : null,
+				numItems: PUBLIC_DISCOVERY_SOURCE_MIGRATION_PAGE_SIZE
+			});
+
+		let pageSources = 0;
+		let pageArtifactCoordinates = 0;
+		let pageTopics = 0;
+		let pageTags = 0;
+		let pageRejected = 0;
+		let pageRecipientIntentTemplates = 0;
+		let pageRecipientIntentRecipients = 0;
+		let pageRecipientProjectedRecipients = 0;
+		let pageRecipientLossTemplates = 0;
+		let pageRecipientLossRecipients = 0;
+		let pageRecipientLossClassifiedTemplates = 0;
+		let pageRecipientLossClassifiedRecipients = 0;
+		for (const template of page.page) {
+			try {
+				const written = await upsertCompactDiscoverySource(ctx, template, runToken);
+				if (written.source) {
+					pageSources += 1;
+					pageArtifactCoordinates += 1;
+				}
+				if (written.topic) pageTopics += 1;
+				pageTags += written.tags;
+				const review = await recordPublicRecipientMigrationReview(
+					ctx,
+					template,
+					runToken,
+					written.publicRecipientCount
+				);
+				pageRecipientIntentTemplates += review.intentTemplates;
+				pageRecipientIntentRecipients += review.intentRecipients;
+				pageRecipientProjectedRecipients += review.projectedRecipients;
+				pageRecipientLossTemplates += review.lossTemplates;
+				pageRecipientLossRecipients += review.lossRecipients;
+				pageRecipientLossClassifiedTemplates += review.classifiedTemplates;
+				pageRecipientLossClassifiedRecipients += review.classifiedRecipients;
+			} catch (error) {
+				pageRejected += 1;
+				console.error(
+					`[public-discovery] compact source rejected ${template._id}: ${error instanceof Error ? error.message : String(error)}`
+				);
+			}
+		}
+
+		const totals = {
+			scanned: (continuation ? (existing?.scanned ?? 0) : 0) + page.page.length,
+			eligible: (continuation ? (existing?.eligible ?? 0) : 0) + page.page.length,
+			sourcesWritten: (continuation ? (existing?.sourcesWritten ?? 0) : 0) + pageSources,
+			pageArtifactCoordinatesWritten:
+				(continuation ? (existing?.pageArtifactCoordinatesWritten ?? 0) : 0) +
+				pageArtifactCoordinates,
+			topicVectorsWritten: (continuation ? (existing?.topicVectorsWritten ?? 0) : 0) + pageTopics,
+			tagVectorsWritten: (continuation ? (existing?.tagVectorsWritten ?? 0) : 0) + pageTags,
+			rejected: (continuation ? (existing?.rejected ?? 0) : 0) + pageRejected,
+			recipientIntentTemplates:
+				(continuation ? (existing?.recipientIntentTemplates ?? 0) : 0) +
+				pageRecipientIntentTemplates,
+			recipientIntentRecipients:
+				(continuation ? (existing?.recipientIntentRecipients ?? 0) : 0) +
+				pageRecipientIntentRecipients,
+			recipientProjectedRecipients:
+				(continuation ? (existing?.recipientProjectedRecipients ?? 0) : 0) +
+				pageRecipientProjectedRecipients,
+			recipientLossTemplates:
+				(continuation ? (existing?.recipientLossTemplates ?? 0) : 0) + pageRecipientLossTemplates,
+			recipientLossRecipients:
+				(continuation ? (existing?.recipientLossRecipients ?? 0) : 0) + pageRecipientLossRecipients,
+			recipientLossClassifiedTemplates:
+				(continuation ? (existing?.recipientLossClassifiedTemplates ?? 0) : 0) +
+				pageRecipientLossClassifiedTemplates,
+			recipientLossClassifiedRecipients:
+				(continuation ? (existing?.recipientLossClassifiedRecipients ?? 0) : 0) +
+				pageRecipientLossClassifiedRecipients
+		};
+		const migration = await publicDiscoverySourceMigrationRow(ctx);
+		if (!migration || migration.runToken !== runToken || migration.status !== 'running') {
+			return { status: 'superseded' as const, runToken, ...totals };
+		}
+
+		if (!page.isDone) {
+			await ctx.db.patch(migration._id, {
+				cursor: page.continueCursor,
+				...totals,
+				updatedAt: Date.now()
+			});
+			if (args.scheduleContinuation !== false) {
+				await ctx.scheduler.runAfter(0, migratePublicDiscoverySourcePageRef, {
+					runToken,
+					cursor: page.continueCursor,
+					startedAt,
+					listDirtyAtAtStart,
+					relationsDirtyAtAtStart,
+					...totals
+				});
+			}
+			return {
+				status: 'running' as const,
+				runToken,
+				continueCursor: page.continueCursor,
+				startedAt,
+				listDirtyAtAtStart,
+				relationsDirtyAtAtStart,
+				...totals
+			};
+		}
+
+		const completedAt = Date.now();
+		await ctx.db.patch(migration._id, {
+			status: 'migrated',
+			cursor: undefined,
+			completedAt,
+			...totals,
+			updatedAt: completedAt
+		});
+		return {
+			status: 'migrated' as const,
+			runToken,
+			completedAt,
+			...totals
+		};
+	}
+});
+
+/**
+ * Explicit cutover switch. Keep this separate from paging so deployment can
+ * verify migration counts and the complete atomic-writer contract first. Until
+ * activation every producer fails closed; it never falls back to templates.
+ */
+export const activatePublicDiscoverySourcePlane = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await publicDiscoverySourceMigrationRow(ctx);
+		if (!migration || migration.status !== 'migrated' || migration.completedAt === undefined) {
+			throw new Error('PUBLIC_DISCOVERY_SOURCE_PLANE_MIGRATION_INCOMPLETE');
+		}
+		if (
+			migration.rejected !== 0 ||
+			migration.sourcesWritten + migration.rejected !== migration.eligible ||
+			migration.pageArtifactCoordinatesWritten !== migration.sourcesWritten ||
+			!publicRecipientMigrationIntegrityReady(migration)
+		) {
+			throw new Error(
+				`PUBLIC_DISCOVERY_SOURCE_PLANE_MIGRATION_UNSAFE:eligible=${migration.eligible}:written=${migration.sourcesWritten}:pageCoordinates=${migration.pageArtifactCoordinatesWritten ?? 'missing'}:rejected=${migration.rejected}:recipientIntentTemplates=${migration.recipientIntentTemplates ?? 'missing'}:recipientIntentRecipients=${migration.recipientIntentRecipients ?? 'missing'}:recipientProjectedRecipients=${migration.recipientProjectedRecipients ?? 'missing'}:recipientLossTemplates=${migration.recipientLossTemplates ?? 'missing'}:recipientLossClassifiedTemplates=${migration.recipientLossClassifiedTemplates ?? 'missing'}:recipientLossRecipients=${migration.recipientLossRecipients ?? 'missing'}:recipientLossClassifiedRecipients=${migration.recipientLossClassifiedRecipients ?? 'missing'}`
+			);
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return {
+			status: 'ready' as const,
+			runToken: migration.runToken,
+			eligible: migration.eligible,
+			sourcesWritten: migration.sourcesWritten,
+			recipientLossTemplates: migration.recipientLossTemplates,
+			recipientLossRecipients: migration.recipientLossRecipients
+		};
+	}
 });
 
 /**
@@ -1285,23 +2474,25 @@ export const publicDiscoveryFailureStatus = internalQuery({
  * There is deliberately no live-scan fallback.
  */
 export const listPublic = query({
-  args: {
-    excludeCwc: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args): Promise<PublicTemplatePayload[]> => {
-    const key: PublicTemplateSnapshotKey = args.excludeCwc ? "excludeCwc" : "all";
-    const snapshot = await ctx.db
-      .query("publicTemplateSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
-    if (!snapshot) {
-      throw new Error(`PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:${key}`);
-    }
-    return projectStoredPublicTemplates(snapshot.templates, {
-      key,
-      revision: snapshot.revision ?? 0,
-    });
-  },
+	args: {
+		_secret: v.optional(v.string()),
+		excludeCwc: v.optional(v.boolean())
+	},
+	handler: async (ctx, args): Promise<PublicTemplatePayload[]> => {
+		requireInternalSecret(args._secret ?? '');
+		const key: PublicTemplateSnapshotKey = args.excludeCwc ? 'excludeCwc' : 'all';
+		const snapshot = await ctx.db
+			.query('publicTemplateSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', key))
+			.unique();
+		if (!snapshot) {
+			throw new Error(`PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:${key}`);
+		}
+		return projectStoredPublicTemplates(snapshot.templates, {
+			key,
+			revision: snapshot.revision ?? 0
+		});
+	}
 });
 
 /**
@@ -1311,65 +2502,71 @@ export const listPublic = query({
  * empty-corpus snapshot without adding a redundant manifest read here.
  */
 export const publicDiscoveryList = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const key: PublicTemplateSnapshotKey = args.excludeCwc ? "excludeCwc" : "all";
-    const snapshot = await ctx.db
-      .query("publicTemplateSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
-    return {
-      projectionVersion: snapshot?.projectionVersion ?? 0,
-      revision: snapshot?.revision ?? 0,
-      updatedAt: snapshot?.updatedAt ?? null,
-      templates: projectStoredPublicTemplates(snapshot?.templates, {
-        key,
-        revision: snapshot?.revision ?? 0,
-      }),
-    };
-  },
+	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		const key: PublicTemplateSnapshotKey = args.excludeCwc ? 'excludeCwc' : 'all';
+		const snapshot = await ctx.db
+			.query('publicTemplateSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', key))
+			.unique();
+		return {
+			projectionVersion: snapshot?.projectionVersion ?? 0,
+			revision: snapshot?.revision ?? 0,
+			updatedAt: snapshot?.updatedAt ?? null,
+			templates: projectStoredPublicTemplates(snapshot?.templates, {
+				key,
+				revision: snapshot?.revision ?? 0
+			})
+		};
+	}
 });
 
 type PublicTemplateSnapshotRebuildResult = {
-  sourceCap: number;
-  scannedCount: number;
-  allCount: number;
-  excludeCwcCount: number;
-  invalidCount: number;
-  oversizedCardCount: number;
-  aggregateShedCount: number;
-  excludedCount: number;
-  allSnapshotBytes: number;
-  excludeCwcSnapshotBytes: number;
+	sourceCap: number;
+	scannedCount: number;
+	allCount: number;
+	excludeCwcCount: number;
+	invalidCount: number;
+	oversizedCardCount: number;
+	aggregateShedCount: number;
+	excludedCount: number;
+	allSnapshotBytes: number;
+	excludeCwcSnapshotBytes: number;
 };
 
 type PublicDiscoveryPublication = {
-  revision: number;
-  updatedAt: number;
-  coordinatedRebuildToken?: string;
+	revision: number;
+	updatedAt: number;
+	coordinatedRebuildToken?: string;
 };
 
 type PublicTemplateSnapshotRow = {
-  key: PublicTemplateSnapshotKey;
-  projectionVersion: number;
-  revision: number;
-  templates: PublicTemplatePayload[];
-  sourceCount: number;
-  updatedAt: number;
+	key: PublicTemplateSnapshotKey;
+	projectionVersion: number;
+	revision: number;
+	templates: PublicTemplatePayload[];
+	sourceCount: number;
+	updatedAt: number;
 };
 
 type PublicTemplateSnapshotPlan = {
-  candidates: Doc<"templates">[];
-  sources: Record<PublicTemplateSnapshotKey, Doc<"templates">[]>;
-  rows: PublicTemplateSnapshotRow[];
-  rowSizes: Map<PublicTemplateSnapshotKey, number>;
-  invalidTemplateIds: string[];
-  oversizedTemplateIds: string[];
-  aggregateShedIds: string[];
-  exclusionCodes: string[];
+	sourceGeneration: string;
+	nextTemporalRebuildAt: number | null;
+	candidates: PublicTemplateEnrichmentSource[];
+	sources: Record<PublicTemplateSnapshotKey, PublicTemplateEnrichmentSource[]>;
+	rows: PublicTemplateSnapshotRow[];
+	rowSizes: Map<PublicTemplateSnapshotKey, number>;
+	invalidTemplateIds: string[];
+	oversizedTemplateIds: string[];
+	aggregateShedIds: string[];
+	exclusionCodes: string[];
 };
 
-type PublicTemplateRelationSelection = Pick<PublicTemplateSnapshotPlan, "candidates" | "sources">;
+type PublicTemplateRelationSelection = Pick<
+	PublicTemplateSnapshotPlan,
+	'sourceGeneration' | 'candidates' | 'sources'
+>;
 
 /**
  * Build and atomically upsert both `listPublic` materializations.
@@ -1382,390 +2579,434 @@ type PublicTemplateRelationSelection = Pick<PublicTemplateSnapshotPlan, "candida
  * are enriched once per batch.
  */
 async function preparePublicTemplateSnapshotPlan(
-  ctx: MutationCtx,
-  publication: PublicDiscoveryPublication,
+	ctx: MutationCtx,
+	publication: PublicDiscoveryPublication
 ): Promise<PublicTemplateSnapshotPlan> {
-  const candidates = await ctx.db
-    .query("templates")
-    .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
-    .order("desc")
-    .take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	if (manifest?.endorsementCountMigrationStatus !== 'complete') {
+		throw new Error(
+			`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:endorsement-count-migration-${manifest?.endorsementCountMigrationStatus ?? 'not-started'}`
+		);
+	}
+	const migration = await compactDiscoveryPlaneReady(ctx);
+	const candidateRows = await ctx.db
+		.query('publicTemplateDiscoverySources')
+		.withIndex('by_generation_templateCreatedAt_templateId', (q) =>
+			q.eq('generation', migration.runToken)
+		)
+		.order('desc')
+		.take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+	const candidates: PublicTemplateEnrichmentSource[] = candidateRows.map((row) => {
+		if (row.projectionVersion !== PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION) {
+			throw new Error(`PUBLIC_DISCOVERY_SOURCE_VERSION_MISMATCH:${row.projectionVersion}`);
+		}
+		assertCompactPublicTemplateSource(row.source);
+		return row.source;
+	});
 
-  const invalidTemplateIds: string[] = [];
-  const oversizedTemplateIds: string[] = [];
-  const aggregateShedIds: string[] = [];
-  const exclusionCodes: string[] = [];
-  const cardBytesById = new Map<string, number>();
-  const enrichedById = new Map<Id<"templates">, PublicTemplatePayload>();
-  const allTemplateIds: Array<Id<"templates">> = [];
-  const excludeCwcTemplateIds: Array<Id<"templates">> = [];
-  const allTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.length);
-  const excludeCwcTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.filter((template) => template.deliveryMethod !== "cwc").length);
-  let validatedCandidateCount = 0;
+	const invalidTemplateIds: string[] = [];
+	const oversizedTemplateIds: string[] = [];
+	const aggregateShedIds: string[] = [];
+	const exclusionCodes: string[] = [];
+	const cardBytesById = new Map<string, number>();
+	const enrichedById = new Map<Id<'templates'>, PublicTemplatePayload>();
+	const allTemplateIds: Array<Id<'templates'>> = [];
+	const excludeCwcTemplateIds: Array<Id<'templates'>> = [];
+	const allTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.length);
+	const excludeCwcTargetCount = Math.min(
+		PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP,
+		candidates.filter((template) => template.deliveryMethod !== 'cwc').length
+	);
+	let validatedCandidateCount = 0;
 
-  candidateScan: for (let offset = 0; offset < candidates.length; offset += PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH) {
-    const needsAll = allTemplateIds.length < allTargetCount;
-    const needsExcludeCwc = excludeCwcTemplateIds.length < excludeCwcTargetCount;
-    if (!needsAll && !needsExcludeCwc) break;
+	candidateScan: for (
+		let offset = 0;
+		offset < candidates.length;
+		offset += PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH
+	) {
+		const needsAll = allTemplateIds.length < allTargetCount;
+		const needsExcludeCwc = excludeCwcTemplateIds.length < excludeCwcTargetCount;
+		if (!needsAll && !needsExcludeCwc) break;
 
-    // Once the normal variant is full, do not pay enrichment joins for CWC
-    // candidates that cannot backfill the gated variant.
-    const batch = candidates
-      .slice(offset, offset + PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH)
-      .filter((template) => needsAll || template.deliveryMethod !== "cwc");
-    const enrichedBatch = await enrichPublicTemplates(ctx, batch);
-    for (const template of enrichedBatch) {
-      const canFillAll = allTemplateIds.length < allTargetCount;
-      const canFillExcludeCwc = template.deliveryMethod !== "cwc" && excludeCwcTemplateIds.length < excludeCwcTargetCount;
-      if (!canFillAll && !canFillExcludeCwc) continue;
-      validatedCandidateCount += 1;
+		// Once the normal variant is full, do not pay enrichment joins for CWC
+		// candidates that cannot backfill the gated variant.
+		const batch = candidates
+			.slice(offset, offset + PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH)
+			.filter((template) => needsAll || template.deliveryMethod !== 'cwc');
+		const enrichedBatch = await enrichPublicTemplates(ctx, batch);
+		for (const template of enrichedBatch) {
+			const canFillAll = allTemplateIds.length < allTargetCount;
+			const canFillExcludeCwc =
+				template.deliveryMethod !== 'cwc' && excludeCwcTemplateIds.length < excludeCwcTargetCount;
+			if (!canFillAll && !canFillExcludeCwc) continue;
+			validatedCandidateCount += 1;
 
-      const projected = projectStoredPublicTemplate(template);
-      if (!projected) {
-        const id = String(template.id);
-        invalidTemplateIds.push(id);
-        exclusionCodes.push(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${id}`);
-        continue;
-      }
-      const cardBytes = getConvexSize(projected as unknown as Value);
-      if (cardBytes > MAX_PUBLIC_TEMPLATE_CARD_BYTES) {
-        const id = String(projected.id);
-        oversizedTemplateIds.push(id);
-        exclusionCodes.push(`PUBLIC_TEMPLATE_CARD_TOO_LARGE:${id}:${cardBytes}>${MAX_PUBLIC_TEMPLATE_CARD_BYTES}`);
-        continue;
-      }
+			const projected = projectStoredPublicTemplate(template);
+			if (!projected) {
+				const id = String(template.id);
+				invalidTemplateIds.push(id);
+				exclusionCodes.push(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${id}`);
+				continue;
+			}
+			const cardBytes = getConvexSize(projected as unknown as Value);
+			if (cardBytes > MAX_PUBLIC_TEMPLATE_CARD_BYTES) {
+				const id = String(projected.id);
+				oversizedTemplateIds.push(id);
+				exclusionCodes.push(
+					`PUBLIC_TEMPLATE_CARD_TOO_LARGE:${id}:${cardBytes}>${MAX_PUBLIC_TEMPLATE_CARD_BYTES}`
+				);
+				continue;
+			}
 
-      cardBytesById.set(String(projected.id), cardBytes);
-      enrichedById.set(projected.id, projected);
-      if (canFillAll) allTemplateIds.push(projected.id);
-      if (canFillExcludeCwc) excludeCwcTemplateIds.push(projected.id);
-      if (allTemplateIds.length >= allTargetCount && excludeCwcTemplateIds.length >= excludeCwcTargetCount) {
-        break candidateScan;
-      }
-    }
-  }
+			cardBytesById.set(String(projected.id), cardBytes);
+			enrichedById.set(projected.id, projected);
+			if (canFillAll) allTemplateIds.push(projected.id);
+			if (canFillExcludeCwc) excludeCwcTemplateIds.push(projected.id);
+			if (
+				allTemplateIds.length >= allTargetCount &&
+				excludeCwcTemplateIds.length >= excludeCwcTargetCount
+			) {
+				break candidateScan;
+			}
+		}
+	}
 
-  const noValidCardsError = () =>
-    new Error(
-      `PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:candidates=${candidates.length}:validated=${validatedCandidateCount}:` + exclusionCodes.slice(0, 3).join("|"),
-    );
-  if (candidates.length > 0 && allTemplateIds.length === 0) {
-    throw noValidCardsError();
-  }
+	const noValidCardsError = () =>
+		new Error(
+			`PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:candidates=${candidates.length}:validated=${validatedCandidateCount}:` +
+				exclusionCodes.slice(0, 3).join('|')
+		);
+	if (candidates.length > 0 && allTemplateIds.length === 0) {
+		throw noValidCardsError();
+	}
 
-  const projectSelectedIds = (ids: Array<Id<"templates">>) =>
-    ids.flatMap((id) => {
-      const projected = enrichedById.get(id);
-      return projected ? [projected] : [];
-    });
-  const buildRows = (): PublicTemplateSnapshotRow[] => {
-    const allTemplates = projectSelectedIds(allTemplateIds);
-    const excludeCwcTemplates = projectSelectedIds(excludeCwcTemplateIds);
-    return [
-      {
-        key: "all",
-        projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
-        revision: publication.revision,
-        templates: allTemplates,
-        sourceCount: allTemplates.length,
-        updatedAt: publication.updatedAt,
-      },
-      {
-        key: "excludeCwc",
-        projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
-        revision: publication.revision,
-        templates: excludeCwcTemplates,
-        sourceCount: excludeCwcTemplates.length,
-        updatedAt: publication.updatedAt,
-      },
-    ];
-  };
+	const projectSelectedIds = (ids: Array<Id<'templates'>>) =>
+		ids.flatMap((id) => {
+			const projected = enrichedById.get(id);
+			return projected ? [projected] : [];
+		});
+	const buildRows = (): PublicTemplateSnapshotRow[] => {
+		const allTemplates = projectSelectedIds(allTemplateIds);
+		const excludeCwcTemplates = projectSelectedIds(excludeCwcTemplateIds);
+		return [
+			{
+				key: 'all',
+				projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
+				revision: publication.revision,
+				templates: allTemplates,
+				sourceCount: allTemplates.length,
+				updatedAt: publication.updatedAt
+			},
+			{
+				key: 'excludeCwc',
+				projectionVersion: PUBLIC_TEMPLATE_PROJECTION_VERSION,
+				revision: publication.revision,
+				templates: excludeCwcTemplates,
+				sourceCount: excludeCwcTemplates.length,
+				updatedAt: publication.updatedAt
+			}
+		];
+	};
 
-  // Per-card bounds make the normal 50-card case fit with headroom. The exact
-  // row guard remains authoritative: if future envelope growth crosses it,
-  // remove the largest card from both variants and recompute until the matched
-  // revision is publishable. Every exclusion is durable failure evidence, so
-  // availability recovers without silently corrupting or truncating content.
-  let rows = buildRows();
-  const rowSizes = new Map<PublicTemplateSnapshotKey, number>();
-  while (true) {
-    rowSizes.clear();
-    const oversizedRow = rows.find((row) => {
-      const bytes = getConvexSize(row as unknown as Value);
-      rowSizes.set(row.key, bytes);
-      return bytes > MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES;
-    });
-    if (!oversizedRow) break;
+	// Per-card bounds make the normal 50-card case fit with headroom. The exact
+	// row guard remains authoritative: if future envelope growth crosses it,
+	// remove the largest card from both variants and recompute until the matched
+	// revision is publishable. Every exclusion is durable failure evidence, so
+	// availability recovers without silently corrupting or truncating content.
+	let rows = buildRows();
+	const rowSizes = new Map<PublicTemplateSnapshotKey, number>();
+	while (true) {
+		rowSizes.clear();
+		const oversizedRow = rows.find((row) => {
+			const bytes = getConvexSize(row as unknown as Value);
+			rowSizes.set(row.key, bytes);
+			return bytes > MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES;
+		});
+		if (!oversizedRow) break;
 
-    const oversizedBytes = rowSizes.get(oversizedRow.key)!;
-    const largest = [...oversizedRow.templates].sort((a, b) => {
-      const sizeDelta = (cardBytesById.get(String(b.id)) ?? 0) - (cardBytesById.get(String(a.id)) ?? 0);
-      return sizeDelta || String(a.id).localeCompare(String(b.id));
-    })[0];
-    if (!largest) {
-      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
-    }
+		const oversizedBytes = rowSizes.get(oversizedRow.key)!;
+		const largest = [...oversizedRow.templates].sort((a, b) => {
+			const sizeDelta =
+				(cardBytesById.get(String(b.id)) ?? 0) - (cardBytesById.get(String(a.id)) ?? 0);
+			return sizeDelta || String(a.id).localeCompare(String(b.id));
+		})[0];
+		if (!largest) {
+			throw new Error(
+				`PUBLIC_TEMPLATE_SNAPSHOT_TOO_LARGE:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`
+			);
+		}
 
-    const id = String(largest.id);
-    enrichedById.delete(largest.id);
-    aggregateShedIds.push(id);
-    exclusionCodes.push(`PUBLIC_TEMPLATE_SNAPSHOT_AGGREGATE_SHED:${id}:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`);
-    rows = buildRows();
-  }
+		const id = String(largest.id);
+		enrichedById.delete(largest.id);
+		aggregateShedIds.push(id);
+		exclusionCodes.push(
+			`PUBLIC_TEMPLATE_SNAPSHOT_AGGREGATE_SHED:${id}:${oversizedRow.key}:${oversizedBytes}>${MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES}`
+		);
+		rows = buildRows();
+	}
 
-  if (candidates.length > 0 && rows.every((row) => row.templates.length === 0)) {
-    throw noValidCardsError();
-  }
+	if (candidates.length > 0 && rows.every((row) => row.templates.length === 0)) {
+		throw noValidCardsError();
+	}
 
-  const candidatesById = new Map(candidates.map((template) => [template._id, template]));
-  const projectSelectedSources = (ids: Array<Id<"templates">>) =>
-    ids.flatMap((id) => {
-      if (!enrichedById.has(id)) return [];
-      const source = candidatesById.get(id);
-      return source ? [source] : [];
-    });
+	const candidatesById = new Map(candidates.map((template) => [template._id, template]));
+	const projectSelectedSources = (ids: Array<Id<'templates'>>) =>
+		ids.flatMap((id) => {
+			if (!enrichedById.has(id)) return [];
+			const source = candidatesById.get(id);
+			return source ? [source] : [];
+		});
+	const sources = {
+		all: projectSelectedSources(allTemplateIds),
+		excludeCwc: projectSelectedSources(excludeCwcTemplateIds)
+	};
+	const temporalSources = [
+		...new Map(
+			[...sources.all, ...sources.excludeCwc].map((source) => [source._id, source] as const)
+		).values()
+	];
 
-  return {
-    candidates,
-    sources: {
-      all: projectSelectedSources(allTemplateIds),
-      excludeCwc: projectSelectedSources(excludeCwcTemplateIds),
-    },
-    rows,
-    rowSizes,
-    invalidTemplateIds,
-    oversizedTemplateIds,
-    aggregateShedIds,
-    exclusionCodes,
-  };
+	return {
+		sourceGeneration: migration.runToken,
+		nextTemporalRebuildAt: nextPublicTemplateTemporalRebuildAt(
+			temporalSources,
+			publication.updatedAt
+		),
+		candidates,
+		sources,
+		rows,
+		rowSizes,
+		invalidTemplateIds,
+		oversizedTemplateIds,
+		aggregateShedIds,
+		exclusionCodes
+	};
 }
 
 async function publishPublicTemplateSnapshotPlan(
-  ctx: MutationCtx,
-  publication: PublicDiscoveryPublication,
-  plan: PublicTemplateSnapshotPlan,
+	ctx: MutationCtx,
+	publication: PublicDiscoveryPublication,
+	plan: PublicTemplateSnapshotPlan
 ): Promise<PublicTemplateSnapshotRebuildResult> {
-  const previousManifest = await getPublicDiscoveryManifestRow(ctx);
+	const previousManifest = await getPublicDiscoveryManifestRow(ctx);
 
-  for (const row of plan.rows) {
-    const existing = await ctx.db
-      .query("publicTemplateSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", row.key))
-      .unique();
-    if (existing) {
-      await ctx.db.patch(existing._id, row);
-    } else {
-      await ctx.db.insert("publicTemplateSnapshots", row);
-    }
-  }
+	for (const row of plan.rows) {
+		const existing = await ctx.db
+			.query('publicTemplateSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', row.key))
+			.unique();
+		if (existing) {
+			await ctx.db.patch(existing._id, row);
+		} else {
+			await ctx.db.insert('publicTemplateSnapshots', row);
+		}
+	}
 
-  // The manifest revision is the commit marker. Convex mutation atomicity means
-  // a later failure in the composite list+relations rebuild rolls this back too.
-  await commitPublicDiscoveryListPublication(ctx, publication);
+	// The manifest revision is the commit marker. Convex mutation atomicity means
+	// a later failure in the composite list+relations rebuild rolls this back too.
+	await commitPublicDiscoveryListPublication(ctx, publication);
+	const committedManifest = await getPublicDiscoveryManifestRow(ctx);
+	if (!committedManifest) {
+		throw new Error('PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION');
+	}
+	await ctx.db.patch(committedManifest._id, {
+		nextTemporalRebuildAt: plan.nextTemporalRebuildAt ?? undefined,
+		temporalScheduleVersion: 1
+	});
 
-  if (plan.exclusionCodes.length > 0) {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!manifest) throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION");
-    const failure = new Error(
-      plan.exclusionCodes.length === 1
-        ? plan.exclusionCodes[0]
-        : `PUBLIC_TEMPLATE_SNAPSHOT_EXCLUDED:${plan.exclusionCodes.join("|")}`,
-    );
-    await recordPublicDiscoverySnapshotFailure(
-      ctx,
-      manifest,
-      "list",
-      failure,
-      publication.updatedAt,
-      {
-        code: previousManifest?.listFailureCode,
-        failedAt: previousManifest?.listFailureAt,
-      },
-    );
-    if (plan.oversizedTemplateIds.length === 0 && plan.aggregateShedIds.length === 0) {
-      console.error(
-        `[public-discovery] list revision ${publication.revision} excluded ${plan.invalidTemplateIds.length} invalid template card(s); valid cards remain available`,
-      );
-    } else {
-      console.error(
-        `[public-discovery] list revision ${publication.revision} excluded ${plan.exclusionCodes.length} unsafe or oversized template card(s); valid cards remain available`,
-      );
-    }
-  }
+	if (plan.exclusionCodes.length > 0) {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest) throw new Error('PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_LIST_PUBLICATION');
+		const failure = new Error(
+			plan.exclusionCodes.length === 1
+				? plan.exclusionCodes[0]
+				: `PUBLIC_TEMPLATE_SNAPSHOT_EXCLUDED:${plan.exclusionCodes.join('|')}`
+		);
+		await recordPublicDiscoverySnapshotFailure(
+			ctx,
+			manifest,
+			'list',
+			failure,
+			publication.updatedAt,
+			{
+				code: previousManifest?.listFailureCode,
+				failedAt: previousManifest?.listFailureAt
+			}
+		);
+		if (plan.oversizedTemplateIds.length === 0 && plan.aggregateShedIds.length === 0) {
+			console.error(
+				`[public-discovery] list revision ${publication.revision} excluded ${plan.invalidTemplateIds.length} invalid template card(s); valid cards remain available`
+			);
+		} else {
+			console.error(
+				`[public-discovery] list revision ${publication.revision} excluded ${plan.exclusionCodes.length} unsafe or oversized template card(s); valid cards remain available`
+			);
+		}
+	}
 
-  const allTemplates = plan.rows.find((row) => row.key === "all")!.templates;
-  const excludeCwcTemplates = plan.rows.find((row) => row.key === "excludeCwc")!.templates;
+	const allTemplates = plan.rows.find((row) => row.key === 'all')!.templates;
+	const excludeCwcTemplates = plan.rows.find((row) => row.key === 'excludeCwc')!.templates;
 
-  return {
-    sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
-    scannedCount: plan.candidates.length,
-    allCount: allTemplates.length,
-    excludeCwcCount: excludeCwcTemplates.length,
-    invalidCount: plan.invalidTemplateIds.length,
-    oversizedCardCount: plan.oversizedTemplateIds.length,
-    aggregateShedCount: plan.aggregateShedIds.length,
-    excludedCount: plan.exclusionCodes.length,
-    allSnapshotBytes: plan.rowSizes.get("all")!,
-    excludeCwcSnapshotBytes: plan.rowSizes.get("excludeCwc")!,
-  };
+	return {
+		sourceCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
+		scannedCount: plan.candidates.length,
+		allCount: allTemplates.length,
+		excludeCwcCount: excludeCwcTemplates.length,
+		invalidCount: plan.invalidTemplateIds.length,
+		oversizedCardCount: plan.oversizedTemplateIds.length,
+		aggregateShedCount: plan.aggregateShedIds.length,
+		excludedCount: plan.exclusionCodes.length,
+		allSnapshotBytes: plan.rowSizes.get('all')!,
+		excludeCwcSnapshotBytes: plan.rowSizes.get('excludeCwc')!
+	};
 }
 
 async function rebuildPublicTemplateSnapshotsImpl(
-  ctx: MutationCtx,
+	ctx: MutationCtx
 ): Promise<PublicTemplateSnapshotRebuildResult> {
-  // Reserve the revision without mutating the manifest. It becomes visible only
-  // after BOTH list rows have passed their size guards and been upserted.
-  const publication = await preparePublicDiscoveryListPublication(ctx);
-  const plan = await preparePublicTemplateSnapshotPlan(ctx, publication);
-  return await publishPublicTemplateSnapshotPlan(ctx, publication, plan);
+	// Reserve the revision without mutating the manifest. It becomes visible only
+	// after BOTH list rows have passed their size guards and been upserted.
+	const publication = await preparePublicDiscoveryListPublication(ctx);
+	const plan = await preparePublicTemplateSnapshotPlan(ctx, publication);
+	return await publishPublicTemplateSnapshotPlan(ctx, publication, plan);
 }
 
 /** Internal/operator entry point for the low-cost public-list materialization. */
 export const rebuildPublicTemplateSnapshots = internalMutation({
-  args: {},
-  handler: rebuildPublicTemplateSnapshotsImpl,
+	args: {},
+	handler: rebuildPublicTemplateSnapshotsImpl
 });
 
 /** Mutation attempt supervised by the cron action below. */
 export const rebuildPublicTemplateSnapshotsForCronAttempt = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    try {
-      return { status: "rebuilt" as const, rebuilt: await rebuildPublicTemplateSnapshotsImpl(ctx) };
-    } catch (error) {
-      const status = classifyPublicTemplateSnapshotFreeze(error);
-      if (!status) throw error;
-      await freezePublicDiscoverySnapshotFailure(
-        ctx,
-        "list",
-        error as Error,
-        Date.now(),
-      );
-      return { status };
-    }
-  },
+	args: {},
+	handler: async (ctx) => {
+		try {
+			return { status: 'rebuilt' as const, rebuilt: await rebuildPublicTemplateSnapshotsImpl(ctx) };
+		} catch (error) {
+			const status = classifyPublicTemplateSnapshotFreeze(error);
+			if (!status) throw error;
+			await freezePublicDiscoverySnapshotFailure(ctx, 'list', error as Error, Date.now());
+			return { status };
+		}
+	}
 });
 
 /** Daily supervisor persists even unknown rebuild failures in a new mutation. */
 export const rebuildPublicTemplateSnapshotsForCron = internalAction({
-  args: {},
-  handler: async (ctx) =>
-    await supervisePublicDiscoveryCronRebuild(
-      ctx,
-      "list",
-      rebuildPublicTemplateSnapshotsForCronAttemptRef,
-    ),
+	args: {},
+	handler: async (ctx) =>
+		await supervisePublicDiscoveryCronRebuild(
+			ctx,
+			'list',
+			rebuildPublicTemplateSnapshotsForCronAttemptRef
+		)
 });
 
 /** Internal entry point used by tests/operators and future write modules. */
 export const requestPublicTemplateSnapshotRefresh = internalMutation({
-  args: {},
-  handler: async (ctx) => markPublicDiscoveryListDirty(ctx),
+	args: {},
+	handler: async (ctx) => markPublicDiscoveryListDirty(ctx, 'aggregate')
 });
 
 /**
  * Coalesced write-driven list refresh.
  *
- * The first dirty write schedules one job after 60 seconds. Further writes
- * share that token. If a successful list publish happened less than six hours
- * ago, the same token is moved to the first permitted instant instead of
- * repeatedly paying the bounded enrichment joins.
+ * User-authored public content gets one prompt generation after the 60-second
+ * coalescing window. High-frequency derived metrics retain the six-hour floor.
+ * Ordinary relation dirtiness never delays the list; only destructive urgent
+ * invalidation owns an immediate composite list+relations rebuild.
  */
 export const flushScheduledPublicTemplateRefresh = internalMutation({
-  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
-  handler: async (ctx, { scheduledAt, bypassMinInterval }) => {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!manifest || manifest.listRefreshScheduledAt !== scheduledAt) {
-      return { status: "superseded" as const };
-    }
+	args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+	handler: async (ctx, { scheduledAt }) => {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest || manifest.listRefreshScheduledAt !== scheduledAt) {
+			return { status: 'superseded' as const };
+		}
 
-    if (manifest.listDirtyAt === undefined) {
-      await ctx.db.patch(manifest._id, { listRefreshScheduledAt: undefined });
-      return { status: "clean" as const };
-    }
+		if (manifest.listDirtyAt === undefined) {
+			await ctx.db.patch(manifest._id, { listRefreshScheduledAt: undefined });
+			return { status: 'clean' as const };
+		}
 
-    const now = Date.now();
-    const rebuildsRelations = manifest.relationsDirtyAt !== undefined;
-    const listNextAllowedAt =
-      (manifest.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
-    const relationsNextAllowedAt = rebuildsRelations
-      ? (manifest.relationsUpdatedAt ?? 0) +
-        PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS
-      : 0;
-    const nextAllowedAt = Math.max(listNextAllowedAt, relationsNextAllowedAt);
-    if (!bypassMinInterval && now < nextAllowedAt) {
-      const nextScheduledAt = await reschedulePublicDiscoveryListRefresh(
-        ctx,
-        manifest,
-        now,
-        nextAllowedAt,
-      );
-      // The list job owns this deferred composite generation. Point the
-      // relation token at the same supervised action without queuing another
-      // relation job; any previously queued relation invocation becomes a
-      // cheap superseded no-op unless it already owns this exact timestamp.
-      const relationsScheduledAt = rebuildsRelations ? nextScheduledAt : undefined;
-      if (relationsScheduledAt !== undefined) {
-        await ctx.db.patch(manifest._id, {
-          relationsRefreshScheduledAt: relationsScheduledAt,
-        });
-      }
-      return {
-        status: "deferred" as const,
-        scheduledAt: nextScheduledAt,
-        ...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {}),
-      };
-    }
+		const now = Date.now();
+		const rebuildsRelations = publicDiscoveryListRefreshRebuildsRelations(manifest);
+		const listNextAllowedAt =
+			(manifest.listUpdatedAt ?? 0) + PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS;
+		const relationsNextAllowedAt = rebuildsRelations
+			? (manifest.relationsUpdatedAt ?? 0) + PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS
+			: 0;
+		const nextAllowedAt = Math.max(listNextAllowedAt, relationsNextAllowedAt);
+		if (!publicDiscoveryListRefreshBypassesMinInterval(manifest) && now < nextAllowedAt) {
+			const nextScheduledAt = await reschedulePublicDiscoveryListRefresh(
+				ctx,
+				manifest,
+				now,
+				nextAllowedAt
+			);
+			// Prompt list work never enters this composite branch. Ordinary list and
+			// relation dirtiness may share the later six-hour floor; destructive
+			// fail-closed work bypasses both floors before reaching this branch.
+			const relationsScheduledAt = rebuildsRelations ? nextScheduledAt : undefined;
+			if (relationsScheduledAt !== undefined) {
+				await ctx.db.patch(manifest._id, {
+					relationsRefreshScheduledAt: relationsScheduledAt
+				});
+			}
+			return {
+				status: 'deferred' as const,
+				scheduledAt: nextScheduledAt,
+				...(relationsScheduledAt !== undefined ? { relationsScheduledAt } : {})
+			};
+		}
 
-    try {
-      const rebuilt = rebuildsRelations
-        ? await rebuildHomepageSnapshotsImpl(ctx)
-        : await rebuildPublicTemplateSnapshotsImpl(ctx);
-      const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
-      if (publishedManifest) {
-        const patch: {
-          listRefreshScheduledAt?: undefined;
-          relationsRefreshScheduledAt?: undefined;
-        } = {};
-        if (publishedManifest.listRefreshScheduledAt === scheduledAt) {
-          patch.listRefreshScheduledAt = undefined;
-        }
-        if (
-          rebuildsRelations &&
-          publishedManifest.relationsRefreshScheduledAt === manifest.relationsRefreshScheduledAt
-        ) {
-          patch.relationsRefreshScheduledAt = undefined;
-        }
-        if (Object.keys(patch).length > 0) {
-          await ctx.db.patch(publishedManifest._id, patch);
-        }
-      }
-      return { status: "rebuilt" as const, rebuilt };
-    } catch (error) {
-      // Size or runtime-schema rejection is detected before either snapshot row
-      // is written. Retain the dirty/failure evidence but clear this elapsed
-      // token: deterministic invalid input is retried by the next source write
-      // or daily cron, not four times per day forever. Unknown database/runtime
-      // failures are rethrown so Convex rolls the transaction back atomically.
-      const status = classifyPublicTemplateSnapshotFreeze(error);
-      if (!status) throw error;
-      await freezePublicDiscoverySnapshotFailure(ctx, "list", error as Error, now);
-      if (rebuildsRelations) {
-        await freezePublicDiscoverySnapshotFailure(
-          ctx,
-          "relations",
-          new Error(
-            `PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${(error as Error).message}`.slice(
-              0,
-              500,
-            ),
-          ),
-          now,
-        );
-      }
-      return { status };
-    }
-  },
+		try {
+			const rebuilt = rebuildsRelations
+				? await rebuildHomepageSnapshotsImpl(ctx)
+				: await rebuildPublicTemplateSnapshotsImpl(ctx);
+			const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
+			if (publishedManifest) {
+				const patch: {
+					listRefreshScheduledAt?: undefined;
+					relationsRefreshScheduledAt?: undefined;
+				} = {};
+				if (publishedManifest.listRefreshScheduledAt === scheduledAt) {
+					patch.listRefreshScheduledAt = undefined;
+				}
+				if (
+					rebuildsRelations &&
+					publishedManifest.relationsRefreshScheduledAt === manifest.relationsRefreshScheduledAt
+				) {
+					patch.relationsRefreshScheduledAt = undefined;
+				}
+				if (Object.keys(patch).length > 0) {
+					await ctx.db.patch(publishedManifest._id, patch);
+				}
+			}
+			return { status: 'rebuilt' as const, rebuilt };
+		} catch (error) {
+			// Size or runtime-schema rejection is detected before either snapshot row
+			// is written. Retain the dirty/failure evidence but clear this elapsed
+			// token: deterministic invalid input is retried by the next source write
+			// or daily cron, not four times per day forever. Unknown database/runtime
+			// failures are rethrown so Convex rolls the transaction back atomically.
+			const status = classifyPublicTemplateSnapshotFreeze(error);
+			if (!status) throw error;
+			await freezePublicDiscoverySnapshotFailure(ctx, 'list', error as Error, now);
+			if (rebuildsRelations) {
+				await freezePublicDiscoverySnapshotFailure(
+					ctx,
+					'relations',
+					new Error(
+						`PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${(error as Error).message}`.slice(0, 500)
+					),
+					now
+				);
+			}
+			return { status };
+		}
+	}
 });
 
 /**
@@ -1773,10 +3014,10 @@ export const flushScheduledPublicTemplateRefresh = internalMutation({
  * `all` / `excludeCwc` keys as their list variants so every returned edge has
  * endpoints in the exact graph being displayed.
  */
-const RELATEDNESS_CALIBRATION_KEY = "public";
+const RELATEDNESS_CALIBRATION_KEY = 'public';
 
 function relationSnapshotKey(excludeCwc: boolean | undefined): RelationSnapshotKey {
-  return excludeCwc ? "excludeCwc" : "all";
+	return excludeCwc ? 'excludeCwc' : 'all';
 }
 
 /** Leave headroom for Convex document system fields below the 1 MiB value cap. */
@@ -1794,17 +3035,18 @@ const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
  * database-I/O failure mode this materialization exists to remove.
  */
 export const relatednessEdges = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<Array<{ a: string; b: string; score: number; kind: "twin" }>> => {
-    const snapshot = await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", relationSnapshotKey(args.excludeCwc)))
-      .unique();
-    return snapshot?.twinEdges ?? [];
-  },
+	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	handler: async (
+		ctx,
+		args
+	): Promise<Array<{ a: string; b: string; score: number; kind: 'twin' }>> => {
+		requireInternalSecret(args._secret ?? '');
+		const snapshot = await ctx.db
+			.query('templateRelationSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', relationSnapshotKey(args.excludeCwc)))
+			.unique();
+		return snapshot?.twinEdges ?? [];
+	}
 });
 
 /**
@@ -1825,46 +3067,58 @@ export const relatednessEdges = query({
  * overwritten with nonsense. Pure Convex compute, no external cost.
  */
 export const recomputeRelatednessCalibration = internalMutation({
-  args: {},
-  handler: async (ctx): Promise<{ updated: boolean; count: number; dim: number }> => {
-    const templates = await ctx.db
-      .query("templates")
-      .withIndex("by_status_isPublic", (q) => q.eq("status", "published").eq("isPublic", true))
-      .order("desc")
-      .take(RELATION_SNAPSHOT_VARIANT_CAP);
+	args: {},
+	handler: async (ctx): Promise<{ updated: boolean; count: number; dim: number }> => {
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const sources = await ctx.db
+			.query('publicTemplateDiscoverySources')
+			.withIndex('by_generation_templateCreatedAt_templateId', (q) =>
+				q.eq('generation', migration.runToken)
+			)
+			.order('desc')
+			.take(RELATION_SNAPSHOT_VARIANT_CAP);
+		const vectors = await Promise.all(
+			sources.map((source) =>
+				ctx.db
+					.query('publicTemplateTopicVectors')
+					.withIndex('by_templateId', (q) => q.eq('templateId', source.templateId))
+					.unique()
+			)
+		);
+		const items = vectors.flatMap((row) =>
+			row?.generation === migration.runToken && isFiniteEmbeddingVector(row.embedding)
+				? [{ id: row.templateId as string, embedding: row.embedding }]
+				: []
+		);
 
-    const items = templates
-      .filter((t) => isFiniteEmbeddingVector(t.topicEmbedding))
-      .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
+		const calibration = computeCalibration(items);
+		// Too thin to normalize — keep the prior calibration (if any) untouched.
+		if (!calibration) {
+			return { updated: false, count: items.length, dim: 0 };
+		}
 
-    const calibration = computeCalibration(items);
-    // Too thin to normalize — keep the prior calibration (if any) untouched.
-    if (!calibration) {
-      return { updated: false, count: items.length, dim: 0 };
-    }
+		const existing = await ctx.db
+			.query('relatednessCalibration')
+			.withIndex('by_key', (q) => q.eq('key', RELATEDNESS_CALIBRATION_KEY))
+			.unique();
 
-    const existing = await ctx.db
-      .query("relatednessCalibration")
-      .withIndex("by_key", (q) => q.eq("key", RELATEDNESS_CALIBRATION_KEY))
-      .unique();
+		const row = {
+			key: RELATEDNESS_CALIBRATION_KEY,
+			centroid: calibration.centroid,
+			threshold: calibration.threshold,
+			count: calibration.count,
+			dim: calibration.dim,
+			updatedAt: Date.now()
+		};
 
-    const row = {
-      key: RELATEDNESS_CALIBRATION_KEY,
-      centroid: calibration.centroid,
-      threshold: calibration.threshold,
-      count: calibration.count,
-      dim: calibration.dim,
-      updatedAt: Date.now(),
-    };
+		if (existing) {
+			await ctx.db.patch(existing._id, row);
+		} else {
+			await ctx.db.insert('relatednessCalibration', row);
+		}
 
-    if (existing) {
-      await ctx.db.patch(existing._id, row);
-    } else {
-      await ctx.db.insert("relatednessCalibration", row);
-    }
-
-    return { updated: true, count: calibration.count, dim: calibration.dim };
-  },
+		return { updated: true, count: calibration.count, dim: calibration.dim };
+	}
 });
 
 /**
@@ -1890,25 +3144,28 @@ export const recomputeRelatednessCalibration = internalMutation({
  * NEVER leave; only labels and `{a,b,concept,kind}` tuples cross the boundary.
  */
 export const conceptRelations = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
-  handler: async (
-    ctx,
-    args,
-  ): Promise<{
-    edges: Array<{ a: string; b: string; concept: string; kind: "concept" }>;
-    conceptMap: Record<string, string>;
-  }> => {
-    const snapshot = await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", relationSnapshotKey(args.excludeCwc)))
-      .unique();
-    if (!snapshot) return { edges: [], conceptMap: {} };
+	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	handler: async (
+		ctx,
+		args
+	): Promise<{
+		edges: Array<{ a: string; b: string; concept: string; kind: 'concept' }>;
+		conceptMap: Record<string, string>;
+	}> => {
+		requireInternalSecret(args._secret ?? '');
+		const snapshot = await ctx.db
+			.query('templateRelationSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', relationSnapshotKey(args.excludeCwc)))
+			.unique();
+		if (!snapshot) return { edges: [], conceptMap: {} };
 
-    return {
-      edges: snapshot.conceptEdges,
-      conceptMap: Object.fromEntries(snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept])),
-    };
-  },
+		return {
+			edges: snapshot.conceptEdges,
+			conceptMap: Object.fromEntries(
+				snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept])
+			)
+		};
+	}
 });
 
 /**
@@ -1917,34 +3174,35 @@ export const conceptRelations = query({
  * concept data can never come from different cache generations.
  */
 export const publicDiscoveryRelations = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
-  handler: async (ctx, args) => {
-    const key = relationSnapshotKey(args.excludeCwc);
-    const snapshot = await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .unique();
-    if (!snapshot) {
-      return {
-        revision: 0,
-        updatedAt: null,
-        twinEdges: [],
-        conceptRelations: { edges: [], conceptMap: {} },
-      };
-    }
+	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		const key = relationSnapshotKey(args.excludeCwc);
+		const snapshot = await ctx.db
+			.query('templateRelationSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', key))
+			.unique();
+		if (!snapshot) {
+			return {
+				revision: 0,
+				updatedAt: null,
+				twinEdges: [],
+				conceptRelations: { edges: [], conceptMap: {} }
+			};
+		}
 
-    return {
-      revision: snapshot.revision ?? 0,
-      updatedAt: snapshot.updatedAt,
-      twinEdges: snapshot.twinEdges,
-      conceptRelations: {
-        edges: snapshot.conceptEdges,
-        conceptMap: Object.fromEntries(
-          snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept]),
-        ),
-      },
-    };
-  },
+		return {
+			revision: snapshot.revision ?? 0,
+			updatedAt: snapshot.updatedAt,
+			twinEdges: snapshot.twinEdges,
+			conceptRelations: {
+				edges: snapshot.conceptEdges,
+				conceptMap: Object.fromEntries(
+					snapshot.conceptEntries.map(({ tag, concept }) => [tag, concept])
+				)
+			}
+		};
+	}
 });
 
 /**
@@ -1969,282 +3227,357 @@ export const publicDiscoveryRelations = query({
  * rows. Public queries never fall back to this scan.
  */
 type RelationSnapshotVariantRebuildResult = {
-  sourceCap: number;
-  sourceTemplateCount: number;
-  embeddedTemplateCount: number;
-  tagVectorCount: number;
-  twinEdgeCount: number;
-  conceptEdgeCount: number;
-  conceptEntryCount: number;
-  twinEdgeShedCount: number;
-  conceptEdgeShedCount: number;
-  conceptEntryShedCount: number;
-  snapshotBytes: number;
+	sourceCap: number;
+	sourceTemplateCount: number;
+	embeddedTemplateCount: number;
+	tagVectorCandidateCount: number;
+	tagVectorCount: number;
+	tagVectorShedCount: number;
+	twinEdgeCount: number;
+	conceptEdgeCount: number;
+	conceptEntryCount: number;
+	twinEdgeShedCount: number;
+	conceptEdgeShedCount: number;
+	conceptEntryShedCount: number;
+	snapshotBytes: number;
 };
 
 type RelationSnapshotRow = {
-  key: RelationSnapshotKey;
-  revision: number;
-  twinEdges: ReturnType<typeof computeTwinEdges>;
-  conceptEdges: ReturnType<typeof conceptEdges>;
-  conceptEntries: Array<{ tag: string; concept: string }>;
-  sourceCap: number;
-  sourceTemplateCount: number;
-  embeddedTemplateCount: number;
-  tagVectorCount: number;
-  updatedAt: number;
+	key: RelationSnapshotKey;
+	revision: number;
+	twinEdges: ReturnType<typeof computeTwinEdges>;
+	conceptEdges: ReturnType<typeof conceptEdges>;
+	conceptEntries: Array<{ tag: string; concept: string }>;
+	sourceCap: number;
+	sourceTemplateCount: number;
+	embeddedTemplateCount: number;
+	tagVectorCandidateCount: number;
+	tagVectorCount: number;
+	tagVectorShedCount: number;
+	updatedAt: number;
 };
 
 type RelationSnapshotVariantBuild = {
-  snapshot: RelationSnapshotRow;
-  result: RelationSnapshotVariantRebuildResult;
-  degradationCode?: string;
+	snapshot: RelationSnapshotRow;
+	result: RelationSnapshotVariantRebuildResult;
+	degradationCode?: string;
 };
 
+type RelationTemplateSource = PublicTemplateEnrichmentSource & {
+	topicEmbedding?: number[];
+	tagEmbeddings?: Array<{ tag: string; embedding: number[] }>;
+};
+
+type RelationVariantInput = {
+	templates: RelationTemplateSource[];
+	tagVectorCandidateCount: number;
+	tagVectorShedCount: number;
+};
+
+async function prepareRelationVariantInput(
+	ctx: MutationCtx,
+	templates: PublicTemplateEnrichmentSource[],
+	sourceGeneration: string
+): Promise<RelationVariantInput> {
+	const distinctTags: string[] = [];
+	const seenTags = new Set<string>();
+	for (const template of templates) {
+		for (const tag of normalizeTags(template.topics)) {
+			if (seenTags.has(tag)) continue;
+			seenTags.add(tag);
+			distinctTags.push(tag);
+		}
+	}
+	const retainedTags = distinctTags.slice(0, MAX_PUBLIC_RELATION_TAG_VECTORS);
+	const retainedTagSet = new Set(retainedTags);
+	const tagVectorShedCount = Math.max(0, distinctTags.length - retainedTags.length);
+
+	// The global tag cap is applied above, before any tag-vector database read.
+	const [topicRows, tagRows] = await Promise.all([
+		Promise.all(
+			templates.map((template) =>
+				ctx.db
+					.query('publicTemplateTopicVectors')
+					.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
+					.unique()
+			)
+		),
+		Promise.all(
+			retainedTags.map((tag) =>
+				ctx.db
+					.query('publicTagEmbeddingVectors')
+					.withIndex('by_tag', (q) => q.eq('tag', tag))
+					.unique()
+			)
+		)
+	]);
+	const topicsByTemplate = new Map(
+		topicRows.flatMap((row) =>
+			row?.generation === sourceGeneration ? [[row.templateId, row.embedding] as const] : []
+		)
+	);
+	const tagsByName = new Map(
+		tagRows.flatMap((row) => (row ? [[row.tag, row.embedding] as const] : []))
+	);
+	return {
+		templates: templates.map((template) => ({
+			...template,
+			topicEmbedding: topicsByTemplate.get(template._id),
+			tagEmbeddings: normalizeTags(template.topics).flatMap((tag) => {
+				if (!retainedTagSet.has(tag)) return [];
+				const embedding = tagsByName.get(tag);
+				return embedding ? [{ tag, embedding }] : [];
+			})
+		})),
+		tagVectorCandidateCount: distinctTags.length,
+		tagVectorShedCount
+	};
+}
+
 function maximumFittingPrefixLength(
-  length: number,
-  fits: (prefixLength: number) => boolean,
+	length: number,
+	fits: (prefixLength: number) => boolean
 ): number {
-  let low = 0;
-  let high = length;
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (fits(middle)) low = middle;
-    else high = middle - 1;
-  }
-  return low;
+	let low = 0;
+	let high = length;
+	while (low < high) {
+		const middle = Math.ceil((low + high) / 2);
+		if (fits(middle)) low = middle;
+		else high = middle - 1;
+	}
+	return low;
 }
 
 function buildRelationSnapshotVariant(
-  key: RelationSnapshotKey,
-  templates: Doc<"templates">[],
-  publication: PublicDiscoveryPublication,
+	key: RelationSnapshotKey,
+	input: RelationVariantInput,
+	publication: PublicDiscoveryPublication
 ): RelationSnapshotVariantBuild {
-  // Measured twins: missing embeddings contribute no edge, exactly as before.
-  // Reject malformed legacy vectors before calibration: the first vector must
-  // never get to redefine the canonical dimensionality for the whole corpus.
-  const items = templates
-    .filter((t) => isFiniteEmbeddingVector(t.topicEmbedding))
-    .map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
+	const { templates, tagVectorCandidateCount, tagVectorShedCount } = input;
+	// Measured twins: missing embeddings contribute no edge, exactly as before.
+	// Reject malformed legacy vectors before calibration: the first vector must
+	// never get to redefine the canonical dimensionality for the whole corpus.
+	const items = templates
+		.filter((t) => isFiniteEmbeddingVector(t.topicEmbedding))
+		.map((t) => ({ id: t._id as string, embedding: t.topicEmbedding as number[] }));
 
-  // Fit the matched centroid/threshold from the exact snapshot generation.
-  // This is bounded pure compute over <=50 rows and saves a database read; the
-  // optional operational calibration job remains useful as observability, but
-  // correctness never depends on its cadence.
-  const calibration = computeCalibration(items);
-  const twinEdges = computeTwinEdges(
-    items,
-    calibration
-      ? { centroid: calibration.centroid, threshold: calibration.threshold }
-      : undefined,
-  );
+	// Fit the matched centroid/threshold from the exact snapshot generation.
+	// This is bounded pure compute over <=50 rows and saves a database read; the
+	// optional operational calibration job remains useful as observability, but
+	// correctness never depends on its cadence.
+	const calibration = computeCalibration(items);
+	const twinEdges = computeTwinEdges(
+		items,
+		calibration ? { centroid: calibration.centroid, threshold: calibration.threshold } : undefined
+	);
 
-  // Tag concepts: retain the former first-occurrence de-duplication and stable
-  // template/tag traversal order so a rebuild is byte-for-byte deterministic
-  // for an unchanged corpus (apart from the audit timestamp).
-  const tagVectors: Array<{ tag: string; embedding: number[] }> = [];
-  const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
-  const seenTag = new Set<string>();
-  for (const template of templates) {
-    const currentTags = normalizeTags(template.topics);
-    const currentTagSet = new Set(currentTags);
-    taggedTemplates.push({
-      id: template._id as string,
-      tags: currentTags,
-    });
-    const tagEmbeddings = Array.isArray(template.tagEmbeddings) ? template.tagEmbeddings : [];
-    for (const tagEmbedding of tagEmbeddings) {
-      if (
-        tagEmbedding &&
-        typeof tagEmbedding.tag === "string" &&
-        currentTagSet.has(tagEmbedding.tag) &&
-        isFiniteEmbeddingVector(tagEmbedding.embedding) &&
-        !seenTag.has(tagEmbedding.tag)
-      ) {
-        seenTag.add(tagEmbedding.tag);
-        tagVectors.push({
-          tag: tagEmbedding.tag,
-          embedding: tagEmbedding.embedding,
-        });
-      }
-    }
-  }
+	// Tag concepts: retain the former first-occurrence de-duplication and stable
+	// template/tag traversal order so a rebuild is byte-for-byte deterministic
+	// for an unchanged corpus (apart from the audit timestamp).
+	const tagVectors: Array<{ tag: string; embedding: number[] }> = [];
+	const taggedTemplates: Array<{ id: string; tags: string[] }> = [];
+	const seenTag = new Set<string>();
+	for (const template of templates) {
+		const currentTags = normalizeTags(template.topics);
+		const currentTagSet = new Set(currentTags);
+		taggedTemplates.push({
+			id: template._id as string,
+			tags: currentTags
+		});
+		const tagEmbeddings = Array.isArray(template.tagEmbeddings) ? template.tagEmbeddings : [];
+		for (const tagEmbedding of tagEmbeddings) {
+			if (
+				tagEmbedding &&
+				typeof tagEmbedding.tag === 'string' &&
+				currentTagSet.has(tagEmbedding.tag) &&
+				isFiniteEmbeddingVector(tagEmbedding.embedding) &&
+				!seenTag.has(tagEmbedding.tag)
+			) {
+				seenTag.add(tagEmbedding.tag);
+				tagVectors.push({
+					tag: tagEmbedding.tag,
+					embedding: tagEmbedding.embedding
+				});
+			}
+		}
+	}
 
-  const concepts = clusterTagConcepts(tagVectors);
-  const allConceptEdges = conceptEdges(taggedTemplates, concepts);
-  const allConceptEntries = Object.entries(tagConceptMap(concepts)).map(([tag, concept]) => ({
-    tag,
-    concept,
-  }));
+	const concepts = clusterTagConcepts(tagVectors);
+	const allConceptEdges = conceptEdges(taggedTemplates, concepts);
+	const allConceptEntries = Object.entries(tagConceptMap(concepts)).map(([tag, concept]) => ({
+		tag,
+		concept
+	}));
 
-  const buildSnapshot = (
-    retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
-    retainedConceptEdges: ReturnType<typeof conceptEdges>,
-    retainedConceptEntries: Array<{ tag: string; concept: string }>,
-  ): RelationSnapshotRow => ({
-    key,
-    revision: publication.revision,
-    twinEdges: retainedTwinEdges,
-    conceptEdges: retainedConceptEdges,
-    conceptEntries: retainedConceptEntries,
-    sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
-    sourceTemplateCount: templates.length,
-    embeddedTemplateCount: items.length,
-    tagVectorCount: tagVectors.length,
-    updatedAt: publication.updatedAt,
-  });
-  const measureSnapshot = (
-    retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
-    retainedConceptEdges: ReturnType<typeof conceptEdges>,
-    retainedConceptEntries: Array<{ tag: string; concept: string }>,
-  ) =>
-    getConvexSize(
-      buildSnapshot(
-        retainedTwinEdges,
-        retainedConceptEdges,
-        retainedConceptEntries,
-      ) as unknown as Value,
-    );
+	const buildSnapshot = (
+		retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
+		retainedConceptEdges: ReturnType<typeof conceptEdges>,
+		retainedConceptEntries: Array<{ tag: string; concept: string }>
+	): RelationSnapshotRow => ({
+		key,
+		revision: publication.revision,
+		twinEdges: retainedTwinEdges,
+		conceptEdges: retainedConceptEdges,
+		conceptEntries: retainedConceptEntries,
+		sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
+		sourceTemplateCount: templates.length,
+		embeddedTemplateCount: items.length,
+		tagVectorCandidateCount,
+		tagVectorCount: tagVectors.length,
+		tagVectorShedCount,
+		updatedAt: publication.updatedAt
+	});
+	const measureSnapshot = (
+		retainedTwinEdges: ReturnType<typeof computeTwinEdges>,
+		retainedConceptEdges: ReturnType<typeof conceptEdges>,
+		retainedConceptEntries: Array<{ tag: string; concept: string }>
+	) =>
+		getConvexSize(
+			buildSnapshot(
+				retainedTwinEdges,
+				retainedConceptEdges,
+				retainedConceptEntries
+			) as unknown as Value
+		);
 
-  let retainedTwinEdges = twinEdges;
-  let retainedConceptEdges = allConceptEdges;
-  let retainedConceptEntries = allConceptEntries;
-  const initialSnapshotBytes = measureSnapshot(
-    retainedTwinEdges,
-    retainedConceptEdges,
-    retainedConceptEntries,
-  );
+	let retainedTwinEdges = twinEdges;
+	let retainedConceptEdges = allConceptEdges;
+	let retainedConceptEntries = allConceptEntries;
+	const initialSnapshotBytes = measureSnapshot(
+		retainedTwinEdges,
+		retainedConceptEdges,
+		retainedConceptEntries
+	);
 
-  if (initialSnapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
-    // Preserve the primary measured-twin graph first. Concept edges are
-    // additive, followed by the display-only concept map, and weakest twins
-    // are the last resort. Every array already has a deterministic quality
-    // order; binary-searching prefixes bounds fitting work and keeps rebuilds
-    // byte-stable for an unchanged corpus.
-    const conceptEdgeCount = maximumFittingPrefixLength(
-      retainedConceptEdges.length,
-      (count) =>
-        measureSnapshot(
-          retainedTwinEdges,
-          retainedConceptEdges.slice(0, count),
-          retainedConceptEntries,
-        ) <= MAX_RELATION_SNAPSHOT_BYTES,
-    );
-    retainedConceptEdges = retainedConceptEdges.slice(0, conceptEdgeCount);
+	if (initialSnapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
+		// Preserve the primary measured-twin graph first. Concept edges are
+		// additive, followed by the display-only concept map, and weakest twins
+		// are the last resort. Every array already has a deterministic quality
+		// order; binary-searching prefixes bounds fitting work and keeps rebuilds
+		// byte-stable for an unchanged corpus.
+		const conceptEdgeCount = maximumFittingPrefixLength(
+			retainedConceptEdges.length,
+			(count) =>
+				measureSnapshot(
+					retainedTwinEdges,
+					retainedConceptEdges.slice(0, count),
+					retainedConceptEntries
+				) <= MAX_RELATION_SNAPSHOT_BYTES
+		);
+		retainedConceptEdges = retainedConceptEdges.slice(0, conceptEdgeCount);
 
-    if (
-      measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
-      MAX_RELATION_SNAPSHOT_BYTES
-    ) {
-      const conceptEntryCount = maximumFittingPrefixLength(
-        retainedConceptEntries.length,
-        (count) =>
-          measureSnapshot(
-            retainedTwinEdges,
-            retainedConceptEdges,
-            retainedConceptEntries.slice(0, count),
-          ) <= MAX_RELATION_SNAPSHOT_BYTES,
-      );
-      retainedConceptEntries = retainedConceptEntries.slice(0, conceptEntryCount);
-    }
+		if (
+			measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
+			MAX_RELATION_SNAPSHOT_BYTES
+		) {
+			const conceptEntryCount = maximumFittingPrefixLength(
+				retainedConceptEntries.length,
+				(count) =>
+					measureSnapshot(
+						retainedTwinEdges,
+						retainedConceptEdges,
+						retainedConceptEntries.slice(0, count)
+					) <= MAX_RELATION_SNAPSHOT_BYTES
+			);
+			retainedConceptEntries = retainedConceptEntries.slice(0, conceptEntryCount);
+		}
 
-    if (
-      measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
-      MAX_RELATION_SNAPSHOT_BYTES
-    ) {
-      const twinEdgeCount = maximumFittingPrefixLength(
-        retainedTwinEdges.length,
-        (count) =>
-          measureSnapshot(
-            retainedTwinEdges.slice(0, count),
-            retainedConceptEdges,
-            retainedConceptEntries,
-          ) <= MAX_RELATION_SNAPSHOT_BYTES,
-      );
-      retainedTwinEdges = retainedTwinEdges.slice(0, twinEdgeCount);
-    }
-  }
+		if (
+			measureSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries) >
+			MAX_RELATION_SNAPSHOT_BYTES
+		) {
+			const twinEdgeCount = maximumFittingPrefixLength(
+				retainedTwinEdges.length,
+				(count) =>
+					measureSnapshot(
+						retainedTwinEdges.slice(0, count),
+						retainedConceptEdges,
+						retainedConceptEntries
+					) <= MAX_RELATION_SNAPSHOT_BYTES
+			);
+			retainedTwinEdges = retainedTwinEdges.slice(0, twinEdgeCount);
+		}
+	}
 
-  const snapshot = buildSnapshot(
-    retainedTwinEdges,
-    retainedConceptEdges,
-    retainedConceptEntries,
-  );
-  // RelationEdge/ConceptEdge are nominal interfaces without Value's index
-  // signature, but every field above is a concrete Convex value.
-  const snapshotBytes = getConvexSize(snapshot as unknown as Value);
-  if (snapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
-    throw new Error(
-      `RELATION_SNAPSHOT_TOO_LARGE:${key}:${snapshotBytes}>${MAX_RELATION_SNAPSHOT_BYTES}`,
-    );
-  }
+	const snapshot = buildSnapshot(retainedTwinEdges, retainedConceptEdges, retainedConceptEntries);
+	// RelationEdge/ConceptEdge are nominal interfaces without Value's index
+	// signature, but every field above is a concrete Convex value.
+	const snapshotBytes = getConvexSize(snapshot as unknown as Value);
+	if (snapshotBytes > MAX_RELATION_SNAPSHOT_BYTES) {
+		throw new Error(
+			`RELATION_SNAPSHOT_TOO_LARGE:${key}:${snapshotBytes}>${MAX_RELATION_SNAPSHOT_BYTES}`
+		);
+	}
 
-  const twinEdgeShedCount = twinEdges.length - retainedTwinEdges.length;
-  const conceptEdgeShedCount = allConceptEdges.length - retainedConceptEdges.length;
-  const conceptEntryShedCount = allConceptEntries.length - retainedConceptEntries.length;
-  const degradationCode =
-    twinEdgeShedCount + conceptEdgeShedCount + conceptEntryShedCount > 0
-      ? `RELATION_SNAPSHOT_DEGRADED:${key}:initial=${initialSnapshotBytes}:final=${snapshotBytes}:twin=${twinEdgeShedCount}:concept=${conceptEdgeShedCount}:entries=${conceptEntryShedCount}`
-      : undefined;
+	const twinEdgeShedCount = twinEdges.length - retainedTwinEdges.length;
+	const conceptEdgeShedCount = allConceptEdges.length - retainedConceptEdges.length;
+	const conceptEntryShedCount = allConceptEntries.length - retainedConceptEntries.length;
+	const payloadShed = twinEdgeShedCount + conceptEdgeShedCount + conceptEntryShedCount;
+	const degradationCode =
+		payloadShed > 0 || tagVectorShedCount > 0
+			? `RELATION_SNAPSHOT_DEGRADED:${key}:initial=${initialSnapshotBytes}:final=${snapshotBytes}:twin=${twinEdgeShedCount}:concept=${conceptEdgeShedCount}:entries=${conceptEntryShedCount}:tag-vectors=${tagVectorShedCount}`
+			: undefined;
 
-  return {
-    snapshot,
-    degradationCode,
-    result: {
-      sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
-      sourceTemplateCount: templates.length,
-      embeddedTemplateCount: items.length,
-      tagVectorCount: tagVectors.length,
-      twinEdgeCount: retainedTwinEdges.length,
-      conceptEdgeCount: retainedConceptEdges.length,
-      conceptEntryCount: retainedConceptEntries.length,
-      twinEdgeShedCount,
-      conceptEdgeShedCount,
-      conceptEntryShedCount,
-      snapshotBytes,
-    },
-  };
+	return {
+		snapshot,
+		degradationCode,
+		result: {
+			sourceCap: RELATION_SNAPSHOT_VARIANT_CAP,
+			sourceTemplateCount: templates.length,
+			embeddedTemplateCount: items.length,
+			tagVectorCandidateCount,
+			tagVectorCount: tagVectors.length,
+			tagVectorShedCount,
+			twinEdgeCount: retainedTwinEdges.length,
+			conceptEdgeCount: retainedConceptEdges.length,
+			conceptEntryCount: retainedConceptEntries.length,
+			twinEdgeShedCount,
+			conceptEdgeShedCount,
+			conceptEntryShedCount,
+			snapshotBytes
+		}
+	};
 }
 
 type RelationSnapshotRebuildResult = {
-  sourceScanCap: number;
-  scannedCount: number;
-  all: RelationSnapshotVariantRebuildResult;
-  excludeCwc: RelationSnapshotVariantRebuildResult;
+	sourceScanCap: number;
+	scannedCount: number;
+	all: RelationSnapshotVariantRebuildResult;
+	excludeCwc: RelationSnapshotVariantRebuildResult;
 };
 
 type HomepageSnapshotRebuildResult = {
-  list: PublicTemplateSnapshotRebuildResult;
-  relations: RelationSnapshotRebuildResult;
+	list: PublicTemplateSnapshotRebuildResult;
+	relations: RelationSnapshotRebuildResult;
 };
 
 type PreparedRelationSnapshotRebuild = {
-  publication: PublicDiscoveryPublication;
-  selection: PublicTemplateRelationSelection;
-  variants: Record<RelationSnapshotKey, RelationSnapshotVariantBuild>;
-  existingRows: Record<RelationSnapshotKey, Doc<"templateRelationSnapshots"> | null>;
+	publication: PublicDiscoveryPublication;
+	selection: PublicTemplateRelationSelection;
+	variants: Record<RelationSnapshotKey, RelationSnapshotVariantBuild>;
+	existingRows: Record<RelationSnapshotKey, Doc<'templateRelationSnapshots'> | null>;
 };
 
 function normalizeRelationSnapshotError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+	return error instanceof Error ? error : new Error(String(error));
 }
 
 function isPublicDiscoveryCoordinationError(error: Error): boolean {
-  return (
-    error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED ||
-    error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH
-  );
+	return (
+		error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCKED ||
+		error.message === PUBLIC_DISCOVERY_COORDINATED_REBUILD_TOKEN_MISMATCH
+	);
 }
 
-function classifyRelationSnapshotFreeze(error: Error): "oversize" | "invalid" | "failed" {
-  if (error.message.startsWith("RELATION_SNAPSHOT_TOO_LARGE:")) return "oversize";
-  const listStatus = classifyPublicTemplateSnapshotFreeze(error);
-  if (listStatus === "oversize") return "oversize";
-  if (listStatus === "invalid") return "invalid";
-  return "failed";
+function classifyRelationSnapshotFreeze(error: Error): 'oversize' | 'invalid' | 'failed' {
+	if (error.message.startsWith('RELATION_SNAPSHOT_TOO_LARGE:')) return 'oversize';
+	const listStatus = classifyPublicTemplateSnapshotFreeze(error);
+	if (listStatus === 'oversize') return 'oversize';
+	if (listStatus === 'invalid') return 'invalid';
+	return 'failed';
 }
 
-type PublicDiscoveryDatabaseReader = QueryCtx["db"];
+type PublicDiscoveryDatabaseReader = QueryCtx['db'];
 
 /**
  * Resolve the exact template IDs in the currently published list generation.
@@ -2252,225 +3585,243 @@ type PublicDiscoveryDatabaseReader = QueryCtx["db"];
  * neither needs another published-corpus index scan.
  */
 async function readPublishedPublicTemplateIds(ctx: {
-  db: PublicDiscoveryDatabaseReader;
-}): Promise<Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>> {
-  const manifest = await ctx.db
-    .query("publicDiscoveryManifest")
-    .withIndex("by_key", (q) => q.eq("key", "public"))
-    .unique();
-  if (!manifest?.listReady || manifest.listUpdatedAt === undefined) {
-    throw new Error("PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready");
-  }
+	db: PublicDiscoveryDatabaseReader;
+}): Promise<Record<PublicTemplateSnapshotKey, Array<Id<'templates'>>>> {
+	const manifest = await ctx.db
+		.query('publicDiscoveryManifest')
+		.withIndex('by_key', (q) => q.eq('key', 'public'))
+		.unique();
+	if (!manifest?.listReady || manifest.listUpdatedAt === undefined) {
+		throw new Error('PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready');
+	}
 
-  const rows = {
-    all: await ctx.db
-      .query("publicTemplateSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "all"))
-      .unique(),
-    excludeCwc: await ctx.db
-      .query("publicTemplateSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "excludeCwc"))
-      .unique(),
-  };
-  const idsByKey = {} as Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>;
-  for (const key of ["all", "excludeCwc"] as const) {
-    const row = rows[key];
-    if (
-      !row ||
-      row.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION ||
-      row.revision !== manifest.listRevision ||
-      row.updatedAt !== manifest.listUpdatedAt
-    ) {
-      throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:published-generation:${key}`);
-    }
-    idsByKey[key] = projectStoredPublicTemplates(row.templates, {
-      key,
-      revision: row.revision,
-    }).map((template) => {
-      const id = ctx.db.normalizeId("templates", String(template.id));
-      if (!id) {
-        throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:template-id:${key}`);
-      }
-      return id;
-    });
-  }
+	const rows = {
+		all: await ctx.db
+			.query('publicTemplateSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', 'all'))
+			.unique(),
+		excludeCwc: await ctx.db
+			.query('publicTemplateSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', 'excludeCwc'))
+			.unique()
+	};
+	const idsByKey = {} as Record<PublicTemplateSnapshotKey, Array<Id<'templates'>>>;
+	for (const key of ['all', 'excludeCwc'] as const) {
+		const row = rows[key];
+		if (
+			!row ||
+			row.projectionVersion !== PUBLIC_TEMPLATE_PROJECTION_VERSION ||
+			row.revision !== manifest.listRevision ||
+			row.updatedAt !== manifest.listUpdatedAt
+		) {
+			throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:published-generation:${key}`);
+		}
+		idsByKey[key] = projectStoredPublicTemplates(row.templates, {
+			key,
+			revision: row.revision
+		}).map((template) => {
+			const id = ctx.db.normalizeId('templates', String(template.id));
+			if (!id) {
+				throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:template-id:${key}`);
+			}
+			return id;
+		});
+	}
 
-  return idsByKey;
+	return idsByKey;
 }
 
 async function preparePublishedPublicTemplateRelationSelection(
-  ctx: MutationCtx,
+	ctx: MutationCtx
 ): Promise<PublicTemplateRelationSelection> {
-  const idsByKey = await readPublishedPublicTemplateIds(ctx);
+	const idsByKey = await readPublishedPublicTemplateIds(ctx);
 
-  const uniqueIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
-  const hydrated = await Promise.all(uniqueIds.map(async (id) => await ctx.db.get(id)));
-  const templatesById = new Map(
-    hydrated.flatMap((template) => (template ? [[template._id, template] as const] : [])),
-  );
-  const sources = {
-    all: idsByKey.all.flatMap((id) => {
-      const template = templatesById.get(id);
-      return template ? [template] : [];
-    }),
-    excludeCwc: idsByKey.excludeCwc.flatMap((id) => {
-      const template = templatesById.get(id);
-      return template ? [template] : [];
-    }),
-  };
+	const uniqueIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
+	const migration = await compactDiscoveryPlaneReady(ctx);
+	const hydrated: PublicTemplateEnrichmentSource[] = (
+		await Promise.all(
+			uniqueIds.map(async (id) => {
+				const row = await ctx.db
+					.query('publicTemplateDiscoverySources')
+					.withIndex('by_templateId', (q) => q.eq('templateId', id))
+					.unique();
+				if (!row || row.generation !== migration.runToken) return null;
+				assertCompactPublicTemplateSource(row.source);
+				return row.source;
+			})
+		)
+	).filter((value): value is CompactPublicTemplateSource => value !== null);
+	const templatesById = new Map(hydrated.map((template) => [template._id, template] as const));
+	const sources = {
+		all: idsByKey.all.flatMap((id) => {
+			const template = templatesById.get(id);
+			return template ? [template] : [];
+		}),
+		excludeCwc: idsByKey.excludeCwc.flatMap((id) => {
+			const template = templatesById.get(id);
+			return template ? [template] : [];
+		})
+	};
 
-  return { candidates: [...templatesById.values()], sources };
+	return {
+		sourceGeneration: migration.runToken,
+		candidates: [...templatesById.values()],
+		sources
+	};
 }
 
 async function prepareRelationSnapshotRebuild(
-  ctx: MutationCtx,
-  selection?: PublicTemplateRelationSelection,
-  coordinatedRebuildToken?: string,
+	ctx: MutationCtx,
+	selection?: PublicTemplateRelationSelection,
+	coordinatedRebuildToken?: string
 ): Promise<PreparedRelationSnapshotRebuild> {
-  // Reserve without advancing either manifest revision. A relation-only rebuild
-  // hydrates the exact IDs in the currently published list generation; the
-  // composite rebuild supplies its already-computed plan.
-  const publication = await preparePublicDiscoveryRelationsPublication(
-    ctx,
-    coordinatedRebuildToken,
-  );
-  const existingRows = {
-    all: await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "all"))
-      .unique(),
-    excludeCwc: await ctx.db
-      .query("templateRelationSnapshots")
-      .withIndex("by_key", (q) => q.eq("key", "excludeCwc"))
-      .unique(),
-  };
-  const resolvedSelection =
-    selection ?? (await preparePublishedPublicTemplateRelationSelection(ctx));
+	// Reserve without advancing either manifest revision. A relation-only rebuild
+	// hydrates the exact IDs in the currently published list generation; the
+	// composite rebuild supplies its already-computed plan.
+	const publication = await preparePublicDiscoveryRelationsPublication(
+		ctx,
+		coordinatedRebuildToken
+	);
+	const existingRows = {
+		all: await ctx.db
+			.query('templateRelationSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', 'all'))
+			.unique(),
+		excludeCwc: await ctx.db
+			.query('templateRelationSnapshots')
+			.withIndex('by_key', (q) => q.eq('key', 'excludeCwc'))
+			.unique()
+	};
+	const resolvedSelection =
+		selection ?? (await preparePublishedPublicTemplateRelationSelection(ctx));
+	const [allInput, excludeCwcInput] = await Promise.all([
+		prepareRelationVariantInput(
+			ctx,
+			resolvedSelection.sources.all,
+			resolvedSelection.sourceGeneration
+		),
+		prepareRelationVariantInput(
+			ctx,
+			resolvedSelection.sources.excludeCwc,
+			resolvedSelection.sourceGeneration
+		)
+	]);
 
-  // Building both variants performs every size check before the first write.
-  const variants = {
-    all: buildRelationSnapshotVariant("all", resolvedSelection.sources.all, publication),
-    excludeCwc: buildRelationSnapshotVariant(
-      "excludeCwc",
-      resolvedSelection.sources.excludeCwc,
-      publication,
-    ),
-  };
+	// Building both variants performs every size check before the first write.
+	const variants = {
+		all: buildRelationSnapshotVariant('all', allInput, publication),
+		excludeCwc: buildRelationSnapshotVariant('excludeCwc', excludeCwcInput, publication)
+	};
 
-  return { publication, selection: resolvedSelection, variants, existingRows };
+	return { publication, selection: resolvedSelection, variants, existingRows };
 }
 
 async function publishRelationSnapshotRebuild(
-  ctx: MutationCtx,
-  prepared: PreparedRelationSnapshotRebuild,
+	ctx: MutationCtx,
+	prepared: PreparedRelationSnapshotRebuild
 ): Promise<RelationSnapshotRebuildResult> {
-  const { publication, selection, variants, existingRows } = prepared;
-  const previousManifest = await getPublicDiscoveryManifestRow(ctx);
+	const { publication, selection, variants, existingRows } = prepared;
+	const previousManifest = await getPublicDiscoveryManifestRow(ctx);
 
-  for (const key of ["all", "excludeCwc"] as const) {
-    const existing = existingRows[key];
-    if (existing) {
-      await ctx.db.patch(existing._id, variants[key].snapshot);
-    } else {
-      await ctx.db.insert("templateRelationSnapshots", variants[key].snapshot);
-    }
-  }
+	for (const key of ['all', 'excludeCwc'] as const) {
+		const existing = existingRows[key];
+		if (existing) {
+			await ctx.db.patch(existing._id, variants[key].snapshot);
+		} else {
+			await ctx.db.insert('templateRelationSnapshots', variants[key].snapshot);
+		}
+	}
 
-  await commitPublicDiscoveryRelationsPublication(ctx, publication);
+	await commitPublicDiscoveryRelationsPublication(ctx, publication);
 
-  const degradationCodes = (["all", "excludeCwc"] as const).flatMap((key) => {
-    const code = variants[key].degradationCode;
-    return code ? [code] : [];
-  });
-  if (degradationCodes.length > 0) {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!manifest) {
-      throw new Error("PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_RELATIONS_PUBLICATION");
-    }
-    const failure = new Error(degradationCodes.join("|"));
-    await recordPublicDiscoverySnapshotFailure(
-      ctx,
-      manifest,
-      "relations",
-      failure,
-      publication.updatedAt,
-      {
-        code: previousManifest?.relationsFailureCode,
-        failedAt: previousManifest?.relationsFailureAt,
-      },
-    );
-    console.error(
-      `[public-discovery] relation revision ${publication.revision} shed bounded payload data; retained graph remains available`,
-    );
-  }
+	const degradationCodes = (['all', 'excludeCwc'] as const).flatMap((key) => {
+		const code = variants[key].degradationCode;
+		return code ? [code] : [];
+	});
+	if (degradationCodes.length > 0) {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest) {
+			throw new Error('PUBLIC_DISCOVERY_MANIFEST_MISSING_AFTER_RELATIONS_PUBLICATION');
+		}
+		const failure = new Error(degradationCodes.join('|'));
+		await recordPublicDiscoverySnapshotFailure(
+			ctx,
+			manifest,
+			'relations',
+			failure,
+			publication.updatedAt,
+			{
+				code: previousManifest?.relationsFailureCode,
+				failedAt: previousManifest?.relationsFailureAt
+			}
+		);
+		console.error(
+			`[public-discovery] relation revision ${publication.revision} shed bounded payload data; retained graph remains available`
+		);
+	}
 
-  return {
-    sourceScanCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
-    scannedCount: selection.candidates.length,
-    all: variants.all.result,
-    excludeCwc: variants.excludeCwc.result,
-  };
+	return {
+		sourceScanCap: PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP,
+		scannedCount: selection.candidates.length,
+		all: variants.all.result,
+		excludeCwc: variants.excludeCwc.result
+	};
 }
 
 async function rebuildRelationSnapshotImpl(
-  ctx: MutationCtx,
-  selection?: PublicTemplateRelationSelection,
+	ctx: MutationCtx,
+	selection?: PublicTemplateRelationSelection
 ): Promise<RelationSnapshotRebuildResult> {
-  return await publishRelationSnapshotRebuild(
-    ctx,
-    await prepareRelationSnapshotRebuild(ctx, selection),
-  );
+	return await publishRelationSnapshotRebuild(
+		ctx,
+		await prepareRelationSnapshotRebuild(ctx, selection)
+	);
 }
 
 /** Internal/operator entry point for relation-only refreshes and the cron. */
 export const rebuildRelationSnapshot = internalMutation({
-  args: {},
-  handler: async (ctx) => await rebuildRelationSnapshotImpl(ctx),
+	args: {},
+	handler: async (ctx) => await rebuildRelationSnapshotImpl(ctx)
 });
 
 /** Mutation attempt supervised by the cron action below. */
 export const rebuildRelationSnapshotForCronAttempt = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    let prepared: PreparedRelationSnapshotRebuild;
-    try {
-      prepared = await prepareRelationSnapshotRebuild(ctx);
-    } catch (error) {
-      const normalized = normalizeRelationSnapshotError(error);
-      if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
-      const status = classifyRelationSnapshotFreeze(normalized);
-      await freezePublicDiscoverySnapshotFailure(
-        ctx,
-        "relations",
-        normalized,
-        Date.now(),
-      );
-      return { status };
-    }
-    // Keep database-write errors throwable so this transaction rolls every
-    // partial upsert back; the outer action records them in a fresh mutation.
-    return {
-      status: "rebuilt" as const,
-      rebuilt: await publishRelationSnapshotRebuild(ctx, prepared),
-    };
-  },
+	args: {},
+	handler: async (ctx) => {
+		let prepared: PreparedRelationSnapshotRebuild;
+		try {
+			prepared = await prepareRelationSnapshotRebuild(ctx);
+		} catch (error) {
+			const normalized = normalizeRelationSnapshotError(error);
+			if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
+			const status = classifyRelationSnapshotFreeze(normalized);
+			await freezePublicDiscoverySnapshotFailure(ctx, 'relations', normalized, Date.now());
+			return { status };
+		}
+		// Keep database-write errors throwable so this transaction rolls every
+		// partial upsert back; the outer action records them in a fresh mutation.
+		return {
+			status: 'rebuilt' as const,
+			rebuilt: await publishRelationSnapshotRebuild(ctx, prepared)
+		};
+	}
 });
 
 /** Daily supervisor persists even unknown rebuild failures in a new mutation. */
 export const rebuildRelationSnapshotForCron = internalAction({
-  args: {},
-  handler: async (ctx) =>
-    await supervisePublicDiscoveryCronRebuild(
-      ctx,
-      "relations",
-      rebuildRelationSnapshotForCronAttemptRef,
-    ),
+	args: {},
+	handler: async (ctx) =>
+		await supervisePublicDiscoveryCronRebuild(
+			ctx,
+			'relations',
+			rebuildRelationSnapshotForCronAttemptRef
+		)
 });
 
 /** Internal entry point used by tests/operators and relation-affecting writers. */
 export const requestPublicTemplateRelationSnapshotRefresh = internalMutation({
-  args: {},
-  handler: async (ctx) => markPublicDiscoveryRelationsDirty(ctx),
+	args: {},
+	handler: async (ctx) => markPublicDiscoveryRelationsDirty(ctx)
 });
 
 /**
@@ -2483,107 +3834,99 @@ export const requestPublicTemplateRelationSnapshotRefresh = internalMutation({
  * runtime failures preserve the last-good relation row and leave it dirty.
  */
 export const flushScheduledPublicTemplateRelationsRefresh = internalMutation({
-  args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
-  handler: async (ctx, { scheduledAt, bypassMinInterval }) => {
-    const manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!manifest || manifest.relationsRefreshScheduledAt !== scheduledAt) {
-      return { status: "superseded" as const };
-    }
+	args: { scheduledAt: v.number(), bypassMinInterval: v.optional(v.boolean()) },
+	handler: async (ctx, { scheduledAt }) => {
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest || manifest.relationsRefreshScheduledAt !== scheduledAt) {
+			return { status: 'superseded' as const };
+		}
 
-    if (manifest.relationsDirtyAt === undefined) {
-      await ctx.db.patch(manifest._id, { relationsRefreshScheduledAt: undefined });
-      return { status: "clean" as const };
-    }
+		if (manifest.relationsDirtyAt === undefined) {
+			await ctx.db.patch(manifest._id, { relationsRefreshScheduledAt: undefined });
+			return { status: 'clean' as const };
+		}
 
-    const now = Date.now();
-    if (manifest.listDirtyAt !== undefined) {
-      if (manifest.listRefreshScheduledAt === undefined) {
-        const blocked = new Error(
-          `PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${manifest.listFailureCode ?? "UNSCHEDULED_DIRTY"}`.slice(
-            0,
-            500,
-          ),
-        );
-        await freezePublicDiscoverySnapshotFailure(ctx, "relations", blocked, now);
-        return { status: "blocked-by-list" as const };
-      }
-      const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
-        ctx,
-        manifest,
-        now,
-        manifest.listRefreshScheduledAt + PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS,
-      );
-      return {
-        status: "deferred-for-list" as const,
-        scheduledAt: nextScheduledAt,
-      };
-    }
-    const nextAllowedAt =
-      (manifest.relationsUpdatedAt ?? 0) +
-      PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
-    if (!bypassMinInterval && now < nextAllowedAt) {
-      const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
-        ctx,
-        manifest,
-        now,
-        nextAllowedAt,
-      );
-      return { status: "deferred" as const, scheduledAt: nextScheduledAt };
-    }
+		const now = Date.now();
+		if (manifest.listDirtyAt !== undefined) {
+			if (manifest.listRefreshScheduledAt === undefined) {
+				const blocked = new Error(
+					`PUBLIC_DISCOVERY_RELATIONS_BLOCKED_BY_LIST:${manifest.listFailureCode ?? 'UNSCHEDULED_DIRTY'}`.slice(
+						0,
+						500
+					)
+				);
+				await freezePublicDiscoverySnapshotFailure(ctx, 'relations', blocked, now);
+				return { status: 'blocked-by-list' as const };
+			}
+			const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
+				ctx,
+				manifest,
+				now,
+				manifest.listRefreshScheduledAt + PUBLIC_DISCOVERY_RELATIONS_DEBOUNCE_MS
+			);
+			return {
+				status: 'deferred-for-list' as const,
+				scheduledAt: nextScheduledAt
+			};
+		}
+		const nextAllowedAt =
+			(manifest.relationsUpdatedAt ?? 0) + PUBLIC_DISCOVERY_RELATIONS_MIN_REBUILD_INTERVAL_MS;
+		if (!publicDiscoveryRelationsRefreshBypassesMinInterval(manifest) && now < nextAllowedAt) {
+			const nextScheduledAt = await reschedulePublicDiscoveryRelationsRefresh(
+				ctx,
+				manifest,
+				now,
+				nextAllowedAt
+			);
+			return { status: 'deferred' as const, scheduledAt: nextScheduledAt };
+		}
 
-    let prepared: PreparedRelationSnapshotRebuild;
-    try {
-      prepared = await prepareRelationSnapshotRebuild(ctx);
-    } catch (error) {
-      const normalized = normalizeRelationSnapshotError(error);
-      if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
-      const status = classifyRelationSnapshotFreeze(normalized);
-      await freezePublicDiscoverySnapshotFailure(ctx, "relations", normalized, now);
-      return { status };
-    }
+		let prepared: PreparedRelationSnapshotRebuild;
+		try {
+			prepared = await prepareRelationSnapshotRebuild(ctx);
+		} catch (error) {
+			const normalized = normalizeRelationSnapshotError(error);
+			if (isPublicDiscoveryCoordinationError(normalized)) throw normalized;
+			const status = classifyRelationSnapshotFreeze(normalized);
+			await freezePublicDiscoverySnapshotFailure(ctx, 'relations', normalized, now);
+			return { status };
+		}
 
-    // Preparation is side-effect-free, so every compute/validation failure is
-    // durably classified above. Publication errors still throw to preserve
-    // Convex's all-or-nothing rollback for the two snapshot rows.
-    const rebuilt = await publishRelationSnapshotRebuild(ctx, prepared);
-    const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
-    if (publishedManifest?.relationsRefreshScheduledAt === scheduledAt) {
-      await ctx.db.patch(publishedManifest._id, {
-        relationsRefreshScheduledAt: undefined,
-      });
-    }
-    return { status: "rebuilt" as const, rebuilt };
-  },
+		// Preparation is side-effect-free, so every compute/validation failure is
+		// durably classified above. Publication errors still throw to preserve
+		// Convex's all-or-nothing rollback for the two snapshot rows.
+		const rebuilt = await publishRelationSnapshotRebuild(ctx, prepared);
+		const publishedManifest = await getPublicDiscoveryManifestRow(ctx);
+		if (publishedManifest?.relationsRefreshScheduledAt === scheduledAt) {
+			await ctx.db.patch(publishedManifest._id, {
+				relationsRefreshScheduledAt: undefined
+			});
+		}
+		return { status: 'rebuilt' as const, rebuilt };
+	}
 });
 
 async function rebuildHomepageSnapshotsImpl(
-  ctx: MutationCtx,
-  coordinatedRebuildToken?: string,
+	ctx: MutationCtx,
+	coordinatedRebuildToken?: string
 ): Promise<HomepageSnapshotRebuildResult> {
-  const listPublication = await preparePublicDiscoveryListPublication(
-    ctx,
-    coordinatedRebuildToken,
-  );
-  const selection = await preparePublicTemplateSnapshotPlan(ctx, listPublication);
-  const preparedRelations = await prepareRelationSnapshotRebuild(
-    ctx,
-    selection,
-    coordinatedRebuildToken,
-  );
+	const listPublication = await preparePublicDiscoveryListPublication(ctx, coordinatedRebuildToken);
+	const selection = await preparePublicTemplateSnapshotPlan(ctx, listPublication);
+	const preparedRelations = await prepareRelationSnapshotRebuild(
+		ctx,
+		selection,
+		coordinatedRebuildToken
+	);
 
-  // Finish both pure preparations before the first row write. The relation
-  // graph therefore consumes the exact cards the list publishes, and a guard
-  // failure cannot expose a half-prepared generation even transiently.
-  const list = await publishPublicTemplateSnapshotPlan(
-    ctx,
-    listPublication,
-    selection,
-  );
-  const relations = await publishRelationSnapshotRebuild(ctx, preparedRelations);
-  if (coordinatedRebuildToken !== undefined) {
-    await completePublicDiscoveryCoordinatedRebuild(ctx, coordinatedRebuildToken);
-  }
-  return { list, relations };
+	// Finish both pure preparations before the first row write. The relation
+	// graph therefore consumes the exact cards the list publishes, and a guard
+	// failure cannot expose a half-prepared generation even transiently.
+	const list = await publishPublicTemplateSnapshotPlan(ctx, listPublication, selection);
+	const relations = await publishRelationSnapshotRebuild(ctx, preparedRelations);
+	if (coordinatedRebuildToken !== undefined) {
+		await completePublicDiscoveryCoordinatedRebuild(ctx, coordinatedRebuildToken);
+	}
+	return { list, relations };
 }
 
 /**
@@ -2592,18 +3935,18 @@ async function rebuildHomepageSnapshotsImpl(
  * observe a freshly rebuilt list paired with relations from a failed rebuild.
  */
 export const rebuildHomepageSnapshots = internalMutation({
-  args: { coordinatedRebuildToken: v.optional(v.string()) },
-  handler: async (ctx, args) =>
-    await rebuildHomepageSnapshotsImpl(ctx, args.coordinatedRebuildToken),
+	args: { coordinatedRebuildToken: v.optional(v.string()) },
+	handler: async (ctx, args) =>
+		await rebuildHomepageSnapshotsImpl(ctx, args.coordinatedRebuildToken)
 });
 
 /** One atomic list+relations attempt used by the consolidated daily cron. */
 export const rebuildHomepageSnapshotsForCronAttempt = internalMutation({
-  args: {},
-  handler: async (ctx) => ({
-    status: "rebuilt" as const,
-    rebuilt: await rebuildHomepageSnapshotsImpl(ctx),
-  }),
+	args: {},
+	handler: async (ctx) => ({
+		status: 'rebuilt' as const,
+		rebuilt: await rebuildHomepageSnapshotsImpl(ctx)
+	})
 });
 
 /**
@@ -2612,319 +3955,421 @@ export const rebuildHomepageSnapshotsForCronAttempt = internalMutation({
  * publish stage fails.
  */
 export const rebuildHomepageSnapshotsForCron = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
-    try {
-      return await ctx.runMutation(rebuildHomepageSnapshotsForCronAttemptRef, {});
-    } catch (error) {
-      const failedAt = Date.now();
-      const message = error instanceof Error ? error.message : String(error);
-      await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
-        failures: (["list", "relations"] as const).map((family) => ({
-          family,
-          code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_COMPOSITE_CRON_REBUILD_FAILED:${message}`.slice(
-            0,
-            500,
-          ),
-        })),
-        failedAt,
-        attempt: attemptState,
-      });
-      throw error;
-    }
-  },
+	args: {},
+	handler: async (ctx) => {
+		const attemptState = await ctx.runQuery(publicDiscoveryCronAttemptStateRef, {});
+		const temporalDue =
+			attemptState.nextTemporalRebuildAt !== null &&
+			attemptState.nextTemporalRebuildAt <= Date.now();
+		const rebuildRequired =
+			attemptState.temporalScheduleVersion !== 1 ||
+			!attemptState.listReady ||
+			!attemptState.relationsReady ||
+			attemptState.listDirtyAt !== null ||
+			attemptState.relationsDirtyAt !== null ||
+			attemptState.listFailureCode !== null ||
+			attemptState.relationsFailureCode !== null ||
+			temporalDue;
+		if (!rebuildRequired) {
+			return {
+				status: 'clean' as const,
+				nextTemporalRebuildAt: attemptState.nextTemporalRebuildAt
+			};
+		}
+		try {
+			return await ctx.runMutation(rebuildHomepageSnapshotsForCronAttemptRef, {});
+		} catch (error) {
+			const failedAt = Date.now();
+			const message = error instanceof Error ? error.message : String(error);
+			await ctx.runMutation(recordPublicDiscoverySnapshotRuntimeFailureRef, {
+				failures: (['list', 'relations'] as const).map((family) => ({
+					family,
+					code: `PUBLIC_DISCOVERY_${family.toUpperCase()}_COMPOSITE_CRON_REBUILD_FAILED:${message}`.slice(
+						0,
+						500
+					)
+				})),
+				failedAt,
+				attempt: attemptState
+			});
+			throw error;
+		}
+	}
 });
 
 /**
- * Public: Get one published template for an explicit detail/send route.
+ * SSR-only: Get one published template for an explicit detail/send route.
  *
  * This indexed query is deliberately separate from the materialized discovery
  * snapshots. Detail/send pages need the target roster to render the power
  * landscape and construct a mailto action; homepage/list snapshots must never
- * contain it. This Convex query is directly public, so every returned field is
- * treated as public; SvelteKit's private + no-store response policy only keeps
- * the purpose-bound roster out of browser and Cloudflare caches. Provider and
- * CWC configuration are therefore redacted here, not merely at the HTTP edge.
+ * contain it. The server credential prevents browser/direct-origin access, and
+ * every stored `v.any()` value is still treated as hostile: this boundary
+ * validates and reconstructs the exhaustive public contract before return.
+ * Provider and CWC configuration are redacted in the projection writer rather
+ * than merely at the HTTP edge.
  */
 export const getBySlugPublic = query({
-  args: { slug: v.string() },
-  handler: async (ctx, args) => {
-    const template = await ctx.db
-      .query("templates")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
-      .first();
+	args: { _secret: v.optional(v.string()), slug: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		if (
+			args.slug.length === 0 ||
+			new TextEncoder().encode(args.slug).byteLength > MAX_TEMPLATE_SLUG_BYTES
+		) {
+			throw new ConvexError({
+				code: 'TEMPLATE_SLUG_VALUE_INVALID',
+				maxBytes: MAX_TEMPLATE_SLUG_BYTES
+			});
+		}
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		await compactDiscoveryPlaneReady(ctx);
+		const projection = await ctx.db
+			.query('publicTemplateDetailProjections')
+			.withIndex('by_slug', (q) => q.eq('slug', args.slug))
+			.unique();
 
-    // Also gate on `status === 'published'`. The CWC delivery path at
-    // `convex/submissions.ts:105 getTemplateDeliveryError` already
-    // rejects non-published templates as `CWC_TEMPLATE_NOT_PUBLISHED`.
-    // But this PUBLIC query (the modal's loader at
-    // `/s/[slug]/+layout.server.ts`) must also enforce the status gate:
-    // returning any `isPublic` template regardless of status would let
-    // an unpublished-but-public CWC template open the modal, and for
-    // guests `TemplateModal.svelte:333` routes to `handleUnifiedEmailFlow`
-    // (mailto relay), bypassing the official publish gate for unofficial
-    // sends. Authors who need to preview unpublished templates should
-    // use an authenticated preview route, not the public `/s/[slug]`
-    // page.
-    if (!template || !template.isPublic || template.status !== 'published') return null;
+		// Only published+public writers create this row. Missing is an honest
+		// private/draft/not-found result after the versioned cutover gate above.
+		if (!projection) return null;
+		if (projection.projectionVersion !== PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION) {
+			throw new Error(
+				`PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION_MISMATCH:${projection.projectionVersion}`
+			);
+		}
+		const detail = readPublicTemplateDetailProjection(projection.detail);
+		if (
+			String(detail.id) !== String(projection.templateId) ||
+			detail.slug !== projection.slug ||
+			detail.slug !== args.slug ||
+			projection.detailBytes !== publicTemplateDetailProjectionBytes(detail)
+		) {
+			throw new Error('PUBLIC_TEMPLATE_DETAIL_PROJECTION_INVALID:row-consistency');
+		}
 
-    // Fetch author info. Post-PII-elimination (2026-04-10) the users table
-    // stores plaintext `name`; the legacy `encryptedName` blob is deprecated
-    // and not produced for new users.
-    let author: { name: string | null; avatar: string | null } | null = null;
-    if (template.userId) {
-      const user = await ctx.db.get(template.userId);
-      if (user) {
-        author = { name: user.name ?? null, avatar: user.avatar ?? null };
-      }
-    }
-    const publicRecipientConfig = projectPublicDetailRecipientConfig(template.recipientConfig);
+		// Fetch author info. Post-PII-elimination (2026-04-10) the users table
+		// stores plaintext `name`; the legacy `encryptedName` blob is deprecated
+		// and not produced for new users.
+		let author: { name: string | null; avatar: string | null } | null = null;
+		if (projection.userId) {
+			const user = await ctx.db.get(projection.userId);
+			if (user) {
+				author = { name: user.name ?? null, avatar: user.avatar ?? null };
+			}
+		}
+		return {
+			...detail,
+			author
+		};
+	}
+});
 
-    return {
-      id: template._id,
-      slug: template.slug,
-      title: template.title,
-      description: template.description,
-      domain: resolveDomain(template),
-      domainHue: template.domainHue ?? undefined,
-      type: template.type,
-      deliveryMethod: template.deliveryMethod,
-      subject: template.title,
-      message_body: template.messageBody,
-      sources: template.sources ?? [],
-      research_log: template.researchLog ?? [],
-      preview: template.preview,
-      is_public: template.isPublic,
-      verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
-      unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-      send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-      delivery_config: {},
-      cwc_config: null,
-      recipient_config: publicRecipientConfig,
-      recipient_count: countRecipientsConvex(template.recipientConfig),
-      recipientEmails: publicRecipientConfig.emails,
-      topics: template.topics ?? [],
-      author,
-      createdAt: new Date(template._creationTime).toISOString(),
-    };
-  },
+export const PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_SIZE = 64;
+export const PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_BATCH_SIZE = 4;
+const PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_MAX_BYTES = 128 * 1024;
+
+if (
+	PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_BATCH_SIZE !== PUBLIC_RECIPIENT_PAGE_METRICS_BATCH_MAX ||
+	PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_BATCH_SIZE !== PUBLIC_TEMPLATE_PAGE_DEBATE_BATCH_MAX
+) {
+	throw new Error('PUBLIC_TEMPLATE_PAGE_INVENTORY_BATCH_CONTRACT_MISMATCH');
+}
+
+/**
+ * Producer-only, cursor-paged inventory of every eligible public detail route.
+ *
+ * The authenticated Pages control plane supplies the exact list generation it
+ * is about to advertise. This query range-reads only the active compact-source
+ * generation and returns only per-template dirty coordinates. Unchanged pages
+ * therefore cost a few hundred bytes of Convex I/O—not their detail copy or up
+ * to 25 argument bodies. A separate bounded query materializes only coordinates
+ * absent from the previous immutable R2 inventory.
+ */
+export const publicTemplatePageArtifactInventoryPage = query({
+	args: {
+		_secret: v.optional(v.string()),
+		cursor: v.optional(v.union(v.string(), v.null())),
+		expectedListRevision: v.number()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		if (
+			!Number.isSafeInteger(args.expectedListRevision) ||
+			args.expectedListRevision < 1 ||
+			(args.cursor !== undefined && args.cursor !== null && args.cursor.length > 2_048)
+		) {
+			throw new Error('PUBLIC_TEMPLATE_PAGE_INVENTORY_CONTROL_INVALID');
+		}
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (
+			!manifest?.listReady ||
+			manifest.listRevision !== args.expectedListRevision ||
+			manifest.listUpdatedAt === undefined
+		) {
+			throw new Error('PUBLIC_TEMPLATE_PAGE_INVENTORY_GENERATION_MISMATCH');
+		}
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const page = await ctx.db
+			.query('publicTemplatePageArtifactCoordinates')
+			.withIndex('by_generation_slug', (q) => q.eq('generation', migration.runToken))
+			.order('asc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_SIZE,
+				maximumRowsRead: PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_SIZE + 1,
+				maximumBytesRead: PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('PUBLIC_TEMPLATE_PAGE_INVENTORY_PAGE_SPLIT_REQUIRED');
+		}
+
+		const entries = page.page.map((coordinate) => {
+			if (
+				coordinate.projectionVersion !== PUBLIC_TEMPLATE_PAGE_ARTIFACT_COORDINATE_VERSION ||
+				!Number.isSafeInteger(coordinate.artifactRevision) ||
+				coordinate.artifactRevision < 1
+			) {
+				throw new Error('PUBLIC_TEMPLATE_PAGE_INVENTORY_COORDINATE_INVALID');
+			}
+			return {
+				templateId: coordinate.templateId,
+				slug: coordinate.slug,
+				artifactRevision: coordinate.artifactRevision
+			};
+		});
+		return {
+			entries,
+			continueCursor: page.isDone ? null : page.continueCursor,
+			isDone: page.isDone,
+			revision: manifest.listRevision,
+			updatedAt: manifest.listUpdatedAt
+		};
+	}
+});
+
+/** Materialize only the changed coordinates selected by the producer. */
+export const publicTemplatePageArtifactsByCoordinates = query({
+	args: {
+		_secret: v.optional(v.string()),
+		expectedListRevision: v.number(),
+		coordinates: v.array(
+			v.object({
+				templateId: v.id('templates'),
+				slug: v.string(),
+				artifactRevision: v.number()
+			})
+		)
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		if (
+			args.coordinates.length < 1 ||
+			args.coordinates.length > PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_BATCH_SIZE ||
+			!Number.isSafeInteger(args.expectedListRevision) ||
+			new Set(args.coordinates.map(({ templateId }) => String(templateId))).size !==
+				args.coordinates.length
+		) {
+			throw new Error('PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_CONTROL_INVALID');
+		}
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!manifest?.listReady || manifest.listRevision !== args.expectedListRevision) {
+			throw new Error('PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_GENERATION_MISMATCH');
+		}
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const coordinates = await Promise.all(
+			args.coordinates.map(({ templateId }) =>
+				ctx.db
+					.query('publicTemplatePageArtifactCoordinates')
+					.withIndex('by_templateId', (q) => q.eq('templateId', templateId))
+					.unique()
+			)
+		);
+		const projections = await Promise.all(
+			args.coordinates.map(({ templateId }) =>
+				ctx.db
+					.query('publicTemplateDetailProjections')
+					.withIndex('by_templateId', (q) => q.eq('templateId', templateId))
+					.unique()
+			)
+		);
+		for (const [index, requested] of args.coordinates.entries()) {
+			const coordinate = coordinates[index];
+			if (
+				!coordinate ||
+				coordinate.generation !== migration.runToken ||
+				coordinate.projectionVersion !== PUBLIC_TEMPLATE_PAGE_ARTIFACT_COORDINATE_VERSION ||
+				coordinate.slug !== requested.slug ||
+				coordinate.artifactRevision !== requested.artifactRevision
+			) {
+				throw new Error('PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_COORDINATE_MISMATCH');
+			}
+		}
+		const templateIds = args.coordinates.map(({ templateId }) => templateId);
+		const [metrics, debates] = await Promise.all([
+			readPublicRecipientPageMetricsBatch(ctx, templateIds),
+			readPublicTemplatePageDebatesBatch(ctx, templateIds)
+		]);
+		return await Promise.all(
+			args.coordinates.map(async (requested, index) => {
+				const projection = projections[index];
+				if (
+					!projection ||
+					projection.projectionVersion !== PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION ||
+					String(projection.templateId) !== String(requested.templateId)
+				) {
+					throw new Error('PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_DETAIL_MISSING');
+				}
+				const detail = readPublicTemplateDetailProjection(projection.detail);
+				if (
+					String(detail.id) !== String(requested.templateId) ||
+					detail.slug !== projection.slug ||
+					detail.slug !== requested.slug ||
+					projection.detailBytes !== publicTemplateDetailProjectionBytes(detail)
+				) {
+					throw new Error('PUBLIC_TEMPLATE_PAGE_MATERIALIZATION_DETAIL_INVALID');
+				}
+				let author: { name: string | null; avatar: string | null } | null = null;
+				if (projection.userId) {
+					const user = await ctx.db.get(projection.userId);
+					if (user) author = { name: user.name ?? null, avatar: user.avatar ?? null };
+				}
+				return {
+					slug: detail.slug,
+					artifactRevision: requested.artifactRevision,
+					detail: { ...detail, author },
+					aggregate: {
+						templateId: String(requested.templateId),
+						messageMetrics: metrics[index]!.messageMetrics,
+						debate: debates[index],
+						positionMetrics: metrics[index]!.positionMetrics
+					}
+				};
+			})
+		);
+	}
 });
 
 /**
  * Extract recipient emails from recipient_config JSON.
  */
 function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
-  if (!recipientConfig || typeof recipientConfig !== "object") return [];
-  const config = recipientConfig as Record<string, unknown>;
-  const emails: string[] = [];
+	if (!recipientConfig || typeof recipientConfig !== 'object') return [];
+	const config = recipientConfig as Record<string, unknown>;
+	const emails: string[] = [];
 
-  // Handle various recipient config shapes
-  if (Array.isArray(config.recipients)) {
-    for (const r of config.recipients) {
-      if (typeof r === "string") emails.push(r);
-      else if (r && typeof r === "object") {
-        const email = (r as { email?: unknown }).email;
-        if (typeof email === "string") emails.push(email);
-      }
-    }
-  }
-  if (Array.isArray(config.decisionMakers)) {
-    for (const decisionMaker of config.decisionMakers) {
-      if (decisionMaker && typeof decisionMaker === "object") {
-        const email = (decisionMaker as { email?: unknown }).email;
-        if (typeof email === "string") emails.push(email);
-      }
-    }
-  }
-  if (typeof config.email === "string") emails.push(config.email);
-  if (Array.isArray(config.emails)) {
-    for (const e of config.emails) {
-      if (typeof e === "string") emails.push(e);
-    }
-  }
+	// Handle various recipient config shapes
+	if (Array.isArray(config.recipients)) {
+		for (const r of config.recipients) {
+			if (typeof r === 'string') emails.push(r);
+			else if (r && typeof r === 'object') {
+				const email = (r as { email?: unknown }).email;
+				if (typeof email === 'string') emails.push(email);
+			}
+		}
+	}
+	if (Array.isArray(config.decisionMakers)) {
+		for (const decisionMaker of config.decisionMakers) {
+			if (decisionMaker && typeof decisionMaker === 'object') {
+				const email = (decisionMaker as { email?: unknown }).email;
+				if (typeof email === 'string') emails.push(email);
+			}
+		}
+	}
+	if (typeof config.email === 'string') emails.push(config.email);
+	if (Array.isArray(config.emails)) {
+		for (const e of config.emails) {
+			if (typeof e === 'string') emails.push(e);
+		}
+	}
 
-  // Authoring stores commonly carry the same target in both `emails` and
-  // `decisionMakers`. Keep the compatibility projection and recipient count
-  // stable instead of double-counting that denormalized representation.
-  return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
-}
-
-function projectPublicHttpUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") return undefined;
-  const candidate = value.trim();
-  if (candidate.length === 0 || candidate.length > 2_048) return undefined;
-  try {
-    const url = new URL(candidate);
-    if (
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
-      url.username.length > 0 ||
-      url.password.length > 0 ||
-      url.search.length > 0 ||
-      url.hash.length > 0
-    ) {
-      return undefined;
-    }
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Construct the exact public roster shape used by anonymous detail/send pages.
- *
- * `recipientConfig` is stored as opaque JSON for authoring compatibility, so it
- * must never cross a directly callable public Convex boundary wholesale. Legacy
- * recipient shapes are normalized into `emails`; decision-maker and location
- * objects retain only fields used by the public power-landscape/mailto UI.
- */
-function projectPublicDetailRecipientConfig(
-  recipientConfig: unknown,
-): Record<string, unknown> & { emails: string[] } {
-  const publicEmails = extractRecipientEmailsConvex(recipientConfig).slice(0, 50);
-  const allowedEmails = new Set(publicEmails);
-  const projected: Record<string, unknown> & { emails: string[] } = {
-    emails: publicEmails,
-  };
-  if (!recipientConfig || typeof recipientConfig !== "object" || Array.isArray(recipientConfig)) {
-    return projected;
-  }
-
-  const config = recipientConfig as Record<string, unknown>;
-  for (const field of ["reach", "target_type", "personalPrompt"] as const) {
-    if (typeof config[field] === "string") projected[field] = config[field];
-  }
-  for (const field of ["cwcRouting", "includesCongress"] as const) {
-    if (typeof config[field] === "boolean") projected[field] = config[field];
-  }
-  if (Array.isArray(config.chambers)) {
-    projected.chambers = config.chambers
-      .filter((value): value is string => typeof value === "string")
-      .slice(0, 4);
-  }
-
-  if (config.location && typeof config.location === "object" && !Array.isArray(config.location)) {
-    const location = config.location as Record<string, unknown>;
-    const publicLocation: Record<string, string> = {};
-    for (const field of ["city", "jurisdiction", "state", "country"] as const) {
-      if (typeof location[field] === "string") publicLocation[field] = location[field];
-    }
-    if (Object.keys(publicLocation).length > 0) projected.location = publicLocation;
-  }
-
-  if (Array.isArray(config.decisionMakers)) {
-    const decisionMakers = config.decisionMakers
-      .slice(0, 50)
-      .map((value) => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-        const decisionMaker = value as Record<string, unknown>;
-        const publicDecisionMaker: Record<string, unknown> = {};
-        for (const field of [
-          "name",
-          "title",
-          "role",
-          "shortName",
-          "organization",
-          "roleCategory",
-          "personalPrompt",
-          "accountabilityOpener",
-        ] as const) {
-          if (typeof decisionMaker[field] === "string") {
-            publicDecisionMaker[field] = decisionMaker[field];
-          }
-        }
-        if (typeof decisionMaker.email === "string") {
-          const email = decisionMaker.email.trim();
-          if (allowedEmails.has(email)) publicDecisionMaker.email = email;
-        }
-        if (
-          typeof publicDecisionMaker.email === "string" &&
-          decisionMaker.emailGrounded === true
-        ) {
-          const emailSource = projectPublicHttpUrl(decisionMaker.emailSource);
-          if (emailSource) {
-            publicDecisionMaker.emailGrounded = true;
-            publicDecisionMaker.emailSource = emailSource;
-          }
-        }
-        if (
-          typeof decisionMaker.relevanceRank === "number" &&
-          Number.isFinite(decisionMaker.relevanceRank)
-        ) {
-          publicDecisionMaker.relevanceRank = decisionMaker.relevanceRank;
-        }
-        return Object.keys(publicDecisionMaker).length > 0 ? publicDecisionMaker : null;
-      })
-      .filter((value): value is Record<string, unknown> => value !== null);
-    if (decisionMakers.length > 0) projected.decisionMakers = decisionMakers;
-  }
-
-  return projected;
+	// Authoring stores commonly carry the same target in both `emails` and
+	// `decisionMakers`. Keep the compatibility projection and recipient count
+	// stable instead of double-counting that denormalized representation.
+	return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
 }
 
 /** Return only the non-identifying cardinality needed by anonymous UI. */
 function countRecipientsConvex(recipientConfig: unknown): number {
-  if (!recipientConfig || typeof recipientConfig !== "object") return 0;
-  const config = recipientConfig as Record<string, unknown>;
-  const decisionMakerCount = Array.isArray(config.decisionMakers) ? config.decisionMakers.length : 0;
-  return Math.max(decisionMakerCount, extractRecipientEmailsConvex(recipientConfig).length);
+	if (!recipientConfig || typeof recipientConfig !== 'object') return 0;
+	const config = recipientConfig as Record<string, unknown>;
+	const decisionMakerCount = Array.isArray(config.decisionMakers)
+		? config.decisionMakers.length
+		: 0;
+	return Math.max(decisionMakerCount, extractRecipientEmailsConvex(recipientConfig).length);
 }
 
 /**
  * Internal: Batch lookup templates by IDs.
  * Used by search action to hydrate results after vector search.
  */
+export const publicDiscoverySearchReadiness = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		return { generation: migration.runToken };
+	}
+});
+
 export const getByIds = internalQuery({
-  args: { ids: v.array(v.id("templates")) },
-  handler: async (ctx, args) => {
-    const results = await Promise.all(
-      args.ids.map((id) => ctx.db.get(id)),
-    );
-    return results.filter(Boolean);
-  },
+	args: { ids: v.array(v.id('templates')) },
+	handler: async (ctx, args) => {
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const results = await Promise.all(
+			args.ids.slice(0, 50).map(async (id) => {
+				const row = await ctx.db
+					.query('publicTemplateDiscoverySources')
+					.withIndex('by_templateId', (q) => q.eq('templateId', id))
+					.unique();
+				if (!row || row.generation !== migration.runToken) return null;
+				assertCompactPublicTemplateSource(row.source);
+				return row.source;
+			})
+		);
+		return results.filter((value): value is CompactPublicTemplateSource => value !== null);
+	}
 });
 
 // =============================================================================
 // SEARCH — Action (needs external Gemini API call)
 // =============================================================================
 
-const GEMINI_EMBEDDING_MODEL = "gemini-embedding-001";
+const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
 const EMBEDDING_DIMENSIONS = 768;
 
 /**
  * Generate a query embedding via Gemini API.
  * Raw fetch — no SDK dependency needed in Convex actions.
  */
-async function generateQueryEmbedding(
-  query: string,
-  apiKey: string,
-): Promise<number[]> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
+async function generateQueryEmbedding(query: string, apiKey: string): Promise<number[]> {
+	const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: `models/${GEMINI_EMBEDDING_MODEL}`,
-      content: { parts: [{ text: query }] },
-      taskType: "RETRIEVAL_QUERY",
-      outputDimensionality: EMBEDDING_DIMENSIONS,
-    }),
-  });
+	const response = await fetch(url, {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({
+			model: `models/${GEMINI_EMBEDDING_MODEL}`,
+			content: { parts: [{ text: query }] },
+			taskType: 'RETRIEVAL_QUERY',
+			outputDimensionality: EMBEDDING_DIMENSIONS
+		})
+	});
 
-  if (!response.ok) {
-    const text = await response.text();
-    console.error(`[templates.search] Gemini error ${response.status}: ${text}`);
-    throw new Error("Search service temporarily unavailable");
-  }
+	if (!response.ok) {
+		const text = await response.text();
+		console.error(`[templates.search] Gemini error ${response.status}: ${text}`);
+		throw new Error('Search service temporarily unavailable');
+	}
 
-  const data = await response.json();
-  const values = data?.embedding?.values;
-  if (!Array.isArray(values) || values.length === 0) {
-    throw new Error("No embedding values in Gemini response");
-  }
-  return values;
+	const data = await response.json();
+	const values = data?.embedding?.values;
+	if (!Array.isArray(values) || values.length === 0) {
+		throw new Error('No embedding values in Gemini response');
+	}
+	return values;
 }
 
 /**
@@ -2939,316 +4384,839 @@ async function generateQueryEmbedding(
  * Falls back to text search if embedding generation fails.
  */
 export const search = action({
-  args: {
-    query: v.string(),
-    limit: v.optional(v.number()),
-    domain: v.optional(v.string()),
-    countryCode: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    // Rate limit: 30 searches per minute per IP/session (Gemini API cost)
-    // Rate limit per user (authenticated search)
-    const identity = await ctx.auth.getUserIdentity();
-    const rlKey = `templates.search:${identity?.subject ?? 'anon'}:${args.query.slice(0, 20)}`;
-    const rl = await ctx.runMutation(rateLimitCheckRef, {
-      key: rlKey,
-      windowMs: 60_000,
-      maxRequests: 30,
-    });
-    if (!rl.allowed) throw new Error("Rate limit exceeded — please try again shortly");
+	args: {
+		_secret: v.string(),
+		actorKey: v.string(),
+		query: v.string(),
+		limit: v.optional(v.number()),
+		domain: v.optional(v.string()),
+		countryCode: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		// This paid action is intentionally reachable only through the authenticated
+		// SvelteKit route. Reject direct public Convex calls before rate-limit I/O or
+		// Gemini work, then charge every query variation to one stable actor bucket.
+		requireInternalSecret(args._secret);
+		if (args.actorKey.length === 0 || args.actorKey.length > 160) {
+			throw new Error('SEARCH_ACTOR_KEY_INVALID');
+		}
+		const queryText = args.query.trim();
+		if (queryText.length < 2) {
+			throw new Error('Query must be at least 2 characters');
+		}
+		if (queryText.length > 200) {
+			throw new Error('Query too long (max 200 characters)');
+		}
 
-    const queryText = args.query.trim();
-    if (queryText.length < 2) {
-      throw new Error("Query must be at least 2 characters");
-    }
-    if (queryText.length > 200) {
-      throw new Error("Query too long (max 200 characters)");
-    }
+		// Bound domain + countryCode at the action boundary. The SvelteKit
+		// boundary takes a separate path and does not enforce these caps
+		// for direct Convex callers.
+		if (args.domain !== undefined && args.domain.length > 64) {
+			throw new Error('DOMAIN_TOO_LARGE');
+		}
+		if (args.countryCode !== undefined && args.countryCode.length > 8) {
+			throw new Error('COUNTRY_CODE_TOO_LARGE');
+		}
 
-    // Bound domain + countryCode at the action boundary. The SvelteKit
-    // boundary takes a separate path and does not enforce these caps
-    // for direct Convex callers.
-    if (args.domain !== undefined && args.domain.length > 64) {
-      throw new Error("DOMAIN_TOO_LARGE");
-    }
-    if (args.countryCode !== undefined && args.countryCode.length > 8) {
-      throw new Error("COUNTRY_CODE_TOO_LARGE");
-    }
+		const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
 
-    const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
+		// Fail before rate-limit writes, Gemini I/O, or vector search while a
+		// coordinated clear/reseed owns the compact source plane.
+		await ctx.runQuery(publicDiscoverySearchReadinessRef, {});
 
-    // Try semantic search first
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY not set");
-      }
+		const keywordFallback = async () => {
+			const textResults = (await ctx.runQuery(textSearchRef, {
+				query: queryText,
+				limit,
+				domain: args.domain,
+				countryCode: args.countryCode
+			})) as CompactPublicTemplateSource[];
+			return {
+				templates: textResults.map((t) => toPublicTemplate(t, null)),
+				method: 'keyword' as const
+			};
+		};
 
-      const embedding = await generateQueryEmbedding(queryText, apiKey);
+		const burst = await ctx.runMutation(rateLimitCheckRef, {
+			key: `templates.search:burst:${args.actorKey}`,
+			windowMs: 60_000,
+			maxRequests: 30
+		});
+		if (!burst.allowed) {
+			throw new ConvexError({ code: 'TEMPLATE_SEARCH_BURST_LIMITED' });
+		}
 
-      // Build filter for vector search. Convex's VectorFilterBuilder only
-      // exposes `.eq` and `.or` — there is no `.and`, so multi-field
-      // conjunction must be handled via post-filter in JS. With one filter
-      // field the builder applies it natively; with two we apply one in
-      // the builder and post-filter the hydrated docs against the other.
-      const filterEntries: Array<['domain' | 'countryCode', string]> = [];
-      if (args.domain) filterEntries.push(['domain', args.domain]);
-      if (args.countryCode) filterEntries.push(['countryCode', args.countryCode]);
-      const [primaryFilter, secondaryFilter] = filterEntries;
+		// Gemini is a paid/finite dependency. Daily actor and team ceilings degrade
+		// to the local keyword index instead of turning discovery into an outage.
+		const actorSemanticBudget = await ctx.runMutation(rateLimitCheckRef, {
+			key: `templates.search:semantic:daily:${args.actorKey}`,
+			windowMs: 24 * 60 * 60 * 1000,
+			maxRequests: 100
+		});
+		if (!actorSemanticBudget.allowed) return await keywordFallback();
+		const globalSemanticBudget = await ctx.runMutation(rateLimitCheckRef, {
+			key: 'templates.search:semantic:daily:global',
+			windowMs: 24 * 60 * 60 * 1000,
+			maxRequests: 1_000
+		});
+		if (!globalSemanticBudget.allowed) return await keywordFallback();
 
-      // Fetch more candidates to allow for quality filtering. When a
-      // post-filter applies, widen further so the post-filter has room to
-      // shed candidates without starving the result set.
-      const candidateLimit = limit + 10 + (secondaryFilter ? 20 : 0);
+		// Try semantic search first
+		try {
+			const apiKey = process.env.GEMINI_API_KEY;
+			if (!apiKey) {
+				throw new Error('GEMINI_API_KEY not set');
+			}
 
-      const vectorResults = await ctx.vectorSearch("templates", "by_topicEmbedding", {
-        vector: embedding,
-        limit: candidateLimit,
-        filter: primaryFilter
-          ? (q) => q.eq(primaryFilter[0], primaryFilter[1])
-          : undefined,
-      });
+			const embedding = await generateQueryEmbedding(queryText, apiKey);
 
-      if (vectorResults.length === 0) {
-        // Fall through to text search
-        throw new Error("No vector results");
-      }
+			// Build filter for vector search. Convex's VectorFilterBuilder only
+			// exposes `.eq` and `.or` — there is no `.and`, so multi-field
+			// conjunction must be handled via post-filter in JS. With one filter
+			// field the builder applies it natively; with two we apply one in
+			// the builder and post-filter the hydrated docs against the other.
+			const filterEntries: Array<['domain' | 'countryCode', string]> = [];
+			if (args.domain) filterEntries.push(['domain', args.domain]);
+			if (args.countryCode) filterEntries.push(['countryCode', args.countryCode]);
+			const [primaryFilter, secondaryFilter] = filterEntries;
 
-      // Hydrate full docs
-      const templateIds = vectorResults.map((r) => r._id);
-      const templates = await ctx.runQuery(getByIdsRef, {
-        ids: templateIds,
-      }) as Array<Doc<"templates"> | null>;
+			// Fetch more candidates to allow for quality filtering. When a
+			// post-filter applies, widen further so the post-filter has room to
+			// shed candidates without starving the result set.
+			const candidateLimit = limit + 10 + (secondaryFilter ? 20 : 0);
 
-      // Build score map from vector results
-      const scoreMap = new Map(
-        vectorResults.map((r) => [r._id, r._score]),
-      );
+			const vectorResults = await ctx.vectorSearch('templates', 'by_topicEmbedding', {
+				vector: embedding,
+				limit: candidateLimit,
+				filter: primaryFilter ? (q) => q.eq(primaryFilter[0], primaryFilter[1]) : undefined
+			});
 
-      // Apply quality boost, similarity floor, and the secondary post-filter
-      // for multi-field AND that VectorFilterBuilder can't express natively.
-      const scored = templates
-        .filter((t): t is NonNullable<typeof t> => t != null)
-        .filter((t) => t.status === "published" && t.isPublic)
-        .filter((t) =>
-          secondaryFilter ? t[secondaryFilter[0]] === secondaryFilter[1] : true,
-        )
-        .map((t) => {
-          const rawScore = Number(scoreMap.get(t._id) ?? 0);
-          const sends = t.verifiedSends || 0;
-          const qualityBoost = 0.8 + 0.2 * Math.min(sends / 100, 1);
-          return {
-            ...t,
-            _score: rawScore * qualityBoost,
-          };
-        })
-        .filter((t) => t._score >= 0.40)
-        .sort((a, b) => b._score - a._score)
-        .slice(0, limit);
+			if (vectorResults.length === 0) {
+				// Fall through to text search
+				throw new Error('No vector results');
+			}
 
-      return {
-        templates: scored.map((t) => toPublicTemplate(t, t._score)),
-        method: "semantic" as const,
-      };
-    } catch {
-      // Fallback: text search via Convex search index
-      const textResults = await ctx.runQuery(textSearchRef, {
-        query: queryText,
-        limit,
-        domain: args.domain,
-        countryCode: args.countryCode,
-      }) as Doc<"templates">[];
+			// Hydrate full docs
+			const templateIds = vectorResults.map((r) => r._id);
+			const templates = (await ctx.runQuery(getByIdsRef, {
+				ids: templateIds
+			})) as Array<CompactPublicTemplateSource | null>;
 
-      return {
-        templates: textResults.map((t) => toPublicTemplate(t, null)),
-        method: "keyword" as const,
-      };
-    }
-  },
+			// Build score map from vector results
+			const scoreMap = new Map(vectorResults.map((r) => [r._id, r._score]));
+
+			// Apply quality boost, similarity floor, and the secondary post-filter
+			// for multi-field AND that VectorFilterBuilder can't express natively.
+			const scored = templates
+				.filter((t): t is NonNullable<typeof t> => t != null)
+				.filter((t) => t.status === 'published' && t.isPublic)
+				.filter((t) => (secondaryFilter ? t[secondaryFilter[0]] === secondaryFilter[1] : true))
+				.map((t) => {
+					const rawScore = Number(scoreMap.get(t._id) ?? 0);
+					const sends = t.verifiedSends || 0;
+					const qualityBoost = 0.8 + 0.2 * Math.min(sends / 100, 1);
+					return {
+						...t,
+						_score: rawScore * qualityBoost
+					};
+				})
+				.filter((t) => t._score >= 0.4)
+				.sort((a, b) => b._score - a._score)
+				.slice(0, limit);
+
+			return {
+				templates: scored.map((t) => toPublicTemplate(t, t._score)),
+				method: 'semantic' as const
+			};
+		} catch {
+			// Fallback: text search via Convex search index
+			return await keywordFallback();
+		}
+	}
 });
 
 /**
  * Internal: Text-based search fallback using Convex search index.
  */
 export const textSearch = internalQuery({
-  args: {
-    query: v.string(),
-    limit: v.number(),
-    domain: v.optional(v.string()),
-    countryCode: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    let q = ctx.db
-      .query("templates")
-      .withSearchIndex("search_templates", (s) => {
-        let search = s.search("title", args.query);
-        if (args.domain) search = search.eq("domain", args.domain);
-        search = search.eq("status", "published");
-        if (args.countryCode) search = search.eq("countryCode", args.countryCode);
-        return search;
-      });
+	args: {
+		query: v.string(),
+		limit: v.number(),
+		domain: v.optional(v.string()),
+		countryCode: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		await assertPublicDiscoveryDirectSourceServingReady(ctx);
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const q = ctx.db
+			.query('publicTemplateDiscoverySources')
+			.withSearchIndex('search_title', (s) => {
+				let search = s.search('title', args.query);
+				search = search.eq('generation', migration.runToken);
+				if (args.domain) search = search.eq('domain', args.domain);
+				if (args.countryCode) search = search.eq('countryCode', args.countryCode);
+				return search;
+			});
 
-    const results = await q.take(Math.min(args.limit + 20, 50));
-    return results
-      .filter((t) => t.status === "published" && t.isPublic)
-      .slice(0, args.limit);
-  },
+		const results = await q.take(Math.min(args.limit + 20, 50));
+		return results.slice(0, args.limit).map((row) => {
+			assertCompactPublicTemplateSource(row.source);
+			return row.source;
+		});
+	}
+});
+
+const TEMPLATE_LIST_PROJECTION_MIGRATION_PAGE_SIZE = 4;
+const TEMPLATE_LIST_PROJECTION_MIGRATION_MAX_BYTES = 5 * 1024 * 1024;
+
+/** Observable state for the embedding-free authenticated-list cutover. */
+export const templateListProjectionMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await getTemplateListProjectionMigration(ctx);
+		return migration
+			? {
+					status: migration.status,
+					runToken: migration.runToken,
+					startedAt: migration.startedAt,
+					completedAt: migration.completedAt ?? null,
+					scanned: migration.scanned,
+					projected: migration.projected,
+					failureCode: migration.failureCode ?? null,
+					failureTemplateId: migration.failureTemplateId ?? null
+				}
+			: { status: 'not-started' as const };
+	}
 });
 
 /**
- * Authenticated: List templates belonging to the current user.
- * Used by: src/routes/api/user/templates/+server.ts
+ * Idempotently project four canonical templates per transaction. Canonical rows
+ * may approach 1 MiB, so both row and byte reads are explicitly bounded. Live
+ * writers dual-write before cutover; restart safely replays the current corpus.
+ */
+export const migrateTemplateListProjection = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		restart: v.optional(v.boolean()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		if (args.runToken !== undefined && args.restart) {
+			throw new Error('TEMPLATE_LIST_PROJECTION_MIGRATION_INVALID_CONTROL');
+		}
+
+		let migration = await getTemplateListProjectionMigration(ctx);
+		let runToken: string;
+		let cursor: string | undefined;
+		let scanned: number;
+		let projected: number;
+
+		if (args.runToken !== undefined) {
+			if (!migration || migration.status !== 'running' || migration.runToken !== args.runToken) {
+				return { status: 'superseded' as const, runToken: args.runToken };
+			}
+			runToken = args.runToken;
+			cursor = migration.cursor;
+			scanned = migration.scanned;
+			projected = migration.projected;
+		} else if (!args.restart && migration?.status === 'ready') {
+			return {
+				status: 'already-ready' as const,
+				runToken: migration.runToken,
+				scanned: migration.scanned,
+				projected: migration.projected,
+				completedAt: migration.completedAt ?? null
+			};
+		} else if (!args.restart && migration?.status === 'migrated') {
+			return {
+				status: 'already-migrated' as const,
+				runToken: migration.runToken,
+				scanned: migration.scanned,
+				projected: migration.projected,
+				completedAt: migration.completedAt ?? null
+			};
+		} else if (!args.restart && migration?.status === 'running') {
+			return {
+				status: 'already-running' as const,
+				runToken: migration.runToken,
+				scanned: migration.scanned,
+				projected: migration.projected
+			};
+		} else if (!args.restart && migration?.status === 'blocked') {
+			return {
+				status: 'blocked' as const,
+				runToken: migration.runToken,
+				failureCode: migration.failureCode ?? null,
+				failureTemplateId: migration.failureTemplateId ?? null
+			};
+		} else {
+			runToken = crypto.randomUUID();
+			cursor = undefined;
+			const startedAt = Date.now();
+			scanned = 0;
+			projected = 0;
+			const initial = {
+				key: TEMPLATE_LIST_PROJECTION_KEY,
+				status: 'running' as const,
+				runToken,
+				cursor: undefined,
+				startedAt,
+				completedAt: undefined,
+				scanned,
+				projected,
+				failureCode: undefined,
+				failureTemplateId: undefined,
+				updatedAt: startedAt
+			};
+			if (migration) await ctx.db.patch(migration._id, initial);
+			else await ctx.db.insert('templateListProjectionMigrations', initial);
+			migration = await getTemplateListProjectionMigration(ctx);
+		}
+
+		if (!migration || migration.runToken !== runToken) {
+			throw new Error('TEMPLATE_LIST_PROJECTION_MIGRATION_STATE_MISSING');
+		}
+		const page = await ctx.db
+			.query('templates')
+			.order('asc')
+			.paginate({
+				cursor: cursor ?? null,
+				numItems: TEMPLATE_LIST_PROJECTION_MIGRATION_PAGE_SIZE,
+				maximumRowsRead: TEMPLATE_LIST_PROJECTION_MIGRATION_PAGE_SIZE + 1,
+				maximumBytesRead: TEMPLATE_LIST_PROJECTION_MIGRATION_MAX_BYTES
+			});
+
+		if (page.pageStatus === 'SplitRequired') {
+			const failureCode = 'TEMPLATE_LIST_PROJECTION_MIGRATION_PAGE_SPLIT_REQUIRED';
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode,
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const, runToken, failureCode };
+		}
+
+		for (const template of page.page) {
+			try {
+				await syncTemplateListProjection(ctx, template);
+			} catch (error) {
+				const failureCode = error instanceof Error ? error.message : String(error);
+				await ctx.db.patch(migration._id, {
+					status: 'blocked',
+					failureCode,
+					failureTemplateId: template._id,
+					updatedAt: Date.now()
+				});
+				return {
+					status: 'blocked' as const,
+					runToken,
+					failureCode,
+					failureTemplateId: template._id
+				};
+			}
+		}
+
+		scanned += page.page.length;
+		projected += page.page.length;
+		const completedAt = page.isDone ? Date.now() : undefined;
+		await ctx.db.patch(migration._id, {
+			status: page.isDone ? 'migrated' : 'running',
+			cursor: page.isDone ? undefined : page.continueCursor,
+			completedAt,
+			scanned,
+			projected,
+			failureCode: undefined,
+			failureTemplateId: undefined,
+			updatedAt: Date.now()
+		});
+
+		if (!page.isDone && args.scheduleContinuation !== false) {
+			await ctx.scheduler.runAfter(0, migrateTemplateListProjectionRef, { runToken });
+		}
+		return {
+			status: page.isDone ? ('migrated' as const) : ('running' as const),
+			runToken,
+			scanned,
+			projected,
+			completedAt: completedAt ?? null,
+			...(page.isDone ? {} : { continueCursor: page.continueCursor })
+		};
+	}
+});
+
+/** Explicit reader cutover after the bounded migration has completed exactly. */
+export const activateTemplateListProjection = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await getTemplateListProjectionMigration(ctx);
+		if (migration?.status === 'ready') {
+			return {
+				status: 'ready' as const,
+				runToken: migration.runToken,
+				scanned: migration.scanned,
+				projected: migration.projected
+			};
+		}
+		if (!migration || migration.status !== 'migrated') {
+			throw new ConvexError({
+				code: 'TEMPLATE_LIST_PROJECTION_MIGRATION_INCOMPLETE',
+				status: migration?.status ?? 'not-started'
+			});
+		}
+		if (migration.scanned !== migration.projected) {
+			throw new ConvexError({
+				code: 'TEMPLATE_LIST_PROJECTION_MIGRATION_INEXACT',
+				scanned: migration.scanned,
+				projected: migration.projected
+			});
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return {
+			status: 'ready' as const,
+			runToken: migration.runToken,
+			scanned: migration.scanned,
+			projected: migration.projected
+		};
+	}
+});
+
+async function currentTemplateListUser(ctx: QueryCtx) {
+	const identity = await ctx.auth.getUserIdentity();
+	if (!identity) throw new Error('Authentication required');
+	return identity.email
+		? await ctx.db
+				.query('users')
+				.withIndex('by_email', (q) => q.eq('email', identity.email))
+				.first()
+		: null;
+}
+
+function legacyTemplateListPageRequired(scope: 'user' | 'org'): never {
+	throw new ConvexError({
+		code: 'TEMPLATE_LIST_PAGINATION_REQUIRED',
+		scope,
+		maxPageSize: TEMPLATE_LIST_MAX_PAGE_SIZE
+	});
+}
+
+/**
+ * Authenticated, cursor-paginated templates belonging to the current user.
+ * Reads only the cutover-gated, embedding-free projection plane.
+ */
+export const listByUserPage = query({
+	args: { paginationOpts: templateListPaginationValidator },
+	handler: async (ctx, { paginationOpts }) => {
+		const user = await currentTemplateListUser(ctx);
+		if (!user) {
+			await requireTemplateListProjectionReady(ctx);
+			return { page: [], isDone: true, continueCursor: '' };
+		}
+		const result = await readTemplateListPageByUser(ctx, user._id, paginationOpts);
+		return { ...result, page: result.page.map(toAuthenticatedTemplateListItem) };
+	}
+});
+
+/**
+ * Backward-compatible array contract for older direct callers. It never
+ * truncates: accounts beyond the bounded first page receive a coded error and
+ * must move to `listByUserPage`.
  */
 export const listByUser = query({
-  args: {},
-  handler: async (ctx) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Authentication required");
+	args: {},
+	handler: async (ctx) => {
+		const user = await currentTemplateListUser(ctx);
+		if (!user) {
+			await requireTemplateListProjectionReady(ctx);
+			return [];
+		}
+		const result = await readTemplateListPageByUser(ctx, user._id, {
+			cursor: null,
+			numItems: TEMPLATE_LIST_MAX_PAGE_SIZE
+		});
+		if (!result.isDone) legacyTemplateListPageRequired('user');
+		return result.page.map(toAuthenticatedTemplateListItem);
+	}
+});
 
-    // Resolve userId from identity
-    const user = identity.email
-      ? await ctx.db
-          .query("users")
-          .withIndex("by_email", (q) => q.eq("email", identity.email))
-          .first()
-      : null;
-    if (!user) return [];
-
-    const templates = await ctx.db
-      .query("templates")
-      .withIndex("by_userId", (q) => q.eq("userId", user._id))
-      .order("desc")
-      .collect();
-
-    return templates.map((t) => ({
-      _id: t._id,
-      _creationTime: t._creationTime,
-      slug: t.slug,
-      title: t.title,
-      description: t.description,
-      domain: resolveDomain(t),
-      domainHue: t.domainHue ?? undefined,
-      status: t.status,
-      isPublic: t.isPublic,
-      verifiedSends: t.verifiedSends,
-      updatedAt: t.updatedAt,
-    }));
-  },
+/** Authenticated, cursor-paginated templates belonging to an organization. */
+export const listByOrgPage = query({
+	args: {
+		slug: v.string(),
+		paginationOpts: templateListPaginationValidator
+	},
+	handler: async (ctx, { slug, paginationOpts }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'member');
+		const result = await readTemplateListPageByOrg(ctx, org._id, paginationOpts);
+		return {
+			...result,
+			page: result.page.map(toOrgTemplateListItem).sort((a, b) => a.title.localeCompare(b.title))
+		};
+	}
 });
 
 /**
- * Authenticated: List templates belonging to an org (title + id only).
- * Used by: src/routes/org/[slug]/campaigns/new/+page.server.ts
+ * Backward-compatible array contract for older direct callers. It never
+ * truncates: larger organizations must use `listByOrgPage`.
  */
 export const listByOrg = query({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
-    const { org } = await requireOrgRole(ctx, slug, "member");
-
-    const templates = await ctx.db
-      .query("templates")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
-
-    // Sort alphabetically by title
-    templates.sort((a, b) => a.title.localeCompare(b.title));
-
-    return templates.map((t) => ({
-      _id: t._id,
-      title: t.title,
-    }));
-  },
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'member');
+		const result = await readTemplateListPageByOrg(ctx, org._id, {
+			cursor: null,
+			numItems: TEMPLATE_LIST_MAX_PAGE_SIZE
+		});
+		if (!result.isDone) legacyTemplateListPageRequired('org');
+		return result.page.map(toOrgTemplateListItem).sort((a, b) => a.title.localeCompare(b.title));
+	}
 });
 
 // =============================================================================
 // ENDORSEMENTS — Org endorses/un-endorses a template
 // =============================================================================
 
+async function storedEndorsementCountIsTrusted(
+	ctx: MutationCtx,
+	count: number | undefined
+): Promise<boolean> {
+	if (!isAuthoritativeEndorsementCount(count)) return false;
+	const manifest = await getPublicDiscoveryManifestRow(ctx);
+	return manifest?.endorsementCountMigrationStatus === 'complete';
+}
+
+async function persistEndorsementCount(
+	ctx: MutationCtx,
+	template: Doc<'templates'>,
+	endorsementCount: number
+): Promise<void> {
+	await ctx.db.patch(template._id, { endorsementCount });
+	await syncTemplateListProjection(ctx, { ...template, endorsementCount });
+	if (template.status === 'published' && template.isPublic) {
+		await upsertCompactDiscoveryProjection(ctx, { ...template, endorsementCount });
+		await markPublicDiscoveryListDirty(ctx, 'aggregate');
+	}
+}
+
+/** Operator-visible progress for the one-time exact counter reconciliation. */
+export const endorsementCountMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const [manifest, missing] = await Promise.all([
+			ctx.db
+				.query('publicDiscoveryManifest')
+				.withIndex('by_key', (q) => q.eq('key', 'public'))
+				.unique(),
+			ctx.db
+				.query('templates')
+				.withIndex('by_endorsementCount', (q) => q.eq('endorsementCount', undefined))
+				.first()
+		]);
+		return {
+			status: manifest?.endorsementCountMigrationStatus ?? ('not-started' as const),
+			runToken: manifest?.endorsementCountMigrationRunToken ?? null,
+			startedAt: manifest?.endorsementCountMigrationStartedAt ?? null,
+			completedAt: manifest?.endorsementCountMigrationCompletedAt ?? null,
+			scannedTemplates: manifest?.endorsementCountMigrationScannedTemplates ?? 0,
+			repairedTemplates: manifest?.endorsementCountMigrationRepairedTemplates ?? 0,
+			endorsementsCounted: manifest?.endorsementCountMigrationEndorsementsCounted ?? 0,
+			failureCode: manifest?.endorsementCountMigrationFailureCode ?? null,
+			failureTemplateId: manifest?.endorsementCountMigrationFailureTemplateId ?? null,
+			missingCounterTemplateId: missing?._id ?? null
+		};
+	}
+});
+
+/**
+ * Recompute every legacy counter, including already-defined values that an old
+ * `undefined ?? 0` writer may have corrupted. Exactly one template and at most
+ * 501 small endorsement rows are read per transaction. The 501st row blocks the
+ * launch gate instead of publishing an inexact total. `resume` rotates the run
+ * token while retaining the durable cursor; delayed jobs from the old chain then
+ * become harmlessly superseded.
+ */
+export const migrateEndorsementCounts = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		resume: v.optional(v.boolean()),
+		restart: v.optional(v.boolean()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		if (args.runToken !== undefined && (args.resume || args.restart)) {
+			throw new Error('ENDORSEMENT_COUNT_MIGRATION_INVALID_CONTINUATION');
+		}
+		if (args.resume && args.restart) {
+			throw new Error('ENDORSEMENT_COUNT_MIGRATION_INVALID_CONTROL');
+		}
+
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		let manifestId = manifest?._id;
+		let runToken: string;
+		let cursor: string | undefined;
+		let scannedTemplates: number;
+		let repairedTemplates: number;
+		let endorsementsCounted: number;
+
+		if (args.runToken !== undefined) {
+			if (
+				!manifestId ||
+				manifest?.endorsementCountMigrationStatus !== 'running' ||
+				manifest.endorsementCountMigrationRunToken !== args.runToken
+			) {
+				return { status: 'superseded' as const, runToken: args.runToken };
+			}
+			runToken = args.runToken;
+			cursor = manifest.endorsementCountMigrationCursor;
+			scannedTemplates = manifest.endorsementCountMigrationScannedTemplates ?? 0;
+			repairedTemplates = manifest.endorsementCountMigrationRepairedTemplates ?? 0;
+			endorsementsCounted = manifest.endorsementCountMigrationEndorsementsCounted ?? 0;
+		} else if (manifest?.endorsementCountMigrationStatus === 'complete' && !args.restart) {
+			return {
+				status: 'already-complete' as const,
+				runToken: manifest.endorsementCountMigrationRunToken ?? null,
+				scannedTemplates: manifest.endorsementCountMigrationScannedTemplates ?? 0,
+				repairedTemplates: manifest.endorsementCountMigrationRepairedTemplates ?? 0,
+				endorsementsCounted: manifest.endorsementCountMigrationEndorsementsCounted ?? 0,
+				completedAt: manifest.endorsementCountMigrationCompletedAt ?? null
+			};
+		} else if (
+			(manifest?.endorsementCountMigrationStatus === 'running' ||
+				manifest?.endorsementCountMigrationStatus === 'blocked') &&
+			!args.resume &&
+			!args.restart
+		) {
+			return {
+				status:
+					manifest.endorsementCountMigrationStatus === 'blocked'
+						? ('blocked' as const)
+						: ('already-running' as const),
+				runToken: manifest.endorsementCountMigrationRunToken ?? null,
+				failureCode: manifest.endorsementCountMigrationFailureCode ?? null,
+				failureTemplateId: manifest.endorsementCountMigrationFailureTemplateId ?? null
+			};
+		} else {
+			const retainingProgress = args.resume === true && manifest !== null;
+			runToken = crypto.randomUUID();
+			cursor = retainingProgress ? manifest?.endorsementCountMigrationCursor : undefined;
+			const startedAt = retainingProgress
+				? (manifest?.endorsementCountMigrationStartedAt ?? Date.now())
+				: Date.now();
+			scannedTemplates = retainingProgress
+				? (manifest?.endorsementCountMigrationScannedTemplates ?? 0)
+				: 0;
+			repairedTemplates = retainingProgress
+				? (manifest?.endorsementCountMigrationRepairedTemplates ?? 0)
+				: 0;
+			endorsementsCounted = retainingProgress
+				? (manifest?.endorsementCountMigrationEndorsementsCounted ?? 0)
+				: 0;
+			const progress = {
+				endorsementCountMigrationStatus: 'running' as const,
+				endorsementCountMigrationRunToken: runToken,
+				endorsementCountMigrationCursor: cursor,
+				endorsementCountMigrationStartedAt: startedAt,
+				endorsementCountMigrationCompletedAt: undefined,
+				endorsementCountMigrationScannedTemplates: scannedTemplates,
+				endorsementCountMigrationRepairedTemplates: repairedTemplates,
+				endorsementCountMigrationEndorsementsCounted: endorsementsCounted,
+				endorsementCountMigrationFailureCode: undefined,
+				endorsementCountMigrationFailureTemplateId: undefined
+			};
+			if (manifestId) {
+				await ctx.db.patch(manifestId, progress);
+			} else {
+				const inserted = {
+					key: 'public' as const,
+					listReady: false,
+					relationsReady: false,
+					listRevision: 0,
+					relationsRevision: 0,
+					...progress
+				};
+				manifestId = await ctx.db.insert('publicDiscoveryManifest', inserted);
+			}
+		}
+
+		if (!manifestId) throw new Error('ENDORSEMENT_COUNT_MIGRATION_STATE_MISSING');
+		const page = await ctx.db
+			.query('templates')
+			.order('asc')
+			.paginate({ cursor: cursor ?? null, numItems: 1 });
+		const template = page.page[0];
+
+		if (!template) {
+			const completedAt = Date.now();
+			await ctx.db.patch(manifestId, {
+				endorsementCountMigrationStatus: 'complete',
+				endorsementCountMigrationCursor: undefined,
+				endorsementCountMigrationCompletedAt: completedAt,
+				endorsementCountMigrationFailureCode: undefined,
+				endorsementCountMigrationFailureTemplateId: undefined
+			});
+			return {
+				status: 'complete' as const,
+				runToken,
+				scannedTemplates,
+				repairedTemplates,
+				endorsementsCounted,
+				completedAt
+			};
+		}
+
+		const exactCount = await boundedExactEndorsementCount(ctx, template._id);
+		if (exactCount === null) {
+			const failureCode = `ENDORSEMENT_COUNT_MIGRATION_OVERFLOW:>${LEGACY_ENDORSEMENT_COUNT_REPAIR_LIMIT}`;
+			await ctx.db.patch(manifestId, {
+				endorsementCountMigrationStatus: 'blocked',
+				endorsementCountMigrationFailureCode: failureCode,
+				endorsementCountMigrationFailureTemplateId: template._id
+			});
+			return {
+				status: 'blocked' as const,
+				runToken,
+				failureCode,
+				failureTemplateId: template._id
+			};
+		}
+
+		const repaired =
+			!isAuthoritativeEndorsementCount(template.endorsementCount) ||
+			template.endorsementCount !== exactCount;
+		if (repaired) {
+			await ctx.db.patch(template._id, { endorsementCount: exactCount });
+		}
+		await syncTemplateListProjection(ctx, {
+			...template,
+			endorsementCount: exactCount
+		});
+		// Reconcile the compact source even when the stored counter was already
+		// right: a pre-migration dual write may have copied the old sampled value.
+		if (template.status === 'published' && template.isPublic) {
+			await upsertCompactDiscoveryProjection(ctx, {
+				...template,
+				endorsementCount: exactCount
+			});
+			if (repaired) await markPublicDiscoveryListDirty(ctx, 'aggregate');
+		}
+
+		scannedTemplates += 1;
+		repairedTemplates += repaired ? 1 : 0;
+		endorsementsCounted += exactCount;
+		const completedAt = page.isDone ? Date.now() : undefined;
+		await ctx.db.patch(manifestId, {
+			endorsementCountMigrationStatus: page.isDone ? 'complete' : 'running',
+			endorsementCountMigrationCursor: page.isDone ? undefined : page.continueCursor,
+			endorsementCountMigrationCompletedAt: completedAt,
+			endorsementCountMigrationScannedTemplates: scannedTemplates,
+			endorsementCountMigrationRepairedTemplates: repairedTemplates,
+			endorsementCountMigrationEndorsementsCounted: endorsementsCounted,
+			endorsementCountMigrationFailureCode: undefined,
+			endorsementCountMigrationFailureTemplateId: undefined
+		});
+
+		if (!page.isDone && args.scheduleContinuation !== false) {
+			await ctx.scheduler.runAfter(0, migrateEndorsementCountsRef, { runToken });
+		}
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			runToken,
+			continueCursor: page.isDone ? null : page.continueCursor,
+			scannedTemplates,
+			repairedTemplates,
+			endorsementsCounted,
+			completedAt: completedAt ?? null
+		};
+	}
+});
+
 /**
  * Endorse a template on behalf of an org. Requires editor role.
  * Upserts to handle duplicate endorsement gracefully.
  */
 export const endorse = mutation({
-  args: {
-    orgSlug: v.string(),
-    templateId: v.id("templates"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		templateId: v.id('templates')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    // Verify template exists and is public
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    if (!template.isPublic) throw new Error("Cannot endorse a private template");
+		// Verify template exists and is public
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		if (!template.isPublic) throw new Error('Cannot endorse a private template');
 
-    // Check if already endorsed (upsert behavior)
-    const existing = await ctx.db
-      .query("templateEndorsements")
-      .withIndex("by_templateId_orgId", (q) =>
-        q.eq("templateId", args.templateId).eq("orgId", org._id),
-      )
-      .first();
+		// Check if already endorsed (upsert behavior)
+		const existing = await ctx.db
+			.query('templateEndorsements')
+			.withIndex('by_templateId_orgId', (q) =>
+				q.eq('templateId', args.templateId).eq('orgId', org._id)
+			)
+			.first();
 
-    if (existing) {
-      return { id: existing._id };
-    }
+		if (existing) {
+			if (!(await storedEndorsementCountIsTrusted(ctx, template.endorsementCount))) {
+				const exactCount = await boundedExactEndorsementCount(ctx, template._id);
+				if (exactCount === null) throwEndorsementCountRepairRequired(template._id);
+				await persistEndorsementCount(ctx, template, exactCount);
+			}
+			return { id: existing._id };
+		}
 
-    const id = await ctx.db.insert("templateEndorsements", {
-      templateId: args.templateId,
-      orgId: org._id,
-      endorsedAt: Date.now(),
-    });
+		const id = await ctx.db.insert('templateEndorsements', {
+			templateId: args.templateId,
+			orgId: org._id,
+			endorsedAt: Date.now()
+		});
 
-    // Increment endorsementCount on template
-    const currentCount = template.endorsementCount ?? 0;
-    await ctx.db.patch(args.templateId, {
-      endorsementCount: currentCount + 1,
-    });
+		// Before the reconciliation is proven complete, recompute in the same
+		// transaction so counters already corrupted by the old `undefined ?? 0`
+		// path are repaired too. Afterwards this is the normal O(1) increment.
+		const trusted = await storedEndorsementCountIsTrusted(ctx, template.endorsementCount);
+		const nextCount = trusted
+			? (template.endorsementCount as number) + 1
+			: await boundedExactEndorsementCount(ctx, template._id);
+		if (nextCount === null) throwEndorsementCountRepairRequired(template._id);
+		await persistEndorsementCount(ctx, template, nextCount);
 
-    if (template.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
-    }
-
-    return { id };
-  },
+		return { id };
+	}
 });
 
 /**
  * Remove an endorsement. Requires editor role.
  */
 export const removeEndorsement = mutation({
-  args: {
-    orgSlug: v.string(),
-    templateId: v.id("templates"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "editor");
+	args: {
+		orgSlug: v.string(),
+		templateId: v.id('templates')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
-    const existing = await ctx.db
-      .query("templateEndorsements")
-      .withIndex("by_templateId_orgId", (q) =>
-        q.eq("templateId", args.templateId).eq("orgId", org._id),
-      )
-      .first();
+		const existing = await ctx.db
+			.query('templateEndorsements')
+			.withIndex('by_templateId_orgId', (q) =>
+				q.eq('templateId', args.templateId).eq('orgId', org._id)
+			)
+			.first();
 
-    if (existing) {
-      await ctx.db.delete(existing._id);
+		const template = await ctx.db.get(args.templateId);
+		if (existing) await ctx.db.delete(existing._id);
 
-      // Decrement endorsementCount on template
-      const template = await ctx.db.get(args.templateId);
-      if (template) {
-        const currentCount = template.endorsementCount ?? 0;
-        await ctx.db.patch(args.templateId, {
-          endorsementCount: Math.max(0, currentCount - 1),
-        });
-        if (template.status === "published" && template.isPublic) {
-          await markPublicDiscoveryListDirty(ctx);
-        }
-      }
-    }
+		if (template) {
+			const trusted = await storedEndorsementCountIsTrusted(ctx, template.endorsementCount);
+			if (existing || !trusted) {
+				const nextCount = trusted
+					? Math.max(0, (template.endorsementCount as number) - 1)
+					: await boundedExactEndorsementCount(ctx, template._id);
+				if (nextCount === null) throwEndorsementCountRepairRequired(template._id);
+				await persistEndorsementCount(ctx, template, nextCount);
+			}
+		}
 
-    return { ok: true };
-  },
+		return { ok: true };
+	}
 });
 
 // =============================================================================
@@ -3258,59 +5226,118 @@ export const removeEndorsement = mutation({
 /**
  * Get cached sources for a template (72h TTL checked by caller).
  */
+const TEMPLATE_SOURCE_CACHE_MAX_ENTRIES = 20;
+const TEMPLATE_SOURCE_CACHE_STRUCTURE_BUDGET = {
+	maxBytes: 64 * 1024,
+	maxDepth: 4,
+	maxNodes: 512,
+	maxContainerEntries: 200
+} as const;
+
+function assertTemplateSourceCache(value: unknown): void {
+	if (!Array.isArray(value) || value.length > TEMPLATE_SOURCE_CACHE_MAX_ENTRIES) {
+		throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_INVALID_STRUCTURE' });
+	}
+	const budget = validateBoundedJson(value, TEMPLATE_SOURCE_CACHE_STRUCTURE_BUDGET);
+	if (!budget.ok) {
+		throw new ConvexError({
+			code: 'TEMPLATE_SOURCE_CACHE_BUDGET_EXCEEDED',
+			reason: budget.reason,
+			actual: budget.actual,
+			limit: budget.limit
+		});
+	}
+}
+
+function requireExpectedTemplateCacheUser(
+	authenticatedUserId: Id<'users'>,
+	expectedUserId: Id<'users'>
+): void {
+	if (String(authenticatedUserId) !== String(expectedUserId)) {
+		throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_USER_MISMATCH' });
+	}
+}
+
 export const getSourceCache = query({
-  args: { templateId: v.id("templates") },
-  handler: async (ctx, args) => {
-    const template = await ctx.db.get(args.templateId);
-    if (!template) return null;
-    return {
-      cachedSources: template.cachedSources ?? null,
-      sourcesCachedAt: template.sourcesCachedAt ?? null,
-    };
-  },
+	args: {
+		_secret: v.optional(v.string()),
+		userId: v.id('users'),
+		templateId: v.id('templates')
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		const { userId } = await requireAuth(ctx);
+		requireExpectedTemplateCacheUser(userId, args.userId);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) return null;
+		if (template.userId !== userId) {
+			throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_NOT_OWNED' });
+		}
+		if (template.cachedSources !== undefined) {
+			assertTemplateSourceCache(template.cachedSources);
+		}
+		return {
+			cachedSources: template.cachedSources ?? null,
+			sourcesCachedAt: template.sourcesCachedAt ?? null
+		};
+	}
 });
 
 /**
  * Update cached sources on a template (fire-and-forget from stream-message).
  */
 export const updateSourceCache = mutation({
-  args: {
-    templateId: v.id("templates"),
-    cachedSources: v.any(),
-    sourcesCachedAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    await requireAuth(ctx);
-    await ctx.db.patch(args.templateId, {
-      cachedSources: args.cachedSources,
-      sourcesCachedAt: args.sourcesCachedAt,
-    });
-  },
+	args: {
+		_secret: v.optional(v.string()),
+		userId: v.id('users'),
+		templateId: v.id('templates'),
+		cachedSources: v.any(),
+		sourcesCachedAt: v.number()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		assertTemplateSourceCache(args.cachedSources);
+		if (!Number.isSafeInteger(args.sourcesCachedAt) || args.sourcesCachedAt < 0) {
+			throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_TIMESTAMP_INVALID' });
+		}
+		const { userId } = await requireAuth(ctx);
+		requireExpectedTemplateCacheUser(userId, args.userId);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_TEMPLATE_NOT_FOUND' });
+		if (template.userId !== userId) {
+			throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_NOT_OWNED' });
+		}
+		await ctx.db.patch(args.templateId, {
+			cachedSources: args.cachedSources,
+			sourcesCachedAt: args.sourcesCachedAt
+		});
+	}
 });
 
 const EMBEDDING_BACKFILL_BATCH_LIMIT = 100;
-const EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT = 100;
+const EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT = 4;
+const EMBEDDING_MARKER_MIGRATION_MAX_BYTES = 5 * 1024 * 1024;
 const EMBEDDING_MARKER_MIGRATION_STALE_MS = 15 * 60 * 1000;
 const EMBEDDING_BACKFILL_LEASE_MS = 15 * 60 * 1000;
 
 function assertEmbeddingBackfillLeaseToken(token: string): void {
-  if (token.length < 16 || token.length > 100) {
-    throw new Error("EMBEDDING_BACKFILL_LEASE_TOKEN_INVALID");
-  }
+	if (token.length < 16 || token.length > 100) {
+		throw new ConvexError({ code: 'EMBEDDING_BACKFILL_LEASE_TOKEN_INVALID' });
+	}
 }
 
 async function requireActiveEmbeddingBackfillLease(ctx: MutationCtx, token: string): Promise<void> {
-  assertEmbeddingBackfillLeaseToken(token);
-  const lease = await ctx.db
-    .query("embeddingBackfillLeases")
-    .withIndex("by_key", (q) => q.eq("key", "topic"))
-    .unique();
-  if (!lease || lease.token !== token) {
-    throw new Error("EMBEDDING_BACKFILL_LEASE_NOT_OWNED");
-  }
-  if (lease.expiresAt <= Date.now()) {
-    throw new Error("EMBEDDING_BACKFILL_LEASE_EXPIRED");
-  }
+	assertEmbeddingBackfillLeaseToken(token);
+	const lease = await ctx.db
+		.query('embeddingBackfillLeases')
+		.withIndex('by_key', (q) => q.eq('key', 'topic'))
+		.unique();
+	if (!lease || lease.token !== token) {
+		throw new ConvexError({ code: 'EMBEDDING_BACKFILL_LEASE_NOT_OWNED' });
+	}
+	if (lease.expiresAt <= Date.now()) {
+		throw new ConvexError({ code: 'EMBEDDING_BACKFILL_LEASE_EXPIRED' });
+	}
 }
 
 /**
@@ -3321,89 +5348,107 @@ async function requireActiveEmbeddingBackfillLease(ctx: MutationCtx, token: stri
  * evicted before its token-checked release runs.
  */
 export const claimEmbeddingBackfillLease = mutation({
-  args: { _secret: v.string(), token: v.string() },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    assertEmbeddingBackfillLeaseToken(args.token);
-    const now = Date.now();
-    const existing = await ctx.db
-      .query("embeddingBackfillLeases")
-      .withIndex("by_key", (q) => q.eq("key", "topic"))
-      .unique();
+	args: { _secret: v.string(), token: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertEmbeddingBackfillLeaseToken(args.token);
+		const now = Date.now();
+		const existing = await ctx.db
+			.query('embeddingBackfillLeases')
+			.withIndex('by_key', (q) => q.eq('key', 'topic'))
+			.unique();
 
-    if (existing && existing.expiresAt > now) {
-      return { acquired: false as const, retryAt: existing.expiresAt };
-    }
+		if (existing && existing.expiresAt > now) {
+			return { acquired: false as const, retryAt: existing.expiresAt };
+		}
 
-    const expiresAt = now + EMBEDDING_BACKFILL_LEASE_MS;
-    if (existing) {
-      await ctx.db.patch(existing._id, { token: args.token, expiresAt });
-    } else {
-      await ctx.db.insert("embeddingBackfillLeases", {
-        key: "topic",
-        token: args.token,
-        expiresAt,
-      });
-    }
-    return { acquired: true as const, expiresAt };
-  },
+		const expiresAt = now + EMBEDDING_BACKFILL_LEASE_MS;
+		if (existing) {
+			await ctx.db.patch(existing._id, { token: args.token, expiresAt });
+		} else {
+			await ctx.db.insert('embeddingBackfillLeases', {
+				key: 'topic',
+				token: args.token,
+				expiresAt
+			});
+		}
+		return { acquired: true as const, expiresAt };
+	}
 });
 
 /** Release only the lease generation owned by this request. */
 export const releaseEmbeddingBackfillLease = mutation({
-  args: { _secret: v.string(), token: v.string() },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    assertEmbeddingBackfillLeaseToken(args.token);
-    const existing = await ctx.db
-      .query("embeddingBackfillLeases")
-      .withIndex("by_key", (q) => q.eq("key", "topic"))
-      .unique();
-    if (!existing || existing.token !== args.token) {
-      return { released: false as const };
-    }
-    await ctx.db.delete(existing._id);
-    return { released: true as const };
-  },
+	args: { _secret: v.string(), token: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertEmbeddingBackfillLeaseToken(args.token);
+		const existing = await ctx.db
+			.query('embeddingBackfillLeases')
+			.withIndex('by_key', (q) => q.eq('key', 'topic'))
+			.unique();
+		if (!existing || existing.token !== args.token) {
+			return { released: false as const };
+		}
+		await ctx.db.delete(existing._id);
+		return { released: true as const };
+	}
 });
 
 function embeddingBackfillLimit(limit: number | undefined): number {
-  if (limit === undefined) return EMBEDDING_BACKFILL_BATCH_LIMIT;
-  return Math.max(1, Math.min(EMBEDDING_BACKFILL_BATCH_LIMIT, Math.floor(limit)));
+	if (limit === undefined) return EMBEDDING_BACKFILL_BATCH_LIMIT;
+	return Math.max(1, Math.min(EMBEDDING_BACKFILL_BATCH_LIMIT, Math.floor(limit)));
 }
 
 async function listMissingEmbeddingsImpl(ctx: QueryCtx, requestedLimit?: number) {
-  const templates = await ctx.db
-    .query("templates")
-    .withIndex("by_status_isPublic_topicEmbeddingsUpdatedAt", (q) =>
-      q.eq("status", "published").eq("isPublic", true).eq("topicEmbeddingsUpdatedAt", undefined),
-    )
-    .order("desc")
-    .take(embeddingBackfillLimit(requestedLimit));
+	const templates = await ctx.db
+		.query('templates')
+		.withIndex('by_status_isPublic_topicEmbeddingsUpdatedAt', (q) =>
+			q.eq('status', 'published').eq('isPublic', true).eq('topicEmbeddingsUpdatedAt', undefined)
+		)
+		.order('desc')
+		.take(embeddingBackfillLimit(requestedLimit));
 
-  return templates.map((t) => ({
-    _id: t._id,
-    title: t.title,
-    description: t.description ?? null,
-    domain: resolveDomain(t),
-    messageBody: t.messageBody,
-  }));
+	return templates.map((t) => ({
+		_id: t._id,
+		title: t.title,
+		description: t.description ?? null,
+		domain: resolveDomain(t),
+		messageBody: t.messageBody
+	}));
 }
 
 /** Server-only bounded batch used by the authenticated SvelteKit admin route. */
 export const listMissingEmbeddings = query({
-  args: { _secret: v.string(), limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    return await listMissingEmbeddingsImpl(ctx, args.limit);
-  },
+	args: { _secret: v.string(), limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		return await listMissingEmbeddingsImpl(ctx, args.limit);
+	}
 });
+
+export function topicEmbeddingMarkerSplitRequiredResult(progress: {
+	startedAt: number;
+	scanned: number;
+	marked: number;
+}) {
+	return {
+		status: 'blocked' as const,
+		failureCode: 'TOPIC_EMBEDDING_MARKER_MIGRATION_PAGE_SPLIT_REQUIRED' as const,
+		pageScanned: 0,
+		pageMarked: 0,
+		scanned: progress.scanned,
+		marked: progress.marked,
+		isDone: false as const,
+		startedAt: progress.startedAt,
+		completedAt: null
+	};
+}
 
 /**
  * One-time bounded migration for rows created before the topic-specific marker.
  * It never calls Gemini: already-valid vectors inherit their existing update
  * timestamp, while genuinely missing/wrong-dimension rows remain in the exact
- * repair index. Each transaction scans at most 100 stable creation-order rows
+ * repair index. Each transaction scans at most four stable creation-order rows
  * and schedules the next page, avoiding one oversized migration transaction.
  * Progress lives on the public-discovery singleton so operators can prove every
  * scheduled page finished. A top-level invocation restarts a run whose first
@@ -3411,202 +5456,257 @@ export const listMissingEmbeddings = query({
  * continuation. Once complete, an accidental rerun is a no-op.
  */
 export const migrateTopicEmbeddingMarkers = internalMutation({
-  args: {
-    cursor: v.optional(v.string()),
-    startedAt: v.optional(v.number()),
-    scanned: v.optional(v.number()),
-    marked: v.optional(v.number()),
-    restart: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const isContinuation = args.startedAt !== undefined;
-    if (!isContinuation && (args.cursor !== undefined || args.scanned !== undefined || args.marked !== undefined)) {
-      throw new Error("TOPIC_EMBEDDING_MARKER_MIGRATION_INVALID_CONTINUATION");
-    }
+	args: {
+		cursor: v.optional(v.string()),
+		startedAt: v.optional(v.number()),
+		scanned: v.optional(v.number()),
+		marked: v.optional(v.number()),
+		restart: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const isContinuation = args.startedAt !== undefined;
+		if (
+			!isContinuation &&
+			(args.cursor !== undefined || args.scanned !== undefined || args.marked !== undefined)
+		) {
+			throw new Error('TOPIC_EMBEDDING_MARKER_MIGRATION_INVALID_CONTINUATION');
+		}
 
-    let manifest = await getPublicDiscoveryManifestRow(ctx);
-    if (!isContinuation && !args.restart) {
-      if (manifest?.topicEmbeddingMarkerMigrationCompletedAt !== undefined) {
-        return {
-          status: "already-complete" as const,
-          scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
-          marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
-          isDone: true,
-          startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt ?? null,
-          completedAt: manifest.topicEmbeddingMarkerMigrationCompletedAt,
-        };
-      }
-      if (manifest?.topicEmbeddingMarkerMigrationStartedAt !== undefined) {
-        const stale =
-          Date.now() - manifest.topicEmbeddingMarkerMigrationStartedAt >=
-          EMBEDDING_MARKER_MIGRATION_STALE_MS;
-        if (!stale) {
-          return {
-            status: "already-running" as const,
-            scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
-            marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
-            isDone: false,
-            startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt,
-            completedAt: null,
-          };
-        }
-      }
-    }
+		const manifest = await getPublicDiscoveryManifestRow(ctx);
+		if (!isContinuation && !args.restart) {
+			if (manifest?.topicEmbeddingMarkerMigrationCompletedAt !== undefined) {
+				return {
+					status: 'already-complete' as const,
+					scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+					marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+					isDone: true,
+					startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt ?? null,
+					completedAt: manifest.topicEmbeddingMarkerMigrationCompletedAt
+				};
+			}
+			if (manifest?.topicEmbeddingMarkerMigrationFailureCode !== undefined) {
+				return {
+					status: 'blocked' as const,
+					failureCode: manifest.topicEmbeddingMarkerMigrationFailureCode,
+					scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+					marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+					isDone: false,
+					startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt ?? null,
+					completedAt: null
+				};
+			}
+			if (manifest?.topicEmbeddingMarkerMigrationStartedAt !== undefined) {
+				const stale =
+					Date.now() - manifest.topicEmbeddingMarkerMigrationStartedAt >=
+					EMBEDDING_MARKER_MIGRATION_STALE_MS;
+				if (!stale) {
+					return {
+						status: 'already-running' as const,
+						scanned: manifest.topicEmbeddingMarkerMigrationScanned ?? 0,
+						marked: manifest.topicEmbeddingMarkerMigrationMarked ?? 0,
+						isDone: false,
+						startedAt: manifest.topicEmbeddingMarkerMigrationStartedAt,
+						completedAt: null
+					};
+				}
+			}
+		}
 
-    const startedAt = args.startedAt ?? Date.now();
-    let manifestId = manifest?._id;
-    if (!isContinuation) {
-      const progress = {
-        topicEmbeddingMarkerMigrationStartedAt: startedAt,
-        topicEmbeddingMarkerMigrationCompletedAt: undefined,
-        topicEmbeddingMarkerMigrationScanned: 0,
-        topicEmbeddingMarkerMigrationMarked: 0,
-      };
-      if (manifestId) {
-        await ctx.db.patch(manifestId, progress);
-      } else {
-        manifestId = await ctx.db.insert("publicDiscoveryManifest", {
-          key: "public",
-          listReady: false,
-          relationsReady: false,
-          listRevision: 0,
-          relationsRevision: 0,
-          ...progress,
-        });
-      }
-    } else if (
-      !manifestId ||
-      manifest?.topicEmbeddingMarkerMigrationStartedAt !== startedAt ||
-      manifest.topicEmbeddingMarkerMigrationCompletedAt !== undefined
-    ) {
-      return {
-        status: "superseded" as const,
-        scanned: args.scanned ?? 0,
-        marked: args.marked ?? 0,
-        isDone: false,
-        startedAt,
-        completedAt: null,
-      };
-    }
+		const startedAt = args.startedAt ?? Date.now();
+		let manifestId = manifest?._id;
+		if (!isContinuation) {
+			const progress = {
+				topicEmbeddingMarkerMigrationStartedAt: startedAt,
+				topicEmbeddingMarkerMigrationCompletedAt: undefined,
+				topicEmbeddingMarkerMigrationScanned: 0,
+				topicEmbeddingMarkerMigrationMarked: 0,
+				topicEmbeddingMarkerMigrationFailureCode: undefined
+			};
+			if (manifestId) {
+				await ctx.db.patch(manifestId, progress);
+			} else {
+				const inserted = {
+					key: 'public' as const,
+					listReady: false,
+					relationsReady: false,
+					listRevision: 0,
+					relationsRevision: 0,
+					...progress
+				};
+				manifestId = await ctx.db.insert('publicDiscoveryManifest', inserted);
+			}
+		} else if (
+			!manifestId ||
+			manifest?.topicEmbeddingMarkerMigrationStartedAt !== startedAt ||
+			manifest.topicEmbeddingMarkerMigrationCompletedAt !== undefined ||
+			manifest.topicEmbeddingMarkerMigrationFailureCode !== undefined
+		) {
+			return {
+				status: 'superseded' as const,
+				scanned: args.scanned ?? 0,
+				marked: args.marked ?? 0,
+				isDone: false,
+				startedAt,
+				completedAt: null
+			};
+		}
 
-    const page = await ctx.db
-      .query("templates")
-      .order("asc")
-      .paginate({
-        cursor: args.cursor ?? null,
-        numItems: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT,
-      });
-    let pageMarked = 0;
-    for (const template of page.page) {
-      if (template.topicEmbeddingsUpdatedAt === undefined && isFiniteEmbeddingVector(template.topicEmbedding)) {
-        await ctx.db.patch(template._id, {
-          topicEmbeddingsUpdatedAt: template.embeddingsUpdatedAt ?? template.updatedAt,
-        });
-        pageMarked += 1;
-      }
-    }
+		const page = await ctx.db
+			.query('templates')
+			.order('asc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT,
+				maximumRowsRead: EMBEDDING_MARKER_MIGRATION_BATCH_LIMIT + 1,
+				maximumBytesRead: EMBEDDING_MARKER_MIGRATION_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			const failureCode = 'TOPIC_EMBEDDING_MARKER_MIGRATION_PAGE_SPLIT_REQUIRED';
+			await ctx.db.patch(manifestId, {
+				topicEmbeddingMarkerMigrationFailureCode: failureCode
+			});
+			return topicEmbeddingMarkerSplitRequiredResult({
+				startedAt,
+				scanned: args.scanned ?? 0,
+				marked: args.marked ?? 0
+			});
+		}
+		let pageMarked = 0;
+		for (const template of page.page) {
+			if (
+				template.topicEmbeddingsUpdatedAt === undefined &&
+				isFiniteEmbeddingVector(template.topicEmbedding)
+			) {
+				await ctx.db.patch(template._id, {
+					topicEmbeddingsUpdatedAt: template.embeddingsUpdatedAt ?? template.updatedAt
+				});
+				pageMarked += 1;
+			}
+		}
 
-    const scanned = (args.scanned ?? 0) + page.page.length;
-    const marked = (args.marked ?? 0) + pageMarked;
-    const completedAt = page.isDone ? Date.now() : undefined;
-    await ctx.db.patch(manifestId, {
-      topicEmbeddingMarkerMigrationScanned: scanned,
-      topicEmbeddingMarkerMigrationMarked: marked,
-      topicEmbeddingMarkerMigrationCompletedAt: completedAt,
-    });
+		const scanned = (args.scanned ?? 0) + page.page.length;
+		const marked = (args.marked ?? 0) + pageMarked;
+		const completedAt = page.isDone ? Date.now() : undefined;
+		await ctx.db.patch(manifestId, {
+			topicEmbeddingMarkerMigrationScanned: scanned,
+			topicEmbeddingMarkerMigrationMarked: marked,
+			topicEmbeddingMarkerMigrationCompletedAt: completedAt,
+			topicEmbeddingMarkerMigrationFailureCode: undefined
+		});
 
-    if (!page.isDone) {
-      await ctx.scheduler.runAfter(0, migrateTopicEmbeddingMarkersRef, {
-        cursor: page.continueCursor,
-        startedAt,
-        scanned,
-        marked,
-      });
-    }
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, migrateTopicEmbeddingMarkersRef, {
+				cursor: page.continueCursor,
+				startedAt,
+				scanned,
+				marked
+			});
+		}
 
-    return {
-      status: page.isDone ? ("complete" as const) : ("running" as const),
-      pageScanned: page.page.length,
-      pageMarked,
-      scanned,
-      marked,
-      isDone: page.isDone,
-      startedAt,
-      completedAt: completedAt ?? null,
-      ...(page.isDone ? {} : { continueCursor: page.continueCursor }),
-    };
-  },
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			pageScanned: page.page.length,
+			pageMarked,
+			scanned,
+			marked,
+			isDone: page.isDone,
+			startedAt,
+			completedAt: completedAt ?? null,
+			...(page.isDone ? {} : { continueCursor: page.continueCursor })
+		};
+	}
 });
 
 /** Observable completion proof for the one-time marker-migration cutover. */
 export const topicEmbeddingMarkerMigrationStatus = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const manifest = await ctx.db
-      .query("publicDiscoveryManifest")
-      .withIndex("by_key", (q) => q.eq("key", "public"))
-      .unique();
-    const startedAt = manifest?.topicEmbeddingMarkerMigrationStartedAt ?? null;
-    const completedAt = manifest?.topicEmbeddingMarkerMigrationCompletedAt ?? null;
-    return {
-      status: completedAt !== null ? "complete" : startedAt !== null ? "running" : "not-started",
-      startedAt,
-      completedAt,
-      scanned: manifest?.topicEmbeddingMarkerMigrationScanned ?? 0,
-      marked: manifest?.topicEmbeddingMarkerMigrationMarked ?? 0,
-    };
-  },
+	args: {},
+	handler: async (ctx) => {
+		const manifest = await ctx.db
+			.query('publicDiscoveryManifest')
+			.withIndex('by_key', (q) => q.eq('key', 'public'))
+			.unique();
+		const startedAt = manifest?.topicEmbeddingMarkerMigrationStartedAt ?? null;
+		const completedAt = manifest?.topicEmbeddingMarkerMigrationCompletedAt ?? null;
+		const failureCode = manifest?.topicEmbeddingMarkerMigrationFailureCode ?? null;
+		return {
+			status:
+				completedAt !== null
+					? 'complete'
+					: failureCode !== null
+						? 'blocked'
+						: startedAt !== null
+							? 'running'
+							: 'not-started',
+			startedAt,
+			completedAt,
+			failureCode,
+			scanned: manifest?.topicEmbeddingMarkerMigrationScanned ?? 0,
+			marked: manifest?.topicEmbeddingMarkerMigrationMarked ?? 0
+		};
+	}
 });
 
 type TemplateEmbeddingWrite = {
-  locationEmbedding: number[];
-  topicEmbedding: number[];
-  domainHue?: number;
+	locationEmbedding: number[];
+	topicEmbedding: number[];
+	domainHue?: number;
 };
 
 function isFiniteEmbeddingVector(value: unknown): value is number[] {
-  return Array.isArray(value) && value.length === 768 && value.every((component) => typeof component === "number" && Number.isFinite(component));
+	return (
+		Array.isArray(value) &&
+		value.length === 768 &&
+		value.every((component) => typeof component === 'number' && Number.isFinite(component))
+	);
 }
 
 function assertEmbeddingDimensions(args: TemplateEmbeddingWrite): void {
-  if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
-    throw new Error("INVALID_EMBEDDING_DIMENSION:expected=768");
-  }
-  if (!isFiniteEmbeddingVector(args.locationEmbedding) || !isFiniteEmbeddingVector(args.topicEmbedding)) {
-    throw new Error("INVALID_EMBEDDING_VALUE:finite-numbers-required");
-  }
-  if (args.domainHue !== undefined && (!Number.isFinite(args.domainHue) || args.domainHue < 0 || args.domainHue > 360)) {
-    throw new Error("INVALID_DOMAIN_HUE:expected=0..360");
-  }
+	if (args.locationEmbedding.length !== 768 || args.topicEmbedding.length !== 768) {
+		throw new Error('INVALID_EMBEDDING_DIMENSION:expected=768');
+	}
+	if (
+		!isFiniteEmbeddingVector(args.locationEmbedding) ||
+		!isFiniteEmbeddingVector(args.topicEmbedding)
+	) {
+		throw new Error('INVALID_EMBEDDING_VALUE:finite-numbers-required');
+	}
+	if (
+		args.domainHue !== undefined &&
+		(!Number.isFinite(args.domainHue) || args.domainHue < 0 || args.domainHue >= 360)
+	) {
+		throw new Error('INVALID_DOMAIN_HUE:expected=0..<360');
+	}
 }
 
 async function patchTemplateEmbeddingValues(
-  ctx: MutationCtx,
-  template: Doc<"templates">,
-  args: TemplateEmbeddingWrite,
-  embeddingVersion: string,
+	ctx: MutationCtx,
+	template: Doc<'templates'>,
+	args: TemplateEmbeddingWrite,
+	embeddingVersion: string
 ): Promise<void> {
-  const embeddingsUpdatedAt = Date.now();
-  await ctx.db.patch(template._id, {
-    locationEmbedding: args.locationEmbedding,
-    topicEmbedding: args.topicEmbedding,
-    embeddingVersion,
-    embeddingsUpdatedAt,
-    topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
-    ...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {}),
-  });
+	const embeddingsUpdatedAt = Date.now();
+	const embeddingPatch = {
+		locationEmbedding: args.locationEmbedding,
+		topicEmbedding: args.topicEmbedding,
+		embeddingVersion,
+		embeddingsUpdatedAt,
+		topicEmbeddingsUpdatedAt: embeddingsUpdatedAt,
+		...(args.domainHue !== undefined ? { domainHue: args.domainHue } : {})
+	};
+	await ctx.db.patch(template._id, embeddingPatch);
+	await syncTemplateListProjection(ctx, { ...template, ...embeddingPatch });
 
-  if (template.status !== "published" || !template.isPublic) return;
+	if (template.status !== 'published' || !template.isPublic) return;
+	await upsertCompactDiscoverySource(ctx, { ...template, ...embeddingPatch });
 
-  // Topic vectors always affect twins. Domain hue affects the list card, but
-  // the vectors and repair markers themselves never enter the public list row.
-  const listChanged =
-    args.domainHue !== undefined && args.domainHue !== template.domainHue;
-  if (listChanged) {
-    await markPublicDiscoveryListAndRelationsDirty(ctx);
-  } else {
-    await markPublicDiscoveryRelationsDirty(ctx);
-  }
+	// Topic vectors always affect twins. Domain hue affects the list card, but
+	// the vectors and repair markers themselves never enter the public list row.
+	const listChanged = args.domainHue !== undefined && args.domainHue !== template.domainHue;
+	if (listChanged) {
+		await markPublicDiscoveryListAndRelationsDirty(ctx, 'aggregate');
+	} else {
+		await markPublicDiscoveryRelationsDirty(ctx);
+	}
 }
 
 /**
@@ -3623,32 +5723,35 @@ async function patchTemplateEmbeddingValues(
  * six-hour relation cost ceiling.
  */
 export const completePublicTemplateEmbeddings = mutation({
-  args: {
-    templateId: v.id("templates"),
-    expectedUserId: v.id("users"),
-    locationEmbedding: v.array(v.float64()),
-    topicEmbedding: v.array(v.float64()),
-    domainHue: v.optional(v.float64()),
-    _secret: v.string(),
-  },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    assertEmbeddingDimensions(args);
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    if (template.userId !== args.expectedUserId) {
-      throw new Error("EMBEDDING_COMPLETION_OWNER_MISMATCH");
-    }
-    if (template.status !== "published" || !template.isPublic) {
-      throw new Error("EMBEDDING_COMPLETION_PUBLIC_TEMPLATE_REQUIRED");
-    }
-    if (template.topicEmbeddingsUpdatedAt !== undefined || isFiniteEmbeddingVector(template.topicEmbedding)) {
-      throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
-    }
+	args: {
+		templateId: v.id('templates'),
+		expectedUserId: v.id('users'),
+		locationEmbedding: v.array(v.float64()),
+		topicEmbedding: v.array(v.float64()),
+		domainHue: v.optional(v.float64()),
+		_secret: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertEmbeddingDimensions(args);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		if (template.userId !== args.expectedUserId) {
+			throw new Error('EMBEDDING_COMPLETION_OWNER_MISMATCH');
+		}
+		if (template.status !== 'published' || !template.isPublic) {
+			throw new Error('EMBEDDING_COMPLETION_PUBLIC_TEMPLATE_REQUIRED');
+		}
+		if (
+			template.topicEmbeddingsUpdatedAt !== undefined ||
+			isFiniteEmbeddingVector(template.topicEmbedding)
+		) {
+			throw new Error('TOPIC_EMBEDDINGS_ALREADY_PRESENT');
+		}
 
-    await patchTemplateEmbeddingValues(ctx, template, args, "v1");
-    return { updated: true };
-  },
+		await patchTemplateEmbeddingValues(ctx, template, args, 'v1');
+		return { updated: true };
+	}
 });
 
 /**
@@ -3660,330 +5763,367 @@ export const completePublicTemplateEmbeddings = mutation({
  * The batch publishes once through `rebuildHomepageSnapshotsAfterBackfill`.
  */
 export const updateMissingEmbeddingsForBackfill = mutation({
-  args: {
-    templateId: v.id("templates"),
-    locationEmbedding: v.array(v.float64()),
-    topicEmbedding: v.array(v.float64()),
-    domainHue: v.optional(v.float64()),
-    _secret: v.string(),
-    leaseToken: v.string(),
-  },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
-    assertEmbeddingDimensions(args);
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    if (template.status !== "published" || !template.isPublic) {
-      throw new Error("EMBEDDING_BACKFILL_PUBLIC_TEMPLATE_REQUIRED");
-    }
-    if (template.topicEmbeddingsUpdatedAt !== undefined || isFiniteEmbeddingVector(template.topicEmbedding)) {
-      throw new Error("TOPIC_EMBEDDINGS_ALREADY_PRESENT");
-    }
+	args: {
+		templateId: v.id('templates'),
+		locationEmbedding: v.array(v.float64()),
+		topicEmbedding: v.array(v.float64()),
+		domainHue: v.optional(v.float64()),
+		_secret: v.string(),
+		leaseToken: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
+		assertEmbeddingDimensions(args);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		if (template.status !== 'published' || !template.isPublic) {
+			throw new Error('EMBEDDING_BACKFILL_PUBLIC_TEMPLATE_REQUIRED');
+		}
+		if (
+			template.topicEmbeddingsUpdatedAt !== undefined ||
+			isFiniteEmbeddingVector(template.topicEmbedding)
+		) {
+			throw new Error('TOPIC_EMBEDDINGS_ALREADY_PRESENT');
+		}
 
-    await patchTemplateEmbeddingValues(ctx, template, args, "gemini-001-768");
-    return { updated: true };
-  },
+		await patchTemplateEmbeddingValues(ctx, template, args, 'gemini-001-768');
+		return { updated: true };
+	}
 });
 
 /** Publish exactly once after a server-side embedding repair batch. */
 export const rebuildHomepageSnapshotsAfterBackfill = mutation({
-  args: { _secret: v.string(), leaseToken: v.string() },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
-    return await rebuildHomepageSnapshotsImpl(ctx);
-  },
+	args: { _secret: v.string(), leaseToken: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		await requireActiveEmbeddingBackfillLease(ctx, args.leaseToken);
+		return await rebuildHomepageSnapshotsImpl(ctx);
+	}
 });
 
 /**
  * Find template by content hash (dedup check).
  */
 export const findByContentHash = query({
-  args: { userId: v.string(), contentHash: v.string() },
-  handler: async (ctx, { contentHash }) => {
-    const { userId: authUserId } = await requireAuth(ctx);
-    const templates = await ctx.db
-      .query("templates")
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("userId"), authUserId),
-          q.eq(q.field("contentHash"), contentHash),
-        ),
-      )
-      .first();
-    return templates;
-  },
+	args: { userId: v.string(), contentHash: v.string() },
+	handler: async (ctx, { userId, contentHash }) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (String(authUserId) !== userId) {
+			throw new ConvexError({ code: 'TEMPLATE_CONTENT_HASH_USER_MISMATCH' });
+		}
+		const template = await ctx.db
+			.query('templates')
+			.withIndex('by_userId_contentHash', (q) =>
+				q.eq('userId', authUserId).eq('contentHash', contentHash)
+			)
+			.unique();
+		if (!template) return null;
+		return {
+			_id: template._id,
+			_creationTime: template._creationTime,
+			slug: template.slug,
+			title: template.title,
+			description: template.description,
+			domain: template.domain,
+			category: template.category,
+			topics: template.topics,
+			type: template.type,
+			deliveryMethod: template.deliveryMethod,
+			messageBody: template.messageBody,
+			sources: template.sources,
+			researchLog: template.researchLog,
+			preview: template.preview,
+			verifiedSends: template.verifiedSends,
+			uniqueDistricts: template.uniqueDistricts,
+			deliveryConfig: template.deliveryConfig,
+			cwcConfig: template.cwcConfig,
+			recipientConfig: template.recipientConfig,
+			campaignId: template.campaignId,
+			status: template.status,
+			isPublic: template.isPublic,
+			updatedAt: template.updatedAt
+		};
+	}
 });
 
 /**
  * Get user's org membership (for quota check).
  */
 export const getUserOrgId = internalQuery({
-  args: { userId: v.string() },
-  handler: async (ctx, { userId }) => {
-    const membership = await ctx.db
-      .query("orgMemberships")
-      .filter((q) => q.eq(q.field("userId"), userId))
-      .first();
-    return membership ? { orgId: membership.orgId } : null;
-  },
+	args: { userId: v.id('users') },
+	handler: async (ctx, { userId }) => {
+		const membership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) => q.eq('userId', userId))
+			.first();
+		return membership ? { orgId: membership.orgId } : null;
+	}
 });
 
 /**
  * Create a template (with quota check and geographic scope).
  */
 export const createTemplate = mutation({
-  args: {
-    _secret: v.string(),
-    userId: v.id("users"),
-    title: v.string(),
-    slug: v.string(),
-    description: v.string(),
-    messageBody: v.string(),
-    preview: v.string(),
-    type: v.string(),
-    deliveryMethod: v.string(),
-    domain: v.string(),
-    topics: v.array(v.string()),
-    sources: v.optional(v.any()),
-    researchLog: v.optional(v.any()),
-    contentHash: v.string(),
-    status: v.string(),
-    isPublic: v.boolean(),
-    deliveryConfig: v.optional(v.any()),
-    cwcConfig: v.optional(v.any()),
-    recipientConfig: v.optional(v.any()),
-    consensusApproved: v.boolean(),
-    geographicScope: v.optional(templateGeographicScopeValidator),
-    domainHue: v.optional(v.float64()),
-  },
-  handler: async (ctx, args) => {
-    // Moderation, publication state, and public visibility are derived by the
-    // SvelteKit server. Convex functions are internet-callable, so require the
-    // server credential before trusting any of those fields.
-    requireInternalSecret(args._secret);
-    // Also force-match the authenticated identity. The credential closes the
-    // server-derived moderation/publication boundary; this identity check keeps
-    // a server request from accidentally attributing content to another user.
-    const { userId: authUserId } = await requireAuth(ctx);
-    if (String(authUserId) !== String(args.userId)) {
-      throw new Error("Authenticated user does not match args.userId");
-    }
-    const ALLOWED_TEMPLATE_STATUSES = ["draft", "published", "archived", "pending"] as const;
-    if (!ALLOWED_TEMPLATE_STATUSES.includes(args.status as typeof ALLOWED_TEMPLATE_STATUSES[number])) {
-      throw new Error("INVALID_TEMPLATE_STATUS");
-    }
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		title: v.string(),
+		slug: v.string(),
+		description: v.string(),
+		messageBody: v.string(),
+		preview: v.string(),
+		type: v.string(),
+		deliveryMethod: v.string(),
+		domain: v.string(),
+		topics: v.array(v.string()),
+		sources: v.optional(v.any()),
+		researchLog: v.optional(v.any()),
+		contentHash: v.string(),
+		status: v.string(),
+		isPublic: v.boolean(),
+		deliveryConfig: v.optional(v.any()),
+		cwcConfig: v.optional(v.any()),
+		recipientConfig: v.optional(v.any()),
+		consensusApproved: v.boolean(),
+		geographicScope: v.optional(templateGeographicScopeValidator),
+		domainHue: v.optional(v.float64())
+	},
+	handler: async (ctx, args) => {
+		// Moderation, publication state, and public visibility are derived by the
+		// SvelteKit server. Convex functions are internet-callable, so require the
+		// server credential before trusting any of those fields.
+		requireInternalSecret(args._secret);
+		// Also force-match the authenticated identity. The credential closes the
+		// server-derived moderation/publication boundary; this identity check keeps
+		// a server request from accidentally attributing content to another user.
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (String(authUserId) !== String(args.userId)) {
+			throw new Error('Authenticated user does not match args.userId');
+		}
+		const ALLOWED_TEMPLATE_STATUSES = ['draft', 'published', 'archived', 'pending'] as const;
+		if (
+			!ALLOWED_TEMPLATE_STATUSES.includes(args.status as (typeof ALLOWED_TEMPLATE_STATUSES)[number])
+		) {
+			throw new Error('INVALID_TEMPLATE_STATUS');
+		}
 
-    // Mirror the HTTP boundary before any quota reads or source write. The
-    // internal secret is a trust boundary, not permission to store a document
-    // large enough to exhaust the bounded homepage materializer.
-    const inputBudget = validateTemplateInputBudgets(
-      {
-        title: args.title,
-        slug: args.slug,
-        description: args.description,
-        messageBody: args.messageBody,
-        preview: args.preview,
-        type: args.type,
-        deliveryMethod: args.deliveryMethod,
-        domain: args.domain,
-        topics: args.topics,
-        sources: args.sources,
-        researchLog: args.researchLog,
-        deliveryConfig: args.deliveryConfig,
-        cwcConfig: args.cwcConfig,
-        recipientConfig: args.recipientConfig,
-        geographicScope: args.geographicScope,
-        contentHash: args.contentHash,
-        status: args.status,
-        isPublic: args.isPublic,
-      },
-      { includePublicInput: args.status === "published" && args.isPublic },
-    );
-    if (!inputBudget.ok) {
-      throw new Error(
-        `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,
-      );
-    }
+		// Mirror the HTTP boundary before any quota reads or source write. The
+		// internal secret is a trust boundary, not permission to store a document
+		// large enough to exhaust the bounded homepage materializer.
+		const inputBudget = validateTemplateInputBudgets(
+			{
+				title: args.title,
+				slug: args.slug,
+				description: args.description,
+				messageBody: args.messageBody,
+				preview: args.preview,
+				type: args.type,
+				deliveryMethod: args.deliveryMethod,
+				domain: args.domain,
+				topics: args.topics,
+				sources: args.sources,
+				researchLog: args.researchLog,
+				deliveryConfig: args.deliveryConfig,
+				cwcConfig: args.cwcConfig,
+				recipientConfig: args.recipientConfig,
+				geographicScope: args.geographicScope,
+				contentHash: args.contentHash,
+				status: args.status,
+				isPublic: args.isPublic
+			},
+			{ includePublicInput: args.status === 'published' && args.isPublic }
+		);
+		if (!inputBudget.ok) {
+			throw new Error(`TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`);
+		}
 
-    // Fail duplicate links before the more expensive plan/quota reads. This
-    // indexed range read remains authoritative: Convex OCC serializes a
-    // concurrent same-slug insert and retries the loser against the new row.
-    const existingSlug = await ctx.db
-      .query("templates")
-      .withIndex("by_slug", (q) => q.eq("slug", args.slug))
-      .first();
-    if (existingSlug) throw new ConvexError({ code: "TEMPLATE_SLUG_TAKEN" });
+		// Fail duplicate links before the more expensive plan/quota reads. This
+		// indexed range read remains authoritative: Convex OCC serializes a
+		// concurrent same-slug insert and retries the loser against the new row.
+		const existingSlug = await ctx.db
+			.query('templates')
+			.withIndex('by_slug', (q) => q.eq('slug', args.slug))
+			.first();
+		if (existingSlug) throw new ConvexError({ code: 'TEMPLATE_SLUG_TAKEN' });
 
-    // Check org quota
-    const membership = await ctx.db
-      .query("orgMemberships")
-      .filter((q) => q.eq(q.field("userId"), args.userId))
-      .first();
+		// Check org quota
+		const membership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) => q.eq('userId', args.userId))
+			.first();
 
-    if (membership) {
-      const org = await ctx.db.get(membership.orgId);
-      if (org && org.maxTemplatesMonth) {
-        const startOfMonth = new Date();
-        startOfMonth.setDate(1);
-        startOfMonth.setHours(0, 0, 0, 0);
-        const templates = await ctx.db
-          .query("templates")
-          .withIndex("by_orgId", (q) => q.eq("orgId", membership.orgId))
-          .filter((q) => q.gte(q.field("_creationTime"), startOfMonth.getTime()))
-          .collect();
-        if (templates.length >= org.maxTemplatesMonth) {
-          throw new Error("TEMPLATE_QUOTA_EXCEEDED");
-        }
-      }
-    } else {
-      // Individual AI-authoring cap (the L2 metered surface). Individuals are
-      // free forever to ACT on existing messages; the bound is on AI-AUTHORING
-      // NEW templates (the expensive person-layer TemplateCreator generation
-      // path). Org members are governed by their plan's maxTemplatesMonth above,
-      // so this only applies to the un-orged individual path.
-      //
-      // The limit is DYNAMIC: read the user's individual subscription plan and
-      // resolve its authored-per-month allowance (free floor 3, Voice 20,
-      // Advocate 75). The template-creation count IS the meter — query-time
-      // aggregation from timestamped rows (templates.by_userId + _creationTime
-      // >= start-of-month), mirroring the billing pattern, NOT a denormalized
-      // counter that needs resetting.
-      const now = Date.now();
+		if (membership) {
+			const org = await ctx.db.get(membership.orgId);
+			if (org && org.maxTemplatesMonth) {
+				const startOfMonth = new Date();
+				startOfMonth.setDate(1);
+				startOfMonth.setHours(0, 0, 0, 0);
+				const templates = await ctx.db
+					.query('templates')
+					.withIndex('by_orgId', (q) =>
+						q.eq('orgId', membership.orgId).gte('_creationTime', startOfMonth.getTime())
+					)
+					.take(org.maxTemplatesMonth);
+				if (templates.length >= org.maxTemplatesMonth) {
+					throw new Error('TEMPLATE_QUOTA_EXCEEDED');
+				}
+			}
+		} else {
+			// Individual AI-authoring cap (the L2 metered surface). Individuals are
+			// free forever to ACT on existing messages; the bound is on AI-AUTHORING
+			// NEW templates (the expensive person-layer TemplateCreator generation
+			// path). Org members are governed by their plan's maxTemplatesMonth above,
+			// so this only applies to the un-orged individual path.
+			//
+			// The limit is DYNAMIC: read the user's individual subscription plan and
+			// resolve its authored-per-month allowance (free floor 3, Voice 20,
+			// Advocate 75). The template-creation count IS the meter — query-time
+			// aggregation from timestamped rows (templates.by_userId + _creationTime
+			// >= start-of-month), mirroring the billing pattern, NOT a denormalized
+			// counter that needs resetting.
+			const now = Date.now();
 
-      // Resolve the user's effective individual authored limit. Only honor the
-      // plan when the sub is effectively active (active/trialing, or past_due
-      // within a 7-day grace) — otherwise fall to the free floor. The sub is
-      // user-scoped (by_userId); org-scoped subs never reach this branch (those
-      // users have an orgMembership and take the maxTemplatesMonth path above).
-      const sub = await ctx.db
-        .query("subscriptions")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-        .first();
-      const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
-      const isWithinGrace =
-        sub?.status === "past_due" &&
-        sub.pastDueSince !== undefined &&
-        now - sub.pastDueSince < GRACE_PERIOD_MS;
-      const effectivelyActive =
-        sub?.status === "active" || sub?.status === "trialing" || isWithinGrace;
-      // authoredLimitForPlan resolves org slugs + unknowns to the free floor,
-      // so an individual sub can NEVER unlock an org plan's volume here.
-      const limit = effectivelyActive
-        ? authoredLimitForPlan(sub?.plan)
-        : authoredLimitForPlan(null);
+			// Resolve the user's effective individual authored limit. Only honor the
+			// plan when the sub is effectively active (active/trialing, or past_due
+			// within a 7-day grace) — otherwise fall to the free floor. The sub is
+			// user-scoped (by_userId); org-scoped subs never reach this branch (those
+			// users have an orgMembership and take the maxTemplatesMonth path above).
+			const subscriptionRows = await ctx.db
+				.query('subscriptions')
+				.withIndex('by_userId', (q) => q.eq('userId', args.userId))
+				.take(2);
+			if (subscriptionRows.length > 1) {
+				throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+			}
+			const sub = subscriptionRows[0] ?? null;
+			const effectivelyActive =
+				sub?.status === 'active' ||
+				sub?.status === 'trialing' ||
+				(sub?.status === 'past_due' && sub.pastDueSince !== undefined);
+			// authoredLimitForPlan resolves org slugs + unknowns to the free floor,
+			// so an individual sub can NEVER unlock an org plan's volume here.
+			const limit = effectivelyActive
+				? authoredLimitForPlan(sub?.plan)
+				: authoredLimitForPlan(null);
 
-      const monthStart = startOfMonthUTC(now);
-      const monthToDate = await ctx.db
-        .query("templates")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-        .filter((q) => q.gte(q.field("_creationTime"), monthStart))
-        .collect();
-      const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
-      if (!decision.ok) {
-        // Coded throw so the SvelteKit route surfaces the at-cap upgrade card.
-        throw new Error(`${AUTHORING_QUOTA_EXCEEDED}:${decision.message}`);
-      }
-    }
+			const monthStart = startOfMonthUTC(now);
+			const monthToDate = await ctx.db
+				.query('templates')
+				.withIndex('by_userId', (q) => q.eq('userId', args.userId).gte('_creationTime', monthStart))
+				.take(limit);
+			const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
+			if (!decision.ok) {
+				// Coded throw so the SvelteKit route surfaces the at-cap upgrade card.
+				throw new Error(`${AUTHORING_QUOTA_EXCEEDED}:${decision.message}`);
+			}
+		}
 
-    const templateId = await ctx.db.insert("templates", {
-      userId: args.userId,
-      orgId: membership?.orgId,
-      title: args.title,
-      slug: args.slug,
-      description: args.description,
-      messageBody: args.messageBody,
-      preview: args.preview,
-      type: args.type,
-      deliveryMethod: args.deliveryMethod,
-      domain: args.domain,
-      topics: args.topics,
-      sources: args.sources ?? [],
-      researchLog: args.researchLog ?? [],
-      contentHash: args.contentHash,
-      status: args.status,
-      isPublic: args.isPublic,
-      deliveryConfig: args.deliveryConfig ?? {},
-      cwcConfig: args.cwcConfig ?? {},
-      recipientConfig: args.recipientConfig ?? {},
-      verificationStatus: args.consensusApproved ? "approved" : "pending",
-      countryCode: "US",
-      reputationApplied: false,
-      consensusApproved: args.consensusApproved,
-      verifiedSends: 0,
-      uniqueDistricts: 0,
-      embeddingVersion: "gemini-001",
-      flaggedByModeration: !args.consensusApproved,
-      reputationDelta: 0.0,
-      updatedAt: Date.now(),
-    });
+		const templateId = await ctx.db.insert('templates', {
+			userId: args.userId,
+			orgId: membership?.orgId,
+			title: args.title,
+			slug: args.slug,
+			description: args.description,
+			messageBody: args.messageBody,
+			preview: args.preview,
+			type: args.type,
+			deliveryMethod: args.deliveryMethod,
+			domain: args.domain,
+			topics: args.topics,
+			sources: args.sources ?? [],
+			researchLog: args.researchLog ?? [],
+			contentHash: args.contentHash,
+			status: args.status,
+			isPublic: args.isPublic,
+			deliveryConfig: args.deliveryConfig ?? {},
+			cwcConfig: args.cwcConfig ?? {},
+			recipientConfig: args.recipientConfig ?? {},
+			verificationStatus: args.consensusApproved ? 'approved' : 'pending',
+			countryCode: 'US',
+			reputationApplied: false,
+			consensusApproved: args.consensusApproved,
+			verifiedSends: 0,
+			uniqueDistricts: 0,
+			endorsementCount: 0,
+			embeddingVersion: 'gemini-001',
+			flaggedByModeration: !args.consensusApproved,
+			reputationDelta: 0.0,
+			updatedAt: Date.now()
+		});
 
-    // Create geographic scope if provided
-    if (args.geographicScope && args.geographicScope.type !== "international") {
-      const geo = args.geographicScope;
-      let countryCode = "US";
-      let regionCode: string | null = null;
-      let localityCode: string | null = null;
-      let scopeLevel = "country";
-      let displayText = "Nationwide";
+		// Create geographic scope if provided
+		if (args.geographicScope && args.geographicScope.type !== 'international') {
+			const geo = args.geographicScope;
+			let countryCode = 'US';
+			let regionCode: string | null = null;
+			let localityCode: string | null = null;
+			let scopeLevel = 'country';
+			let displayText = 'Nationwide';
 
-      if (geo.type === "nationwide") {
-        countryCode = geo.country;
-        displayText = geo.country;
-      } else if (geo.type === "subnational") {
-        countryCode = geo.country;
-        if (geo.subdivision) {
-          regionCode = geo.subdivision;
-          scopeLevel = "region";
-          displayText = geo.subdivision;
-        }
-        if (geo.locality) {
-          localityCode = geo.locality;
-          scopeLevel = "locality";
-          displayText = geo.locality + (geo.subdivision ? `, ${geo.subdivision}` : "");
-        }
-      }
+			if (geo.type === 'nationwide') {
+				countryCode = geo.country;
+				displayText = geo.country;
+			} else if (geo.type === 'subnational') {
+				countryCode = geo.country;
+				if (geo.subdivision) {
+					regionCode = geo.subdivision;
+					scopeLevel = 'region';
+					displayText = geo.subdivision;
+				}
+				if (geo.locality) {
+					localityCode = geo.locality;
+					scopeLevel = 'locality';
+					displayText = geo.locality + (geo.subdivision ? `, ${geo.subdivision}` : '');
+				}
+			}
 
-      await ctx.db.patch(templateId, {
-        scopes: [
-          {
-            countryCode,
-            ...(regionCode ? { regionCode } : {}),
-            ...(localityCode ? { localityCode } : {}),
-            displayText,
-            scopeLevel,
-            confidence: 1.0,
-            extractionMethod: "gemini_inline",
-          },
-        ],
-      });
-    }
+			await ctx.db.patch(templateId, {
+				scopes: [
+					{
+						countryCode,
+						...(regionCode ? { regionCode } : {}),
+						...(localityCode ? { localityCode } : {}),
+						displayText,
+						scopeLevel,
+						confidence: 1.0,
+						extractionMethod: 'gemini_inline'
+					}
+				]
+			});
+		}
 
-    // Do not make public discovery publication depend on the external embedding
-    // call. A new row can enter/evict the relation graph's bounded top-50 even
-    // before it has vectors, so Gemini failure must still refresh both families.
-    // A successful embedding patch below reuses the relation dirty token (and
-    // the list token when domain hue changes); it never starts a direct rebuild.
-    if (args.status === "published" && args.isPublic) {
-      await markPublicDiscoveryListAndRelationsDirty(ctx);
-    }
-
-    const template = await ctx.db.get(templateId);
-    return template;
-  },
+		// Do not make public discovery publication depend on the external embedding
+		// call. A new row can enter/evict the relation graph's bounded top-50 even
+		// before it has vectors, so Gemini failure must still refresh both families.
+		// A successful embedding patch below reuses the relation dirty token (and
+		// the list token when domain hue changes); it never starts a direct rebuild.
+		const template = await ctx.db.get(templateId);
+		if (!template) throw new Error(`TEMPLATE_LIST_PROJECTION_CREATE_MISSING:${templateId}`);
+		await syncTemplateListProjection(ctx, template);
+		if (args.status === 'published' && args.isPublic) {
+			await upsertCompactDiscoverySource(ctx, template);
+			await markPublicDiscoveryListAndRelationsDirty(ctx, 'authored');
+		}
+		return template;
+	}
 });
 
 /** Delete a template by ID (internal only). */
 export const deleteTemplate = internalMutation({
-  args: { templateId: v.id("templates") },
-  handler: async (ctx, { templateId }) => {
-    const template = await ctx.db.get(templateId);
-    await ctx.db.delete(templateId);
-    if (template?.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListAndRelationsDirty(ctx);
-    }
-  },
+	args: { templateId: v.id('templates') },
+	handler: async (ctx, { templateId }) => {
+		const template = await ctx.db.get(templateId);
+		await deleteCompactDiscoveryRows(ctx, templateId);
+		await deleteTemplateListProjection(ctx, templateId);
+		await ctx.db.delete(templateId);
+		if (template?.status === 'published' && template.isPublic) {
+			await invalidatePublicDiscoveryAfterDestructiveSourceChange(ctx, {
+				list: true,
+				relations: true
+			});
+		}
+	}
 });
 
 /**
@@ -3991,83 +6131,91 @@ export const deleteTemplate = internalMutation({
  * Called when content-hash matches an existing document but metadata has changed.
  */
 export const patchMetadata = mutation({
-  args: {
-    templateId: v.id("templates"),
-    domain: v.optional(v.string()),
-    topics: v.optional(v.array(v.string())),
-  },
-  handler: async (ctx, args) => {
-    const { userId } = await requireAuth(ctx);
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    if (template.userId !== userId) throw new Error("Unauthorized");
+	args: {
+		templateId: v.id('templates'),
+		domain: v.optional(v.string()),
+		topics: v.optional(v.array(v.string()))
+	},
+	handler: async (ctx, args) => {
+		const { userId } = await requireAuth(ctx);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		if (template.userId !== userId) throw new Error('Unauthorized');
 
-    // Metadata is part of the materialized public card. Re-evaluate the full
-    // resulting authoring/public projection so this secondary writer cannot
-    // bypass the create boundary's snapshot-availability budget.
-    const inputBudget = validateTemplateInputBudgets(
-      {
-        title: template.title,
-        slug: template.slug,
-        description: template.description,
-        messageBody: template.messageBody,
-        preview: template.preview,
-        type: template.type,
-        deliveryMethod: template.deliveryMethod,
-        domain: args.domain ?? resolveDomain(template),
-        topics: args.topics ?? template.topics ?? [],
-        sources: template.sources,
-        researchLog: template.researchLog,
-        deliveryConfig: template.deliveryConfig,
-        cwcConfig: template.cwcConfig,
-        recipientConfig: template.recipientConfig,
-        scopes: template.scopes,
-        jurisdictions: template.jurisdictions,
-        contentHash: template.contentHash,
-        status: template.status,
-        isPublic: template.isPublic,
-      },
-      { includePublicInput: template.status === "published" && template.isPublic },
-    );
-    if (!inputBudget.ok) {
-      throw new Error(
-        `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,
-      );
-    }
+		// Validate exactly the fields this mutation can change. Historical rows may
+		// predate today's config budgets; unchanged legacy config remains
+		// grandfathered instead of blocking an otherwise bounded metadata repair.
+		const inputBudget = validateTemplateMetadataBudgets({
+			domain: args.domain,
+			topics: args.topics
+		});
+		if (!inputBudget.ok) {
+			throw new Error(`TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`);
+		}
 
-    await ctx.db.patch(args.templateId, {
-      updatedAt: Date.now(),
-      ...(args.domain !== undefined ? { domain: args.domain } : {}),
-      ...(args.topics !== undefined ? { topics: args.topics } : {}),
-    });
-    if (template.status === "published" && template.isPublic) {
-      if (args.topics !== undefined) {
-        await markPublicDiscoveryListAndRelationsDirty(ctx);
-      } else if (args.domain !== undefined) {
-        await markPublicDiscoveryListDirty(ctx);
-      }
-    }
-  },
+		const metadataPatch = {
+			updatedAt: Date.now(),
+			...(args.domain !== undefined ? { domain: args.domain } : {}),
+			...(args.topics !== undefined ? { topics: args.topics } : {})
+		};
+		await ctx.db.patch(args.templateId, metadataPatch);
+		await syncTemplateListProjection(ctx, { ...template, ...metadataPatch });
+		if (template.status === 'published' && template.isPublic) {
+			await upsertCompactDiscoveryProjection(ctx, { ...template, ...metadataPatch });
+			if (args.topics !== undefined) {
+				await markPublicDiscoveryListAndRelationsDirty(ctx, 'authored');
+			} else if (args.domain !== undefined) {
+				await markPublicDiscoveryListDirty(ctx, 'authored');
+			}
+		}
+	}
 });
 
 /**
  * Set CWC verification status on a template.
  */
 export const setCwcVerification = mutation({
-  args: {
-    templateId: v.id("templates"),
-    verificationStatus: v.string(),
-    countryCode: v.string(),
-    reputationApplied: v.boolean(),
-  },
-  handler: async (ctx, args) => {
-    await requireAuth(ctx);
-    await ctx.db.patch(args.templateId, {
-      verificationStatus: args.verificationStatus,
-      countryCode: args.countryCode,
-      reputationApplied: args.reputationApplied,
-    });
-  },
+	args: {
+		_secret: v.optional(v.string()),
+		expectedUserId: v.id('users'),
+		templateId: v.id('templates'),
+		verificationStatus: v.string(),
+		countryCode: v.string(),
+		reputationApplied: v.boolean()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret ?? '');
+		const allowedVerificationStatuses = new Set(['pending', 'approved', 'rejected', 'verified']);
+		if (!allowedVerificationStatuses.has(args.verificationStatus)) {
+			throw new ConvexError({ code: 'CWC_VERIFICATION_STATUS_INVALID' });
+		}
+		if (!/^[A-Z]{2}$/.test(args.countryCode)) {
+			throw new ConvexError({ code: 'CWC_VERIFICATION_COUNTRY_CODE_INVALID' });
+		}
+		const { userId } = await requireAuth(ctx);
+		if (userId !== args.expectedUserId) {
+			throw new ConvexError({ code: 'CWC_VERIFICATION_EXPECTED_USER_MISMATCH' });
+		}
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		if (template.userId !== userId) {
+			throw new ConvexError({ code: 'CWC_VERIFICATION_TEMPLATE_NOT_OWNED' });
+		}
+		await ctx.db.patch(args.templateId, {
+			verificationStatus: args.verificationStatus,
+			countryCode: args.countryCode,
+			reputationApplied: args.reputationApplied
+		});
+		if (template.status === 'published' && template.isPublic) {
+			await upsertCompactDiscoveryProjection(ctx, {
+				...template,
+				countryCode: args.countryCode,
+				verificationStatus: args.verificationStatus,
+				reputationApplied: args.reputationApplied
+			});
+			await markPublicDiscoveryListDirty(ctx, 'discreteStatus');
+		}
+	}
 });
 
 // =============================================================================
@@ -4083,43 +6231,64 @@ export const setCwcVerification = mutation({
  * one-time Gemini cost, run alongside the topic-embedding backfill.
  */
 export const listMissingTagEmbeddings = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    let idsByKey: Record<PublicTemplateSnapshotKey, Array<Id<"templates">>>;
-    try {
-      idsByKey = await readPublishedPublicTemplateIds(ctx);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message === "PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready"
-      ) {
-        // Cold start has no truthful displayed corpus yet. The consolidated
-        // homepage rebuild publishes it later in the same daily maintenance
-        // window; the next tag pass then embeds only those displayed IDs.
-        return [];
-      }
-      throw error;
-    }
+	args: {},
+	handler: async (ctx) => {
+		let idsByKey: Record<PublicTemplateSnapshotKey, Array<Id<'templates'>>>;
+		try {
+			idsByKey = await readPublishedPublicTemplateIds(ctx);
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				error.message === 'PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready'
+			) {
+				// Cold start has no truthful displayed corpus yet. The consolidated
+				// homepage rebuild publishes it later in the same daily maintenance
+				// window; the next tag pass then embeds only those displayed IDs.
+				return [];
+			}
+			throw error;
+		}
 
-    const selectedIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
-    const templates = (
-      await Promise.all(selectedIds.map(async (id) => await ctx.db.get(id)))
-    ).filter((template): template is Doc<"templates"> => template !== null);
-
-    return templates
-      .map((t) => ({ doc: t, tags: normalizeTags(t.topics) }))
-      .filter(({ doc, tags }) => {
-        if (tags.length === 0) return false; // nothing to embed
-        const covered = new Set(
-          (Array.isArray(doc.tagEmbeddings) ? doc.tagEmbeddings : [])
-            .filter((te) => te && Array.isArray(te.embedding) && te.embedding.length === 768)
-            .map((te) => te.tag),
-        );
-        // Re-embed only when some current tag has no embedding yet.
-        return tags.some((tag) => !covered.has(tag));
-      })
-      .map(({ doc, tags }) => ({ _id: doc._id, tags }));
-  },
+		const selectedIds = [...new Set([...idsByKey.all, ...idsByKey.excludeCwc])];
+		const migration = await compactDiscoveryPlaneReady(ctx);
+		const sources = (
+			await Promise.all(
+				selectedIds.map(async (id) => {
+					const row = await ctx.db
+						.query('publicTemplateDiscoverySources')
+						.withIndex('by_templateId', (q) => q.eq('templateId', id))
+						.unique();
+					if (!row || row.generation !== migration.runToken) return null;
+					assertCompactPublicTemplateSource(row.source);
+					return row.source;
+				})
+			)
+		).filter((source): source is CompactPublicTemplateSource => source !== null);
+		const retained = new Set<string>();
+		for (const source of sources) {
+			for (const tag of normalizeTags(source.topics)) {
+				if (retained.size >= MAX_PUBLIC_RELATION_TAG_VECTORS) break;
+				retained.add(tag);
+			}
+		}
+		const coveredRows = await Promise.all(
+			[...retained].map((tag) =>
+				ctx.db
+					.query('publicTagEmbeddingVectors')
+					.withIndex('by_tag', (q) => q.eq('tag', tag))
+					.unique()
+			)
+		);
+		const covered = new Set(
+			coveredRows.flatMap((row) => (row && isFiniteEmbeddingVector(row.embedding) ? [row.tag] : []))
+		);
+		return sources.flatMap((source) => {
+			const tags = normalizeTags(source.topics).filter((tag) => retained.has(tag));
+			return tags.length > 0 && tags.some((tag) => !covered.has(tag))
+				? [{ _id: source._id, tags }]
+				: [];
+		});
+	}
 });
 
 /**
@@ -4129,91 +6298,98 @@ export const listMissingTagEmbeddings = internalQuery({
  * concept query can cluster the tag vocabulary into concepts. No auth — internal.
  */
 export const backfillTagEmbeddings = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const missing: Array<{ _id: Id<"templates">; tags: string[] }> =
-      await ctx.runQuery(listMissingTagEmbeddingsRef);
+	args: {},
+	handler: async (ctx) => {
+		const missing: Array<{ _id: Id<'templates'>; tags: string[] }> = await ctx.runQuery(
+			listMissingTagEmbeddingsRef
+		);
 
-    if (missing.length === 0) {
-      console.log("[backfill-tags] All template tags are embedded.");
-      return { processed: 0 };
-    }
+		if (missing.length === 0) {
+			console.log('[backfill-tags] All template tags are embedded.');
+			return { processed: 0 };
+		}
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("[backfill-tags] GEMINI_API_KEY not configured in Convex env vars.");
-      return { processed: 0, error: "GEMINI_API_KEY missing" };
-    }
+		const apiKey = process.env.GEMINI_API_KEY;
+		if (!apiKey) {
+			console.error('[backfill-tags] GEMINI_API_KEY not configured in Convex env vars.');
+			return { processed: 0, error: 'GEMINI_API_KEY missing' };
+		}
 
-    async function embed(text: string): Promise<number[] | null> {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: { parts: [{ text }] },
-            taskType: "RETRIEVAL_DOCUMENT",
-            outputDimensionality: 768,
-          }),
-        },
-      );
-      if (!res.ok) return null;
-      const data = await res.json();
-      return data.embedding?.values ?? null;
-    }
+		async function embed(text: string): Promise<number[] | null> {
+			const res = await fetch(
+				`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+				{
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						content: { parts: [{ text }] },
+						taskType: 'RETRIEVAL_DOCUMENT',
+						outputDimensionality: 768
+					})
+				}
+			);
+			if (!res.ok) return null;
+			const data = await res.json();
+			return data.embedding?.values ?? null;
+		}
 
-    let processed = 0;
-    for (const t of missing) {
-      try {
-        const embedded = await Promise.all(
-          t.tags.map(async (tag) => ({ tag, embedding: await embed(tag) })),
-        );
-        const tagEmbeddings = embedded
-          .filter((e): e is { tag: string; embedding: number[] } => Array.isArray(e.embedding))
-          .map((e) => ({ tag: e.tag, embedding: e.embedding }));
+		let processed = 0;
+		for (const t of missing) {
+			try {
+				const embedded = await Promise.all(
+					t.tags.map(async (tag) => ({ tag, embedding: await embed(tag) }))
+				);
+				const tagEmbeddings = embedded
+					.filter((e): e is { tag: string; embedding: number[] } => Array.isArray(e.embedding))
+					.map((e) => ({ tag: e.tag, embedding: e.embedding }));
 
-        if (tagEmbeddings.length === 0) {
-          console.error(`[backfill-tags] Gemini returned no tag embeddings for ${t._id}`);
-          continue;
-        }
+				if (tagEmbeddings.length === 0) {
+					console.error(`[backfill-tags] Gemini returned no tag embeddings for ${t._id}`);
+					continue;
+				}
 
-        await ctx.runMutation(patchTagEmbeddingsRef, {
-          templateId: t._id,
-          tagEmbeddings,
-        });
-        processed++;
-        console.log(`[backfill-tags] Embedded ${tagEmbeddings.length} tags for ${t._id}`);
-      } catch (err) {
-        console.error(`[backfill-tags] Failed for ${t._id}:`, err);
-      }
-    }
+				await ctx.runMutation(patchTagEmbeddingsRef, {
+					templateId: t._id,
+					tagEmbeddings
+				});
+				processed++;
+				console.log(`[backfill-tags] Embedded ${tagEmbeddings.length} tags for ${t._id}`);
+			} catch (err) {
+				console.error(`[backfill-tags] Failed for ${t._id}:`, err);
+			}
+		}
 
-    console.log(`[backfill-tags] Done: ${processed}/${missing.length} templates.`);
-    return { processed, total: missing.length };
-  },
+		console.log(`[backfill-tags] Done: ${processed}/${missing.length} templates.`);
+		return { processed, total: missing.length };
+	}
 });
 
 /** Internal mutation: store per-tag embeddings (server-only) on a template. */
 export const patchTagEmbeddings = internalMutation({
-  args: {
-    templateId: v.id("templates"),
-    tagEmbeddings: v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) })),
-  },
-  handler: async (ctx, args) => {
-    if (args.tagEmbeddings.some(({ embedding }) => embedding.length !== 768)) {
-      throw new Error("INVALID_TAG_EMBEDDING_DIMENSION:expected=768");
-    }
-    const template = await ctx.db.get(args.templateId);
-    if (!template) throw new Error("Template not found");
-    await ctx.db.patch(args.templateId, {
-      tagEmbeddings: args.tagEmbeddings,
-      embeddingsUpdatedAt: Date.now(),
-    });
-    if (template.status === "published" && template.isPublic) {
-      await markPublicDiscoveryRelationsDirty(ctx);
-    }
-  },
+	args: {
+		templateId: v.id('templates'),
+		tagEmbeddings: v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) }))
+	},
+	handler: async (ctx, args) => {
+		if (args.tagEmbeddings.some(({ embedding }) => !isFiniteEmbeddingVector(embedding))) {
+			throw new Error('INVALID_TAG_EMBEDDING_DIMENSION:expected=768');
+		}
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		const embeddingsUpdatedAt = Date.now();
+		await ctx.db.patch(args.templateId, {
+			tagEmbeddings: args.tagEmbeddings,
+			embeddingsUpdatedAt
+		});
+		if (template.status === 'published' && template.isPublic) {
+			await upsertCompactDiscoverySource(ctx, {
+				...template,
+				tagEmbeddings: args.tagEmbeddings,
+				embeddingsUpdatedAt
+			});
+			await markPublicDiscoveryRelationsDirty(ctx);
+		}
+	}
 });
 
 // =============================================================================
@@ -4222,107 +6398,217 @@ export const patchTagEmbeddings = internalMutation({
 
 /** Cosine similarity between two equal-length vectors. */
 function _cosine(a: number[], b: number[]): number {
-  let dot = 0, magA = 0, magB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(magA) * Math.sqrt(magB);
-  return denom === 0 ? 0 : dot / denom;
+	let dot = 0,
+		magA = 0,
+		magB = 0;
+	for (let i = 0; i < a.length; i++) {
+		dot += a[i] * b[i];
+		magA += a[i] * a[i];
+		magB += b[i] * b[i];
+	}
+	const denom = Math.sqrt(magA) * Math.sqrt(magB);
+	return denom === 0 ? 0 : dot / denom;
 }
 
 /** Circular weighted mean of hue angles (handles 350° + 10° → 0°). */
 function _circularMean(hues: number[], weights: number[]): number {
-  let sinSum = 0, cosSum = 0, weightSum = 0;
-  for (let i = 0; i < hues.length; i++) {
-    const rad = (hues[i] * Math.PI) / 180;
-    sinSum += weights[i] * Math.sin(rad);
-    cosSum += weights[i] * Math.cos(rad);
-    weightSum += weights[i];
-  }
-  if (weightSum === 0) return 0;
-  const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
-  return ((angle % 360) + 360) % 360;
+	let sinSum = 0,
+		cosSum = 0,
+		weightSum = 0;
+	for (let i = 0; i < hues.length; i++) {
+		const rad = (hues[i] * Math.PI) / 180;
+		sinSum += weights[i] * Math.sin(rad);
+		cosSum += weights[i] * Math.cos(rad);
+		weightSum += weights[i];
+	}
+	if (weightSum === 0) return 0;
+	const angle = (Math.atan2(sinSum / weightSum, cosSum / weightSum) * 180) / Math.PI;
+	return ((angle % 360) + 360) % 360;
 }
 
 /** Project embedding onto anchors → hue angle. */
-function _projectToHue(embedding: number[], anchors: Array<{ hue: number; embedding: number[] }>, topK = 3): number {
-  const scored = anchors.map((a) => ({
-    hue: a.hue,
-    similarity: _cosine(embedding, a.embedding),
-  }));
-  scored.sort((a, b) => b.similarity - a.similarity);
-  const top = scored.slice(0, topK);
-  const minSim = Math.min(...top.map((t) => t.similarity));
-  const shifted = top.map((t) => ({
-    hue: t.hue,
-    weight: Math.max(0, t.similarity - minSim + 0.01),
-  }));
-  return _circularMean(
-    shifted.map((s) => s.hue),
-    shifted.map((s) => s.weight),
-  );
+function _projectToHue(
+	embedding: number[],
+	anchors: Array<{ hue: number; embedding: number[] }>,
+	topK = 3
+): number {
+	const scored = anchors.map((a) => ({
+		hue: a.hue,
+		similarity: _cosine(embedding, a.embedding)
+	}));
+	scored.sort((a, b) => b.similarity - a.similarity);
+	const top = scored.slice(0, topK);
+	const minSim = Math.min(...top.map((t) => t.similarity));
+	const shifted = top.map((t) => ({
+		hue: t.hue,
+		weight: Math.max(0, t.similarity - minSim + 0.01)
+	}));
+	return _circularMean(
+		shifted.map((s) => s.hue),
+		shifted.map((s) => s.weight)
+	);
 }
 
+function validateDomainHueAnchors(anchors: Array<{ hue: number; embedding: number[] }>): number {
+	if (anchors.length === 0) {
+		throw new ConvexError({ code: 'DOMAIN_HUE_ANCHORS_EMPTY' });
+	}
+	const dimension = anchors[0]?.embedding.length ?? 0;
+	if (dimension === 0) {
+		throw new ConvexError({ code: 'DOMAIN_HUE_ANCHOR_DIMENSION_INVALID' });
+	}
+	for (const [index, anchor] of anchors.entries()) {
+		if (!Number.isFinite(anchor.hue) || anchor.hue < 0 || anchor.hue >= 360) {
+			throw new ConvexError({ code: 'DOMAIN_HUE_ANCHOR_HUE_INVALID', index });
+		}
+		if (
+			anchor.embedding.length !== dimension ||
+			anchor.embedding.some((component) => !Number.isFinite(component))
+		) {
+			throw new ConvexError({
+				code: 'DOMAIN_HUE_ANCHOR_VECTOR_INVALID',
+				index,
+				expectedDimension: dimension
+			});
+		}
+	}
+	return dimension;
+}
+
+function assertDomainHueCandidateEmbedding(embedding: number[], dimension: number): void {
+	if (
+		embedding.length !== dimension ||
+		embedding.some((component) => !Number.isFinite(component))
+	) {
+		throw new ConvexError({
+			code: 'DOMAIN_HUE_CANDIDATE_VECTOR_INVALID',
+			expectedDimension: dimension
+		});
+	}
+}
+
+function assertDomainHueValue(domainHue: number): void {
+	if (!Number.isFinite(domainHue) || domainHue < 0 || domainHue >= 360) {
+		throw new ConvexError({ code: 'DOMAIN_HUE_VALUE_INVALID' });
+	}
+}
+
+const DOMAIN_HUE_BACKFILL_SCAN_PAGE_SIZE = 8;
+
 /**
- * Backfill domainHue on templates that have topicEmbedding but no domainHue.
+ * Backfill every template that has a topic embedding and no stored domain hue.
+ * A hue of zero is already materialized and must not be recomputed. The action
+ * walks bounded query pages until the full table has been scanned, including
+ * pages with no candidates.
  *
  * Usage: npx convex run templates:backfillDomainHue '{"anchors": <contents of domain-anchors.json>}'
  */
 export const backfillDomainHue = internalAction({
-  args: {
-    anchors: v.array(v.object({
-      hue: v.float64(),
-      embedding: v.array(v.float64()),
-    })),
-  },
-  handler: async (ctx, args) => {
-    const candidates = await ctx.runQuery(listMissingDomainHueRef, {});
-    console.log(`[backfillDomainHue] ${candidates.length} templates need domainHue`);
+	args: {
+		anchors: v.array(
+			v.object({
+				hue: v.float64(),
+				embedding: v.array(v.float64())
+			})
+		)
+	},
+	handler: async (ctx, args) => {
+		// Validate caller-controlled math inputs before the first Convex read.
+		const anchorDimension = validateDomainHueAnchors(args.anchors);
+		let processed = 0;
+		let scanned = 0;
+		let pages = 0;
+		let cursor: string | undefined;
+		let isDone = false;
 
-    let processed = 0;
-    for (const t of candidates) {
-      const hue = _projectToHue(t.topicEmbedding, args.anchors);
-      await ctx.runMutation(patchDomainHueRef, {
-        templateId: t._id,
-        domainHue: hue,
-      });
-      processed++;
-      console.log(`[backfillDomainHue] ${t._id} → hue ${hue.toFixed(1)}`);
-    }
+		while (!isDone) {
+			const batch = await ctx.runQuery(
+				listMissingDomainHueRef,
+				cursor === undefined ? {} : { cursor }
+			);
+			pages += 1;
+			scanned += batch.scanned;
+			console.log(
+				`[backfillDomainHue] page ${pages}: scanned ${batch.scanned}, missing ${batch.candidates.length}`
+			);
 
-    return { processed, total: candidates.length };
-  },
+			// Validate the whole page before scheduling any patch, so one malformed
+			// candidate cannot leave its valid page siblings partially materialized.
+			for (const template of batch.candidates) {
+				assertDomainHueCandidateEmbedding(template.topicEmbedding, anchorDimension);
+			}
+			for (const template of batch.candidates) {
+				const hue = _projectToHue(template.topicEmbedding, args.anchors);
+				assertDomainHueValue(hue);
+				await ctx.runMutation(patchDomainHueRef, {
+					templateId: template._id,
+					domainHue: hue
+				});
+				processed += 1;
+				console.log(`[backfillDomainHue] ${template._id} → hue ${hue.toFixed(1)}`);
+			}
+
+			isDone = batch.isDone;
+			if (!isDone && batch.continueCursor === null) {
+				throw new Error('DOMAIN_HUE_BACKFILL_CURSOR_MISSING');
+			}
+			cursor = batch.continueCursor ?? undefined;
+		}
+
+		console.log(
+			`[backfillDomainHue] complete: processed ${processed}, scanned ${scanned} across ${pages} pages`
+		);
+		return { processed, total: processed, scanned, pages };
+	}
 });
 
-/** Internal query: find templates with topicEmbedding but no domainHue. */
+/**
+ * Scan one bounded full-template page for missing domain hues. Callers must
+ * advance `continueCursor` even when `candidates` is empty so later rows cannot
+ * be starved by an already-complete prefix.
+ */
 export const _listMissingDomainHue = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const all = await ctx.db.query("templates").collect();
-    return all
-      .filter((t): t is typeof t & { topicEmbedding: number[] } =>
-        t.topicEmbedding != null && !t.domainHue
-      )
-      .map((t) => ({
-        _id: t._id,
-        topicEmbedding: t.topicEmbedding,
-      }));
-  },
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, args): Promise<MissingDomainHuePage> => {
+		// Legacy templates can approach Convex's 1 MiB document ceiling, so this
+		// query deliberately hydrates no more than eight full rows per transaction.
+		const page = await ctx.db
+			.query('templates')
+			.order('asc')
+			.paginate({ cursor: args.cursor ?? null, numItems: DOMAIN_HUE_BACKFILL_SCAN_PAGE_SIZE });
+		const candidates = page.page
+			.filter(
+				(template): template is typeof template & { topicEmbedding: number[] } =>
+					template.topicEmbedding !== undefined && template.domainHue === undefined
+			)
+			.map((template) => ({
+				_id: template._id,
+				topicEmbedding: template.topicEmbedding
+			}));
+		return {
+			candidates,
+			scanned: page.page.length,
+			continueCursor: page.isDone ? null : page.continueCursor,
+			isDone: page.isDone
+		};
+	}
 });
 
 /** Internal mutation: set domainHue on a single template. */
 export const _patchDomainHue = internalMutation({
-  args: {
-    templateId: v.id("templates"),
-    domainHue: v.float64(),
-  },
-  handler: async (ctx, args) => {
-    const template = await ctx.db.get(args.templateId);
-    await ctx.db.patch(args.templateId, { domainHue: args.domainHue });
-    if (template?.status === "published" && template.isPublic) {
-      await markPublicDiscoveryListDirty(ctx);
-    }
-  },
+	args: {
+		templateId: v.id('templates'),
+		domainHue: v.float64()
+	},
+	handler: async (ctx, args) => {
+		assertDomainHueValue(args.domainHue);
+		const template = await ctx.db.get(args.templateId);
+		if (!template) throw new Error('Template not found');
+		await ctx.db.patch(args.templateId, { domainHue: args.domainHue });
+		await syncTemplateListProjection(ctx, { ...template, domainHue: args.domainHue });
+		if (template.status === 'published' && template.isPublic) {
+			await upsertCompactDiscoveryProjection(ctx, { ...template, domainHue: args.domainHue });
+			await markPublicDiscoveryListDirty(ctx, 'aggregate');
+		}
+	}
 });

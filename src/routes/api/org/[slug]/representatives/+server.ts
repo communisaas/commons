@@ -4,7 +4,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -61,7 +61,17 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
 	const cursor = url.searchParams.get('cursor');
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+	if (!countryCode && !constituencyId) {
+		throw error(400, 'country or constituency is required');
+	}
+	if ((countryCode?.length ?? 0) > 8 || (constituencyId?.length ?? 0) > 128) {
+		throw error(400, 'representative scope is invalid');
+	}
+	if ((cursor?.length ?? 0) > 2_048) throw error(400, 'cursor is invalid');
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1),
+		100
+	);
 
 	const result = await serverQuery(api.legislation.listRepresentatives, {
 		slug: params.slug,

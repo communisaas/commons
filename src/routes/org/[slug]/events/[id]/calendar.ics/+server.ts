@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { eventExportFilename, renderEventIcs } from '$lib/server/events/export';

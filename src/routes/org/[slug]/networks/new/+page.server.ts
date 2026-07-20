@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — subscription plan gate check
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';

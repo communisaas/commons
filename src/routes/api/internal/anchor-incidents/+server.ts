@@ -11,7 +11,7 @@
  */
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { enforceInternalRateLimit } from '$lib/server/internal/rate-limit';
@@ -30,7 +30,11 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	// Read-only dashboard query. 120/min is plenty for an operator refreshing
 	// a page while still capping DB load under a leaked-secret scan.
-	await enforceInternalRateLimit({ endpoint: 'anchor-incidents', maxRequests: 120, windowMs: 60_000 });
+	await enforceInternalRateLimit({
+		endpoint: 'anchor-incidents',
+		maxRequests: 120,
+		windowMs: 60_000
+	});
 
 	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10) || 50, 500);
 	const cursor = url.searchParams.get('cursor') ?? undefined;
@@ -38,7 +42,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const incidents = await serverQuery(api.submissions.listAnchorIncidents, {
 		_secret: getInternalSecret(),
 		limit,
-		cursor});
+		cursor
+	});
 
 	return json({
 		divergentCount: incidents.divergent.length,

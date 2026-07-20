@@ -463,6 +463,24 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip'
 	},
 	// Anti-astroturf rate limits
+	// Slug availability is public GET traffic and performs one compact Convex
+	// lookup. Keep it ahead of the broader authoring rule so anonymous probes
+	// cannot bypass GET throttling or inherit the 24-hour mutation policy.
+	{
+		pattern: '/api/templates/check-slug',
+		maxRequests: 30,
+		windowMs: 60 * 1000,
+		keyStrategy: 'ip',
+		includeGet: true
+	},
+	// Search is a read/AI-cost surface, not template authoring. Keep this more
+	// specific rule before `/api/templates` because matching is first-wins.
+	{
+		pattern: '/api/templates/search',
+		maxRequests: 30,
+		windowMs: 60 * 1000,
+		keyStrategy: 'user'
+	},
 	{
 		pattern: '/api/templates',
 		maxRequests: 10,
@@ -560,14 +578,8 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 10 req/min per user — Stripe portal redirects
 		keyStrategy: 'user'
 	},
-	// ── Public REST API v1 (Phase 1) ──
-	{
-		pattern: '/api/v1/',
-		maxRequests: 100,
-		windowMs: 60 * 1000, // 100 req/min per API key (key ID fills userId slot)
-		keyStrategy: 'user',
-		includeGet: true
-	},
+	// Public REST API v1 is protected by the exact Convex auth mutation. Keeping
+	// a generic 100/min IP rule here would undercut paid API tiers.
 	// ── Events  ──
 	{
 		pattern: '/api/e/',

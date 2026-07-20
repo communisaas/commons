@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 
 const VALID_SCOPES = ['campaign_sign', 'debate_position', 'message_generate', 'full'] as const;
@@ -95,13 +95,20 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			throw error(400, 'orgFilter must be an array of ≤32 strings (each ≤64 characters)');
 		}
 	}
-	if (stanceProfileId !== undefined && stanceProfileId !== null && (typeof stanceProfileId !== 'string' || stanceProfileId.length > 64)) {
+	if (
+		stanceProfileId !== undefined &&
+		stanceProfileId !== null &&
+		(typeof stanceProfileId !== 'string' || stanceProfileId.length > 64)
+	) {
 		throw error(400, 'stanceProfileId must be ≤64 characters');
 	}
 	if (
 		maxActionsPerDay !== undefined &&
 		maxActionsPerDay !== null &&
-		(typeof maxActionsPerDay !== 'number' || !Number.isInteger(maxActionsPerDay) || maxActionsPerDay < 0 || maxActionsPerDay > 10_000)
+		(typeof maxActionsPerDay !== 'number' ||
+			!Number.isInteger(maxActionsPerDay) ||
+			maxActionsPerDay < 0 ||
+			maxActionsPerDay > 10_000)
 	) {
 		throw error(400, 'maxActionsPerDay must be an integer 0-10,000');
 	}
@@ -113,7 +120,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(400, 'requireReviewAbove must be a finite number');
 	}
 	const expiresAtMs = expiresAt ? new Date(expiresAt).getTime() : undefined;
-	if (expiresAt !== undefined && expiresAt !== null && (expiresAtMs === undefined || !Number.isFinite(expiresAtMs))) {
+	if (
+		expiresAt !== undefined &&
+		expiresAt !== null &&
+		(expiresAtMs === undefined || !Number.isFinite(expiresAtMs))
+	) {
 		throw error(400, 'expiresAt must be a valid date');
 	}
 

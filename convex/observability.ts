@@ -7,10 +7,9 @@
  * which is too slow.
  *
  * This module:
- *   - `getBoundaryCellRate24h` (internalQuery): computes the boundary-cell
- *     send rate over the trailing 24 h on credentials that carry the H1
- *     `cellStraddles` field. Legacy rows (pre-H1) are excluded from the
- *     denominator — H0r honesty: "unknown" is not a synonym for "false."
+ *   - `getBoundaryCellRate24h` (internalQuery): reads one explicit, byte-bounded
+ *     trailing-24 h page. Above the reviewed launch capacity it reports
+ *     saturation instead of iterating an attacker-sized credential range.
  *   - `monitorBoundaryCellRate` (internalAction): runs the query and emits
  *     a Sentry alert via `/api/internal/alert` when the rate exceeds the
  *     threshold. Cron-driven (see `convex/crons.ts`).
@@ -32,14 +31,27 @@
 import { v } from 'convex/values';
 import {
 	internalAction,
+	internalMutation,
 	internalQuery,
 	query,
-	type ActionCtx,
+	type MutationCtx,
 	type QueryCtx
 } from './_generated/server';
 import { makeFunctionReference, type FunctionReference } from 'convex/server';
 import { captureToSentry } from './_sentry';
 import { requireInternalSecret } from './_internalAuth';
+import {
+	supervisePublicDiscoveryCoordinatedRebuildLease,
+	supervisePublicDiscoveryCoordinatedRebuildWatchdog,
+	type PublicDiscoveryCoordinatedRebuildLeaseSupervisionResult,
+	type PublicDiscoveryCoordinatedRebuildWatchdogResult
+} from './lib/publicDiscovery';
+import {
+	PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION,
+	publicRecipientMigrationIntegrityReady
+} from './lib/publicTemplateDiscoverySource';
+import { isAccountabilityReadModelReady } from './lib/accountabilityReadModel';
+import { isPlanUsageMigrationReady } from './lib/planUsage';
 
 // Break circular type inference between the action and the query in the same
 // file (mirrors the revocations.ts pattern). Calling `internal.observability.*`
@@ -58,10 +70,49 @@ const getBoundaryCellRate24hRef = makeFunctionReference<'query'>(
 		postH1Count: number;
 		totalRecent: number;
 		periodMs: number;
+		capacityExceeded: boolean;
+		scanned: number;
+		cutoff: number;
+		asOf: number;
 	}
+>;
+const recordBoundaryCellRateResultRef = makeFunctionReference<'mutation'>(
+	'observability:recordBoundaryCellRateResult'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{
+		asOf: number;
+		cutoff: number;
+		scanned: number;
+		boundaryCount: number;
+		postH1Count: number;
+		totalRecent: number;
+		rate?: number;
+		capacityExceeded: boolean;
+	},
+	unknown
+>;
+
+const reportCoordinatedPublicDiscoveryRebuildLeaseFailureRef = makeFunctionReference<'action'>(
+	'observability:reportCoordinatedPublicDiscoveryRebuildLeaseFailure'
+) as unknown as FunctionReference<
+	'action',
+	'internal',
+	{
+		failureAt: number;
+		failureCode: string;
+		leaseExpiresAt: number;
+		retryAt: number;
+		kind: 'clearSeed' | 'reseedTemplates' | null;
+		attempt: number;
+	},
+	{ reported: true }
 >;
 
 const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+const BOUNDARY_CELL_MONITOR_PAGE_ROWS = 250;
+const BOUNDARY_CELL_MONITOR_PAGE_BYTES = 512 * 1024;
 
 /**
  * Tunable threshold for boundary_cell_send_rate alerts.
@@ -94,6 +145,86 @@ const MIN_DENOMINATOR_FOR_ALERT = 50;
 const COVERAGE_FLOOR = 0.5;
 const PUBLIC_DISCOVERY_REFRESH_OVERDUE_GRACE_MS = 15 * 60 * 1000;
 
+type StaleCoordinatedRebuildResult = Extract<
+	PublicDiscoveryCoordinatedRebuildLeaseSupervisionResult,
+	{ status: 'stale' }
+>;
+
+async function enqueueCoordinatedPublicDiscoveryRebuildLeaseAlert(
+	ctx: Pick<MutationCtx, 'scheduler'>,
+	result: StaleCoordinatedRebuildResult
+): Promise<void> {
+	if (!result.shouldAlert) return;
+	await ctx.scheduler.runAfter(0, reportCoordinatedPublicDiscoveryRebuildLeaseFailureRef, {
+		failureAt: result.failureAt,
+		failureCode: result.failureCode,
+		leaseExpiresAt: result.leaseExpiresAt,
+		retryAt: result.retryAt,
+		kind: result.kind,
+		attempt: result.attempt
+	});
+}
+
+/**
+ * Stamp an expired coordinated-rebuild lease and atomically enqueue its alert.
+ *
+ * The shared helper never unlocks or publishes. Scheduling from the same
+ * mutation as the first durable failure stamp prevents a worker crash between
+ * persistence and notification from permanently losing the alert.
+ */
+export const superviseCoordinatedPublicDiscoveryRebuildLease = internalMutation({
+	args: {},
+	handler: async (ctx): Promise<PublicDiscoveryCoordinatedRebuildLeaseSupervisionResult> => {
+		const result = await supervisePublicDiscoveryCoordinatedRebuildLease(ctx);
+		if (result.status === 'stale' && result.shouldAlert) {
+			await enqueueCoordinatedPublicDiscoveryRebuildLeaseAlert(ctx, result);
+		}
+		return result;
+	}
+});
+
+/**
+ * Contained-mode, zero-idle lease watchdog.
+ *
+ * Acquisition schedules this mutation once with the exact owner coordinate.
+ * Only that coordinate can re-arm after a renewal or stamp terminal evidence;
+ * every cleared, duplicate, delayed, or predecessor invocation is a no-op.
+ */
+export const superviseCoordinatedPublicDiscoveryRebuildWatchdog = internalMutation({
+	args: {
+		coordinatedRebuildToken: v.string(),
+		coordinatedRebuildAttempt: v.number(),
+		scheduledAt: v.number()
+	},
+	handler: async (ctx, args): Promise<PublicDiscoveryCoordinatedRebuildWatchdogResult> => {
+		const result = await supervisePublicDiscoveryCoordinatedRebuildWatchdog(ctx, args);
+		if (result.status === 'stale' && result.shouldAlert) {
+			await enqueueCoordinatedPublicDiscoveryRebuildLeaseAlert(ctx, result);
+		}
+		return result;
+	}
+});
+
+/** Emit the one-shot, PII-free alert for a coordinated rebuild that lost its lease. */
+export const reportCoordinatedPublicDiscoveryRebuildLeaseFailure = internalAction({
+	args: {
+		failureAt: v.number(),
+		failureCode: v.string(),
+		leaseExpiresAt: v.number(),
+		retryAt: v.number(),
+		kind: v.union(v.literal('clearSeed'), v.literal('reseedTemplates'), v.null()),
+		attempt: v.number()
+	},
+	handler: async (_ctx, args): Promise<{ reported: true }> => {
+		await captureToSentry(new Error(args.failureCode), {
+			action: 'observability:superviseCoordinatedPublicDiscoveryRebuildLease',
+			level: 'error',
+			extra: args
+		});
+		return { reported: true };
+	}
+});
+
 async function readPublicDiscoveryManifest(ctx: QueryCtx) {
 	return ctx.db
 		.query('publicDiscoveryManifest')
@@ -101,8 +232,393 @@ async function readPublicDiscoveryManifest(ctx: QueryCtx) {
 		.unique();
 }
 
+async function readPublicDiscoverySourceMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('publicDiscoverySourceMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readTemplateListProjectionMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('templateListProjectionMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readRecipientMetricsMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('recipientMetricsMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readSessionAuthorityMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('sessionAuthorityMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readCampaignReadModelMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('campaignReadModelMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readCampaignCounterMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('campaignActiveCounterMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readDebateReadModelMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('debateReadModelMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readPublicOrganizationDirectoryMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('publicOrganizationDirectoryMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readCoalitionMetricsMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('coalitionMetricsMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readNetworkCharterMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('networkCharterMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readSupporterBrowseMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('supporterBrowseMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'supporter-browse-v1'))
+		.unique();
+}
+
+async function readSupporterAudienceActionMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('supporterAudienceActionMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'supporter-audience-actions-v2'))
+		.unique();
+}
+
+async function readAccountabilityReadModelMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('accountabilityReadModelMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readPlanUsageMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('planUsageMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'v1'))
+		.unique();
+}
+
+async function readSubscriptionAuthorityMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('subscriptionAuthorityMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'subscription-authority-v1'))
+		.unique();
+}
+
+async function readContactAuthorityMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('contactAuthorityMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'contact-authority-v1'))
+		.unique();
+}
+
+async function readOldestContactFanoutJob(ctx: QueryCtx, status: 'pending' | 'failed') {
+	return ctx.db
+		.query('contactFanoutJobs')
+		.withIndex('by_status_createdAt', (q) => q.eq('status', status))
+		.order('asc')
+		.first();
+}
+
+async function readWorkflowExecutionCountMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('workflowExecutionCountMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'workflow-execution-count-v1'))
+		.unique();
+}
+
+async function readDonationConfirmationSummaryMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('donationConfirmationSummaryMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'donation-confirmation-summary-v1'))
+		.unique();
+}
+
+async function readSmsReplySummaryMigration(ctx: QueryCtx) {
+	return ctx.db
+		.query('smsReplySummaryMigrations')
+		.withIndex('by_key', (q) => q.eq('key', 'sms-reply-summary-v1'))
+		.unique();
+}
+
+function launchPlane(status: unknown, ready: boolean, failureCode?: unknown) {
+	return {
+		status:
+			typeof status === 'string' && status.length > 0 ? status.slice(0, 64) : ('missing' as const),
+		ready,
+		failureCode:
+			typeof failureCode === 'string' && failureCode.length > 0 ? failureCode.slice(0, 256) : null
+	};
+}
+
 async function readDiscoveryProducerStatus(ctx: QueryCtx) {
-	const manifest = await readPublicDiscoveryManifest(ctx);
+	const [
+		manifest,
+		sourceMigration,
+		templateListMigration,
+		recipientMetricsMigration,
+		sessionAuthorityMigration,
+		campaignReadModelMigration,
+		campaignCounterMigration,
+		debateReadModelMigration,
+		publicOrganizationDirectoryMigration,
+		coalitionMetricsMigration,
+		networkCharterMigration,
+		supporterBrowseMigration,
+		supporterAudienceActionMigration,
+		accountabilityReadModelMigration,
+		planUsageMigration,
+		subscriptionAuthorityMigration,
+		contactAuthorityMigration,
+		failedContactFanoutJob,
+		pendingContactFanoutJob,
+		workflowExecutionCountMigration,
+		donationConfirmationSummaryMigration,
+		smsReplySummaryMigration
+	] = await Promise.all([
+		readPublicDiscoveryManifest(ctx),
+		readPublicDiscoverySourceMigration(ctx),
+		readTemplateListProjectionMigration(ctx),
+		readRecipientMetricsMigration(ctx),
+		readSessionAuthorityMigration(ctx),
+		readCampaignReadModelMigration(ctx),
+		readCampaignCounterMigration(ctx),
+		readDebateReadModelMigration(ctx),
+		readPublicOrganizationDirectoryMigration(ctx),
+		readCoalitionMetricsMigration(ctx),
+		readNetworkCharterMigration(ctx),
+		readSupporterBrowseMigration(ctx),
+		readSupporterAudienceActionMigration(ctx),
+		readAccountabilityReadModelMigration(ctx),
+		readPlanUsageMigration(ctx),
+		readSubscriptionAuthorityMigration(ctx),
+		readContactAuthorityMigration(ctx),
+		readOldestContactFanoutJob(ctx, 'failed'),
+		readOldestContactFanoutJob(ctx, 'pending'),
+		readWorkflowExecutionCountMigration(ctx),
+		readDonationConfirmationSummaryMigration(ctx),
+		readSmsReplySummaryMigration(ctx)
+	]);
+	const discoverySourcePlaneReady =
+		sourceMigration?.status === 'ready' &&
+		sourceMigration.projectionVersion === PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION &&
+		sourceMigration.completedAt !== undefined &&
+		sourceMigration.rejected === 0 &&
+		sourceMigration.sourcesWritten === sourceMigration.eligible &&
+		publicRecipientMigrationIntegrityReady(sourceMigration);
+	const discoveryEndorsementCountsReady =
+		manifest?.endorsementCountMigrationStatus === 'complete' &&
+		manifest.endorsementCountMigrationCompletedAt !== undefined &&
+		manifest.endorsementCountMigrationFailureCode === undefined;
+	const templateListProjectionStatus = templateListMigration?.status ?? 'not-started';
+	const templateListProjectionReady =
+		templateListProjectionStatus === 'ready' &&
+		templateListMigration?.completedAt !== undefined &&
+		templateListMigration.cursor === undefined &&
+		templateListMigration.failureCode === undefined &&
+		templateListMigration.scanned === templateListMigration.projected;
+	const recipientMetricsStatus = recipientMetricsMigration?.status ?? 'not-started';
+	const recipientMetricsReady =
+		recipientMetricsStatus === 'ready' &&
+		recipientMetricsMigration?.phase === 'complete' &&
+		recipientMetricsMigration.completedAt !== undefined &&
+		recipientMetricsMigration.scannedMessages === recipientMetricsMigration.projectedMessages &&
+		recipientMetricsMigration.scannedPositions === recipientMetricsMigration.projectedPositions;
+	const launchProjectionPlanes = {
+		discoverySource: launchPlane(
+			sourceMigration?.status,
+			discoverySourcePlaneReady,
+			sourceMigration?.failureCode
+		),
+		endorsementCounts: launchPlane(
+			manifest?.endorsementCountMigrationStatus,
+			discoveryEndorsementCountsReady,
+			manifest?.endorsementCountMigrationFailureCode
+		),
+		templateList: launchPlane(
+			templateListProjectionStatus,
+			templateListProjectionReady,
+			templateListMigration?.failureCode
+		),
+		recipientMetrics: launchPlane(
+			recipientMetricsStatus,
+			recipientMetricsReady,
+			recipientMetricsMigration?.failureCode
+		),
+		sessionAuthority: launchPlane(
+			sessionAuthorityMigration?.status,
+			sessionAuthorityMigration?.status === 'ready' &&
+				sessionAuthorityMigration.scanComplete === true &&
+				sessionAuthorityMigration.cursor === undefined &&
+				sessionAuthorityMigration.failureCode === undefined &&
+				sessionAuthorityMigration.scanned === sessionAuthorityMigration.written,
+			sessionAuthorityMigration?.failureCode
+		),
+		campaignReadModel: launchPlane(
+			campaignReadModelMigration?.status,
+			campaignReadModelMigration?.status === 'ready' &&
+				campaignReadModelMigration.phase === 'deliveries' &&
+				campaignReadModelMigration.cursor === undefined &&
+				campaignReadModelMigration.failureCode === undefined,
+			campaignReadModelMigration?.failureCode
+		),
+		campaignCounters: launchPlane(
+			campaignCounterMigration?.status,
+			campaignCounterMigration?.status === 'ready' &&
+				campaignCounterMigration.cursor === undefined &&
+				campaignCounterMigration.failureCode === undefined,
+			campaignCounterMigration?.failureCode
+		),
+		debateReadModel: launchPlane(
+			debateReadModelMigration?.status,
+			debateReadModelMigration?.status === 'ready' &&
+				debateReadModelMigration.cursor === undefined &&
+				debateReadModelMigration.failureCode === undefined,
+			debateReadModelMigration?.failureCode
+		),
+		organizationDirectory: launchPlane(
+			publicOrganizationDirectoryMigration?.status,
+			publicOrganizationDirectoryMigration?.status === 'ready' &&
+				publicOrganizationDirectoryMigration.scanComplete === true &&
+				publicOrganizationDirectoryMigration.cursor === undefined &&
+				publicOrganizationDirectoryMigration.failureCode === undefined,
+			publicOrganizationDirectoryMigration?.failureCode
+		),
+		coalitionMetrics: launchPlane(
+			coalitionMetricsMigration?.status,
+			coalitionMetricsMigration?.status === 'ready' &&
+				coalitionMetricsMigration.phase === 'complete' &&
+				coalitionMetricsMigration.cursor === undefined &&
+				coalitionMetricsMigration.failureCode === undefined &&
+				coalitionMetricsMigration.scannedSupporters ===
+					coalitionMetricsMigration.projectedSupporters &&
+				coalitionMetricsMigration.scannedActions === coalitionMetricsMigration.projectedActions &&
+				coalitionMetricsMigration.scannedReceipts === coalitionMetricsMigration.projectedReceipts &&
+				coalitionMetricsMigration.networksScheduled === coalitionMetricsMigration.networksReady,
+			coalitionMetricsMigration?.failureCode
+		),
+		networkCharters: launchPlane(
+			networkCharterMigration?.status,
+			networkCharterMigration?.status === 'ready' &&
+				networkCharterMigration.cursor === undefined &&
+				networkCharterMigration.failureCode === undefined &&
+				networkCharterMigration.scanned === networkCharterMigration.projected,
+			networkCharterMigration?.failureCode
+		),
+		supporterBrowse: launchPlane(
+			supporterBrowseMigration?.status,
+			supporterBrowseMigration?.status === 'ready' &&
+				supporterBrowseMigration.phase === 'complete' &&
+				supporterBrowseMigration.cursor === undefined &&
+				supporterBrowseMigration.failureCode === undefined &&
+				supporterBrowseMigration.completedAt !== undefined &&
+				supporterBrowseMigration.scanned === supporterBrowseMigration.projected,
+			supporterBrowseMigration?.failureCode
+		),
+		supporterAudienceActions: launchPlane(
+			supporterAudienceActionMigration?.status,
+			supporterAudienceActionMigration?.status === 'ready' &&
+				supporterAudienceActionMigration.cursor === undefined &&
+				supporterAudienceActionMigration.failureCode === undefined &&
+				supporterAudienceActionMigration.completedAt !== undefined &&
+				supporterAudienceActionMigration.scanned === supporterAudienceActionMigration.projected,
+			supporterAudienceActionMigration?.failureCode
+		),
+		accountabilityReadModel: launchPlane(
+			accountabilityReadModelMigration?.status,
+			isAccountabilityReadModelReady(accountabilityReadModelMigration),
+			accountabilityReadModelMigration?.failureCode
+		),
+		planUsage: launchPlane(
+			planUsageMigration?.status,
+			isPlanUsageMigrationReady(planUsageMigration),
+			planUsageMigration?.failureCode
+		),
+		subscriptionAuthority: launchPlane(
+			subscriptionAuthorityMigration?.status,
+			subscriptionAuthorityMigration?.status === 'ready' &&
+				subscriptionAuthorityMigration.cursor === undefined &&
+				subscriptionAuthorityMigration.completedAt !== undefined &&
+				subscriptionAuthorityMigration.failureCode === undefined,
+			subscriptionAuthorityMigration?.failureCode
+		),
+		contactAuthority: launchPlane(
+			failedContactFanoutJob
+				? 'failed'
+				: pendingContactFanoutJob
+					? 'draining'
+					: contactAuthorityMigration?.status,
+			contactAuthorityMigration?.status === 'ready' &&
+				contactAuthorityMigration.cursor === undefined &&
+				contactAuthorityMigration.completedAt !== undefined &&
+				contactAuthorityMigration.failureCode === undefined &&
+				failedContactFanoutJob === null &&
+				pendingContactFanoutJob === null,
+			contactAuthorityMigration?.failureCode ??
+				failedContactFanoutJob?.failureCode ??
+				(pendingContactFanoutJob ? 'CONTACT_FANOUT_PENDING' : undefined)
+		),
+		workflowExecutionCounts: launchPlane(
+			workflowExecutionCountMigration?.status,
+			workflowExecutionCountMigration?.status === 'ready' &&
+				workflowExecutionCountMigration.phase === 'complete' &&
+				workflowExecutionCountMigration.cursor === undefined &&
+				workflowExecutionCountMigration.completedAt !== undefined &&
+				workflowExecutionCountMigration.failureCode === undefined,
+			workflowExecutionCountMigration?.failureCode
+		),
+		donationConfirmationSummaries: launchPlane(
+			donationConfirmationSummaryMigration?.status,
+			donationConfirmationSummaryMigration?.status === 'ready' &&
+				donationConfirmationSummaryMigration.cursor === undefined &&
+				donationConfirmationSummaryMigration.completedAt !== undefined &&
+				donationConfirmationSummaryMigration.failureCode === undefined,
+			donationConfirmationSummaryMigration?.failureCode
+		),
+		smsReplySummaries: launchPlane(
+			smsReplySummaryMigration?.status,
+			smsReplySummaryMigration?.status === 'ready' &&
+				smsReplySummaryMigration.cursor === undefined &&
+				smsReplySummaryMigration.completedAt !== undefined &&
+				smsReplySummaryMigration.failureCode === undefined,
+			smsReplySummaryMigration?.failureCode
+		)
+	};
+	const launchProjectionsReady = Object.values(launchProjectionPlanes).every(
+		(plane) => plane.ready
+	);
 	const overdueCandidates = manifest
 		? [
 				manifest.listDirtyAt === undefined
@@ -119,8 +635,20 @@ async function readDiscoveryProducerStatus(ctx: QueryCtx) {
 		ok: true as const,
 		storageReadable: true as const,
 		discoveryManifestPresent: manifest !== null,
+		discoverySourcePlaneReady,
+		discoveryEndorsementCountsReady,
+		templateListProjectionStatus,
+		templateListProjectionReady,
+		recipientMetricsStatus,
+		recipientMetricsReady,
+		launchProjectionPlanes,
+		launchProjectionsReady,
 		discoveryProducerHealthy:
 			manifest !== null &&
+			discoverySourcePlaneReady &&
+			discoveryEndorsementCountsReady &&
+			templateListProjectionReady &&
+			recipientMetricsReady &&
 			manifest.listReady &&
 			manifest.relationsReady &&
 			manifest.listFailureCode === undefined &&
@@ -145,7 +673,7 @@ async function readDiscoveryProducerStatus(ctx: QueryCtx) {
  * of this anonymous response; trusted server probes use
  * `discoveryProducerStatus` below.
  */
-export const servicePing = query({
+export const servicePing = internalQuery({
 	args: {},
 	handler: async (ctx) => {
 		await readPublicDiscoveryManifest(ctx);
@@ -166,23 +694,47 @@ export const discoveryProducerStatus = query({
 	}
 });
 
+/**
+ * Secret-free operator view for `npx convex run`. Internal functions are
+ * deployment-authorized by Convex and cannot be called by application clients,
+ * so cutover polling does not need to serialize INTERNAL_API_SECRET.
+ */
+export const launchProjectionStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const status = await readDiscoveryProducerStatus(ctx);
+		return {
+			launchProjectionPlanes: status.launchProjectionPlanes,
+			launchProjectionsReady: status.launchProjectionsReady
+		};
+	}
+});
+
 export const getBoundaryCellRate24h = internalQuery({
 	args: {},
 	handler: async (ctx) => {
-		const cutoff = Date.now() - TWENTY_FOUR_HOURS_MS;
+		const asOf = Date.now();
+		const cutoff = asOf - TWENTY_FOUR_HOURS_MS;
 
-		// Range scan via `by_issuedAt` reads only credentials issued within
-		// the 24h window — bounded by window-rate, not table cardinality.
-		// Previous `.collect()` would hit Convex's row-scan cap somewhere
-		// between 5K-16K active credentials and throw silently in the
-		// hourly cron, killing the boundary alert precisely when there are
-		// enough users for boundary mistakes to matter.
+		// One explicit page makes hourly I/O independent of an attacker-sized
+		// trailing-day range. At launch, <=250 credentials/day is measured
+		// exactly. A larger range becomes a durable capacity alert; it is never
+		// sampled and mislabeled as the exact population rate.
+		const page = await ctx.db
+			.query('districtCredentials')
+			.withIndex('by_issuedAt', (q) => q.gte('issuedAt', cutoff).lte('issuedAt', asOf))
+			.order('asc')
+			.paginate({
+				cursor: null,
+				numItems: BOUNDARY_CELL_MONITOR_PAGE_ROWS,
+				maximumRowsRead: BOUNDARY_CELL_MONITOR_PAGE_ROWS + 1,
+				maximumBytesRead: BOUNDARY_CELL_MONITOR_PAGE_BYTES
+			});
+		const capacityExceeded = !page.isDone || page.pageStatus === 'SplitRequired';
 		let postH1Count = 0;
 		let boundaryCount = 0;
 		let totalRecent = 0;
-		for await (const row of ctx.db
-			.query('districtCredentials')
-			.withIndex('by_issuedAt', (q) => q.gte('issuedAt', cutoff))) {
+		for (const row of page.page.slice(0, BOUNDARY_CELL_MONITOR_PAGE_ROWS)) {
 			totalRecent++;
 			// H0r CRITICAL: only rows with cellStraddles defined contribute to
 			// the denominator. Legacy rows (undefined) are "unknown," not "no
@@ -192,14 +744,85 @@ export const getBoundaryCellRate24h = internalQuery({
 			if (row.cellStraddles === true) boundaryCount++;
 		}
 
-		const rate = postH1Count > 0 ? boundaryCount / postH1Count : null;
+		const rate = !capacityExceeded && postH1Count > 0 ? boundaryCount / postH1Count : null;
 		return {
 			rate,
 			boundaryCount,
 			postH1Count,
 			totalRecent,
-			periodMs: TWENTY_FOUR_HOURS_MS
+			periodMs: TWENTY_FOUR_HOURS_MS,
+			capacityExceeded,
+			scanned: Math.min(page.page.length, BOUNDARY_CELL_MONITOR_PAGE_ROWS),
+			cutoff,
+			asOf
 		};
+	}
+});
+
+/** Persist exact-or-saturated aggregate evidence in one compact singleton. */
+export const recordBoundaryCellRateResult = internalMutation({
+	args: {
+		asOf: v.number(),
+		cutoff: v.number(),
+		scanned: v.number(),
+		boundaryCount: v.number(),
+		postH1Count: v.number(),
+		totalRecent: v.number(),
+		rate: v.optional(v.number()),
+		capacityExceeded: v.boolean()
+	},
+	handler: async (ctx, args) => {
+		for (const value of [
+			args.asOf,
+			args.cutoff,
+			args.scanned,
+			args.boundaryCount,
+			args.postH1Count,
+			args.totalRecent
+		]) {
+			if (!Number.isSafeInteger(value)) {
+				throw new Error('BOUNDARY_CELL_MONITOR_RESULT_INVALID');
+			}
+		}
+		const rateRequired = !args.capacityExceeded && args.postH1Count > 0;
+		if (
+			args.asOf - args.cutoff !== TWENTY_FOUR_HOURS_MS ||
+			args.scanned < 0 ||
+			args.scanned > BOUNDARY_CELL_MONITOR_PAGE_ROWS ||
+			args.boundaryCount < 0 ||
+			args.postH1Count < args.boundaryCount ||
+			args.totalRecent < args.postH1Count ||
+			args.totalRecent > args.scanned ||
+			(args.rate !== undefined) !== rateRequired ||
+			(!args.capacityExceeded && args.rate !== undefined && (args.rate < 0 || args.rate > 1)) ||
+			(args.capacityExceeded && args.rate !== undefined)
+		) {
+			throw new Error('BOUNDARY_CELL_MONITOR_RESULT_INVALID');
+		}
+		const existing = await ctx.db
+			.query('boundaryCellMonitorState')
+			.withIndex('by_key', (q) => q.eq('key', 'rolling-24h-v1'))
+			.unique();
+		// A delayed action must never replace evidence from a newer hourly run.
+		// Equal timestamps are idempotent retries and likewise need no write.
+		if (existing && existing.asOf >= args.asOf) {
+			return { status: 'stale_ignored' as const };
+		}
+		const row = {
+			key: 'rolling-24h-v1' as const,
+			status: args.capacityExceeded ? ('capacity_exceeded' as const) : ('complete' as const),
+			cutoff: args.cutoff,
+			asOf: args.asOf,
+			scanned: args.scanned,
+			boundaryCount: args.boundaryCount,
+			postH1Count: args.postH1Count,
+			totalRecent: args.totalRecent,
+			rate: args.rate,
+			updatedAt: Date.now()
+		};
+		if (existing) await ctx.db.replace(existing._id, row);
+		else await ctx.db.insert('boundaryCellMonitorState', row);
+		return { status: row.status };
 	}
 });
 
@@ -217,7 +840,18 @@ export const monitorBoundaryCellRate = internalAction({
 	args: {},
 	handler: async (ctx) => {
 		try {
-			return await runMonitorBoundaryCellRate(ctx);
+			const stats = await ctx.runQuery(getBoundaryCellRate24hRef, {});
+			await ctx.runMutation(recordBoundaryCellRateResultRef, {
+				asOf: stats.asOf,
+				cutoff: stats.cutoff,
+				scanned: stats.scanned,
+				boundaryCount: stats.boundaryCount,
+				postH1Count: stats.postH1Count,
+				totalRecent: stats.totalRecent,
+				...(stats.rate === null ? {} : { rate: stats.rate }),
+				capacityExceeded: stats.capacityExceeded
+			});
+			return await runMonitorBoundaryCellRate(stats);
 		} catch (err) {
 			await captureToSentry(err, {
 				action: 'monitorBoundaryCellRate',
@@ -228,8 +862,31 @@ export const monitorBoundaryCellRate = internalAction({
 	}
 });
 
-async function runMonitorBoundaryCellRate(ctx: ActionCtx): Promise<unknown> {
-	const stats = await ctx.runQuery(getBoundaryCellRate24hRef, {});
+async function runMonitorBoundaryCellRate(stats: {
+	rate: number | null;
+	boundaryCount: number;
+	postH1Count: number;
+	totalRecent: number;
+	periodMs: number;
+	capacityExceeded: boolean;
+	scanned: number;
+	cutoff: number;
+	asOf: number;
+}): Promise<unknown> {
+	if (stats.capacityExceeded) {
+		await captureToSentry(new Error('BOUNDARY_CELL_MONITOR_CAPACITY_EXCEEDED'), {
+			action: 'monitorBoundaryCellRate',
+			level: 'error',
+			extra: {
+				asOf: stats.asOf,
+				cutoff: stats.cutoff,
+				scanned: stats.scanned,
+				pageRows: BOUNDARY_CELL_MONITOR_PAGE_ROWS,
+				pageBytes: BOUNDARY_CELL_MONITOR_PAGE_BYTES
+			}
+		});
+		return { alerted: true, reason: 'capacity_exceeded', stats };
+	}
 
 	// Insufficient signal — log silently, do NOT alert (would just
 	// generate noise during low-volume periods like fresh deploys).

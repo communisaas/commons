@@ -1,17 +1,19 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { isValidPublicTemplateSlug } from '$lib/server/public-template-detail-path';
+import { getCachedPublicTemplatePageArtifact } from '$lib/server/public-template-queries';
 
-export const load: PageServerLoad = async ({ params, locals, setHeaders }) => {
+export const load: PageServerLoad = async ({ params, locals, setHeaders, url, platform }) => {
 	const { slug } = params;
+	if (!isValidPublicTemplateSlug(slug)) throw error(404, 'Template not found');
 
 	// Modal detail data includes direct-email targets. Keep this purpose-bound
 	// response out of browser and Cloudflare caches.
 	setHeaders({ 'Cache-Control': 'private, no-store, max-age=0' });
 
-	const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
+	const artifact = await getCachedPublicTemplatePageArtifact({ url, platform }, slug);
+	const convexTemplate = artifact?.detail ?? null;
 
 	if (!convexTemplate) {
 		throw error(404, 'Template not found');

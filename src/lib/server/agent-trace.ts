@@ -42,11 +42,11 @@
  *   npx convex run agentTraces:listByTrace --prod -- \
  *     '{"_secret":"$INTERNAL_API_SECRET","traceId":"abc-..."}'
  *   npx convex run agentTraces:findStuck --prod -- \
- *     '{"_secret":"$INTERNAL_API_SECRET","endpoint":"message-generation","olderThanMs":300000}'
+ *     '{"_secret":"$INTERNAL_API_SECRET","endpoint":"message-generation","olderThanMs":300000,"asOf":1784462400000}'
  */
 
 import { env } from '$env/dynamic/private';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
@@ -68,7 +68,9 @@ export function getTraceConfig(): TraceConfig {
 	const rawTtl = Number.parseInt(env.AGENT_TRACE_TTL_DAYS ?? String(DEFAULT_TTL_DAYS), 10);
 	const ttlDays = Number.isFinite(rawTtl) && rawTtl > 0 ? rawTtl : DEFAULT_TTL_DAYS;
 	const rawSample = Number.parseFloat(env.AGENT_TRACE_SAMPLE_RATE ?? String(DEFAULT_SAMPLE_RATE));
-	const sampleRate = Number.isFinite(rawSample) ? Math.max(0, Math.min(1, rawSample)) : DEFAULT_SAMPLE_RATE;
+	const sampleRate = Number.isFinite(rawSample)
+		? Math.max(0, Math.min(1, rawSample))
+		: DEFAULT_SAMPLE_RATE;
 	return {
 		enabled,
 		ttlMs: ttlDays * 86_400_000,
@@ -378,12 +380,7 @@ export function traceEnd(
  * now call `endpoint` and `event` as what we now call `eventType`. The
  * signature is preserved.
  */
-export function traceEvent(
-	traceId: string,
-	pipeline: string,
-	event: string,
-	data?: unknown
-): void {
+export function traceEvent(traceId: string, pipeline: string, event: string, data?: unknown): void {
 	const cfg = getTraceConfig();
 	if (!cfg.enabled) return;
 	if (!shouldSample(traceId, cfg.sampleRate)) return;

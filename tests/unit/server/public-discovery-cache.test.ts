@@ -1,18 +1,31 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+	PUBLIC_DISCOVERY_CACHE_PAYLOAD_MAX_BYTES,
 	PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES,
 	PUBLIC_DISCOVERY_FRESH_MS,
-	PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS,
 	PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES,
-	PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
+	PublicDiscoveryPayloadNotPublishedError,
+	PublicDiscoveryRefreshBackoffError,
 	clearPublicDiscoveryCache,
 	getCachedPublicData,
-	getCachedPublicDataLastKnownGood
+	publishPublicDiscoveryPayload
 } from '$lib/server/public-discovery-cache';
 
 const NOW = 1_800_000_000_000;
 const TEST_URL = new URL('https://commons.example/browse');
+const TEST_CONVEX_URL = 'https://production.example.convex.cloud';
+
+function r2RevisionPrefix(logicalKey: string, revision?: string): string {
+	return (
+		'public-discovery/v8/' +
+		encodeURIComponent(`backend=${new URL(TEST_CONVEX_URL).origin}`) +
+		'/' +
+		encodeURIComponent(logicalKey) +
+		'/revision=' +
+		(revision === undefined ? '' : `${encodeURIComponent(revision)}/`)
+	);
+}
 
 type Deferred<T> = {
 	promise: Promise<T>;
@@ -50,51 +63,99 @@ function installEdgeCache() {
 	return { entries, match, put };
 }
 
-function installKv() {
-	const entries = new Map<string, string>();
+type StoredR2Object = {
+	body: string;
+	customMetadata?: Record<string, string>;
+	etag: string;
+	uploaded: Date;
+};
+
+function installR2() {
+	const entries = new Map<string, StoredR2Object>();
+	let nextEtag = 1;
+	const object = (key: string, stored: StoredR2Object) => ({
+		customMetadata: stored.customMetadata,
+		etag: stored.etag,
+		httpEtag: `"${stored.etag}"`,
+		json: async <T>() => JSON.parse(stored.body) as T,
+		key,
+		size: stored.body.length,
+		text: async () => stored.body,
+		uploaded: stored.uploaded
+	});
 	const get = vi.fn(async (key: string) => {
-		const value = entries.get(key);
-		return value === undefined ? null : JSON.parse(value);
+		const stored = entries.get(key);
+		return stored ? object(key, stored) : null;
 	});
-	const put = vi.fn(async (key: string, value: string, _options?: { expirationTtl?: number }) => {
-		entries.set(key, value);
-	});
-	const list = vi.fn(
+	const put = vi.fn(
 		async (
-			{ cursor, limit = 1000, prefix = '' }: { cursor?: string; limit?: number; prefix?: string } = {}
+			key: string,
+			value: string,
+			options?: {
+				customMetadata?: Record<string, string>;
+				onlyIf?: Headers | { etagMatches?: string };
+			}
 		) => {
-			const matching = [...entries.keys()].filter((key) => key.startsWith(prefix)).sort();
-			const start = cursor === undefined ? 0 : Number(cursor);
-			const end = Math.min(start + limit, matching.length);
+			const existing = entries.get(key);
+			const ifNoneMatch =
+				options?.onlyIf instanceof Headers ? options.onlyIf.get('If-None-Match') : null;
+			const ifMatch = options?.onlyIf instanceof Headers ? options.onlyIf.get('If-Match') : null;
+			const etagMatches =
+				options?.onlyIf && !(options.onlyIf instanceof Headers)
+					? options.onlyIf.etagMatches
+					: undefined;
+			if (ifNoneMatch === '*' && existing) return null;
+			if (ifMatch && existing?.etag !== ifMatch.replaceAll('"', '')) return null;
+			if (etagMatches !== undefined && existing?.etag !== etagMatches) return null;
+			const stored: StoredR2Object = {
+				body: String(value),
+				customMetadata: options?.customMetadata,
+				etag: `etag-${nextEtag++}`,
+				uploaded: new Date(Date.now())
+			};
+			entries.set(key, stored);
+			return object(key, stored);
+		}
+	);
+	const list = vi.fn(
+		async ({ limit = 1000, prefix = '' }: { limit?: number; prefix?: string } = {}) => {
+			const matching = [...entries.entries()]
+				.filter(([key]) => key.startsWith(prefix))
+				.sort(([left], [right]) => left.localeCompare(right));
 			return {
-				keys: matching.slice(start, end).map((name) => ({ name })),
-				list_complete: end >= matching.length,
-				...(end < matching.length ? { cursor: String(end) } : {}),
-				cacheStatus: null
+				objects: matching.slice(0, limit).map(([key, stored]) => object(key, stored)),
+				truncated: matching.length > limit,
+				...(matching.length > limit ? { cursor: String(limit) } : {})
 			};
 		}
 	);
+	const remove = vi.fn(async (keys: string | string[]) => {
+		for (const key of Array.isArray(keys) ? keys : [keys]) entries.delete(key);
+	});
 	return {
 		entries,
 		get,
 		put,
 		list,
-		delete: vi.fn(async (key: string) => {
-			entries.delete(key);
-		})
-	} as unknown as KVNamespace & {
-		entries: Map<string, string>;
+		delete: remove
+	} as unknown as R2Bucket & {
+		entries: Map<string, StoredR2Object>;
 		get: ReturnType<typeof vi.fn>;
 		put: ReturnType<typeof vi.fn>;
 		list: ReturnType<typeof vi.fn>;
+		delete: ReturnType<typeof vi.fn>;
 	};
 }
 
-function platformWithKv(kv: KVNamespace, convexUrl?: string, pending?: Promise<unknown>[]) {
+function platformWithR2(
+	r2: R2Bucket,
+	convexUrl = TEST_CONVEX_URL,
+	pending?: Promise<unknown>[]
+) {
 	return {
 		env: {
-			PUBLIC_DISCOVERY_KV: kv,
-			...(convexUrl ? { PUBLIC_CONVEX_URL: convexUrl } : {})
+			PUBLIC_DISCOVERY_R2: r2,
+			PUBLIC_CONVEX_URL: convexUrl
 		},
 		...(pending
 			? {
@@ -259,6 +320,26 @@ describe('public discovery cache', () => {
 		);
 	});
 
+	it('never returns a retry-backed-off payload after a withdrawal floor retires it', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		await getCachedPublicData('retired-retry', { url: TEST_URL, revision: 4 }, async () => [
+			'revision-4'
+		]);
+		const unavailable = vi.fn().mockRejectedValue(new Error('revision 5 unavailable'));
+
+		await expect(
+			getCachedPublicData('retired-retry', { url: TEST_URL, revision: 5 }, unavailable)
+		).resolves.toEqual(['revision-4']);
+		await expect(
+			getCachedPublicData(
+				'retired-retry',
+				{ url: TEST_URL, revision: 5, retiredRevisionFloor: 4 },
+				unavailable
+			)
+		).rejects.toThrow('revision 5 refresh is temporarily backed off');
+		expect(unavailable).toHaveBeenCalledOnce();
+	});
+
 	it('serves stale data immediately, coalesces refreshes, then publishes the refresh', async () => {
 		const pending: Promise<unknown>[] = [];
 		const platform = platformCapturingWaits(pending);
@@ -298,6 +379,85 @@ describe('public discovery cache', () => {
 		).resolves.toEqual({ revision: 2 });
 
 		expect(loader).toHaveBeenCalledTimes(1);
+	});
+
+	it('memoizes a fail-closed control-plane error without reauthorizing its stale value', async () => {
+		installEdgeCache();
+		const context = {
+			url: TEST_URL,
+			freshForMs: 60_000,
+			failClosedRefreshBackoffMs: 60_000,
+			refreshMode: 'blocking' as const,
+			shouldFallbackToStale: () => false
+		};
+		await getCachedPublicData('manifest', context, async () => ({ revision: 1 }));
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		const loader = vi.fn().mockRejectedValue(new Error('manifest unavailable'));
+
+		await expect(getCachedPublicData('manifest', context, loader)).rejects.toThrow(
+			'manifest unavailable'
+		);
+		await expect(getCachedPublicData('manifest', context, loader)).rejects.toBeInstanceOf(
+			PublicDiscoveryRefreshBackoffError
+		);
+		expect(loader).toHaveBeenCalledOnce();
+
+		vi.mocked(Date.now).mockReturnValue(NOW + 120_002);
+		loader.mockResolvedValue({ revision: 2 });
+		await expect(getCachedPublicData('manifest', context, loader)).resolves.toEqual({
+			revision: 2
+		});
+		expect(loader).toHaveBeenCalledTimes(2);
+	});
+
+	it('caps fail-closed refresh backoff even when a caller requests an unsafe duration', async () => {
+		const context = {
+			url: TEST_URL,
+			failClosedRefreshBackoffMs: Number.MAX_SAFE_INTEGER,
+			shouldFallbackToStale: () => false
+		};
+		const loader = vi.fn().mockRejectedValue(new Error('control plane unavailable'));
+
+		await expect(getCachedPublicData('manifest', context, loader)).rejects.toThrow(
+			'control plane unavailable'
+		);
+		const retry = await getCachedPublicData('manifest', context, loader).catch((error) => error);
+
+		expect(retry).toBeInstanceOf(PublicDiscoveryRefreshBackoffError);
+		expect((retry as PublicDiscoveryRefreshBackoffError).retryAt - NOW).toBe(15 * 60 * 1000);
+		expect(loader).toHaveBeenCalledOnce();
+	});
+
+	it('coalesces stale blocking resolution before shared reads and keeps R2 disabled', async () => {
+		const edge = installEdgeCache();
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const context = {
+			url: TEST_URL,
+			platform,
+			freshForMs: 60_000,
+			r2Policy: 'none' as const,
+			refreshMode: 'blocking' as const
+		};
+
+		await getCachedPublicData('manifest', context, async () => ({ revision: 1 }));
+		edge.match.mockClear();
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		const refresh = deferred<{ revision: number }>();
+		const loader = vi.fn(() => refresh.promise);
+
+		const first = getCachedPublicData('manifest', context, loader);
+		const second = getCachedPublicData('manifest', context, loader);
+		await vi.waitFor(() => expect(loader).toHaveBeenCalledOnce());
+
+		expect(edge.match).toHaveBeenCalledOnce();
+		expect(r2.get).not.toHaveBeenCalled();
+		expect(r2.put).not.toHaveBeenCalled();
+		refresh.resolve({ revision: 2 });
+		await expect(Promise.all([first, second])).resolves.toEqual([
+			{ revision: 2 },
+			{ revision: 2 }
+		]);
 	});
 
 	it('keeps the last-known-good value when a stale background refresh fails', async () => {
@@ -361,7 +521,8 @@ describe('public discovery cache', () => {
 				{
 					url: TEST_URL,
 					revision: 1,
-					projectCachedValue: (value) => {
+					projectCachedValue: (value, envelopeRevision) => {
+						expect(envelopeRevision).toBe('1');
 						if (
 							!value ||
 							typeof value !== 'object' ||
@@ -379,39 +540,180 @@ describe('public discovery cache', () => {
 		expect(edge.match).toHaveBeenCalled();
 	});
 
-	it('uses Workers KV as a global shield after a local edge cache miss', async () => {
-		const kv = installKv();
-		const platform = { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform;
-		const loader = vi.fn().mockResolvedValue({ templates: ['global'] });
+	it('keeps every anonymous exact miss to one GET per cold isolate and zero mutation or origin work', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		const coldIsolates: Array<typeof import('$lib/server/public-discovery-cache')> = [];
+		const loaders = Array.from({ length: 24 }, () =>
+			vi.fn().mockResolvedValue(['must-not-load'])
+		);
 
-		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, loader);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(kv.put.mock.calls[0][0]).toContain('public-discovery:v5:');
-		expect(kv.put.mock.calls[0][0]).not.toContain('public-discovery:v4:');
+		for (let index = 0; index < loaders.length; index += 1) {
+			vi.resetModules();
+			coldIsolates.push(await import('$lib/server/public-discovery-cache'));
+		}
 
-		clearPublicDiscoveryCache();
-		installEdgeCache();
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 7 }, () =>
-				Promise.reject(new Error('KV should satisfy this cold location'))
+		const results = await Promise.allSettled(
+			coldIsolates.map((isolate, index) =>
+				isolate.getCachedPublicData(
+					'templates:exclude-cwc=0',
+					{
+						url: new URL('https://pop-' + index + '.commons.example/'),
+						platform,
+						revision: '7:700'
+					},
+					loaders[index]
+				)
 			)
-		).resolves.toEqual({ templates: ['global'] });
+		);
 
-		// Healthy misses and cold hits both perform only the exact revision read;
-		// generation enumeration is reserved for origin-failure recovery.
-		expect(kv.get).toHaveBeenCalledTimes(2);
-		expect(kv.list).not.toHaveBeenCalled();
-		expect(loader).toHaveBeenCalledTimes(1);
+		expect(results).toHaveLength(24);
+		for (const result of results) {
+			expect(result.status).toBe('rejected');
+			if (result.status === 'rejected') {
+				expect(result.reason).toMatchObject({
+					name: 'PublicDiscoveryPayloadNotPublishedError',
+					revision: '7:700'
+				});
+			}
+		}
+		expect(r2.get).toHaveBeenCalledTimes(24);
+		const exactKeys = r2.get.mock.calls.map(([key]) => String(key));
+		expect(new Set(exactKeys)).toEqual(
+			new Set([r2RevisionPrefix('templates:exclude-cwc=0', '7:700') + 'payload.json'])
+		);
+		expect(exactKeys.every((key) => !key.endsWith('/claim.json'))).toBe(true);
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+		expect(loaders.every((loader) => loader.mock.calls.length === 0)).toBe(true);
 	});
 
-	it('treats a malformed KV envelope value as a cache miss', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		await getCachedPublicData('cards', { url: TEST_URL, platform, revision: 2 }, async () => ({
-			message_body: { privateRecipient: 'private@example.test' }
-		}));
+	it('producer-publishes one immutable object and reuses it without another write', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const firstLoader = vi.fn().mockResolvedValue({ templates: ['published'] });
+
+		await expect(
+			publishPublicDiscoveryPayload(
+				'templates:exclude-cwc=0',
+				{ platform, revision: '7:700' },
+				firstLoader
+			)
+		).resolves.toEqual({ templates: ['published'] });
+
+		const payloadKey =
+			r2RevisionPrefix('templates:exclude-cwc=0', '7:700') + 'payload.json';
+		expect(firstLoader).toHaveBeenCalledOnce();
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).toHaveBeenCalledOnce();
+		expect(r2.put).toHaveBeenCalledWith(
+			payloadKey,
+			expect.any(String),
+			expect.objectContaining({
+				customMetadata: { kind: 'payload', revision: '7:700' },
+				onlyIf: expect.any(Headers)
+			})
+		);
+		expect(r2.put.mock.calls[0]?.[2]?.onlyIf.get('If-None-Match')).toBe('*');
+		expect(r2.entries.has(payloadKey)).toBe(true);
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+
+		r2.get.mockClear();
+		r2.put.mockClear();
+		r2.delete.mockClear();
+		const duplicateLoader = vi.fn().mockResolvedValue({ templates: ['must-not-replace'] });
+		await expect(
+			publishPublicDiscoveryPayload(
+				'templates:exclude-cwc=0',
+				{ platform, revision: '7:700' },
+				duplicateLoader
+			)
+		).resolves.toEqual({ templates: ['published'] });
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+		expect(duplicateLoader).not.toHaveBeenCalled();
+	});
+
+	it('serves a producer-published exact hit with one GET and no mutation or origin work', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		await publishPublicDiscoveryPayload(
+			'templates:exclude-cwc=0',
+			{ platform, revision: '8:800' },
+			async () => ['global']
+		);
 		clearPublicDiscoveryCache();
-		const loader = vi.fn().mockResolvedValue({ message_body: 'Safe message' });
+		r2.get.mockClear();
+		r2.put.mockClear();
+		r2.list.mockClear();
+		r2.delete.mockClear();
+		const anonymousLoader = vi.fn().mockResolvedValue(['must-not-load']);
+
+		await expect(
+			getCachedPublicData(
+				'templates:exclude-cwc=0',
+				{ url: TEST_URL, platform, revision: '8:800' },
+				anonymousLoader
+			)
+		).resolves.toEqual(['global']);
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+		expect(anonymousLoader).not.toHaveBeenCalled();
+	});
+
+	it('isolates producer-published payloads by the trusted Convex backend', async () => {
+		const r2 = installR2();
+		const production = platformWithR2(r2, TEST_CONVEX_URL);
+		const previewUrl = 'https://preview.example.convex.cloud';
+		const preview = platformWithR2(r2, previewUrl);
+
+		await publishPublicDiscoveryPayload(
+			'templates',
+			{ platform: production, revision: 8 },
+			async () => ['production']
+		);
+		await publishPublicDiscoveryPayload(
+			'templates',
+			{ platform: preview, revision: 8 },
+			async () => ['preview']
+		);
+
+		const payloadKeys = [...r2.entries.keys()].filter((key) => key.endsWith('/payload.json'));
+		expect(payloadKeys).toHaveLength(2);
+		expect(
+			payloadKeys.some((key) =>
+				key.includes(encodeURIComponent('backend=' + new URL(TEST_CONVEX_URL).origin))
+			)
+		).toBe(true);
+		expect(
+			payloadKeys.some((key) =>
+				key.includes(encodeURIComponent('backend=' + new URL(previewUrl).origin))
+			)
+		).toBe(true);
+	});
+
+	it('fails closed on a malformed exact R2 payload without reading origin or mutating R2', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const payloadKey = r2RevisionPrefix('cards', '2') + 'payload.json';
+		r2.entries.set(payloadKey, {
+			body: JSON.stringify({
+				cachedAt: NOW,
+				revision: '2',
+				value: { message_body: { privateRecipient: 'private@example.test' } }
+			}),
+			etag: 'malformed-payload',
+			uploaded: new Date(NOW)
+		});
+		const loader = vi.fn().mockResolvedValue({ message_body: 'must-not-load' });
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
 		await expect(
 			getCachedPublicData(
@@ -428,982 +730,360 @@ describe('public discovery cache', () => {
 						) {
 							throw new Error('unsafe cached card');
 						}
-						return { message_body: (value as { message_body: string }).message_body };
+						return value as { message_body: string };
 					}
 				},
 				loader
 			)
-		).resolves.toEqual({ message_body: 'Safe message' });
-		expect(loader).toHaveBeenCalledOnce();
-		expect(kv.get).toHaveBeenCalledTimes(2);
-	});
-
-	it('never serves a pre-v5 unallowlisted envelope or pointer during origin failure', async () => {
-		const edge = installEdgeCache();
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const legacyPayload = {
-			recipient_config: { recipients: [{ email: 'legacy-private@example.test' }] },
-			recipientEmails: ['legacy-private@example.test']
-		};
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: 7 },
-			async () => legacyPayload
-		);
-
-		for (const [url, response] of [...edge.entries]) {
-			edge.entries.delete(url);
-			edge.entries.set(url.replace('/v5/', '/v4/'), response);
-		}
-		for (const [key, value] of [...kv.entries]) {
-			kv.entries.delete(key);
-			kv.entries.set(key.replace(':v5:', ':v4:'), value);
-		}
-		expect([...edge.entries.keys()].some((url) => url.includes('/v4/') && url.endsWith('/lkg-pointer'))).toBe(true);
-		expect([...kv.entries.keys()].some((key) => key.includes('public-discovery:v4:'))).toBe(true);
-
-		clearPublicDiscoveryCache();
-		await expect(
-			getCachedPublicDataLastKnownGood<typeof legacyPayload>('templates', {
-				url: TEST_URL,
-				platform
-			})
-		).resolves.toBeUndefined();
-
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 8 }, () =>
-				Promise.reject(new Error('origin unavailable'))
-			)
-		).rejects.toThrow('origin unavailable');
+		).rejects.toThrow('could not be read safely');
+		expect(loader).not.toHaveBeenCalled();
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
 		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] revision refresh failed:',
-			'origin unavailable'
+			'[public-discovery-cache] invalid R2 payload envelope:',
+			payloadKey
 		);
-		expect(edge.match.mock.calls.every(([request]) => request.url.includes('/v5/'))).toBe(true);
-		expect(kv.get.mock.calls.every(([key]) => String(key).includes(':v5:'))).toBe(true);
 	});
 
-	it('does not list older generations during a healthy cross-isolate revision transition', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		installEdgeCache();
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['revision-one']
-		);
-		vi.resetModules();
-		const publishingIsolate = await import('$lib/server/public-discovery-cache');
-		const healthyLoader = vi.fn().mockResolvedValue(['revision-two']);
-		await expect(
-			publishingIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '2:200' },
-				healthyLoader
-			)
-		).resolves.toEqual(['revision-two']);
-
-		vi.resetModules();
-		installEdgeCache();
-		const coldIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			coldIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '2:200' },
-				async () => {
-					throw new Error('exact KV generation should satisfy the cold isolate');
-				}
-			)
-		).resolves.toEqual(['revision-two']);
-
-		expect(healthyLoader).toHaveBeenCalledTimes(1);
-		expect(kv.put).toHaveBeenCalledTimes(2);
-		expect(kv.list).not.toHaveBeenCalled();
-	});
-
-	it('does not rewrite KV for every unchanged manifest revalidation', async () => {
-		const kv = installKv();
-		const platform = { env: { PUBLIC_DISCOVERY_KV: kv } } as App.Platform;
-		const manifest = { list: { ready: true, revision: 3 } };
-
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => manifest
-		);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => manifest
-		);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-
-		// Renew the global LKG once per day so a healthy, unchanged manifest does
-		// not age out of the seven-day outage window.
-		vi.mocked(Date.now).mockReturnValue(NOW + 24 * 60 * 60 * 1000 + 1);
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => manifest
-		);
-		expect(kv.put).toHaveBeenCalledTimes(2);
-	});
-
-	it('writes a changed unversioned manifest through before daily renewal', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => ({ list: { ready: true, revision: 1 } })
-		);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => ({ list: { ready: true, revision: 2 } })
-		);
-
-		expect(kv.put).toHaveBeenCalledTimes(2);
-		expect(JSON.parse([...kv.entries.values()][0]).value.list.revision).toBe(2);
-	});
-
-	it('uses a versioned coordinate instead of serializing the payload to decide KV renewal', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		let serializations = 0;
-		const payload = (label: string) => ({
-			toJSON: () => {
-				serializations += 1;
-				return { templates: [label] };
-			}
+	it('rejects an oversized exact R2 payload before JSON parsing or origin work', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const payloadKey = r2RevisionPrefix('oversized-payload', '2') + 'payload.json';
+		r2.entries.set(payloadKey, {
+			body: 'x'.repeat(PUBLIC_DISCOVERY_CACHE_PAYLOAD_MAX_BYTES + 1),
+			etag: 'oversized-payload',
+			uploaded: new Date(NOW)
 		});
+		const loader = vi.fn().mockResolvedValue(['must-not-load']);
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100', freshForMs: 60_000 },
-			async () => payload('first')
-		);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(serializations).toBe(1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100', freshForMs: 60_000 },
-			async () => payload('second')
-		);
-
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(serializations).toBe(1);
+		await expect(
+			getCachedPublicData(
+				'oversized-payload',
+				{ url: TEST_URL, platform, revision: 2 },
+				loader
+			)
+		).rejects.toThrow('could not be read safely');
+		expect(loader).not.toHaveBeenCalled();
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
 	});
 
-	it('ignores request path and query while physically busting edge payloads by generation', async () => {
-		const edge = installEdgeCache();
-		const loader = vi.fn().mockResolvedValueOnce(['generation-a']).mockResolvedValueOnce(['generation-b']);
+	it('never bypasses an R2 read error with an origin load', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		r2.get.mockRejectedValueOnce(new Error('R2 unavailable'));
+		const loader = vi.fn().mockResolvedValue(['must-not-load']);
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-		await getCachedPublicData(
-			'templates:exclude-cwc=0',
-			{ url: new URL('https://commons.example/browse?random=1'), revision: '1:100' },
-			loader
-		);
-		clearPublicDiscoveryCache();
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 3 }, loader)
+		).rejects.toThrow('could not be read safely');
+		expect(loader).not.toHaveBeenCalled();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+	});
+
+	it('rejects an exact object whose embedded revision does not match its key', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const payloadKey = r2RevisionPrefix('templates', '4') + 'payload.json';
+		r2.entries.set(payloadKey, {
+			body: JSON.stringify({ cachedAt: NOW, revision: '999', value: ['wrong-coordinate'] }),
+			etag: 'wrong-coordinate',
+			uploaded: new Date(NOW)
+		});
+		const loader = vi.fn().mockResolvedValue(['must-not-load']);
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+		await expect(
+			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 4 }, loader)
+		).rejects.toThrow('could not be read safely');
+		expect(loader).not.toHaveBeenCalled();
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+	});
+
+	it('requires R2 before a deployed versioned payload may read origin', async () => {
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		const loader = vi.fn().mockResolvedValue(['must-not-load']);
 		await expect(
 			getCachedPublicData(
-				'templates:exclude-cwc=0',
-				{ url: new URL('https://commons.example/api/templates?random=2'), revision: '1:100' },
+				'templates',
+				{ url: TEST_URL, platform: { env: {} } as App.Platform, revision: 1 },
 				loader
 			)
-		).resolves.toEqual(['generation-a']);
+		).rejects.toThrow('PUBLIC_DISCOVERY_R2 binding is required');
+		expect(loader).not.toHaveBeenCalled();
+	});
 
-		clearPublicDiscoveryCache();
-		await expect(
-			getCachedPublicData(
-				'templates:exclude-cwc=0',
-				{ url: new URL('https://commons.example/'), revision: '1:200' },
-				loader
-			)
-		).resolves.toEqual(['generation-b']);
+	it('keeps mutable control values out of the immutable payload-cache R2 protocol', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		const context = {
+			url: TEST_URL,
+			platform,
+			freshForMs: 60_000,
+			r2Policy: 'none' as const,
+			refreshMode: 'blocking' as const
+		};
+		const loader = vi
+			.fn()
+			.mockResolvedValueOnce({ revision: 1 })
+			.mockResolvedValueOnce({ revision: 2 });
 
-		const matchedUrls = edge.match.mock.calls
-			.map(([request]) => (request as Request).url)
-			.filter((url) => url.includes('/revision='));
-		expect(matchedUrls[0]).toBe(matchedUrls[1]);
-		expect(matchedUrls[2]).not.toBe(matchedUrls[1]);
-		expect(matchedUrls[2]).toContain('revision=1%3A200');
+		await expect(getCachedPublicData('manifest', context, loader)).resolves.toEqual({
+			revision: 1
+		});
+		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
+		await expect(getCachedPublicData('manifest', context, loader)).resolves.toEqual({
+			revision: 2
+		});
+		expect(r2.get).not.toHaveBeenCalled();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
 		expect(loader).toHaveBeenCalledTimes(2);
 	});
 
-	it('isolates KV by request origin and configured backend', async () => {
-		const kv = installKv();
-		const production = platformWithKv(kv, 'https://alpha.convex.cloud');
-		const otherBackend = platformWithKv(kv, 'https://beta.convex.cloud');
-		const loader = vi.fn()
-			.mockResolvedValueOnce(['alpha-first-origin'])
-			.mockResolvedValueOnce(['alpha-second-origin'])
-			.mockResolvedValueOnce(['beta']);
-
-		await getCachedPublicData(
+	it('lets only the producer retire exact, strictly older revisions and never lists globally', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		await publishPublicDiscoveryPayload(
 			'templates',
-			{ url: new URL('https://first-preview.pages.dev/'), platform: production, revision: 7 },
-			loader
+			{ platform, revision: '1:100' },
+			async () => ['prior']
 		);
-		clearPublicDiscoveryCache();
+		const priorKey = r2RevisionPrefix('templates', '1:100') + 'payload.json';
+		const currentKey = r2RevisionPrefix('templates', '2:200') + 'payload.json';
+		r2.get.mockClear();
+		r2.put.mockClear();
+		r2.list.mockClear();
+		r2.delete.mockClear();
+
 		await expect(
-			getCachedPublicData(
+			publishPublicDiscoveryPayload(
 				'templates',
-				{ url: new URL('https://second-preview.pages.dev/'), platform: production, revision: 7 },
-				loader
+				{ platform, retireRevisions: ['1:100'], revision: '2:200' },
+				async () => ['current']
 			)
-		).resolves.toEqual(['alpha-second-origin']);
+		).resolves.toEqual(['current']);
+		expect(r2.entries.has(priorKey)).toBe(false);
+		expect(r2.entries.has(currentKey)).toBe(true);
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.put).toHaveBeenCalledOnce();
+		expect(r2.delete).toHaveBeenCalledWith([priorKey]);
+		expect(r2.list).not.toHaveBeenCalled();
 
-		clearPublicDiscoveryCache();
+		r2.get.mockClear();
+		r2.put.mockClear();
+		r2.delete.mockClear();
+		const invalidLoader = vi.fn().mockResolvedValue(['invalid']);
 		await expect(
-			getCachedPublicData(
+			publishPublicDiscoveryPayload(
 				'templates',
-				{ url: new URL('https://first-preview.pages.dev/'), platform: otherBackend, revision: 7 },
-				loader
+				{ platform, retireRevisions: ['4:400'], revision: '3:300' },
+				invalidLoader
 			)
-		).resolves.toEqual(['beta']);
-
-		const revisionKeys = kv.get.mock.calls
-			.map(([key]) => key as string)
-			.filter((key) => key.includes(':revision='));
-		expect(revisionKeys[0]).not.toBe(revisionKeys[1]);
-		expect(revisionKeys[2]).not.toBe(revisionKeys[1]);
-		expect(loader).toHaveBeenCalledTimes(3);
+		).rejects.toThrow('may retire only an older exact revision');
+		expect(invalidLoader).not.toHaveBeenCalled();
+		expect(r2.get).not.toHaveBeenCalled();
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
 	});
 
-	it('expires KV envelopes beyond the seven-day LKG window', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv, 'https://alpha.convex.cloud');
-
-		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 1 }, async () => [
-			'known-good'
-		]);
-
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(kv.put.mock.calls[0][2]).toEqual({
-			expirationTtl: PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS
-		});
-		expect(PUBLIC_DISCOVERY_KV_EXPIRATION_TTL_SECONDS).toBeGreaterThan(7 * 24 * 60 * 60);
-	});
-
-	it('retries an unchanged KV renewal after a failed put', async () => {
-		const kv = installKv();
-		kv.put
-			.mockRejectedValueOnce(new Error('KV quota exceeded'))
-			.mockImplementationOnce(async (key: string, value: string) => {
-				kv.entries.set(key, value);
-			});
-		const platform = platformWithKv(kv);
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		const manifest = { list: { ready: true, revision: 3 } };
-
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => manifest
-		);
-		vi.mocked(Date.now).mockReturnValue(NOW + 60_001);
-		await getCachedPublicData(
-			'manifest',
-			{ url: TEST_URL, platform, freshForMs: 60_000, refreshMode: 'blocking' },
-			async () => manifest
-		);
-
-		expect(kv.put).toHaveBeenCalledTimes(2);
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV write failed:',
-			'KV quota exceeded'
-		);
-	});
-
-	it('does not spend a KV read when a fresh revision exists in the local edge cache', async () => {
-		installEdgeCache();
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-
-		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 4 }, async () => [
-			'edge-hot'
-		]);
-		const kvReadsAfterFill = kv.get.mock.calls.length;
-		clearPublicDiscoveryCache();
-
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 4 }, async () => {
-				throw new Error('fresh edge should satisfy this request');
-			})
-		).resolves.toEqual(['edge-hot']);
-		expect(kv.get).toHaveBeenCalledTimes(kvReadsAfterFill);
-	});
-
-	it('renews a matching payload before its seven-day LKG window can expire', async () => {
-		installEdgeCache();
-		const kv = installKv();
-		const pending: Promise<unknown>[] = [];
-		const platform = platformWithKv(kv, undefined, pending);
-		const loader = vi.fn().mockResolvedValue(['rolling-good']);
-
-		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: 8 }, loader);
-		await Promise.all(pending.splice(0));
-		expect(kv.put).toHaveBeenCalledTimes(1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: 8 }, loader)
-		).resolves.toEqual(['rolling-good']);
-		await vi.waitFor(() => expect(kv.put).toHaveBeenCalledTimes(2));
-		await Promise.all(pending.splice(0));
-
-		const renewed = JSON.parse([...kv.entries.values()][0]) as { cachedAt: number };
-		expect(renewed.cachedAt).toBe(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
-	});
-
-	it('serves a prior-revision KV LKG on a cold revision transition failure', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		await getCachedPublicData('templates', { url: TEST_URL, platform, revision: '1:100' }, async () => [
-			'prior'
-		]);
-
-		clearPublicDiscoveryCache();
-		installEdgeCache();
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		const failingLoader = vi.fn(async () => {
-			throw new Error('new snapshot unavailable');
-		});
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: '2:200' }, failingLoader)
-		).resolves.toEqual(['prior']);
-		expect(kv.list).toHaveBeenCalledTimes(1);
-		const kvReadsAfterFailure = kv.get.mock.calls.length;
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, platform, revision: '2:200' }, failingLoader)
-		).resolves.toEqual(['prior']);
-		expect(kv.get).toHaveBeenCalledTimes(kvReadsAfterFailure);
-		expect(failingLoader).toHaveBeenCalledTimes(1);
-	});
-
-	it('shares revision-scoped transition backoff without suppressing a newer revision', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const edge = installEdgeCache();
-		await getCachedPublicData(
+	it('never lets an older producer completion delayed over five minutes delete a newer payload', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
+		await publishPublicDiscoveryPayload(
 			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['stable']
+			{ platform, revision: '7:100' },
+			async () => ['seed']
 		);
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		vi.resetModules();
-		const firstIsolate = await import('$lib/server/public-discovery-cache');
-		const firstRevisionTwoLoad = vi.fn().mockRejectedValue(new Error('revision two unavailable'));
-		await expect(
-			firstIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '2:200' },
-				firstRevisionTwoLoad
-			)
-		).resolves.toEqual(['stable']);
-		expect(firstRevisionTwoLoad).toHaveBeenCalledTimes(1);
-		expect(kv.list).toHaveBeenCalledTimes(1);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(
-			[...edge.entries.keys()].some((url) => url.includes('/revision-retry=2%3A200'))
-		).toBe(true);
-		expect(
-			[...edge.entries.keys()].some((url) => url.includes('/revision=2%3A200'))
-		).toBe(false);
-
-		// A fresh isolate in the same Cache API location reuses the revision-two
-		// marker: no origin retry, generation list, or KV write.
-		vi.resetModules();
-		const secondIsolate = await import('$lib/server/public-discovery-cache');
-		const suppressedRevisionTwoLoad = vi.fn().mockRejectedValue(new Error('must not run'));
-		await expect(
-			secondIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '2:200' },
-				suppressedRevisionTwoLoad
-			)
-		).resolves.toEqual(['stable']);
-		expect(suppressedRevisionTwoLoad).not.toHaveBeenCalled();
-		expect(kv.list).toHaveBeenCalledTimes(1);
-
-		// The physical retry key is revision-qualified, so revision three still
-		// receives its own origin attempt and recovery check.
-		vi.resetModules();
-		const newerIsolate = await import('$lib/server/public-discovery-cache');
-		const revisionThreeLoad = vi.fn().mockRejectedValue(new Error('revision three unavailable'));
-		await expect(
-			newerIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '3:300' },
-				revisionThreeLoad
-			)
-		).resolves.toEqual(['stable']);
-		expect(revisionThreeLoad).toHaveBeenCalledTimes(1);
-		expect(kv.list).toHaveBeenCalledTimes(2);
-
-		// Origin retries every 15 minutes, but the completed global-generation
-		// check is reused for a day instead of spending another list operation.
-		vi.mocked(Date.now).mockReturnValue(NOW + 15 * 60 * 1000 + 1);
-		vi.resetModules();
-		const retryingIsolate = await import('$lib/server/public-discovery-cache');
-		const retriedRevisionTwoLoad = vi.fn().mockRejectedValue(new Error('still unavailable'));
-		await expect(
-			retryingIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '2:200' },
-				retriedRevisionTwoLoad
-			)
-		).resolves.toEqual(['stable']);
-		expect(retriedRevisionTwoLoad).toHaveBeenCalledTimes(1);
-		expect(kv.list).toHaveBeenCalledTimes(2);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-	});
-
-	it('shares a failed cold-revision marker even when no fallback exists', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		installEdgeCache();
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		const firstLoader = vi.fn().mockRejectedValue(new Error('first publication unavailable'));
-		await expect(
-			getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '1:cold' },
-				firstLoader
-			)
-		).rejects.toThrow('first publication unavailable');
-		expect(firstLoader).toHaveBeenCalledTimes(1);
-		expect(kv.list).toHaveBeenCalledTimes(1);
-
-		vi.resetModules();
-		const nextIsolate = await import('$lib/server/public-discovery-cache');
-		const suppressedLoader = vi.fn().mockRejectedValue(new Error('must not run'));
-		await expect(
-			nextIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '1:cold' },
-				suppressedLoader
-			)
-		).rejects.toThrow('temporarily backed off');
-		expect(suppressedLoader).not.toHaveBeenCalled();
-		expect(kv.list).toHaveBeenCalledTimes(1);
-		expect(kv.put).not.toHaveBeenCalled();
-	});
-
-	it('follows the local LKG pointer when KV is unavailable during a cold transition', async () => {
-		installEdgeCache();
-		await getCachedPublicData('templates', { url: TEST_URL, revision: '1:100' }, async () => [
-			'local-prior'
-		]);
-		clearPublicDiscoveryCache();
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, revision: '2:200' }, async () => {
-				throw new Error('Convex and KV unavailable');
-			})
-		).resolves.toEqual(['local-prior']);
-	});
-
-	it('does not let a failed generation backoff suppress a later generation', async () => {
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		await getCachedPublicData('templates', { url: TEST_URL, revision: '1:100' }, async () => [
-			'revision-1'
-		]);
-		const revision2 = vi.fn().mockRejectedValue(new Error('revision 2 unavailable'));
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, revision: '2:200' }, revision2)
-		).resolves.toEqual(['revision-1']);
-
-		const revision3 = vi.fn().mockResolvedValue(['revision-3']);
-		await expect(
-			getCachedPublicData('templates', { url: TEST_URL, revision: '3:300' }, revision3)
-		).resolves.toEqual(['revision-3']);
-		expect(revision2).toHaveBeenCalledTimes(1);
-		expect(revision3).toHaveBeenCalledTimes(1);
-	});
-
-	it('does not let a late stale generation overwrite a newer stable KV envelope', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const newerLoad = deferred<string[]>();
-		const staleLoad = deferred<string[]>();
-		const newerLoader = vi.fn(() => newerLoad.promise);
-		const staleLoader = vi.fn(() => staleLoad.promise);
-		const newer = getCachedPublicData(
+		const olderValue = deferred<string[]>();
+		const olderLoader = vi.fn(() => olderValue.promise);
+		const olderPublication = publishPublicDiscoveryPayload(
 			'templates',
-			{ url: TEST_URL, platform, revision: '1:200' },
-			newerLoader
+			{ platform, retireRevisions: ['7:100'], revision: '8:100' },
+			olderLoader
 		);
-		await vi.waitFor(() => expect(newerLoader).toHaveBeenCalledTimes(1));
-		const stale = getCachedPublicData(
+		await vi.waitFor(() => expect(olderLoader).toHaveBeenCalledOnce());
+
+		vi.mocked(Date.now).mockReturnValue(NOW + 1);
+		await publishPublicDiscoveryPayload(
 			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			staleLoader
-		);
-		await vi.waitFor(() => expect(staleLoader).toHaveBeenCalledTimes(1));
-
-		newerLoad.resolve(['newer']);
-		await expect(newer).resolves.toEqual(['newer']);
-		staleLoad.resolve(['stale']);
-		await expect(stale).resolves.toEqual(['stale']);
-
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		const stored = JSON.parse([...kv.entries.values()][0]) as { revision: string; value: string[] };
-		expect(stored).toMatchObject({ revision: '1:200', value: ['newer'] });
-	});
-
-	it('orders generations by logical revision before the publication timestamp', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const revisionNineLoad = deferred<string[]>();
-		const revisionTenLoad = deferred<string[]>();
-		const revisionNineLoader = vi.fn(() => revisionNineLoad.promise);
-		const revisionNine = getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '9:900' },
-			revisionNineLoader
-		);
-		await vi.waitFor(() => expect(revisionNineLoader).toHaveBeenCalledTimes(1));
-		const revisionTen = getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '10:100' },
-			() => revisionTenLoad.promise
-		);
-
-		revisionTenLoad.resolve(['revision-ten']);
-		await expect(revisionTen).resolves.toEqual(['revision-ten']);
-		revisionNineLoad.resolve(['revision-nine']);
-		await expect(revisionNine).resolves.toEqual(['revision-nine']);
-
-		expect(kv.put).toHaveBeenCalledTimes(1);
-		expect(kv.list).not.toHaveBeenCalled();
-		const stored = JSON.parse([...kv.entries.values()][0]) as { revision: string; value: string[] };
-		expect(stored).toMatchObject({ revision: '10:100', value: ['revision-ten'] });
-	});
-
-	it('keeps the global LKG monotonic when an older request finishes in another isolate', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const oldLoad = deferred<string[]>();
-		const firstIsolate = await import('$lib/server/public-discovery-cache');
-		const oldLoader = vi.fn(() => oldLoad.promise);
-		const oldRequest = firstIsolate.getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '9:900' },
-			oldLoader
-		);
-		await vi.waitFor(() => expect(oldLoader).toHaveBeenCalledTimes(1));
-
-		vi.resetModules();
-		const secondIsolate = await import('$lib/server/public-discovery-cache');
-		const newLoad = deferred<string[]>();
-		const newRequest = secondIsolate.getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '10:100' },
-			() => newLoad.promise
-		);
-		newLoad.resolve(['newer']);
-		await expect(newRequest).resolves.toEqual(['newer']);
-		oldLoad.resolve(['older']);
-		await expect(oldRequest).resolves.toEqual(['older']);
-		expect(kv.list).not.toHaveBeenCalled();
-
-		const stored = [...kv.entries.entries()].map(([key, value]) => ({
-			key,
-			envelope: JSON.parse(value) as { revision: string; value: string[] }
-		}));
-		expect(stored).toHaveLength(2);
-		expect(stored.map(({ key }) => key)).toEqual(
-			expect.arrayContaining([
-				expect.stringContaining('revision=9%3A900'),
-				expect.stringContaining('revision=10%3A100')
-			])
-		);
-
-		vi.resetModules();
-		const thirdIsolate = await import('$lib/server/public-discovery-cache');
-		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		await expect(
-			thirdIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '11:50' },
-				async () => {
-					throw new Error('origin unavailable');
-				}
-			)
-		).resolves.toEqual(['newer']);
-		expect(kv.list).toHaveBeenCalledTimes(1);
-	});
-
-	it('does not let an older KV hit regress a globally checked edge LKG pointer', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-
-		// Publish both immutable generations without a shared Cache API layer.
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '9:900' },
-			async () => ['older']
-		);
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '10:100' },
+			{ platform, retireRevisions: ['8:100'], revision: '9:100' },
 			async () => ['newer']
 		);
+		const newerKey = r2RevisionPrefix('templates', '9:100') + 'payload.json';
+		expect(r2.entries.has(newerKey)).toBe(true);
 
-		clearPublicDiscoveryCache();
-		installEdgeCache();
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['newer']);
-		expect(kv.list).toHaveBeenCalledTimes(1);
-
-		// A stale isolate can still read its exact immutable KV generation, but that
-		// hit must not replace the globally checked pointer with revision 9.
-		vi.resetModules();
-		const staleIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			staleIsolate.getCachedPublicData(
-				'templates',
-				{ url: TEST_URL, platform, revision: '9:900' },
-				async () => {
-					throw new Error('exact KV generation should satisfy the request');
-				}
+		vi.mocked(Date.now).mockReturnValue(NOW + 5 * 60 * 1000 + 2);
+		olderValue.resolve(['older']);
+		await expect(olderPublication).resolves.toEqual(['older']);
+		expect(r2.entries.has(newerKey)).toBe(true);
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(
+			r2.delete.mock.calls.every(([keys]) =>
+				(Array.isArray(keys) ? keys : [keys]).every((key) => key !== newerKey)
 			)
-		).resolves.toEqual(['older']);
-
-		vi.resetModules();
-		const recoveryIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			recoveryIsolate.getCachedPublicDataLastKnownGood<string[]>('templates', {
-				url: TEST_URL,
-				platform
-			})
-		).resolves.toEqual(['newer']);
-		// Recovery remains local-first while the shared global-check lease is live.
-		expect(kv.list).toHaveBeenCalledTimes(1);
+		).toBe(true);
 	});
 
-	it('periodically revalidates a pointer-selected LKG without listing KV on every recovery', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		installEdgeCache();
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['revision-one']
-		);
-		clearPublicDiscoveryCache();
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['revision-one']);
-		const listCallsAfterCheck = kv.list.mock.calls.length;
-
-		clearPublicDiscoveryCache();
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['revision-one']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsAfterCheck);
-
-		// Once the shared lease expires, one recovery checks immutable KV again.
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
-		clearPublicDiscoveryCache();
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['revision-one']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsAfterCheck + 1);
-	});
-
-	it('refuses an overflow candidate while retaining an independently local LKG', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const edge = installEdgeCache();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['revision-one']
-		);
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '2000:100' },
-			async () => ['local-newest']
-		);
-
-		const seedKey = [...kv.entries.keys()].find((key) => key.includes(':revision='));
-		expect(seedKey).toBeDefined();
-		const revisionPrefix = seedKey!.slice(0, seedKey!.indexOf(':revision=') + ':revision='.length);
-		for (let revision = 2; revision <= 1001; revision += 1) {
-			const generation = `${revision}:100`;
-			kv.entries.set(
-				`${revisionPrefix}${encodeURIComponent(generation)}`,
-				JSON.stringify({
-					cachedAt: NOW,
-					globalCachedAt: NOW,
-					revision: generation,
-					value: [`revision-${revision}`]
-				})
-			);
-		}
-
-		clearPublicDiscoveryCache();
-		const listCallsBeforeRecovery = kv.list.mock.calls.length;
-		const readsBeforeRecovery = kv.get.mock.calls.length;
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['local-newest']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsBeforeRecovery + 1);
-		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
-		expect(kv.list.mock.calls.at(-1)?.[0]).toMatchObject({ limit: 1000 });
-		expect(kv.list.mock.calls.at(-1)?.[0]).not.toHaveProperty('cursor');
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV revision listing exceeded 1000-key recovery bound'
-		);
-
-		const pointerResponse = [...edge.entries.entries()].find(([url]) =>
-			url.endsWith('/lkg-pointer')
-		)?.[1];
-		expect(pointerResponse).toBeDefined();
-		const pointer = (await pointerResponse!.clone().json()) as Record<string, unknown>;
-		expect(pointer.latestRevisionCheckedAt).toBeUndefined();
-		expect(pointer.latestRevisionRetryAt).toBe(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + 16 * 60 * 1000);
-		vi.resetModules();
-		const nextIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			nextIsolate.getCachedPublicDataLastKnownGood<string[]>('templates', {
-				url: TEST_URL,
-				platform
-			})
-		).resolves.toEqual(['local-newest']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsBeforeRecovery + 1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
-		vi.resetModules();
-		const nextDayIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			nextDayIsolate.getCachedPublicDataLastKnownGood<string[]>('templates', {
-				url: TEST_URL,
-				platform
-			})
-		).resolves.toEqual(['local-newest']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsBeforeRecovery + 2);
-	});
-
-	it('fails closed and spends one daily list when overflow has no local LKG', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['revision-one']
-		);
-		const seedKey = [...kv.entries.keys()].find((key) => key.includes(':revision='));
-		expect(seedKey).toBeDefined();
-		const revisionPrefix = seedKey!.slice(0, seedKey!.indexOf(':revision=') + ':revision='.length);
-		for (let revision = 2; revision <= 1001; revision += 1) {
-			const generation = `${revision}:100`;
-			kv.entries.set(
-				`${revisionPrefix}${encodeURIComponent(generation)}`,
-				JSON.stringify({
-					cachedAt: NOW,
-					globalCachedAt: NOW,
-					revision: generation,
-					value: [`revision-${revision}`]
-				})
-			);
-		}
-		clearPublicDiscoveryCache();
-		const readsBeforeRecovery = kv.get.mock.calls.length;
-
-		await expect(
-			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
-		).resolves.toBeUndefined();
-		await expect(
-			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
-		).resolves.toBeUndefined();
-
-		expect(kv.list).toHaveBeenCalledOnce();
-		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV revision listing exceeded 1000-key recovery bound'
-		);
-	});
-
-	it('does not read or serve the global legacy key when KV revision listing is unavailable', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-
-		await getCachedPublicData('templates', { url: TEST_URL, platform }, async () => [
-			'legacy-global'
-		]);
-		clearPublicDiscoveryCache();
-		const readsBeforeRecovery = kv.get.mock.calls.length;
-		const listlessKv = {
-			get: kv.get,
-			put: kv.put,
-			delete: kv.delete
-		} as unknown as KVNamespace;
-
-		await expect(
-			getCachedPublicDataLastKnownGood<string[]>('templates', {
-				url: TEST_URL,
-				platform: platformWithKv(listlessKv)
-			})
-		).resolves.toBeUndefined();
-
-		expect(kv.list).not.toHaveBeenCalled();
-		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
-	});
-
-	it('does not read or serve the global legacy key when KV revision listing throws', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		await getCachedPublicData('templates', { url: TEST_URL, platform }, async () => [
-			'legacy-global'
-		]);
-		clearPublicDiscoveryCache();
-		const readsBeforeRecovery = kv.get.mock.calls.length;
-		kv.list.mockRejectedValueOnce(new Error('KV list unavailable'));
-
-		await expect(
-			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
-		).resolves.toBeUndefined();
-
-		expect(kv.list).toHaveBeenCalledOnce();
-		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV revision listing failed:',
-			'KV list unavailable'
-		);
-	});
-
-	it('retains an independently edge-local LKG when KV revision listing throws', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		installEdgeCache();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['edge-known-good']
-		);
-		clearPublicDiscoveryCache();
-		const readsBeforeRecovery = kv.get.mock.calls.length;
-		kv.list.mockRejectedValueOnce(new Error('KV list unavailable'));
-
-		await expect(
-			getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform })
-		).resolves.toEqual(['edge-known-good']);
-
-		expect(kv.list).toHaveBeenCalledOnce();
-		expect(kv.get).toHaveBeenCalledTimes(readsBeforeRecovery);
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV revision listing failed:',
-			'KV list unavailable'
-		);
-	});
-
-	it('does not certify a failed KV check and shares its daily retry backoff', async () => {
-		const kv = installKv();
-		const platform = platformWithKv(kv);
-		const edge = installEdgeCache();
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform, revision: '1:100' },
-			async () => ['known-good']
-		);
-		clearPublicDiscoveryCache();
-		await getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform });
-		const listCallsAfterHealthyCheck = kv.list.mock.calls.length;
-
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
-		kv.list.mockRejectedValueOnce(new Error('KV list unavailable'));
-		clearPublicDiscoveryCache();
-		await expect(getCachedPublicDataLastKnownGood<string[]>('templates', { url: TEST_URL, platform }))
-			.resolves.toEqual(['known-good']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsAfterHealthyCheck + 1);
-		expect(warn).toHaveBeenCalledWith(
-			'[public-discovery-cache] KV revision listing failed:',
-			'KV list unavailable'
-		);
-
-		const pointerResponse = [...edge.entries.entries()].find(([url]) =>
-			url.endsWith('/lkg-pointer')
-		)?.[1];
-		const pointer = (await pointerResponse!.clone().json()) as Record<string, unknown>;
-		expect(pointer.latestRevisionCheckedAt).toBeUndefined();
-		expect(pointer.latestRevisionRetryAt).toBe(
-			NOW + 2 * PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1
-		);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 16 * 60 * 1000);
-		vi.resetModules();
-		const retryingIsolate = await import('$lib/server/public-discovery-cache');
-		await expect(
-			retryingIsolate.getCachedPublicDataLastKnownGood<string[]>('templates', {
-				url: TEST_URL,
-				platform
-			})
-		).resolves.toEqual(['known-good']);
-		expect(kv.list).toHaveBeenCalledTimes(listCallsAfterHealthyCheck + 1);
-	});
-
-	it('keeps outage backoff writes local across independent Worker isolates', async () => {
-		const kv = installKv();
-		const seedPlatform = platformWithKv(kv);
-		installEdgeCache();
-		await getCachedPublicData(
-			'templates',
-			{ url: TEST_URL, platform: seedPlatform, revision: '1:100' },
-			async () => ['stable']
-		);
-		expect(kv.put).toHaveBeenCalledTimes(1);
-
-		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS + 1);
+	it('never performs a global LIST or chooses an older LKG for an anonymous exact miss', async () => {
+		const r2 = installR2();
+		const platform = platformWithR2(r2);
 		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-		for (let isolateIndex = 0; isolateIndex < 2; isolateIndex += 1) {
-			vi.resetModules();
-			const isolate = await import('$lib/server/public-discovery-cache');
-			installEdgeCache();
-			const pending: Promise<unknown>[] = [];
-			const platform = platformWithKv(kv, undefined, pending);
-			await expect(
-				isolate.getCachedPublicData(
-					'templates',
-					{ url: TEST_URL, platform, revision: '1:100' },
-					async () => {
-						throw new Error(`origin unavailable in isolate ${isolateIndex}`);
-					}
-				)
-			).resolves.toEqual(['stable']);
-			await Promise.all(pending);
-		}
+		await publishPublicDiscoveryPayload(
+			'templates',
+			{ platform, revision: '1:100' },
+			async () => ['older']
+		);
+		const olderKey = r2RevisionPrefix('templates', '1:100') + 'payload.json';
+		clearPublicDiscoveryCache();
+		r2.get.mockClear();
+		r2.put.mockClear();
+		r2.list.mockClear();
+		r2.delete.mockClear();
+		const loader = vi.fn().mockResolvedValue(['must-not-load']);
 
-		// Failed refresh metadata belongs only in memory/Cache API. A fleet-wide
-		// outage must not multiply scarce KV writes by active location count.
-		expect(kv.put).toHaveBeenCalledTimes(1);
+		await expect(
+			getCachedPublicData(
+				'templates',
+				{ url: TEST_URL, platform, revision: '2:200' },
+				loader
+			)
+		).rejects.toBeInstanceOf(PublicDiscoveryPayloadNotPublishedError);
+		expect(r2.get).toHaveBeenCalledWith(
+			r2RevisionPrefix('templates', '2:200') + 'payload.json'
+		);
+		expect(r2.get).toHaveBeenCalledOnce();
+		expect(r2.entries.has(olderKey)).toBe(true);
+		expect(r2.put).not.toHaveBeenCalled();
+		expect(r2.list).not.toHaveBeenCalled();
+		expect(r2.delete).not.toHaveBeenCalled();
+		expect(loader).not.toHaveBeenCalled();
+	});
+
+	it('keeps the hard account-wide Cloudflare operation envelope inside the free tiers', () => {
+		// Use the longest billing month. These are account-wide ceilings, so the
+		// apparent remainder is usable only if siblings have left it unspent; none
+		// of this test's positive margins is reserved Commons capacity.
+		const days = 31;
+		const liveBackendRealms = 2;
+		const workersFreeRequestsPerDay = 100_000;
+		const maxAcceptedProducerCycles = liveBackendRealms * days * 24 * 60;
+		// A destructive cycle may use acquisition, staged withdrawal, and final
+		// authority PUTs. Every admitted cycle may also publish both list variants
+		// and both bundled graph variants. This deliberately covers urgent writes
+		// instead of assuming ordinary six-hour producer floors.
+		const manifestClassAPuts = maxAcceptedProducerCycles * 3;
+		const immutablePayloadPuts = maxAcceptedProducerCycles * 4;
+		const exactRetirementClassAOperations = 0;
+		const monthlyClassAOperations =
+			manifestClassAPuts + immutablePayloadPuts + exactRetirementClassAOperations;
+		const standardClassAFreeTier = 1_000_000;
+		const classAReserve = standardClassAFreeTier - monthlyClassAOperations;
+
+		expect(maxAcceptedProducerCycles).toBe(89_280);
+		expect(manifestClassAPuts).toBe(267_840);
+		expect(immutablePayloadPuts).toBe(357_120);
+		expect(monthlyClassAOperations).toBe(624_960);
+		expect(classAReserve).toBe(375_040);
+		expect(classAReserve).toBeGreaterThan(0);
+
+		// The Workers Free account ceiling is a harder anonymous-read bound than
+		// a guessed POP count: every allowed request can spend at most one exact
+		// manifest GET and one exact bundled-payload GET. Producer cycles add one
+		// manifest-state GET and four payload-existence GETs.
+		const maxMonthlyWorkerRequests = workersFreeRequestsPerDay * days;
+		const anonymousClassBOperations = maxMonthlyWorkerRequests * 2;
+		const producerExactReads = maxAcceptedProducerCycles * 5;
+		const monthlyClassBOperations = anonymousClassBOperations + producerExactReads;
+		const standardClassBFreeTier = 10_000_000;
+		const classBReserve = standardClassBFreeTier - monthlyClassBOperations;
+
+		expect(maxMonthlyWorkerRequests).toBe(3_100_000);
+		expect(anonymousClassBOperations).toBe(6_200_000);
+		expect(producerExactReads).toBe(446_400);
+		expect(monthlyClassBOperations).toBe(6_646_400);
+		expect(classBReserve).toBe(3_353_600);
+		expect(classBReserve).toBeGreaterThan(0);
+
+		// The manifest retains exactly three generations for each of the four
+		// immutable payload families. Charge every retained payload at the 2 MiB
+		// parser ceiling and every realm one complete 4 KiB manifest. Even this
+		// deliberately pessimistic ring is tiny relative to the account-wide 10 GB
+		// Standard-storage allowance.
+		const retainedGenerationsPerRealm = 3;
+		const immutablePayloadsPerGeneration = 4;
+		const manifestMaxBytes = 4 * 1024;
+		const monthlyStandardStorageFreeBytes = 10_000_000_000;
+		const retainedR2Bytes =
+			liveBackendRealms *
+			(retainedGenerationsPerRealm *
+				immutablePayloadsPerGeneration *
+				PUBLIC_DISCOVERY_CACHE_PAYLOAD_MAX_BYTES +
+				manifestMaxBytes);
+		expect(PUBLIC_DISCOVERY_CACHE_PAYLOAD_MAX_BYTES).toBe(2 * 1024 * 1024);
+		expect(retainedR2Bytes).toBe(50_339_840);
+		expect(monthlyStandardStorageFreeBytes - retainedR2Bytes).toBe(9_949_660_160);
+		expect(retainedR2Bytes).toBeLessThan(monthlyStandardStorageFreeBytes);
+
+		// Workers/Pages inbound requests and DO requests are separate account-level
+		// meters. A valid call spends one of each; the endpoint's Workers ceiling
+		// therefore also bounds calls into this object when siblings spend nothing.
+		// The transaction reads at most two singleton rows. Alternating an admitted
+		// cycle with an authenticated deployment-priority marker/clear is the
+		// conservative row-write bound; ordinary operation is far lower.
+		const durableObjectFreeRequestsPerDay = 100_000;
+		const durableObjectFreeRowsReadPerDay = 5_000_000;
+		const durableObjectFreeRowsWrittenPerDay = 100_000;
+		const durableObjectFreeStorageBytes = 5_000_000_000;
+		const durableObjectFreeDurationGbSecondsPerDay = 13_000;
+		const maxRowsReadPerValidRequest = 2;
+		const maxRowsWrittenPerDay = liveBackendRealms * 2 * 24 * 60;
+		const ordinaryCronAndPushRequestsPerDay = liveBackendRealms * (2 * 24 * 60 + 4);
+		expect(ordinaryCronAndPushRequestsPerDay).toBe(5_768);
+		expect(durableObjectFreeRequestsPerDay - workersFreeRequestsPerDay).toBe(0);
+		expect(
+			durableObjectFreeRowsReadPerDay -
+				workersFreeRequestsPerDay * maxRowsReadPerValidRequest
+		).toBe(4_800_000);
+		expect(durableObjectFreeRowsWrittenPerDay - maxRowsWrittenPerDay).toBe(94_240);
+
+		// Each realm has two fixed singleton rows and cannot accumulate request
+		// history. Budgeting a loose whole MiB per realm for rows, schema, indexes,
+		// and SQLite internal pages still uses only 2 MiB of the account's 5 GB.
+		const conservativeSqliteBytesPerRealm = 1024 * 1024;
+		const conservativeSqliteStorageBytes =
+			liveBackendRealms * conservativeSqliteBytesPerRealm;
+		expect(conservativeSqliteStorageBytes).toBe(2_097_152);
+		expect(durableObjectFreeStorageBytes - conservativeSqliteStorageBytes).toBe(
+			4_997_902_848
+		);
+		expect(conservativeSqliteStorageBytes).toBeLessThan(durableObjectFreeStorageBytes);
+
+		// Duration is billed for actual handler lifetime. As a conservative proxy,
+		// charge every one of the account's 100,000 possible calls the full 750 ms
+		// caller deadline at the 128 MB Worker memory ceiling. Faster synchronous
+		// gate responses bill less; the proxy leaves only an account-wide reserve.
+		const gateCallerDeadlineSeconds = 0.75;
+		const workerMemoryGb = 0.128;
+		const conservativeDurationGbSecondsPerDay =
+			durableObjectFreeRequestsPerDay * gateCallerDeadlineSeconds * workerMemoryGb;
+		expect(conservativeDurationGbSecondsPerDay).toBe(9_600);
+		expect(
+			durableObjectFreeDurationGbSecondsPerDay - conservativeDurationGbSecondsPerDay
+		).toBe(3_400);
 	});
 
 	it('can force-refresh a fresh control-plane entry after a publish race', async () => {
@@ -1414,6 +1094,27 @@ describe('public discovery cache', () => {
 			getCachedPublicData('manifest', { url: TEST_URL, forceRefresh: true }, refresh)
 		).resolves.toEqual({ revision: 2 });
 		expect(refresh).toHaveBeenCalledTimes(1);
+	});
+
+	it('bounds a lengthless oversized Cache API envelope before parsing it', async () => {
+		const oversized = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.enqueue(
+					new TextEncoder().encode('x'.repeat(PUBLIC_DISCOVERY_CACHE_PAYLOAD_MAX_BYTES + 1))
+				);
+				controller.close();
+			}
+		});
+		const match = vi.fn().mockResolvedValue(new Response(oversized));
+		const put = vi.fn().mockResolvedValue(undefined);
+		vi.stubGlobal('caches', { default: { match, put } });
+		vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+		const loader = vi.fn().mockResolvedValue(['live']);
+
+		await expect(
+			getCachedPublicData('oversized-edge-envelope', { url: TEST_URL }, loader)
+		).resolves.toEqual(['live']);
+		expect(loader).toHaveBeenCalledOnce();
 	});
 
 	it('degrades to the loader when edge reads and writes fail', async () => {

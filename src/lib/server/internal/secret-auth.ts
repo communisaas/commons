@@ -50,8 +50,25 @@ export function getInternalSecret(): string {
 	return secret;
 }
 
-export function matchInternalSecret(presented: string | null | undefined): InternalSecretMatchResult {
-	const active = env.INTERNAL_API_SECRET;
+export function matchInternalSecret(
+	presented: string | null | undefined
+): InternalSecretMatchResult {
+	return matchInternalSecretValues(
+		presented,
+		env.INTERNAL_API_SECRET,
+		env.INTERNAL_API_SECRET_PREVIOUS
+	);
+}
+
+/**
+ * Platform-env variant for request paths that intentionally execute before
+ * the general hooks.server process.env shim (notably runtime containment).
+ */
+export function matchInternalSecretValues(
+	presented: string | null | undefined,
+	active: string | null | undefined,
+	previous: string | null | undefined
+): InternalSecretMatchResult {
 	if (!isStringSecret(active)) {
 		return { ok: false, reason: 'not_configured' };
 	}
@@ -60,7 +77,6 @@ export function matchInternalSecret(presented: string | null | undefined): Inter
 	}
 	const presentedBytes = Buffer.from(presented, 'utf8');
 	const candidates: string[] = [active];
-	const previous = env.INTERNAL_API_SECRET_PREVIOUS;
 	if (typeof previous === 'string') {
 		if (previous.length < MIN_SECRET_BYTES) {
 			// Bad _PREVIOUS must NOT brick active-secret verification — log

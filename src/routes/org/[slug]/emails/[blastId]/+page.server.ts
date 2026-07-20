@@ -1,7 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { env as publicEnv } from '$env/dynamic/public';
 import { env as privateEnv } from '$env/dynamic/private';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
@@ -189,8 +189,7 @@ export const actions: Actions = {
 		}
 		if (!FEATURES.EMAIL_SERVER_DISPATCH) {
 			return fail(403, {
-				error:
-					"Email sending from our servers isn't available yet. Your A/B test drafts are saved."
+				error: "Email sending from our servers isn't available yet. Your A/B test drafts are saved."
 			});
 		}
 		const boundary = await serverDispatchBoundary(params.slug);

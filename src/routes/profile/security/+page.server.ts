@@ -1,5 +1,5 @@
 import { redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 

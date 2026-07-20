@@ -35,6 +35,29 @@ function source(rel: string): string {
 }
 
 describe('public Convex action auth gates', () => {
+	it('templates.search rejects direct callers before rate limiting or Gemini work', () => {
+		const templates = source('convex/templates.ts');
+		const start = templates.indexOf('export const search = action');
+		expect(start).toBeGreaterThan(-1);
+		const end = templates.indexOf('\nexport const ', start + 1);
+		const action = templates.slice(start, end === -1 ? undefined : end);
+		const secretGate = action.indexOf('requireInternalSecret(args._secret)');
+		const rateLimit = action.indexOf('ctx.runMutation(rateLimitCheckRef');
+		const gemini = action.indexOf('process.env.GEMINI_API_KEY');
+		expect(secretGate).toBeGreaterThan(0);
+		expect(rateLimit).toBeGreaterThan(secretGate);
+		expect(gemini).toBeGreaterThan(rateLimit);
+		expect(action).toContain('`templates.search:burst:${args.actorKey}`');
+		expect(action).toContain('`templates.search:semantic:daily:${args.actorKey}`');
+		expect(action).toMatch(/key:\s*['"]templates\.search:semantic:daily:global['"]/);
+		expect(action).not.toContain('args.query.slice');
+
+		const route = source('src/routes/api/templates/search/+server.ts');
+		expect(route).toContain('if (!locals.user)');
+		expect(route).toContain('_secret: getInternalSecret()');
+		expect(route).toContain('actorKey: locals.user.id');
+	});
+
 	it('segments.exportDecrypted has explicit editor gate before key unseal', () => {
 		const svelte = source('convex/segments.ts');
 		expect(svelte).toContain('export const requireExportAuth = internalQuery');

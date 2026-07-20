@@ -5,7 +5,7 @@ import {
 	verifyRegistrationResponse,
 	type RegistrationResponseJSON
 } from '@simplewebauthn/server';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$convex/_generated/api';
 import type { Id } from '$convex/_generated/dataModel';
 import { base64urlEncode } from '$lib/core/encoding/base64url';

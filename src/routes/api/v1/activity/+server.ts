@@ -1,18 +1,17 @@
-import { json } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import type { Id } from '$convex/_generated/dataModel';
+import { apiError, apiOk, parsePagination } from '$lib/server/api-v1/response';
 import type { RequestHandler } from './$types';
 
 /**
  * GET /api/v1/activity
  *
- * Activity feed across the org's followed decision-makers. Mirrors the
- * internal session-auth feed at /api/org/[slug]/decision-makers/feed.
+ * Activity for one followed decision-maker and one source type. Requiring both
+ * scopes keeps every request to one bounded indexed source page.
  *
  * Query params:
  *   limit (1-50, default 20)
@@ -29,27 +28,38 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const rateLimit = await checkApiPlanRateLimit(auth, { method: request.method });
 	if (rateLimit) return rateLimit;
 
-	const limit = Math.min(
-		Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1),
-		50
-	);
-	const cursor = url.searchParams.get('cursor') ?? undefined;
-	const decisionMakerId = url.searchParams.get('decision_maker_id') ?? undefined;
-	const activityType = url.searchParams.get('activity_type') ?? undefined;
+	const { cursor, limit } = parsePagination(url);
+	const decisionMakerId = url.searchParams.get('decision_maker_id')?.trim();
+	const rawActivityType = url.searchParams.get('activity_type')?.trim();
+	if (!decisionMakerId || new TextEncoder().encode(decisionMakerId).byteLength > 128) {
+		return apiError('BAD_REQUEST', 'decision_maker_id is required and must be valid', 400);
+	}
+	if (
+		rawActivityType !== 'vote' &&
+		rawActivityType !== 'sponsor' &&
+		rawActivityType !== 'receipt'
+	) {
+		return apiError('BAD_REQUEST', 'activity_type must be vote, sponsor, or receipt', 400);
+	}
 
 	const result = await serverQuery(api.v1api.listActivityFeed, {
 		_secret: getInternalSecret(),
 		orgId: auth.orgId,
 		limit,
-		cursor: cursor || undefined,
-		decisionMakerId: decisionMakerId
-			? (decisionMakerId as Id<'decisionMakers'>)
-			: undefined,
-		activityType: activityType || undefined
+		cursor: cursor ?? undefined,
+		decisionMakerId,
+		activityType: rawActivityType
 	});
+	if ('invalidDecisionMakerId' in result) {
+		return apiError('BAD_REQUEST', 'decision_maker_id is invalid', 400);
+	}
+	if (result.forbidden) {
+		return apiError('FORBIDDEN', 'Organization does not follow this decision-maker', 403);
+	}
 
-	return json({
-		data: result.items,
-		meta: { cursor: result.nextCursor, hasMore: !!result.nextCursor, total: result.total }
+	return apiOk(result.items, {
+		cursor: result.nextCursor,
+		hasMore: result.hasMore,
+		total: result.total
 	});
 };

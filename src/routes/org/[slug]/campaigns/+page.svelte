@@ -3,17 +3,19 @@
 
 	let { data }: { data: PageData } = $props();
 
-	let activeFilter = $state('ALL');
-
-	const filtered = $derived(
-		activeFilter === 'ALL'
-			? data.campaigns
-			: data.campaigns.filter((c) => c.status === activeFilter)
-	);
+	const activeFilter = $derived(data.filter);
 
 	const canCreate = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 
-	const filters = ['ALL', 'DRAFT', 'ACTIVE', 'COMPLETE'] as const;
+	const filters = ['ALL', 'DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'] as const;
+
+	function listHref(filter: (typeof filters)[number], cursor: string | null = null): string {
+		const params = new URLSearchParams();
+		if (filter !== 'ALL') params.set('status', filter);
+		if (cursor) params.set('cursor', cursor);
+		const query = params.toString();
+		return query ? `?${query}` : '?';
+	}
 
 	function typeBadgeClass(type: string): string {
 		switch (type) {
@@ -79,23 +81,22 @@
 	<!-- Filter tabs -->
 	<div class="border-surface-border flex gap-1 border-b">
 		{#each filters as filter}
-			<button
-				type="button"
+			<a
+				href={listHref(filter)}
 				class="border-b-2 px-4 py-2 text-sm transition-colors {activeFilter === filter
 					? 'text-text-primary border-teal-400'
 					: 'text-text-tertiary hover:text-text-secondary border-transparent'}"
-				onclick={() => (activeFilter = filter)}
 			>
 				{filter === 'ALL' ? 'All' : filter.charAt(0) + filter.slice(1).toLowerCase()}
 				<span class="text-text-quaternary ml-1 font-mono text-xs tabular-nums"
 					>{data.counts[filter] ?? 0}</span
 				>
-			</button>
+			</a>
 		{/each}
 	</div>
 
 	<!-- Campaign cards -->
-	{#if filtered.length === 0}
+	{#if data.campaigns.length === 0}
 		<div class="bg-surface-base border-surface-border rounded-md border p-12 text-center">
 			<div
 				class="bg-surface-overlay mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full"
@@ -125,7 +126,7 @@
 		</div>
 	{:else}
 		<div class="space-y-3">
-			{#each filtered as campaign (campaign.id)}
+			{#each data.campaigns as campaign (campaign.id)}
 				<div class="group relative">
 					<a
 						href="/org/{data.org.slug}/campaigns/{campaign.id}"
@@ -232,5 +233,28 @@
 				</div>
 			{/each}
 		</div>
+	{/if}
+
+	{#if data.pagination.currentCursor || data.pagination.hasMore}
+		<nav class="flex items-center justify-between" aria-label="Campaign pages">
+			{#if data.pagination.currentCursor}
+				<a
+					href={listHref(activeFilter)}
+					class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-3 py-2 text-sm"
+				>
+					First page
+				</a>
+			{:else}
+				<span></span>
+			{/if}
+			{#if data.pagination.hasMore && data.pagination.nextCursor}
+				<a
+					href={listHref(activeFilter, data.pagination.nextCursor)}
+					class="border-surface-border-strong text-text-secondary hover:bg-surface-raised rounded-lg border px-3 py-2 text-sm"
+				>
+					Next 50
+				</a>
+			{/if}
+		</nav>
 	{/if}
 </div>

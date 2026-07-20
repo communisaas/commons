@@ -1,25 +1,27 @@
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 /**
  * GET /api/org/[slug]/dm/receipts/export.csv
  *
- * CSV export of all accountability receipts for the org. Streams the response
- * so large receipt sets don't sit in memory. Attestation digest column lets
- * downstream consumers reproduce the per-receipt hash. T6-5.
+ * CSV export of one explicit accountability-receipt page. A continuation
+ * cursor is returned in X-Next-Cursor; no request walks all history.
  */
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	try {
-		// Pull a wide page — CSV export is bounded by what the org wants. 500
-		// keeps the response sub-MB for typical orgs; multi-page exports can
-		// chain via the cursor pagination on the JSON endpoint.
-		const result = await serverQuery(api.legislation.listReceiptsByOrg, {
+		const cursor = url.searchParams.get('cursor') ?? undefined;
+		const requestedLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+		const limit = Number.isSafeInteger(requestedLimit)
+			? Math.min(Math.max(requestedLimit, 1), 100)
+			: 100;
+		const result = await serverQuery(api.legislation.exportReceiptsByOrg, {
 			slug: params.slug!,
-			limit: 500
+			cursor,
+			limit
 		});
 
 		const header = [
@@ -42,7 +44,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 		const escape = (v: unknown): string => {
 			if (v === null || v === undefined) return '';
-			const s = String(v);
+			let s = String(v);
+			if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
 			if (s.includes(',') || s.includes('"') || s.includes('\n')) {
 				return `"${s.replace(/"/g, '""')}"`;
 			}
@@ -75,14 +78,23 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		}
 
 		const body = lines.join('\n');
+		const headers: Record<string, string> = {
+			'Content-Type': 'text/csv; charset=utf-8',
+			'Content-Disposition': `attachment; filename="receipts-${params.slug}-part.csv"`,
+			'X-Export-Complete': result.nextCursor ? 'false' : 'true'
+		};
+		if (result.nextCursor) {
+			headers['X-Next-Cursor'] = result.nextCursor;
+			const nextUrl = new URL(url);
+			nextUrl.searchParams.set('cursor', result.nextCursor);
+			headers.Link = `<${nextUrl.pathname}${nextUrl.search}>; rel="next"`;
+		}
 		return new Response(body, {
-			headers: {
-				'Content-Type': 'text/csv; charset=utf-8',
-				'Content-Disposition': `attachment; filename="receipts-${params.slug}.csv"`
-			}
+			headers
 		});
 	} catch (e) {
 		const message = e instanceof Error ? e.message : 'Failed to export receipts';
+		if (message.includes('ACCOUNTABILITY_READ_MODEL_NOT_READY')) throw error(503, message);
 		throw error(404, message);
 	}
 };

@@ -42,12 +42,13 @@ import { getContext, setContext } from 'svelte';
 import { browser } from '$app/environment';
 import type {
 	ReasoningEntry,
-	ReasoningStage
-} from '$lib/components/org/studio/StudioReasoning.svelte';
-import type { StudioSource } from '$lib/components/org/studio/StudioSources.svelte';
+	ReasoningStage,
+	StudioSource
+} from '$lib/components/org/studio/types';
 import type { GeoScope } from '$lib/core/agents/types';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 import type { ResolutionStopReason, StudioProcessEvidence } from '$lib/types/studio-process';
+import type { ProcessedDecisionMaker } from '$lib/types/template';
 
 // ─── Spaces ──────────────────────────────────────────────────────────
 export type SpaceId = 'studio' | 'base' | 'landscape' | 'return';
@@ -185,12 +186,7 @@ export interface AuthoringIntent {
 	audienceGuidance: string;
 }
 
-export interface ResolvedDecisionMaker {
-	name: string;
-	title: string;
-	organization: string;
-	email?: string;
-}
+export type ResolvedDecisionMaker = ProcessedDecisionMaker;
 
 export type GeographicScopeSource =
 	| 'pending'

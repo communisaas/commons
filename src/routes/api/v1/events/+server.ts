@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -32,8 +32,13 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		status: status && ['DRAFT', 'PUBLISHED', 'CANCELLED', 'COMPLETED'].includes(status) ? status : undefined,
-		eventType: eventType && ['IN_PERSON', 'VIRTUAL', 'HYBRID'].includes(eventType) ? eventType : undefined});
+		status:
+			status && ['DRAFT', 'PUBLISHED', 'CANCELLED', 'COMPLETED'].includes(status)
+				? status
+				: undefined,
+		eventType:
+			eventType && ['IN_PERSON', 'VIRTUAL', 'HYBRID'].includes(eventType) ? eventType : undefined
+	});
 
 	const data = result.items.map((e: any) => ({
 		id: e._id,

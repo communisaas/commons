@@ -9,6 +9,13 @@ import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 /** Functional role a decision-maker plays in the decision */
 export type RoleCategory = 'votes' | 'executes' | 'shapes' | 'funds' | 'oversees';
 
+/** Server-issued proof that a grounded agent result may cross the anonymous detail boundary. */
+export interface PublicRecipientProvenance {
+	version: 1;
+	expiresAt: number;
+	signature: string;
+}
+
 /** Group of decision-makers sharing the same functional role */
 export interface RoleGroup {
 	category: RoleCategory;
@@ -96,6 +103,8 @@ export interface Template {
 	// (capped at 500 in storage; consumers truncate), tier breakdown 0-5.
 	daily_arrivals?: number[];
 	district_counts?: Array<{ code: string; count: number }>;
+	district_counts_suppressed_districts?: number;
+	district_counts_suppressed_count?: number;
 	tier_counts?: number[];
 
 	// Geographic scope (populated by scope-filtering; computed, not stored on the template row)
@@ -242,6 +251,16 @@ export interface ProcessedDecisionMaker {
 	emailGrounded?: boolean; // true = email found in grounded search results
 	emailSource?: string; // Specific URL where email was found (if grounded)
 	emailSourceTitle?: string; // Title of email source page
+	/**
+	 * Server-only evidence that this run found the email verbatim in a page it
+	 * read. A cached contact may remain useful to the author, but it must not be
+	 * granted an anonymous-public recipient attestation from legacy cache state.
+	 */
+	publicEmailGrounding?: {
+		version: 1;
+		method: 'page-read';
+		source: string;
+	};
 	/** Free-form notes about alternative contact paths discovered by the agent */
 	contactNotes?: string;
 	/** true if discovered from page content rather than the initial identity list */
@@ -258,6 +277,8 @@ export interface ProcessedDecisionMaker {
 	publicActions?: string[];
 	/** Issue-specific prompt for compose Zone 2 */
 	personalPrompt?: string | null;
+	/** Author-bound, purpose-bound proof for anonymous public recipient projection. */
+	publicRecipientProvenance?: PublicRecipientProvenance;
 
 	// === Email Deliverability Verification ===
 	/** Email verification status from MX check */

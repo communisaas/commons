@@ -19,11 +19,13 @@
 
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+
+const DIRECT_DELIVERY_RECIPIENT_MAX = 20;
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
@@ -40,8 +42,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json({ error: 'Missing or invalid templateId (≤64 chars)' }, { status: 400 });
 		}
 
-		if (!Array.isArray(recipients) || recipients.length === 0 || recipients.length > 200) {
-			return json({ error: 'recipients must be a non-empty array (≤200 entries)' }, { status: 400 });
+		if (
+			!Array.isArray(recipients) ||
+			recipients.length === 0 ||
+			recipients.length > DIRECT_DELIVERY_RECIPIENT_MAX
+		) {
+			return json(
+				{
+					error: `recipients must be a non-empty array (≤${DIRECT_DELIVERY_RECIPIENT_MAX} entries)`
+				},
+				{ status: 400 }
+			);
 		}
 
 		// Validate each recipient
@@ -50,7 +61,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			if (!r.name || typeof r.name !== 'string' || r.name.length > 200) {
 				return json({ error: 'Each recipient must have a name (≤200 chars)' }, { status: 400 });
 			}
-			if (r.email !== undefined && r.email !== null && (typeof r.email !== 'string' || r.email.length > 254)) {
+			if (
+				r.email !== undefined &&
+				r.email !== null &&
+				(typeof r.email !== 'string' || r.email.length > 254)
+			) {
 				return json({ error: 'Recipient email must be a string ≤254 chars' }, { status: 400 });
 			}
 			if (!r.deliveryMethod || !validMethods.includes(r.deliveryMethod)) {

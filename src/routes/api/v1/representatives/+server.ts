@@ -5,8 +5,8 @@
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
-import { apiOk, parsePagination } from '$lib/server/api-v1/response';
-import { serverQuery } from 'convex-sveltekit';
+import { apiError, apiOk, parsePagination } from '$lib/server/api-v1/response';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -24,13 +24,26 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const { cursor, limit } = parsePagination(url);
 	const countryCode = url.searchParams.get('country');
 	const constituencyId = url.searchParams.get('constituency');
+	if (constituencyId?.trim()) {
+		return apiError(
+			'SERVICE_UNAVAILABLE',
+			'Constituency lookup is unavailable until its compact read projection is ready',
+			503
+		);
+	}
+	if (!countryCode?.trim()) {
+		return apiError('BAD_REQUEST', 'country is required to bound representative discovery', 400);
+	}
+	if (countryCode && new TextEncoder().encode(countryCode.trim()).byteLength > 100) {
+		return apiError('BAD_REQUEST', 'country is too long', 400);
+	}
 
 	const result = await serverQuery(api.v1api.listRepresentativesV1, {
 		_secret: getInternalSecret(),
 		limit,
 		cursor: cursor ?? undefined,
-		country: countryCode ?? undefined,
-		constituencyId: constituencyId ?? undefined});
+		country: countryCode.trim()
+	});
 
 	const data = result.items.map((r: any) => ({
 		id: r._id,

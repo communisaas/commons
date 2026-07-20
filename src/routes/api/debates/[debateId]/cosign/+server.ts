@@ -1,11 +1,16 @@
 // CONVEX: Keep SvelteKit — POST uses blockchain (coSignArgument), tx-verifier
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const DEBATE_COSIGN_REQUEST_MAX_BYTES = 128 * 1024;
 
 function verifyTransactionAsync(_txHash: string, _context: Record<string, unknown>): void {
 	// Transaction verification worker is not wired in this API boundary yet.
@@ -21,7 +26,7 @@ function isValidEthAddress(addr: unknown): addr is string {
  *
  * Co-sign an existing argument. Requires Tier 3+ and ZK proof.
  */
-export const POST: RequestHandler = async ({ params, request, locals }) => {
+export const POST: RequestHandler = async ({ params, request, locals, getClientAddress }) => {
 	if (!FEATURES.DEBATE) {
 		throw error(404, 'Not found');
 	}
@@ -37,8 +42,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!user || (user.trust_tier ?? 0) < 3) {
 		throw error(403, 'Tier 3+ verification required to co-sign arguments');
 	}
+	const rate = await getRateLimiter().check(`ratelimit:debate-cosign:${getClientAddress()}`, {
+		maxRequests: 20,
+		windowMs: 60_000
+	});
+	if (!rate.allowed) return json({ error: 'Too many requests' }, { status: 429 });
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
+		debateId: debateId as Id<'debates'>
+	});
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -49,7 +62,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Debate deadline has passed');
 	}
 
-	const body = await request.json();
+	const parsed = await readBoundedJson(request, DEBATE_COSIGN_REQUEST_MAX_BYTES);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw error(400, 'Invalid co-sign request');
+	}
+	const body = parsed as Record<string, any>;
 	const { argumentIndex, stakeAmount, proofHex, publicInputs, nullifierHex, walletAddress } = body;
 
 	const stakeNum = Number(stakeAmount);
@@ -57,16 +74,26 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'stakeAmount must be a positive number up to 100 billion (micro-units)');
 	}
 
-	if (argumentIndex === undefined || typeof argumentIndex !== 'number') {
+	if (!Number.isSafeInteger(argumentIndex) || argumentIndex < 0) {
 		throw error(400, 'argumentIndex is required');
 	}
-	if (!stakeAmount || !proofHex || !publicInputs || !nullifierHex) {
+	if (
+		!stakeAmount ||
+		typeof proofHex !== 'string' ||
+		proofHex.length > 64 * 1024 ||
+		!Array.isArray(publicInputs) ||
+		publicInputs.length !== 31 ||
+		typeof nullifierHex !== 'string' ||
+		nullifierHex.length === 0 ||
+		nullifierHex.length > 256
+	) {
 		throw error(400, 'stakeAmount, proof data are required');
 	}
 
 	// Nullifier dedup
 	if (nullifierHex) {
 		const existingNullifier = await serverQuery(api.debates.findNullifier, {
+			_secret: getInternalSecret(),
 			debateId: debateId as Id<'debates'>,
 			nullifierHash: nullifierHex
 		});
@@ -78,14 +105,20 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (walletAddress !== undefined && walletAddress !== null && !isValidEthAddress(walletAddress)) {
 		throw error(400, 'walletAddress must be a valid Ethereum address (0x-prefixed, 42 chars)');
 	}
-	const beneficiary: string | undefined = isValidEthAddress(walletAddress) ? walletAddress : undefined;
+	const beneficiary: string | undefined = isValidEthAddress(walletAddress)
+		? walletAddress
+		: undefined;
 
 	// ── On-chain co-sign via DebateMarket ──────────────────────────────
 	let txHash: string | undefined;
 	let serverVerified = false;
 
 	const clientTxHash = body.txHash;
-	if (clientTxHash && typeof clientTxHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(clientTxHash)) {
+	if (
+		clientTxHash &&
+		typeof clientTxHash === 'string' &&
+		/^0x[0-9a-fA-F]{64}$/.test(clientTxHash)
+	) {
 		txHash = clientTxHash;
 	} else {
 		try {
@@ -127,6 +160,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// ── Convex DB write (atomic) ─────────────────────────────────────
 	await serverMutation(api.debates.cosign, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>,
 		argumentIndex,
 		stakeAmount: stakeNum,

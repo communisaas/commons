@@ -26,20 +26,39 @@
  * @see voter-protocol/packages/crypto/noir/three_tree_membership/src/main.nr
  */
 
-import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
-import { makeFunctionReference } from "convex/server";
-import type { FunctionReference } from "convex/server";
-import { v } from "convex/values";
-import { requireInternalSecret } from "./_internalAuth";
+import {
+	internalAction,
+	internalMutation,
+	internalQuery,
+	mutation,
+	query
+} from './_generated/server';
+import { internal } from './_generated/api';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
+import { v } from 'convex/values';
+import { requireInternalSecret } from './_internalAuth';
 
 declare const process: { env: Record<string, string | undefined> };
 
-const TREE_ID = "revocation";
-const setRevocationHaltRef = makeFunctionReference<"mutation">("revocations:setRevocationHalt") as unknown as FunctionReference<"mutation", "internal", { reason: string }, unknown>;
-const getRevocationRootInternalRef = makeFunctionReference<"query">("revocations:getRevocationRootInternal") as unknown as FunctionReference<"query", "internal">;
-const recordReconcileSkipRef = makeFunctionReference<"mutation">("revocations:recordReconcileSkip") as unknown as FunctionReference<"mutation", "internal", { treeId: string; reason: string }, { consecutiveSkips: number }>;
-const clearReconcileSkipsRef = makeFunctionReference<"mutation">("revocations:clearReconcileSkips") as unknown as FunctionReference<"mutation", "internal", { treeId: string }, unknown>;
+const TREE_ID = 'revocation';
+const setRevocationHaltRef = makeFunctionReference<'mutation'>(
+	'revocations:setRevocationHalt'
+) as unknown as FunctionReference<'mutation', 'internal', { reason: string }, unknown>;
+const getRevocationRootInternalRef = makeFunctionReference<'query'>(
+	'revocations:getRevocationRootInternal'
+) as unknown as FunctionReference<'query', 'internal'>;
+const recordReconcileSkipRef = makeFunctionReference<'mutation'>(
+	'revocations:recordReconcileSkip'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ treeId: string; reason: string },
+	{ consecutiveSkips: number }
+>;
+const clearReconcileSkipsRef = makeFunctionReference<'mutation'>(
+	'revocations:clearReconcileSkips'
+) as unknown as FunctionReference<'mutation', 'internal', { treeId: string }, unknown>;
 
 // Alert when the reconciler has skipped at least this many consecutive ticks.
 // Cron fires hourly; 3 ticks = ~3 hours of silent skips before paging.
@@ -58,10 +77,10 @@ const SMT_DEPTH = 128;
  * lookups that compute the same numeric path always produce the same string.
  */
 function canonicalizePathKey(key: string | bigint): string {
-  let hex = typeof key === "bigint" ? key.toString(16) : key;
-  if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.slice(2);
-  hex = hex.toLowerCase().replace(/^0+/, "");
-  return hex.length === 0 ? "0" : hex;
+	let hex = typeof key === 'bigint' ? key.toString(16) : key;
+	if (hex.startsWith('0x') || hex.startsWith('0X')) hex = hex.slice(2);
+	hex = hex.toLowerCase().replace(/^0+/, '');
+	return hex.length === 0 ? '0' : hex;
 }
 
 /**
@@ -73,13 +92,13 @@ function canonicalizePathKey(key: string | bigint): string {
  * Returns 128 canonicalized sibling pathKeys, indexed by depth (0..127).
  */
 function computeSiblingPathKeys(leafKey: bigint): string[] {
-  const result: string[] = [];
-  for (let d = 0; d < SMT_DEPTH; d++) {
-    const nodePath = leafKey >> BigInt(d);
-    const siblingPath = nodePath ^ 1n;
-    result.push(canonicalizePathKey(siblingPath));
-  }
-  return result;
+	const result: string[] = [];
+	for (let d = 0; d < SMT_DEPTH; d++) {
+		const nodePath = leafKey >> BigInt(d);
+		const siblingPath = nodePath ^ 1n;
+		result.push(canonicalizePathKey(siblingPath));
+	}
+	return result;
 }
 
 /**
@@ -99,51 +118,51 @@ function computeSiblingPathKeys(leafKey: bigint): string[] {
  * Caller is responsible for the truncation to the SMT keyspace.
  */
 export const getRevocationSMTPath = query({
-  args: { _secret: v.string(), leafKey: v.string() },
-  handler: async (ctx, { _secret, leafKey }) => {
-    requireInternalSecret(_secret);
-    const canonicalLeaf = canonicalizePathKey(leafKey);
-    const leafKeyBig = BigInt("0x" + canonicalLeaf);
-    const siblingKeys = computeSiblingPathKeys(leafKeyBig);
+	args: { _secret: v.string(), leafKey: v.string() },
+	handler: async (ctx, { _secret, leafKey }) => {
+		requireInternalSecret(_secret);
+		const canonicalLeaf = canonicalizePathKey(leafKey);
+		const leafKeyBig = BigInt('0x' + canonicalLeaf);
+		const siblingKeys = computeSiblingPathKeys(leafKeyBig);
 
-    // Fetch current root + seq.
-    const rootRow = await ctx.db
-      .query("smtRoots")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
+		// Fetch current root + seq.
+		const rootRow = await ctx.db
+			.query('smtRoots')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
 
-    // Fetch the leaf value (depth 0, pathKey = leafKey).
-    const leafRow = await ctx.db
-      .query("smtNodes")
-      .withIndex("by_tree_depth_path", (q) =>
-        q.eq("treeId", TREE_ID).eq("depth", 0).eq("pathKey", canonicalLeaf),
-      )
-      .first();
+		// Fetch the leaf value (depth 0, pathKey = leafKey).
+		const leafRow = await ctx.db
+			.query('smtNodes')
+			.withIndex('by_tree_depth_path', (q) =>
+				q.eq('treeId', TREE_ID).eq('depth', 0).eq('pathKey', canonicalLeaf)
+			)
+			.first();
 
-    // Fetch all 128 siblings concurrently. Sequential awaits widen the OCC
-    // race window — every ms of read latency increases the chance another
-    // emit lands between read and write. Parallel point-lookups complete in
-    // ~1 round trip.
-    const siblings: (string | null)[] = await Promise.all(
-      siblingKeys.map((siblingPath, d) =>
-        ctx.db
-          .query("smtNodes")
-          .withIndex("by_tree_depth_path", (q) =>
-            q.eq("treeId", TREE_ID).eq("depth", d).eq("pathKey", siblingPath),
-          )
-          .first()
-          .then((sib) => sib?.hash ?? null),
-      ),
-    );
+		// Fetch all 128 siblings concurrently. Sequential awaits widen the OCC
+		// race window — every ms of read latency increases the chance another
+		// emit lands between read and write. Parallel point-lookups complete in
+		// ~1 round trip.
+		const siblings: (string | null)[] = await Promise.all(
+			siblingKeys.map((siblingPath, d) =>
+				ctx.db
+					.query('smtNodes')
+					.withIndex('by_tree_depth_path', (q) =>
+						q.eq('treeId', TREE_ID).eq('depth', d).eq('pathKey', siblingPath)
+					)
+					.first()
+					.then((sib) => sib?.hash ?? null)
+			)
+		);
 
-    return {
-      siblings,
-      currentLeaf: leafRow?.hash ?? null,
-      currentRoot: rootRow?.root ?? null,
-      expectedSequenceNumber: rootRow?.sequenceNumber ?? 0,
-      leafCount: rootRow?.leafCount ?? 0,
-    };
-  },
+		return {
+			siblings,
+			currentLeaf: leafRow?.hash ?? null,
+			currentRoot: rootRow?.root ?? null,
+			expectedSequenceNumber: rootRow?.sequenceNumber ?? 0,
+			leafCount: rootRow?.leafCount ?? 0
+		};
+	}
 });
 
 /**
@@ -170,158 +189,153 @@ export const getRevocationSMTPath = query({
  * revert with AlreadyRevoked anyway, but failing fast here saves the gas.
  */
 export const applyRevocationSMTUpdate = mutation({
-  args: {
-    _secret: v.string(),
-    leafKey: v.string(),
-    // 128 entries, indexed by depth 0..127. Depth 0 is the leaf itself; its
-    // pathKey MUST match the canonical leafKey. The root (depth 128) lives in
-    // smtRoots, not in this array.
-    nodeUpdates: v.array(
-      v.object({
-        depth: v.number(),
-        pathKey: v.string(),
-        hash: v.string(),
-      }),
-    ),
-    newRoot: v.string(),
-    expectedSequenceNumber: v.number(),
-  },
-  handler: async (ctx, args) => {
-    requireInternalSecret(args._secret);
-    if (args.nodeUpdates.length !== SMT_DEPTH) {
-      throw new Error(
-        `SMT_PATH_LENGTH_MISMATCH: expected ${SMT_DEPTH} nodeUpdates (depths 0..${SMT_DEPTH - 1}), got ${args.nodeUpdates.length}`,
-      );
-    }
+	args: {
+		_secret: v.string(),
+		leafKey: v.string(),
+		// 128 entries, indexed by depth 0..127. Depth 0 is the leaf itself; its
+		// pathKey MUST match the canonical leafKey. The root (depth 128) lives in
+		// smtRoots, not in this array.
+		nodeUpdates: v.array(
+			v.object({
+				depth: v.number(),
+				pathKey: v.string(),
+				hash: v.string()
+			})
+		),
+		newRoot: v.string(),
+		expectedSequenceNumber: v.number()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		if (args.nodeUpdates.length !== SMT_DEPTH) {
+			throw new Error(
+				`SMT_PATH_LENGTH_MISMATCH: expected ${SMT_DEPTH} nodeUpdates (depths 0..${SMT_DEPTH - 1}), got ${args.nodeUpdates.length}`
+			);
+		}
 
-    const canonicalLeaf = canonicalizePathKey(args.leafKey);
+		const canonicalLeaf = canonicalizePathKey(args.leafKey);
 
-    // Optimistic-concurrency check.
-    const rootRow = await ctx.db
-      .query("smtRoots")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
+		// Optimistic-concurrency check.
+		const rootRow = await ctx.db
+			.query('smtRoots')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
 
-    // Drift kill-switch. When the reconciliation cron detects critical
-    // divergence (Convex root != on-chain root, or contract EMPTY_TREE_ROOT
-    // mismatch), it sets `revocationFlags.isHalted=true`. Until an operator
-    // investigates and explicitly clears the halt via
-    // `operatorClearRevocationHalt`, all new emits are refused.
-    //
-    // Halt state lives in a separate table so it doesn't pollute
-    // `smtRoots.root` with a placeholder zero at genesis.
-    const haltRow = await ctx.db
-      .query("revocationFlags")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    if (haltRow?.isHalted === true) {
-      throw new Error(
-        `REVOCATION_EMITS_HALTED: kill-switch active since ${haltRow.haltedAt} (reason: ${haltRow.haltedReason ?? 'unspecified'})`,
-      );
-    }
+		// Drift kill-switch. When the reconciliation cron detects critical
+		// divergence (Convex root != on-chain root, or contract EMPTY_TREE_ROOT
+		// mismatch), it sets `revocationFlags.isHalted=true`. Until an operator
+		// investigates and explicitly clears the halt via
+		// `operatorClearRevocationHalt`, all new emits are refused.
+		//
+		// Halt state lives in a separate table so it doesn't pollute
+		// `smtRoots.root` with a placeholder zero at genesis.
+		const haltRow = await ctx.db
+			.query('revocationFlags')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		if (haltRow?.isHalted === true) {
+			throw new Error(
+				`REVOCATION_EMITS_HALTED: kill-switch active since ${haltRow.haltedAt} (reason: ${haltRow.haltedReason ?? 'unspecified'})`
+			);
+		}
 
-    const observedSeq = rootRow?.sequenceNumber ?? 0;
-    if (observedSeq !== args.expectedSequenceNumber) {
-      throw new Error(
-        `SMT_SEQUENCE_CONFLICT: expected ${args.expectedSequenceNumber}, found ${observedSeq}`,
-      );
-    }
+		const observedSeq = rootRow?.sequenceNumber ?? 0;
+		if (observedSeq !== args.expectedSequenceNumber) {
+			throw new Error(
+				`SMT_SEQUENCE_CONFLICT: expected ${args.expectedSequenceNumber}, found ${observedSeq}`
+			);
+		}
 
-    // Idempotency: leaf must be empty for this to be a fresh insert. The
-    // caller's read MAY be stale, so we re-check at write time.
-    const existingLeaf = await ctx.db
-      .query("smtNodes")
-      .withIndex("by_tree_depth_path", (q) =>
-        q.eq("treeId", TREE_ID).eq("depth", 0).eq("pathKey", canonicalLeaf),
-      )
-      .first();
-    if (existingLeaf !== null) {
-      throw new Error("SMT_LEAF_OCCUPIED: insert at this slot already exists");
-    }
+		// Idempotency: leaf must be empty for this to be a fresh insert. The
+		// caller's read MAY be stale, so we re-check at write time.
+		const existingLeaf = await ctx.db
+			.query('smtNodes')
+			.withIndex('by_tree_depth_path', (q) =>
+				q.eq('treeId', TREE_ID).eq('depth', 0).eq('pathKey', canonicalLeaf)
+			)
+			.first();
+		if (existingLeaf !== null) {
+			throw new Error('SMT_LEAF_OCCUPIED: insert at this slot already exists');
+		}
 
-    // Validate every depth d's pathKey equals (leafKey >> d). This catches
-    // caller-side bit-decomposition bugs that would otherwise persist as a
-    // structurally-impossible tree. Cheap: 128 bigint shifts + string
-    // compares, no Poseidon2.
-    const leafKeyBig = BigInt("0x" + canonicalLeaf);
-    const seenDepths = new Set<number>();
-    for (const u of args.nodeUpdates) {
-      if (seenDepths.has(u.depth)) {
-        throw new Error(
-          `SMT_PATH_DUPLICATE_DEPTH: nodeUpdates contains depth ${u.depth} twice`,
-        );
-      }
-      seenDepths.add(u.depth);
-      const expectedPathKey = canonicalizePathKey(leafKeyBig >> BigInt(u.depth));
-      if (canonicalizePathKey(u.pathKey) !== expectedPathKey) {
-        throw new Error(
-          `SMT_PATH_KEY_MISMATCH: depth ${u.depth} pathKey != (leafKey >> ${u.depth})`,
-        );
-      }
-    }
-    for (let d = 0; d < SMT_DEPTH; d++) {
-      if (!seenDepths.has(d)) {
-        throw new Error(`SMT_PATH_GAP: nodeUpdates missing depth ${d}`);
-      }
-    }
+		// Validate every depth d's pathKey equals (leafKey >> d). This catches
+		// caller-side bit-decomposition bugs that would otherwise persist as a
+		// structurally-impossible tree. Cheap: 128 bigint shifts + string
+		// compares, no Poseidon2.
+		const leafKeyBig = BigInt('0x' + canonicalLeaf);
+		const seenDepths = new Set<number>();
+		for (const u of args.nodeUpdates) {
+			if (seenDepths.has(u.depth)) {
+				throw new Error(`SMT_PATH_DUPLICATE_DEPTH: nodeUpdates contains depth ${u.depth} twice`);
+			}
+			seenDepths.add(u.depth);
+			const expectedPathKey = canonicalizePathKey(leafKeyBig >> BigInt(u.depth));
+			if (canonicalizePathKey(u.pathKey) !== expectedPathKey) {
+				throw new Error(
+					`SMT_PATH_KEY_MISMATCH: depth ${u.depth} pathKey != (leafKey >> ${u.depth})`
+				);
+			}
+		}
+		for (let d = 0; d < SMT_DEPTH; d++) {
+			if (!seenDepths.has(d)) {
+				throw new Error(`SMT_PATH_GAP: nodeUpdates missing depth ${d}`);
+			}
+		}
 
-    // Look up existing rows for all 128 path-nodes in parallel; serialize the
-    // writes (Convex doesn't expose batched insert/patch). Read concurrency
-    // alone halves the wall time of this phase.
-    const canonicalPaths = args.nodeUpdates.map((u) => ({
-      ...u,
-      canonicalPath: canonicalizePathKey(u.pathKey),
-    }));
-    const existingRows = await Promise.all(
-      canonicalPaths.map((u) =>
-        ctx.db
-          .query("smtNodes")
-          .withIndex("by_tree_depth_path", (q) =>
-            q
-              .eq("treeId", TREE_ID)
-              .eq("depth", u.depth)
-              .eq("pathKey", u.canonicalPath),
-          )
-          .first(),
-      ),
-    );
-    for (let i = 0; i < canonicalPaths.length; i++) {
-      const u = canonicalPaths[i];
-      const existing = existingRows[i];
-      if (existing) {
-        await ctx.db.patch(existing._id, { hash: u.hash });
-      } else {
-        await ctx.db.insert("smtNodes", {
-          treeId: TREE_ID,
-          depth: u.depth,
-          pathKey: u.canonicalPath,
-          hash: u.hash,
-        });
-      }
-    }
+		// Look up existing rows for all 128 path-nodes in parallel; serialize the
+		// writes (Convex doesn't expose batched insert/patch). Read concurrency
+		// alone halves the wall time of this phase.
+		const canonicalPaths = args.nodeUpdates.map((u) => ({
+			...u,
+			canonicalPath: canonicalizePathKey(u.pathKey)
+		}));
+		const existingRows = await Promise.all(
+			canonicalPaths.map((u) =>
+				ctx.db
+					.query('smtNodes')
+					.withIndex('by_tree_depth_path', (q) =>
+						q.eq('treeId', TREE_ID).eq('depth', u.depth).eq('pathKey', u.canonicalPath)
+					)
+					.first()
+			)
+		);
+		for (let i = 0; i < canonicalPaths.length; i++) {
+			const u = canonicalPaths[i];
+			const existing = existingRows[i];
+			if (existing) {
+				await ctx.db.patch(existing._id, { hash: u.hash });
+			} else {
+				await ctx.db.insert('smtNodes', {
+					treeId: TREE_ID,
+					depth: u.depth,
+					pathKey: u.canonicalPath,
+					hash: u.hash
+				});
+			}
+		}
 
-    // Update the root row — insert if first write, patch otherwise.
-    const newSeq = observedSeq + 1;
-    const now = Date.now();
-    if (rootRow) {
-      await ctx.db.patch(rootRow._id, {
-        root: args.newRoot,
-        leafCount: rootRow.leafCount + 1,
-        sequenceNumber: newSeq,
-        lastUpdatedAt: now,
-      });
-    } else {
-      await ctx.db.insert("smtRoots", {
-        treeId: TREE_ID,
-        root: args.newRoot,
-        leafCount: 1,
-        sequenceNumber: newSeq,
-        lastUpdatedAt: now,
-      });
-    }
+		// Update the root row — insert if first write, patch otherwise.
+		const newSeq = observedSeq + 1;
+		const now = Date.now();
+		if (rootRow) {
+			await ctx.db.patch(rootRow._id, {
+				root: args.newRoot,
+				leafCount: rootRow.leafCount + 1,
+				sequenceNumber: newSeq,
+				lastUpdatedAt: now
+			});
+		} else {
+			await ctx.db.insert('smtRoots', {
+				treeId: TREE_ID,
+				root: args.newRoot,
+				leafCount: 1,
+				sequenceNumber: newSeq,
+				lastUpdatedAt: now
+			});
+		}
 
-    return { newRoot: args.newRoot, newSequenceNumber: newSeq };
-  },
+		return { newRoot: args.newRoot, newSequenceNumber: newSeq };
+	}
 });
 
 /**
@@ -349,48 +363,48 @@ export const applyRevocationSMTUpdate = mutation({
  * coordination.
  */
 export const getRevocationNonMembershipPath = query({
-  args: { _secret: v.string(), revocationNullifier: v.string() },
-  handler: async (ctx, { _secret, revocationNullifier }) => {
-    requireInternalSecret(_secret);
-    // Truncate to low 128 bits — same convention as
-    // src/lib/server/smt/revocation-smt.ts `nullifierToLeafKey`.
-    // SMT_DEPTH widened to 128 to close targeted-lockout grinding (see header).
-    const cleaned = revocationNullifier.startsWith("0x")
-      ? revocationNullifier.slice(2)
-      : revocationNullifier;
-    const fullValue = BigInt("0x" + cleaned);
-    const leafKey = fullValue & ((1n << 128n) - 1n);
+	args: { _secret: v.string(), revocationNullifier: v.string() },
+	handler: async (ctx, { _secret, revocationNullifier }) => {
+		requireInternalSecret(_secret);
+		// Truncate to low 128 bits — same convention as
+		// src/lib/server/smt/revocation-smt.ts `nullifierToLeafKey`.
+		// SMT_DEPTH widened to 128 to close targeted-lockout grinding (see header).
+		const cleaned = revocationNullifier.startsWith('0x')
+			? revocationNullifier.slice(2)
+			: revocationNullifier;
+		const fullValue = BigInt('0x' + cleaned);
+		const leafKey = fullValue & ((1n << 128n) - 1n);
 
-    const siblingKeys = computeSiblingPathKeys(leafKey);
-    const siblings: (string | null)[] = await Promise.all(
-      siblingKeys.map((siblingPath, d) =>
-        ctx.db
-          .query("smtNodes")
-          .withIndex("by_tree_depth_path", (q) =>
-            q.eq("treeId", TREE_ID).eq("depth", d).eq("pathKey", siblingPath),
-          )
-          .first()
-          .then((sib) => sib?.hash ?? null),
-      ),
-    );
+		const siblingKeys = computeSiblingPathKeys(leafKey);
+		const siblings: (string | null)[] = await Promise.all(
+			siblingKeys.map((siblingPath, d) =>
+				ctx.db
+					.query('smtNodes')
+					.withIndex('by_tree_depth_path', (q) =>
+						q.eq('treeId', TREE_ID).eq('depth', d).eq('pathKey', siblingPath)
+					)
+					.first()
+					.then((sib) => sib?.hash ?? null)
+			)
+		);
 
-    const pathBits: number[] = [];
-    for (let d = 0; d < SMT_DEPTH; d++) {
-      pathBits.push(Number((leafKey >> BigInt(d)) & 1n));
-    }
+		const pathBits: number[] = [];
+		for (let d = 0; d < SMT_DEPTH; d++) {
+			pathBits.push(Number((leafKey >> BigInt(d)) & 1n));
+		}
 
-    const rootRow = await ctx.db
-      .query("smtRoots")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
+		const rootRow = await ctx.db
+			.query('smtRoots')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
 
-    return {
-      path: siblings,
-      pathBits,
-      currentRoot: rootRow?.root ?? null,
-      sequenceNumber: rootRow?.sequenceNumber ?? 0,
-    };
-  },
+		return {
+			path: siblings,
+			pathBits,
+			currentRoot: rootRow?.root ?? null,
+			sequenceNumber: rootRow?.sequenceNumber ?? 0
+		};
+	}
 });
 
 /**
@@ -399,22 +413,23 @@ export const getRevocationNonMembershipPath = query({
  * the root is already public on-chain.
  */
 export const getRevocationRoot = query({
-  args: {},
-  handler: async (ctx) => {
-    const rootRow = await ctx.db
-      .query("smtRoots")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    if (!rootRow) {
-      return { root: null, leafCount: 0, sequenceNumber: 0, lastUpdatedAt: 0 };
-    }
-    return {
-      root: rootRow.root,
-      leafCount: rootRow.leafCount,
-      sequenceNumber: rootRow.sequenceNumber,
-      lastUpdatedAt: rootRow.lastUpdatedAt,
-    };
-  },
+	args: { _secret: v.string() },
+	handler: async (ctx, { _secret }) => {
+		requireInternalSecret(_secret);
+		const rootRow = await ctx.db
+			.query('smtRoots')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		if (!rootRow) {
+			return { root: null, leafCount: 0, sequenceNumber: 0, lastUpdatedAt: 0 };
+		}
+		return {
+			root: rootRow.root,
+			leafCount: rootRow.leafCount,
+			sequenceNumber: rootRow.sequenceNumber,
+			lastUpdatedAt: rootRow.lastUpdatedAt
+		};
+	}
 });
 
 /**
@@ -423,22 +438,22 @@ export const getRevocationRoot = query({
  * non-public path.
  */
 export const getRevocationRootInternal = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const rootRow = await ctx.db
-      .query("smtRoots")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    if (!rootRow) {
-      return { root: null, leafCount: 0, sequenceNumber: 0, lastUpdatedAt: 0 };
-    }
-    return {
-      root: rootRow.root,
-      leafCount: rootRow.leafCount,
-      sequenceNumber: rootRow.sequenceNumber,
-      lastUpdatedAt: rootRow.lastUpdatedAt,
-    };
-  },
+	args: {},
+	handler: async (ctx) => {
+		const rootRow = await ctx.db
+			.query('smtRoots')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		if (!rootRow) {
+			return { root: null, leafCount: 0, sequenceNumber: 0, lastUpdatedAt: 0 };
+		}
+		return {
+			root: rootRow.root,
+			leafCount: rootRow.leafCount,
+			sequenceNumber: rootRow.sequenceNumber,
+			lastUpdatedAt: rootRow.lastUpdatedAt
+		};
+	}
 });
 
 /**
@@ -457,44 +472,44 @@ export const getRevocationRootInternal = internalQuery({
  * appended to `revocationHaltAuditLog` for forensic recovery.
  */
 export const setRevocationHalt = internalMutation({
-  args: { reason: v.string() },
-  handler: async (ctx, args) => {
-    const haltRow = await ctx.db
-      .query("revocationFlags")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    const now = Date.now();
-    const previousReason = haltRow?.haltedReason;
-    const previousHaltedAt = haltRow?.haltedAt;
-    if (haltRow) {
-      // Preserve the FIRST halt's timestamp so operators can see how long
-      // the halt has been active. Re-flagging just refreshes the reason.
-      await ctx.db.patch(haltRow._id, {
-        isHalted: true,
-        haltedAt: haltRow.haltedAt ?? now,
-        haltedReason: args.reason,
-      });
-    } else {
-      await ctx.db.insert("revocationFlags", {
-        treeId: TREE_ID,
-        isHalted: true,
-        haltedAt: now,
-        haltedReason: args.reason,
-      });
-    }
-    // Append-only audit record. The set path's actor is always the cron;
-    // operator-initiated clears record their incident ref separately.
-    await ctx.db.insert("revocationHaltAuditLog", {
-      treeId: TREE_ID,
-      action: "set",
-      reason: args.reason,
-      actor: "cron:reconcileSMTRoot",
-      timestamp: now,
-      previousReason,
-      previousHaltedAt,
-    });
-    return { halted: true, reason: args.reason };
-  },
+	args: { reason: v.string() },
+	handler: async (ctx, args) => {
+		const haltRow = await ctx.db
+			.query('revocationFlags')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		const now = Date.now();
+		const previousReason = haltRow?.haltedReason;
+		const previousHaltedAt = haltRow?.haltedAt;
+		if (haltRow) {
+			// Preserve the FIRST halt's timestamp so operators can see how long
+			// the halt has been active. Re-flagging just refreshes the reason.
+			await ctx.db.patch(haltRow._id, {
+				isHalted: true,
+				haltedAt: haltRow.haltedAt ?? now,
+				haltedReason: args.reason
+			});
+		} else {
+			await ctx.db.insert('revocationFlags', {
+				treeId: TREE_ID,
+				isHalted: true,
+				haltedAt: now,
+				haltedReason: args.reason
+			});
+		}
+		// Append-only audit record. The set path's actor is always the cron;
+		// operator-initiated clears record their incident ref separately.
+		await ctx.db.insert('revocationHaltAuditLog', {
+			treeId: TREE_ID,
+			action: 'set',
+			reason: args.reason,
+			actor: 'cron:reconcileSMTRoot',
+			timestamp: now,
+			previousReason,
+			previousHaltedAt
+		});
+		return { halted: true, reason: args.reason };
+	}
 });
 
 /**
@@ -504,11 +519,11 @@ export const setRevocationHalt = internalMutation({
  * cron callers (`reconcileSMTRoot` at line 632) which already hold full trust.
  */
 export const setRevocationHaltForCaller = mutation({
-  args: { _secret: v.string(), reason: v.string() },
-  handler: async (ctx, { _secret, reason }): Promise<{ halted: boolean; reason: string }> => {
-    requireInternalSecret(_secret);
-    return await ctx.runMutation(internal.revocations.setRevocationHalt, { reason });
-  },
+	args: { _secret: v.string(), reason: v.string() },
+	handler: async (ctx, { _secret, reason }): Promise<{ halted: boolean; reason: string }> => {
+		requireInternalSecret(_secret);
+		return await ctx.runMutation(internal.revocations.setRevocationHalt, { reason });
+	}
 });
 
 /**
@@ -532,62 +547,62 @@ export const setRevocationHaltForCaller = mutation({
  *     --arg actorPrincipal:'"oncall-alice"'
  */
 export const operatorClearRevocationHalt = internalMutation({
-  args: {
-    confirmation: v.string(),
-    incidentRef: v.string(),
-    actorPrincipal: v.string(),
-  },
-  handler: async (ctx, args) => {
-    if (args.confirmation !== "i-have-investigated-the-drift") {
-      throw new Error(
-        "OPERATOR_CONFIRMATION_REQUIRED: pass `confirmation: 'i-have-investigated-the-drift'` to clear the halt",
-      );
-    }
-    if (args.incidentRef.length < 4) {
-      throw new Error(
-        "OPERATOR_INCIDENT_REF_REQUIRED: pass an incident reference (issue/ticket/runbook id, min 4 chars)",
-      );
-    }
-    if (args.actorPrincipal.length < 2) {
-      throw new Error(
-        "OPERATOR_ACTOR_REQUIRED: pass `actorPrincipal` (operator handle / oncall name) for audit log",
-      );
-    }
-    const haltRow = await ctx.db
-      .query("revocationFlags")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    if (!haltRow || haltRow.isHalted !== true) {
-      // Still log the attempt — even no-op clears are audit-relevant.
-      await ctx.db.insert("revocationHaltAuditLog", {
-        treeId: TREE_ID,
-        action: "clear",
-        reason: "halt_not_active",
-        incidentRef: args.incidentRef,
-        actor: `operator:${args.actorPrincipal}`,
-        timestamp: Date.now(),
-      });
-      return { cleared: false, reason: "halt_not_active" };
-    }
-    const previousReason = haltRow.haltedReason;
-    const previousHaltedAt = haltRow.haltedAt;
-    await ctx.db.patch(haltRow._id, {
-      isHalted: false,
-      haltedAt: undefined,
-      haltedReason: undefined,
-    });
-    await ctx.db.insert("revocationHaltAuditLog", {
-      treeId: TREE_ID,
-      action: "clear",
-      reason: previousReason ?? "unspecified",
-      incidentRef: args.incidentRef,
-      actor: `operator:${args.actorPrincipal}`,
-      timestamp: Date.now(),
-      previousReason,
-      previousHaltedAt,
-    });
-    return { cleared: true, previousReason };
-  },
+	args: {
+		confirmation: v.string(),
+		incidentRef: v.string(),
+		actorPrincipal: v.string()
+	},
+	handler: async (ctx, args) => {
+		if (args.confirmation !== 'i-have-investigated-the-drift') {
+			throw new Error(
+				"OPERATOR_CONFIRMATION_REQUIRED: pass `confirmation: 'i-have-investigated-the-drift'` to clear the halt"
+			);
+		}
+		if (args.incidentRef.length < 4) {
+			throw new Error(
+				'OPERATOR_INCIDENT_REF_REQUIRED: pass an incident reference (issue/ticket/runbook id, min 4 chars)'
+			);
+		}
+		if (args.actorPrincipal.length < 2) {
+			throw new Error(
+				'OPERATOR_ACTOR_REQUIRED: pass `actorPrincipal` (operator handle / oncall name) for audit log'
+			);
+		}
+		const haltRow = await ctx.db
+			.query('revocationFlags')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		if (!haltRow || haltRow.isHalted !== true) {
+			// Still log the attempt — even no-op clears are audit-relevant.
+			await ctx.db.insert('revocationHaltAuditLog', {
+				treeId: TREE_ID,
+				action: 'clear',
+				reason: 'halt_not_active',
+				incidentRef: args.incidentRef,
+				actor: `operator:${args.actorPrincipal}`,
+				timestamp: Date.now()
+			});
+			return { cleared: false, reason: 'halt_not_active' };
+		}
+		const previousReason = haltRow.haltedReason;
+		const previousHaltedAt = haltRow.haltedAt;
+		await ctx.db.patch(haltRow._id, {
+			isHalted: false,
+			haltedAt: undefined,
+			haltedReason: undefined
+		});
+		await ctx.db.insert('revocationHaltAuditLog', {
+			treeId: TREE_ID,
+			action: 'clear',
+			reason: previousReason ?? 'unspecified',
+			incidentRef: args.incidentRef,
+			actor: `operator:${args.actorPrincipal}`,
+			timestamp: Date.now(),
+			previousReason,
+			previousHaltedAt
+		});
+		return { cleared: true, previousReason };
+	}
 });
 
 /**
@@ -595,18 +610,19 @@ export const operatorClearRevocationHalt = internalMutation({
  * runbook scripts read this to confirm halt status.
  */
 export const getRevocationHaltStatus = query({
-  args: {},
-  handler: async (ctx) => {
-    const haltRow = await ctx.db
-      .query("revocationFlags")
-      .withIndex("by_treeId", (q) => q.eq("treeId", TREE_ID))
-      .first();
-    return {
-      halted: haltRow?.isHalted === true,
-      haltedAt: haltRow?.haltedAt ?? null,
-      haltedReason: haltRow?.haltedReason ?? null,
-    };
-  },
+	args: { _secret: v.string() },
+	handler: async (ctx, { _secret }) => {
+		requireInternalSecret(_secret);
+		const haltRow = await ctx.db
+			.query('revocationFlags')
+			.withIndex('by_treeId', (q) => q.eq('treeId', TREE_ID))
+			.first();
+		return {
+			halted: haltRow?.isHalted === true,
+			haltedAt: haltRow?.haltedAt ?? null,
+			haltedReason: haltRow?.haltedReason ?? null
+		};
+	}
 });
 
 /**
@@ -614,15 +630,19 @@ export const getRevocationHaltStatus = query({
  * recent 100 records — paginate if needed for older incidents.
  */
 export const getRevocationHaltAuditLog = internalQuery({
-  args: { limit: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const limit = args.limit ?? 100;
-    return await ctx.db
-      .query("revocationHaltAuditLog")
-      .withIndex("by_treeId_timestamp", (q) => q.eq("treeId", TREE_ID))
-      .order("desc")
-      .take(limit);
-  },
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const requestedLimit = args.limit ?? 100;
+		if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+			throw new Error('REVOCATION_AUDIT_LIMIT_INVALID');
+		}
+		const limit = Math.min(requestedLimit, 100);
+		return await ctx.db
+			.query('revocationHaltAuditLog')
+			.withIndex('by_treeId_timestamp', (q) => q.eq('treeId', TREE_ID))
+			.order('desc')
+			.take(limit);
+	}
 });
 
 /**
@@ -637,32 +657,32 @@ export const getRevocationHaltAuditLog = internalQuery({
  * the error to dashboard logs (paged via standard cron-failure alerting).
  */
 async function flipHaltWithRetry(
-  ctx: {
-    runMutation: (
-      ref: FunctionReference<"mutation", "internal", { reason: string }, unknown>,
-      args: { reason: string },
-    ) => Promise<unknown>;
-  },
-  reason: string,
+	ctx: {
+		runMutation: (
+			ref: FunctionReference<'mutation', 'internal', { reason: string }, unknown>,
+			args: { reason: string }
+		) => Promise<unknown>;
+	},
+	reason: string
 ): Promise<void> {
-  const maxAttempts = 3;
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      await ctx.runMutation(setRevocationHaltRef, { reason });
-      return;
-    } catch (err) {
-      lastErr = err;
-      if (attempt < maxAttempts - 1) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-      }
-    }
-  }
-  console.error(
-    `[reconcileSMTRoot] CRITICAL: halt-flip failed after ${maxAttempts} attempts; drift detected but emits NOT halted`,
-    { reason, lastError: lastErr instanceof Error ? lastErr.message : String(lastErr) },
-  );
-  throw lastErr;
+	const maxAttempts = 3;
+	let lastErr: unknown;
+	for (let attempt = 0; attempt < maxAttempts; attempt++) {
+		try {
+			await ctx.runMutation(setRevocationHaltRef, { reason });
+			return;
+		} catch (err) {
+			lastErr = err;
+			if (attempt < maxAttempts - 1) {
+				await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
+			}
+		}
+	}
+	console.error(
+		`[reconcileSMTRoot] CRITICAL: halt-flip failed after ${maxAttempts} attempts; drift detected but emits NOT halted`,
+		{ reason, lastError: lastErr instanceof Error ? lastErr.message : String(lastErr) }
+	);
+	throw lastErr;
 }
 
 /**
@@ -715,348 +735,344 @@ async function flipHaltWithRetry(
  * `REVOCATION_EMITS_HALTED` user-facing errors. PII-free payload.
  */
 async function emitReconcileDriftAlert(args: {
-  severity: "critical" | "high";
-  reason: string;
-  baseUrl: string;
-  internalSecret: string;
-  context: Record<string, unknown>;
+	severity: 'critical' | 'high';
+	reason: string;
+	baseUrl: string;
+	internalSecret: string;
+	context: Record<string, unknown>;
 }): Promise<void> {
-  if (!args.baseUrl || !args.internalSecret) {
-    console.warn(
-      "[reconcileSMTRoot] drift detected but alert env missing; halt was set, no Sentry alert emitted",
-      { reason: args.reason, severity: args.severity },
-    );
-    return;
-  }
-  try {
-    const res = await fetch(`${args.baseUrl}/api/internal/alert`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-secret": args.internalSecret,
-      },
-      body: JSON.stringify({
-        code: "RECONCILE_DRIFT_DETECTED",
-        message: `reconcileSMTRoot detected ${args.severity} on-chain/Convex divergence (${args.reason}); kill-switch flipped`,
-        severity: "error",
-        context: { ...args.context, severity: args.severity, reason: args.reason },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      console.error(
-        `[reconcileSMTRoot] drift-alert emission failed: HTTP ${res.status}`,
-      );
-    }
-  } catch (err) {
-    console.error(
-      "[reconcileSMTRoot] drift-alert fetch failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+	if (!args.baseUrl || !args.internalSecret) {
+		console.warn(
+			'[reconcileSMTRoot] drift detected but alert env missing; halt was set, no Sentry alert emitted',
+			{ reason: args.reason, severity: args.severity }
+		);
+		return;
+	}
+	try {
+		const res = await fetch(`${args.baseUrl}/api/internal/alert`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'x-internal-secret': args.internalSecret
+			},
+			body: JSON.stringify({
+				code: 'RECONCILE_DRIFT_DETECTED',
+				message: `reconcileSMTRoot detected ${args.severity} on-chain/Convex divergence (${args.reason}); kill-switch flipped`,
+				severity: 'error',
+				context: { ...args.context, severity: args.severity, reason: args.reason }
+			}),
+			signal: AbortSignal.timeout(10_000)
+		});
+		if (!res.ok) {
+			console.error(`[reconcileSMTRoot] drift-alert emission failed: HTTP ${res.status}`);
+		}
+	} catch (err) {
+		console.error(
+			'[reconcileSMTRoot] drift-alert fetch failed:',
+			err instanceof Error ? err.message : String(err)
+		);
+	}
 }
 
 async function maybeEmitReconcileSkipAlert(
-  consecutiveSkips: number,
-  reason: string,
-  baseUrl: string,
-  internalSecret: string,
+	consecutiveSkips: number,
+	reason: string,
+	baseUrl: string,
+	internalSecret: string
 ): Promise<void> {
-  if (consecutiveSkips < RECONCILE_SKIP_ALERT_THRESHOLD) return;
-  if (!baseUrl || !internalSecret) return;
-  try {
-    const res = await fetch(`${baseUrl}/api/internal/alert`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-internal-secret": internalSecret,
-      },
-      body: JSON.stringify({
-        code: "RECONCILE_SKIP_HIGH",
-        message: `reconcileSMTRoot has skipped ${consecutiveSkips} consecutive ticks (last reason: ${reason})`,
-        severity: "error",
-        context: {
-          consecutiveSkips,
-          lastReason: reason,
-          threshold: RECONCILE_SKIP_ALERT_THRESHOLD,
-        },
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      console.error(
-        `[reconcileSMTRoot] skip-alert emission failed: HTTP ${res.status}`,
-      );
-    }
-  } catch (err) {
-    console.error(
-      "[reconcileSMTRoot] skip-alert fetch failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-  }
+	if (consecutiveSkips < RECONCILE_SKIP_ALERT_THRESHOLD) return;
+	if (!baseUrl || !internalSecret) return;
+	try {
+		const res = await fetch(`${baseUrl}/api/internal/alert`, {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				'x-internal-secret': internalSecret
+			},
+			body: JSON.stringify({
+				code: 'RECONCILE_SKIP_HIGH',
+				message: `reconcileSMTRoot has skipped ${consecutiveSkips} consecutive ticks (last reason: ${reason})`,
+				severity: 'error',
+				context: {
+					consecutiveSkips,
+					lastReason: reason,
+					threshold: RECONCILE_SKIP_ALERT_THRESHOLD
+				}
+			}),
+			signal: AbortSignal.timeout(10_000)
+		});
+		if (!res.ok) {
+			console.error(`[reconcileSMTRoot] skip-alert emission failed: HTTP ${res.status}`);
+		}
+	} catch (err) {
+		console.error(
+			'[reconcileSMTRoot] skip-alert fetch failed:',
+			err instanceof Error ? err.message : String(err)
+		);
+	}
 }
 
 export const recordReconcileSkip = internalMutation({
-  args: { treeId: v.string(), reason: v.string() },
-  handler: async (ctx, args) => {
-    const state = await ctx.db
-      .query("revocationReconcileState")
-      .withIndex("by_treeId", (q) => q.eq("treeId", args.treeId))
-      .first();
-    const now = Date.now();
-    if (!state) {
-      await ctx.db.insert("revocationReconcileState", {
-        treeId: args.treeId,
-        consecutiveSkips: 1,
-        lastSkipReason: args.reason,
-        lastSkipAt: now,
-        updatedAt: now,
-      });
-      return { consecutiveSkips: 1 };
-    }
-    const next = state.consecutiveSkips + 1;
-    await ctx.db.patch(state._id, {
-      consecutiveSkips: next,
-      lastSkipReason: args.reason,
-      lastSkipAt: now,
-      updatedAt: now,
-    });
-    return { consecutiveSkips: next };
-  },
+	args: { treeId: v.string(), reason: v.string() },
+	handler: async (ctx, args) => {
+		const state = await ctx.db
+			.query('revocationReconcileState')
+			.withIndex('by_treeId', (q) => q.eq('treeId', args.treeId))
+			.first();
+		const now = Date.now();
+		if (!state) {
+			await ctx.db.insert('revocationReconcileState', {
+				treeId: args.treeId,
+				consecutiveSkips: 1,
+				lastSkipReason: args.reason,
+				lastSkipAt: now,
+				updatedAt: now
+			});
+			return { consecutiveSkips: 1 };
+		}
+		const next = state.consecutiveSkips + 1;
+		await ctx.db.patch(state._id, {
+			consecutiveSkips: next,
+			lastSkipReason: args.reason,
+			lastSkipAt: now,
+			updatedAt: now
+		});
+		return { consecutiveSkips: next };
+	}
 });
 
 export const clearReconcileSkips = internalMutation({
-  args: { treeId: v.string() },
-  handler: async (ctx, args) => {
-    const state = await ctx.db
-      .query("revocationReconcileState")
-      .withIndex("by_treeId", (q) => q.eq("treeId", args.treeId))
-      .first();
-    if (!state || state.consecutiveSkips === 0) {
-      return;
-    }
-    await ctx.db.patch(state._id, {
-      consecutiveSkips: 0,
-      updatedAt: Date.now(),
-    });
-  },
+	args: { treeId: v.string() },
+	handler: async (ctx, args) => {
+		const state = await ctx.db
+			.query('revocationReconcileState')
+			.withIndex('by_treeId', (q) => q.eq('treeId', args.treeId))
+			.first();
+		if (!state || state.consecutiveSkips === 0) {
+			return;
+		}
+		await ctx.db.patch(state._id, {
+			consecutiveSkips: 0,
+			updatedAt: Date.now()
+		});
+	}
 });
 
 export const reconcileSMTRoot = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const localRoot = await ctx.runQuery(
-      getRevocationRootInternalRef,
-      {},
-    );
+	args: {},
+	handler: async (ctx) => {
+		const localRoot = await ctx.runQuery(getRevocationRootInternalRef, {});
 
-    // Read on-chain root via the existing internal endpoint. This keeps the
-    // ethers dependency in one place (the SvelteKit /api/internal layer).
-    const baseUrl = process.env.CONVEX_SITE_URL ?? "";
-    const internalSecret = process.env.INTERNAL_API_SECRET ?? "";
-    if (!baseUrl || !internalSecret) {
-      console.warn(
-        "[reconcileSMTRoot] CONVEX_SITE_URL or INTERNAL_API_SECRET not set; skipping reconciliation",
-      );
-      const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
-        treeId: TREE_ID,
-        reason: "missing_env",
-      });
-      await maybeEmitReconcileSkipAlert(consecutiveSkips, "missing_env", baseUrl, internalSecret);
-      return { skipped: true, reason: "missing_env", consecutiveSkips };
-    }
+		// Read on-chain root via the existing internal endpoint. This keeps the
+		// ethers dependency in one place (the SvelteKit /api/internal layer).
+		const baseUrl = process.env.CONVEX_SITE_URL ?? '';
+		const internalSecret = process.env.INTERNAL_API_SECRET ?? '';
+		if (!baseUrl || !internalSecret) {
+			console.warn(
+				'[reconcileSMTRoot] CONVEX_SITE_URL or INTERNAL_API_SECRET not set; skipping reconciliation'
+			);
+			const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+				treeId: TREE_ID,
+				reason: 'missing_env'
+			});
+			await maybeEmitReconcileSkipAlert(consecutiveSkips, 'missing_env', baseUrl, internalSecret);
+			return { skipped: true, reason: 'missing_env', consecutiveSkips };
+		}
 
-    let onChainRoot: string | null = null;
-    let onChainEmptyRoot: string | null = null;
-    let computedEmptyRoot: string | null = null;
-    try {
-      const res = await fetch(`${baseUrl}/api/internal/revocation-root`, {
-        method: "GET",
-        headers: { "x-internal-secret": internalSecret },
-      });
-      if (!res.ok) {
-        console.warn(
-          `[reconcileSMTRoot] on-chain root read failed: HTTP ${res.status}`,
-        );
-        const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
-          treeId: TREE_ID,
-          reason: "rpc_unavailable",
-        });
-        await maybeEmitReconcileSkipAlert(consecutiveSkips, "rpc_unavailable", baseUrl, internalSecret);
-        return { skipped: true, reason: "rpc_unavailable", consecutiveSkips };
-      }
-      const body = (await res.json()) as {
-        root?: string;
-        emptyTreeRoot?: string;
-        computedEmptyRoot?: string;
-      };
-      onChainRoot = body.root ?? null;
-      onChainEmptyRoot = body.emptyTreeRoot ?? null;
-      computedEmptyRoot = body.computedEmptyRoot ?? null;
-    } catch (err) {
-      console.warn(
-        "[reconcileSMTRoot] fetch failed:",
-        err instanceof Error ? err.message : String(err),
-      );
-      const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
-        treeId: TREE_ID,
-        reason: "fetch_failed",
-      });
-      await maybeEmitReconcileSkipAlert(consecutiveSkips, "fetch_failed", baseUrl, internalSecret);
-      return { skipped: true, reason: "fetch_failed", consecutiveSkips };
-    }
+		let onChainRoot: string | null = null;
+		let onChainEmptyRoot: string | null = null;
+		let computedEmptyRoot: string | null = null;
+		try {
+			const res = await fetch(`${baseUrl}/api/internal/revocation-root`, {
+				method: 'GET',
+				headers: { 'x-internal-secret': internalSecret }
+			});
+			if (!res.ok) {
+				console.warn(`[reconcileSMTRoot] on-chain root read failed: HTTP ${res.status}`);
+				const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+					treeId: TREE_ID,
+					reason: 'rpc_unavailable'
+				});
+				await maybeEmitReconcileSkipAlert(
+					consecutiveSkips,
+					'rpc_unavailable',
+					baseUrl,
+					internalSecret
+				);
+				return { skipped: true, reason: 'rpc_unavailable', consecutiveSkips };
+			}
+			const body = (await res.json()) as {
+				root?: string;
+				emptyTreeRoot?: string;
+				computedEmptyRoot?: string;
+			};
+			onChainRoot = body.root ?? null;
+			onChainEmptyRoot = body.emptyTreeRoot ?? null;
+			computedEmptyRoot = body.computedEmptyRoot ?? null;
+		} catch (err) {
+			console.warn(
+				'[reconcileSMTRoot] fetch failed:',
+				err instanceof Error ? err.message : String(err)
+			);
+			const { consecutiveSkips } = await ctx.runMutation(recordReconcileSkipRef, {
+				treeId: TREE_ID,
+				reason: 'fetch_failed'
+			});
+			await maybeEmitReconcileSkipAlert(consecutiveSkips, 'fetch_failed', baseUrl, internalSecret);
+			return { skipped: true, reason: 'fetch_failed', consecutiveSkips };
+		}
 
-    // Independent check: the contract's EMPTY_TREE_ROOT immutable MUST agree
-    // with SvelteKit's Poseidon2-computed empty root. If they diverge, the
-    // contract was deployed against the wrong constant — every future emit
-    // will produce roots that the genesis-anchored proof chain rejects.
-    // (Compare across sides — comparing the chain to itself, e.g.
-    // `chain currentRoot === chain EMPTY_TREE_ROOT`, would only confirm the
-    // chain is internally consistent, not that it agrees with this runtime.)
-    if (
-      onChainEmptyRoot !== null &&
-      computedEmptyRoot !== null &&
-      onChainEmptyRoot.toLowerCase() !== computedEmptyRoot.toLowerCase()
-    ) {
-      console.error(
-        "[reconcileSMTRoot] CRITICAL: contract EMPTY_TREE_ROOT diverges from SvelteKit-computed empty root",
-        { onChainEmptyRoot, computedEmptyRoot },
-      );
-      // Flip kill-switch to halt new emits. Bounded retry: a single transient
-      // runMutation failure must not leave drift detected but un-halted for
-      // the next 1h cron interval.
-      await flipHaltWithRetry(ctx, "empty_tree_root_mismatch");
-      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-      await emitReconcileDriftAlert({
-        severity: "critical",
-        reason: "empty_tree_root_mismatch",
-        baseUrl,
-        internalSecret,
-        context: { onChainEmptyRoot, computedEmptyRoot },
-      });
-      return {
-        drift: true,
-        severity: "critical",
-        reason: "empty_tree_root_mismatch",
-        onChainEmptyRoot,
-        computedEmptyRoot,
-        haltActivated: true,
-      };
-    }
+		// Independent check: the contract's EMPTY_TREE_ROOT immutable MUST agree
+		// with SvelteKit's Poseidon2-computed empty root. If they diverge, the
+		// contract was deployed against the wrong constant — every future emit
+		// will produce roots that the genesis-anchored proof chain rejects.
+		// (Compare across sides — comparing the chain to itself, e.g.
+		// `chain currentRoot === chain EMPTY_TREE_ROOT`, would only confirm the
+		// chain is internally consistent, not that it agrees with this runtime.)
+		if (
+			onChainEmptyRoot !== null &&
+			computedEmptyRoot !== null &&
+			onChainEmptyRoot.toLowerCase() !== computedEmptyRoot.toLowerCase()
+		) {
+			console.error(
+				'[reconcileSMTRoot] CRITICAL: contract EMPTY_TREE_ROOT diverges from SvelteKit-computed empty root',
+				{ onChainEmptyRoot, computedEmptyRoot }
+			);
+			// Flip kill-switch to halt new emits. Bounded retry: a single transient
+			// runMutation failure must not leave drift detected but un-halted for
+			// the next 1h cron interval.
+			await flipHaltWithRetry(ctx, 'empty_tree_root_mismatch');
+			await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+			await emitReconcileDriftAlert({
+				severity: 'critical',
+				reason: 'empty_tree_root_mismatch',
+				baseUrl,
+				internalSecret,
+				context: { onChainEmptyRoot, computedEmptyRoot }
+			});
+			return {
+				drift: true,
+				severity: 'critical',
+				reason: 'empty_tree_root_mismatch',
+				onChainEmptyRoot,
+				computedEmptyRoot,
+				haltActivated: true
+			};
+		}
 
-    // Genesis case: Convex has no inserts yet (root row doesn't exist), and
-    // the on-chain root equals BOTH the contract's EMPTY_TREE_ROOT immutable
-    // AND SvelteKit's computed empty root (now verified to agree above).
-    // This is a HEALTHY pre-launch state. Without this carve-out the cron
-    // would scream CRITICAL every hour from deploy until the first
-    // revocation lands.
-    const isGenesisHealthy =
-      localRoot.root === null &&
-      onChainRoot !== null &&
-      onChainEmptyRoot !== null &&
-      onChainRoot === onChainEmptyRoot;
-    if (isGenesisHealthy) {
-      console.debug("[reconcileSMTRoot] healthy genesis", {
-        emptyTreeRoot: onChainEmptyRoot,
-      });
-      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-      return {
-        drift: false,
-        severity: "genesis",
-        localRoot: null,
-        onChainRoot,
-        emptyTreeRoot: onChainEmptyRoot,
-      };
-    }
+		// Genesis case: Convex has no inserts yet (root row doesn't exist), and
+		// the on-chain root equals BOTH the contract's EMPTY_TREE_ROOT immutable
+		// AND SvelteKit's computed empty root (now verified to agree above).
+		// This is a HEALTHY pre-launch state. Without this carve-out the cron
+		// would scream CRITICAL every hour from deploy until the first
+		// revocation lands.
+		const isGenesisHealthy =
+			localRoot.root === null &&
+			onChainRoot !== null &&
+			onChainEmptyRoot !== null &&
+			onChainRoot === onChainEmptyRoot;
+		if (isGenesisHealthy) {
+			console.debug('[reconcileSMTRoot] healthy genesis', {
+				emptyTreeRoot: onChainEmptyRoot
+			});
+			await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+			return {
+				drift: false,
+				severity: 'genesis',
+				localRoot: null,
+				onChainRoot,
+				emptyTreeRoot: onChainEmptyRoot
+			};
+		}
 
-    // Drift detection.
-    if (localRoot.root === null && onChainRoot !== null) {
-      // Local empty + on-chain non-empty AND non-genesis: real divergence.
-      console.error(
-        "[reconcileSMTRoot] CRITICAL: Convex SMT empty but on-chain root is set and != EMPTY_TREE_ROOT; possible state loss",
-        { onChainRoot, onChainEmptyRoot },
-      );
-      await flipHaltWithRetry(ctx, "convex_empty_chain_nonempty");
-      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-      await emitReconcileDriftAlert({
-        severity: "critical",
-        reason: "convex_empty_chain_nonempty",
-        baseUrl,
-        internalSecret,
-        context: { onChainRoot, emptyTreeRoot: onChainEmptyRoot },
-      });
-      return {
-        drift: true,
-        severity: "critical",
-        localRoot: null,
-        onChainRoot,
-        emptyTreeRoot: onChainEmptyRoot,
-        haltActivated: true,
-      };
-    }
-    if (localRoot.root !== null && onChainRoot === null) {
-      console.error(
-        "[reconcileSMTRoot] CRITICAL: Convex has a root but on-chain is null; chain read failed or contract address misconfigured",
-        { localRoot: localRoot.root },
-      );
-      await flipHaltWithRetry(ctx, "chain_root_null_with_local_set");
-      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-      await emitReconcileDriftAlert({
-        severity: "critical",
-        reason: "chain_root_null_with_local_set",
-        baseUrl,
-        internalSecret,
-        context: { localRoot: localRoot.root },
-      });
-      return {
-        drift: true,
-        severity: "critical",
-        localRoot: localRoot.root,
-        onChainRoot: null,
-        haltActivated: true,
-      };
-    }
-    if (localRoot.root !== onChainRoot) {
-      console.error(
-        "[reconcileSMTRoot] DRIFT: Convex SMT root != on-chain RevocationRegistry root",
-        {
-          localRoot: localRoot.root,
-          onChainRoot,
-          leafCount: localRoot.leafCount,
-          sequenceNumber: localRoot.sequenceNumber,
-        },
-      );
-      // High-severity drift also flips the halt — letting new emits land
-      // while Convex and chain disagree just compounds the divergence.
-      await flipHaltWithRetry(ctx, "convex_chain_root_diverged");
-      await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-      await emitReconcileDriftAlert({
-        severity: "high",
-        reason: "convex_chain_root_diverged",
-        baseUrl,
-        internalSecret,
-        context: { localRoot: localRoot.root, onChainRoot },
-      });
-      return {
-        drift: true,
-        severity: "high",
-        localRoot: localRoot.root,
-        onChainRoot,
-        haltActivated: true,
-      };
-    }
+		// Drift detection.
+		if (localRoot.root === null && onChainRoot !== null) {
+			// Local empty + on-chain non-empty AND non-genesis: real divergence.
+			console.error(
+				'[reconcileSMTRoot] CRITICAL: Convex SMT empty but on-chain root is set and != EMPTY_TREE_ROOT; possible state loss',
+				{ onChainRoot, onChainEmptyRoot }
+			);
+			await flipHaltWithRetry(ctx, 'convex_empty_chain_nonempty');
+			await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+			await emitReconcileDriftAlert({
+				severity: 'critical',
+				reason: 'convex_empty_chain_nonempty',
+				baseUrl,
+				internalSecret,
+				context: { onChainRoot, emptyTreeRoot: onChainEmptyRoot }
+			});
+			return {
+				drift: true,
+				severity: 'critical',
+				localRoot: null,
+				onChainRoot,
+				emptyTreeRoot: onChainEmptyRoot,
+				haltActivated: true
+			};
+		}
+		if (localRoot.root !== null && onChainRoot === null) {
+			console.error(
+				'[reconcileSMTRoot] CRITICAL: Convex has a root but on-chain is null; chain read failed or contract address misconfigured',
+				{ localRoot: localRoot.root }
+			);
+			await flipHaltWithRetry(ctx, 'chain_root_null_with_local_set');
+			await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+			await emitReconcileDriftAlert({
+				severity: 'critical',
+				reason: 'chain_root_null_with_local_set',
+				baseUrl,
+				internalSecret,
+				context: { localRoot: localRoot.root }
+			});
+			return {
+				drift: true,
+				severity: 'critical',
+				localRoot: localRoot.root,
+				onChainRoot: null,
+				haltActivated: true
+			};
+		}
+		if (localRoot.root !== onChainRoot) {
+			console.error(
+				'[reconcileSMTRoot] DRIFT: Convex SMT root != on-chain RevocationRegistry root',
+				{
+					localRoot: localRoot.root,
+					onChainRoot,
+					leafCount: localRoot.leafCount,
+					sequenceNumber: localRoot.sequenceNumber
+				}
+			);
+			// High-severity drift also flips the halt — letting new emits land
+			// while Convex and chain disagree just compounds the divergence.
+			await flipHaltWithRetry(ctx, 'convex_chain_root_diverged');
+			await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+			await emitReconcileDriftAlert({
+				severity: 'high',
+				reason: 'convex_chain_root_diverged',
+				baseUrl,
+				internalSecret,
+				context: { localRoot: localRoot.root, onChainRoot }
+			});
+			return {
+				drift: true,
+				severity: 'high',
+				localRoot: localRoot.root,
+				onChainRoot,
+				haltActivated: true
+			};
+		}
 
-    console.debug("[reconcileSMTRoot] healthy", {
-      root: localRoot.root,
-      leafCount: localRoot.leafCount,
-    });
-    await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
-    return {
-      drift: false,
-      severity: "ok",
-      localRoot: localRoot.root,
-      onChainRoot,
-      leafCount: localRoot.leafCount,
-    };
-  },
+		console.debug('[reconcileSMTRoot] healthy', {
+			root: localRoot.root,
+			leafCount: localRoot.leafCount
+		});
+		await ctx.runMutation(clearReconcileSkipsRef, { treeId: TREE_ID });
+		return {
+			drift: false,
+			severity: 'ok',
+			localRoot: localRoot.root,
+			onChainRoot,
+			leafCount: localRoot.leafCount
+		};
+	}
 });

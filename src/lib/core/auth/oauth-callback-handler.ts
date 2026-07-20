@@ -20,9 +20,13 @@ import { error, redirect } from '@sveltejs/kit';
 import { dev } from '$app/environment';
 import { validateReturnTo } from '$lib/core/auth/oauth';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	resolveSessionCookieSigningSecrets,
+	sealSessionCookie
+} from '$lib/server/auth/session-cookie';
 
 /**
  * NEAR IMPLICIT ACCOUNT CREATION (fire-and-forget)
@@ -143,12 +147,13 @@ export class OAuthCallbackHandler {
 				tokens = await config.exchangeTokens(oauthClient, code, codeVerifier);
 			} catch (exchangeErr) {
 				// Retry once on transient fetch failures (ArcticFetchError / network hiccup)
-				const isTransient = exchangeErr instanceof Error &&
+				const isTransient =
+					exchangeErr instanceof Error &&
 					(exchangeErr.message.includes('Failed to send request') ||
-					 exchangeErr.message.includes('fetch failed'));
+						exchangeErr.message.includes('fetch failed'));
 				if (isTransient) {
 					console.warn(`[OAuth] Token exchange failed transiently, retrying:`, exchangeErr.message);
-					await new Promise(r => setTimeout(r, 500));
+					await new Promise((r) => setTimeout(r, 500));
 					tokens = await config.exchangeTokens(oauthClient, code, codeVerifier);
 				} else {
 					throw exchangeErr;
@@ -186,7 +191,13 @@ export class OAuthCallbackHandler {
 			}
 
 			// Step 5: Create session and handle redirects
-			return await this.handleSessionAndRedirect(userId, returnTo, config.provider, cookies, userData);
+			return await this.handleSessionAndRedirect(
+				userId,
+				returnTo,
+				config.provider,
+				cookies,
+				userData
+			);
 		} catch (err) {
 			return this.handleError(err, config.provider);
 		}
@@ -266,8 +277,10 @@ export class OAuthCallbackHandler {
 			avatar: userData.avatar,
 			emailVerified,
 			encryptedAccessToken: encAccessToken ? JSON.parse(JSON.stringify(encAccessToken)) : undefined,
-			encryptedRefreshToken: encRefreshToken ? JSON.parse(JSON.stringify(encRefreshToken)) : undefined,
-			expiresAt: tokenData.expiresAt ?? undefined,
+			encryptedRefreshToken: encRefreshToken
+				? JSON.parse(JSON.stringify(encRefreshToken))
+				: undefined,
+			expiresAt: tokenData.expiresAt ?? undefined
 		});
 
 		// Log Sybil resistance action for audit (no plaintext PII in logs)
@@ -312,6 +325,12 @@ export class OAuthCallbackHandler {
 		if (!sessionSecret) {
 			throw new Error('SESSION_CREATION_SECRET not configured');
 		}
+		const cookieSecrets = resolveSessionCookieSigningSecrets({
+			activeSecret: process.env.SESSION_COOKIE_SIGNING_SECRET,
+			previousSecret: process.env.SESSION_COOKIE_SIGNING_SECRET_PREVIOUS || undefined,
+			sessionCreationSecret: sessionSecret,
+			previousSessionCreationSecret: process.env.SESSION_CREATION_SECRET_PREVIOUS || undefined
+		});
 		const encoder = new TextEncoder();
 		const hmacKey = await crypto.subtle.importKey(
 			'raw',
@@ -324,16 +343,24 @@ export class OAuthCallbackHandler {
 		const proofBytes = new Uint8Array(
 			await crypto.subtle.sign('HMAC', hmacKey, encoder.encode(`${userId}|${expiresAt}`))
 		);
-		const proof = Array.from(proofBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+		const proof = Array.from(proofBytes)
+			.map((b) => b.toString(16).padStart(2, '0'))
+			.join('');
 
 		const session = await serverMutation(api.authOps.createSession, {
 			userId,
 			expiresAt,
-			proof,
+			proof
 		});
 
-		// Set session cookie
-		cookies.set('auth-session', session.sessionId, {
+		// The browser receives a locally verifiable envelope, never the raw
+		// database lookup id. This lets hooks reject forged cookies without I/O.
+		const sessionCookie = await sealSessionCookie(
+			session.sessionId,
+			expiresAt,
+			cookieSecrets.activeSecret
+		);
+		cookies.set('auth-session', sessionCookie, {
 			path: '/',
 			secure: !dev,
 			httpOnly: true,

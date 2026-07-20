@@ -365,9 +365,8 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 		// A single owning campaign (legacy shorthand). orgId defaults to the
 		// template's orgId so the org-scope check passes unless overridden.
 		campaign?: Record<string, unknown> | null;
-		// Full list of campaigns linked to the template via by_templateId. When
-		// provided it takes precedence over `campaign` and is returned by
-		// `.collect()` — used to exercise the cross-org filter.
+		// Full list of campaigns linked to the template. The production read uses
+		// the exact active same-org composite index and takes at most two rows.
 		campaigns?: Record<string, unknown>[];
 		template?: Record<string, unknown> | null;
 	}) {
@@ -380,7 +379,19 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			opts.campaigns ??
 			(opts.campaign === null
 				? []
-				: [{ _id: 'camp_1', templateId: 'tmpl_doc_1', orgId: 'org_1', ...(opts.campaign ?? {}) }]);
+				: [
+						{
+							_id: 'camp_1',
+							templateId: 'tmpl_doc_1',
+							orgId: 'org_1',
+							status: 'ACTIVE',
+							...(opts.campaign ?? {})
+						}
+					]);
+		const attributableCampaigns = campaignList.filter(
+			(campaign) =>
+				campaign.orgId === template?.orgId && (campaign.status ?? 'ACTIVE') === 'ACTIVE'
+		);
 
 		const ctx = {
 			db: {
@@ -393,10 +404,8 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 							if (table === 'campaigns') return campaignList[0] ?? null;
 							return null;
 						},
-						collect: async () => {
-							if (table === 'campaigns') return campaignList;
-							return [];
-						}
+						take: async (limit: number) =>
+							table === 'campaigns' ? attributableCampaigns.slice(0, limit) : []
 					})
 				})
 			},
@@ -499,7 +508,7 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 			trustTier: 4,
 			deliveryStatus: 'delivered'
 		});
-		expect(result).toEqual({ attributed: false, reason: 'cross_org' });
+		expect(result).toEqual({ attributed: false, reason: 'no_campaign' });
 		expect(createCalls).toHaveLength(0);
 	});
 
@@ -521,5 +530,22 @@ describe('emitCongressionalAction — reuses the counter-maintaining create path
 		expect(result).toEqual({ attributed: true, alreadySubmitted: false });
 		expect(createCalls).toHaveLength(1);
 		expect(createCalls[0].campaignId).toBe('camp_a');
+	});
+
+	it('fails closed when historical data contains multiple active same-org owners', async () => {
+		const { ctx, createCalls } = makeEmitCtx({
+			campaigns: [
+				{ _id: 'camp_a', templateId: 'tmpl_doc_1', orgId: 'org_1', status: 'ACTIVE' },
+				{ _id: 'camp_b', templateId: 'tmpl_doc_1', orgId: 'org_1', status: 'ACTIVE' }
+			]
+		});
+		await expect(
+			runEmit(ctx as any, {
+				submissionId: 'sub_1' as any,
+				templateId: 'tmpl_1',
+				deliveryStatus: 'delivered'
+			})
+		).rejects.toThrow('CONGRESSIONAL_CAMPAIGN_ATTRIBUTION_MULTIPLICITY');
+		expect(createCalls).toHaveLength(0);
 	});
 });

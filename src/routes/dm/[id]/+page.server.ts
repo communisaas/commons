@@ -1,8 +1,9 @@
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
 import type { PageServerLoad } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const load: PageServerLoad = async ({ params }) => {
 	const { id } = params;
@@ -14,7 +15,10 @@ export const load: PageServerLoad = async ({ params }) => {
 	// one exists; redirect when the request slug differs so public URLs in the
 	// public record do not encode internal storage ids (CONSTITUTION.md §1.3
 	// permanence over product cycles).
-	const result = await serverQuery(api.legislation.getDmPublicProfile, { identifier: id });
+	const result = await serverQuery(api.legislation.getDmPublicProfile, {
+		_secret: getInternalSecret(),
+		identifier: id
+	});
 
 	if (!result) {
 		throw error(404, 'Decision-maker not found');

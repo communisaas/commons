@@ -44,9 +44,19 @@ function makeProcess(overrides: Partial<OrgProcess> = {}): OrgProcess {
 				name: 'Pat Rivers',
 				title: 'Board Chair',
 				organization: 'State Water Board',
-				email: 'pat@water.example.gov'
+				email: 'pat@water.example.gov',
+				provenance: 'Resolved from the board directory.',
+				reasoning: 'Owns enforcement oversight.',
+				isAiResolved: true
 			},
-			{ name: 'Lee Brooks', title: 'Director', organization: 'State Water Board' }
+			{
+				name: 'Lee Brooks',
+				title: 'Director',
+				organization: 'State Water Board',
+				provenance: 'Resolved from the board directory.',
+				reasoning: 'Runs the enforcement program.',
+				isAiResolved: true
+			}
 		],
 		droppedEmailless: 1,
 		resolutionStopReason: null,

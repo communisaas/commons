@@ -19,11 +19,15 @@ vi.mock('$lib/config/features', () => ({
 
 import { load } from '../../../src/routes/+page.server';
 import { clearPublicDiscoveryCache } from '$lib/server/public-discovery-cache';
+import { PUBLIC_DISCOVERY_MANIFEST_REVALIDATE_MS } from '$lib/server/public-discovery-manifest-shield';
+
+const mockSetHeaders = vi.fn();
 
 function loadEvent(href: string) {
 	return {
 		url: new URL(href, 'https://commons.email'),
-		depends: vi.fn()
+		depends: vi.fn(),
+		setHeaders: mockSetHeaders
 	} as never;
 }
 
@@ -51,6 +55,8 @@ function publicCard(id: string) {
 		send_count: 0,
 		daily_arrivals: [],
 		district_counts: [],
+		district_counts_suppressed_districts: 0,
+		district_counts_suppressed_count: 0,
 		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
@@ -70,8 +76,8 @@ function publicCard(id: string) {
 function readyQueryResult(ref: string) {
 	if (ref === api.templates.publicDiscoveryManifest) {
 		return {
-			list: { ready: true, revision: 4, updatedAt: 1_800_000_000_000 },
-			relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_000 }
+			list: { ready: true, retiredRevision: 3, revision: 4, updatedAt: 1_800_000_000_000 },
+			relations: { ready: true, retiredRevision: 8, revision: 9, updatedAt: 1_800_000_000_000 }
 		};
 	}
 	if (ref === api.templates.publicDiscoveryList) {
@@ -106,6 +112,7 @@ function readyQueryResult(ref: string) {
 describe('home page load', () => {
 	beforeEach(() => {
 		clearPublicDiscoveryCache();
+		mockSetHeaders.mockReset();
 		mockServerQuery.mockReset();
 		mockServerQuery.mockImplementation(async (ref: string) => readyQueryResult(ref));
 	});
@@ -116,8 +123,11 @@ describe('home page load', () => {
 			const result = (await load(loadEvent(href))) as Awaited<ReturnType<typeof load>>;
 
 			expect(mockServerQuery).toHaveBeenCalledTimes(2);
-			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {
+				_secret: expect.any(String)
+			});
 			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryList, {
+				_secret: expect.any(String),
 				excludeCwc: true
 			});
 			expect(result).toMatchObject({
@@ -129,18 +139,34 @@ describe('home page load', () => {
 		}
 	);
 
-	it('loads both graph relation sources alongside templates for the graph surface', async () => {
+	it('loads the atomic template-and-relations bundle for the graph surface', async () => {
+		mockServerQuery.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...readyQueryResult(ref),
+					templates: [publicCard('template_1'), publicCard('template_2')]
+				};
+			}
+			return readyQueryResult(ref);
+		});
 		const pending = load(loadEvent('/?view=graph'));
 
-		// All three reads are started before the loader awaits their shared result.
+		// The graph bundle validates both source coordinates together.
 		await vi.waitFor(() => expect(mockServerQuery).toHaveBeenCalledTimes(3));
 		const result = (await pending) as Awaited<ReturnType<typeof load>>;
 
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {
+			_secret: expect.any(String),
 			excludeCwc: true
 		});
+		expect(mockSetHeaders).toHaveBeenCalledOnce();
+		expect(mockSetHeaders).toHaveBeenCalledWith({
+			'x-public-discovery-graph': 'ready',
+			'x-public-discovery-graph-generation':
+				'list=4:1800000000000;relations=9:1800000000000'
+		});
 		expect(result).toMatchObject({
-			templates: [{ id: 'template_1' }],
+			templates: [{ id: 'template_1' }, { id: 'template_2' }],
 			templatesLoadFailed: false,
 			relationEdges: [{ kind: 'twin', score: 0.9 }],
 			conceptRelations: {
@@ -150,7 +176,7 @@ describe('home page load', () => {
 		});
 	});
 
-	it('preserves graph relations when only the list snapshot read fails', async () => {
+	it('fails the graph bundle closed when its list snapshot read fails', async () => {
 		mockServerQuery.mockImplementation(async (ref: string) => {
 			if (ref === api.templates.publicDiscoveryList) {
 				throw new Error('List snapshot unavailable');
@@ -164,16 +190,14 @@ describe('home page load', () => {
 		expect(result).toMatchObject({
 			templates: [],
 			templatesLoadFailed: true,
-			relationEdges: [{ kind: 'twin', score: 0.9 }],
-			conceptRelations: {
-				edges: [{ kind: 'concept', concept: 'libraries' }],
-				conceptMap: { 'library card': 'libraries' }
-			}
+			relationEdges: [],
+			conceptRelations: { edges: [], conceptMap: {} }
 		});
-		expect(consoleError).toHaveBeenCalledTimes(1);
+		expect(mockSetHeaders).not.toHaveBeenCalled();
+		expect(consoleError).toHaveBeenCalledOnce();
 	});
 
-	it('preserves templates when only the relation snapshot read fails', async () => {
+	it('fails the atomic graph bundle closed when its relation snapshot read fails', async () => {
 		mockServerQuery.mockImplementation(async (ref: string) => {
 			if (ref === api.templates.publicDiscoveryRelations) {
 				throw new Error('Relation snapshot unavailable');
@@ -185,11 +209,12 @@ describe('home page load', () => {
 		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
 
 		expect(result).toEqual({
-			templates: [publicCard('template_1')],
-			templatesLoadFailed: false,
+			templates: [],
+			templatesLoadFailed: true,
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
+		expect(mockSetHeaders).not.toHaveBeenCalled();
 		expect(consoleError).toHaveBeenCalledTimes(1);
 	});
 
@@ -199,20 +224,21 @@ describe('home page load', () => {
 
 		const result = (await load(loadEvent('/?view=graph'))) as Awaited<ReturnType<typeof load>>;
 
-		expect(mockServerQuery).toHaveBeenCalledTimes(1);
+		expect(mockServerQuery).toHaveBeenCalledOnce();
 		expect(result).toEqual({
 			templates: [],
 			templatesLoadFailed: true,
 			relationEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
 		});
-		expect(consoleError).toHaveBeenCalledTimes(2);
+		expect(mockSetHeaders).not.toHaveBeenCalled();
+		expect(consoleError).toHaveBeenCalledOnce();
 	});
 
 	it('does not read or cache a payload before its manifest says the snapshot is ready', async () => {
 		mockServerQuery.mockResolvedValue({
-			list: { ready: false, revision: 0, updatedAt: null },
-			relations: { ready: false, revision: 0, updatedAt: null }
+			list: { ready: false, retiredRevision: 0, revision: 0, updatedAt: null },
+			relations: { ready: false, retiredRevision: 0, revision: 0, updatedAt: null }
 		});
 		const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -222,7 +248,9 @@ describe('home page load', () => {
 		expect(first).toMatchObject({ templates: [], templatesLoadFailed: true });
 		expect(second).toMatchObject({ templates: [], templatesLoadFailed: true });
 		expect(mockServerQuery).toHaveBeenCalledTimes(1);
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {
+			_secret: expect.any(String)
+		});
 		expect(mockServerQuery).not.toHaveBeenCalledWith(
 			api.templates.publicDiscoveryList,
 			expect.anything()
@@ -245,21 +273,32 @@ describe('home page load', () => {
 		});
 	});
 
-	it('reloads a payload when updatedAt changes even if a reseed reuses the revision number', async () => {
+	it('revalidates locally after 60 seconds and reloads an advanced manifest coordinate', async () => {
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+		let revision = 1;
 		let updatedAt = 1_800_000_000_000;
 		let templateId = 'before-reseed';
 		mockServerQuery.mockImplementation(async (ref: string) => {
 			if (ref === api.templates.publicDiscoveryManifest) {
 				return {
-					list: { ready: true, revision: 1, updatedAt },
-					relations: { ready: true, revision: 1, updatedAt }
+					list: {
+						ready: true,
+						retiredRevision: revision - 1,
+						revision,
+						updatedAt
+					},
+					relations: {
+						ready: true,
+						retiredRevision: revision - 1,
+						revision,
+						updatedAt
+					}
 				};
 			}
 			if (ref === api.templates.publicDiscoveryList) {
 				return {
 					projectionVersion: 4,
-					revision: 1,
+					revision,
 					updatedAt,
 					templates: [publicCard(templateId)]
 				};
@@ -270,9 +309,12 @@ describe('home page load', () => {
 		await expect(load(loadEvent('/'))).resolves.toMatchObject({
 			templates: [{ id: 'before-reseed' }]
 		});
-		updatedAt += 60_001;
+		revision = 2;
+		updatedAt += PUBLIC_DISCOVERY_MANIFEST_REVALIDATE_MS + 1;
 		templateId = 'after-reseed';
-		clock.mockReturnValue(1_800_000_060_001);
+		clock.mockReturnValue(
+			1_800_000_000_000 + PUBLIC_DISCOVERY_MANIFEST_REVALIDATE_MS + 1
+		);
 
 		await expect(load(loadEvent('/'))).resolves.toMatchObject({
 			templates: [{ id: 'after-reseed' }]
@@ -282,21 +324,33 @@ describe('home page load', () => {
 		).toHaveLength(2);
 	});
 
-	it('rejects a same-revision snapshot from a newer epoch than the cached manifest', async () => {
+	it('rejects a newer snapshot until the manifest revision catches up', async () => {
 		const clock = vi.spyOn(Date, 'now').mockReturnValue(1_800_000_000_000);
+		let manifestRevision = 1;
 		let manifestUpdatedAt = 100;
+		const snapshotRevision = 2;
 		const snapshotUpdatedAt = 200;
 		mockServerQuery.mockImplementation(async (ref: string) => {
 			if (ref === api.templates.publicDiscoveryManifest) {
 				return {
-					list: { ready: true, revision: 1, updatedAt: manifestUpdatedAt },
-					relations: { ready: true, revision: 1, updatedAt: manifestUpdatedAt }
+					list: {
+						ready: true,
+						retiredRevision: manifestRevision - 1,
+						revision: manifestRevision,
+						updatedAt: manifestUpdatedAt
+					},
+					relations: {
+						ready: true,
+						retiredRevision: manifestRevision - 1,
+						revision: manifestRevision,
+						updatedAt: manifestUpdatedAt
+					}
 				};
 			}
 			if (ref === api.templates.publicDiscoveryList) {
 				return {
 					projectionVersion: 4,
-					revision: 1,
+					revision: snapshotRevision,
 					updatedAt: snapshotUpdatedAt,
 					templates: [publicCard('new-epoch')]
 				};
@@ -306,8 +360,11 @@ describe('home page load', () => {
 		vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
 		await expect(load(loadEvent('/'))).resolves.toMatchObject({ templates: [] });
+		manifestRevision = snapshotRevision;
 		manifestUpdatedAt = snapshotUpdatedAt;
-		clock.mockReturnValue(1_800_000_060_001);
+		clock.mockReturnValue(
+			1_800_000_000_000 + PUBLIC_DISCOVERY_MANIFEST_REVALIDATE_MS + 1
+		);
 		await expect(load(loadEvent('/'))).resolves.toMatchObject({
 			templates: [{ id: 'new-epoch' }]
 		});

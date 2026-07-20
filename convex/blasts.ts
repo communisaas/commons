@@ -6,14 +6,36 @@ import {
 	internalAction
 } from './_generated/server';
 import { internal } from './_generated/api';
+import { makeFunctionReference, type FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import type { Id } from './_generated/dataModel';
 import {
-	collectFilteredRecipients,
+	pageFilteredRecipients,
 	RECIPIENT_COHORT_CAP,
+	RECIPIENT_SCAN_CAP,
+	RECIPIENT_SCAN_PAGE,
 	type EmailRecipientFilter as SharedEmailRecipientFilter
 } from './_emailRecipientFilter';
+import { normalizeEmailAudienceFilter } from './_audienceFilters';
+import {
+	AUDIENCE_DISPATCH_JOBS_READY,
+	requireAudienceDispatchJobsReady
+} from './lib/audienceDispatchGate';
+import {
+	assertEmailReservationPartition,
+	blockEmailReservation,
+	EMAIL_RESERVATION_LEASE_MS,
+	reconcileEmailReservation,
+	renewEmailReservationLease,
+	reserveEmailUsage
+} from './lib/planUsageReservations';
+import { readContactAuthorityEpoch } from './lib/contactAuthority';
+import { syncEmailAbWinnerCandidate } from './lib/emailAbWinnerCandidate';
+
+const enqueuePlanUsageRepairRef = makeFunctionReference<'mutation'>(
+	'planUsage:enqueueForOrg'
+) as unknown as FunctionReference<'mutation', 'internal', { orgId: Id<'organizations'> }, unknown>;
 
 declare const process: { env: Record<string, string | undefined> };
 type EncryptedSupporterForBlast = {
@@ -25,53 +47,20 @@ type EncryptedSupporterForBlast = {
 	verified?: boolean;
 };
 
-const EMAIL_HASH_RE = /^[a-f0-9]{64}$/;
-const MAX_HASH_FILTER_ITEMS = 10_000;
+const BLAST_RECOVERY_BATCH = 25;
+
+function recoveryBatchLimit(value: number | undefined): number {
+	const requested = value ?? BLAST_RECOVERY_BATCH;
+	if (!Number.isSafeInteger(requested) || requested < 1) {
+		throw new Error('BLAST_RECOVERY_LIMIT_INVALID');
+	}
+	return Math.min(requested, BLAST_RECOVERY_BATCH);
+}
 
 type EmailRecipientFilter = SharedEmailRecipientFilter;
 
-function cleanStringArray(
-	value: unknown,
-	predicate: (value: string) => boolean,
-	limit = MAX_HASH_FILTER_ITEMS
-): string[] | undefined {
-	if (!Array.isArray(value)) return undefined;
-	const cleaned = Array.from(
-		new Set(value.filter((item): item is string => typeof item === 'string' && predicate(item)))
-	).slice(0, limit);
-	return cleaned.length > 0 ? cleaned : undefined;
-}
-
 function readSafeEmailRecipientFilter(raw: unknown): EmailRecipientFilter {
-	if (!raw || typeof raw !== 'object') return {};
-	const candidate = raw as Record<string, unknown>;
-	const safeFilter: EmailRecipientFilter = {};
-	const tagIds = cleanStringArray(
-		candidate.tagIds,
-		(tagId) => tagId.length > 0 && tagId.length <= 64
-	);
-	if (tagIds) safeFilter.tagIds = tagIds;
-	const segmentIds = cleanStringArray(
-		candidate.segmentIds,
-		(segmentId) => segmentId.length > 0 && segmentId.length <= 64
-	);
-	if (segmentIds) safeFilter.segmentIds = segmentIds;
-	if (
-		candidate.verified === 'any' ||
-		candidate.verified === 'verified' ||
-		candidate.verified === 'unverified'
-	) {
-		safeFilter.verified = candidate.verified;
-	}
-	const includeEmailHashes = cleanStringArray(candidate.includeEmailHashes, (hash) =>
-		EMAIL_HASH_RE.test(hash)
-	);
-	if (includeEmailHashes) safeFilter.includeEmailHashes = includeEmailHashes;
-	const excludeEmailHashes = cleanStringArray(candidate.excludeEmailHashes, (hash) =>
-		EMAIL_HASH_RE.test(hash)
-	);
-	if (excludeEmailHashes) safeFilter.excludeEmailHashes = excludeEmailHashes;
-	return safeFilter;
+	return normalizeEmailAudienceFilter(raw);
 }
 
 // =============================================================================
@@ -96,6 +85,7 @@ export const sealAndScheduleBlast = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) {
@@ -131,6 +121,7 @@ export const sealAndScheduleBlast = mutation({
 				{ blastId: args.blastId }
 			);
 			if (!claim.ok) {
+				if (claim.reason) throw new Error(claim.reason);
 				// Defensive: another cron tick won the race (extremely unlikely
 				// within the same mutation transaction, but covers the edge
 				// where claim was already taken before this branch ran).
@@ -178,10 +169,10 @@ export const sealAndScheduleBlast = mutation({
 export const dispatchScheduledBlast = internalAction({
 	args: { blastId: v.id('emailBlasts') },
 	handler: async (ctx, { blastId }) => {
-		const claim: { ok: boolean } = await ctx.runMutation(
-			internal.blasts.claimForBlastDispatch,
-			{ blastId }
-		);
+		requireAudienceDispatchJobsReady();
+		const claim: { ok: boolean } = await ctx.runMutation(internal.blasts.claimForBlastDispatch, {
+			blastId
+		});
 		if (!claim.ok) {
 			// Already dispatched/cancelled/completed (or claimed by the
 			// safety-net sweep) — idempotent no-op.
@@ -196,19 +187,27 @@ export const dispatchScheduledBlast = internalAction({
  * Called by the cron job every minute.
  */
 export const getReadyBlasts = internalQuery({
-	handler: async (ctx) => {
+	args: { limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
 		const now = Date.now();
+		const limit = recoveryBatchLimit(args.limit);
 
-		// Use by_status index to find scheduled blasts
 		const scheduled = await ctx.db
 			.query('emailBlasts')
-			.withIndex('by_status', (q) => q.eq('status', 'scheduled'))
-			.collect();
+			.withIndex('by_status_sendMode_scheduledAt', (q) =>
+				q
+					.eq('status', 'scheduled')
+					.eq('sendMode', 'tee-sealed')
+					.gt('scheduledAt', 0)
+					.lte('scheduledAt', now)
+			)
+			.order('asc')
+			.take(limit + 1);
 
-		// Filter for tee-sealed blasts whose scheduledAt has passed
-		return scheduled.filter(
-			(b) => b.sendMode === 'tee-sealed' && b.sealedOrgKey && b.scheduledAt && b.scheduledAt <= now
-		);
+		return {
+			blasts: scheduled.slice(0, limit),
+			hasMore: scheduled.length > limit
+		};
 	}
 });
 
@@ -221,6 +220,7 @@ export const triggerEnclaveSend = internalAction({
 		blastId: v.id('emailBlasts')
 	},
 	handler: async (ctx, args) => {
+		requireAudienceDispatchJobsReady();
 		// 1. Fetch blast record
 		const blast = await ctx.runQuery(internal.blasts.getBlastForEnclave, {
 			blastId: args.blastId
@@ -261,10 +261,58 @@ export const triggerEnclaveSend = internalAction({
 		// before scheduling triggerEnclaveSend. The transition happens in
 		// the claim, not in this action.
 
-		// 2. Fetch encrypted supporter records for the org
-		const supporters = await ctx.runQuery(internal.blasts.getEncryptedSupporters, {
-			orgId: blast.orgId
-		});
+		// Snapshot the global contact-authority epoch before materialization. Every
+		// STOP/complaint/suppression OCC-bumps this singleton transactionally.
+		const contactAuthorityEpoch: number = await ctx.runQuery(
+			internal.blasts.getContactAuthorityEpochForDispatch,
+			{}
+		);
+
+		// 2. Fetch the cohort through one bounded query transaction per cursor
+		// page. The action is only an orchestrator; no query transaction loops over
+		// multiple database pages and the total scan/recipient envelopes are hard.
+		const supporters: EncryptedSupporterForBlast[] = [];
+		let cursor: string | null = null;
+		let scanned = 0;
+		do {
+			const page: {
+				recipients: EncryptedSupporterForBlast[];
+				continueCursor: string | null;
+				isDone: boolean;
+				scannedCount: number;
+			} = await ctx.runQuery(internal.blasts.getEncryptedSupporters, {
+				orgId: blast.orgId,
+				blastId: args.blastId,
+				cursor
+			});
+			scanned += page.scannedCount;
+			if (scanned > RECIPIENT_SCAN_CAP) throw new Error('EMAIL_AUDIENCE_SCAN_LIMIT_EXCEEDED');
+			supporters.push(...page.recipients);
+			if (supporters.length > RECIPIENT_COHORT_CAP) {
+				throw new Error('EMAIL_AUDIENCE_COHORT_TOO_LARGE');
+			}
+			cursor = page.continueCursor;
+			if (page.isDone) break;
+		} while (cursor !== null);
+
+		// Last serializable boundary before the enclave/SES POST. The mutable
+		// filter may have grown or shrunk since compose/schedule; never exercise
+		// carrier authority unless the fully materialized in-memory cohort exactly
+		// matches the durable reservation requested count.
+		const parity: { ok: boolean; reason?: string } = await ctx.runMutation(
+			internal.blasts.verifyBlastCarrierBoundary,
+			{
+				blastId: args.blastId,
+				observedRecipientCount: supporters.length,
+				expectedContactAuthorityEpoch: contactAuthorityEpoch
+			}
+		);
+		if (!parity.ok) {
+			console.error(
+				`[triggerEnclaveSend] Carrier boundary refused for ${args.blastId}: ${parity.reason}`
+			);
+			return;
+		}
 
 		// 3. Call the enclave endpoint via the parent instance API
 		const enclaveHost = process.env.ENCLAVE_PARENT_HOST;
@@ -341,17 +389,27 @@ export const triggerEnclaveSend = internalAction({
 			if (!response.ok) {
 				const errorText = await response.text();
 				console.error(`[triggerEnclaveSend] Enclave returned ${response.status}: ${errorText}`);
-				await ctx.runMutation(internal.blasts.updateBlastStatus, {
+				await ctx.runMutation(internal.blasts.blockBlastAfterAmbiguousCarrierError, {
 					blastId: args.blastId,
-					status: 'failed',
-					totalSent: 0,
-					totalFailed: 0,
-					clearSealedKey: true
+					failureCode: 'TEE_OUTCOME_AMBIGUOUS'
 				});
 				return;
 			}
 
 			const result: { totalSent: number; totalFailed: number } = await response.json();
+			if (
+				!Number.isSafeInteger(result.totalSent) ||
+				result.totalSent < 0 ||
+				!Number.isSafeInteger(result.totalFailed) ||
+				result.totalFailed < 0 ||
+				result.totalSent + result.totalFailed !== blast.totalRecipients
+			) {
+				await ctx.runMutation(internal.blasts.blockBlastAfterAmbiguousCarrierError, {
+					blastId: args.blastId,
+					failureCode: 'TEE_RESULT_INCOMPLETE_OR_INVALID'
+				});
+				return;
+			}
 
 			// 4. Update blast status and clear the sealed key
 			await ctx.runMutation(internal.blasts.updateBlastStatus, {
@@ -364,12 +422,9 @@ export const triggerEnclaveSend = internalAction({
 		} catch (err) {
 			const message = err instanceof Error ? err.message : 'Unknown error';
 			console.error(`[triggerEnclaveSend] Failed for blast ${args.blastId}:`, message);
-			await ctx.runMutation(internal.blasts.updateBlastStatus, {
+			await ctx.runMutation(internal.blasts.blockBlastAfterAmbiguousCarrierError, {
 				blastId: args.blastId,
-				status: 'failed',
-				totalSent: 0,
-				totalFailed: 0,
-				clearSealedKey: true
+				failureCode: 'TEE_OUTCOME_AMBIGUOUS'
 			});
 		}
 	}
@@ -388,7 +443,8 @@ export const triggerEnclaveSend = internalAction({
  */
 export const claimForBlastDispatch = internalMutation({
 	args: { blastId: v.id('emailBlasts') },
-	handler: async (ctx, args): Promise<{ ok: boolean }> => {
+	handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+		requireAudienceDispatchJobsReady();
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return { ok: false };
 		if (blast.status !== 'scheduled') return { ok: false };
@@ -399,12 +455,149 @@ export const claimForBlastDispatch = internalMutation({
 		if (blast.scheduledAt !== undefined && Date.now() < blast.scheduledAt) {
 			return { ok: false };
 		}
+		try {
+			readReceiptCountAuthority(blast);
+		} catch (error) {
+			const reason =
+				error instanceof Error ? error.message : 'EMAIL_RECEIPT_COUNT_PROJECTION_NOT_READY';
+			await ctx.db.patch(args.blastId, {
+				status: 'failed',
+				sealedOrgKey: undefined,
+				updatedAt: Date.now()
+			});
+			return { ok: false, reason };
+		}
+
+		// This mutation is the last serializable boundary before external SES
+		// authority is exercised. Read only the O(1) projection; stale/malformed
+		// usage never falls back to source history in a dispatch transaction.
+		const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
+			orgId: blast.orgId
+		});
+		if (!limits?.usageReady) {
+			if (limits?.usageRepairRequired) {
+				await ctx.runMutation(enqueuePlanUsageRepairRef, { orgId: blast.orgId });
+			}
+			return {
+				ok: false,
+				reason: limits?.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			};
+		}
+		const remaining =
+			limits.limits.maxEmails - limits.current.emailsSent - limits.current.emailsReserved;
+		if (remaining <= 0 || blast.totalRecipients > remaining) {
+			// A due scheduled send that cannot fit the current exact remaining quota
+			// is terminal. Clearing
+			// the sealed key prevents a later cron from unexpectedly sending it after
+			// a period rollover; the editor can create a fresh blast deliberately.
+			await ctx.db.patch(args.blastId, {
+				status: 'failed',
+				sealedOrgKey: undefined,
+				updatedAt: Date.now()
+			});
+			return { ok: false, reason: 'EMAIL_QUOTA_EXCEEDED' };
+		}
+		let reservation: Awaited<ReturnType<typeof reserveEmailUsage>>;
+		try {
+			reservation = await reserveEmailUsage(ctx, {
+				orgId: blast.orgId,
+				sourceType: 'emailBlast',
+				sourceId: String(blast._id),
+				requestedCount: blast.totalRecipients,
+				admission: {
+					periodStart: limits.periodStart,
+					currentEmailsSent: limits.current.emailsSent,
+					maxEmails: limits.limits.maxEmails
+				},
+				leaseExpiresAt: Date.now() + EMAIL_RESERVATION_LEASE_MS
+			});
+		} catch (error) {
+			if (error instanceof Error && error.message === 'EMAIL_QUOTA_EXCEEDED') {
+				await ctx.db.patch(args.blastId, {
+					status: 'failed',
+					sealedOrgKey: undefined,
+					updatedAt: Date.now()
+				});
+				return { ok: false, reason: 'EMAIL_QUOTA_EXCEEDED' };
+			}
+			throw error;
+		}
 		await ctx.db.patch(args.blastId, {
 			status: 'sending',
+			planUsageReservationId: reservation._id,
 			updatedAt: Date.now()
 		});
 		return { ok: true };
 	}
+});
+
+export const verifyBlastCarrierBoundary = internalMutation({
+	args: {
+		blastId: v.id('emailBlasts'),
+		observedRecipientCount: v.number(),
+		expectedContactAuthorityEpoch: v.number()
+	},
+	handler: async (ctx, args): Promise<{ ok: boolean; reason?: string }> => {
+		if (!Number.isSafeInteger(args.observedRecipientCount) || args.observedRecipientCount < 0) {
+			throw new Error('EMAIL_AUDIENCE_OBSERVED_COUNT_INVALID');
+		}
+		const blast = await ctx.db.get(args.blastId);
+		if (!blast || blast.status !== 'sending' || !blast.planUsageReservationId) {
+			return { ok: false, reason: 'BLAST_CARRIER_AUTHORITY_NOT_ACTIVE' };
+		}
+		// This is a one-shot grant, not a repeatable predicate. A duplicate action
+		// must leave the first action's live reservation untouched while refusing a
+		// second enclave/SES POST.
+		if (blast.carrierAuthorityIssuedAt !== undefined) {
+			return { ok: false, reason: 'BLAST_CARRIER_AUTHORITY_ALREADY_ISSUED' };
+		}
+		const reservation = await ctx.db.get(blast.planUsageReservationId);
+		if (!reservation) return { ok: false, reason: 'EMAIL_BLAST_RESERVATION_MISSING' };
+		assertEmailReservationPartition(reservation);
+		const currentContactAuthorityEpoch = await readContactAuthorityEpoch(ctx);
+		const exact =
+			Number.isSafeInteger(args.expectedContactAuthorityEpoch) &&
+			args.expectedContactAuthorityEpoch >= 0 &&
+			currentContactAuthorityEpoch === args.expectedContactAuthorityEpoch &&
+			reservation.status === 'active' &&
+			reservation.orgId === blast.orgId &&
+			reservation.sourceType === 'emailBlast' &&
+			reservation.sourceId === String(blast._id) &&
+			reservation.requestedCount === blast.totalRecipients &&
+			reservation.remainingCount === reservation.requestedCount &&
+			reservation.sentCount === 0 &&
+			reservation.releasedCount === 0 &&
+			args.observedRecipientCount === reservation.requestedCount;
+		if (!exact) {
+			if (reservation.status === 'active') {
+				await reconcileEmailReservation(ctx, {
+					reservationId: reservation._id,
+					absoluteSentCount: 0,
+					terminal: true,
+					terminalReason: 'EMAIL_BLAST_COHORT_RESERVATION_PARITY_REFUSED'
+				});
+			}
+			await ctx.db.patch(blast._id, {
+				status: 'failed',
+				sealedOrgKey: undefined,
+				updatedAt: Date.now()
+			});
+			return { ok: false, reason: 'EMAIL_BLAST_COHORT_RESERVATION_PARITY_MISMATCH' };
+		}
+		await renewEmailReservationLease(ctx, reservation._id);
+		await ctx.db.patch(blast._id, {
+			carrierAuthorityIssuedAt: Date.now(),
+			carrierAuthorityEpoch: currentContactAuthorityEpoch,
+			carrierAuthorityRecipientCount: args.observedRecipientCount,
+			updatedAt: Date.now()
+		});
+		return { ok: true };
+	}
+});
+
+export const getContactAuthorityEpochForDispatch = internalQuery({
+	args: {},
+	handler: async (ctx) => await readContactAuthorityEpoch(ctx)
 });
 
 /**
@@ -429,11 +622,22 @@ export const claimForBlastDispatch = internalMutation({
  */
 export const processScheduledBlasts = internalAction({
 	handler: async (ctx) => {
+		// The essential cron remains registered during launch. Disabled delivery
+		// must be a zero-I/O no-op, not a recurrent exception/log-cost loop.
+		if (!AUDIENCE_DISPATCH_JOBS_READY) {
+			return { disabled: true, processed: 0 };
+		}
+		requireAudienceDispatchJobsReady();
 		const now = Date.now();
 
 		// (a) Recover orphaned SCHEDULED blasts.
-		const ready = await ctx.runQuery(internal.blasts.getReadyBlasts);
-		for (const blast of ready) {
+		const ready: {
+			blasts: Array<{ _id: Id<'emailBlasts'> }>;
+			hasMore: boolean;
+		} = await ctx.runQuery(internal.blasts.getReadyBlasts, {
+			limit: BLAST_RECOVERY_BATCH
+		});
+		for (const blast of ready.blasts) {
 			const claim = await ctx.runMutation(internal.blasts.claimForBlastDispatch, {
 				blastId: blast._id
 			});
@@ -441,7 +645,7 @@ export const processScheduledBlasts = internalAction({
 				// Another cron firing already claimed this blast; skip.
 				continue;
 			}
-			await ctx.runAction(internal.blasts.triggerEnclaveSend, {
+			await ctx.scheduler.runAfter(0, internal.blasts.triggerEnclaveSend, {
 				blastId: blast._id
 			});
 		}
@@ -450,10 +654,14 @@ export const processScheduledBlasts = internalAction({
 		// Threshold exceeds the 60s enclave fetch timeout + any reasonable action
 		// time, so a live send is never misclassified as stuck.
 		const STUCK_SENDING_MS = 15 * 60 * 1000;
-		const stuck = await ctx.runQuery(internal.blasts.getStuckSendingBlasts, {
-			stuckBeforeMs: now - STUCK_SENDING_MS
+		const stuck: {
+			blasts: Array<{ _id: Id<'emailBlasts'> }>;
+			hasMore: boolean;
+		} = await ctx.runQuery(internal.blasts.getStuckSendingBlasts, {
+			stuckBeforeMs: now - STUCK_SENDING_MS,
+			limit: BLAST_RECOVERY_BATCH
 		});
-		for (const blast of stuck) {
+		for (const blast of stuck.blasts) {
 			const r = await ctx.runMutation(internal.blasts.failStuckSendingBlast, {
 				blastId: blast._id,
 				stuckBeforeMs: now - STUCK_SENDING_MS
@@ -466,6 +674,10 @@ export const processScheduledBlasts = internalAction({
 				);
 			}
 		}
+
+		if (ready.hasMore || stuck.hasMore) {
+			await ctx.scheduler.runAfter(0, internal.blasts.processScheduledBlasts, {});
+		}
 	}
 });
 
@@ -474,13 +686,23 @@ export const processScheduledBlasts = internalAction({
  * Used by `processScheduledBlasts` to recover dispatch-action-evicted orphans.
  */
 export const getStuckSendingBlasts = internalQuery({
-	args: { stuckBeforeMs: v.number() },
-	handler: async (ctx, { stuckBeforeMs }) => {
-		return await ctx.db
+	args: { stuckBeforeMs: v.number(), limit: v.optional(v.number()) },
+	handler: async (ctx, { stuckBeforeMs, limit: requestedLimit }) => {
+		if (!Number.isFinite(stuckBeforeMs)) {
+			throw new Error('BLAST_RECOVERY_CUTOFF_INVALID');
+		}
+		const limit = recoveryBatchLimit(requestedLimit);
+		const stuck = await ctx.db
 			.query('emailBlasts')
-			.withIndex('by_status', (q) => q.eq('status', 'sending'))
-			.filter((q) => q.lt(q.field('updatedAt'), stuckBeforeMs))
-			.collect();
+			.withIndex('by_status_updatedAt', (q) =>
+				q.eq('status', 'sending').lt('updatedAt', stuckBeforeMs)
+			)
+			.order('asc')
+			.take(limit + 1);
+		return {
+			blasts: stuck.slice(0, limit),
+			hasMore: stuck.length > limit
+		};
 	}
 });
 
@@ -496,8 +718,21 @@ export const failStuckSendingBlast = internalMutation({
 		const blast = await ctx.db.get(blastId);
 		if (!blast || blast.status !== 'sending') return { failed: false };
 		if ((blast.updatedAt ?? 0) >= stuckBeforeMs) return { failed: false };
+		if (!blast.planUsageReservationId) {
+			await ctx.db.patch(blast.orgId, {
+				emailReservationState: 'blocked',
+				emailReservationFailureCode: 'TEE_LEGACY_OUTCOME_AMBIGUOUS',
+				updatedAt: Date.now()
+			});
+		} else {
+			await blockEmailReservation(
+				ctx,
+				blast.planUsageReservationId,
+				'TEE_OUTCOME_AMBIGUOUS_STALE_ACTION'
+			);
+		}
 		await ctx.db.patch(blastId, {
-			status: 'failed',
+			status: 'outcome_unknown',
 			sealedOrgKey: undefined,
 			updatedAt: Date.now()
 		});
@@ -523,25 +758,33 @@ export const getBlastForEnclave = internalQuery({
  * Internal query: get encrypted supporters for an org (subscribed only).
  */
 export const getEncryptedSupporters = internalQuery({
-	args: { orgId: v.id('organizations') },
+	args: {
+		orgId: v.id('organizations'),
+		blastId: v.id('emailBlasts'),
+		cursor: v.union(v.string(), v.null())
+	},
 	handler: async (ctx, args) => {
-		// Sub-class (A) must-enumerate: the enclave needs the actual encrypted
-		// recipient blobs. Bounded paginated scan over subscribed supporters
-		// (empty filter == subscribed-only, applied per page) — never an
-		// unbounded .collect() of the roster (throws past the per-read doc cap
-		// once an org passes ~16K supporters). Capped at RECIPIENT_COHORT_CAP.
-		const { recipients } = await collectFilteredRecipients(
+		requireAudienceDispatchJobsReady();
+		const blast = await ctx.db.get(args.blastId);
+		if (!blast || blast.orgId !== args.orgId) throw new Error('Blast not found');
+		const page = await pageFilteredRecipients(
 			ctx,
 			args.orgId,
-			{},
-			RECIPIENT_COHORT_CAP
+			readSafeEmailRecipientFilter(blast.recipientFilter),
+			args.cursor,
+			RECIPIENT_SCAN_PAGE
 		);
 
-		return recipients.map((s) => ({
-			_id: s._id,
-			encryptedEmail: s.encryptedEmail,
-			emailHash: s.emailHash
-		}));
+		return {
+			recipients: page.recipients.map((s) => ({
+				_id: s._id,
+				encryptedEmail: s.encryptedEmail,
+				emailHash: s.emailHash
+			})),
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			scannedCount: page.scannedCount
+		};
 	}
 });
 
@@ -559,6 +802,29 @@ export const updateBlastStatus = internalMutation({
 	handler: async (ctx, args) => {
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return;
+		if (!Number.isSafeInteger(args.totalSent) || args.totalSent < 0) {
+			throw new Error('TOTAL_SENT_INVALID');
+		}
+		if (!Number.isSafeInteger(args.totalFailed) || args.totalFailed < 0) {
+			throw new Error('TOTAL_FAILED_INVALID');
+		}
+		if (
+			(args.status === 'sent' || args.status === 'failed') &&
+			args.totalSent + args.totalFailed !== blast.totalRecipients
+		) {
+			throw new Error('BLAST_RESULT_DOES_NOT_PARTITION_RESERVED_COHORT');
+		}
+		if ((args.status === 'sent' || args.status === 'failed') && blast.status !== args.status) {
+			if (!blast.planUsageReservationId) {
+				throw new Error('EMAIL_BLAST_RESERVATION_MISSING');
+			}
+			await reconcileEmailReservation(ctx, {
+				reservationId: blast.planUsageReservationId,
+				absoluteSentCount: args.totalSent,
+				terminal: true,
+				terminalReason: args.status === 'sent' ? 'TEE_RESULT_RECORDED' : 'TEE_TERMINAL_FAILURE'
+			});
+		}
 
 		const patch: Record<string, unknown> = {
 			status: args.status,
@@ -574,19 +840,33 @@ export const updateBlastStatus = internalMutation({
 		}
 
 		await ctx.db.patch(args.blastId, patch);
+		await syncEmailAbWinnerCandidate(ctx, {
+			blastId: blast._id,
+			orgId: blast.orgId,
+			status: args.status,
+			isAbTest: blast.isAbTest,
+			abParentId: blast.abParentId,
+			abVariant: blast.abVariant,
+			abWinnerPickedAt: blast.abWinnerPickedAt,
+			abTestConfig: blast.abTestConfig,
+			totalSent: args.totalSent,
+			totalOpened: blast.totalOpened,
+			totalClicked: blast.totalClicked,
+			sentAt: args.status === 'sent' ? (patch.sentAt as number) : blast.sentAt
+		});
+	}
+});
 
-		// Increment org-level email counter on status transition to "sent"
-		// (mirrors the pattern in email.ts updateBlastStatus)
-		if (args.status === 'sent' && blast.status !== 'sent' && blast.orgId) {
-			const org = await ctx.db.get(blast.orgId);
-			if (org) {
-				const currentCount = org.sentEmailCount ?? 0;
-				await ctx.db.patch(blast.orgId, {
-					sentEmailCount: currentCount + args.totalSent,
-					updatedAt: Date.now()
-				});
-			}
-		}
+export const blockBlastAfterAmbiguousCarrierError = internalMutation({
+	args: { blastId: v.id('emailBlasts'), failureCode: v.string() },
+	handler: async (ctx, args) => {
+		const blast = await ctx.db.get(args.blastId);
+		if (!blast || blast.status !== 'sending' || !blast.planUsageReservationId) return;
+		await blockEmailReservation(ctx, blast.planUsageReservationId, args.failureCode);
+		await ctx.db.patch(blast._id, {
+			status: 'outcome_unknown',
+			updatedAt: Date.now()
+		});
 	}
 });
 
@@ -606,10 +886,12 @@ export const updateBlastStatus = internalMutation({
 export const getEncryptedSupportersForBlast = query({
 	args: {
 		orgSlug: v.string(),
-		blastId: v.optional(v.id('emailBlasts'))
+		blastId: v.optional(v.id('emailBlasts')),
+		cursor: v.optional(v.union(v.string(), v.null()))
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 
 		// Resolve the persisted recipientFilter from the blast row. Without
 		// blastId (legacy callers) the entire subscribed cohort returns — which
@@ -636,26 +918,29 @@ export const getEncryptedSupportersForBlast = query({
 			}
 			filter = readSafeEmailRecipientFilter(blast.recipientFilter);
 		}
-		// Sub-class (A) must-enumerate: the browser-direct send needs the actual
-		// encrypted recipient blobs. Bounded paginated scan — never an unbounded
-		// .collect() of the roster. The dispatch-claim route caps the cohort at
-		// 10K and rejects past it; this cap matches so a saturated cohort can be
-		// surfaced rather than silently dropping recipients.
-		const { recipients: filtered } = await collectFilteredRecipients(
+		const page = await pageFilteredRecipients(
 			ctx,
 			org._id,
 			filter,
-			RECIPIENT_COHORT_CAP
+			args.cursor ?? null,
+			RECIPIENT_SCAN_PAGE
 		);
 
-		return filtered.map((s) => ({
-			_id: s._id,
-			encryptedEmail: s.encryptedEmail,
-			emailHash: s.emailHash,
-			encryptedName: s.encryptedName,
-			postalCode: s.postalCode,
-			verified: s.verified
-		}));
+		return {
+			recipients: page.recipients.map((s) => ({
+				_id: s._id,
+				encryptedEmail: s.encryptedEmail,
+				emailHash: s.emailHash,
+				encryptedName: s.encryptedName,
+				postalCode: s.postalCode,
+				verified: s.verified
+			})),
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			scannedCount: page.scannedCount,
+			maxRecipients: RECIPIENT_COHORT_CAP,
+			maxScanned: RECIPIENT_SCAN_CAP
+		};
 	}
 });
 
@@ -684,11 +969,17 @@ export const updateClientBlastProgress = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) {
 			throw new Error('Blast not found');
 		}
+		// Pre-carrier tombstone for legacy blasts: the UI calls this with
+		// status='sending' before its first SES request. A missing/corrupt exact
+		// receipt count therefore blocks the send, rather than failing only when
+		// the browser later tries to persist forensic receipts.
+		readReceiptCountAuthority(blast);
 		const previousStatus = blast.status;
 
 		// Only allow updates from client-direct sends in valid states
@@ -735,6 +1026,20 @@ export const updateClientBlastProgress = mutation({
 		}
 
 		await ctx.db.patch(args.blastId, patch);
+		await syncEmailAbWinnerCandidate(ctx, {
+			blastId: blast._id,
+			orgId: blast.orgId,
+			status: args.status,
+			isAbTest: blast.isAbTest,
+			abParentId: blast.abParentId,
+			abVariant: blast.abVariant,
+			abWinnerPickedAt: blast.abWinnerPickedAt,
+			abTestConfig: blast.abTestConfig,
+			totalSent: args.totalSent,
+			totalOpened: blast.totalOpened,
+			totalClicked: blast.totalClicked,
+			sentAt: args.status === 'sent' ? (patch.sentAt as number) : blast.sentAt
+		});
 
 		// Increment org-level email counter on transition to "sent". The
 		// delta is bounded by the cohort-size check above, so no inflation
@@ -783,6 +1088,34 @@ export const updateClientBlastProgress = mutation({
 // publicly would let an editor forge/overwrite backend SES receipt rows.
 const INTERNAL_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed', 'server']);
 const PUBLIC_RECEIPT_SENDMODES = new Set(['client-direct', 'tee-sealed']);
+const BLAST_RECEIPT_BATCH_MAX = 200;
+const BLAST_RECEIPT_BASELINE_CAP = 2_000;
+export const BLAST_RECEIPT_HARD_CAP = RECIPIENT_COHORT_CAP * 2;
+
+function readReceiptCountAuthority(blast: { totalRecipients: number; receiptCount?: number }): {
+	receiptCount: number;
+	ceiling: number;
+} {
+	if (
+		!Number.isSafeInteger(blast.totalRecipients) ||
+		blast.totalRecipients < 0 ||
+		blast.totalRecipients > RECIPIENT_COHORT_CAP
+	) {
+		throw new Error('EMAIL_BLAST_RECIPIENT_COUNT_REPAIR_REQUIRED');
+	}
+	const ceiling = Math.max(BLAST_RECEIPT_BASELINE_CAP, blast.totalRecipients * 2);
+	if (ceiling > BLAST_RECEIPT_HARD_CAP) {
+		throw new Error('EMAIL_BLAST_RECEIPT_CAP_INVALID');
+	}
+	if (
+		!Number.isSafeInteger(blast.receiptCount) ||
+		blast.receiptCount! < 0 ||
+		blast.receiptCount! > ceiling
+	) {
+		throw new Error('EMAIL_RECEIPT_COUNT_PROJECTION_NOT_READY');
+	}
+	return { receiptCount: blast.receiptCount!, ceiling };
+}
 
 export const recordBlastReceiptsInternal = internalMutation({
 	args: {
@@ -809,31 +1142,15 @@ export const recordBlastReceiptsInternal = internalMutation({
 			throw new Error(`Cannot record receipts for blast in status '${blast.status}'`);
 		}
 		if (args.receipts.length === 0) return { written: 0, updated: 0 };
-		if (args.receipts.length > 200) {
-			throw new Error('Too many receipts in a single batch (max 200)');
+		if (args.receipts.length > BLAST_RECEIPT_BATCH_MAX) {
+			throw new Error(`Too many receipts in a single batch (max ${BLAST_RECEIPT_BATCH_MAX})`);
 		}
 
-		// Cohort cap — storage-bloat / cohort-poisoning bound. New inserts
-		// (after subtracting upsert hits) must not push the per-blast receipt
-		// count past 2× totalRecipients. The 2× slack covers retries +
-		// browser-and-Lambda double-write race; anything above that is a
-		// misbehaving caller and rejected.
-		const ceiling = Math.max(2000, blast.totalRecipients * 2);
-		// Take at most `ceiling + 1` to count existing receipts. A
-		// `.collect()` here would be an unbounded read that crashes
-		// mid-stream from Convex's per-mutation 16K-doc cap for any blast
-		// with >16K receipts (or many smaller blasts whose receipt rows
-		// persist). The cap-check itself would become the read bomb —
-		// mutation aborts before reaching the rejection branch, leaving
-		// the cohort cap unenforced for that blast. The count is bounded
-		// by the very ceiling it enforces; "more than the cap" is the
-		// only signal needed.
-		const existingCount = (
-			await ctx.db
-				.query('emailDeliveryReceipts')
-				.withIndex('by_blastId', (q) => q.eq('blastId', args.blastId))
-				.take(ceiling + 1)
-		).length;
+		// Exact O(1) count projection. Every new insert and the count patch
+		// commit in this same serializable mutation, so retries/upserts cannot
+		// inflate it. Legacy/malformed rows fail closed instead of rebuilding a
+		// cohort-sized count in the request path.
+		const { receiptCount: existingCount, ceiling } = readReceiptCountAuthority(blast);
 
 		let written = 0;
 		let updated = 0;
@@ -885,6 +1202,9 @@ export const recordBlastReceiptsInternal = internalMutation({
 				written++;
 			}
 		}
+		if (written > 0) {
+			await ctx.db.patch(args.blastId, { receiptCount: existingCount + written });
+		}
 		return { written, updated, skippedDowngrade };
 	}
 });
@@ -933,27 +1253,11 @@ export const recordBlastReceipts = mutation({
 			throw new Error(`Cannot record receipts for blast in status '${blast.status}'`);
 		}
 		if (args.receipts.length === 0) return { written: 0, updated: 0 };
-		if (args.receipts.length > 200) {
-			throw new Error('Too many receipts in a single batch (max 200)');
+		if (args.receipts.length > BLAST_RECEIPT_BATCH_MAX) {
+			throw new Error(`Too many receipts in a single batch (max ${BLAST_RECEIPT_BATCH_MAX})`);
 		}
 
-		// Cohort cap — see `recordBlastReceiptsInternal` for rationale.
-		const ceiling = Math.max(2000, blast.totalRecipients * 2);
-		// Take at most `ceiling + 1` to count existing receipts. A
-		// `.collect()` here would be an unbounded read that crashes
-		// mid-stream from Convex's per-mutation 16K-doc cap for any blast
-		// with >16K receipts (or many smaller blasts whose receipt rows
-		// persist). The cap-check itself would become the read bomb —
-		// mutation aborts before reaching the rejection branch, leaving
-		// the cohort cap unenforced for that blast. The count is bounded
-		// by the very ceiling it enforces; "more than the cap" is the
-		// only signal needed.
-		const existingCount = (
-			await ctx.db
-				.query('emailDeliveryReceipts')
-				.withIndex('by_blastId', (q) => q.eq('blastId', args.blastId))
-				.take(ceiling + 1)
-		).length;
+		const { receiptCount: existingCount, ceiling } = readReceiptCountAuthority(blast);
 
 		let written = 0;
 		let updated = 0;
@@ -1001,6 +1305,9 @@ export const recordBlastReceipts = mutation({
 				});
 				written++;
 			}
+		}
+		if (written > 0) {
+			await ctx.db.patch(args.blastId, { receiptCount: existingCount + written });
 		}
 		return { written, updated, skippedDowngrade };
 	}

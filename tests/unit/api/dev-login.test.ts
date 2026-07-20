@@ -4,6 +4,9 @@ const { mockServerMutation } = vi.hoisted(() => ({
 	mockServerMutation: vi.fn()
 }));
 
+const SESSION_SECRET = 's'.repeat(64);
+const COOKIE_SECRET = 'c'.repeat(64);
+
 vi.mock('convex-sveltekit', () => ({
 	serverMutation: (...args: unknown[]) => mockServerMutation(...args)
 }));
@@ -28,7 +31,8 @@ function makeEvent({
 		ENABLE_DEV_LOGIN: '1',
 		ENVIRONMENT: 'test',
 		DEV_LOGIN_TOKEN: 'dev-token',
-		SESSION_CREATION_SECRET: 'session-secret'
+		SESSION_CREATION_SECRET: SESSION_SECRET,
+		SESSION_COOKIE_SIGNING_SECRET: COOKIE_SECRET
 	},
 	token = 'dev-token'
 }: {
@@ -65,7 +69,8 @@ describe('POST /api/internal/dev-login', () => {
 					env: {
 						ENVIRONMENT: 'test',
 						DEV_LOGIN_TOKEN: 'dev-token',
-						SESSION_CREATION_SECRET: 'session-secret'
+						SESSION_CREATION_SECRET: SESSION_SECRET,
+						SESSION_COOKIE_SIGNING_SECRET: COOKIE_SECRET
 					}
 				})
 			)
@@ -81,7 +86,8 @@ describe('POST /api/internal/dev-login', () => {
 						ENABLE_DEV_LOGIN: '1',
 						ENVIRONMENT: 'staging',
 						DEV_LOGIN_TOKEN: 'dev-token',
-						SESSION_CREATION_SECRET: 'session-secret'
+						SESSION_CREATION_SECRET: SESSION_SECRET,
+						SESSION_COOKIE_SIGNING_SECRET: COOKIE_SECRET
 					}
 				})
 			)
@@ -93,6 +99,23 @@ describe('POST /api/internal/dev-login', () => {
 		await expect(
 			POST(makeEvent({ body: { email: 'admin@commons.email', principalName: 'Admin' } }))
 		).rejects.toMatchObject({ status: 400 });
+		expect(mockServerMutation).not.toHaveBeenCalled();
+	});
+
+	it('rejects cookie/proof key reuse before creating a user or session', async () => {
+		await expect(
+			POST(
+				makeEvent({
+					env: {
+						ENABLE_DEV_LOGIN: '1',
+						ENVIRONMENT: 'test',
+						DEV_LOGIN_TOKEN: 'dev-token',
+						SESSION_CREATION_SECRET: SESSION_SECRET,
+						SESSION_COOKIE_SIGNING_SECRET: SESSION_SECRET
+					}
+				})
+			)
+		).rejects.toThrow(/REUSES_SESSION_CREATION_KEY/);
 		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
@@ -114,7 +137,7 @@ describe('POST /api/internal/dev-login', () => {
 		);
 		expect(event.cookies.set).toHaveBeenCalledWith(
 			'auth-session',
-			'session_dev_login',
+			expect.stringMatching(/^v1\.session_dev_login\.[0-9]{13}\.[A-Za-z0-9_-]{43}$/),
 			expect.objectContaining({
 				httpOnly: true,
 				sameSite: 'lax'

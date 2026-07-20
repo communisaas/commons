@@ -13,6 +13,48 @@
 	const canInvite = $derived(data.membership.role === 'owner' || data.membership.role === 'editor');
 	const planName = $derived(data.usage.plan ?? data.subscription?.plan ?? 'inactive');
 
+	// Public directory publication is explicit and reversible. The Convex mutation
+	// updates the canonical organization and its compact directory projection in
+	// one transaction; the public Cloudflare cache refreshes within one minute.
+	// svelte-ignore state_referenced_locally
+	let directoryPublic = $state(Boolean(data.org.isPublic));
+	let directorySaving = $state(false);
+	let directoryMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
+
+	async function setDirectoryVisibility(isPublic: boolean) {
+		if (!canEdit || directorySaving || isPublic === directoryPublic) return;
+		directorySaving = true;
+		directoryMessage = null;
+		try {
+			const res = await fetch(`/api/org/${data.org.slug}/directory-visibility`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ isPublic })
+			});
+			if (!res.ok) {
+				const err = await res.json().catch(() => ({ message: 'Failed to update visibility' }));
+				directoryMessage = {
+					type: 'error',
+					text: err.message ?? 'Failed to update visibility'
+				};
+				return;
+			}
+			const result = (await res.json()) as { isPublic: boolean };
+			directoryPublic = result.isPublic;
+			directoryMessage = {
+				type: 'success',
+				text: result.isPublic
+					? 'Published. The public directory will refresh within one minute.'
+					: 'Unpublished. The public directory will refresh within one minute.'
+			};
+			await invalidateAll();
+		} catch {
+			directoryMessage = { type: 'error', text: 'Network error. Please try again.' };
+		} finally {
+			directorySaving = false;
+		}
+	}
+
 	// Invite form state
 	let inviteEmail = $state('');
 	let inviteRole = $state<'member' | 'editor'>('member');
@@ -199,7 +241,8 @@
 	let brandingMessage = $state<{ type: 'success' | 'error'; text: string } | null>(null);
 
 	const accentValid = $derived(
-		brandingAccent.trim() === '' || /^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(brandingAccent.trim())
+		brandingAccent.trim() === '' ||
+			/^#?[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(brandingAccent.trim())
 	);
 	const accentPreview = $derived(
 		accentValid && brandingAccent.trim()
@@ -1004,9 +1047,7 @@
 				<div class="flex justify-between text-xs">
 					<span class="text-text-tertiary">Verified Actions</span>
 					<span class="text-text-secondary font-mono tabular-nums">
-						<Datum
-							value={data.usage.verifiedActions}
-						/> / <Datum
+						<Datum value={data.usage.verifiedActions} /> / <Datum
 							value={data.usage.maxVerifiedActions}
 						/>
 					</span>
@@ -1022,11 +1063,7 @@
 				<div class="flex justify-between text-xs">
 					<span class="text-text-tertiary">Emails Sent</span>
 					<span class="text-text-secondary font-mono tabular-nums">
-						<Datum
-							value={data.usage.emailsSent}
-						/> / <Datum
-							value={data.usage.maxEmails}
-						/>
+						<Datum value={data.usage.emailsSent} /> / <Datum value={data.usage.maxEmails} />
 					</span>
 				</div>
 				<div class="bg-surface-overlay h-2 overflow-hidden rounded-full">
@@ -1040,11 +1077,7 @@
 				<div class="flex justify-between text-xs">
 					<span class="text-text-tertiary">SMS Reserved</span>
 					<span class="text-text-secondary font-mono tabular-nums">
-						<Datum
-							value={data.usage.smsSent}
-						/> / <Datum
-							value={data.usage.maxSms}
-						/>
+						<Datum value={data.usage.smsSent} /> / <Datum value={data.usage.maxSms} />
 					</span>
 				</div>
 				<div class="bg-surface-overlay h-2 overflow-hidden rounded-full">
@@ -1066,8 +1099,8 @@
 			<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">Plans</h2>
 			<div class="border-surface-border bg-surface-base rounded-md border px-4 py-3">
 				<p class="text-text-tertiary text-sm">
-					Quotas and seats are enforced today. Features marked "coming" are listed for
-					transparency and aren't available yet.
+					Quotas and seats are enforced today. Features marked "coming" are listed for transparency
+					and aren't available yet.
 				</p>
 			</div>
 			<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1119,6 +1152,59 @@
 		</section>
 	{/if}
 
+	<!-- Explicit public-directory publication boundary -->
+	{#if canEdit}
+		<section id="public-directory-visibility" class="space-y-4">
+			<div>
+				<h2 class="text-text-secondary text-sm font-medium tracking-wider uppercase">
+					Public directory
+				</h2>
+				<p class="text-text-tertiary mt-1 text-xs leading-5">
+					Publishing lists this organization’s public name, description, mission, logo, and
+					aggregate counts. Member identities and private campaign data are never included.
+				</p>
+			</div>
+
+			<div
+				class="border-surface-border bg-surface-base flex flex-col gap-4 rounded-md border p-5 sm:flex-row sm:items-center sm:justify-between"
+			>
+				<div>
+					<p class="text-text-primary text-sm font-medium">
+						{directoryPublic ? 'Listed publicly' : 'Not listed publicly'}
+					</p>
+					<p class="text-text-tertiary mt-1 text-xs leading-5">
+						Changes are atomic in Commons and become visible through the Cloudflare directory cache
+						within one minute.
+					</p>
+				</div>
+				<button
+					type="button"
+					onclick={() => setDirectoryVisibility(!directoryPublic)}
+					disabled={directorySaving}
+					aria-pressed={directoryPublic}
+					class="shrink-0 rounded-lg px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 {directoryPublic
+						? 'border-surface-border-strong text-text-secondary hover:bg-surface-raised border'
+						: 'bg-teal-600 text-white hover:bg-teal-500'}"
+				>
+					{directorySaving
+						? 'Saving…'
+						: directoryPublic
+							? 'Remove from directory'
+							: 'Publish to directory'}
+				</button>
+			</div>
+
+			{#if directoryMessage}
+				<p
+					class="text-xs {directoryMessage.type === 'success' ? 'text-teal-400' : 'text-red-400'}"
+					aria-live="polite"
+				>
+					{directoryMessage.text}
+				</p>
+			{/if}
+		</section>
+	{/if}
+
 	<!-- Branding (Coalition-tier) -->
 	{#if canEdit}
 		<section id="branding-ground" class="space-y-4">
@@ -1160,9 +1246,7 @@
 			>
 				{#if brandingMessage}
 					<p
-						class="text-xs {brandingMessage.type === 'success'
-							? 'text-teal-400'
-							: 'text-red-400'}"
+						class="text-xs {brandingMessage.type === 'success' ? 'text-teal-400' : 'text-red-400'}"
 						role="status"
 					>
 						{brandingMessage.text}
@@ -1184,7 +1268,7 @@
 						</div>
 						<div class="flex items-center gap-2">
 							<label
-								class="border-surface-border bg-surface-overlay hover:border-surface-border-strong cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium text-text-secondary transition-colors {!isCoalition ||
+								class="border-surface-border bg-surface-overlay hover:border-surface-border-strong text-text-secondary cursor-pointer rounded-lg border px-3 py-2 text-sm font-medium transition-colors {!isCoalition ||
 								logoUploading
 									? 'pointer-events-none opacity-50'
 									: ''}"
@@ -1249,8 +1333,8 @@
 						<p class="text-text-primary text-sm font-medium">White-label outbound surfaces</p>
 						<p class="text-text-tertiary mt-1 text-xs leading-5">
 							Removes the "powered by Commons" footer from the report email, embed widget, and
-							scorecard embed. The public verification page keeps its Commons attestation either
-							way — that's the independent third-party proof.
+							scorecard embed. The public verification page keeps its Commons attestation either way
+							— that's the independent third-party proof.
 						</p>
 					</div>
 					<button

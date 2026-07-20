@@ -7,9 +7,10 @@
  * 2. User verification hash → individual sender verification (future)
  */
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params }) => {
@@ -25,6 +26,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		// 3 for uniqueDistricts; exact above). Sub-K cohort sizes would name
 		// specific submitters; above K the count is the public-civic-action signal.
 		const stats = await serverQuery(api.campaigns.getStats, {
+			_secret: getInternalSecret(),
 			campaignId: hash as Id<'campaigns'>
 		});
 
@@ -34,6 +36,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			let summary;
 			try {
 				summary = await serverQuery(api.campaigns.getCampaignPacketSummary, {
+					_secret: getInternalSecret(),
 					campaignId: hash as Id<'campaigns'>
 				});
 			} catch {
@@ -86,7 +89,9 @@ export const load: PageServerLoad = async ({ params }) => {
 	// Try resolving as a district credential hash
 	try {
 		const credential = await serverQuery(api.users.resolveCredentialHash, {
-			credentialHash: hash
+			_secret: getInternalSecret(),
+			credentialHash: hash,
+			asOf: Date.now()
 		});
 
 		if (credential) {
@@ -99,13 +104,25 @@ export const load: PageServerLoad = async ({ params }) => {
 
 			const districts: { slot: number; label: string; value: string }[] = [];
 			if (credential.congressionalDistrict) {
-				districts.push({ slot: 0, label: 'Congressional district', value: credential.congressionalDistrict });
+				districts.push({
+					slot: 0,
+					label: 'Congressional district',
+					value: credential.congressionalDistrict
+				});
 			}
 			if (credential.stateSenateDistrict) {
-				districts.push({ slot: 2, label: 'State senate district', value: credential.stateSenateDistrict });
+				districts.push({
+					slot: 2,
+					label: 'State senate district',
+					value: credential.stateSenateDistrict
+				});
 			}
 			if (credential.stateAssemblyDistrict) {
-				districts.push({ slot: 3, label: 'State assembly district', value: credential.stateAssemblyDistrict });
+				districts.push({
+					slot: 3,
+					label: 'State assembly district',
+					value: credential.stateAssemblyDistrict
+				});
 			}
 
 			return {

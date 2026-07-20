@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
@@ -43,9 +43,10 @@ export const load: PageServerLoad = async ({ parent }) => {
 			memberCount: n.memberCount,
 			ownerOrg: n.ownerOrg,
 			isOwner: n.ownerOrg?.slug === org.slug,
-			joinedAt: typeof n._creationTime === 'number'
-				? new Date(n._creationTime).toISOString()
-				: String(n._creationTime)
+			joinedAt:
+				typeof n._creationTime === 'number'
+					? new Date(n._creationTime).toISOString()
+					: String(n._creationTime)
 		})),
 		canCreate: subscription?.plan === 'coalition' && membership.role === 'owner'
 	};

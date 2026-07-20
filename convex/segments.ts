@@ -4,53 +4,140 @@
  * No PII involved — segments are filter definitions, not data containers.
  */
 
-import { query, mutation, action, internalQuery, internalMutation } from "./_generated/server";
-import { makeFunctionReference } from "convex/server";
-import type { FunctionReference } from "convex/server";
-import { v } from "convex/values";
-import { requireOrgRole } from "./_authHelpers";
-import { getOrgKeyForAction } from "./_orgKeyUnseal";
-import { decryptOrgPii } from "./_orgKey";
-import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import { query, mutation, action, internalQuery, internalMutation } from './_generated/server';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
+import { v } from 'convex/values';
+import { requireOrgRole } from './_authHelpers';
+import { getOrgKeyForAction } from './_orgKeyUnseal';
+import { decryptOrgPii } from './_orgKey';
+import { internal } from './_generated/api';
+import type { Id } from './_generated/dataModel';
 import {
-  filterNeedsActionContext,
-  matchFilter,
-  normalizeSegmentFilter,
-  type SegmentActionContext,
-} from "./_segmentMatch";
+	filterNeedsActionContext,
+	matchFilter,
+	MAX_SEGMENT_CONDITIONS,
+	normalizeSegmentFilter,
+	type SegmentActionContext
+} from './_segmentMatch';
+import {
+	attachSupporterTagProjection,
+	assertSupporterBrowseReady,
+	detachSupporterTagProjection,
+	MAX_ORG_TAGS,
+	MAX_SUPPORTER_TAGS,
+	SUPPORTER_BROWSE_VERSION
+} from './lib/supporterBrowse';
+import {
+	assertSupporterAudienceActionReady,
+	SUPPORTER_AUDIENCE_ACTION_VERSION
+} from './lib/supporterAudience';
+
+export const MAX_SEGMENTS_PER_ORG = 100;
+export const MAX_SEGMENT_FILTER_BYTES = 16 * 1024;
+const MAX_SEGMENT_NAME_BYTES = 200;
+const MAX_SEGMENT_CONDITION_ID_BYTES = 128;
+const MAX_SEGMENT_CONDITION_KEY_BYTES = 64;
+const segmentEncoder = new TextEncoder();
+
+function byteLength(value: string): number {
+	return segmentEncoder.encode(value).byteLength;
+}
+
+/**
+ * `segments.filters` is intentionally `v.any()` for legacy compatibility, so
+ * direct Convex writers need a closed byte and cardinality envelope of their
+ * own. Normalize away unknown top-level/condition properties after validating
+ * the fields that survive into the persisted document.
+ */
+function boundedSegmentFilter(raw: unknown): ReturnType<typeof normalizeSegmentFilter> {
+	let serialized: string | undefined;
+	try {
+		serialized = JSON.stringify(raw);
+	} catch {
+		throw new Error('SEGMENT_FILTER_INVALID');
+	}
+	if (!serialized || byteLength(serialized) > MAX_SEGMENT_FILTER_BYTES) {
+		throw new Error(`SEGMENT_FILTER_TOO_LARGE (max ${MAX_SEGMENT_FILTER_BYTES} bytes)`);
+	}
+	if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+		throw new Error('SEGMENT_FILTER_INVALID');
+	}
+
+	const candidate = raw as Record<string, unknown>;
+	if (candidate.logic !== 'AND' && candidate.logic !== 'OR') {
+		throw new Error('SEGMENT_FILTER_LOGIC_INVALID');
+	}
+	if (!Array.isArray(candidate.conditions)) {
+		throw new Error('SEGMENT_FILTER_CONDITIONS_INVALID');
+	}
+	if (candidate.conditions.length > MAX_SEGMENT_CONDITIONS) {
+		throw new Error(`SEGMENT_FILTER_TOO_MANY_CONDITIONS (max ${MAX_SEGMENT_CONDITIONS})`);
+	}
+	for (const condition of candidate.conditions) {
+		if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
+			throw new Error('SEGMENT_FILTER_CONDITION_INVALID');
+		}
+		const row = condition as Record<string, unknown>;
+		if (
+			typeof row.id !== 'string' ||
+			row.id.trim().length === 0 ||
+			byteLength(row.id) > MAX_SEGMENT_CONDITION_ID_BYTES
+		) {
+			throw new Error('SEGMENT_FILTER_CONDITION_ID_INVALID');
+		}
+		for (const key of ['field', 'operator'] as const) {
+			if (
+				typeof row[key] !== 'string' ||
+				row[key].trim().length === 0 ||
+				byteLength(row[key]) > MAX_SEGMENT_CONDITION_KEY_BYTES
+			) {
+				throw new Error(`SEGMENT_FILTER_CONDITION_${key.toUpperCase()}_INVALID`);
+			}
+		}
+		if (!('value' in row) || row.value === undefined) {
+			throw new Error('SEGMENT_FILTER_CONDITION_VALUE_INVALID');
+		}
+	}
+
+	return normalizeSegmentFilter(raw);
+}
 
 type ExportMatchingRow = {
-  _id: string;
-  encryptedEmail: string | null;
-  encryptedName: string | null;
-  encryptedPhone: string | null;
-  // emailHash flows through so the action wrapper's version-aware
-  // `decryptOrgPii` dispatcher can derive the v=org-2 AAD without an
-  // extra round-trip to the row. v=org-1 (legacy) blobs still decrypt
-  // via the `supporter:${_id}` fallback path.
-  emailHash: string;
-  tagNames: string[];
+	_id: string;
+	encryptedEmail: string | null;
+	encryptedName: string | null;
+	encryptedPhone: string | null;
+	// emailHash flows through so the action wrapper's version-aware
+	// `decryptOrgPii` dispatcher can derive the v=org-2 AAD without an
+	// extra round-trip to the row. v=org-1 (legacy) blobs still decrypt
+	// via the `supporter:${_id}` fallback path.
+	emailHash: string;
+	tagNames: string[];
 };
 
 type ExportDecryptedRow = {
-  email: string;
-  name: string;
-  phone: string;
-  tags: string;
+	email: string;
+	name: string;
+	phone: string;
+	tags: string;
 };
 
-const getOrganizationBySlugRef = makeFunctionReference<"query">("organizations:getBySlug") as unknown as FunctionReference<
-  "query",
-  "public",
-  { slug: string },
-  { _id: Id<"organizations"> } | null
+const getOrganizationBySlugRef = makeFunctionReference<'query'>(
+	'organizations:getBySlug'
+) as unknown as FunctionReference<
+	'query',
+	'public',
+	{ slug: string },
+	{ _id: Id<'organizations'> } | null
 >;
-const exportMatchingRef = makeFunctionReference<"query">("segments:exportMatching") as unknown as FunctionReference<
-  "query",
-  "public",
-  { slug: string; filters: unknown },
-  ExportMatchingRow[]
+const exportMatchingRef = makeFunctionReference<'query'>(
+	'segments:exportMatching'
+) as unknown as FunctionReference<
+	'query',
+	'public',
+	{ slug: string; filters: unknown },
+	ExportMatchingRow[]
 >;
 
 // =============================================================================
@@ -61,28 +148,30 @@ const exportMatchingRef = makeFunctionReference<"query">("segments:exportMatchin
  * List saved segments for an org.
  */
 export const list = query({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
-    const { org } = await requireOrgRole(ctx, slug, "member");
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'member');
 
-    const segments = await ctx.db
-      .query("segments")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
+		const segments = await ctx.db
+			.query('segments')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.order('desc')
+			.take(MAX_SEGMENTS_PER_ORG + 1);
 
-    // Sort by _creationTime descending (newest first)
-    segments.sort((a, b) => b._creationTime - a._creationTime);
+		if (segments.length > MAX_SEGMENTS_PER_ORG) {
+			throw new Error('SEGMENT_CARDINALITY_REPAIR_REQUIRED');
+		}
 
-    return {
-      segments: segments.map((s) => ({
-        _id: s._id,
-        name: s.name,
-        filters: s.filters,
-        createdAt: s._creationTime,
-        updatedAt: s.updatedAt,
-      })),
-    };
-  },
+		return {
+			segments: segments.map((s) => ({
+				_id: s._id,
+				name: s.name,
+				filters: s.filters,
+				createdAt: s._creationTime,
+				updatedAt: s.updatedAt
+			}))
+		};
+	}
 });
 
 // =============================================================================
@@ -93,86 +182,95 @@ export const list = query({
  * Create a new segment. Requires editor+ role.
  */
 export const create = mutation({
-  args: {
-    slug: v.string(),
-    name: v.string(),
-    filters: v.any(),
-  },
-  handler: async (ctx, args) => {
-    const { org, userId } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		name: v.string(),
+		filters: v.any()
+	},
+	handler: async (ctx, args) => {
+		const { org, userId } = await requireOrgRole(ctx, args.slug, 'editor');
 
-    const name = args.name?.trim();
-    if (!name || name.length > 100) {
-      throw new Error("Segment name is required (max 100 chars)");
-    }
+		const name = args.name?.trim();
+		if (!name || name.length > 100 || byteLength(name) > MAX_SEGMENT_NAME_BYTES) {
+			throw new Error('Segment name is required (max 100 chars)');
+		}
+		const filters = boundedSegmentFilter(args.filters);
+		const existing = await ctx.db
+			.query('segments')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_SEGMENTS_PER_ORG + 1);
+		if (existing.length >= MAX_SEGMENTS_PER_ORG) {
+			throw new Error(`SEGMENT_LIMIT_EXCEEDED (max ${MAX_SEGMENTS_PER_ORG})`);
+		}
 
-    const now = Date.now();
-    const segmentId = await ctx.db.insert("segments", {
-      orgId: org._id,
-      name,
-      filters: args.filters,
-      createdBy: userId,
-      updatedAt: now,
-    });
+		const now = Date.now();
+		const segmentId = await ctx.db.insert('segments', {
+			orgId: org._id,
+			name,
+			filters,
+			createdBy: userId,
+			updatedAt: now
+		});
 
-    const segment = await ctx.db.get(segmentId);
-    return { segment };
-  },
+		const segment = await ctx.db.get(segmentId);
+		return { segment };
+	}
 });
 
 /**
  * Update an existing segment. Requires editor+ role.
  */
 export const update = mutation({
-  args: {
-    slug: v.string(),
-    segmentId: v.id("segments"),
-    name: v.string(),
-    filters: v.any(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		segmentId: v.id('segments'),
+		name: v.string(),
+		filters: v.any()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 
-    const existing = await ctx.db.get(args.segmentId);
-    if (!existing || existing.orgId !== org._id) {
-      throw new Error("Segment not found");
-    }
+		const existing = await ctx.db.get(args.segmentId);
+		if (!existing || existing.orgId !== org._id) {
+			throw new Error('Segment not found');
+		}
 
-    const name = args.name?.trim();
-    if (!name || name.length > 100) {
-      throw new Error("Segment name is required (max 100 chars)");
-    }
+		const name = args.name?.trim();
+		if (!name || name.length > 100 || byteLength(name) > MAX_SEGMENT_NAME_BYTES) {
+			throw new Error('Segment name is required (max 100 chars)');
+		}
+		const filters = boundedSegmentFilter(args.filters);
 
-    await ctx.db.patch(args.segmentId, {
-      name,
-      filters: args.filters,
-      updatedAt: Date.now(),
-    });
+		await ctx.db.patch(args.segmentId, {
+			name,
+			filters,
+			updatedAt: Date.now()
+		});
 
-    const updated = await ctx.db.get(args.segmentId);
-    return { segment: updated };
-  },
+		const updated = await ctx.db.get(args.segmentId);
+		return { segment: updated };
+	}
 });
 
 /**
  * Delete a segment. Requires editor+ role.
  */
 export const remove = mutation({
-  args: {
-    slug: v.string(),
-    segmentId: v.id("segments"),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		segmentId: v.id('segments')
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 
-    const existing = await ctx.db.get(args.segmentId);
-    if (!existing || existing.orgId !== org._id) {
-      throw new Error("Segment not found");
-    }
+		const existing = await ctx.db.get(args.segmentId);
+		if (!existing || existing.orgId !== org._id) {
+			throw new Error('Segment not found');
+		}
 
-    await ctx.db.delete(args.segmentId);
-    return { ok: true };
-  },
+		await ctx.db.delete(args.segmentId);
+		return { ok: true };
+	}
 });
 
 // =============================================================================
@@ -187,7 +285,9 @@ export const remove = mutation({
 // well below Convex's per-query row-scan cap. The action then iterates
 // pages until isDone — bulk ops scale to any org size via cursor-based
 // dispatch rather than a fixed bulk hard cap.
-const SEGMENT_PAGE_SIZE = 256;
+const SEGMENT_PAGE_SIZE = 100;
+const SEGMENT_PAGE_MAX_BYTES = 512 * 1024;
+const SEGMENT_CURSOR_MAX_BYTES = 2_048;
 // Action-level safety bound: stop after this many pages per invocation
 // so a single action call doesn't blow past Convex's 10-min execution
 // budget. Operators re-invoke for follow-on coverage; bulk mutations
@@ -204,107 +304,96 @@ const SEGMENT_MAX_PAGES_PER_INVOCATION = 200;
  * supporter set.
  */
 export const getMatchingSupportersPage = internalQuery({
-  args: {
-    orgId: v.id("organizations"),
-    filters: v.any(),
-    paginationCursor: v.optional(v.string()),
-    pageSize: v.number(),
-  },
-  handler: async (ctx, { orgId, filters, paginationCursor, pageSize }) => {
-    const result = await ctx.db
-      .query("supporters")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .paginate({ numItems: pageSize, cursor: paginationCursor ?? null });
+	args: {
+		orgId: v.id('organizations'),
+		filters: v.any(),
+		paginationCursor: v.optional(v.string()),
+		pageSize: v.number()
+	},
+	handler: async (ctx, { orgId, filters, paginationCursor, pageSize }) => {
+		const typedFilter = boundedSegmentFilter(filters);
+		if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > SEGMENT_PAGE_SIZE) {
+			throw new Error('SEGMENT_PAGE_SIZE_INVALID');
+		}
+		if (paginationCursor !== undefined && byteLength(paginationCursor) > SEGMENT_CURSOR_MAX_BYTES) {
+			throw new Error('SEGMENT_CURSOR_INVALID');
+		}
+		const noFilter = typedFilter.conditions.length === 0;
+		const needsActionContext = !noFilter && filterNeedsActionContext(typedFilter);
+		await assertSupporterBrowseReady(ctx);
+		if (needsActionContext) await assertSupporterAudienceActionReady(ctx);
 
-    const typedFilter = normalizeSegmentFilter(filters);
-    const noFilter = typedFilter.conditions.length === 0;
-    const needsActionContext = !noFilter && filterNeedsActionContext(typedFilter);
+		const result = await ctx.db
+			.query('supporters')
+			.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+			.paginate({
+				numItems: pageSize,
+				cursor: paginationCursor ?? null,
+				maximumRowsRead: pageSize + 1,
+				maximumBytesRead: SEGMENT_PAGE_MAX_BYTES
+			});
+		if (result.pageStatus === 'SplitRequired') throw new Error('SEGMENT_PAGE_SPLIT_REQUIRED');
 
-    const matches: Array<{
-      _id: Id<"supporters">;
-      encryptedEmail: string | null;
-      encryptedName: string | null;
-      encryptedPhone: string | null;
-      // emailHash flows up so callers (exportMatching) can derive the
-      // v=org-2 AAD for decryption without re-reading.
-      emailHash: string;
-      tagIds: string[];
-      creationTime: number;
-    }> = [];
+		const matches: Array<{
+			_id: Id<'supporters'>;
+			encryptedEmail: string | null;
+			encryptedName: string | null;
+			encryptedPhone: string | null;
+			// emailHash flows up so callers (exportMatching) can derive the
+			// v=org-2 AAD for decryption without re-reading.
+			emailHash: string;
+			tagIds: string[];
+			creationTime: number;
+		}> = [];
 
-    for (const s of result.page) {
-      let tagIdsArr: string[] = [];
-      let isMatch = noFilter;
-      if (!noFilter) {
-        const tags = await ctx.db
-          .query("supporterTags")
-          .withIndex("by_supporterId", (idx) => idx.eq("supporterId", s._id))
-          .collect();
-        tagIdsArr = tags.map((t) => t.tagId as string);
-        let actionContext: SegmentActionContext | undefined;
-        if (needsActionContext) {
-          const actions = await ctx.db
-            .query("campaignActions")
-            .withIndex("by_orgId_supporterId", (idx) =>
-              idx.eq("orgId", orgId).eq("supporterId", s._id),
-            )
-            .collect();
-          actionContext = {
-            campaignIds: new Set(actions.map((action) => String(action.campaignId))),
-            districtHashes: new Set(
-              actions
-                .map((action) => action.districtHash?.trim().toLowerCase())
-                .filter((hash): hash is string => !!hash),
-            ),
-            districtCodes: new Set(
-              actions
-                .map((action) => action.districtCode?.trim().toUpperCase())
-                .filter((code): code is string => !!code),
-            ),
-            maxEngagementTier: actions.reduce(
-              (max, action) => Math.max(max, action.engagementTier ?? 0),
-              0,
-            ),
-          };
-        }
-        isMatch = matchFilter(
-          s,
-          new Set(tagIdsArr),
-          typedFilter,
-          actionContext,
-        );
-      }
-      if (isMatch) {
-        // Re-read tags only if filter passed AND filter didn't already
-        // load them (the noFilter path skipped the per-row fetch).
-        if (noFilter) {
-          const tags = await ctx.db
-            .query("supporterTags")
-            .withIndex("by_supporterId", (idx) =>
-              idx.eq("supporterId", s._id),
-            )
-            .collect();
-          tagIdsArr = tags.map((t) => t.tagId as string);
-        }
-        matches.push({
-          _id: s._id,
-          encryptedEmail: s.encryptedEmail ?? null,
-          encryptedName: s.encryptedName ?? null,
-          encryptedPhone: s.encryptedPhone ?? null,
-          emailHash: s.emailHash,
-          tagIds: tagIdsArr,
-          creationTime: s._creationTime,
-        });
-      }
-    }
+		for (const s of result.page) {
+			if (s.supporterBrowseVersion !== SUPPORTER_BROWSE_VERSION) {
+				throw new Error('SEGMENT_SUPPORTER_BROWSE_NOT_PROJECTED');
+			}
+			const projectedTagIds = s.browseTagIds ?? [];
+			if (projectedTagIds.length > MAX_SUPPORTER_TAGS) {
+				throw new Error('SUPPORTER_TAG_LIMIT_EXCEEDED');
+			}
+			const tagIdsArr = projectedTagIds.map(String);
+			let isMatch = noFilter;
+			if (!noFilter) {
+				let actionContext: SegmentActionContext | undefined;
+				if (needsActionContext) {
+					if (s.audienceActionProjectionVersion !== SUPPORTER_AUDIENCE_ACTION_VERSION) {
+						throw new Error('SEGMENT_SUPPORTER_ACTIONS_NOT_PROJECTED');
+					}
+					if (s.audienceActionProjectionOverflow) {
+						throw new Error('SEGMENT_SUPPORTER_ACTION_PROJECTION_OVERFLOW');
+					}
+					actionContext = {
+						campaignIds: new Set((s.audienceCampaignIds ?? []).map(String)),
+						districtHashes: new Set(s.audienceDistrictHashes ?? []),
+						districtCodes: new Set(s.audienceDistrictCodes ?? []),
+						maxEngagementTier: s.audienceMaxEngagementTier ?? 0
+					};
+				}
+				isMatch = matchFilter(s, new Set(tagIdsArr), typedFilter, actionContext);
+			}
+			if (isMatch) {
+				matches.push({
+					_id: s._id,
+					encryptedEmail: s.encryptedEmail ?? null,
+					encryptedName: s.encryptedName ?? null,
+					encryptedPhone: s.encryptedPhone ?? null,
+					emailHash: s.emailHash,
+					tagIds: tagIdsArr,
+					creationTime: s._creationTime
+				});
+			}
+		}
 
-    return {
-      matches,
-      continueCursor: result.continueCursor,
-      isDone: result.isDone,
-      scannedThisPage: result.page.length,
-    };
-  },
+		return {
+			matches,
+			continueCursor: result.continueCursor,
+			isDone: result.isDone,
+			scannedThisPage: result.page.length
+		};
+	}
 });
 
 /**
@@ -313,26 +402,20 @@ export const getMatchingSupportersPage = internalQuery({
  * lookup per row). Returns the number of new links created.
  */
 export const bulkInsertTagLinks = internalMutation({
-  args: {
-    supporterIds: v.array(v.id("supporters")),
-    tagId: v.id("tags"),
-  },
-  handler: async (ctx, { supporterIds, tagId }) => {
-    let inserted = 0;
-    for (const supporterId of supporterIds) {
-      const existing = await ctx.db
-        .query("supporterTags")
-        .withIndex("by_supporterId_tagId", (idx) =>
-          idx.eq("supporterId", supporterId).eq("tagId", tagId),
-        )
-        .first();
-      if (!existing) {
-        await ctx.db.insert("supporterTags", { supporterId, tagId });
-        inserted++;
-      }
-    }
-    return { inserted };
-  },
+	args: {
+		supporterIds: v.array(v.id('supporters')),
+		tagId: v.id('tags')
+	},
+	handler: async (ctx, { supporterIds, tagId }) => {
+		let inserted = 0;
+		for (const supporterId of supporterIds) {
+			const result = await attachSupporterTagProjection(ctx, { supporterId, tagId });
+			if (result.created) {
+				inserted++;
+			}
+		}
+		return { inserted };
+	}
 });
 
 /**
@@ -341,26 +424,26 @@ export const bulkInsertTagLinks = internalMutation({
  * number of links deleted.
  */
 export const bulkDeleteTagLinks = internalMutation({
-  args: {
-    supporterIds: v.array(v.id("supporters")),
-    tagId: v.id("tags"),
-  },
-  handler: async (ctx, { supporterIds, tagId }) => {
-    let deleted = 0;
-    for (const supporterId of supporterIds) {
-      const existing = await ctx.db
-        .query("supporterTags")
-        .withIndex("by_supporterId_tagId", (idx) =>
-          idx.eq("supporterId", supporterId).eq("tagId", tagId),
-        )
-        .first();
-      if (existing) {
-        await ctx.db.delete(existing._id);
-        deleted++;
-      }
-    }
-    return { deleted };
-  },
+	args: {
+		supporterIds: v.array(v.id('supporters')),
+		tagId: v.id('tags')
+	},
+	handler: async (ctx, { supporterIds, tagId }) => {
+		let deleted = 0;
+		for (const supporterId of supporterIds) {
+			const existing = await ctx.db
+				.query('supporterTags')
+				.withIndex('by_supporterId_tagId', (idx) =>
+					idx.eq('supporterId', supporterId).eq('tagId', tagId)
+				)
+				.first();
+			if (existing) {
+				await detachSupporterTagProjection(ctx, existing);
+				deleted++;
+			}
+		}
+		return { deleted };
+	}
 });
 
 /**
@@ -369,69 +452,69 @@ export const bulkDeleteTagLinks = internalMutation({
  * this AFTER fetching the user context to get the orgId for downstream
  * paginated reads.
  */
-const getOrgForSegmentActionRef = makeFunctionReference<"query">(
-  "segments:getOrgForSegmentAction",
+const getOrgForSegmentActionRef = makeFunctionReference<'query'>(
+	'segments:getOrgForSegmentAction'
 ) as unknown as FunctionReference<
-  "query",
-  "internal",
-  { slug: string; requiredRole: "member" | "editor" },
-  { orgId: Id<"organizations"> }
+	'query',
+	'internal',
+	{ slug: string; requiredRole: 'member' | 'editor' },
+	{ orgId: Id<'organizations'> }
 >;
 
 export const getOrgForSegmentAction = internalQuery({
-  args: {
-    slug: v.string(),
-    requiredRole: v.union(v.literal("member"), v.literal("editor")),
-  },
-  handler: async (ctx, { slug, requiredRole }) => {
-    const { org } = await requireOrgRole(ctx, slug, requiredRole);
-    return { orgId: org._id };
-  },
+	args: {
+		slug: v.string(),
+		requiredRole: v.union(v.literal('member'), v.literal('editor'))
+	},
+	handler: async (ctx, { slug, requiredRole }) => {
+		const { org } = await requireOrgRole(ctx, slug, requiredRole);
+		return { orgId: org._id };
+	}
 });
 
-const getMatchingSupportersPageRef = makeFunctionReference<"query">(
-  "segments:getMatchingSupportersPage",
+const getMatchingSupportersPageRef = makeFunctionReference<'query'>(
+	'segments:getMatchingSupportersPage'
 ) as unknown as FunctionReference<
-  "query",
-  "internal",
-  {
-    orgId: Id<"organizations">;
-    filters: unknown;
-    paginationCursor?: string;
-    pageSize: number;
-  },
-  {
-    matches: Array<{
-      _id: Id<"supporters">;
-      encryptedEmail: string | null;
-      encryptedName: string | null;
-      encryptedPhone: string | null;
-      emailHash: string;
-      tagIds: string[];
-      creationTime: number;
-    }>;
-    continueCursor: string;
-    isDone: boolean;
-    scannedThisPage: number;
-  }
+	'query',
+	'internal',
+	{
+		orgId: Id<'organizations'>;
+		filters: unknown;
+		paginationCursor?: string;
+		pageSize: number;
+	},
+	{
+		matches: Array<{
+			_id: Id<'supporters'>;
+			encryptedEmail: string | null;
+			encryptedName: string | null;
+			encryptedPhone: string | null;
+			emailHash: string;
+			tagIds: string[];
+			creationTime: number;
+		}>;
+		continueCursor: string;
+		isDone: boolean;
+		scannedThisPage: number;
+	}
 >;
 
-const bulkInsertTagLinksRef = makeFunctionReference<"mutation">(
-  "segments:bulkInsertTagLinks",
+const bulkInsertTagLinksRef = makeFunctionReference<'mutation'>(
+	'segments:bulkInsertTagLinks'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  { supporterIds: Id<"supporters">[]; tagId: Id<"tags"> },
-  { inserted: number }
+	'mutation',
+	'internal',
+	{ supporterIds: Id<'supporters'>[]; tagId: Id<'tags'> },
+	{ inserted: number }
 >;
 
-const bulkDeleteTagLinksRef = makeFunctionReference<"mutation">(
-  "segments:bulkDeleteTagLinks",
+const bulkDeleteTagLinksRef = makeFunctionReference<'mutation'>(
+	'segments:bulkDeleteTagLinks'
 ) as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  { supporterIds: Id<"supporters">[]; tagId: Id<"tags"> },
-  { deleted: number }
+	'mutation',
+	'internal',
+	{ supporterIds: Id<'supporters'>[]; tagId: Id<'tags'> },
+	{ deleted: number }
 >;
 
 /**
@@ -444,36 +527,36 @@ const bulkDeleteTagLinksRef = makeFunctionReference<"mutation">(
  * whether to re-invoke for resume.
  */
 export const countMatching = action({
-  args: { slug: v.string(), filters: v.any() },
-  handler: async (
-    ctx,
-    { slug, filters },
-  ): Promise<{ count: number; partial: boolean; scanned: number }> => {
-    const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
-      slug,
-      requiredRole: "member",
-    });
+	args: { slug: v.string(), filters: v.any() },
+	handler: async (
+		ctx,
+		{ slug, filters }
+	): Promise<{ count: number; partial: boolean; scanned: number }> => {
+		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
+			slug,
+			requiredRole: 'member'
+		});
 
-    let count = 0;
-    let scanned = 0;
-    let isDone = false;
-    let cursor: string | undefined;
-    let pages = 0;
-    while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
-      const page = await ctx.runQuery(getMatchingSupportersPageRef, {
-        orgId,
-        filters,
-        paginationCursor: cursor,
-        pageSize: SEGMENT_PAGE_SIZE,
-      });
-      pages++;
-      count += page.matches.length;
-      scanned += page.scannedThisPage;
-      isDone = page.isDone;
-      cursor = page.continueCursor;
-    }
-    return { count, partial: !isDone, scanned };
-  },
+		let count = 0;
+		let scanned = 0;
+		let isDone = false;
+		let cursor: string | undefined;
+		let pages = 0;
+		while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
+			const page = await ctx.runQuery(getMatchingSupportersPageRef, {
+				orgId,
+				filters,
+				paginationCursor: cursor,
+				pageSize: SEGMENT_PAGE_SIZE
+			});
+			pages++;
+			count += page.matches.length;
+			scanned += page.scannedThisPage;
+			isDone = page.isDone;
+			cursor = page.continueCursor;
+		}
+		return { count, partial: !isDone, scanned };
+	}
 });
 
 /**
@@ -484,56 +567,53 @@ export const countMatching = action({
  * a re-invocation Just Works.
  */
 export const bulkApplyTag = action({
-  args: {
-    slug: v.string(),
-    tagId: v.id("tags"),
-    filters: v.any(),
-  },
-  handler: async (
-    ctx,
-    { slug, tagId, filters },
-  ): Promise<{ affected: number; partial: boolean; scanned: number }> => {
-    const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
-      slug,
-      requiredRole: "editor",
-    });
+	args: {
+		slug: v.string(),
+		tagId: v.id('tags'),
+		filters: v.any()
+	},
+	handler: async (
+		ctx,
+		{ slug, tagId, filters }
+	): Promise<{ affected: number; partial: boolean; scanned: number }> => {
+		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
+			slug,
+			requiredRole: 'editor'
+		});
 
-    // Validate tag belongs to this org (internal query — auth gate is
-    // implicit via requireOrgRole above).
-    const tagOrgRow = await ctx.runQuery(
-      internal.segments.getTagOrgForActionInternal,
-      { tagId },
-    );
-    if (!tagOrgRow || String(tagOrgRow.orgId) !== String(orgId)) {
-      throw new Error("Tag not found");
-    }
+		// Validate tag belongs to this org (internal query — auth gate is
+		// implicit via requireOrgRole above).
+		const tagOrgRow = await ctx.runQuery(internal.segments.getTagOrgForActionInternal, { tagId });
+		if (!tagOrgRow || String(tagOrgRow.orgId) !== String(orgId)) {
+			throw new Error('Tag not found');
+		}
 
-    let affected = 0;
-    let scanned = 0;
-    let isDone = false;
-    let cursor: string | undefined;
-    let pages = 0;
-    while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
-      const page = await ctx.runQuery(getMatchingSupportersPageRef, {
-        orgId,
-        filters,
-        paginationCursor: cursor,
-        pageSize: SEGMENT_PAGE_SIZE,
-      });
-      pages++;
-      scanned += page.scannedThisPage;
-      if (page.matches.length > 0) {
-        const result = await ctx.runMutation(bulkInsertTagLinksRef, {
-          supporterIds: page.matches.map((m) => m._id),
-          tagId,
-        });
-        affected += result.inserted;
-      }
-      isDone = page.isDone;
-      cursor = page.continueCursor;
-    }
-    return { affected, partial: !isDone, scanned };
-  },
+		let affected = 0;
+		let scanned = 0;
+		let isDone = false;
+		let cursor: string | undefined;
+		let pages = 0;
+		while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
+			const page = await ctx.runQuery(getMatchingSupportersPageRef, {
+				orgId,
+				filters,
+				paginationCursor: cursor,
+				pageSize: SEGMENT_PAGE_SIZE
+			});
+			pages++;
+			scanned += page.scannedThisPage;
+			if (page.matches.length > 0) {
+				const result = await ctx.runMutation(bulkInsertTagLinksRef, {
+					supporterIds: page.matches.map((m) => m._id),
+					tagId
+				});
+				affected += result.inserted;
+			}
+			isDone = page.isDone;
+			cursor = page.continueCursor;
+		}
+		return { affected, partial: !isDone, scanned };
+	}
 });
 
 /**
@@ -542,75 +622,73 @@ export const bulkApplyTag = action({
  * partial completion is safe to resume.
  */
 export const bulkRemoveTag = action({
-  args: {
-    slug: v.string(),
-    tagId: v.id("tags"),
-    filters: v.any(),
-  },
-  handler: async (
-    ctx,
-    { slug, tagId, filters },
-  ): Promise<{ affected: number; partial: boolean; scanned: number }> => {
-    const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
-      slug,
-      requiredRole: "editor",
-    });
-    const tagOrgRow = await ctx.runQuery(
-      internal.segments.getTagOrgForActionInternal,
-      { tagId },
-    );
-    if (!tagOrgRow || String(tagOrgRow.orgId) !== String(orgId)) {
-      throw new Error("Tag not found");
-    }
+	args: {
+		slug: v.string(),
+		tagId: v.id('tags'),
+		filters: v.any()
+	},
+	handler: async (
+		ctx,
+		{ slug, tagId, filters }
+	): Promise<{ affected: number; partial: boolean; scanned: number }> => {
+		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
+			slug,
+			requiredRole: 'editor'
+		});
+		const tagOrgRow = await ctx.runQuery(internal.segments.getTagOrgForActionInternal, { tagId });
+		if (!tagOrgRow || String(tagOrgRow.orgId) !== String(orgId)) {
+			throw new Error('Tag not found');
+		}
 
-    let affected = 0;
-    let scanned = 0;
-    let isDone = false;
-    let cursor: string | undefined;
-    let pages = 0;
-    while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
-      const page = await ctx.runQuery(getMatchingSupportersPageRef, {
-        orgId,
-        filters,
-        paginationCursor: cursor,
-        pageSize: SEGMENT_PAGE_SIZE,
-      });
-      pages++;
-      scanned += page.scannedThisPage;
-      if (page.matches.length > 0) {
-        const result = await ctx.runMutation(bulkDeleteTagLinksRef, {
-          supporterIds: page.matches.map((m) => m._id),
-          tagId,
-        });
-        affected += result.deleted;
-      }
-      isDone = page.isDone;
-      cursor = page.continueCursor;
-    }
-    return { affected, partial: !isDone, scanned };
-  },
+		let affected = 0;
+		let scanned = 0;
+		let isDone = false;
+		let cursor: string | undefined;
+		let pages = 0;
+		while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
+			const page = await ctx.runQuery(getMatchingSupportersPageRef, {
+				orgId,
+				filters,
+				paginationCursor: cursor,
+				pageSize: SEGMENT_PAGE_SIZE
+			});
+			pages++;
+			scanned += page.scannedThisPage;
+			if (page.matches.length > 0) {
+				const result = await ctx.runMutation(bulkDeleteTagLinksRef, {
+					supporterIds: page.matches.map((m) => m._id),
+					tagId
+				});
+				affected += result.deleted;
+			}
+			isDone = page.isDone;
+			cursor = page.continueCursor;
+		}
+		return { affected, partial: !isDone, scanned };
+	}
 });
 
 /** Internal query: lookup tag's orgId for action-side ownership check. */
 export const getTagOrgForActionInternal = internalQuery({
-  args: { tagId: v.id("tags") },
-  handler: async (ctx, { tagId }) => {
-    const tag = await ctx.db.get(tagId);
-    if (!tag) return null;
-    return { orgId: tag.orgId };
-  },
+	args: { tagId: v.id('tags') },
+	handler: async (ctx, { tagId }) => {
+		const tag = await ctx.db.get(tagId);
+		if (!tag) return null;
+		return { orgId: tag.orgId };
+	}
 });
 
 /** Internal query: read org's full tag dictionary (small per-org table). */
 export const getOrgTagsInternal = internalQuery({
-  args: { orgId: v.id("organizations") },
-  handler: async (ctx, { orgId }) => {
-    const tags = await ctx.db
-      .query("tags")
-      .withIndex("by_orgId", (q) => q.eq("orgId", orgId))
-      .collect();
-    return tags.map((t) => ({ _id: String(t._id), name: t.name }));
-  },
+	args: { orgId: v.id('organizations') },
+	handler: async (ctx, { orgId }) => {
+		const tags = await ctx.db
+			.query('tags')
+			.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+			.take(MAX_ORG_TAGS + 1);
+		if (tags.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
+		return tags.map((t) => ({ _id: String(t._id), name: t.name }));
+	}
 });
 
 /**
@@ -623,82 +701,78 @@ export const getOrgTagsInternal = internalQuery({
  * resolution.
  */
 export const exportMatching = action({
-  args: { slug: v.string(), filters: v.any() },
-  handler: async (
-    ctx,
-    { slug, filters },
-  ): Promise<ExportMatchingRow[] & { partial?: boolean }> => {
-    const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
-      slug,
-      requiredRole: "editor",
-    });
+	args: { slug: v.string(), filters: v.any() },
+	handler: async (ctx, { slug, filters }): Promise<ExportMatchingRow[] & { partial?: boolean }> => {
+		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
+			slug,
+			requiredRole: 'editor'
+		});
 
-    const orgTags: Array<{ _id: string; name: string }> = await ctx.runQuery(
-      internal.segments.getOrgTagsInternal,
-      { orgId },
-    );
-    const tagNameByIdMap = new Map<string, string>(
-      orgTags.map((t) => [t._id, t.name]),
-    );
+		const orgTags: Array<{ _id: string; name: string }> = await ctx.runQuery(
+			internal.segments.getOrgTagsInternal,
+			{ orgId }
+		);
+		const tagNameByIdMap = new Map<string, string>(orgTags.map((t) => [t._id, t.name]));
 
-    const collected: Array<{
-      _id: string;
-      encryptedEmail: string | null;
-      encryptedName: string | null;
-      encryptedPhone: string | null;
-      emailHash: string;
-      tagNames: string[];
-      creationTime: number;
-    }> = [];
+		const collected: Array<{
+			_id: string;
+			encryptedEmail: string | null;
+			encryptedName: string | null;
+			encryptedPhone: string | null;
+			emailHash: string;
+			tagNames: string[];
+			creationTime: number;
+		}> = [];
 
-    let isDone = false;
-    let cursor: string | undefined;
-    let pages = 0;
-    while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
-      const page = await ctx.runQuery(getMatchingSupportersPageRef, {
-        orgId,
-        filters,
-        paginationCursor: cursor,
-        pageSize: SEGMENT_PAGE_SIZE,
-      });
-      pages++;
-      for (const m of page.matches) {
-        const tagNames: string[] = [];
-        for (const tagId of m.tagIds) {
-          const name = tagNameByIdMap.get(tagId);
-          if (name) tagNames.push(name);
-        }
-        collected.push({
-          _id: String(m._id),
-          encryptedEmail: m.encryptedEmail,
-          encryptedName: m.encryptedName,
-          encryptedPhone: m.encryptedPhone,
-          emailHash: m.emailHash,
-          tagNames,
-          creationTime: m.creationTime,
-        });
-      }
-      isDone = page.isDone;
-      cursor = page.continueCursor;
-    }
+		let isDone = false;
+		let cursor: string | undefined;
+		let pages = 0;
+		while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
+			const page = await ctx.runQuery(getMatchingSupportersPageRef, {
+				orgId,
+				filters,
+				paginationCursor: cursor,
+				pageSize: SEGMENT_PAGE_SIZE
+			});
+			pages++;
+			for (const m of page.matches) {
+				const tagNames: string[] = [];
+				for (const tagId of m.tagIds) {
+					const name = tagNameByIdMap.get(tagId);
+					if (name) tagNames.push(name);
+				}
+				collected.push({
+					_id: String(m._id),
+					encryptedEmail: m.encryptedEmail,
+					encryptedName: m.encryptedName,
+					encryptedPhone: m.encryptedPhone,
+					emailHash: m.emailHash,
+					tagNames,
+					creationTime: m.creationTime
+				});
+			}
+			isDone = page.isDone;
+			cursor = page.continueCursor;
+		}
 
-    // Order by creationTime desc (canonical export contract).
-    collected.sort((a, b) => b.creationTime - a.creationTime);
+		// Order by creationTime desc (canonical export contract).
+		collected.sort((a, b) => b.creationTime - a.creationTime);
 
-    // Strip the transient `creationTime` ordering key from the export
-    // shape but keep `emailHash` so the consumer (`exportDecrypted`)
-    // can dispatch v=org-1 vs v=org-2 decryption per row.
-    const result: ExportMatchingRow[] & { partial?: boolean } =
-      collected.map(({ creationTime: _ct, ...row }) => row) as ExportMatchingRow[] & { partial?: boolean };
-    if (!isDone) {
-      // Action hit the per-invocation page cap. Caller re-invokes if
-      // they need the rest; the result is otherwise complete up to
-      // that point (no synthetic truncation marker row — `partial`
-      // flag is the canonical signal now).
-      result.partial = true;
-    }
-    return result;
-  },
+		// Strip the transient `creationTime` ordering key from the export
+		// shape but keep `emailHash` so the consumer (`exportDecrypted`)
+		// can dispatch v=org-1 vs v=org-2 decryption per row.
+		const result: ExportMatchingRow[] & { partial?: boolean } = collected.map(
+			({ creationTime: _ct, ...row }) => row
+		) as ExportMatchingRow[] & { partial?: boolean };
+		if (!isDone) {
+			// Action hit the per-invocation page cap. Caller re-invokes if
+			// they need the rest; the result is otherwise complete up to
+			// that point (no synthetic truncation marker row — `partial`
+			// flag is the canonical signal now).
+			result.partial = true;
+		}
+		return result;
+	}
 });
 
 /**
@@ -709,27 +783,29 @@ export const exportMatching = action({
  * action's explicit precondition and runs BEFORE any decryption.
  */
 export const requireExportAuth = internalQuery({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }): Promise<{ orgId: Id<"organizations"> }> => {
-    const { org } = await requireOrgRole(ctx, slug, "editor");
-    return { orgId: org._id };
-  },
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }): Promise<{ orgId: Id<'organizations'> }> => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		return { orgId: org._id };
+	}
 });
 
-const requireExportAuthRef = makeFunctionReference<"query">("segments:requireExportAuth") as unknown as FunctionReference<
-  "query",
-  "internal",
-  { slug: string },
-  { orgId: Id<"organizations"> }
+const requireExportAuthRef = makeFunctionReference<'query'>(
+	'segments:requireExportAuth'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ slug: string },
+	{ orgId: Id<'organizations'> }
 >;
 
-const exportMatchingActionRef = makeFunctionReference<"action">(
-  "segments:exportMatching",
+const exportMatchingActionRef = makeFunctionReference<'action'>(
+	'segments:exportMatching'
 ) as unknown as FunctionReference<
-  "action",
-  "public",
-  { slug: string; filters: unknown },
-  ExportMatchingRow[] & { partial?: boolean }
+	'action',
+	'public',
+	{ slug: string; filters: unknown },
+	ExportMatchingRow[] & { partial?: boolean }
 >;
 
 /**
@@ -737,76 +813,81 @@ const exportMatchingActionRef = makeFunctionReference<"action">(
  * Returns plaintext email/name/phone for CSV export.
  */
 export const exportDecrypted = action({
-  args: { slug: v.string(), filters: v.any() },
-  handler: async (ctx, { slug, filters }): Promise<ExportDecryptedRow[]> => {
-    // Bound slug; filters is v.any() and is validated downstream.
-    if (slug.length > 64) throw new Error("SLUG_TOO_LARGE");
+	args: { slug: v.string(), filters: v.any() },
+	handler: async (ctx, { slug, filters }): Promise<ExportDecryptedRow[]> => {
+		// Bound slug; filters is v.any() and is validated downstream.
+		if (slug.length > 64) throw new Error('SLUG_TOO_LARGE');
 
-    // Explicit auth + editor-role gate at the action's top. An indirect
-    // check via the inner `exportMatchingRef` query's `requireOrgRole`
-    // is functional but fragile: a refactor that inlines the supporter
-    // fetch (or replaces the inner query) would silently expose
-    // decrypted PII to any authenticated caller. Any path through this
-    // action must clear the explicit gate before touching the org key.
-    await ctx.runQuery(requireExportAuthRef, { slug });
+		// Explicit auth + editor-role gate at the action's top. An indirect
+		// check via the inner `exportMatchingRef` query's `requireOrgRole`
+		// is functional but fragile: a refactor that inlines the supporter
+		// fetch (or replaces the inner query) would silently expose
+		// decrypted PII to any authenticated caller. Any path through this
+		// action must clear the explicit gate before touching the org key.
+		await ctx.runQuery(requireExportAuthRef, { slug });
 
+		// Get org context
+		const org = await ctx.runQuery(getOrganizationBySlugRef, { slug });
+		if (!org) throw new Error('Organization not found');
 
-    // Get org context
-    const org = await ctx.runQuery(getOrganizationBySlugRef, { slug });
-    if (!org) throw new Error("Organization not found");
+		const orgKey = await getOrgKeyForAction(ctx, org._id);
+		if (!orgKey) throw new Error('Organization encryption not configured');
 
-    const orgKey = await getOrgKeyForAction(ctx, org._id);
-    if (!orgKey) throw new Error("Organization encryption not configured");
+		// Call the action variant of exportMatching (paginated dispatch).
+		// The action handles its own editor-role auth gate via
+		// `getOrgForSegmentAction`, so the belt-and-suspenders contract
+		// holds: both this action's `requireExportAuth` and the inner
+		// action's gate must pass before any decryption work runs.
+		const supporters = await ctx.runAction(exportMatchingActionRef, { slug, filters });
 
-    // Call the action variant of exportMatching (paginated dispatch).
-    // The action handles its own editor-role auth gate via
-    // `getOrgForSegmentAction`, so the belt-and-suspenders contract
-    // holds: both this action's `requireExportAuth` and the inner
-    // action's gate must pass before any decryption work runs.
-    const supporters = await ctx.runAction(exportMatchingActionRef, { slug, filters });
+		// Truncation is surfaced via the `partial` boolean flag attached to
+		// the result array. If the action hit its page cap, log so
+		// operators see partial exports in the function logs.
+		if ((supporters as ExportMatchingRow[] & { partial?: boolean }).partial) {
+			console.warn(
+				`[segments.exportDecrypted] export partial — action hit SEGMENT_MAX_PAGES_PER_INVOCATION for slug=${slug}; re-invoke for more rows`
+			);
+		}
+		const dataRows = supporters;
 
-    // Truncation is surfaced via the `partial` boolean flag attached to
-    // the result array. If the action hit its page cap, log so
-    // operators see partial exports in the function logs.
-    if ((supporters as ExportMatchingRow[] & { partial?: boolean }).partial) {
-      console.warn(
-        `[segments.exportDecrypted] export partial — action hit SEGMENT_MAX_PAGES_PER_INVOCATION for slug=${slug}; re-invoke for more rows`,
-      );
-    }
-    const dataRows = supporters;
+		// Decrypt each supporter's PII
+		return Promise.all(
+			dataRows.map(async (s) => {
+				let email = '[encrypted]';
+				let name = '';
+				let phone = '';
 
-    // Decrypt each supporter's PII
-    return Promise.all(
-      dataRows.map(async (s) => {
-        let email = "[encrypted]";
-        let name = "";
-        let phone = "";
+				// Version-aware dispatch via `decryptOrgPii`. v=org-2 blobs use
+				// the row's emailHash for AAD; v=org-1 legacy blobs use the
+				// `supporter:${_id}` AAD. Mixed data decrypts through a single
+				// call site.
+				if (s.encryptedEmail) {
+					try {
+						const parsed = JSON.parse(s.encryptedEmail);
+						email = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, 'email');
+					} catch {
+						/* decryption failed */
+					}
+				}
+				if (s.encryptedName) {
+					try {
+						const parsed = JSON.parse(s.encryptedName);
+						name = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, 'name');
+					} catch {
+						/* decryption failed */
+					}
+				}
+				if (s.encryptedPhone) {
+					try {
+						const parsed = JSON.parse(s.encryptedPhone);
+						phone = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, 'phone');
+					} catch {
+						/* decryption failed */
+					}
+				}
 
-        // Version-aware dispatch via `decryptOrgPii`. v=org-2 blobs use
-        // the row's emailHash for AAD; v=org-1 legacy blobs use the
-        // `supporter:${_id}` AAD. Mixed data decrypts through a single
-        // call site.
-        if (s.encryptedEmail) {
-          try {
-            const parsed = JSON.parse(s.encryptedEmail);
-            email = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, "email");
-          } catch { /* decryption failed */ }
-        }
-        if (s.encryptedName) {
-          try {
-            const parsed = JSON.parse(s.encryptedName);
-            name = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, "name");
-          } catch { /* decryption failed */ }
-        }
-        if (s.encryptedPhone) {
-          try {
-            const parsed = JSON.parse(s.encryptedPhone);
-            phone = await decryptOrgPii(parsed, orgKey, s.emailHash, `supporter:${s._id}`, "phone");
-          } catch { /* decryption failed */ }
-        }
-
-        return { email, name, phone, tags: s.tagNames?.join("; ") ?? "" };
-      }),
-    );
-  },
+				return { email, name, phone, tags: s.tagNames?.join('; ') ?? '' };
+			})
+		);
+	}
 });

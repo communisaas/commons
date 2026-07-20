@@ -4,7 +4,7 @@
  */
 
 import { error, fail, type Actions } from '@sveltejs/kit';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
@@ -62,12 +62,29 @@ export const actions: Actions = {
 			description: description || undefined
 		});
 		if (result.error === 'invalid_url') return fail(400, { error: 'URL is malformed' });
-		if (result.error === 'invalid_url_scheme')
-			return fail(400, { error: 'URL must use http or https' });
-		if (result.error === 'empty_events')
-			return fail(400, { error: 'Select at least one event' });
+		if (result.error === 'url_too_long') return fail(400, { error: 'URL is too long' });
+		if (result.error === 'invalid_url_scheme') return fail(400, { error: 'URL must use HTTPS' });
+		if (result.error === 'destination_credentials')
+			return fail(400, { error: 'Webhook URLs cannot contain credentials' });
+		if (result.error === 'destination_fragment')
+			return fail(400, { error: 'Webhook URLs cannot contain fragments' });
+		if (result.error === 'destination_private')
+			return fail(400, { error: 'Private, local, and reserved destinations are not allowed' });
+		if (result.error === 'destination_not_allowed')
+			return fail(400, { error: 'This destination is not in the trusted webhook egress policy' });
+		if (result.error === 'destination_policy_invalid')
+			return fail(503, { error: 'Webhook egress is not configured for this deployment' });
+		if (result.error === 'empty_events') return fail(400, { error: 'Select at least one event' });
+		if (result.error === 'too_many_events') return fail(400, { error: 'Too many event entries' });
+		if (result.error === 'event_too_long') return fail(400, { error: 'An event name is too long' });
 		if (result.error === 'unknown_event')
 			return fail(400, { error: `Unknown event: ${result.event}` });
+		if (result.error === 'description_too_long')
+			return fail(400, { error: 'Description is too long' });
+		if (result.error === 'subscription_limit')
+			return fail(409, { error: 'This organization already has the maximum of 8 webhooks' });
+		if (result.error === 'creation_throttled')
+			return fail(429, { error: 'Webhook creation is temporarily rate limited' });
 
 		// signingSecret returned ONCE — return as flash data so the page can
 		// render it for the user to copy. They will never see it again.
@@ -85,6 +102,8 @@ export const actions: Actions = {
 			enabled: enabledRaw === null ? undefined : enabledRaw === 'true'
 		});
 		if (result.error === 'not_found') return fail(404, { error: 'Webhook not found' });
+		if (result.error === 'subscription_limit')
+			return fail(409, { error: 'This organization already has 8 enabled webhooks' });
 		return { updated: true };
 	},
 	rotate: async ({ request, params }) => {

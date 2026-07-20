@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * GET /api/embed/scorecard/[id]
@@ -13,6 +14,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const { id } = params;
 
 	const result = await serverQuery(api.legislation.getDmScorecard, {
+		_secret: getInternalSecret(),
 		identifier: id
 	});
 	if (!result) throw error(404, 'Decision-maker not found');
@@ -27,6 +29,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	if (orgSlug) {
 		try {
 			const branding = await serverQuery(api.organizations.getPublicBrandingBySlug, {
+				_secret: getInternalSecret(),
 				slug: orgSlug
 			});
 			whiteLabel = branding?.whiteLabel ?? false;

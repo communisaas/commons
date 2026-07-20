@@ -3,63 +3,67 @@ import { FEATURES } from '$lib/config/features';
 
 import { selectLandingSurface } from '$lib/core/topic/landing-surface';
 import {
-	getCachedPublicRelations,
+	getCachedPublicDiscoveryGraphSurface,
 	getCachedPublicTemplates
 } from '$lib/server/public-template-queries';
 
-export const load: PageServerLoad = async ({ depends, url, platform }) => {
+type PublicTemplates = Awaited<ReturnType<typeof getCachedPublicTemplates>>;
+type PublicGraphRelations = Pick<
+	Awaited<ReturnType<typeof getCachedPublicDiscoveryGraphSurface>>,
+	'conceptRelations' | 'twinEdges'
+>;
+
+export const load: PageServerLoad = async ({ depends, setHeaders, url, platform }) => {
 	// Cache across client-side navigations — only re-fetch when invalidated
 	depends('data:templates');
 	const showGraph = selectLandingSurface(url) === 'graph';
 	const excludeCwc = !FEATURES.CONGRESSIONAL;
 
-	// Degrade gracefully: a transient SSR→Convex failure (e.g. an intermittent
-	// connect-timeout) should render an empty homepage, not a hard 500. Mirrors
-	// the guarded Convex calls in +layout.server.ts.
+	// Degrade gracefully when the producer-published R2 generation is missing,
+	// expired, or fails its public contract. Anonymous SSR never falls through to
+	// Convex; an empty homepage is safer than inventing mixed cache authority.
 	const cacheContext = { url, platform };
 	let templatesLoadFailed = false;
-	const templatesPromise = getCachedPublicTemplates(
-		cacheContext,
-		// Keep CWC templates out of public discovery until congressional launch.
-		excludeCwc
-	).catch((err) => {
-		templatesLoadFailed = true;
-		console.error(
-			'[Page] templates.listPublic failed (transient):',
-			err instanceof Error ? err.message : String(err)
-		);
-		return [];
-	});
-
-	// One materialized relation read over the public set: measured twins plus tags
-	// that cluster tightly in mean-centered space fold into one concept, and templates sharing
-	// a tight concept get a subordinate `kind:'concept'` edge. The server-only tag
-	// vectors are consumed there and never cross — only `{a,b,concept,kind}` tuples
-	// and a tag→concept label map do. Guarded the same way as the edges above so a
-	// transient Convex timeout degrades to no concept edges (the graph still paints
-	// twin + family), never a hard 500. At a corpus too thin to form any tight
-	// cross-template concept — the honest state at the seed, before tag embeddings
-	// are backfilled — `edges` is simply empty, and the graph's concept legend item
-	// stays hidden. That empty result is expected, not a failure.
-	const relationsPromise = showGraph
-		? getCachedPublicRelations(cacheContext, excludeCwc).catch((err) => {
-				console.error(
-					'[Page] templates.publicDiscoveryRelations failed (transient):',
-					err instanceof Error ? err.message : String(err)
-				);
-				return {
-					twinEdges: [],
-					conceptRelations: { edges: [], conceptMap: {} }
-				};
-			})
-		: Promise.resolve({
-				twinEdges: [],
-				conceptRelations: { edges: [], conceptMap: {} }
+	let templates: PublicTemplates = [];
+	let relations: PublicGraphRelations = {
+		twinEdges: [],
+		conceptRelations: { edges: [], conceptMap: {} }
+	};
+	if (showGraph) {
+		try {
+			const graph = await getCachedPublicDiscoveryGraphSurface(cacheContext, excludeCwc);
+			// Exact-deployment release probes use this as a direct assertion that
+			// the atomic list+relations artifact was present and validated. It is
+			// deliberately absent from every fallback/error response.
+			setHeaders({
+				'x-public-discovery-graph': 'ready',
+				'x-public-discovery-graph-generation': graph.generation
 			});
-
-	// The list and combined-relation reads share one latency window. List and
-	// spectrum surfaces skip the relation read entirely.
-	const [templates, relations] = await Promise.all([templatesPromise, relationsPromise]);
+			templates = graph.templates;
+			relations = {
+				twinEdges: graph.twinEdges,
+				conceptRelations: graph.conceptRelations
+			};
+		} catch (err) {
+			templatesLoadFailed = true;
+			console.error(
+				'[Page] public discovery graph R2 publication unavailable:',
+				err instanceof Error ? err.message : String(err)
+			);
+			// The graph is one atomic public artifact. Do not spend a third R2 read
+			// or combine independently certified generations when it is missing.
+		}
+	} else {
+		try {
+			templates = await getCachedPublicTemplates(cacheContext, excludeCwc);
+		} catch (err) {
+			templatesLoadFailed = true;
+			console.error(
+				'[Page] public template-list R2 publication unavailable:',
+				err instanceof Error ? err.message : String(err)
+			);
+		}
+	}
 
 	return {
 		templates,

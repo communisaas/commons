@@ -9,7 +9,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
@@ -34,8 +34,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		status: status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status) ? status : undefined,
-		type: type && ['LETTER', 'EVENT', 'FORM'].includes(type) ? type : undefined});
+		status:
+			status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status) ? status : undefined,
+		type: type && ['LETTER', 'EVENT', 'FORM'].includes(type) ? type : undefined
+	});
 
 	const data = result.items.map((c: any) => ({
 		id: c._id,
@@ -76,14 +78,27 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('BAD_REQUEST', 'Invalid JSON body', 400);
 	}
 
-	const { title, type, body: campaignBody, templateId, targetJurisdiction, targetCountry } = body as {
-		title?: string; type?: string; body?: string; templateId?: string; targetJurisdiction?: string; targetCountry?: string;
+	const {
+		title,
+		type,
+		body: campaignBody,
+		templateId,
+		targetJurisdiction,
+		targetCountry
+	} = body as {
+		title?: string;
+		type?: string;
+		body?: string;
+		templateId?: string;
+		targetJurisdiction?: string;
+		targetCountry?: string;
 	};
 
 	if (!title || typeof title !== 'string' || !title.trim()) {
 		return apiError('BAD_REQUEST', 'Title is required', 400);
 	}
-	if (title.length > 200) return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
+	if (title.length > 200)
+		return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
 	if (campaignBody && typeof campaignBody === 'string' && campaignBody.length > 50000) {
 		return apiError('BAD_REQUEST', 'Body must be 50,000 characters or fewer', 400);
 	}
@@ -93,7 +108,11 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (targetJurisdiction && !VALID_JURISDICTIONS.includes(targetJurisdiction as JurisdictionType)) {
 		return apiError('BAD_REQUEST', `Invalid jurisdiction: ${targetJurisdiction}`, 400);
 	}
-	if (targetCountry && typeof targetCountry === 'string' && !VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)) {
+	if (
+		targetCountry &&
+		typeof targetCountry === 'string' &&
+		!VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)
+	) {
 		return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 	}
 
@@ -108,7 +127,8 @@ export const POST: RequestHandler = async ({ request }) => {
 		// Form-input string cast; Convex args validator rejects malformed Ids.
 		templateId: templateId ? (templateId as Id<'templates'>) : undefined,
 		targetJurisdiction: targetJurisdiction || undefined,
-		targetCountry: targetCountry?.toUpperCase() || 'US'});
+		targetCountry: targetCountry?.toUpperCase() || 'US'
+	});
 
 	return apiOk(
 		{

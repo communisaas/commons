@@ -1,0 +1,83 @@
+{
+	"version": 1,
+	"zone": {
+		"accountId": "019d1184e655db74b7589794a2a2a533",
+		"name": "commons.email",
+		"plan": "Free Website"
+	},
+	"ruleset": {
+		"kind": "zone",
+		"phase": "http_ratelimit",
+		"scope": {
+			"inventoryPath": "config/anonymous-dynamic-route-cost-inventory.json",
+			"methodScope": "all",
+			"exactPaths": [
+				"/",
+				"/api/release-origin",
+				"/api/waitlist",
+				"/api/templates",
+				"/browse",
+				"/deliberation",
+				"/directory",
+				"/governance",
+				"/org",
+				"/unsubscribe"
+			],
+			"prefixes": [
+				"/accountability/",
+				"/api/auth/passkey/",
+				"/api/c/",
+				"/api/campaigns/",
+				"/api/d/",
+				"/api/debates/",
+				"/api/dm/",
+				"/api/e/",
+				"/api/email/confirm/",
+				"/api/embed/",
+				"/api/ground/",
+				"/api/location/",
+				"/api/positions/count/",
+				"/api/positions/engagement-by-district/",
+				"/api/proofs/",
+				"/api/submissions/",
+				"/api/templates/",
+				"/c/",
+				"/d/",
+				"/dm/",
+				"/e/",
+				"/embed/",
+				"/n/",
+				"/og/",
+				"/org/invite/",
+				"/s/",
+				"/template-modal/",
+				"/unsubscribe/",
+				"/v/",
+				"/verify/"
+			]
+		},
+		"capacityModel": {
+			"workersFreeAccountRequestsPerDay": 100000,
+			"nominalSingleIpColoAdmissionsPerDay": 51840,
+			"admissionsPerPeriod": 6,
+			"periodsPerDay": 8640,
+			"warning": "Cloudflare counters are per IP and data center and can enforce after a delay; this is a nominal single-bucket bound, never a global quota guarantee."
+		},
+		"rules": [
+			{
+				"action": "block",
+				"description": "Commons public dynamic route cost shield v1",
+				"enabled": true,
+				"expression": "(http.request.uri.path eq \"/\" or http.request.uri.path eq \"/api/release-origin\" or http.request.uri.path eq \"/api/waitlist\" or http.request.uri.path eq \"/api/templates\" or http.request.uri.path eq \"/browse\" or http.request.uri.path eq \"/deliberation\" or http.request.uri.path eq \"/directory\" or http.request.uri.path eq \"/governance\" or http.request.uri.path eq \"/org\" or http.request.uri.path eq \"/unsubscribe\" or starts_with(http.request.uri.path, \"/accountability/\") or starts_with(http.request.uri.path, \"/api/auth/passkey/\") or starts_with(http.request.uri.path, \"/api/c/\") or starts_with(http.request.uri.path, \"/api/campaigns/\") or starts_with(http.request.uri.path, \"/api/d/\") or starts_with(http.request.uri.path, \"/api/debates/\") or starts_with(http.request.uri.path, \"/api/dm/\") or starts_with(http.request.uri.path, \"/api/e/\") or starts_with(http.request.uri.path, \"/api/email/confirm/\") or starts_with(http.request.uri.path, \"/api/embed/\") or starts_with(http.request.uri.path, \"/api/ground/\") or starts_with(http.request.uri.path, \"/api/location/\") or starts_with(http.request.uri.path, \"/api/positions/count/\") or starts_with(http.request.uri.path, \"/api/positions/engagement-by-district/\") or starts_with(http.request.uri.path, \"/api/proofs/\") or starts_with(http.request.uri.path, \"/api/submissions/\") or starts_with(http.request.uri.path, \"/api/templates/\") or starts_with(http.request.uri.path, \"/c/\") or starts_with(http.request.uri.path, \"/d/\") or starts_with(http.request.uri.path, \"/dm/\") or starts_with(http.request.uri.path, \"/e/\") or starts_with(http.request.uri.path, \"/embed/\") or starts_with(http.request.uri.path, \"/n/\") or starts_with(http.request.uri.path, \"/og/\") or starts_with(http.request.uri.path, \"/org/invite/\") or starts_with(http.request.uri.path, \"/s/\") or starts_with(http.request.uri.path, \"/template-modal/\") or starts_with(http.request.uri.path, \"/unsubscribe/\") or starts_with(http.request.uri.path, \"/v/\") or starts_with(http.request.uri.path, \"/verify/\"))",
+				"ratelimit": {
+					"characteristics": ["cf.colo.id", "ip.src"],
+					"mitigation_timeout": 10,
+					"period": 10,
+					"requests_per_period": 6,
+					"requests_to_origin": false
+				},
+				"ref": "commons_public_dynamic_cost_shield_v1"
+			}
+		]
+	}
+}

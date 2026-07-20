@@ -10,7 +10,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
 // Bounds reflect realistic ciphertext sizes for org-encrypted PII.
@@ -118,13 +118,10 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	return apiOk(data, {
 		cursor: result.cursor,
 		hasMore: result.hasMore,
-		// `total` counts only the scanned window. When `truncated` is true the org
-		// exceeds `scanLimit` rows and the oldest fall outside this enumeration —
-		// page with `cursor` to walk what is in-window; do not treat `total` as the
-		// org's complete supporter count.
-		total: result.total,
-		truncated: result.truncated,
-		scanLimit: result.scanLimit
+		// Unfiltered pages expose the exact write-maintained org total. Filtered
+		// totals are omitted rather than rebuilding the roster just to count it;
+		// the opaque cursor still traverses every matching database page.
+		...(result.total === undefined ? {} : { total: result.total })
 	});
 };
 

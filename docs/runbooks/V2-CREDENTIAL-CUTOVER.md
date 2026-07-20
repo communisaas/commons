@@ -47,7 +47,8 @@ export CONVEX_ADMIN_KEY=<ops key>
 npx tsx scripts/cutover-v1-credentials.ts
 ```
 
-Output lists every active credential that would be patched. No DB write.
+Output scans every active credential in bounded 50-row pages and lists a
+20-row sample. No DB write.
 Read and verify:
 - Total count matches expectation (beta-tester count).
 - `With districtCommitment` bucket should be ~= total (post-sponge-24
@@ -65,7 +66,9 @@ Send email / in-app notice:
 npx tsx scripts/cutover-v1-credentials.ts --execute
 ```
 
-Runs:
+Runs in bounded 50-row pages, restarting each read at the beginning of the
+shrinking active-credential index so a cursor cannot skip rows moved out of
+the range by the preceding mutation batch:
 - For each active credential: sets `revokedAt: now`.
 - Where `districtCommitment` is set: also sets `revocationStatus: "pending"`
   and schedules `internal.users.emitOnChainRevocation(credentialId)`.

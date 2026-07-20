@@ -262,12 +262,11 @@
 					<div class="mt-3 rounded-lg border border-teal-500/25 bg-teal-500/5 px-4 py-3">
 						<p class="text-text-secondary text-sm font-medium">Delivers to Congress</p>
 						<p class="text-text-tertiary mt-1 text-xs leading-relaxed">
-							This action sends each supporter's message to their House and Senate offices
-							through the Communicating with Congress system. Supporters who have verified
-							their address deliver. Supporters who have verified with a government ID
-							deliver too — and their messages carry a higher-assurance badge in the proof
-							packet, so a staffer can see at a glance how many came from gov-ID-verified
-							constituents.
+							This action sends each supporter's message to their House and Senate offices through
+							the Communicating with Congress system. Supporters who have verified their address
+							deliver. Supporters who have verified with a government ID deliver too — and their
+							messages carry a higher-assurance badge in the proof packet, so a staffer can see at a
+							glance how many came from gov-ID-verified constituents.
 						</p>
 					</div>
 				{/if}
@@ -305,6 +304,22 @@
 						<option value={template.id}>{template.title}</option>
 					{/each}
 				</select>
+				{#if data.templatePagination.nextPageUrl || !data.templatePagination.isFirstPage}
+					<p class="text-text-quaternary mt-2 text-xs">
+						Showing up to 50 templates at a time.
+						{#if !data.templatePagination.isFirstPage}
+							<a class="text-teal-400 hover:underline" href={data.templatePagination.firstPageUrl}
+								>Newest page</a
+							>
+						{/if}
+						{#if data.templatePagination.nextPageUrl}
+							<a
+								class="ml-2 text-teal-400 hover:underline"
+								href={data.templatePagination.nextPageUrl}>Older templates</a
+							>
+						{/if}
+					</p>
+				{/if}
 			</div>
 		</div>
 
@@ -335,8 +350,8 @@
 
 			{#if debateEnabled}
 				<p class="text-text-tertiary text-xs">
-					The threshold saves with this draft. A debate doesn't open until that many verified
-					people have participated.
+					The threshold saves with this draft. A debate doesn't open until that many verified people
+					have participated.
 				</p>
 				<div>
 					<label for="debateThreshold" class="text-text-secondary mb-1.5 block text-sm font-medium">
@@ -384,9 +399,9 @@
 						<span class="text-text-quaternary font-mono tabular-nums">Pending</span>
 					</div>
 					<p class="text-text-quaternary mt-1 text-[11px] leading-relaxed">
-						The packet shows both counts so a recipient office can weigh reach against
-						gov-ID-grade assurance. Address verification is the delivery floor; gov-ID
-						verification raises the badge, not the bar.
+						The packet shows both counts so a recipient office can weigh reach against gov-ID-grade
+						assurance. Address verification is the delivery floor; gov-ID verification raises the
+						badge, not the bar.
 					</p>
 				</div>
 			{/if}

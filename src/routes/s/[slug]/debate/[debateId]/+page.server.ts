@@ -1,18 +1,28 @@
 import type { PageServerLoad } from './$types';
-import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
+import type {
+	AIResolutionData,
+	ArgumentAIScore,
+	MinerEvaluation
+} from '$lib/stores/debateState.svelte';
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 const onchainId = (value: string | number | null | undefined): string =>
 	value == null ? '' : String(value);
 
-export const load: PageServerLoad = async ({ params, locals, parent }) => {
+export const load: PageServerLoad = async ({ params, locals, parent, url }) => {
 	const { debateId } = params;
 	const parentData = await parent();
+	const argumentCursor = url.searchParams.get('argumentCursor');
+	if (argumentCursor && argumentCursor.length > 2_048) throw error(400, 'Invalid argument cursor');
 
 	const result = await serverQuery(api.debates.getPublicDetail, {
-		identifier: debateId
+		_secret: getInternalSecret(),
+		identifier: debateId,
+		cursor: argumentCursor,
+		limit: 25
 	});
 
 	if (!result) throw error(404, 'Debate not found');
@@ -26,10 +36,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	// accepts a Convex doc id via the same query but redirects 302 to the
 	// canonical form so shared URLs do not encode storage ids.
 	if (result.canonicalDebateId && result.canonicalDebateId !== debateId) {
-		throw redirect(
-			302,
-			`/s/${params.slug}/debate/${result.canonicalDebateId}`
-		);
+		throw redirect(302, `/s/${params.slug}/debate/${result.canonicalDebateId}`);
 	}
 
 	// Build AI resolution from Convex data if available
@@ -37,31 +44,24 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	let aiResolution: AIResolutionData | undefined;
 	if (aiBlob) {
 		const scoredArgs = result.arguments.filter((argument) => argument.aiScores != null);
-		const maxWeightedScore = Math.max(
-			...scoredArgs.map((argument) => argument.weightedScore),
-			1
-		);
-		const argumentScores: ArgumentAIScore[] = scoredArgs.map(
-			(argument) => {
-				const dims = (argument.aiScores ?? {}) as Record<string, number>;
-				return {
-					argumentIndex: argument.argumentIndex,
-					dimensions: {
-						reasoning: dims.reasoning ?? 0,
-						accuracy: dims.accuracy ?? 0,
-						evidence: dims.evidence ?? 0,
-						constructiveness: dims.constructiveness ?? 0,
-						feasibility: dims.feasibility ?? 0
-					},
-					weightedAIScore: argument.aiWeighted ?? 0,
-					communityScore: Math.round(
-						(argument.weightedScore / maxWeightedScore) * 10000
-					),
-					finalScore: argument.finalScore ?? 0,
-					modelAgreement: argument.modelAgreement ?? 0
-				};
-			}
-		);
+		const maxWeightedScore = Math.max(...scoredArgs.map((argument) => argument.weightedScore), 1);
+		const argumentScores: ArgumentAIScore[] = scoredArgs.map((argument) => {
+			const dims = (argument.aiScores ?? {}) as Record<string, number>;
+			return {
+				argumentIndex: argument.argumentIndex,
+				dimensions: {
+					reasoning: dims.reasoning ?? 0,
+					accuracy: dims.accuracy ?? 0,
+					evidence: dims.evidence ?? 0,
+					constructiveness: dims.constructiveness ?? 0,
+					feasibility: dims.feasibility ?? 0
+				},
+				weightedAIScore: argument.aiWeighted ?? 0,
+				communityScore: Math.round((argument.weightedScore / maxWeightedScore) * 10000),
+				finalScore: argument.finalScore ?? 0,
+				modelAgreement: argument.modelAgreement ?? 0
+			};
+		});
 
 		const source = (aiBlob.source as string) ?? 'ai_panel';
 		const minerCount = (aiBlob.minerCount as number) ?? undefined;
@@ -74,8 +74,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 			signatureCount: (result.aiSignatureCount as number) ?? 0,
 			quorumRequired: 4,
 			resolutionMethod:
-				(result.resolutionMethod as AIResolutionData['resolutionMethod']) ??
-				'ai_community',
+				(result.resolutionMethod as AIResolutionData['resolutionMethod']) ?? 'ai_community',
 			evaluatedAt: (aiBlob.evaluatedAt as string) ?? undefined,
 			source: source as AIResolutionData['source'],
 			minerCount,
@@ -84,8 +83,7 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 				? new Date(result.appealDeadline as number).toISOString()
 				: undefined,
 			hasAppeal: false,
-			governanceJustification:
-				(result.governanceJustification as string) ?? undefined
+			governanceJustification: (result.governanceJustification as string) ?? undefined
 		};
 	}
 
@@ -100,6 +98,14 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 			: null,
 		template: parentData.template,
 		channel: parentData.channel,
+		argumentPagination: {
+			isFirstPage: argumentCursor === null,
+			hasMore: result.hasMoreArguments,
+			firstPageUrl: url.pathname,
+			nextPageUrl: result.argumentCursor
+				? `${url.pathname}?argumentCursor=${encodeURIComponent(result.argumentCursor)}`
+				: null
+		},
 		debate: {
 			id: result._id,
 			debateIdOnchain: onchainId(result.debateIdOnchain),

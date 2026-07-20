@@ -1,10 +1,9 @@
 // CONVEX: Keep SvelteKit — SMS audience count boundary
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
+import { countSmsAudience } from '$lib/server/sms/audience';
 import type { RequestHandler } from './$types';
 
 const RecipientFilterSchema = z
@@ -35,19 +34,26 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		);
 	}
 
-	const result = (await serverQuery(api.sms.countEligibleRecipientsForFilter, {
-		slug: params.slug,
-		recipientFilter: {
+	let result: Awaited<ReturnType<typeof countSmsAudience>>;
+	try {
+		result = await countSmsAudience(params.slug, {
 			tags: parsed.data.tags as Id<'tags'>[] | undefined,
 			segments: parsed.data.segments as Id<'segments'>[] | undefined,
 			excludeTags: parsed.data.excludeTags as Id<'tags'>[] | undefined
+		});
+	} catch (cause) {
+		const code = cause instanceof Error ? cause.message : 'SMS_AUDIENCE_COUNT_FAILED';
+		if (code.includes('SMS_AUDIENCE_COHORT_TOO_LARGE')) {
+			return json(
+				{
+					error: 'text_audience_too_large',
+					message: 'Text audiences are limited to 10,000 eligible recipients.'
+				},
+				{ status: 422 }
+			);
 		}
-	})) as {
-		eligibleCount: number;
-		batchLimit: number;
-		hasMoreThanBatchLimit: boolean;
-		source: string;
-	};
+		throw cause;
+	}
 
 	return json({
 		eligibleCount: result.eligibleCount,

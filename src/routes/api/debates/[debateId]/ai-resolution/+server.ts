@@ -1,9 +1,10 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * GET /api/debates/[debateId]/ai-resolution
@@ -20,6 +21,7 @@ export const GET: RequestHandler = async ({ params }) => {
 	const { debateId } = params;
 
 	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>
 	});
 	if (!debate) {
@@ -30,7 +32,7 @@ export const GET: RequestHandler = async ({ params }) => {
 	}
 	return json({
 		aiResolution: {
-			...(debate.aiResolution as Record<string, unknown> ?? {}),
+			...((debate.aiResolution as Record<string, unknown>) ?? {}),
 			signatureCount: debate.aiSignatureCount,
 			panelConsensus: debate.aiPanelConsensus,
 			resolutionMethod: debate.resolutionMethod,

@@ -1,5 +1,5 @@
-import { serverMutation, serverQuery } from 'convex-sveltekit';
-import { fail, redirect, type Actions } from '@sveltejs/kit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
+import { error, fail, redirect, type Actions } from '@sveltejs/kit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 
@@ -13,13 +13,24 @@ function asNumber(value: unknown, fallback = 0): number {
 	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
-export const load: PageServerLoad = async ({ parent }) => {
+const CAMPAIGN_FILTERS = ['ALL', 'DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'] as const;
+type CampaignFilter = (typeof CAMPAIGN_FILTERS)[number];
+
+export const load: PageServerLoad = async ({ parent, url }) => {
 	const { org } = await parent();
+	const requestedFilter = (url.searchParams.get('status') ?? 'ALL').toUpperCase();
+	if (!CAMPAIGN_FILTERS.includes(requestedFilter as CampaignFilter)) {
+		throw error(400, 'Invalid campaign status filter');
+	}
+	const filter = requestedFilter as CampaignFilter;
+	const cursor = url.searchParams.get('cursor');
+	if (cursor !== null && cursor.length > 2_048) throw error(400, 'Invalid campaign cursor');
 
 	const [convexResult, statusCounts] = await Promise.all([
 		serverQuery(api.campaigns.list, {
 			slug: org.slug,
-			paginationOpts: { numItems: 100, cursor: null }
+			status: filter === 'ALL' ? undefined : filter,
+			paginationOpts: { numItems: 50, cursor }
 		}),
 		serverQuery(api.campaigns.getStatusCounts, { slug: org.slug })
 	]);
@@ -35,11 +46,16 @@ export const load: PageServerLoad = async ({ parent }) => {
 			templateTitle: typeof c.templateTitle === 'string' ? c.templateTitle : null,
 			debateEnabled: c.debateEnabled === true,
 			debateThreshold: asNumber(c.debateThreshold, 50),
-			updatedAt: typeof c.updatedAt === 'number'
-				? new Date(c.updatedAt).toISOString()
-				: String(c.updatedAt)
+			updatedAt:
+				typeof c.updatedAt === 'number' ? new Date(c.updatedAt).toISOString() : String(c.updatedAt)
 		})),
-		counts: statusCounts
+		counts: statusCounts,
+		filter,
+		pagination: {
+			currentCursor: cursor,
+			nextCursor: convexResult.isDone ? null : convexResult.continueCursor,
+			hasMore: !convexResult.isDone
+		}
 	};
 };
 

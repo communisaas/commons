@@ -1,43 +1,42 @@
 // CONVEX: Keep SvelteKit — complex load (verification packets, analytics, debate chain). Form actions use Convex mutations.
 import { error, fail, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
-import { computeVerificationPacketCached } from '$lib/server/verification-packet';
-import { loadCampaignAnalytics } from '$lib/server/campaign-analytics';
+import { loadCampaignReadModelBundleCached } from '$lib/server/verification-packet';
 import type { PageServerLoad, Actions } from './$types';
 
 function asString(value: unknown, fallback = ''): string {
 	return typeof value === 'string' ? value : fallback;
 }
 
-export const load: PageServerLoad = async ({ params, parent, platform }) => {
+export const load: PageServerLoad = async ({ params, parent, platform, url }) => {
 	const { org, membership } = await parent();
+	const templateCursor = url.searchParams.get('templateCursor');
+	if (templateCursor && templateCursor.length > 2_048) {
+		throw error(400, 'Invalid template pagination cursor');
+	}
 
 	const result = await serverQuery(api.campaigns.getForOrgPage, {
 		slug: params.slug,
-		campaignId: params.id as Id<'campaigns'>
+		campaignId: params.id as Id<'campaigns'>,
+		templatePaginationOpts: { numItems: 50, cursor: templateCursor }
 	});
 
 	if (!result) {
 		throw error(404, 'Campaign not found');
 	}
 
-	const { campaign, templates, debate, actionCount, memberRole } = result;
+	const { campaign, templates, templatePagination, debate, actionCount, memberRole } = result;
 
 	// Compute verification packet and analytics for non-draft campaigns
-	const packetKV = platform?.env?.PACKET_CACHE_KV as
-		| {
-				get(key: string): Promise<string | null>;
-				put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-		  }
-		| undefined;
 	const isActive = campaign.status !== 'DRAFT';
-	const [packet, analytics] = await Promise.all([
-		isActive ? computeVerificationPacketCached(campaign._id, org.id, packetKV) : null,
-		isActive && FEATURES.ANALYTICS_EXPANDED ? loadCampaignAnalytics(campaign._id, org.id) : null
-	]);
+	const readModel = isActive
+		? await loadCampaignReadModelBundleCached(campaign._id, org.id, { url, platform })
+		: null;
+	const packet = readModel?.packet ?? null;
+	const analytics = FEATURES.ANALYTICS_EXPANDED ? (readModel?.analytics ?? null) : null;
 
 	// Strip target emails for non-editor members (PII minimization)
 	const rawTargets = campaign.targets;
@@ -50,6 +49,12 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 					decisionMakerId: typeof t.decisionMakerId === 'string' ? t.decisionMakerId : undefined
 				}))
 			: rawTargets;
+	const firstTemplatePageUrl = new URL(url);
+	firstTemplatePageUrl.searchParams.delete('templateCursor');
+	const nextTemplatePageUrl = new URL(url);
+	if (!templatePagination.isDone) {
+		nextTemplatePageUrl.searchParams.set('templateCursor', templatePagination.continueCursor);
+	}
 
 	return {
 		campaign: {
@@ -73,6 +78,14 @@ export const load: PageServerLoad = async ({ params, parent, platform }) => {
 			id: asString(template._id ?? template.id),
 			title: asString(template.title, 'Untitled template')
 		})),
+		templatePagination: {
+			isFirstPage: templateCursor === null,
+			isDone: templatePagination.isDone,
+			firstPageUrl: `${firstTemplatePageUrl.pathname}${firstTemplatePageUrl.search}`,
+			nextPageUrl: templatePagination.isDone
+				? null
+				: `${nextTemplatePageUrl.pathname}${nextTemplatePageUrl.search}`
+		},
 		packet,
 		analytics,
 		debate: debate

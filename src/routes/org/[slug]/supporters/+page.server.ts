@@ -1,7 +1,7 @@
 // CONVEX: Fully migrated — form actions use Convex tag mutations
 import { fail, redirect } from '@sveltejs/kit';
 
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { PeopleSegmentationGroundData } from '$lib/components/org/os/spaces';
@@ -26,12 +26,10 @@ type SupporterListResult = {
 		verified?: boolean;
 		emailStatus?: string;
 		source?: string | null;
-		tags?: Array<{ _id: string; name: string }>;
+		tagIds?: string[];
 	}>;
 	hasMore: boolean;
 	nextCursor: string | null;
-	truncated?: boolean;
-	scanLimit?: number;
 };
 
 type CampaignListResult = {
@@ -162,8 +160,8 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 				filters: Object.keys(convexFilters).length > 0 ? convexFilters : undefined
 			}) as Promise<SupporterListResult>,
 			serverQuery(api.supporters.getSummaryStats, { orgSlug: org.slug }),
-			// District-of-record is set cardinality — served by a separate
-			// bounded query, not the always-on funnel summary.
+			// Exact org scalar; its Convex reader fails closed until the v2
+			// supporter-audience projection is fully migrated and activated.
 			serverQuery(api.supporters.getDistrictVerifiedCount, { orgSlug: org.slug }).catch(() => null),
 			serverQuery(api.supporters.getTags, { orgSlug: org.slug }),
 			serverQuery(api.campaigns.list, {
@@ -173,7 +171,15 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 			serverQuery(api.segments.list, { slug: org.slug }).catch(() => null)
 		]);
 
-	// Pass encrypted blobs through — client decrypts with org key
+	const tagRows = (tags ?? []).map((tag: Record<string, unknown>) => ({
+		id: String(tag._id ?? tag.id),
+		name: String(tag.name ?? ''),
+		supporterCount: typeof tag.supporterCount === 'number' ? tag.supporterCount : 0
+	}));
+	const tagNameById = new Map(tagRows.map((tag) => [tag.id, tag.name]));
+
+	// Pass encrypted blobs through — client decrypts with org key. Tag names
+	// resolve from the one bounded org directory read, never per supporter.
 	const supporters = convexResult.supporters.map((s) => ({
 		id: s._id,
 		encryptedEmail: s.encryptedEmail ?? null,
@@ -189,10 +195,10 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		emailStatus: s.emailStatus ?? 'subscribed',
 		source: s.source ?? null,
 		createdAt: new Date(s._creationTime).toISOString(),
-		tags: (s.tags ?? []).map((t) => ({
-			id: t._id,
-			name: t.name
-		}))
+		tags: (s.tagIds ?? []).flatMap((tagId) => {
+			const name = tagNameById.get(tagId);
+			return name ? [{ id: tagId, name }] : [];
+		})
 	}));
 
 	return {
@@ -200,22 +206,13 @@ export const load: PageServerLoad = async ({ parent, url }) => {
 		total: summaryStats.total,
 		hasMore: convexResult.hasMore,
 		nextCursor: convexResult.nextCursor,
-		// When the org exceeds the per-query scan cap, the list reflects only the
-		// most recent `scanLimit` rows — surface it so the page can say so.
-		scanCapped: convexResult.truncated ?? false,
-		scanLimit: convexResult.scanLimit ?? null,
-		tags: (tags ?? []).map((t: Record<string, unknown>) => ({
-			id: t._id ?? t.id,
-			name: t.name,
-			supporterCount: t.supporterCount ?? 0
-		})),
+		tags: tagRows,
 		campaigns: campaigns.page.map((c) => ({ id: c._id, title: c.title })),
 		summary: {
 			verified: summaryStats.identityVerified,
 			postal: summaryStats.postalResolved,
-			district: districtVerifiedResult?.districtVerified ?? 0,
-			// True when the district scan saturated its cap — `district` is then a
-			// floor, not an exact count, so the page can render "N+" instead.
+			district: districtVerifiedResult?.districtVerified ?? null,
+			// Compatibility field; the v2 exact projection never truncates.
 			districtTruncated: districtVerifiedResult?.truncated ?? false,
 			imported: summaryStats.imported
 		},

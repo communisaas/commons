@@ -31,7 +31,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { getEmptyTreeRoot } from '$lib/server/smt/revocation-smt';
 
 export const POST: RequestHandler = async ({ request, locals }) => {
@@ -60,7 +60,8 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	const result = await serverQuery(api.revocations.getRevocationSMTPath, {
 		_secret: getInternalSecret(),
-		leafKey: revocationNullifier});
+		leafKey: revocationNullifier
+	});
 
 	const computedEmptyRoot = await getEmptyTreeRoot();
 

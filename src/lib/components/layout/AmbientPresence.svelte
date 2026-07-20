@@ -26,6 +26,7 @@
 
 	// Org memberships — bridge from individual to org layer
 	const orgMemberships = $derived(user?.orgMemberships ?? []);
+	const hasMoreOrgMemberships = $derived(user?.orgMembershipsOverflow?.hasMore ?? false);
 
 	function handleOrgClick(event: MouseEvent, slug: string): void {
 		event.preventDefault();
@@ -169,7 +170,12 @@
 
 			{#if isDropdownOpen}
 				<div class="ambient-dropdown" role="menu" aria-label="Account options">
-					<a href="/profile" class="ambient-dropdown-item" role="menuitem" onclick={handleProfileClick}>
+					<a
+						href="/profile"
+						class="ambient-dropdown-item"
+						role="menuitem"
+						onclick={handleProfileClick}
+					>
 						<User class="ambient-dropdown-icon" />
 						<span>Profile</span>
 					</a>
@@ -198,11 +204,19 @@
 								<div class="ambient-org-info">
 									<span class="ambient-org-name">{org.orgName}</span>
 									<span class="ambient-org-meta">
-										{org.role}{#if org.activeCampaignCount > 0}<span class="ambient-org-dot"></span>{org.activeCampaignCount} campaign{org.activeCampaignCount !== 1 ? 's' : ''}{/if}
+										{org.role}{#if (org.activeCampaignCount ?? 0) > 0}<span class="ambient-org-dot"
+											></span>{org.activeCampaignCount} campaign{org.activeCampaignCount !== 1
+												? 's'
+												: ''}{/if}
 									</span>
 								</div>
 							</a>
 						{/each}
+						{#if hasMoreOrgMemberships}
+							<a href="/org" class="ambient-dropdown-item" role="menuitem">
+								<span>More organizations…</span>
+							</a>
+						{/if}
 					{/if}
 					<div class="ambient-dropdown-divider"></div>
 					<button
@@ -340,8 +354,13 @@
 	}
 
 	@keyframes identity-pulse {
-		0%, 100% { opacity: 0.5; }
-		50% { opacity: 0.9; }
+		0%,
+		100% {
+			opacity: 0.5;
+		}
+		50% {
+			opacity: 0.9;
+		}
 	}
 
 	.ambient-user-name--resolved {
@@ -349,8 +368,14 @@
 	}
 
 	@keyframes identity-resolve {
-		from { opacity: 0; transform: translateY(2px); }
-		to { opacity: 1; transform: translateY(0); }
+		from {
+			opacity: 0;
+			transform: translateY(2px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
 	}
 
 	.ambient-user-name {

@@ -21,6 +21,10 @@
 
 import type { MutationCtx } from './_generated/server';
 import type { Id } from './_generated/dataModel';
+import {
+	applyCoalitionSupporterTransition,
+	applyCoalitionSupporterTransitionsBatch
+} from './lib/coalitionMetrics';
 
 /**
  * The subset of supporter fields the counters are derived from. Accepts a
@@ -28,6 +32,10 @@ import type { Id } from './_generated/dataModel';
  * time before the doc is read back.
  */
 export interface CountableSupporter {
+	_id?: Id<'supporters'>;
+	coalitionMetricsVersion?: number;
+	globalEmailHash?: string;
+	country?: string;
 	emailStatus: string;
 	smsStatus: string;
 	source?: string;
@@ -53,6 +61,12 @@ export interface SupporterStats {
 	emailBounced: number;
 	emailComplained: number;
 	smsSubscribed: number;
+	/**
+	 * Exact `smsStatus === subscribed && encryptedPhone present` intersection.
+	 * Undefined means a legacy org has not been reconciled yet; readers must
+	 * fall back to the bounded cursor path rather than treating it as zero.
+	 */
+	smsDispatchEligible?: number;
 	smsUnsubscribed: number;
 	smsStopped: number;
 	smsNone: number;
@@ -72,6 +86,7 @@ const SCALAR_KEYS = [
 	'emailBounced',
 	'emailComplained',
 	'smsSubscribed',
+	'smsDispatchEligible',
 	'smsUnsubscribed',
 	'smsStopped',
 	'smsNone',
@@ -93,6 +108,7 @@ export function emptySupporterStats(): SupporterStats {
 		emailBounced: 0,
 		emailComplained: 0,
 		smsSubscribed: 0,
+		smsDispatchEligible: 0,
 		smsUnsubscribed: 0,
 		smsStopped: 0,
 		smsNone: 0,
@@ -177,6 +193,7 @@ function contributions(s: CountableSupporter): Record<ScalarKey, number> {
 		emailBounced: s.emailStatus === 'bounced' ? 1 : 0,
 		emailComplained: s.emailStatus === 'complained' ? 1 : 0,
 		smsSubscribed: s.smsStatus === 'subscribed' ? 1 : 0,
+		smsDispatchEligible: s.smsStatus === 'subscribed' && !!s.encryptedPhone ? 1 : 0,
 		smsUnsubscribed: s.smsStatus === 'unsubscribed' ? 1 : 0,
 		smsStopped: s.smsStatus === 'stopped' ? 1 : 0,
 		smsNone: s.smsStatus === 'none' ? 1 : 0,
@@ -202,7 +219,9 @@ export function computeSupporterStats(
 	before: CountableSupporter | null,
 	after: CountableSupporter | null
 ): SupporterStats {
-	const next = current ? { ...current, sourceCounts: { ...current.sourceCounts } } : emptySupporterStats();
+	const next = current
+		? { ...current, sourceCounts: { ...current.sourceCounts } }
+		: emptySupporterStats();
 
 	const beforeC = before ? contributions(before) : null;
 	const afterC = after ? contributions(after) : null;
@@ -212,7 +231,7 @@ export function computeSupporterStats(
 		if (beforeC) delta -= beforeC[key];
 		if (afterC) delta += afterC[key];
 		if (delta !== 0) {
-			next[key] = Math.max(0, next[key] + delta);
+			next[key] = Math.max(0, (next[key] ?? 0) + delta);
 		}
 	}
 
@@ -267,8 +286,15 @@ export async function applySupporterStatsDelta(
 ): Promise<void> {
 	const org = await ctx.db.get(orgId);
 	if (!org) return;
+	const projectionWasTrusted =
+		org.supporterStats?.smsDispatchEligible !== undefined || (org.supporterCount ?? 0) === 0;
 	const updated = computeSupporterStats(org.supporterStats, before, after);
+	// A single post-deploy transition cannot establish an exact intersection
+	// for a legacy, non-empty roster. Preserve the absent cutover marker until
+	// reconcileOrgStats folds every supporter row.
+	if (!projectionWasTrusted) updated.smsDispatchEligible = undefined;
 	await ctx.db.patch(orgId, { supporterStats: updated });
+	await applyCoalitionSupporterTransition(ctx, orgId, before, after);
 }
 
 /**
@@ -284,9 +310,13 @@ export async function applySupporterStatsDeltaBatch(
 	if (pairs.length === 0) return;
 	const org = await ctx.db.get(orgId);
 	if (!org) return;
+	const projectionWasTrusted =
+		org.supporterStats?.smsDispatchEligible !== undefined || (org.supporterCount ?? 0) === 0;
 	let stats = org.supporterStats;
 	for (const { before, after } of pairs) {
 		stats = computeSupporterStats(stats, before, after);
 	}
+	if (!projectionWasTrusted && stats) stats.smsDispatchEligible = undefined;
 	await ctx.db.patch(orgId, { supporterStats: stats });
+	await applyCoalitionSupporterTransitionsBatch(ctx, orgId, pairs);
 }

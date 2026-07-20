@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -10,7 +10,11 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	}
 
 	const body = await request.json();
-	const { name, slug, description } = body as { name?: string; slug?: string; description?: string };
+	const { name, slug, description } = body as {
+		name?: string;
+		slug?: string;
+		description?: string;
+	};
 
 	if (!name || !slug) {
 		throw error(400, 'name and slug are required');

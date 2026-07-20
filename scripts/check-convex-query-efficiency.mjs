@@ -4,9 +4,12 @@
  * Prevent public Convex query read debt from growing unnoticed.
  *
  * This is intentionally a syntactic, deterministic check. It scans exported
- * `query({...})` declarations and records three expensive constructs:
+ * `query({...})` declarations and records five expensive constructs:
  *   - `.collect()` calls;
  *   - Convex query-builder `.filter()` calls (not Array.prototype.filter);
+ *   - Convex query-builder `.take()` calls with a statically resolvable bound
+ *     of at least 1,000 documents;
+ *   - Convex query-builder `.paginate()` calls executed inside a loop; and
  *   - wall-clock reads (`Date.now()`, zero-argument `new Date()`, `Date()`,
  *     `performance.now()`, and `Temporal.Now.*()`).
  *
@@ -26,7 +29,20 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, '..');
 const CONVEX_DIR = path.join(REPO_ROOT, 'convex');
 const BASELINE_PATH = path.join(SCRIPT_DIR, 'convex-query-efficiency-baseline.json');
-const RULES = ['collect', 'queryFilter', 'dateNow'];
+const LARGE_TAKE_THRESHOLD = 1_000;
+const RULES = ['collect', 'queryFilter', 'largeTake', 'loopPaginate', 'dateNow'];
+const ITERATION_METHODS = new Set([
+	'every',
+	'filter',
+	'find',
+	'findIndex',
+	'flatMap',
+	'forEach',
+	'map',
+	'reduce',
+	'reduceRight',
+	'some'
+]);
 
 function relative(filePath) {
 	return path.relative(REPO_ROOT, filePath).split(path.sep).join('/');
@@ -70,7 +86,7 @@ function hasExportModifier(node) {
 }
 
 function isGeneratedServerModule(specifier) {
-	return /(?:^|\/)\_generated\/server(?:\.[cm]?[jt]s)?$/.test(specifier);
+	return /(?:^|\/)_generated\/server(?:\.[cm]?[jt]s)?$/.test(specifier);
 }
 
 function buildModuleInfo(filePath, source) {
@@ -425,6 +441,35 @@ function isFunctionLike(node) {
 	);
 }
 
+function lexicalCallableBinding(identifier) {
+	let current = identifier.parent;
+	while (current) {
+		if (isFunctionLike(current)) {
+			for (const parameter of current.parameters ?? []) {
+				if (ts.isIdentifier(parameter.name) && parameter.name.text === identifier.text) {
+					return { found: true, expression: parameter.initializer ?? null };
+				}
+			}
+		}
+		if (ts.isBlock(current) || ts.isSourceFile(current)) {
+			for (const statement of current.statements) {
+				if (ts.isVariableStatement(statement)) {
+					for (const declaration of statement.declarationList.declarations) {
+						if (ts.isIdentifier(declaration.name) && declaration.name.text === identifier.text) {
+							return { found: true, expression: declaration.initializer ?? null };
+						}
+					}
+				}
+				if (ts.isFunctionDeclaration(statement) && statement.name?.text === identifier.text) {
+					return { found: true, expression: statement };
+				}
+			}
+		}
+		current = current.parent;
+	}
+	return { found: false, expression: null };
+}
+
 function resolveCallable(expression, info, graph, seen = new Set()) {
 	const current = unwrapExpression(expression);
 	if (isFunctionLike(current)) return { info, node: current };
@@ -432,6 +477,10 @@ function resolveCallable(expression, info, graph, seen = new Set()) {
 		const key = `${info.filePath}::${current.text}`;
 		if (seen.has(key)) return null;
 		seen.add(key);
+		const lexical = lexicalCallableBinding(current);
+		if (lexical.found) {
+			return lexical.expression ? resolveCallable(lexical.expression, info, graph, seen) : null;
+		}
 		const binding = localBinding(info, current.text);
 		if (binding) return resolveCallable(binding, info, graph, seen);
 		const imported = info.imports.get(current.text);
@@ -518,11 +567,23 @@ function discoverReachableRoots(queryCall, queryInfo, graph) {
 			if (ts.isCallExpression(node)) {
 				const target = resolveCallable(node.expression, root.info, graph);
 				if (target) {
-					callEdges.push({ call: node, callerInfo: root.info, target });
+					callEdges.push({ call: node, caller: root, callerInfo: root.info, target });
 					const key = targetKey(target);
 					if (!seenTargets.has(key)) {
 						seenTargets.add(key);
 						roots.push(target);
+					}
+				}
+				const callee = unwrapExpression(node.expression);
+				if (ts.isPropertyAccessExpression(callee) && ITERATION_METHODS.has(callee.name.text)) {
+					for (const argument of node.arguments) {
+						const callbackTarget = resolveCallable(argument, root.info, graph);
+						if (!callbackTarget) continue;
+						const key = targetKey(callbackTarget);
+						if (!seenTargets.has(key)) {
+							seenTargets.add(key);
+							roots.push(callbackTarget);
+						}
 					}
 				}
 			}
@@ -691,11 +752,245 @@ function isWallClockRead(node) {
 	);
 }
 
+function lexicalStaticBinding(identifier) {
+	let current = identifier.parent;
+	while (current) {
+		if (isFunctionLike(current)) {
+			for (const parameter of current.parameters ?? []) {
+				if (!ts.isIdentifier(parameter.name) || parameter.name.text !== identifier.text) continue;
+				return {
+					found: true,
+					expression: parameter.initializer ?? null
+				};
+			}
+		}
+
+		if (ts.isBlock(current) || ts.isSourceFile(current)) {
+			for (const statement of current.statements) {
+				if (ts.isVariableStatement(statement)) {
+					for (const declaration of statement.declarationList.declarations) {
+						if (!ts.isIdentifier(declaration.name) || declaration.name.text !== identifier.text) {
+							continue;
+						}
+						const isConst =
+							(statement.declarationList.flags & ts.NodeFlags.Const) === ts.NodeFlags.Const;
+						return {
+							found: true,
+							expression: isConst ? (declaration.initializer ?? null) : null
+						};
+					}
+				}
+				if (ts.isFunctionDeclaration(statement) && statement.name?.text === identifier.text) {
+					return { found: true, expression: null };
+				}
+			}
+		}
+		current = current.parent;
+	}
+	return { found: false, expression: null };
+}
+
+function finiteNumber(value) {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function evaluateStaticBinary(operator, left, right) {
+	switch (operator) {
+		case ts.SyntaxKind.PlusToken:
+			return finiteNumber(left + right);
+		case ts.SyntaxKind.MinusToken:
+			return finiteNumber(left - right);
+		case ts.SyntaxKind.AsteriskToken:
+			return finiteNumber(left * right);
+		case ts.SyntaxKind.SlashToken:
+			return finiteNumber(left / right);
+		case ts.SyntaxKind.PercentToken:
+			return finiteNumber(left % right);
+		case ts.SyntaxKind.AsteriskAsteriskToken:
+			return finiteNumber(left ** right);
+		case ts.SyntaxKind.LessThanLessThanToken:
+			return finiteNumber(left << right);
+		case ts.SyntaxKind.GreaterThanGreaterThanToken:
+			return finiteNumber(left >> right);
+		case ts.SyntaxKind.GreaterThanGreaterThanGreaterThanToken:
+			return finiteNumber(left >>> right);
+		case ts.SyntaxKind.BarToken:
+			return finiteNumber(left | right);
+		case ts.SyntaxKind.AmpersandToken:
+			return finiteNumber(left & right);
+		case ts.SyntaxKind.CaretToken:
+			return finiteNumber(left ^ right);
+		default:
+			return null;
+	}
+}
+
+function resolveStaticNumber(expression, info, graph, seen = new Set()) {
+	const current = unwrapExpression(expression);
+	const nodeKey = `${info.filePath}:${current.pos}:${current.end}`;
+	if (seen.has(nodeKey)) return null;
+	seen.add(nodeKey);
+
+	if (ts.isNumericLiteral(current)) {
+		return finiteNumber(Number(current.text.replaceAll('_', '')));
+	}
+	if (ts.isPrefixUnaryExpression(current)) {
+		const operand = resolveStaticNumber(current.operand, info, graph, seen);
+		if (operand === null) return null;
+		if (current.operator === ts.SyntaxKind.PlusToken) return operand;
+		if (current.operator === ts.SyntaxKind.MinusToken) return finiteNumber(-operand);
+		return null;
+	}
+	if (ts.isIdentifier(current)) {
+		const lexical = lexicalStaticBinding(current);
+		if (lexical.found) {
+			return lexical.expression ? resolveStaticNumber(lexical.expression, info, graph, seen) : null;
+		}
+		const imported = info.imports.get(current.text);
+		if (!imported) return null;
+		const target = resolveRelativeModule(info, imported.specifier, graph.modulesByPath);
+		const exported = target ? resolveExportExpression(target, imported.importedName, graph) : null;
+		return exported ? resolveStaticNumber(exported.expression, exported.info, graph, seen) : null;
+	}
+	if (
+		ts.isPropertyAccessExpression(current) &&
+		ts.isIdentifier(current.expression) &&
+		info.namespaceImports.has(current.expression.text)
+	) {
+		const target = resolveRelativeModule(
+			info,
+			info.namespaceImports.get(current.expression.text),
+			graph.modulesByPath
+		);
+		const exported = target ? resolveExportExpression(target, current.name.text, graph) : null;
+		return exported ? resolveStaticNumber(exported.expression, exported.info, graph, seen) : null;
+	}
+	if (ts.isBinaryExpression(current)) {
+		const left = resolveStaticNumber(current.left, info, graph, new Set(seen));
+		const right = resolveStaticNumber(current.right, info, graph, new Set(seen));
+		return left === null || right === null
+			? null
+			: evaluateStaticBinary(current.operatorToken.kind, left, right);
+	}
+	if (
+		ts.isCallExpression(current) &&
+		ts.isPropertyAccessExpression(current.expression) &&
+		isIdentifierNamed(current.expression.expression, 'Math')
+	) {
+		const values = current.arguments.map((argument) =>
+			resolveStaticNumber(argument, info, graph, new Set(seen))
+		);
+		if (values.some((value) => value === null)) return null;
+		const method = current.expression.name.text;
+		const operations = {
+			abs: Math.abs,
+			ceil: Math.ceil,
+			floor: Math.floor,
+			max: Math.max,
+			min: Math.min,
+			round: Math.round,
+			trunc: Math.trunc
+		};
+		const operation = operations[method];
+		return operation ? finiteNumber(operation(...values)) : null;
+	}
+	return null;
+}
+
+function isLoopStatement(node) {
+	return (
+		ts.isForStatement(node) ||
+		ts.isForInStatement(node) ||
+		ts.isForOfStatement(node) ||
+		ts.isWhileStatement(node) ||
+		ts.isDoStatement(node)
+	);
+}
+
+function loopRepeatsChild(loop, child) {
+	if (ts.isForStatement(loop)) return child !== loop.initializer;
+	if (ts.isForInStatement(loop) || ts.isForOfStatement(loop)) {
+		return child === loop.statement;
+	}
+	return true;
+}
+
+function isIterationCallbackFunction(node) {
+	let current = node;
+	while (
+		current.parent &&
+		(ts.isParenthesizedExpression(current.parent) ||
+			ts.isAsExpression(current.parent) ||
+			ts.isTypeAssertionExpression(current.parent) ||
+			ts.isNonNullExpression(current.parent) ||
+			ts.isSatisfiesExpression(current.parent))
+	) {
+		current = current.parent;
+	}
+	const call = current.parent;
+	if (!call || !ts.isCallExpression(call) || !call.arguments.includes(current)) return false;
+	const callee = unwrapExpression(call.expression);
+	return ts.isPropertyAccessExpression(callee) && ITERATION_METHODS.has(callee.name.text);
+}
+
+function isLexicallyLooped(node, rootNode) {
+	let current = node;
+	while (current && current !== rootNode) {
+		const parent = current.parent;
+		if (!parent) return false;
+		if (isLoopStatement(parent) && loopRepeatsChild(parent, current)) return true;
+		if (isFunctionLike(parent) && parent !== rootNode) {
+			return isIterationCallbackFunction(parent);
+		}
+		current = parent;
+	}
+	return false;
+}
+
+function collectLoopExecutedRoots(reachable, graph) {
+	const looped = new Set();
+	const mark = (target) => {
+		const key = targetKey(target);
+		if (looped.has(key)) return false;
+		looped.add(key);
+		return true;
+	};
+
+	for (const { call, caller, target } of reachable.callEdges) {
+		if (isLexicallyLooped(call, caller.node)) mark(target);
+	}
+	for (const root of reachable.roots) {
+		const visit = (node) => {
+			if (ts.isCallExpression(node)) {
+				const callee = unwrapExpression(node.expression);
+				if (ts.isPropertyAccessExpression(callee) && ITERATION_METHODS.has(callee.name.text)) {
+					for (const argument of node.arguments) {
+						const target = resolveCallable(argument, root.info, graph);
+						if (target) mark(target);
+					}
+				}
+			}
+			ts.forEachChild(node, visit);
+		};
+		visit(root.node);
+	}
+
+	let changed = true;
+	while (changed) {
+		changed = false;
+		for (const { caller, target } of reachable.callEdges) {
+			if (looped.has(targetKey(caller)) && mark(target)) changed = true;
+		}
+	}
+	return looped;
+}
+
 function analyzePublicQuery(queryNode, queryInfo, graph) {
 	const reachable = discoverReachableRoots(queryNode, queryInfo, graph);
 	const dbNames = collectDbNames(reachable.roots, reachable.callEdges);
 	const builderNames = collectBuilderNames(reachable.roots, reachable.callEdges, dbNames);
-	const lines = { collect: [], queryFilter: [], dateNow: [] };
+	const loopedRoots = collectLoopExecutedRoots(reachable, graph);
+	const lines = Object.fromEntries(RULES.map((rule) => [rule, []]));
 	const counted = new Set();
 	for (const root of reachable.roots) {
 		const location = (node) => {
@@ -704,11 +999,11 @@ function analyzePublicQuery(queryNode, queryInfo, graph) {
 					.line + 1;
 			return `${relative(root.info.filePath)}:${line}`;
 		};
-		const record = (rule, node) => {
+		const record = (rule, node, detail = '') => {
 			const key = `${rule}:${root.info.filePath}:${node.pos}:${node.end}`;
 			if (counted.has(key)) return;
 			counted.add(key);
-			lines[rule].push(location(node));
+			lines[rule].push(`${location(node)}${detail}`);
 		};
 		const visit = (node) => {
 			if (isWallClockRead(node)) record('dateNow', node);
@@ -718,6 +1013,21 @@ function analyzePublicQuery(queryNode, queryInfo, graph) {
 				if (method === 'collect') record('collect', node);
 				else if (method === 'filter' && isQueryBuilderExpression(receiver, builderNames, dbNames)) {
 					record('queryFilter', node);
+				} else if (
+					method === 'take' &&
+					isQueryBuilderExpression(receiver, builderNames, dbNames) &&
+					node.arguments[0]
+				) {
+					const bound = resolveStaticNumber(node.arguments[0], root.info, graph);
+					if (bound !== null && bound >= LARGE_TAKE_THRESHOLD) {
+						record('largeTake', node, ` (bound=${bound})`);
+					}
+				} else if (
+					method === 'paginate' &&
+					isQueryBuilderExpression(receiver, builderNames, dbNames) &&
+					(loopedRoots.has(targetKey(root)) || isLexicallyLooped(node, root.node))
+				) {
+					record('loopPaginate', node);
 				}
 			}
 			ts.forEachChild(node, visit);
@@ -761,9 +1071,17 @@ function selfCheckAnalyzer() {
 		{
 			filePath: path.join(root, 'helper.ts'),
 			source: `
+				export const TAKE_BASE = 900;
+				export const TAKE_INCREMENT = 100;
 				export function importedHazard({ db: database }) {
 					const importedBuilder = database.query('rows');
 					return importedBuilder.filter(Boolean).collect();
+				}
+				export async function paginateOnce(database) {
+					return database.query('rows').paginate({ cursor: null, numItems: 10 });
+				}
+				export async function delegatedPaginate(database) {
+					return paginateOnce(database);
 				}
 			`
 		},
@@ -777,7 +1095,12 @@ function selfCheckAnalyzer() {
 					wrappedForwardedFactory,
 					higherOrderForwardedFactory
 				} from './factory-barrel';
-				import { importedHazard as remoteHazard } from './helper';
+				import {
+					delegatedPaginate,
+					importedHazard as remoteHazard,
+					TAKE_BASE,
+					TAKE_INCREMENT
+				} from './helper';
 				const clockHazard = () => new Date().valueOf();
 				const delegatedBuilder = (builder) => builder.filter(Boolean).collect();
 				const delegatedDb = (database) => database.query('rows').filter(Boolean).collect();
@@ -805,6 +1128,28 @@ function selfCheckAnalyzer() {
 				export const higherOrderFactoryQuery = higherOrderForwardedFactory({
 					handler: async ({ db }) => db.query('rows').filter(Boolean).collect()
 				});
+				export const largeTakeQuery = publicQuery({
+					handler: async ({ db }) => db.query('rows').take(TAKE_BASE + TAKE_INCREMENT)
+				});
+				export const safeTakeQuery = publicQuery({
+					handler: async ({ db }) => db.query('rows').take(999)
+				});
+				export const loopPaginateQuery = publicQuery({
+					handler: async ({ db }) => {
+						for (const ignored of [1, 2]) await delegatedPaginate(db);
+					}
+				});
+				export const callbackPaginateQuery = publicQuery({
+					handler: async ({ db }) => {
+						const localPage = () =>
+							db.query('rows').paginate({ cursor: null, numItems: 10 });
+						await Promise.all([1, 2].map(localPage));
+					}
+				});
+				export const singlePaginateQuery = publicQuery({
+					handler: async ({ db }) =>
+						db.query('rows').paginate({ cursor: null, numItems: 10 })
+				});
 			`
 		},
 		{
@@ -816,11 +1161,13 @@ function selfCheckAnalyzer() {
 		}
 	]);
 	const scan = scanPublicQueries(graph);
-	assert.equal(scan.publicQueryCount, 6);
+	assert.equal(scan.publicQueryCount, 11);
 	assert.deepEqual(scan.errors, []);
 	assert.deepEqual(scan.findings.get('__query_efficiency_self_test__/main.ts::synthetic')?.counts, {
 		collect: 4,
 		queryFilter: 4,
+		largeTake: 0,
+		loopPaginate: 0,
 		dateNow: 1
 	});
 	assert.deepEqual(
@@ -828,24 +1175,43 @@ function selfCheckAnalyzer() {
 		{
 			collect: 4,
 			queryFilter: 4,
+			largeTake: 0,
+			loopPaginate: 0,
 			dateNow: 1
 		}
 	);
 	assert.deepEqual(
 		scan.findings.get('__query_efficiency_self_test__/main.ts::namespaceQuery')?.counts,
-		{ collect: 1, queryFilter: 1, dateNow: 0 }
+		{ collect: 1, queryFilter: 1, largeTake: 0, loopPaginate: 0, dateNow: 0 }
 	);
 	assert.deepEqual(
 		scan.findings.get('__query_efficiency_self_test__/main.ts::importedFactoryQuery')?.counts,
-		{ collect: 1, queryFilter: 0, dateNow: 0 }
+		{ collect: 1, queryFilter: 0, largeTake: 0, loopPaginate: 0, dateNow: 0 }
 	);
 	assert.deepEqual(
 		scan.findings.get('__query_efficiency_self_test__/main.ts::wrappedFactoryQuery')?.counts,
-		{ collect: 0, queryFilter: 0, dateNow: 1 }
+		{ collect: 0, queryFilter: 0, largeTake: 0, loopPaginate: 0, dateNow: 1 }
 	);
 	assert.deepEqual(
 		scan.findings.get('__query_efficiency_self_test__/main.ts::higherOrderFactoryQuery')?.counts,
-		{ collect: 1, queryFilter: 1, dateNow: 0 }
+		{ collect: 1, queryFilter: 1, largeTake: 0, loopPaginate: 0, dateNow: 0 }
+	);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::largeTakeQuery')?.counts,
+		{ collect: 0, queryFilter: 0, largeTake: 1, loopPaginate: 0, dateNow: 0 }
+	);
+	assert.equal(scan.findings.has('__query_efficiency_self_test__/main.ts::safeTakeQuery'), false);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::loopPaginateQuery')?.counts,
+		{ collect: 0, queryFilter: 0, largeTake: 0, loopPaginate: 1, dateNow: 0 }
+	);
+	assert.deepEqual(
+		scan.findings.get('__query_efficiency_self_test__/main.ts::callbackPaginateQuery')?.counts,
+		{ collect: 0, queryFilter: 0, largeTake: 0, loopPaginate: 1, dateNow: 0 }
+	);
+	assert.equal(
+		scan.findings.has('__query_efficiency_self_test__/main.ts::singlePaginateQuery'),
+		false
 	);
 
 	const unresolvedGraph = buildModuleGraph([
@@ -1164,6 +1530,8 @@ console.log(
 	`Convex query efficiency: ${scan.publicQueryCount} public queries in ${scan.moduleCount} modules; ` +
 		`${totals.collect.calls} collect calls/${totals.collect.queries} queries, ` +
 		`${totals.queryFilter.calls} query filters/${totals.queryFilter.queries} queries, ` +
+		`${totals.largeTake.calls} large takes/${totals.largeTake.queries} queries, ` +
+		`${totals.loopPaginate.calls} looped paginations/${totals.loopPaginate.queries} queries, ` +
 		`${totals.dateNow.calls} clock reads/${totals.dateNow.queries} queries.`
 );
 

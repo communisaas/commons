@@ -2,10 +2,13 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
-import { escalateToGovernance, readChainResolution } from '$lib/core/blockchain/debate-market-client';
+import {
+	escalateToGovernance,
+	readChainResolution
+} from '$lib/core/blockchain/debate-market-client';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { FEATURES } from '$lib/config/features';
@@ -56,7 +59,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		throw error(429, rateLimitError);
 	}
 
-	const debate = await serverQuery(api.debates.getPublicDetail, { identifier: debateId });
+	const debate = await serverQuery(api.debates.getPublicDetail, {
+		_secret: getInternalSecret(),
+		identifier: debateId
+	});
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -72,6 +78,21 @@ export const POST: RequestHandler = async ({ params, request }) => {
 	if (!debate.debateIdOnchain) {
 		throw error(400, 'Debate has no on-chain ID');
 	}
+	const allArguments = [...debate.arguments];
+	let argumentCursor = debate.argumentCursor;
+	while (argumentCursor) {
+		const page = await serverQuery(api.debates.listArguments, {
+			_secret: getInternalSecret(),
+			debateId: debate._id,
+			cursor: argumentCursor,
+			limit: 50
+		});
+		allArguments.push(...page.arguments);
+		argumentCursor = page.cursor;
+		if (allArguments.length > 10_000) {
+			throw error(413, 'Debate exceeds the evaluation argument budget');
+		}
+	}
 
 	activeEvaluations.add(debateId);
 	hourlyCount++;
@@ -85,7 +106,12 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			throw error(503, 'AI evaluator service not available.');
 		}
 
-		let modelConfigs: Array<{ provider: number; modelName: string; apiKey: string; signerPrivateKey: string }>;
+		let modelConfigs: Array<{
+			provider: number;
+			modelName: string;
+			apiKey: string;
+			signerPrivateKey: string;
+		}>;
 		try {
 			modelConfigs = aiEvaluator.loadModelConfigs();
 		} catch (err: unknown) {
@@ -95,7 +121,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 
 		const providers = aiEvaluator.createProviders(modelConfigs);
 
-		const debateArguments = debate.arguments.map((arg: any) => ({
+		const debateArguments = allArguments.map((arg: any) => ({
 			index: arg.argumentIndex,
 			stance: arg.stance,
 			bodyText: arg.body,
@@ -116,11 +142,10 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		};
 
 		try {
-			evaluationResult = await aiEvaluator.evaluateDebate(
-				debate.debateIdOnchain,
-				debateArguments,
-				{ providers, timeoutMs: 90_000 }
-			);
+			evaluationResult = await aiEvaluator.evaluateDebate(debate.debateIdOnchain, debateArguments, {
+				providers,
+				timeoutMs: 90_000
+			});
 		} catch (err: unknown) {
 			const msg = err instanceof Error ? err.message : String(err);
 			throw error(502, `AI evaluation failed: ${msg}`);
@@ -133,6 +158,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			await serverMutation(api.debates.updateStatus, {
 				_secret: getInternalSecret(),
 				debateId: debateId as Id<'debates'>,
+				expectedStatus: 'active',
 				status: 'awaiting_governance',
 				aiResolution: {
 					scores: evaluationResult.aggregatedScores,
@@ -207,7 +233,8 @@ export const POST: RequestHandler = async ({ params, request }) => {
 				winnerIndex = agg.argumentIndex;
 			}
 		}
-		let winnerStance = debate.arguments.find((a: any) => a.argumentIndex === winnerIndex)?.stance ?? null;
+		let winnerStance =
+			allArguments.find((a: any) => a.argumentIndex === winnerIndex)?.stance ?? null;
 		let resolvedFromChain = false;
 
 		// Chain is authoritative
@@ -223,6 +250,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 		await serverMutation(api.debates.updateStatus, {
 			_secret: getInternalSecret(),
 			debateId: debateId as Id<'debates'>,
+			expectedStatus: 'active',
 			status: 'resolved',
 			aiResolution: {
 				scores: evaluationResult.aggregatedScores,
@@ -241,7 +269,7 @@ export const POST: RequestHandler = async ({ params, request }) => {
 			aiPanelConsensus: overallAgreement,
 			resolutionMethod: 'ai_community',
 			winningArgumentIndex: winnerIndex,
-			winningStance: winnerStance ?? undefined,
+			winningStance: winnerStance ?? undefined
 		});
 
 		// Update per-argument AI scores via Convex

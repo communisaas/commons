@@ -1,0 +1,85 @@
+{
+	"schemaVersion": 4,
+	"deploymentApiBasePath": "/api/v1",
+	"constraints": {
+		"minimumDatabaseIoLimitGb": 1,
+		"pagesMonthlyAdmissionReserveBytes": 536870912,
+		"teamFreeMonthlyDatabaseIoBytes": 1073741824
+	},
+	"teamUsageAuthority": {
+		"mode": "operator-local-dashboard-capture-ssh-attestation",
+		"teamId": 422260,
+		"teamSlug": "eric-mockler",
+		"signatureNamespace": "commons-convex-team-quota-v1",
+		"maximumCaptureAgeSeconds": 2700,
+		"maximumLifetimeSeconds": 2700,
+		"maximumFutureSkewSeconds": 60,
+		"futureWorkAllowanceWindowSeconds": 3360,
+		"minimumFirstProofRemainingValiditySeconds": 2100,
+		"minimumFinalProofRemainingValiditySeconds": 180,
+		"requiredCommonsProjectId": 1867656,
+		"requiredCommonsProjectSlug": "commons",
+		"requiredCommonsNonPagesDisposition": "quiescent",
+		"expectedProjects": [
+			{
+				"id": 1646861,
+				"slug": "superhero-hotel",
+				"name": "superhero-hotel",
+				"prodDeploymentName": "useful-dachshund-223",
+				"devDeploymentName": "kindhearted-manatee-209"
+			},
+			{
+				"id": 1867656,
+				"slug": "commons",
+				"name": "commons",
+				"prodDeploymentName": "quirky-chinchilla-352",
+				"devDeploymentName": "outstanding-firefly-831"
+			},
+			{
+				"id": 1958834,
+				"slug": "vcn-engine",
+				"name": "vcn-engine",
+				"prodDeploymentName": "disciplined-turtle-925",
+				"devDeploymentName": "secret-echidna-126"
+			},
+			{
+				"id": 2189493,
+				"slug": "bob-site",
+				"name": "bob-site",
+				"prodDeploymentName": "careful-cardinal-138",
+				"devDeploymentName": "colorless-turtle-682"
+			}
+		]
+	},
+	"normalReleaseAuthority": {
+		"status": "blocked-shared-free",
+		"reasonCode": "SHARED_FREE_BROWSER_DIRECT_UNARBITRATED",
+		"requiredReplacementAuthorityKinds": ["paid-no-shared-hard-disable", "quota-isolation"]
+	},
+	"environments": {
+		"production": {
+			"deploymentUrl": "https://quirky-chinchilla-352.convex.cloud",
+			"limits": [
+				{
+					"metric": "databaseIoGb",
+					"window": "month",
+					"limitType": "disable",
+					"limit": 1,
+					"enabled": true
+				}
+			]
+		},
+		"preview": {
+			"deploymentUrl": "https://outstanding-firefly-831.convex.cloud",
+			"limits": [
+				{
+					"metric": "databaseIoGb",
+					"window": "month",
+					"limitType": "disable",
+					"limit": 1,
+					"enabled": true
+				}
+			]
+		}
+	}
+}

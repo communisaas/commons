@@ -14,6 +14,9 @@ describe('mDL verification finalization', () => {
 		expect(schema).toContain('credentialHash: v.string()');
 		expect(schema).toMatch(/\.index\(["']by_credentialHash["'], \[["']credentialHash["']\]\)/);
 		expect(schema).toMatch(/\.index\(["']by_nonce["'], \[["']nonce["']\]\)/);
+		expect(schema).toMatch(
+			/\.index\(["']by_nonce_expiresAt["'], \[["']nonce["'], ["']expiresAt["']\]\)/
+		);
 		expect(schema).toMatch(/\.index\(["']by_expiresAt["'], \[["']expiresAt["']\]\)/);
 	});
 
@@ -26,7 +29,10 @@ describe('mDL verification finalization', () => {
 		expect(convexUsers).toContain('identityCommitment: args.identityCommitment');
 		expect(convexUsers).toMatch(/query\(["']mdlCredentialUses["']\)/);
 		expect(convexUsers).toMatch(/withIndex\(["']by_credentialHash["']/);
-		expect(convexUsers).toMatch(/withIndex\(["']by_nonce["']/);
+		// Active-reuse checks use the composite nonce/expiry range so expired
+		// ledger rows do not need an unbounded nonce scan or block a fresh proof.
+		expect(convexUsers).toMatch(/withIndex\(["']by_nonce_expiresAt["']/);
+		expect(convexUsers).toMatch(/q\.eq\(["']nonce["'], args\.nonce\)\.gt\(["']expiresAt["'], now\)/);
 		expect(convexUsers).toContain('MDL_CREDENTIAL_HASH_REUSED');
 		expect(convexUsers).toContain('MDL_SESSION_NONCE_REUSED');
 		expect(convexUsers).toMatch(/ctx\.db\.insert\(["']mdlCredentialUses["']/);

@@ -18,7 +18,13 @@
 
 import { z } from 'zod';
 import { generate, generateWithThoughts, GEMINI_CONFIG, extractTokenUsage } from '../gemini-client';
-import { sumTokenUsage, emptyExternalCounts, sumExternalCounts, type TokenUsage, type ExternalApiCounts } from '../types';
+import {
+	sumTokenUsage,
+	emptyExternalCounts,
+	sumExternalCounts,
+	type TokenUsage,
+	type ExternalApiCounts
+} from '../types';
 import {
 	ROLE_DISCOVERY_PROMPT,
 	buildRoleDiscoveryPrompt,
@@ -31,16 +37,13 @@ import {
 	CONTACT_SYNTHESIS_PROMPT,
 	buildContactSynthesisPrompt,
 	detectOrgTypes,
-	generateDomainContext,
+	generateDomainContext
 } from '../prompts/decision-maker';
 import { getCachedContacts, upsertResolvedContacts, normalizeOrgKey } from '../utils/contact-cache';
 import { capFanout, MAX_DECISION_MAKER_FANOUT } from '../cogs-fanout';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
 import { searchWeb, readPage, prunePageContent, type ExaPageContent } from '../exa-search';
-import {
-	classifyUrl,
-	extractContactHints,
-} from '../agents/decision-maker';
+import { classifyUrl, extractContactHints } from '../agents/decision-maker';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
 import type {
 	DecisionMakerProvider,
@@ -127,25 +130,29 @@ const CandidateSchema = z.object({
 	source_url: z.string().optional(),
 	recency_check: z.string(),
 	contact_notes: z.string().optional(),
-	discovered: z.boolean().optional(),
+	discovered: z.boolean().optional()
 });
 
 const PersonLookupResponseSchema = z.object({
 	decision_makers: z.array(CandidateSchema),
-	research_summary: z.string(),
+	research_summary: z.string()
 });
 
 const PageSelectionResponseSchema = z.object({
-	page_selections: z.array(z.object({
-		identity_index: z.number(),
-		person_name: z.string(),
-		organization: z.string(),
-		selected_pages: z.array(z.object({
-			url: z.string(),
-			reason: z.string(),
-			url_hint: z.string(),
-		})),
-	})),
+	page_selections: z.array(
+		z.object({
+			identity_index: z.number(),
+			person_name: z.string(),
+			organization: z.string(),
+			selected_pages: z.array(
+				z.object({
+					url: z.string(),
+					reason: z.string(),
+					url_hint: z.string()
+				})
+			)
+		})
+	)
 });
 
 /**
@@ -169,14 +176,14 @@ const PERSON_LOOKUP_RESPONSE_SCHEMA = {
 					source_url: { type: 'string' as const },
 					recency_check: { type: 'string' as const },
 					contact_notes: { type: 'string' as const },
-					discovered: { type: 'boolean' as const },
+					discovered: { type: 'boolean' as const }
 				},
-				required: ['name', 'title', 'organization', 'reasoning', 'email', 'recency_check'],
-			},
+				required: ['name', 'title', 'organization', 'reasoning', 'email', 'recency_check']
+			}
 		},
-		research_summary: { type: 'string' as const },
+		research_summary: { type: 'string' as const }
 	},
-	required: ['decision_makers', 'research_summary'],
+	required: ['decision_makers', 'research_summary']
 };
 
 /**
@@ -236,12 +243,14 @@ async function resolveIdentitiesFromSearch(
 ): Promise<{ identities: ResolvedIdentity[]; tokenUsage?: TokenUsage; exaSearchCount: number }> {
 	const currentYear = new Date().getFullYear().toString();
 	const currentDate = new Date().toLocaleDateString('en-US', {
-		year: 'numeric', month: 'long', day: 'numeric'
+		year: 'numeric',
+		month: 'long',
+		day: 'numeric'
 	});
 
 	// 1. Generate search queries — use Phase 1's search_query, fallback to position+org+year
-	const queries = roles.map(r =>
-		r.search_query || `${r.position} ${r.organization} ${currentYear}`
+	const queries = roles.map(
+		(r) => r.search_query || `${r.position} ${r.organization} ${currentYear}`
 	);
 
 	console.debug(`[gemini-provider] Phase 2a: ${queries.length} parallel identity searches`);
@@ -249,7 +258,7 @@ async function resolveIdentitiesFromSearch(
 	// 2. Parallel Exa searches — rate limiter handles throttling
 	const searchResults = await Promise.allSettled(
 		queries.map((q, i) =>
-			searchWeb(q, { maxResults: 20 }).then(hits => ({
+			searchWeb(q, { maxResults: 20 }).then((hits) => ({
 				role: roles[i],
 				hits
 			}))
@@ -261,19 +270,33 @@ async function resolveIdentitiesFromSearch(
 		if (result.status === 'fulfilled') {
 			return result.value;
 		}
-		console.warn(`[gemini-provider] Phase 2a search failed for "${roles[i].position}":`, result.reason);
-		return { role: roles[i], hits: [] as { url: string; title: string; publishedDate?: string; score?: number }[] };
+		console.warn(
+			`[gemini-provider] Phase 2a search failed for "${roles[i].position}":`,
+			result.reason
+		);
+		return {
+			role: roles[i],
+			hits: [] as { url: string; title: string; publishedDate?: string; score?: number }[]
+		};
 	});
 
 	const totalHits = roleResults.reduce((sum, rr) => sum + rr.hits.length, 0);
-	console.debug(`[gemini-provider] Phase 2a: ${totalHits} total search hits across ${roles.length} roles`);
+	console.debug(
+		`[gemini-provider] Phase 2a: ${totalHits} total search hits across ${roles.length} roles`
+	);
 
 	if (signal?.aborted) {
 		console.warn('[gemini-provider] Phase 2a aborted after searches');
-		return { identities: roles.map(r => ({
-			position: r.position, name: 'UNKNOWN', title: r.position,
-			organization: r.organization, search_evidence: 'Aborted before extraction'
-		})), exaSearchCount: queries.length };
+		return {
+			identities: roles.map((r) => ({
+				position: r.position,
+				name: 'UNKNOWN',
+				title: r.position,
+				organization: r.organization,
+				search_evidence: 'Aborted before extraction'
+			})),
+			exaSearchCount: queries.length
+		};
 	}
 
 	// 3. Single extraction call — generateWithThoughts, NOT agentic
@@ -300,15 +323,17 @@ async function resolveIdentitiesFromSearch(
 
 	if (isSuccessfulExtraction(extraction) && extraction.data?.identities?.length > 0) {
 		const identities = normalizeIdentityNames(extraction.data.identities);
-		console.debug(`[gemini-provider] Phase 2a extracted ${identities.length} identities:`,
-			identities.map(id => `${id.name} (${id.title} at ${id.organization})`));
+		console.debug(
+			`[gemini-provider] Phase 2a extracted ${identities.length} identities:`,
+			identities.map((id) => `${id.name} (${id.title} at ${id.organization})`)
+		);
 		return { identities, tokenUsage: extractionResult.tokenUsage, exaSearchCount: queries.length };
 	}
 
 	// Fallback: UNKNOWN identities from roles
 	console.warn('[gemini-provider] Phase 2a extraction failed, falling back to UNKNOWN identities');
 	return {
-		identities: roles.map(r => ({
+		identities: roles.map((r) => ({
 			position: r.position,
 			name: 'UNKNOWN',
 			title: r.position,
@@ -326,8 +351,18 @@ async function resolveIdentitiesFromSearch(
 
 /** Sentinel names that LLMs return instead of the instructed "UNKNOWN" string. */
 const SENTINEL_NAMES = new Set([
-	'vacant', 'tbd', 'n/a', 'none', 'open', 'unfilled', 'position open',
-	'to be determined', 'not available', 'not found', 'pending', 'empty',
+	'vacant',
+	'tbd',
+	'n/a',
+	'none',
+	'open',
+	'unfilled',
+	'position open',
+	'to be determined',
+	'not available',
+	'not found',
+	'pending',
+	'empty'
 ]);
 
 /** Returns true if a name is a sentinel / non-person value that should be treated as UNKNOWN. */
@@ -338,10 +373,12 @@ export function isSentinelName(name: string): boolean {
 
 /** Normalize extracted identities: coerce sentinel names to "UNKNOWN". */
 function normalizeIdentityNames(identities: ResolvedIdentity[]): ResolvedIdentity[] {
-	return identities.map(id => {
+	return identities.map((id) => {
 		if (isSentinelName(id.name)) {
 			if (id.name !== 'UNKNOWN') {
-				console.debug(`[gemini-provider] Normalizing sentinel name "${id.name}" → "UNKNOWN" for ${id.title}`);
+				console.debug(
+					`[gemini-provider] Normalizing sentinel name "${id.name}" → "UNKNOWN" for ${id.title}`
+				);
 			}
 			return { ...id, name: 'UNKNOWN' };
 		}
@@ -350,16 +387,22 @@ function normalizeIdentityNames(identities: ResolvedIdentity[]): ResolvedIdentit
 }
 
 /** Match Phase 1 reasoning to an identity by position+org, then org, then index */
-function matchRoleReasoning(identity: ResolvedIdentity, roles: DiscoveredRole[], index: number): string {
-	return roles.find(r =>
-		r.position.toLowerCase() === identity.position.toLowerCase() &&
-		r.organization.toLowerCase() === identity.organization.toLowerCase()
-	)?.reasoning ||
-	roles.find(r =>
-		r.organization.toLowerCase() === identity.organization.toLowerCase()
-	)?.reasoning ||
-	roles[index]?.reasoning ||
-	'';
+function matchRoleReasoning(
+	identity: ResolvedIdentity,
+	roles: DiscoveredRole[],
+	index: number
+): string {
+	return (
+		roles.find(
+			(r) =>
+				r.position.toLowerCase() === identity.position.toLowerCase() &&
+				r.organization.toLowerCase() === identity.organization.toLowerCase()
+		)?.reasoning ||
+		roles.find((r) => r.organization.toLowerCase() === identity.organization.toLowerCase())
+			?.reasoning ||
+		roles[index]?.reasoning ||
+		''
+	);
 }
 
 // ============================================================================
@@ -391,13 +434,23 @@ function fallbackFromPageHints(
 	}
 	// Secondary: emails from pages whose domain matches significant org words
 	if (hintEmails.length === 0) {
-		const orgWords = identity.organization.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+		const orgWords = identity.organization
+			.toLowerCase()
+			.split(/\s+/)
+			.filter((w) => w.length > 3);
 		for (const page of pages) {
 			if (page.contactHints.emails.length > 0) {
 				let hostname = '';
-				try { hostname = new URL(page.url).hostname.replace(/^www\./, ''); } catch { /* skip */ }
-				const domainMatch = orgWords.some(w => hostname.includes(w)) ||
-					hostname.split('.').some(part => part.length > 3 && orgWords.some(w => w.includes(part)));
+				try {
+					hostname = new URL(page.url).hostname.replace(/^www\./, '');
+				} catch {
+					/* skip */
+				}
+				const domainMatch =
+					orgWords.some((w) => hostname.includes(w)) ||
+					hostname
+						.split('.')
+						.some((part) => part.length > 3 && orgWords.some((w) => w.includes(part)));
 				if (domainMatch) {
 					hintEmails.push(...page.contactHints.emails);
 				}
@@ -406,7 +459,7 @@ function fallbackFromPageHints(
 	}
 	const bestEmail = hintEmails[0] || '';
 	const emailSource = bestEmail
-		? pages.find(p => p.contactHints.emails.includes(bestEmail))?.url || ''
+		? pages.find((p) => p.contactHints.emails.includes(bestEmail))?.url || ''
 		: '';
 
 	return {
@@ -451,7 +504,9 @@ async function huntContactsFanOutSynthesize(
 }> {
 	const currentYear = new Date().getFullYear().toString();
 	const currentDate = new Date().toLocaleDateString('en-US', {
-		year: 'numeric', month: 'long', day: 'numeric'
+		year: 'numeric',
+		month: 'long',
+		day: 'numeric'
 	});
 	const tokenUsages: (TokenUsage | undefined)[] = [];
 	const extCounts = emptyExternalCounts();
@@ -499,7 +554,9 @@ async function huntContactsFanOutSynthesize(
 		}
 	}
 
-	console.debug(`[gemini-provider] Fan-out: ${cachedCandidates.length} cached, ${uncached.length} uncached`);
+	console.debug(
+		`[gemini-provider] Fan-out: ${cachedCandidates.length} cached, ${uncached.length} uncached`
+	);
 
 	// Emit cached contacts immediately
 	if (onCandidateProcessed) {
@@ -524,7 +581,12 @@ async function huntContactsFanOutSynthesize(
 	// ================================================================
 
 	if (signal?.aborted) {
-		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
+		return {
+			candidates: cachedCandidates,
+			fetchedPages,
+			tokenUsage: sumTokenUsage(...tokenUsages),
+			externalCounts: extCounts
+		};
 	}
 
 	onThought?.(`Searching for contact information across ${uncached.length} positions...`);
@@ -571,12 +633,15 @@ Rules:
 - When you are NOT confident about the specific domain, return an empty include_domains array. A bad domain filter is worse than no filter.
 - Keep search_query concise (under 120 chars).`;
 
-	const planningUser = `Plan search queries for these ${uncached.length} identities:\n\n` +
-		uncached.map((entry, i) => {
-			const { identity } = entry;
-			const nameStr = identity.name === 'UNKNOWN' ? '(name unknown)' : identity.name;
-			return `[${i}] ${nameStr} — ${identity.title} @ ${identity.organization}`;
-		}).join('\n');
+	const planningUser =
+		`Plan search queries for these ${uncached.length} identities:\n\n` +
+		uncached
+			.map((entry, i) => {
+				const { identity } = entry;
+				const nameStr = identity.name === 'UNKNOWN' ? '(name unknown)' : identity.name;
+				return `[${i}] ${nameStr} — ${identity.title} @ ${identity.organization}`;
+			})
+			.join('\n');
 
 	const planByIndex = new Map<number, QueryPlan>();
 	try {
@@ -619,14 +684,19 @@ Rules:
 			}))
 		);
 	} catch (err) {
-		console.warn('[gemini-provider] Phase 2b query planning failed, falling back to template queries', err);
+		console.warn(
+			'[gemini-provider] Phase 2b query planning failed, falling back to template queries',
+			err
+		);
 	}
 
 	// Build per-identity search queries — use plan when available, template otherwise
 	const searchPlans = uncached.map((entry, i) => {
 		const plan = planByIndex.get(i);
 		if (plan) {
-			const includeDomains = plan.include_domains.filter(d => typeof d === 'string' && d.trim().length > 0);
+			const includeDomains = plan.include_domains.filter(
+				(d) => typeof d === 'string' && d.trim().length > 0
+			);
 			return {
 				query: plan.search_query,
 				includeDomains: includeDomains.length > 0 ? includeDomains : undefined
@@ -637,13 +707,13 @@ Rules:
 			includeDomains: undefined as string[] | undefined
 		};
 	});
-	const searchQueries = searchPlans.map(p => p.query);
+	const searchQueries = searchPlans.map((p) => p.query);
 
 	const searchResults = await Promise.allSettled(
-		searchPlans.map(p =>
-			searchWeb(p.query, p.includeDomains
-				? { maxResults: 25, includeDomains: p.includeDomains }
-				: { maxResults: 25 }
+		searchPlans.map((p) =>
+			searchWeb(
+				p.query,
+				p.includeDomains ? { maxResults: 25, includeDomains: p.includeDomains } : { maxResults: 25 }
 			)
 		)
 	);
@@ -652,14 +722,23 @@ Rules:
 	const identitySearchResults: Array<{
 		identity: ResolvedIdentity;
 		reasoning: string;
-		hits: Array<{ url: string; title: string; publishedDate?: string; score?: number; url_hint: string }>;
+		hits: Array<{
+			url: string;
+			title: string;
+			publishedDate?: string;
+			score?: number;
+			url_hint: string;
+		}>;
 	}> = uncached.map((entry, i) => {
 		const result = searchResults[i];
 		const rawHits = result.status === 'fulfilled' ? result.value : [];
 		if (result.status === 'rejected') {
-			console.warn(`[gemini-provider] Stage 1 search failed for "${entry.identity.name}":`, result.reason);
+			console.warn(
+				`[gemini-provider] Stage 1 search failed for "${entry.identity.name}":`,
+				result.reason
+			);
 		}
-		const hits = rawHits.map(h => ({
+		const hits = rawHits.map((h) => ({
 			url: h.url,
 			title: h.title,
 			publishedDate: h.publishedDate,
@@ -675,25 +754,37 @@ Rules:
 
 	extCounts.exaSearches += searchQueries.length;
 	const totalHits = identitySearchResults.reduce((sum, isr) => sum + isr.hits.length, 0);
-	console.debug(`[gemini-provider] Stage 1 complete: ${totalHits} total hits across ${uncached.length} searches`);
-	onThought?.(`Found ${totalHits} potential sources. Selecting the most promising pages to read...`);
+	console.debug(
+		`[gemini-provider] Stage 1 complete: ${totalHits} total hits across ${uncached.length} searches`
+	);
+	onThought?.(
+		`Found ${totalHits} potential sources. Selecting the most promising pages to read...`
+	);
 
 	// ================================================================
 	// Stage 2: Page Selection (1 Gemini call, ~3-5s)
 	// ================================================================
 
 	if (signal?.aborted) {
-		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
+		return {
+			candidates: cachedCandidates,
+			fetchedPages,
+			tokenUsage: sumTokenUsage(...tokenUsages),
+			externalCounts: extCounts
+		};
 	}
 
 	const MAX_PAGES_TOTAL = Math.min(uncached.length * 3, 20);
 
-	const pageSelectionSystem = PAGE_SELECTION_PROMPT
-		.replace(/{CURRENT_DATE}/g, currentDate)
-		.replace(/{MAX_PAGES_TOTAL}/g, String(MAX_PAGES_TOTAL));
+	const pageSelectionSystem = PAGE_SELECTION_PROMPT.replace(/{CURRENT_DATE}/g, currentDate).replace(
+		/{MAX_PAGES_TOTAL}/g,
+		String(MAX_PAGES_TOTAL)
+	);
 	const pageSelectionUser = buildPageSelectionPrompt(identitySearchResults);
 
-	console.debug(`[gemini-provider] Stage 2: Page selection call (budget: ${MAX_PAGES_TOTAL} pages)`);
+	console.debug(
+		`[gemini-provider] Stage 2: Page selection call (budget: ${MAX_PAGES_TOTAL} pages)`
+	);
 
 	const selectionResult = await generateWithThoughts<PageSelectionResponse>(
 		pageSelectionUser,
@@ -715,7 +806,10 @@ Rules:
 	// Build URL → identity indices map (same page attributed to multiple identities, fetched once)
 	const urlToIdentities = new Map<string, Set<number>>();
 
-	if (isSuccessfulExtraction(selectionExtraction) && selectionExtraction.data?.page_selections?.length > 0) {
+	if (
+		isSuccessfulExtraction(selectionExtraction) &&
+		selectionExtraction.data?.page_selections?.length > 0
+	) {
 		// Parse successful — use Gemini's selections
 		for (const sel of selectionExtraction.data.page_selections) {
 			for (const page of sel.selected_pages) {
@@ -732,15 +826,16 @@ Rules:
 		for (let i = 0; i < identitySearchResults.length; i++) {
 			const priorityHints = new Set(['contact_page', 'about_page', 'press_page']);
 			const priorityHits = identitySearchResults[i].hits
-				.filter(h => priorityHints.has(h.url_hint))
+				.filter((h) => priorityHints.has(h.url_hint))
 				.slice(0, 2);
 
 			// If not enough priority hits, fill with any hits
-			const fallbackHits = priorityHits.length < 2
-				? identitySearchResults[i].hits
-					.filter(h => !priorityHints.has(h.url_hint))
-					.slice(0, 2 - priorityHits.length)
-				: [];
+			const fallbackHits =
+				priorityHits.length < 2
+					? identitySearchResults[i].hits
+							.filter((h) => !priorityHints.has(h.url_hint))
+							.slice(0, 2 - priorityHits.length)
+					: [];
 
 			for (const h of [...priorityHits, ...fallbackHits]) {
 				if (!urlToIdentities.has(h.url)) {
@@ -759,14 +854,21 @@ Rules:
 		selectedUrlToIdentities.set(url, urlToIdentities.get(url)!);
 	}
 
-	console.debug(`[gemini-provider] Stage 2 final: ${selectedUrls.length} URLs to fetch (budget: ${MAX_PAGES_TOTAL})`);
+	console.debug(
+		`[gemini-provider] Stage 2 final: ${selectedUrls.length} URLs to fetch (budget: ${MAX_PAGES_TOTAL})`
+	);
 
 	// ================================================================
 	// Stage 3: Parallel Page Reads (~5-8s)
 	// ================================================================
 
 	if (signal?.aborted) {
-		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
+		return {
+			candidates: cachedCandidates,
+			fetchedPages,
+			tokenUsage: sumTokenUsage(...tokenUsages),
+			externalCounts: extCounts
+		};
 	}
 
 	onThought?.(`Reading ${selectedUrls.length} pages for contact details...`);
@@ -774,14 +876,12 @@ Rules:
 
 	// Full page content for grounding; prunePageContent() trims for Gemini.
 	extCounts.firecrawlReads += selectedUrls.length;
-	const pageReadResults = await Promise.allSettled(
-		selectedUrls.map(url => readPage(url))
-	);
+	const pageReadResults = await Promise.allSettled(selectedUrls.map((url) => readPage(url)));
 
 	// Build identity name list for contact-priority pruning
 	const identityNamesForPruning = uncached
-		.map(u => u.identity.name)
-		.filter(n => n !== 'UNKNOWN');
+		.map((u) => u.identity.name)
+		.filter((n) => n !== 'UNKNOWN');
 
 	const pagesForSynthesis: Array<{
 		url: string;
@@ -827,7 +927,9 @@ Rules:
 		});
 	}
 
-	console.debug(`[gemini-provider] Stage 3 complete: ${pagesForSynthesis.length} pages readable, ${fetchedPages.size} stored`);
+	console.debug(
+		`[gemini-provider] Stage 3 complete: ${pagesForSynthesis.length} pages readable, ${fetchedPages.size} stored`
+	);
 	onThought?.(`Retrieved ${pagesForSynthesis.length} pages. Analyzing contacts...`);
 
 	// If zero pages readable: return all uncached identities as no-email candidates
@@ -862,14 +964,22 @@ Rules:
 	// ================================================================
 
 	if (signal?.aborted) {
-		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
+		return {
+			candidates: cachedCandidates,
+			fetchedPages,
+			tokenUsage: sumTokenUsage(...tokenUsages),
+			externalCounts: extCounts
+		};
 	}
 
 	const SYNTHESIS_CHUNK_SIZE = 3;
-	const domainContext = generateDomainContext(detectOrgTypes(uncached.map(u => u.identity.organization)));
-	const synthesisSystem = CONTACT_SYNTHESIS_PROMPT
-		.replace(/{CURRENT_DATE}/g, currentDate)
-		.replace(/{DOMAIN_CONTEXT}/g, domainContext || '');
+	const domainContext = generateDomainContext(
+		detectOrgTypes(uncached.map((u) => u.identity.organization))
+	);
+	const synthesisSystem = CONTACT_SYNTHESIS_PROMPT.replace(/{CURRENT_DATE}/g, currentDate).replace(
+		/{DOMAIN_CONTEXT}/g,
+		domainContext || ''
+	);
 
 	// Partition uncached identities into chunks
 	const chunks: Array<typeof uncached> = [];
@@ -877,7 +987,9 @@ Rules:
 		chunks.push(uncached.slice(i, i + SYNTHESIS_CHUNK_SIZE));
 	}
 
-	console.debug(`[gemini-provider] Stage 4: ${chunks.length} parallel synthesis chunk(s) for ${uncached.length} identities`);
+	console.debug(
+		`[gemini-provider] Stage 4: ${chunks.length} parallel synthesis chunk(s) for ${uncached.length} identities`
+	);
 
 	const allPages = Array.from(fetchedPages.values());
 
@@ -887,19 +999,20 @@ Rules:
 		const chunkGlobalIndices = chunk.map((_, i) => globalStartIdx + i);
 
 		const chunkPages = pagesForSynthesis
-			.filter(p =>
-				p.attributedTo.length === 0 ||
-				p.attributedTo.some(idx => chunkGlobalIndices.includes(idx))
+			.filter(
+				(p) =>
+					p.attributedTo.length === 0 ||
+					p.attributedTo.some((idx) => chunkGlobalIndices.includes(idx))
 			)
-			.map(p => ({
+			.map((p) => ({
 				...p,
 				attributedTo: p.attributedTo
-					.filter(idx => chunkGlobalIndices.includes(idx))
-					.map(idx => idx - globalStartIdx)
+					.filter((idx) => chunkGlobalIndices.includes(idx))
+					.map((idx) => idx - globalStartIdx)
 			}));
 
 		const synthesisUser = buildContactSynthesisPrompt(
-			chunk.map(u => ({ identity: u.identity, reasoning: u.reasoning })),
+			chunk.map((u) => ({ identity: u.identity, reasoning: u.reasoning })),
 			chunkPages,
 			issueContext
 		);
@@ -917,7 +1030,9 @@ Rules:
 		chunkWork.map(async ({ chunk, chunkIdx, globalStartIdx, synthesisUser }) => {
 			if (signal?.aborted) return;
 
-			console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}/${chunks.length}: ${chunk.length} identities`);
+			console.debug(
+				`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}/${chunks.length}: ${chunk.length} identities`
+			);
 
 			let candidates: Candidate[];
 
@@ -935,10 +1050,14 @@ Rules:
 				const parsed = JSON.parse(responseText) as PersonLookupResponse;
 
 				if (parsed.decision_makers?.length > 0) {
-					console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: synthesized ${parsed.decision_makers.length} candidates`);
+					console.debug(
+						`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: synthesized ${parsed.decision_makers.length} candidates`
+					);
 					candidates = parsed.decision_makers;
 				} else {
-					console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: model returned 0 candidates`);
+					console.debug(
+						`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: model returned 0 candidates`
+					);
 					candidates = [];
 				}
 			} catch (err) {
@@ -947,19 +1066,24 @@ Rules:
 					const globalIdx = globalStartIdx + localIdx;
 					return fallbackFromPageHints(identity, globalIdx, reasoning, pagesForSynthesis);
 				});
-				const hintRecovered = candidates.filter(c => c.email).length;
-				console.debug(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1} fallback: ${hintRecovered}/${candidates.length} recovered from page hints`);
+				const hintRecovered = candidates.filter((c) => c.email).length;
+				console.debug(
+					`[gemini-provider] Stage 4 chunk ${chunkIdx + 1} fallback: ${hintRecovered}/${candidates.length} recovered from page hints`
+				);
 			}
 
 			// Backfill: if synthesis still has a sentinel name, try to recover from input
 			for (const candidate of candidates) {
 				if (isSentinelName(candidate.name)) {
-					const matchingInput = chunk.find(u =>
-						u.identity.title.toLowerCase() === candidate.title.toLowerCase() &&
-						u.identity.organization.toLowerCase() === candidate.organization.toLowerCase()
+					const matchingInput = chunk.find(
+						(u) =>
+							u.identity.title.toLowerCase() === candidate.title.toLowerCase() &&
+							u.identity.organization.toLowerCase() === candidate.organization.toLowerCase()
 					);
 					if (matchingInput && !isSentinelName(matchingInput.identity.name)) {
-						console.debug(`[gemini-provider] Name backfill: "${candidate.name}" → "${matchingInput.identity.name}" for ${candidate.title}`);
+						console.debug(
+							`[gemini-provider] Name backfill: "${candidate.name}" → "${matchingInput.identity.name}" for ${candidate.title}`
+						);
 						candidate.name = matchingInput.identity.name;
 					}
 				}
@@ -975,13 +1099,18 @@ Rules:
 
 			// Progress update after each chunk completes
 			chunksComplete++;
-			const withEmail = candidates.filter(c => c.email?.includes('@')).length;
-			const names = candidates.filter(c => c.email?.includes('@')).map(c => c.name).join(', ');
+			const withEmail = candidates.filter((c) => c.email?.includes('@')).length;
+			const names = candidates
+				.filter((c) => c.email?.includes('@'))
+				.map((c) => c.name)
+				.join(', ');
 			if (withEmail > 0) {
 				onThought?.(`Found contact details for ${names}.`);
 			}
 			if (chunksComplete < chunks.length) {
-				onThought?.(`Resolving remaining contacts (${chunks.length - chunksComplete} of ${chunks.length} groups left)...`);
+				onThought?.(
+					`Resolving remaining contacts (${chunks.length - chunksComplete} of ${chunks.length} groups left)...`
+				);
 			}
 		})
 	);
@@ -991,7 +1120,9 @@ Rules:
 	// ================================================================
 
 	const allCandidates = [...cachedCandidates, ...synthesizedCandidates];
-	console.debug(`[gemini-provider] Fan-out complete: ${allCandidates.length} total candidates (${cachedCandidates.length} cached + ${synthesizedCandidates.length} synthesized), ${fetchedPages.size} pages`);
+	console.debug(
+		`[gemini-provider] Fan-out complete: ${allCandidates.length} total candidates (${cachedCandidates.length} cached + ${synthesizedCandidates.length} synthesized), ${fetchedPages.size} pages`
+	);
 
 	return {
 		candidates: allCandidates,
@@ -1038,7 +1169,13 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			streaming?.onPhase?.('discover', 'Mapping institutional power structure...');
 
-			const rolePrompt = buildRoleDiscoveryPrompt(subjectLine, coreMessage, topics, voiceSample, audienceGuidance);
+			const rolePrompt = buildRoleDiscoveryPrompt(
+				subjectLine,
+				coreMessage,
+				topics,
+				voiceSample,
+				audienceGuidance
+			);
 
 			console.debug('[gemini-provider] Phase 1: Discovering roles with thoughts...');
 
@@ -1118,7 +1255,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			// Direct Exa searches (1 per role) + 1 extraction call
 			// ================================================================
 
-			streaming?.onPhase?.('identity', `Identifying current holders of ${roles.length} positions...`);
+			streaming?.onPhase?.(
+				'identity',
+				`Identifying current holders of ${roles.length} positions...`
+			);
 
 			const identityResult = await resolveIdentitiesFromSearch(roles, streaming, context.signal);
 			tokenUsages.push(identityResult.tokenUsage);
@@ -1131,7 +1271,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			// Cache Lookup — Pre-populate known emails
 			// ================================================================
 
-			const orgTitlePairs = identities.map(id => ({
+			const orgTitlePairs = identities.map((id) => ({
 				organization: id.organization,
 				title: id.title
 			}));
@@ -1139,22 +1279,23 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const cachedContacts = Array.isArray(cachedContactsRaw) ? cachedContactsRaw : [];
 
 			if (cachedContacts.length > 0) {
-				const withEmail = cachedContacts.filter(c => c.email);
+				const withEmail = cachedContacts.filter((c) => c.email);
 				console.debug(`[gemini-provider] Cache hit: ${withEmail.length} contacts pre-populated`);
 			}
 
 			// Emit identity placeholders to UI — cards appear before contact hunting starts
 			if (streaming?.onIdentitiesFound) {
-				const placeholders = identities.map(id => {
+				const placeholders = identities.map((id) => {
 					const orgKey = normalizeOrgKey(id.organization);
 					const cached = cachedContacts.find(
-						c => c.email && c.orgKey === orgKey && c.title?.toLowerCase() === id.title.toLowerCase()
+						(c) =>
+							c.email && c.orgKey === orgKey && c.title?.toLowerCase() === id.title.toLowerCase()
 					);
 					return {
 						name: id.name === 'UNKNOWN' ? '' : id.name,
 						title: id.title,
 						organization: id.organization,
-						status: cached?.email ? 'cached' as const : 'pending' as const
+						status: cached?.email ? ('cached' as const) : ('pending' as const)
 					};
 				});
 				streaming.onIdentitiesFound(placeholders);
@@ -1170,9 +1311,16 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const emittedNames = new Set<string>();
 
 			const contactResult = await huntContactsFanOutSynthesize(
-				identities, cachedContacts, roles,
-				{ subjectLine: context.subjectLine, coreMessage: context.coreMessage, topics: context.topics },
-				streaming, context.signal,
+				identities,
+				cachedContacts,
+				roles,
+				{
+					subjectLine: context.subjectLine,
+					coreMessage: context.coreMessage,
+					topics: context.topics
+				},
+				streaming,
+				context.signal,
 				// Per-identity streaming callback — emit as each mini-agent completes
 				(candidate, pages) => {
 					if (isSentinelName(candidate.name || '')) return;
@@ -1203,9 +1351,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					if (!processed) return;
 
 					// Strip ungrounded email for the streaming preview
-					const final = (processed.email && processed.emailGrounded !== true)
-						? { ...processed, email: undefined, emailGrounded: undefined }
-						: processed;
+					const final =
+						processed.email && processed.emailGrounded !== true
+							? { ...processed, email: undefined, emailGrounded: undefined }
+							: processed;
 
 					streaming?.onCandidateResolved?.({
 						name: final.name,
@@ -1234,10 +1383,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			});
 
 			// Process decision-makers with content-based email verification
-			const processed = this.processDecisionMakers(
-				data.decision_makers || [],
-				pageContents
-			);
+			const processed = this.processDecisionMakers(data.decision_makers || [], pageContents);
 
 			const latencyMs = Date.now() - startTime;
 
@@ -1258,8 +1404,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			console.debug(`[gemini-provider] Parallel resolution complete in ${latencyMs}ms:`, {
 				rolesDiscovered: roles.length,
-				identitiesResolved: identities.filter(id => id.name !== 'UNKNOWN').length,
-				cacheHits: cachedContacts.filter(c => c.email).length,
+				identitiesResolved: identities.filter((id) => id.name !== 'UNKNOWN').length,
+				cacheHits: cachedContacts.filter((c) => c.email).length,
 				candidatesFound: data.decision_makers?.length || 0,
 				verified: processed.length,
 				withEmail: processed.filter((dm) => dm.email).length,
@@ -1282,7 +1428,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			// Strip emails not found in page content (text + highlights).
 			// Keep the candidate, just remove the unverified email.
-			const filtered = processed.map(dm => {
+			const filtered = processed.map((dm) => {
 				if (dm.email && dm.emailGrounded !== true) {
 					console.debug(`[gemini-provider] Stripping ungrounded email for ${dm.name}: ${dm.email}`);
 					return { ...dm, email: undefined, emailGrounded: undefined };
@@ -1301,7 +1447,9 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			}
 			for (const [email, count] of emailCounts) {
 				if (count > 1) {
-					console.debug(`[gemini-provider] Shared email ${email} assigned to ${count} candidates (org-level contact path)`);
+					console.debug(
+						`[gemini-provider] Shared email ${email} assigned to ${count} candidates (org-level contact path)`
+					);
 				}
 			}
 
@@ -1322,16 +1470,20 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					} else if (existing.email && dm.email && dm.emailGrounded && !existing.emailGrounded) {
 						deduped[existingIdx] = dm;
 					}
-					console.debug(`[gemini-provider] Dedup: merged duplicate "${dm.name}" (title: "${dm.title}") into existing (title: "${existing.title}")`);
+					console.debug(
+						`[gemini-provider] Dedup: merged duplicate "${dm.name}" (title: "${dm.title}") into existing (title: "${existing.title}")`
+					);
 				} else {
 					seenNames.set(normalized, deduped.length);
 					deduped.push(dm);
 				}
 			}
 
-			const withVerifiedEmail = deduped.filter(dm => dm.email);
-			const withoutEmail = deduped.filter(dm => !dm.email);
-			console.debug(`[gemini-provider] Returning ${deduped.length} candidates: ${withVerifiedEmail.length} with verified email, ${withoutEmail.length} without email`);
+			const withVerifiedEmail = deduped.filter((dm) => dm.email);
+			const withoutEmail = deduped.filter((dm) => !dm.email);
+			console.debug(
+				`[gemini-provider] Returning ${deduped.length} candidates: ${withVerifiedEmail.length} with verified email, ${withoutEmail.length} without email`
+			);
 
 			const contactsToCache = deduped.flatMap((dm) =>
 				typeof dm.email === 'string' && dm.email.includes('@')
@@ -1348,7 +1500,9 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			);
 
 			// Cache write — fire-and-forget, never blocks the response
-			upsertResolvedContacts(contactsToCache).catch(err => console.warn('[gemini-provider] Cache write failed:', err));
+			upsertResolvedContacts(contactsToCache).catch((err) =>
+				console.warn('[gemini-provider] Cache write failed:', err)
+			);
 
 			streaming?.onPhase?.(
 				'complete',
@@ -1367,8 +1521,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				researchSummary: data.research_summary || 'Parallel resolution completed.',
 				metadata: {
 					rolesDiscovered: roles.length,
-					identitiesResolved: identities.filter(id => id.name !== 'UNKNOWN').length,
-					cacheHits: cachedContacts.filter(c => c.email).length,
+					identitiesResolved: identities.filter((id) => id.name !== 'UNKNOWN').length,
+					cacheHits: cachedContacts.filter((c) => c.email).length,
 					candidatesFound: data.decision_makers?.length || 0,
 					verified: deduped.length,
 					withVerifiedEmail: withVerifiedEmail.length,
@@ -1389,7 +1543,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				provider: this.name,
 				cacheHit: false,
 				latencyMs,
-				researchSummary: 'Research encountered an issue. Please try again or refine your subject line.',
+				researchSummary:
+					'Research encountered an issue. Please try again or refine your subject line.',
 				tokenUsage: sumTokenUsage(...tokenUsages)
 			};
 		}
@@ -1410,12 +1565,14 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 		return candidates
 			.filter((c) => {
 				if (isSentinelName(c.name || '')) {
-					console.debug(`[gemini-provider] Dropping unnamed candidate: ${c.title} at ${c.organization}`);
+					console.debug(
+						`[gemini-provider] Dropping unnamed candidate: ${c.title} at ${c.organization}`
+					);
 					return false;
 				}
 				return true;
 			})
-			.map(c => this.processOneCandidate(c, pageContents))
+			.map((c) => this.processOneCandidate(c, pageContents))
 			.filter((dm): dm is ProcessedDecisionMaker => dm !== null);
 	}
 
@@ -1428,7 +1585,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 		candidate: Candidate,
 		pageContents: ExaPageContent[]
 	): ProcessedDecisionMaker | null {
-		const hasEmail = candidate.email &&
+		const hasEmail =
+			candidate.email &&
 			candidate.email !== 'NO_EMAIL_FOUND' &&
 			candidate.email.toUpperCase() !== 'NO_EMAIL_FOUND' &&
 			candidate.email.includes('@');
@@ -1436,6 +1594,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 		let emailGrounded = false;
 		let emailSource: string | undefined;
 		let emailSourceTitle: string | undefined;
+		let publiclyAttestableEmailGrounding = false;
 
 		// Cache hits were verified in a prior run — trust the stored email
 		// without re-grounding against this run's (different) page set.
@@ -1448,9 +1607,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const emailLower = candidate.email.toLowerCase();
 
 			if (candidate.email_source) {
-				const sourcePage = pageContents.find(p => p.url === candidate.email_source);
+				const sourcePage = pageContents.find((p) => p.url === candidate.email_source);
 				if (sourcePage?.text.toLowerCase().includes(emailLower)) {
 					emailGrounded = true;
+					publiclyAttestableEmailGrounding = true;
 					emailSource = sourcePage.url;
 					emailSourceTitle = sourcePage.title;
 				}
@@ -1460,6 +1620,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				for (const page of pageContents) {
 					if (page.text.toLowerCase().includes(emailLower)) {
 						emailGrounded = true;
+						publiclyAttestableEmailGrounding = true;
 						emailSource = page.url;
 						emailSourceTitle = page.title;
 						break;
@@ -1468,9 +1629,13 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			}
 
 			if (emailGrounded) {
-				console.debug(`[gemini-provider] Email VERIFIED for ${candidate.name}: ${candidate.email} from ${emailSource}`);
+				console.debug(
+					`[gemini-provider] Email VERIFIED for ${candidate.name}: ${candidate.email} from ${emailSource}`
+				);
 			} else {
-				console.debug(`[gemini-provider] Email NOT verified for ${candidate.name}: ${candidate.email} (not found in page content)`);
+				console.debug(
+					`[gemini-provider] Email NOT verified for ${candidate.name}: ${candidate.email} (not found in page content)`
+				);
 			}
 		}
 
@@ -1501,12 +1666,13 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			...(candidate.recency_check ? ['', candidate.recency_check] : [])
 		].join('\n');
 
-		const confidence = Math.min(1.0,
-			0.4
-			+ (emailGrounded ? 0.3 : 0)
-			+ (candidate.recency_check ? 0.15 : 0)
-			+ (candidate.cacheHit ? 0.1 : 0)
-			+ (verifiedPersonSource ? 0.05 : 0)
+		const confidence = Math.min(
+			1.0,
+			0.4 +
+				(emailGrounded ? 0.3 : 0) +
+				(candidate.recency_check ? 0.15 : 0) +
+				(candidate.cacheHit ? 0.1 : 0) +
+				(verifiedPersonSource ? 0.05 : 0)
 		);
 
 		return {
@@ -1522,10 +1688,18 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			emailGrounded: hasEmail ? emailGrounded : undefined,
 			emailSource: emailGrounded ? emailSource : undefined,
 			emailSourceTitle: emailGrounded ? emailSourceTitle : undefined,
+			...(publiclyAttestableEmailGrounding && emailSource
+				? {
+						publicEmailGrounding: {
+							version: 1 as const,
+							method: 'page-read' as const,
+							source: emailSource
+						}
+					}
+				: {}),
 			contactNotes: candidate.contact_notes || undefined,
 			discovered: candidate.discovered || false,
 			confidence
 		};
 	}
-
 }

@@ -16,13 +16,12 @@ import {
 	internalQuery
 } from './_generated/server';
 import { internal } from './_generated/api';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
-import { computeDistrictVerified } from './_dashboardStats';
 import {
 	assertPiiTripleCreate,
 	computeOrgScopedEmailHash,
@@ -39,11 +38,45 @@ import {
 	visibleSourceCounts,
 	type CountableSupporter
 } from './_supporterStats';
-import { countTagSupporters, collectTagSupporterIds } from './_tagCounts';
+import { syncPublicOrganizationDirectory } from './lib/publicOrganizationDirectory';
+import { syncSupporterIdentityReceiptProjections } from './lib/accountabilityReadModelDb';
+import {
+	assertSupporterBrowseReady,
+	attachSupporterTagProjection,
+	detachAllSupporterTagProjections,
+	detachSupporterTagProjection,
+	MAX_ORG_TAGS,
+	MAX_SUPPORTER_TAGS,
+	normalizeSupporterBrowseSource,
+	normalizeSupporterTagName,
+	readSupporterBrowsePage,
+	SUPPORTER_BROWSE_MIGRATION_KEY,
+	SUPPORTER_BROWSE_VERSION,
+	supporterTagNameKey,
+	syncSupporterBrowseProjection,
+	uniqueSupporterTagIds
+} from './lib/supporterBrowse';
+import {
+	assertSupporterInputBatchBudget,
+	assertSupporterInputBudget
+} from './lib/supporterInputBudget';
+import {
+	assertSupporterAudienceActionReady,
+	detachSupporterAudienceProjection
+} from './lib/supporterAudience';
+import { bumpContactAuthorityEpoch } from './lib/contactAuthority';
+import { matchesStrandedPlaceholderSweepCas } from './lib/strandedPlaceholderSweep';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
 const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
 const requireImportAuthRef = makeFunctionReference<'query'>('supporters:requireImportAuth');
+const migrateSupporterBrowseRef = makeFunctionReference<'mutation'>(
+	'supporters:migrateSupporterBrowse'
+);
+// Each imported supporter can touch a raw row, a marker, two coalition
+// dimensions, tags, and org counters. Keep the mutation comfortably below
+// Convex's write/read envelopes; the enclosing action chunks larger files.
+const SUPPORTER_IMPORT_WRITE_BATCH = 24;
 // `findByEmailHashRef` / `patchEncryptedPiiRef` declarations are no
 // longer needed — the two-phase placeholder + readback + patch flow
 // that required them is gone. `importWithEncryption` and
@@ -54,13 +87,6 @@ const requireImportAuthRef = makeFunctionReference<'query'>('supporters:requireI
 // =============================================================================
 // QUERIES (return encrypted blobs — client decrypts with org key)
 // =============================================================================
-
-function normalizeTagName(name: string): string {
-	const normalized = name.trim().replace(/\s+/g, ' ');
-	if (!normalized) throw new Error('TAG_NAME_REQUIRED');
-	if (normalized.length > 48) throw new Error('TAG_NAME_TOO_LONG');
-	return normalized;
-}
 
 const EMAIL_STATUS_RANK: Record<string, number> = {
 	subscribed: 0,
@@ -84,12 +110,6 @@ function stricterStatus(
 	const currentRank = rank[current ?? ''] ?? 0;
 	const incomingRank = rank[incoming] ?? 0;
 	return incomingRank > currentRank ? incoming : (current ?? incoming);
-}
-
-function supporterSourceValue(supporter: { source?: string }): string {
-	return typeof supporter.source === 'string' && supporter.source.trim()
-		? supporter.source.trim()
-		: 'unknown';
 }
 
 /**
@@ -151,6 +171,44 @@ function membershipIsEditor(role: string): boolean {
 	return role === 'owner' || role === 'editor';
 }
 
+function projectSupporterBrowseRow(s: Doc<'supporters'>, isEditor: boolean) {
+	if (s.supporterBrowseVersion !== SUPPORTER_BROWSE_VERSION) {
+		throw new Error('SUPPORTER_BROWSE_ROW_NOT_PROJECTED');
+	}
+	return projectSupporterFields(
+		{
+			_id: s._id,
+			_creationTime: s._creationTime,
+			encryptedEmail: s.encryptedEmail,
+			emailHash: s.emailHash ?? null,
+			encryptedName: s.encryptedName ?? null,
+			postalCode: s.postalCode ?? null,
+			stateCode: s.stateCode ?? null,
+			congressionalDistrict: s.congressionalDistrict ?? null,
+			country: s.country ?? null,
+			encryptedPhone: s.encryptedPhone ?? null,
+			verified: s.verified,
+			identityVerified: !!(s.identityCommitment && s.verified),
+			emailStatus: s.emailStatus,
+			smsStatus: s.smsStatus,
+			source: s.source ?? null,
+			emailConsentSource: s.emailConsentSource ?? null,
+			emailConsentedAt: s.emailConsentedAt ?? null,
+			emailConsentText: s.emailConsentText ?? null,
+			smsConsentSource: s.smsConsentSource ?? null,
+			smsConsentedAt: s.smsConsentedAt ?? null,
+			smsConsentText: s.smsConsentText ?? null,
+			importedAt: s.importedAt ?? null,
+			encryptedCustomFields: s.encryptedCustomFields ?? null,
+			updatedAt: s.updatedAt,
+			// Compact ids only. The org route already loads the bounded tag
+			// directory once and resolves names without an N×M database join.
+			tagIds: s.browseTagIds ?? []
+		},
+		isEditor
+	);
+}
+
 /**
  * Paginated supporter list with filters. Returns encrypted PII blobs.
  */
@@ -173,128 +231,16 @@ export const list = query({
 	handler: async (ctx, args) => {
 		const { org, membership } = await requireOrgRole(ctx, args.orgSlug, 'member');
 		const isEditor = membershipIsEditor(membership.role);
-		const { cursor, numItems } = args.paginationOpts;
-		const filters = args.filters;
-
-		// All filters post-process in memory; org scope is always the primary index.
-		// Use .take() with a bounded cap to prevent unbounded memory usage.
-		const limit = Math.min(numItems, 100);
-		const MAX_SCAN = 10_000;
-		// Take ONE extra row as a truncation sentinel: an org sitting at exactly
-		// MAX_SCAN is complete, not truncated. `take(MAX_SCAN)` + `>= MAX_SCAN`
-		// would false-flag it. Fetch MAX_SCAN + 1 and treat `> MAX_SCAN` as the
-		// real truncation signal, then drop the sentinel row from the working set.
-		const scanned = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.order('desc')
-			.take(MAX_SCAN + 1);
-
-		// Scan newest-first so the 10K window is the MOST RECENT supporters — the
-		// rows an operator actually wants, and what the page's "showing the most
-		// recent 10,000" notice truthfully describes. When the scan saturates the
-		// cap, rows beyond the window (the OLDEST) are absent; surface the cap
-		// honestly so the page warns instead of presenting a truncated list as
-		// complete. Mirrors the v1 API's `truncated`/`scanLimit` envelope
-		// (convex/v1api.ts listSupporters).
-		const scanCapped = scanned.length > MAX_SCAN;
-		// Drop the sentinel +1 row so it isn't processed or returned.
-		const allDocs = scanned.slice(0, MAX_SCAN);
-
-		// Apply filters in memory (Convex indexes are limited to equality prefixes)
-		let filtered = allDocs;
-		if (filters?.emailStatus) {
-			filtered = filtered.filter((s) => s.emailStatus === filters.emailStatus);
-		}
-		if (filters?.verified !== undefined) {
-			filtered = filtered.filter((s) => s.verified === filters.verified);
-		}
-		if (filters?.source) {
-			filtered = filtered.filter((s) => supporterSourceValue(s) === filters.source);
-		}
-
-		// Tag filter: join supporterTags via a BOUNDED scan (a popular tag's link
-		// set can exceed the per-query doc cap). The list page already scans a
-		// bounded supporter window and intersects, so a capped membership set
-		// still yields a correct page for the scanned window.
-		if (filters?.tagId) {
-			const { supporterIds } = await collectTagSupporterIds(ctx, filters.tagId);
-			filtered = filtered.filter((s) => supporterIds.has(s._id));
-		}
-
-		// Two-stage ordering: the DB `order('desc')` above selects WHICH rows enter
-		// the scan window (the newest MAX_SCAN); this in-memory sort fixes the
-		// DISPLAY order of the filtered subset (newest first) after the filters run.
-		filtered.sort((a, b) => b._creationTime - a._creationTime);
-
-		// Cursor-based slicing
-		let startIdx = 0;
-		if (cursor) {
-			const cursorIdx = filtered.findIndex((s) => s._id === cursor);
-			if (cursorIdx >= 0) startIdx = cursorIdx + 1;
-		}
-
-		const page = filtered.slice(startIdx, startIdx + limit + 1);
-		const hasMore = page.length > limit;
-		const items = page.slice(0, limit);
-
-		// Return encrypted blobs — client decrypts with org key
-		const supporters = await Promise.all(
-			items.map(async (s) => {
-				// Load tags for this supporter
-				const tagLinks = await ctx.db
-					.query('supporterTags')
-					.withIndex('by_supporterId', (idx) => idx.eq('supporterId', s._id))
-					.collect();
-				const tags = await Promise.all(
-					tagLinks.map(async (link) => {
-						const tag = await ctx.db.get(link.tagId);
-						return tag ? { _id: tag._id, name: tag.name } : null;
-					})
-				);
-
-				return projectSupporterFields(
-					{
-						_id: s._id,
-						_creationTime: s._creationTime,
-						encryptedEmail: s.encryptedEmail,
-						emailHash: s.emailHash ?? null,
-						encryptedName: s.encryptedName ?? null,
-						postalCode: s.postalCode ?? null,
-						stateCode: s.stateCode ?? null,
-						congressionalDistrict: s.congressionalDistrict ?? null,
-						country: s.country ?? null,
-						encryptedPhone: s.encryptedPhone ?? null,
-						verified: s.verified,
-						identityVerified: !!(s.identityCommitment && s.verified),
-						emailStatus: s.emailStatus,
-						smsStatus: s.smsStatus,
-						source: s.source ?? null,
-						emailConsentSource: s.emailConsentSource ?? null,
-						emailConsentedAt: s.emailConsentedAt ?? null,
-						emailConsentText: s.emailConsentText ?? null,
-						smsConsentSource: s.smsConsentSource ?? null,
-						smsConsentedAt: s.smsConsentedAt ?? null,
-						smsConsentText: s.smsConsentText ?? null,
-						importedAt: s.importedAt ?? null,
-						encryptedCustomFields: s.encryptedCustomFields ?? null,
-						updatedAt: s.updatedAt,
-						tags: tags.filter((t): t is NonNullable<typeof t> => t !== null)
-					},
-					isEditor
-				);
-			})
-		);
-
-		const nextCursor = hasMore ? (items[items.length - 1]?._id ?? null) : null;
-
+		const page = await readSupporterBrowsePage(ctx, {
+			orgId: org._id,
+			cursor: args.paginationOpts.cursor,
+			numItems: args.paginationOpts.numItems,
+			filters: args.filters
+		});
 		return {
-			supporters,
-			nextCursor,
-			hasMore,
-			// Additive — existing consumers read { supporters, nextCursor, hasMore }.
-			truncated: scanCapped,
-			scanLimit: MAX_SCAN
+			supporters: page.page.map((doc) => projectSupporterBrowseRow(doc, isEditor)),
+			nextCursor: page.continueCursor,
+			hasMore: !page.isDone
 		};
 	}
 });
@@ -319,7 +265,8 @@ export const get = query({
 		const tagLinks = await ctx.db
 			.query('supporterTags')
 			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', supporter._id))
-			.collect();
+			.take(MAX_SUPPORTER_TAGS + 1);
+		if (tagLinks.length > MAX_SUPPORTER_TAGS) throw new Error('SUPPORTER_TAG_LIMIT_EXCEEDED');
 		const tags = await Promise.all(
 			tagLinks.map(async (link) => {
 				const tag = await ctx.db.get(link.tagId);
@@ -439,7 +386,8 @@ export const searchByEmail = query({
 		const tagLinks = await ctx.db
 			.query('supporterTags')
 			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', supporter._id))
-			.collect();
+			.take(MAX_SUPPORTER_TAGS + 1);
+		if (tagLinks.length > MAX_SUPPORTER_TAGS) throw new Error('SUPPORTER_TAG_LIMIT_EXCEEDED');
 		const tags = await Promise.all(
 			tagLinks.map(async (link) => {
 				const tag = await ctx.db.get(link.tagId);
@@ -525,28 +473,26 @@ export const getSummaryStats = query({
 	}
 });
 
-/**
- * District-of-record count for an org — distinct supporters with at least one
- * verified action carrying a districtHash. Lazy + bounded: a separate query so
- * the always-on funnel summary stays O(1), and the scan is capped so it can
- * never throw the per-query document-cap error the way the old unbounded
- * .collect() did. When the cap saturates, `truncated` is surfaced so the
- * consumer can present a floor (">= N") instead of a wrong exact number.
- *
- * Set cardinality (distinct supporterIds) can't be a denormalized counter
- * without double-counting cross-district supporters, so it is computed on
- * demand here rather than maintained as a scalar.
- */
+/** Exact distinct-supporter count from the write-maintained action projection. */
 export const getDistrictVerifiedCount = query({
 	args: {
 		orgSlug: v.string()
 	},
-	handler: async (ctx, args) => {
+	handler: async (
+		ctx,
+		args
+	): Promise<{
+		districtVerified: number;
+		truncated: boolean;
+		scanLimit: number;
+	}> => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
-
-		// Shared bounded path — same scan getDashboardStats's funnel uses, so the
-		// two never drift on the cap or the cardinality math.
-		return await computeDistrictVerified(ctx, org._id);
+		await assertSupporterAudienceActionReady(ctx);
+		return {
+			districtVerified: org.districtVerifiedSupporterCount ?? 0,
+			truncated: false,
+			scanLimit: 0
+		};
 	}
 });
 
@@ -557,28 +503,24 @@ export const getTags = query({
 	args: { orgSlug: v.string() },
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		await assertSupporterBrowseReady(ctx);
 
 		const tags = await ctx.db
 			.query('tags')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
+			.take(MAX_ORG_TAGS + 1);
+		if (tags.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
 
-		const rows = await Promise.all(
-			tags.map(async (t) => {
-				// Sub-class (B) pure count via a BOUNDED scan — a popular tag's link
-				// set can exceed the per-query doc cap. `truncated` marks a floor.
-				const { count, truncated } = await countTagSupporters(ctx, t._id);
-				return {
-					_id: t._id,
-					id: t._id,
-					name: t.name,
-					supporterCount: count,
-					supporterCountTruncated: truncated
-				};
-			})
-		);
-
-		return rows.sort((a, b) => a.name.localeCompare(b.name));
+		return tags
+			.map((tag) => ({
+				_id: tag._id,
+				id: tag._id,
+				name: tag.name,
+				supporterCount: tag.supporterCount ?? 0,
+				// Compatibility field: the count is now maintained and exact.
+				supporterCountTruncated: false
+			}))
+			.sort((a, b) => a.name.localeCompare(b.name));
 	}
 });
 
@@ -590,19 +532,21 @@ export const createTag = mutation({
 	args: { orgSlug: v.string(), name: v.string() },
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
-		const name = normalizeTagName(args.name);
-		const folded = name.toLowerCase();
+		const name = normalizeSupporterTagName(args.name);
+		const nameKey = supporterTagNameKey(name);
 
 		const tags = await ctx.db
 			.query('tags')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
-		const existing = tags.find((tag) => tag.name.toLowerCase() === folded);
+			.take(MAX_ORG_TAGS + 1);
+		if (tags.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
+		const existing = tags.find((tag) => supporterTagNameKey(tag.name) === nameKey);
 		if (existing) {
 			return { id: existing._id, name: existing.name, created: false };
 		}
 
-		const id = await ctx.db.insert('tags', { orgId: org._id, name });
+		if (tags.length >= MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
+		const id = await ctx.db.insert('tags', { orgId: org._id, name, nameKey, supporterCount: 0 });
 		return { id, name, created: true };
 	}
 });
@@ -614,26 +558,27 @@ export const renameTag = mutation({
 	args: { orgSlug: v.string(), tagId: v.id('tags'), name: v.string() },
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
-		const name = normalizeTagName(args.name);
+		const name = normalizeSupporterTagName(args.name);
 		const tag = await ctx.db.get(args.tagId);
 		if (!tag || tag.orgId !== org._id) {
 			throw new Error('TAG_NOT_FOUND');
 		}
 
-		const folded = name.toLowerCase();
+		const nameKey = supporterTagNameKey(name);
 		const tags = await ctx.db
 			.query('tags')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
+			.take(MAX_ORG_TAGS + 1);
+		if (tags.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
 		const duplicate = tags.find(
-			(candidate) => candidate._id !== args.tagId && candidate.name.toLowerCase() === folded
+			(candidate) => candidate._id !== args.tagId && supporterTagNameKey(candidate.name) === nameKey
 		);
 		if (duplicate) {
 			throw new Error('TAG_NAME_EXISTS');
 		}
 
 		if (tag.name !== name) {
-			await ctx.db.patch(args.tagId, { name });
+			await ctx.db.patch(args.tagId, { name, nameKey });
 		}
 		return { id: args.tagId, name, renamed: tag.name !== name };
 	}
@@ -662,9 +607,7 @@ export const deleteTag = mutation({
 			.query('supporterTags')
 			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
 			.take(TAG_DELETE_BATCH);
-		for (const link of batch) {
-			await ctx.db.delete(link._id);
-		}
+		for (const link of batch) await detachSupporterTagProjection(ctx, link);
 		await ctx.db.delete(args.tagId);
 
 		// More links than one batch could hold → drain the remainder out-of-band.
@@ -677,7 +620,7 @@ export const deleteTag = mutation({
 });
 
 /** Per-mutation cap on tag-link deletes. Well under the ~4096 write-op budget. */
-const TAG_DELETE_BATCH = 2_000;
+const TAG_DELETE_BATCH = 64;
 
 /**
  * Drain the remaining `supporterTags` rows for a deleted tag in bounded
@@ -693,13 +636,306 @@ export const purgeTagLinks = internalMutation({
 			.query('supporterTags')
 			.withIndex('by_tagId', (idx) => idx.eq('tagId', args.tagId))
 			.take(TAG_DELETE_BATCH);
-		for (const link of batch) {
-			await ctx.db.delete(link._id);
-		}
+		for (const link of batch) await detachSupporterTagProjection(ctx, link);
 		if (batch.length >= TAG_DELETE_BATCH) {
 			await ctx.scheduler.runAfter(0, internal.supporters.purgeTagLinks, { tagId: args.tagId });
 		}
 		return { removed: batch.length };
+	}
+});
+
+// =============================================================================
+// SUPPORTER BROWSE READ-MODEL CUTOVER
+// =============================================================================
+
+const SUPPORTER_BROWSE_LINK_PAGE = 24;
+const SUPPORTER_BROWSE_SUPPORTER_PAGE = 8;
+const SUPPORTER_BROWSE_TAG_PAGE = 32;
+const SUPPORTER_BROWSE_MIGRATION_MAX_BYTES = 4 * 1024 * 1024;
+
+type SupporterBrowsePhase = 'links' | 'supporters' | 'tags' | 'complete';
+
+function supporterBrowseFailure(error: unknown): string {
+	return (error instanceof Error ? error.message : String(error)).slice(0, 500);
+}
+
+/**
+ * Durable, restart-safe projection rebuild. Link markers make counter folding
+ * exactly-once; every page owns one opaque database continuation. Reads stay
+ * fail-closed until a separate activation proves every scanned row projected.
+ */
+export const migrateSupporterBrowse = internalMutation({
+	args: {
+		runToken: v.optional(v.string()),
+		restart: v.optional(v.boolean()),
+		scheduleContinuation: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		if (args.runToken !== undefined && args.restart) {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_INVALID_CONTROL');
+		}
+		let migration = await ctx.db
+			.query('supporterBrowseMigrations')
+			.withIndex('by_key', (q) => q.eq('key', SUPPORTER_BROWSE_MIGRATION_KEY))
+			.unique();
+		let runToken: string;
+		if (args.runToken !== undefined) {
+			if (!migration || migration.status !== 'running' || migration.runToken !== args.runToken) {
+				return { status: 'superseded' as const, runToken: args.runToken };
+			}
+			runToken = args.runToken;
+		} else if (!args.restart && migration?.status === 'ready') {
+			return { status: 'already-ready' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'migrated') {
+			return { status: 'already-migrated' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'running') {
+			return { status: 'already-running' as const, runToken: migration.runToken };
+		} else if (!args.restart && migration?.status === 'blocked') {
+			return {
+				status: 'blocked' as const,
+				runToken: migration.runToken,
+				failureCode: migration.failureCode ?? null
+			};
+		} else {
+			runToken = crypto.randomUUID();
+			const now = Date.now();
+			const initial = {
+				key: SUPPORTER_BROWSE_MIGRATION_KEY as 'supporter-browse-v1',
+				status: 'running' as const,
+				runToken,
+				phase: 'links' as const,
+				cursor: undefined,
+				scanned: 0,
+				projected: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				failurePhase: undefined,
+				startedAt: now,
+				completedAt: undefined,
+				updatedAt: now
+			};
+			if (migration) await ctx.db.patch(migration._id, initial);
+			else await ctx.db.insert('supporterBrowseMigrations', initial);
+			migration = await ctx.db
+				.query('supporterBrowseMigrations')
+				.withIndex('by_key', (q) => q.eq('key', SUPPORTER_BROWSE_MIGRATION_KEY))
+				.unique();
+		}
+		if (!migration || migration.status !== 'running' || migration.runToken !== runToken) {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_STATE_MISSING');
+		}
+
+		const phase = migration.phase as SupporterBrowsePhase;
+		if (!['links', 'supporters', 'tags', 'complete'].includes(phase)) {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_PHASE_INVALID');
+		}
+		if (phase === 'complete') {
+			return {
+				status: 'migrated' as const,
+				runToken,
+				scanned: migration.scanned,
+				projected: migration.projected
+			};
+		}
+
+		const pageSize =
+			phase === 'links'
+				? SUPPORTER_BROWSE_LINK_PAGE
+				: phase === 'supporters'
+					? SUPPORTER_BROWSE_SUPPORTER_PAGE
+					: SUPPORTER_BROWSE_TAG_PAGE;
+		const pagination = {
+			cursor: migration.cursor ?? null,
+			numItems: pageSize,
+			maximumRowsRead: pageSize + 1,
+			maximumBytesRead: SUPPORTER_BROWSE_MIGRATION_MAX_BYTES
+		};
+		const page =
+			phase === 'links'
+				? await ctx.db.query('supporterTags').order('asc').paginate(pagination)
+				: phase === 'supporters'
+					? await ctx.db.query('supporters').order('asc').paginate(pagination)
+					: await ctx.db.query('tags').order('asc').paginate(pagination);
+		if (page.pageStatus === 'SplitRequired') {
+			const failureCode = 'SUPPORTER_BROWSE_MIGRATION_PAGE_SPLIT_REQUIRED';
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode,
+				failurePhase: phase,
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const, runToken, failureCode, failurePhase: phase };
+		}
+
+		let scanned = migration.scanned;
+		let projected = migration.projected;
+		for (const source of page.page) {
+			try {
+				if (phase === 'links') {
+					const link = source as Doc<'supporterTags'>;
+					const supporter = await ctx.db.get(link.supporterId);
+					const tag = await ctx.db.get(link.tagId);
+					if (!supporter || !tag) {
+						if (tag && link.supporterBrowseVersion === SUPPORTER_BROWSE_VERSION) {
+							await ctx.db.patch(tag._id, {
+								supporterCount: Math.max(0, (tag.supporterCount ?? 0) - 1)
+							});
+						}
+						await ctx.db.delete(link._id);
+					} else {
+						if (supporter.orgId !== tag.orgId) throw new Error('SUPPORTER_TAG_CROSS_ORG');
+						const canonical = await ctx.db
+							.query('supporterTags')
+							.withIndex('by_supporterId_tagId', (q) =>
+								q.eq('supporterId', supporter._id).eq('tagId', tag._id)
+							)
+							.first();
+						if (canonical && canonical._id !== link._id) {
+							if (link.supporterBrowseVersion === SUPPORTER_BROWSE_VERSION) {
+								await ctx.db.patch(tag._id, {
+									supporterCount: Math.max(0, (tag.supporterCount ?? 0) - 1)
+								});
+							}
+							await ctx.db.delete(link._id);
+						} else if (link.supporterBrowseVersion !== SUPPORTER_BROWSE_VERSION) {
+							await ctx.db.patch(link._id, {
+								supporterCreatedAt: supporter._creationTime,
+								supporterBrowseVersion: SUPPORTER_BROWSE_VERSION
+							});
+							await ctx.db.patch(tag._id, {
+								supporterCount: (tag.supporterCount ?? 0) + 1
+							});
+						} else if (link.supporterCreatedAt !== supporter._creationTime) {
+							await ctx.db.patch(link._id, { supporterCreatedAt: supporter._creationTime });
+						}
+					}
+				} else if (phase === 'supporters') {
+					const supporter = source as Doc<'supporters'>;
+					const links = await ctx.db
+						.query('supporterTags')
+						.withIndex('by_supporterId', (q) => q.eq('supporterId', supporter._id))
+						.take(MAX_SUPPORTER_TAGS + 1);
+					if (links.length > MAX_SUPPORTER_TAGS) throw new Error('SUPPORTER_TAG_LIMIT_EXCEEDED');
+					const tagIds: Id<'tags'>[] = [];
+					const seen = new Set<string>();
+					for (const link of links) {
+						if (link.supporterBrowseVersion !== SUPPORTER_BROWSE_VERSION) {
+							throw new Error('SUPPORTER_TAG_LINK_NOT_PROJECTED');
+						}
+						const tag = await ctx.db.get(link.tagId);
+						if (!tag || tag.orgId !== supporter.orgId) {
+							throw new Error('SUPPORTER_TAG_LINK_DRIFT');
+						}
+						if (!seen.has(String(tag._id))) {
+							seen.add(String(tag._id));
+							tagIds.push(tag._id);
+						}
+					}
+					await ctx.db.patch(supporter._id, {
+						browseSource: normalizeSupporterBrowseSource(supporter.source),
+						browseTagIds: tagIds,
+						supporterBrowseVersion: SUPPORTER_BROWSE_VERSION
+					});
+				} else {
+					const tag = source as Doc<'tags'>;
+					const nameKey = supporterTagNameKey(tag.name);
+					const duplicate = await ctx.db
+						.query('tags')
+						.withIndex('by_orgId_nameKey', (q) => q.eq('orgId', tag.orgId).eq('nameKey', nameKey))
+						.first();
+					if (duplicate && duplicate._id !== tag._id) throw new Error('TAG_NAME_EXISTS');
+					await ctx.db.patch(tag._id, {
+						nameKey,
+						supporterCount: tag.supporterCount ?? 0
+					});
+				}
+				scanned++;
+				projected++;
+			} catch (error) {
+				const failureCode = supporterBrowseFailure(error);
+				await ctx.db.patch(migration._id, {
+					status: 'blocked',
+					failureCode,
+					failureSourceId: String(source._id).slice(0, 256),
+					failurePhase: phase,
+					updatedAt: Date.now()
+				});
+				return { status: 'blocked' as const, runToken, failureCode, failurePhase: phase };
+			}
+		}
+
+		const nextPhase: SupporterBrowsePhase = page.isDone
+			? phase === 'links'
+				? 'supporters'
+				: phase === 'supporters'
+					? 'tags'
+					: 'complete'
+			: phase;
+		const complete = nextPhase === 'complete';
+		await ctx.db.patch(migration._id, {
+			status: complete ? 'migrated' : 'running',
+			phase: nextPhase,
+			cursor: page.isDone ? undefined : page.continueCursor,
+			scanned,
+			projected,
+			completedAt: complete ? Date.now() : undefined,
+			updatedAt: Date.now()
+		});
+		if (!complete && args.scheduleContinuation !== false) {
+			await ctx.scheduler.runAfter(0, migrateSupporterBrowseRef, { runToken });
+		}
+		return {
+			status: complete ? ('migrated' as const) : ('running' as const),
+			runToken,
+			phase: nextPhase,
+			scanned,
+			projected
+		};
+	}
+});
+
+export const activateSupporterBrowse = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('supporterBrowseMigrations')
+			.withIndex('by_key', (q) => q.eq('key', SUPPORTER_BROWSE_MIGRATION_KEY))
+			.unique();
+		if (migration?.status === 'ready') return { status: 'ready' as const };
+		if (!migration || migration.status !== 'migrated' || migration.phase !== 'complete') {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_INCOMPLETE');
+		}
+		if (migration.cursor !== undefined || migration.failureCode !== undefined) {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_DIRTY');
+		}
+		if (migration.scanned !== migration.projected) {
+			throw new Error('SUPPORTER_BROWSE_MIGRATION_INEXACT');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { status: 'ready' as const, scanned: migration.scanned };
+	}
+});
+
+export const supporterBrowseMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('supporterBrowseMigrations')
+			.withIndex('by_key', (q) => q.eq('key', SUPPORTER_BROWSE_MIGRATION_KEY))
+			.unique();
+		return migration
+			? {
+					status: migration.status,
+					phase: migration.phase,
+					runToken: migration.runToken,
+					scanned: migration.scanned,
+					projected: migration.projected,
+					cursor: migration.cursor ?? null,
+					failureCode: migration.failureCode ?? null,
+					failureSourceId: migration.failureSourceId ?? null,
+					failurePhase: migration.failurePhase ?? null
+				}
+			: { status: 'missing' as const };
 	}
 });
 
@@ -734,14 +970,11 @@ export const create = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertSupporterInputBudget(args, 'SUPPORTER_CREATE');
 
-		// Enforce PII triple coherence at create time. Direct caller paths
-		// (this `create`, `importBatch`, `v1api.createSupporter`) have the
-		// full triple in hand — they can fail closed. The two-phase
-		// `findOrCreateSupporter` + `patchEncryptedPii` pattern used by
-		// `campaigns.submitAction` is exempted because its placeholder
-		// ciphertext state is transient by design; that path is tracked
-		// for a future refactor.
+		// Enforce PII triple coherence at create time. Current create,
+		// import, v1 API, and campaign-submission paths all have ciphertext
+		// plus both hashes before their first insert and fail closed here.
 		assertPiiTripleCreate(args);
 
 		// Dedup check using org-scoped emailHash
@@ -756,7 +989,15 @@ export const create = mutation({
 			throw new Error('A supporter with this email already exists');
 		}
 
+		const tagIds = uniqueSupporterTagIds(args.tagIds ?? []);
+		for (const tagId of tagIds) {
+			const tag = await ctx.db.get(tagId);
+			if (!tag) throw new Error('TAG_NOT_FOUND');
+			if (tag.orgId !== org._id) throw new Error('TAG_CROSS_ORG');
+		}
+
 		const now = Date.now();
+		const source = args.source ?? 'organic';
 
 		const supporterId = await ctx.db.insert('supporters', {
 			orgId: org._id,
@@ -776,7 +1017,10 @@ export const create = mutation({
 			stateCode: args.stateCode,
 			congressionalDistrict: args.congressionalDistrict,
 			country: args.country ?? 'US',
-			source: args.source ?? 'organic',
+			source,
+			browseSource: normalizeSupporterBrowseSource(source),
+			browseTagIds: tagIds,
+			supporterBrowseVersion: SUPPORTER_BROWSE_VERSION,
 			encryptedCustomFields: args.encryptedCustomFields,
 			verified: false,
 			emailStatus: 'subscribed',
@@ -785,16 +1029,8 @@ export const create = mutation({
 		});
 
 		// Link tags
-		if (args.tagIds && args.tagIds.length > 0) {
-			for (const tagId of args.tagIds) {
-				const tag = await ctx.db.get(tagId);
-				if (tag && tag.orgId === org._id) {
-					await ctx.db.insert('supporterTags', {
-						supporterId,
-						tagId
-					});
-				}
-			}
+		for (const tagId of tagIds) {
+			await attachSupporterTagProjection(ctx, { supporterId, tagId });
 		}
 
 		// Emit supporter.created event (T9-3). No PII in payload — supporter
@@ -805,7 +1041,7 @@ export const create = mutation({
 			event: 'supporter.created',
 			payload: JSON.stringify({
 				supporterId,
-				source: args.source ?? 'organic',
+				source,
 				country: args.country ?? 'US',
 				timestamp: now
 			})
@@ -817,7 +1053,7 @@ export const create = mutation({
 			triggerEvent: {
 				type: 'supporter_created',
 				supporterId,
-				source: args.source ?? 'organic',
+				source,
 				country: args.country ?? 'US',
 				timestamp: now
 			}
@@ -839,6 +1075,7 @@ export const create = mutation({
 			onboardingState: { ...onboarding, hasSupporters: true },
 			updatedAt: now
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		// Maintain the denormalized breakdown counters for the just-created row.
 		// New rows always land subscribed/none with no identity/consent, so the
@@ -846,6 +1083,10 @@ export const create = mutation({
 		// when present). Re-read the org inside the helper to fold onto the count
 		// we just wrote.
 		await applySupporterStatsDelta(ctx, org._id, null, {
+			_id: supporterId,
+			globalEmailHash: args.globalEmailHash,
+			country: args.country ?? 'US',
+			verified: false,
 			emailStatus: 'subscribed',
 			smsStatus: 'none',
 			source: args.source ?? 'organic',
@@ -883,11 +1124,13 @@ export const update = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertSupporterInputBudget(args, 'SUPPORTER_UPDATE_INPUT');
 
 		const supporter = await ctx.db.get(args.supporterId);
 		if (!supporter || supporter.orgId !== org._id) {
 			throw new Error('Supporter not found');
 		}
+		assertSupporterInputBudget({ ...supporter, ...args }, 'SUPPORTER_UPDATE');
 
 		const patch: Record<string, unknown> = { updatedAt: Date.now() };
 
@@ -931,37 +1174,34 @@ export const update = mutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+		if (hasEncEmail || hasEncPhone) await bumpContactAuthorityEpoch(ctx, Date.now());
 
 		// postalCode / phone are counted breakdown fields and can change here
 		// (e.g. a supporter gains an address or phone on edit). Apply a
 		// transition delta from the pre-patch row to the post-patch row so
 		// postalResolved / phonePresent stay exact. The merged `after` view
 		// reuses the existing value for any field this update didn't touch.
-		await applySupporterStatsDelta(
-			ctx,
-			org._id,
-			supporter as CountableSupporter,
-			{
-				emailStatus: supporter.emailStatus,
-				smsStatus: supporter.smsStatus,
-				source: supporter.source,
-				postalCode:
-					'postalCode' in patch ? (patch.postalCode as string | undefined) : supporter.postalCode,
-				encryptedPhone:
-					'encryptedPhone' in patch
-						? (patch.encryptedPhone as string | undefined)
-						: supporter.encryptedPhone,
-				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash,
-				identityCommitment: supporter.identityCommitment,
-				verified: supporter.verified,
-				emailConsentSource: supporter.emailConsentSource,
-				emailConsentedAt: supporter.emailConsentedAt,
-				emailConsentText: supporter.emailConsentText,
-				smsConsentSource: supporter.smsConsentSource,
-				smsConsentedAt: supporter.smsConsentedAt,
-				smsConsentText: supporter.smsConsentText
-			}
-		);
+		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, {
+			emailStatus: supporter.emailStatus,
+			smsStatus: supporter.smsStatus,
+			source: supporter.source,
+			postalCode:
+				'postalCode' in patch ? (patch.postalCode as string | undefined) : supporter.postalCode,
+			encryptedPhone:
+				'encryptedPhone' in patch
+					? (patch.encryptedPhone as string | undefined)
+					: supporter.encryptedPhone,
+			phoneHash:
+				'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash,
+			identityCommitment: supporter.identityCommitment,
+			verified: supporter.verified,
+			emailConsentSource: supporter.emailConsentSource,
+			emailConsentedAt: supporter.emailConsentedAt,
+			emailConsentText: supporter.emailConsentText,
+			smsConsentSource: supporter.smsConsentSource,
+			smsConsentedAt: supporter.smsConsentedAt,
+			smsConsentText: supporter.smsConsentText
+		});
 
 		// Emit supporter.updated (A4) once per edit via this canonical update
 		// path — NOT from tag/sms sub-mutations, which would over-emit. No PII.
@@ -997,8 +1237,10 @@ export const patchEncryptedPii = internalMutation({
 		encryptedCustomFields: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		assertSupporterInputBudget(args, 'SUPPORTER_PII_PATCH_INPUT');
 		const supporter = await ctx.db.get(args.supporterId);
 		if (!supporter) throw new Error('Supporter not found');
+		assertSupporterInputBudget({ ...supporter, ...args }, 'SUPPORTER_PII_PATCH');
 
 		const patch: Record<string, unknown> = {
 			encryptedEmail: args.encryptedEmail,
@@ -1013,23 +1255,26 @@ export const patchEncryptedPii = internalMutation({
 			patch.encryptedCustomFields = args.encryptedCustomFields;
 
 		await ctx.db.patch(args.supporterId, patch);
+		if (
+			args.globalEmailHash !== undefined ||
+			args.globalPhoneHash !== undefined ||
+			args.encryptedPhone !== undefined
+		) {
+			await bumpContactAuthorityEpoch(ctx, Date.now());
+		}
 
 		// encryptedPhone / phoneHash can change here (operator repair path), so
 		// keep phonePresent exact via a transition delta. All other counted
 		// fields are unchanged by this mutation.
-		await applySupporterStatsDelta(
-			ctx,
-			supporter.orgId,
-			supporter as CountableSupporter,
-			{
-				...(supporter as CountableSupporter),
-				encryptedPhone:
-					'encryptedPhone' in patch
-						? (patch.encryptedPhone as string | undefined)
-						: supporter.encryptedPhone,
-				phoneHash: 'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash
-			}
-		);
+		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
+			...(supporter as CountableSupporter),
+			encryptedPhone:
+				'encryptedPhone' in patch
+					? (patch.encryptedPhone as string | undefined)
+					: supporter.encryptedPhone,
+			phoneHash:
+				'phoneHash' in patch ? (patch.phoneHash as string | undefined) : supporter.phoneHash
+		});
 	}
 });
 
@@ -1053,18 +1298,17 @@ export const remove = mutation({
 			throw new Error('Supporter not found');
 		}
 
-		// Delete all tag links for this supporter
-		const tagLinks = await ctx.db
-			.query('supporterTags')
-			.withIndex('by_supporterId', (idx) => idx.eq('supporterId', args.supporterId))
-			.collect();
-
-		for (const link of tagLinks) {
-			await ctx.db.delete(link._id);
-		}
+		// Delete the deliberately bounded link set and reverse exact tag counters.
+		await detachAllSupporterTagProjections(ctx, args.supporterId);
+		await detachSupporterAudienceProjection(ctx, {
+			orgId: org._id,
+			supporterId: args.supporterId
+		});
 
 		// Delete the supporter
 		await ctx.db.delete(args.supporterId);
+		await bumpContactAuthorityEpoch(ctx, Date.now());
+		await syncSupporterIdentityReceiptProjections(ctx, args.supporterId, org._id);
 
 		// Decrement org supporterCount
 		const newCount = Math.max((org.supporterCount ?? 1) - 1, 0);
@@ -1072,6 +1316,7 @@ export const remove = mutation({
 			supporterCount: newCount,
 			updatedAt: Date.now()
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		// Decrement the breakdown counters for the deleted row.
 		await applySupporterStatsDelta(ctx, org._id, supporter as CountableSupporter, null);
@@ -1115,34 +1360,26 @@ export const addTag = mutation({
 			throw new Error('Tag not found');
 		}
 
-		// Check if link already exists (idempotent)
-		const existing = await ctx.db
-			.query('supporterTags')
-			.withIndex('by_supporterId_tagId', (idx) =>
-				idx.eq('supporterId', args.supporterId).eq('tagId', args.tagId)
-			)
-			.first();
-
-		if (existing) return existing._id;
-
-		const supporterTagId = await ctx.db.insert('supporterTags', {
+		const result = await attachSupporterTagProjection(ctx, {
 			supporterId: args.supporterId,
 			tagId: args.tagId
 		});
-		await ctx.runMutation(internal.workflows.dispatchTrigger, {
-			orgId: org._id,
-			triggerType: 'tag_added',
-			supporterId: args.supporterId,
-			triggerEvent: {
-				type: 'tag_added',
+		if (result.created) {
+			await ctx.runMutation(internal.workflows.dispatchTrigger, {
+				orgId: org._id,
+				triggerType: 'tag_added',
 				supporterId: args.supporterId,
-				tagId: args.tagId,
-				tagName: tag.name,
-				timestamp: Date.now()
-			}
-		});
+				triggerEvent: {
+					type: 'tag_added',
+					supporterId: args.supporterId,
+					tagId: args.tagId,
+					tagName: tag.name,
+					timestamp: Date.now()
+				}
+			});
+		}
 
-		return supporterTagId;
+		return result.linkId;
 	}
 });
 
@@ -1172,7 +1409,7 @@ export const removeTag = mutation({
 			.first();
 
 		if (link) {
-			await ctx.db.delete(link._id);
+			await detachSupporterTagProjection(ctx, link);
 		}
 
 		return { removed: true };
@@ -1212,11 +1449,13 @@ export const updateSmsStatus = mutation({
 			return { updated: true };
 		}
 
+		const now = Date.now();
 		const after = { ...supporter, smsStatus: args.smsStatus };
 		await ctx.db.patch(args.supporterId, {
 			smsStatus: args.smsStatus,
-			updatedAt: Date.now()
+			updatedAt: now
 		});
+		await bumpContactAuthorityEpoch(ctx, now);
 		// This manual editor is a status writer like the webhook paths; without
 		// the delta the smsSubscribed/smsUnsubscribed/smsNone buckets drift.
 		await applySupporterStatsDelta(ctx, org._id, supporter, after);
@@ -1260,10 +1499,15 @@ export const unsubscribe = mutation({
 		requireInternalSecret(_secret);
 		const supporter = await ctx.db.get(supporterId);
 		if (!supporter) throw new Error('Supporter not found');
+		if (supporter.emailStatus === 'unsubscribed' || supporter.emailStatus === 'complained') {
+			return { success: true };
+		}
+		const now = Date.now();
 		await ctx.db.patch(supporterId, {
 			emailStatus: 'unsubscribed',
-			updatedAt: Date.now()
+			updatedAt: now
 		});
+		await bumpContactAuthorityEpoch(ctx, now);
 		// emailStatus transition — move the supporter out of its old email
 		// bucket and into 'unsubscribed' in the breakdown counters.
 		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
@@ -1282,22 +1526,42 @@ export const ensureTags = mutation({
 	args: { slug: v.string(), tagNames: v.array(v.string()) },
 	handler: async (ctx, { slug, tagNames }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const normalizedNames = Array.from(
+			new Map(
+				tagNames.map((rawName) => {
+					const name = normalizeSupporterTagName(rawName);
+					return [supporterTagNameKey(name), name] as const;
+				})
+			).values()
+		);
+		const orgTags = await ctx.db
+			.query('tags')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_ORG_TAGS + 1);
+		if (orgTags.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
+		const byKey = new Map(orgTags.map((tag) => [supporterTagNameKey(tag.name), tag]));
+		const missing = normalizedNames.filter((name) => !byKey.has(supporterTagNameKey(name)));
+		if (orgTags.length + missing.length > MAX_ORG_TAGS) throw new Error('ORG_TAG_LIMIT_EXCEEDED');
 
 		const tagMap: Record<string, string> = {};
-		for (const name of tagNames) {
-			// Check existing
-			const existing = await ctx.db
-				.query('tags')
-				.withIndex('by_orgId_name', (idx) => idx.eq('orgId', org._id).eq('name', name))
-				.first();
+		let tagsCreated = 0;
+		for (const name of normalizedNames) {
+			const nameKey = supporterTagNameKey(name);
+			const existing = byKey.get(nameKey);
 			if (existing) {
 				tagMap[name] = existing._id;
 			} else {
-				const id = await ctx.db.insert('tags', { orgId: org._id, name });
+				const id = await ctx.db.insert('tags', {
+					orgId: org._id,
+					name,
+					nameKey,
+					supporterCount: 0
+				});
 				tagMap[name] = id;
+				tagsCreated++;
 			}
 		}
-		return { tagMap, tagsCreated: tagNames.length - Object.keys(tagMap).length };
+		return { tagMap, tagsCreated };
 	}
 });
 
@@ -1355,15 +1619,16 @@ export const importBatch = mutation({
 	},
 	handler: async (ctx, { slug, supporters }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'editor');
-		// Apply the PII triple invariant before the batch insert loop so
-		// a partially-coherent row is rejected before any side effects.
-		// The bulk-import action that wraps this mutation uses the
-		// two-phase placeholder pattern (encryptedEmail="" + populated
-		// hashes, then a follow-up patchEncryptedPii lands real ciphertext)
-		// — pass `allowPlaceholder: true` so the helper admits that
-		// transient state. Public-facing mutations (`supporters.create`,
-		// `v1api.createSupporter`) pass false to reject placeholder rows
-		// from being minted by direct callers.
+		if (supporters.length > SUPPORTER_IMPORT_WRITE_BATCH) {
+			throw new Error('SUPPORTER_IMPORT_WRITE_BATCH_EXCEEDED');
+		}
+		assertSupporterInputBatchBudget(supporters, 'SUPPORTER_IMPORT');
+		// Apply the PII triple invariant before the batch insert loop so a
+		// partially coherent row is rejected before any side effects. The
+		// enclosing action now encrypts every row before invoking this
+		// mutation; the compatibility flag remains scoped to this internal
+		// boundary while the recurring-work verifier prohibits any empty
+		// encryptedEmail writer in the runtime module.
 		for (const s of supporters) {
 			assertPiiTripleCreate({ ...s, allowPlaceholder: true });
 		}
@@ -1378,6 +1643,7 @@ export const importBatch = mutation({
 			before: CountableSupporter | null;
 			after: CountableSupporter | null;
 		}> = [];
+		let contactEligibilityChanged = false;
 
 		// Pre-validate every tagId belongs to THIS org. Accepting
 		// `tagIds: v.array(v.string())` with a `tagId as any` cast at
@@ -1391,6 +1657,9 @@ export const importBatch = mutation({
 		// count-then-continue).
 		const allTagIds = new Set<string>();
 		for (const s of supporters) {
+			if (new Set(s.tagIds).size > MAX_SUPPORTER_TAGS) {
+				throw new Error('SUPPORTER_TAG_LIMIT_EXCEEDED');
+			}
 			for (const t of s.tagIds) allTagIds.add(t);
 		}
 		const validTagIds = new Set<string>();
@@ -1465,6 +1734,9 @@ export const importBatch = mutation({
 					if (Object.keys(patch).length > 0) {
 						patch.updatedAt = Date.now();
 						await ctx.db.patch(existing._id, patch);
+						if ('emailStatus' in patch || 'smsStatus' in patch) {
+							contactEligibilityChanged = true;
+						}
 						// Import can fill in postal/phone/consent and apply a
 						// stricter email/sms status on an existing row — all
 						// counted. Queue a transition delta from the pre-patch row
@@ -1472,31 +1744,30 @@ export const importBatch = mutation({
 						// after the loop so a 5000-row import does one org write.
 						statsDeltas.push({
 							before: existing as CountableSupporter,
-							after: { ...(existing as CountableSupporter), ...(patch as Partial<CountableSupporter>) }
+							after: {
+								...(existing as CountableSupporter),
+								...(patch as Partial<CountableSupporter>)
+							}
 						});
 					}
 
 					// Add tags (skip duplicates). tagId was pre-validated against
 					// org._id above so the `as any` cast can't reach cross-org
 					// tag rows.
-					for (const tagId of s.tagIds) {
+					for (const tagId of new Set(s.tagIds)) {
 						const normalizedTagId = ctx.db.normalizeId('tags', tagId)!;
-						const existingTag = await ctx.db
-							.query('supporterTags')
-							.withIndex('by_supporterId_tagId', (idx) =>
-								idx.eq('supporterId', existing._id).eq('tagId', normalizedTagId)
-							)
-							.first();
-						if (!existingTag) {
-							await ctx.db.insert('supporterTags', {
-								supporterId: existing._id,
-								tagId: normalizedTagId
-							});
-						}
+						await attachSupporterTagProjection(ctx, {
+							supporterId: existing._id,
+							tagId: normalizedTagId
+						});
 					}
 					updated++;
 				} else {
 					// Create new supporter
+					const source = s.source ?? 'csv';
+					const browseTagIds = uniqueSupporterTagIds(
+						Array.from(new Set(s.tagIds)).map((tagId) => ctx.db.normalizeId('tags', tagId)!)
+					);
 					const id = await ctx.db.insert('supporters', {
 						orgId: org._id,
 						encryptedName: s.encryptedName,
@@ -1518,7 +1789,10 @@ export const importBatch = mutation({
 						smsConsentedAt: s.smsConsentedAt,
 						smsConsentText: s.smsConsentText,
 						verified: false,
-						source: s.source ?? 'csv',
+						source,
+						browseSource: normalizeSupporterBrowseSource(source),
+						browseTagIds,
+						supporterBrowseVersion: SUPPORTER_BROWSE_VERSION,
 						encryptedEmail: s.encryptedEmail,
 						emailHash: s.emailHash,
 						encryptedCustomFields: s.encryptedCustomFields,
@@ -1526,18 +1800,18 @@ export const importBatch = mutation({
 					});
 
 					// Add tags
-					for (const tagId of s.tagIds) {
-						const normalizedTagId = ctx.db.normalizeId('tags', tagId)!;
-						await ctx.db.insert('supporterTags', {
-							supporterId: id,
-							tagId: normalizedTagId
-						});
+					for (const tagId of browseTagIds) {
+						await attachSupporterTagProjection(ctx, { supporterId: id, tagId });
 					}
 					imported++;
 					// Queue a create delta for the new row's breakdown counters.
 					statsDeltas.push({
 						before: null,
 						after: {
+							_id: id,
+							globalEmailHash: s.globalEmailHash,
+							country: s.country ?? undefined,
+							verified: false,
 							emailStatus: s.emailStatus,
 							smsStatus: s.smsStatus,
 							source: s.source ?? 'csv',
@@ -1585,8 +1859,10 @@ export const importBatch = mutation({
 				onboardingState: { ...onboarding, hasSupporters: true },
 				updatedAt: Date.now()
 			});
+			await syncPublicOrganizationDirectory(ctx, org._id);
 		}
 		await applySupporterStatsDeltaBatch(ctx, org._id, statsDeltas);
+		if (contactEligibilityChanged) await bumpContactAuthorityEpoch(ctx, Date.now());
 
 		return { imported, updated, skipped, errors };
 	}
@@ -1627,6 +1903,7 @@ export const importWithEncryption = action({
 		// Auth check first — before any key operations
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
+		assertSupporterInputBatchBudget(args.supporters, 'SUPPORTER_PLAINTEXT_IMPORT');
 
 		// action-boundary length caps. Imports are bounded; if a CSV
 		// upload produces 5,000 rows of valid data fine, but no single row should
@@ -1678,7 +1955,6 @@ export const importWithEncryption = action({
 		// closes the amplification window; same shape of defense as
 		// `segments.exportDecrypted`.
 		await ctx.runQuery(requireImportAuthRef, { slug: args.slug });
-
 
 		// Get org ID from slug
 		const org = await ctx.runQuery(getOrganizationBySlugRef, { slug: args.slug });
@@ -1759,10 +2035,17 @@ export const importWithEncryption = action({
 			})
 		);
 
-		const result = await ctx.runMutation(importBatchRef, {
-			slug: args.slug,
-			supporters: rows
-		});
+		const result = { imported: 0, updated: 0, skipped: 0, errors: [] as string[] };
+		for (let offset = 0; offset < rows.length; offset += SUPPORTER_IMPORT_WRITE_BATCH) {
+			const chunk = await ctx.runMutation(importBatchRef, {
+				slug: args.slug,
+				supporters: rows.slice(offset, offset + SUPPORTER_IMPORT_WRITE_BATCH)
+			});
+			result.imported += chunk.imported;
+			result.updated += chunk.updated;
+			result.skipped += chunk.skipped;
+			result.errors.push(...chunk.errors);
+		}
 
 		return result;
 	}
@@ -1773,14 +2056,10 @@ export const importWithEncryption = action({
 // =============================================================================
 
 /**
- * Internal query: collect a page of supporters whose encryptedEmail is
- * still the empty-string placeholder set by the two-phase create
- * pattern (`campaigns.submitAction` → `findOrCreateSupporter` writes
- * `encryptedEmail: ""`, then a follow-up `patchEncryptedPii` lands the
- * real ciphertext). If the action crashes between those two mutations,
- * the row is stranded with empty ciphertext forever. This query finds
- * stranded rows older than the threshold so the cleanup action can
- * delete them.
+ * Internal query: collect one page of legacy/operator-bootstrap supporters
+ * that still have an empty encryptedEmail. Current submission and import
+ * writers encrypt before their first insert; this query exists solely for
+ * the explicitly activated, versioned one-shot cleanup.
  */
 export const getStrandedPlaceholderSupporters = internalQuery({
 	args: {
@@ -1789,19 +2068,29 @@ export const getStrandedPlaceholderSupporters = internalQuery({
 		limit: v.number()
 	},
 	handler: async (ctx, { olderThanMs, paginationCursor, limit }) => {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+			throw new Error('STRANDED_SUPPORTER_SWEEP_LIMIT_INVALID');
+		}
 		const cutoff = Date.now() - olderThanMs;
 		// Stranded placeholders are NEW rows (15-min-to-hours-old). An
 		// `order("asc").take(limit * 10)` would read the OLDEST 500 rows
 		// and filter — for an org with >500 supporters, that window
 		// NEVER touches a placeholder; the cron would look busy while
 		// doing nothing. Paginate through the table (no order assumption),
-		// filter the page in-memory, return what we find. Caller (sweep
-		// action) iterates pages until isDone. No index on
+		// filter the page in-memory, return what we find. The sweep action
+		// advances exactly one persisted-CAS page per active tick. No index on
 		// `encryptedEmail === ""` is needed — placeholders are rare
 		// enough that per-page filter is cheap.
-		const result = await ctx.db
-			.query('supporters')
-			.paginate({ numItems: limit * 10, cursor: paginationCursor ?? null });
+		const scanRows = limit * 10;
+		const result = await ctx.db.query('supporters').paginate({
+			numItems: scanRows,
+			cursor: paginationCursor ?? null,
+			maximumRowsRead: scanRows + 1,
+			maximumBytesRead: 512 * 1024
+		});
+		if (result.pageStatus === 'SplitRequired') {
+			throw new Error('STRANDED_SUPPORTER_SWEEP_PAGE_TOO_LARGE');
+		}
 		const stranded = result.page.filter((s) => s.encryptedEmail === '' && s._creationTime < cutoff);
 		return {
 			items: stranded.slice(0, limit).map((s) => ({
@@ -1823,7 +2112,7 @@ export const getStrandedPlaceholderSupporters = internalQuery({
 /**
  * Internal mutation: delete a stranded placeholder supporter row.
  * Guarded — re-reads inside the mutation and refuses if the row is no
- * longer in the placeholder state (a follow-up patchEncryptedPii may
+ * longer in the placeholder state (for example, an operator repair may
  * have landed concurrent with the cleanup action's pagination).
  */
 export const deleteStrandedPlaceholder = internalMutation({
@@ -1832,20 +2121,26 @@ export const deleteStrandedPlaceholder = internalMutation({
 		const current = await ctx.db.get(supporterId);
 		if (!current) return { ok: false, reason: 'not_found' } as const;
 		if (current.encryptedEmail !== '') {
-			// The follow-up patch landed between our paginated read and
-			// this mutation — leave the row alone.
+			// A repair landed between our paginated read and this mutation;
+			// leave the row alone.
 			return { ok: false, reason: 'not_placeholder' } as const;
 		}
+		await detachAllSupporterTagProjections(ctx, supporterId);
+		await detachSupporterAudienceProjection(ctx, {
+			orgId: current.orgId,
+			supporterId
+		});
 		await ctx.db.delete(supporterId);
-		// The placeholder was counted into supporterCount + supporterStats when
-		// findOrCreateSupporter created it; decrement both so deleting a stranded
-		// row doesn't leave the counters overstated.
+		await syncSupporterIdentityReceiptProjections(ctx, supporterId, current.orgId);
+		// Historical placeholder writers counted the row in supporterCount and
+		// supporterStats; decrement both so cleanup cannot leave them overstated.
 		const org = await ctx.db.get(current.orgId);
 		if (org) {
 			await ctx.db.patch(current.orgId, {
 				supporterCount: Math.max((org.supporterCount ?? 1) - 1, 0),
 				updatedAt: Date.now()
 			});
+			await syncPublicOrganizationDirectory(ctx, current.orgId);
 		}
 		await applySupporterStatsDelta(ctx, current.orgId, current as CountableSupporter, null);
 		return { ok: true } as const;
@@ -1855,19 +2150,101 @@ export const deleteStrandedPlaceholder = internalMutation({
 /**
  * Cleanup action: sweep stranded placeholder supporters.
  *
- * `submitAction` and `importWithEncryption` use a two-phase create
- * pattern: insert row with `encryptedEmail: ""` placeholder, then
- * patch with real ciphertext. If the action crashes between, the
- * row is permanently broken — empty ciphertext + populated hashes,
- * violating the PII-triple invariant. This cron deletes rows older
- * than 15 minutes that still carry the placeholder, containing the
- * blast radius of any crash to "one lost submission" instead of
- * "permanent zombie row in the table".
+ * Current submit/import writers encrypt before the first insert. This
+ * explicitly activated migration removes only legacy/bootstrap rows that
+ * predate that invariant and still contain empty ciphertext.
  *
- * Threshold (15 min) is larger than Convex's 10-min action execution
- * budget so a slow-but-live submission isn't classified as stranded.
+ * The 15-minute threshold also prevents a deliberately coordinated legacy
+ * repair from being classified as stranded while it is still in flight.
  */
-const SWEEP_KEY_STRANDED_PLACEHOLDERS = 'supporters.strandedPlaceholders';
+const SWEEP_KEY_STRANDED_PLACEHOLDERS = 'supporters.strandedPlaceholders' as const;
+const SWEEP_KEY_STRANDED_DONATIONS = 'donations.strandedPlaceholders' as const;
+const STRANDED_PLACEHOLDER_SWEEP_VERSION = 1;
+const strandedPlaceholderSweepKey = v.union(
+	v.literal(SWEEP_KEY_STRANDED_PLACEHOLDERS),
+	v.literal(SWEEP_KEY_STRANDED_DONATIONS)
+);
+
+/** O(1) launch tombstone checked before either legacy full-table page. */
+export const strandedPlaceholderSweepActivation = internalQuery({
+	args: { key: strandedPlaceholderSweepKey },
+	handler: async (ctx, { key }) => {
+		const checkpoint = await ctx.db
+			.query('sweepCheckpoints')
+			.withIndex('by_key', (q) => q.eq('key', key))
+			.unique();
+		return {
+			status:
+				checkpoint?.completedVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION
+					? ('complete' as const)
+					: checkpoint?.activeVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION
+						? ('running' as const)
+						: ('not_activated' as const),
+			active: checkpoint?.activeVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION,
+			activeVersion: checkpoint?.activeVersion ?? null,
+			activatedAt: checkpoint?.activatedAt ?? null,
+			completedAt: checkpoint?.completedAt ?? null
+		};
+	}
+});
+
+/**
+ * Explicit deploy-key cutover after the bounded-page implementation is live.
+ * Existing checkpoint cursors are retained so activation cannot restart a
+ * partially completed legacy traversal from the table head.
+ */
+export const activateStrandedPlaceholderSweeps = internalMutation({
+	args: {
+		version: v.literal(STRANDED_PLACEHOLDER_SWEEP_VERSION),
+		operatorReference: v.string()
+	},
+	handler: async (ctx, args) => {
+		const reference = args.operatorReference.trim();
+		if (reference.length < 8 || new TextEncoder().encode(reference).byteLength > 256) {
+			throw new Error('STRANDED_PLACEHOLDER_SWEEP_OPERATOR_REFERENCE_INVALID');
+		}
+		const now = Date.now();
+		let activated = 0;
+		let completed = 0;
+		for (const key of [SWEEP_KEY_STRANDED_PLACEHOLDERS, SWEEP_KEY_STRANDED_DONATIONS]) {
+			const existing = await ctx.db
+				.query('sweepCheckpoints')
+				.withIndex('by_key', (q) => q.eq('key', key))
+				.unique();
+			if (existing?.completedVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION) {
+				completed += 1;
+				continue;
+			}
+			if (
+				existing?.activeVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION &&
+				existing.activeRunToken !== undefined &&
+				existing.cursorRevision !== undefined
+			) {
+				activated += 1;
+				continue;
+			}
+			const patch = {
+				activeVersion: STRANDED_PLACEHOLDER_SWEEP_VERSION,
+				activeRunToken: `${STRANDED_PLACEHOLDER_SWEEP_VERSION}:${now}:${key}`,
+				cursorRevision: existing?.cursorRevision ?? 0,
+				activatedAt: now,
+				activationReference: reference,
+				updatedAt: now
+			};
+			if (existing) await ctx.db.patch(existing._id, patch);
+			else {
+				await ctx.db.insert('sweepCheckpoints', {
+					key,
+					cursor: undefined,
+					wrapCount: 0,
+					...patch
+				});
+			}
+			activated += 1;
+		}
+		return { activated, completed, version: STRANDED_PLACEHOLDER_SWEEP_VERSION };
+	}
+});
 
 /**
  * Internal mutation: load the persisted sweep cursor + wrap count.
@@ -1875,48 +2252,75 @@ const SWEEP_KEY_STRANDED_PLACEHOLDERS = 'supporters.strandedPlaceholders';
  * branch on "first run vs resumed".
  */
 export const loadSweepCheckpoint = internalMutation({
-	args: { key: v.string() },
+	args: { key: strandedPlaceholderSweepKey },
 	handler: async (ctx, { key }) => {
 		const existing = await ctx.db
 			.query('sweepCheckpoints')
 			.withIndex('by_key', (q) => q.eq('key', key))
 			.first();
-		if (existing) {
+		if (existing?.activeVersion === STRANDED_PLACEHOLDER_SWEEP_VERSION) {
+			if (existing.activeRunToken === undefined || existing.cursorRevision === undefined) {
+				throw new Error('STRANDED_PLACEHOLDER_SWEEP_CAS_AUTHORITY_MISSING');
+			}
 			return {
 				cursor: existing.cursor,
 				wrapCount: existing.wrapCount,
+				cursorRevision: existing.cursorRevision,
+				runToken: existing.activeRunToken,
 				checkpointId: existing._id
 			};
 		}
-		const checkpointId = await ctx.db.insert('sweepCheckpoints', {
-			key,
-			cursor: undefined,
-			wrapCount: 0,
-			updatedAt: Date.now()
-		});
-		return { cursor: undefined, wrapCount: 0, checkpointId };
+		throw new Error('STRANDED_PLACEHOLDER_SWEEP_NOT_ACTIVATED');
 	}
 });
 
 /**
- * Internal mutation: persist the cursor and wrap count after a sweep
- * tick. `wrapped` indicates whether this tick reached `isDone`; if so,
- * the next tick starts from null again and the wrap counter increments.
+ * Internal mutation: CAS the cursor after one bounded sweep page. `wrapped`
+ * permanently completes version 1; later ticks read only the activation
+ * tombstone. A delayed overlapping action returns `stale` without rewinding.
  */
 export const saveSweepCheckpoint = internalMutation({
 	args: {
 		checkpointId: v.id('sweepCheckpoints'),
+		expectedCursor: v.optional(v.string()),
+		expectedRevision: v.number(),
+		runToken: v.string(),
 		cursor: v.optional(v.string()),
 		wrapped: v.boolean()
 	},
-	handler: async (ctx, { checkpointId, cursor, wrapped }) => {
+	handler: async (
+		ctx,
+		{ checkpointId, expectedCursor, expectedRevision, runToken, cursor, wrapped }
+	) => {
+		if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+			throw new Error('STRANDED_PLACEHOLDER_SWEEP_REVISION_INVALID');
+		}
 		const current = await ctx.db.get(checkpointId);
-		if (!current) return;
+		if (
+			!matchesStrandedPlaceholderSweepCas(current, {
+				version: STRANDED_PLACEHOLDER_SWEEP_VERSION,
+				runToken,
+				expectedRevision,
+				expectedCursor
+			})
+		) {
+			return { status: 'stale' as const };
+		}
 		await ctx.db.patch(checkpointId, {
 			cursor: wrapped ? undefined : cursor,
 			wrapCount: wrapped ? current.wrapCount + 1 : current.wrapCount,
+			cursorRevision: expectedRevision + 1,
+			...(wrapped
+				? {
+						activeVersion: undefined,
+						activeRunToken: undefined,
+						completedVersion: STRANDED_PLACEHOLDER_SWEEP_VERSION,
+						completedAt: Date.now()
+					}
+				: {}),
 			updatedAt: Date.now()
 		});
+		return { status: wrapped ? ('complete' as const) : ('advanced' as const) };
 	}
 });
 
@@ -1925,6 +2329,22 @@ export const sweepStrandedPlaceholders = internalAction({
 	handler: async (ctx) => {
 		const STRANDED_THRESHOLD_MS = 15 * 60 * 1000;
 		const BATCH = 50;
+		const activation: { active: boolean; status: 'running' | 'complete' | 'not_activated' } =
+			await ctx.runQuery(internal.supporters.strandedPlaceholderSweepActivation, {
+				key: SWEEP_KEY_STRANDED_PLACEHOLDERS
+			});
+		if (!activation.active) {
+			return {
+				status: activation.status,
+				deleted: 0,
+				preserved: 0,
+				skipped: 0,
+				totalSeen: 0,
+				pagesScanned: 0,
+				wrapCount: 0,
+				wrapped: false
+			};
+		}
 		// Forensic-state preserving statuses — if a webhook patched the
 		// placeholder row to one of these BEFORE the cleanup landed, we
 		// skip deletion. Losing a bounce/complaint mark would let a
@@ -1937,8 +2357,6 @@ export const sweepStrandedPlaceholders = internalAction({
 		let preserved = 0;
 		let skipped = 0;
 		let totalSeen = 0;
-		let isDone = false;
-		let pagesScanned = 0;
 
 		// Resume from the previous tick's cursor instead of restarting at
 		// null. Intra-tick pagination alone would still re-scan the same
@@ -1952,72 +2370,62 @@ export const sweepStrandedPlaceholders = internalAction({
 		const checkpoint: {
 			cursor?: string;
 			wrapCount: number;
+			cursorRevision: number;
+			runToken: string;
 			checkpointId: Id<'sweepCheckpoints'>;
 		} = await ctx.runMutation(internal.supporters.loadSweepCheckpoint, {
 			key: SWEEP_KEY_STRANDED_PLACEHOLDERS
 		});
-		let paginationCursor: string | undefined = checkpoint.cursor;
+		const result: {
+			items: Array<{
+				_id: Id<'supporters'>;
+				orgId: Id<'organizations'>;
+				ageMs: number;
+				emailStatus: string;
+				smsStatus: string;
+			}>;
+			continueCursor: string;
+			isDone: boolean;
+		} = await ctx.runQuery(internal.supporters.getStrandedPlaceholderSupporters, {
+			olderThanMs: STRANDED_THRESHOLD_MS,
+			paginationCursor: checkpoint.cursor,
+			limit: BATCH
+		});
+		totalSeen = result.items.length;
 
-		while (!isDone && pagesScanned < 20) {
-			const result: {
-				items: Array<{
-					_id: Id<'supporters'>;
-					orgId: Id<'organizations'>;
-					ageMs: number;
-					emailStatus: string;
-					smsStatus: string;
-				}>;
-				continueCursor: string;
-				isDone: boolean;
-			} = await ctx.runQuery(internal.supporters.getStrandedPlaceholderSupporters, {
-				olderThanMs: STRANDED_THRESHOLD_MS,
-				paginationCursor,
-				limit: BATCH
-			});
-			pagesScanned++;
-			isDone = result.isDone;
-			paginationCursor = result.continueCursor;
-			totalSeen += result.items.length;
-
-			for (const s of result.items) {
-				// Preserve forensic suppression state if a webhook already
-				// landed before this sweep. Deletion would silently lose
-				// `bounced`/`complained` marks and a future re-import would
-				// resubscribe a known-bad email.
-				if (PRESERVE_STATUSES.has(s.emailStatus)) {
-					console.warn(
-						`[sweepStrandedPlaceholders] PRESERVING stranded supporter ${s._id} (emailStatus=${s.emailStatus}, ageMs=${s.ageMs}) — webhook-patched suppression must survive cleanup`
-					);
-					preserved++;
-					continue;
-				}
-				const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
-					internal.supporters.deleteStrandedPlaceholder,
-					{ supporterId: s._id }
+		for (const s of result.items) {
+			// Preserve forensic suppression state if a webhook already landed.
+			if (PRESERVE_STATUSES.has(s.emailStatus)) {
+				console.warn(
+					`[sweepStrandedPlaceholders] PRESERVING stranded supporter ${s._id} (emailStatus=${s.emailStatus}, ageMs=${s.ageMs}) — webhook-patched suppression must survive cleanup`
 				);
-				if (deleteResult.ok) {
-					console.warn(
-						`[sweepStrandedPlaceholders] Deleted stranded supporter ${s._id} (orgId=${s.orgId}, ageMs=${s.ageMs}) — submitAction crashed mid-flight`
-					);
-					deleted++;
-				} else {
-					skipped++;
-				}
+				preserved++;
+				continue;
 			}
-
-			// Bound the sweep — if we keep finding stranded rows above the
-			// threshold, something upstream is wrong; let the next cron
-			// tick continue rather than monopolizing this execution.
-			if (deleted + preserved >= BATCH * 4) break;
+			const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
+				internal.supporters.deleteStrandedPlaceholder,
+				{ supporterId: s._id }
+			);
+			if (deleteResult.ok) {
+				console.warn(
+					`[sweepStrandedPlaceholders] Deleted stranded supporter ${s._id} (orgId=${s.orgId}, ageMs=${s.ageMs}) — submitAction crashed mid-flight`
+				);
+				deleted++;
+			} else {
+				skipped++;
+			}
 		}
 
-		// Persist the cursor for the next tick. If we reached isDone, the
-		// wrap counter increments and the cursor resets to null so the
-		// next sweep starts from the table head again.
+		// Persist only if this action still owns the exact cursor revision it
+		// loaded. Reaching isDone permanently completes version 1; later cron
+		// ticks stay on the O(1) activation tombstone instead of restarting.
 		await ctx.runMutation(internal.supporters.saveSweepCheckpoint, {
 			checkpointId: checkpoint.checkpointId,
-			cursor: paginationCursor,
-			wrapped: isDone
+			expectedCursor: checkpoint.cursor,
+			expectedRevision: checkpoint.cursorRevision,
+			runToken: checkpoint.runToken,
+			cursor: result.continueCursor,
+			wrapped: result.isDone
 		});
 
 		return {
@@ -2025,9 +2433,9 @@ export const sweepStrandedPlaceholders = internalAction({
 			preserved,
 			skipped,
 			totalSeen,
-			pagesScanned,
-			wrapCount: isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
-			wrapped: isDone
+			pagesScanned: 1,
+			wrapCount: result.isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
+			wrapped: result.isDone
 		};
 	}
 });

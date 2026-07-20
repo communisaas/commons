@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — tag listing for new-workflow form
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getWorkflowEmailRuntimeReadinessFromEnv } from '$lib/server/workflows/workflow-email-readiness';

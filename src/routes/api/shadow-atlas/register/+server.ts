@@ -24,7 +24,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler, RequestEvent } from './$types';
@@ -49,20 +49,26 @@ async function queueRegistrationRetry(
 	try {
 		const kv = event.platform?.env?.REGISTRATION_RETRY_KV;
 		if (!kv) {
-			console.error('[Registration Retry] REGISTRATION_RETRY_KV not available — cannot queue retry');
+			console.error(
+				'[Registration Retry] REGISTRATION_RETRY_KV not available — cannot queue retry'
+			);
 			return;
 		}
 		const key = `retry:${data.userId}:${Date.now()}`;
-		await kv.put(key, JSON.stringify({
-			...data,
-			queuedAt: new Date().toISOString(),
-		}), {
-			expirationTtl: 3600, // 1 hour TTL — auto-cleanup
-		});
+		await kv.put(
+			key,
+			JSON.stringify({
+				...data,
+				queuedAt: new Date().toISOString()
+			}),
+			{
+				expirationTtl: 3600 // 1 hour TTL — auto-cleanup
+			}
+		);
 		console.warn('[Registration Retry] Queued for retry in KV', {
 			key,
 			userId: data.userId,
-			leafIndex: data.atlasResult.leafIndex,
+			leafIndex: data.atlasResult.leafIndex
 		});
 	} catch (kvError) {
 		// KV also failed — log for manual operator intervention.
@@ -70,7 +76,7 @@ async function queueRegistrationRetry(
 		console.error('[CRITICAL] KV queue also failed — manual intervention required', {
 			userId: data.userId,
 			leafIndex: data.atlasResult.leafIndex,
-			kvError,
+			kvError
 		});
 	}
 }
@@ -87,7 +93,7 @@ export const POST: RequestHandler = async (event) => {
 		// NUL-001: Look up canonical identity commitment (set during verification).
 		// Required for nullifier binding — prevents Sybil via re-registration.
 		const user = await serverQuery(api.users.getIdentityForAtlas, {
-			userId: session.userId as Id<'users'>,
+			userId: session.userId as Id<'users'>
 		});
 
 		if (!user?.identityCommitment) {
@@ -114,10 +120,7 @@ export const POST: RequestHandler = async (event) => {
 		}
 
 		if (!/^(0x)?[0-9a-fA-F]+$/.test(leaf)) {
-			return json(
-				{ error: 'Invalid leaf format: must be hex-encoded' },
-				{ status: 400 }
-			);
+			return json({ error: 'Invalid leaf format: must be hex-encoded' }, { status: 400 });
 		}
 
 		// Validate leaf is within BN254 field
@@ -135,7 +138,7 @@ export const POST: RequestHandler = async (event) => {
 
 		// Check if user is already registered
 		const existingRegistration = await serverQuery(api.users.getShadowAtlasRegistration, {
-			userId: session.userId as Id<'users'>,
+			userId: session.userId as Id<'users'>
 		});
 
 		if (existingRegistration) {
@@ -144,14 +147,13 @@ export const POST: RequestHandler = async (event) => {
 				const replaceIdempotencyKey = crypto.randomUUID();
 				let replacementResult;
 				try {
-					replacementResult = await replaceLeaf(leaf, existingRegistration.leafIndex, { idempotencyKey: replaceIdempotencyKey });
+					replacementResult = await replaceLeaf(leaf, existingRegistration.leafIndex, {
+						idempotencyKey: replaceIdempotencyKey
+					});
 				} catch (error) {
 					const msg = error instanceof Error ? error.message : String(error);
 					console.error('[Shadow Atlas] Registration service failed:', msg);
-					return json(
-						{ error: 'Registration service unavailable' },
-						{ status: 503 }
-					);
+					return json({ error: 'Registration service unavailable' }, { status: 503 });
 				}
 
 				// Update Convex record with new leaf data
@@ -162,7 +164,7 @@ export const POST: RequestHandler = async (event) => {
 						identityCommitment,
 						leafIndex: replacementResult.leafIndex,
 						merkleRoot: replacementResult.userRoot,
-						merklePath: replacementResult.userPath,
+						merklePath: replacementResult.userPath
 					});
 				} catch (dbError) {
 					// CRITICAL: Shadow Atlas tree was mutated but DB failed.
@@ -172,19 +174,16 @@ export const POST: RequestHandler = async (event) => {
 						oldIndex: existingRegistration.leafIndex,
 						newIndex: replacementResult.leafIndex,
 						idempotencyKey: replaceIdempotencyKey,
-						error: dbError,
+						error: dbError
 					});
 					await queueRegistrationRetry(event, {
 						userId: session.userId,
 						identityCommitment,
 						verificationMethod: user.verificationMethod || 'unknown',
 						atlasResult: replacementResult,
-						isReplace: true,
+						isReplace: true
 					});
-					return json(
-						{ error: 'Registration service unavailable' },
-						{ status: 503 }
-					);
+					return json({ error: 'Registration service unavailable' }, { status: 503 });
 				}
 
 				return json({
@@ -193,14 +192,15 @@ export const POST: RequestHandler = async (event) => {
 					userPath: replacementResult.userPath,
 					pathIndices: replacementResult.pathIndices,
 					identityCommitment,
-					authorityLevel: user.authorityLevel ?? 1,
+					authorityLevel: user.authorityLevel ?? 1
 				});
 			}
 
 			// Normal already-registered: return cached proof
 			const depth = (existingRegistration.merklePath as string[]).length;
-			const pathIndices = Array.from({ length: depth }, (_, i) =>
-				(existingRegistration.leafIndex >> i) & 1,
+			const pathIndices = Array.from(
+				{ length: depth },
+				(_, i) => (existingRegistration.leafIndex >> i) & 1
 			);
 
 			return json({
@@ -210,7 +210,7 @@ export const POST: RequestHandler = async (event) => {
 				pathIndices,
 				alreadyRegistered: true,
 				identityCommitment,
-				authorityLevel: user.authorityLevel ?? 1,
+				authorityLevel: user.authorityLevel ?? 1
 			});
 		}
 
@@ -231,10 +231,7 @@ export const POST: RequestHandler = async (event) => {
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
 			console.error('[Shadow Atlas] Registration service failed:', msg);
-			return json(
-				{ error: 'Registration service unavailable' },
-				{ status: 503 }
-			);
+			return json({ error: 'Registration service unavailable' }, { status: 503 });
 		}
 
 		// Store registration metadata in Convex
@@ -247,7 +244,7 @@ export const POST: RequestHandler = async (event) => {
 				merkleRoot: registrationResult.userRoot,
 				merklePath: registrationResult.userPath,
 				verificationMethod: user.verificationMethod || 'unknown', // BR6-005: use actual method, not hardcoded
-				verificationId: session.userId, // Link to auth session
+				verificationId: session.userId // Link to auth session
 			});
 		} catch (dbError) {
 			// CRITICAL: Shadow Atlas tree was mutated but DB write failed.
@@ -258,18 +255,15 @@ export const POST: RequestHandler = async (event) => {
 				userId: session.userId,
 				leafIndex: registrationResult.leafIndex,
 				idempotencyKey,
-				error: dbError,
+				error: dbError
 			});
 			await queueRegistrationRetry(event, {
 				userId: session.userId,
 				identityCommitment,
 				verificationMethod: user.verificationMethod || 'unknown',
-				atlasResult: registrationResult,
+				atlasResult: registrationResult
 			});
-			return json(
-				{ error: 'Registration service unavailable' },
-				{ status: 503 }
-			);
+			return json({ error: 'Registration service unavailable' }, { status: 503 });
 		}
 
 		return json({
@@ -279,13 +273,10 @@ export const POST: RequestHandler = async (event) => {
 			pathIndices: registrationResult.pathIndices,
 			identityCommitment,
 			authorityLevel: user.authorityLevel ?? 1,
-			receipt: registrationResult.receipt, // Signed registration receipt
+			receipt: registrationResult.receipt // Signed registration receipt
 		});
 	} catch (error) {
 		console.error('[Shadow Atlas] Registration error:', error);
-		return json(
-			{ error: 'Internal server error' },
-			{ status: 500 }
-		);
+		return json({ error: 'Internal server error' }, { status: 500 });
 	}
 };

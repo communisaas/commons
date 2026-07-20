@@ -42,7 +42,8 @@
 	import { templateDraftStore } from '$lib/stores/templateDraft';
 	import { TIMING, EASING } from '$lib/design/motion';
 	import { orgLimitSentence } from '$lib/data/org-limit-sentences';
-	import WorkspaceSwitcher, { type WorkspaceMark } from './WorkspaceSwitcher.svelte';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+	import type { WorkspaceMark } from './os/navigationTypes';
 	import MantleWatermark, { type WatermarkTier } from './MantleWatermark.svelte';
 	import SignalWell from './SignalWell.svelte';
 	import CommandBar from './CommandBar.svelte';

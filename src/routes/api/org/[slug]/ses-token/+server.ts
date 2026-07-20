@@ -1,8 +1,10 @@
 import { json, error } from '@sveltejs/kit';
 import { STSClient, AssumeRoleCommand } from '@aws-sdk/client-sts';
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { env } from '$env/dynamic/private';
+import { FEATURES } from '$lib/config/features';
+import { requireAudienceDispatchJobsReady } from '$convex/lib/audienceDispatchGate';
 import type { RequestHandler } from './$types';
 
 /**
@@ -27,8 +29,23 @@ const TOKEN_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 const lastIssuedMap = new Map<string, number>();
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+	// Launch tombstone. Browser-held STS credentials are unconstrained carrier
+	// authority and cannot participate in the durable reservation/CAS ledger.
+	// This check intentionally precedes auth, Convex, rate-limit, and AWS work.
+	if (!FEATURES.EMAIL_SERVER_DISPATCH) {
+		throw error(503, 'Bulk email dispatch is disabled');
+	}
 	if (!locals.user) throw error(401, 'Authentication required');
 
+	// This endpoint mints carrier authority, not merely UI state. Keep it tied
+	// to the same immutable-cohort launch gate as Convex before any org/cohort
+	// read or STS work; otherwise a direct authenticated request can bypass the
+	// disabled composer and send arbitrary mail with the browser-held token.
+	try {
+		requireAudienceDispatchJobsReady();
+	} catch {
+		throw error(503, 'Bulk email dispatch is unavailable until recipient jobs are ready');
+	}
 	// Verify user is editor+ on this org via Convex
 	const orgContext = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
 	if (!orgContext) throw error(404, 'Organization not found');
@@ -46,6 +63,15 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	// inactive ⇒ maxEmails:0 ⇒ 0>=0 ⇒ refused; exhausted active ⇒ refused; a null
 	// result (org deleted mid-request) fails closed.
 	const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+	if (!limits.usageReady) {
+		if (limits.usageRepairRequired) {
+			await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+		}
+		throw error(503, {
+			message: 'Billing usage is being rebuilt. No send authority was issued; retry shortly.',
+			code: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+		});
+	}
 	if (!limits?.current || limits.current.emailsSent >= limits.limits.maxEmails) {
 		const subscribeGate = (limits?.limits.maxEmails ?? 0) <= 0;
 		throw error(403, {

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest, type TestConvex } from 'convex-test';
 import type { TransactionMetrics } from 'convex/server';
 
@@ -14,6 +14,14 @@ const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 type Harness = TestConvex<typeof schema>;
 
 const VECTOR = Array.from({ length: 768 }, (_, index) => index / 768);
+const SSR_SECRET = 'template-read-budget-secret-32-bytes';
+
+beforeEach(() => {
+	vi.stubEnv('INTERNAL_API_SECRET', SSR_SECRET);
+	vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+});
+
+afterEach(() => vi.unstubAllEnvs());
 
 function newHarness(): Harness {
 	return convexTest({
@@ -57,6 +65,8 @@ function storedPublicCard(id: string, deliveryMethod: 'email' | 'cwc'): Record<s
 		send_count: null,
 		daily_arrivals: [],
 		district_counts: [],
+		district_counts_suppressed_districts: 0,
+		district_counts_suppressed_count: 0,
 		tier_counts: [],
 		delivery_config: {},
 		cwc_config: null,
@@ -115,6 +125,42 @@ async function seedHeavyTemplates(t: Harness, count: number): Promise<void> {
 	});
 }
 
+async function prepareDiscoveryRollout(t: Harness): Promise<void> {
+	let endorsement: any = await t.mutation(internal.templates.migrateEndorsementCounts, {
+		restart: true,
+		scheduleContinuation: false
+	});
+	while (endorsement.status === 'running') {
+		endorsement = await t.mutation(internal.templates.migrateEndorsementCounts, {
+			runToken: endorsement.runToken,
+			scheduleContinuation: false
+		});
+	}
+	expect(endorsement.status).toBe('complete');
+
+	let source: any = await t.mutation(internal.templates.migratePublicDiscoverySourcePage, {
+		scheduleContinuation: false
+	});
+	while (source.status === 'running') {
+		source = await t.mutation(internal.templates.migratePublicDiscoverySourcePage, {
+			runToken: source.runToken,
+			cursor: source.continueCursor,
+			startedAt: source.startedAt,
+			listDirtyAtAtStart: source.listDirtyAtAtStart,
+			relationsDirtyAtAtStart: source.relationsDirtyAtAtStart,
+			scanned: source.scanned,
+			eligible: source.eligible,
+			sourcesWritten: source.sourcesWritten,
+			topicVectorsWritten: source.topicVectorsWritten,
+			tagVectorsWritten: source.tagVectorsWritten,
+			rejected: source.rejected,
+			scheduleContinuation: false
+		});
+	}
+	expect(source.status).toBe('migrated');
+	await t.mutation(internal.templates.activatePublicDiscoverySourcePlane, {});
+}
+
 describe('public template query read budgets', () => {
 	it('the activation rebuild publishes bounded list and relation snapshots with no vector leakage', async () => {
 		const t = newRebuildHarness();
@@ -127,6 +173,7 @@ describe('public template query read budgets', () => {
 			expect(cwcTemplate).not.toBeNull();
 			await ctx.db.patch(cwcTemplate!._id, { deliveryMethod: 'cwc' });
 		});
+		await prepareDiscoveryRollout(t);
 
 		const rebuilt = await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
 		expect(rebuilt.list).toMatchObject({
@@ -152,8 +199,14 @@ describe('public template query read budgets', () => {
 			}
 		});
 
-		const all = await t.query(api.templates.listPublic, { excludeCwc: false });
-		const excludingCwc = await t.query(api.templates.listPublic, { excludeCwc: true });
+		const all = await t.query(api.templates.listPublic, {
+			_secret: SSR_SECRET,
+			excludeCwc: false
+		});
+		const excludingCwc = await t.query(api.templates.listPublic, {
+			_secret: SSR_SECRET,
+			excludeCwc: true
+		});
 		expect(all).toHaveLength(20);
 		expect(excludingCwc).toHaveLength(19);
 		expect(excludingCwc.every((template) => template.deliveryMethod !== 'cwc')).toBe(true);
@@ -180,12 +233,13 @@ describe('public template query read budgets', () => {
 	it('listPublic distinguishes cold start without scanning templates', async () => {
 		const t = newHarness();
 		await seedHeavyTemplates(t, 20);
-		await expect(t.query(api.templates.listPublic, { excludeCwc: false })).rejects.toThrow(
-			'PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:all'
-		);
+		await expect(
+			t.query(api.templates.listPublic, { _secret: SSR_SECRET, excludeCwc: false })
+		).rejects.toThrow('PUBLIC_DISCOVERY_LIST_SNAPSHOT_NOT_READY:all');
 
 		const observed = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				_secret: SSR_SECRET,
 				excludeCwc: false
 			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
@@ -226,7 +280,10 @@ describe('public template query read budgets', () => {
 		});
 
 		const all = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.listPublic, { excludeCwc: false });
+			const result = await ctx.runQuery(api.templates.listPublic, {
+				_secret: SSR_SECRET,
+				excludeCwc: false
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(all.result).toEqual([allCard, nonCwcCard]);
@@ -235,7 +292,10 @@ describe('public template query read budgets', () => {
 		expect(all.metrics.bytesRead.used).toBeLessThan(8_000);
 
 		const excludingCwc = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.listPublic, { excludeCwc: true });
+			const result = await ctx.runQuery(api.templates.listPublic, {
+				_secret: SSR_SECRET,
+				excludeCwc: true
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(excludingCwc.result).toEqual([nonCwcCard]);
@@ -245,6 +305,7 @@ describe('public template query read budgets', () => {
 
 		const versioned = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				_secret: SSR_SECRET,
 				excludeCwc: false
 			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
@@ -274,15 +335,30 @@ describe('public template query read budgets', () => {
 				relationsUpdatedAt: 1_800_000_000_001
 			});
 		});
+		await t.mutation(internal.templates.migratePublicDiscoveryManifestAuthority, {});
 
 		const observed = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.publicDiscoveryManifest, {});
+			const result = await ctx.runQuery(api.templates.publicDiscoveryManifest, {
+				_secret: SSR_SECRET
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 
 		expect(observed.result).toEqual({
-			list: { ready: true, revision: 7, updatedAt: 1_800_000_000_000 },
-			relations: { ready: true, revision: 9, updatedAt: 1_800_000_000_001 }
+			list: {
+				ready: true,
+				retiredRevision: 6,
+				revision: 7,
+				updatedAt: 1_800_000_000_000,
+				withdrawalEpoch: 0
+			},
+			relations: {
+				ready: true,
+				retiredRevision: 8,
+				revision: 9,
+				updatedAt: 1_800_000_000_001,
+				withdrawalEpoch: 0
+			}
 		});
 		expect(observed.metrics.documentsRead.used).toBe(1);
 		expect(observed.metrics.databaseQueries.used).toBe(1);
@@ -294,8 +370,12 @@ describe('public template query read budgets', () => {
 		await seedHeavyTemplates(t, 20);
 
 		const observed = await t.query(async (ctx) => {
-			const twins = await ctx.runQuery(api.templates.relatednessEdges, {});
-			const concepts = await ctx.runQuery(api.templates.conceptRelations, {});
+			const twins = await ctx.runQuery(api.templates.relatednessEdges, {
+				_secret: SSR_SECRET
+			});
+			const concepts = await ctx.runQuery(api.templates.conceptRelations, {
+				_secret: SSR_SECRET
+			});
 			return { twins, concepts, metrics: await getTransactionMetrics(ctx) };
 		});
 
@@ -328,7 +408,9 @@ describe('public template query read budgets', () => {
 		});
 
 		const twins = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.relatednessEdges, {});
+			const result = await ctx.runQuery(api.templates.relatednessEdges, {
+				_secret: SSR_SECRET
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(twins.result).toEqual([{ a: 'alpha', b: 'beta', score: 0.91, kind: 'twin' }]);
@@ -337,7 +419,9 @@ describe('public template query read budgets', () => {
 		expect(twins.metrics.bytesRead.used).toBeLessThan(2_000);
 
 		const concepts = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.conceptRelations, {});
+			const result = await ctx.runQuery(api.templates.conceptRelations, {
+				_secret: SSR_SECRET
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(concepts.result).toEqual({
@@ -352,7 +436,9 @@ describe('public template query read budgets', () => {
 		expect(concepts.metrics.bytesRead.used).toBeLessThan(2_000);
 
 		const combined = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.publicDiscoveryRelations, {});
+			const result = await ctx.runQuery(api.templates.publicDiscoveryRelations, {
+				_secret: SSR_SECRET
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(combined.result).toEqual({

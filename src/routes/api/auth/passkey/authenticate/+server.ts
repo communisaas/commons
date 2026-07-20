@@ -7,11 +7,15 @@ import {
 	type AuthenticationResponseJSON,
 	type WebAuthnCredential
 } from '@simplewebauthn/server';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$convex/_generated/api';
 import { base64urlDecode } from '$lib/core/encoding/base64url';
 import { getPasskeyRPConfig } from '$lib/core/identity/passkey-rp-config';
 import { createServerProof, createSessionCreationProof } from '$lib/server/auth/session-proof';
+import {
+	resolveSessionCookieSigningSecrets,
+	sealSessionCookie
+} from '$lib/server/auth/session-cookie';
 
 const CEREMONY_TTL_MS = 5 * 60 * 1000;
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -40,6 +44,12 @@ function parseAuthenticationResponse(value: unknown): AuthenticationResponseJSON
 export const POST: RequestHandler = async ({ request, cookies }) => {
 	const body = await request.json().catch(() => ({}));
 	const secret = sessionSecret();
+	const cookieSecrets = resolveSessionCookieSigningSecrets({
+		activeSecret: process.env.SESSION_COOKIE_SIGNING_SECRET,
+		previousSecret: process.env.SESSION_COOKIE_SIGNING_SECRET_PREVIOUS || undefined,
+		sessionCreationSecret: secret,
+		previousSessionCreationSecret: process.env.SESSION_CREATION_SECRET_PREVIOUS || undefined
+	});
 	const { rpID, origin } = getPasskeyRPConfig();
 
 	if (body?.action === 'options') {
@@ -159,7 +169,12 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			proof: sessionProof
 		});
 
-		cookies.set('auth-session', session.sessionId, {
+		const sessionCookie = await sealSessionCookie(
+			session.sessionId,
+			expiresAt,
+			cookieSecrets.activeSecret
+		);
+		cookies.set('auth-session', sessionCookie, {
 			path: '/',
 			secure: !dev,
 			httpOnly: true,

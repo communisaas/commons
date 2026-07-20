@@ -1,6 +1,7 @@
 import { mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 import { requireAuth } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import type { Doc, Id } from './_generated/dataModel';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 
@@ -118,28 +119,35 @@ async function collectGroundVaultsByStatuses(
 			ctx.db
 				.query('groundVaults')
 				.withIndex('by_userId_status', (q: any) => q.eq('userId', userId).eq('status', status))
-				.collect()
+				.take(2)
 		)
 	);
-	return batches.flat() as Array<Doc<'groundVaults'>>;
+	const vaults = batches.flat() as Array<Doc<'groundVaults'>>;
+	if (vaults.length > 1) throw new Error('GROUND_VAULT_MULTIPLICITY');
+	return vaults;
 }
 
 async function getReadableGroundVaultForUser(
 	ctx: { db: any },
 	userId: Id<'users'>
 ): Promise<Doc<'groundVaults'> | null> {
-	const active = (await ctx.db
-		.query('groundVaults')
-		.withIndex('by_userId_status', (q: any) => q.eq('userId', userId).eq('status', 'active'))
-		.order('desc')
-		.first()) as Doc<'groundVaults'> | null;
-	if (active) return active;
-
-	return (await ctx.db
-		.query('groundVaults')
-		.withIndex('by_userId_status', (q: any) => q.eq('userId', userId).eq('status', 'rewrap_needed'))
-		.order('desc')
-		.first()) as Doc<'groundVaults'> | null;
+	const [active, rewrapNeeded] = (await Promise.all([
+		ctx.db
+			.query('groundVaults')
+			.withIndex('by_userId_status', (q: any) => q.eq('userId', userId).eq('status', 'active'))
+			.order('desc')
+			.take(2),
+		ctx.db
+			.query('groundVaults')
+			.withIndex('by_userId_status', (q: any) =>
+				q.eq('userId', userId).eq('status', 'rewrap_needed')
+			)
+			.order('desc')
+			.take(2)
+	])) as [Array<Doc<'groundVaults'>>, Array<Doc<'groundVaults'>>];
+	const readable = [...active, ...rewrapNeeded];
+	if (readable.length > 1) throw new Error('GROUND_VAULT_MULTIPLICITY');
+	return readable[0] ?? null;
 }
 
 function assertCellMetadataForCredential(
@@ -165,7 +173,7 @@ function assertCellMetadataForCredential(
 		cell.slotCount !== undefined &&
 		cell.slotCount !== credential.slotCount
 	) {
-			throw new Error('GROUND_CELL_SLOT_COUNT_MISMATCH');
+		throw new Error('GROUND_CELL_SLOT_COUNT_MISMATCH');
 	}
 
 	const credentialDistrict = credential.congressionalDistrict.trim();
@@ -215,33 +223,34 @@ export const persistGroundBundle = mutation({
 			}
 		}
 
-			const priorActiveVaults = await collectGroundVaultsByStatuses(ctx, userId, [
-				'active',
-				'rewrap_needed'
-			]);
+		const priorActiveVaults = await collectGroundVaultsByStatuses(ctx, userId, [
+			'active',
+			'rewrap_needed'
+		]);
 
-			for (const vault of priorActiveVaults) {
-				await ctx.db.patch(vault._id, {
+		for (const vault of priorActiveVaults) {
+			await ctx.db.patch(vault._id, {
+				status: 'retired',
+				retiredAt: now,
+				retiredReason: 'superseded_by_ground_bundle',
+				updatedAt: now
+			});
+			const wrappers = (await ctx.db
+				.query('passkeyVaultWrappers')
+				.withIndex('by_groundVaultId_status', (q) =>
+					q.eq('groundVaultId', vault._id).eq('status', 'active')
+				)
+				.take(2)) as Array<Doc<'passkeyVaultWrappers'>>;
+			if (wrappers.length > 1) throw new Error('GROUND_WRAPPER_MULTIPLICITY');
+			for (const wrapper of wrappers) {
+				await ctx.db.patch(wrapper._id, {
 					status: 'retired',
-					retiredAt: now,
-					retiredReason: 'superseded_by_ground_bundle',
 					updatedAt: now
 				});
-				const wrappers = (await ctx.db
-					.query('passkeyVaultWrappers')
-					.withIndex('by_groundVaultId_status', (q) =>
-						q.eq('groundVaultId', vault._id).eq('status', 'active')
-					)
-					.collect()) as Array<Doc<'passkeyVaultWrappers'>>;
-				for (const wrapper of wrappers) {
-					await ctx.db.patch(wrapper._id, {
-						status: 'retired',
-						updatedAt: now
-					});
-				}
 			}
+		}
 
-			const groundVaultId = await ctx.db.insert('groundVaults', {
+		const groundVaultId = await ctx.db.insert('groundVaults', {
 			userId,
 			status: 'active',
 			ciphertext: args.vault.ciphertext,
@@ -342,29 +351,30 @@ export const addPasskeyWrapperToActiveVault = mutation({
 			throw new Error('GROUND_PASSKEY_NOT_REGISTERED');
 		}
 
-			const existingWrappers = (await ctx.db
-				.query('passkeyVaultWrappers')
-				.withIndex('by_groundVaultId_status', (q) =>
-					q.eq('groundVaultId', args.groundVaultId).eq('status', 'active')
-				)
-				.collect()) as Array<Doc<'passkeyVaultWrappers'>>;
-			const currentPasskeyWrapper = existingWrappers.find(
-				(wrapper) => wrapper.passkeyCredentialId === args.wrapper.passkeyCredentialId
-			);
-			if (currentPasskeyWrapper) {
-				return {
-					groundVaultId: args.groundVaultId,
-					passkeyVaultWrapperId: currentPasskeyWrapper._id,
-					status: 'already-wrapped'
-				};
-			}
+		const existingWrappers = (await ctx.db
+			.query('passkeyVaultWrappers')
+			.withIndex('by_groundVaultId_status', (q) =>
+				q.eq('groundVaultId', args.groundVaultId).eq('status', 'active')
+			)
+			.take(2)) as Array<Doc<'passkeyVaultWrappers'>>;
+		if (existingWrappers.length > 1) throw new Error('GROUND_WRAPPER_MULTIPLICITY');
+		const currentPasskeyWrapper = existingWrappers.find(
+			(wrapper) => wrapper.passkeyCredentialId === args.wrapper.passkeyCredentialId
+		);
+		if (currentPasskeyWrapper) {
+			return {
+				groundVaultId: args.groundVaultId,
+				passkeyVaultWrapperId: currentPasskeyWrapper._id,
+				status: 'already-wrapped'
+			};
+		}
 
-			for (const wrapper of existingWrappers) {
-				await ctx.db.patch(wrapper._id, {
-					status: 'retired',
-					updatedAt: now
-				});
-			}
+		for (const wrapper of existingWrappers) {
+			await ctx.db.patch(wrapper._id, {
+				status: 'retired',
+				updatedAt: now
+			});
+		}
 
 		await ctx.db.patch(args.groundVaultId, {
 			status: 'active',
@@ -426,7 +436,8 @@ export const getMyGroundState = query({
 			.withIndex('by_groundVaultId_status', (q) =>
 				q.eq('groundVaultId', activeVault._id).eq('status', 'active')
 			)
-			.collect()) as Array<Doc<'passkeyVaultWrappers'>>;
+			.take(2)) as Array<Doc<'passkeyVaultWrappers'>>;
+		if (wrappers.length > 1) throw new Error('GROUND_WRAPPER_MULTIPLICITY');
 
 		return {
 			vault: activeVault,
@@ -443,10 +454,12 @@ export const getMyGroundState = query({
  * binding material already required for proof/delivery state.
  */
 export const getMyGroundRestoreState = query({
-	args: {},
-	handler: async (ctx) => {
+	args: { _secret: v.string(), asOf: v.number() },
+	handler: async (ctx, { _secret, asOf }) => {
+		requireInternalSecret(_secret);
+		if (!Number.isFinite(asOf) || asOf < 0) throw new Error('INVALID_QUERY_AS_OF');
 		const { userId } = await requireAuth(ctx);
-		const active = await selectActiveCredentialForUser(ctx, userId);
+		const active = await selectActiveCredentialForUser(ctx, userId, asOf);
 		if (!active) {
 			return { credential: null };
 		}

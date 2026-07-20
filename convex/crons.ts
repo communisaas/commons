@@ -28,11 +28,12 @@
  *
  *   full        → essential + operational + speculative  (= legacy)
  *   operational → essential + operational
- *   essential   → essential only
+ *   essential   → essential only (requires isolated/paid quota authority)
+ *   contained   → no cron registrations (shared-Free launch containment)
  *
  * Tiers:
- *   ESSENTIAL   — correctness / safety / privacy hygiene. Must run on every
- *                 deployment regardless of traffic (PII expiry, crashed-worker
+ *   ESSENTIAL   — correctness / safety / privacy hygiene for a traffic-bearing,
+ *                 quota-authorized deployment (PII expiry, crashed-worker
  *                 recovery, revocation reconcile, key/TTL hygiene).
  *   OPERATIONAL — only meaningful with live traffic (bounce probes, retries,
  *                 A/B winners, analytics, digests, reputation/embedding refits).
@@ -41,8 +42,11 @@
  *
  * The two former 1-min pollers (workflow-scheduler, process-scheduled-blasts)
  * are now event-driven (native scheduler.runAfter/runAt at their write-sites)
- * plus a wide 15-min orphan-recovery sweep tiered ESSENTIAL — so they always
- * provide a backstop without the minute-cadence cost.
+ * plus a wide 15-min orphan-recovery sweep tiered ESSENTIAL. Coordinated public
+ * discovery rebuilds additionally arm one token/attempt-scoped lease watchdog
+ * at acquisition, so contained clear/reseed work has causal recovery with zero
+ * idle ticks. The periodic backstops remain absent until the essential
+ * profile's quota authority is activated.
  *
  * IMPORTANT — DEPLOY-TIME FROZEN: CRON_PROFILE is read once, at push/deploy
  * time. Changing the env var has NO effect until the next `convex deploy` /
@@ -51,80 +55,150 @@
  * reevaluated on deployment (Convex docs, "Environment Variables") — and is
  * exactly the semantics we want: each deployment freezes its tier at push.
  *
- * COST-SAFE FLOOR: unset (or unrecognized) CRON_PROFILE → 'essential' — the
- * always-run safety/PII/recovery crons. A typo (or a forgotten env var) can
- * never silently run the most expensive 'full' fleet on a zero-user backend;
- * it under-runs (cheap, recoverable) instead. Opt UP to 'operational'/'full'
- * explicitly. The resolved profile is logged at module evaluation so the
- * effective set is visible in deploy logs.
+ * HARD CONTAINMENT FLOOR: unset (or unrecognized) CRON_PROFILE → 'contained'.
+ * The shared Free-team quota has sibling-project TOCTOU risk that a release-
+ * time headroom observation cannot govern. `contained` therefore registers no
+ * cron at all: exactly zero recurring database-I/O allowance. Event-driven
+ * `scheduler.runAfter` / `runAt` continuations remain available at write sites.
+ * Opting up to `essential` requires quota isolation or a paid authority without
+ * the shared hard-disable failure mode; a short-lived Free-team observation is
+ * intentionally insufficient. The resolved profile is logged during deploy.
  *
- * Posture: dev (outstanding-firefly-831) → 'essential'; prod
- * (quirky-chinchilla-352) pre-launch → 'essential'; flip prod to 'full' (or
- * 'operational') at launch and redeploy. See docs/development/cron-setup.md.
+ * Required shared-Free posture: preview (outstanding-firefly-831) and prod
+ * (quirky-chinchilla-352) → 'contained'. Do not flip either deployment to
+ * `essential` until its quota authority gate passes. See
+ * docs/development/cron-setup.md.
  */
 
-import { cronJobs } from "convex/server";
-import { internal } from "./_generated/api";
+import { cronJobs, makeFunctionReference, type FunctionReference } from 'convex/server';
+import { internal } from './_generated/api';
+import { ANALYTICS_CONTRIBUTION_AUTHORITY_READY } from './lib/analyticsPrivacyGate';
 
 declare const process: { env: Record<string, string | undefined> };
 
-type CronTier = "essential" | "operational" | "speculative";
+type CronTier = 'essential' | 'operational' | 'speculative';
 
 const RAW_CRON_PROFILE = process.env.CRON_PROFILE;
-// Unset → 'essential' (cost-safe floor). Opt UP to operational/full explicitly.
-const CRON_PROFILE = (RAW_CRON_PROFILE ?? "essential").toLowerCase();
+// Unset → 'contained' (zero registered crons). Opt UP only with quota authority.
+const CRON_PROFILE = (RAW_CRON_PROFILE ?? 'contained').toLowerCase();
 
 // Profile → enabled tier set.
 const PROFILE_TIERS: Record<string, ReadonlySet<CronTier>> = {
-  full: new Set<CronTier>(["essential", "operational", "speculative"]),
-  operational: new Set<CronTier>(["essential", "operational"]),
-  essential: new Set<CronTier>(["essential"]),
+	full: new Set<CronTier>(['essential', 'operational', 'speculative']),
+	operational: new Set<CronTier>(['essential', 'operational']),
+	essential: new Set<CronTier>(['essential']),
+	contained: new Set<CronTier>()
 };
 
-// Unknown / typo'd profile → 'essential' (the safe-AND-cheap floor), NOT 'full'.
-// Failing open to the full fleet would let a single typo silently run the most
-// expensive config on a zero-user backend — the exact failure this gate exists
-// to prevent. 'essential' is by definition the always-safe set, so flooring to
-// it satisfies both the safety goal and the cost goal.
+// Unknown / typo'd profile → 'contained', never a database-touching fleet.
 // Own-property check (NOT the `in` operator): `in` matches inherited keys
 // (`constructor`, `__proto__`, `toString`, …), which would resolve to a
 // non-Set value and throw at module init — breaking the deploy. hasOwnProperty
-// accepts only the three explicit profile keys; anything else floors to
-// 'essential'.
-const RESOLVED_PROFILE = Object.prototype.hasOwnProperty.call(
-  PROFILE_TIERS,
-  CRON_PROFILE
-)
-  ? CRON_PROFILE
-  : "essential";
+// accepts only the four explicit profile keys; anything else floors to
+// 'contained'.
+const RESOLVED_PROFILE = Object.prototype.hasOwnProperty.call(PROFILE_TIERS, CRON_PROFILE)
+	? CRON_PROFILE
+	: 'contained';
 const activeTiers = PROFILE_TIERS[RESOLVED_PROFILE];
 const enabled = (tier: CronTier): boolean => activeTiers.has(tier);
 
+// The bounded coordinator is deployed dark until durable contribution
+// authority exists and its exact identity migration is activated. Enabling an
+// operational/full profile alone must never publish an invalid epsilon claim.
+const ANALYTICS_SNAPSHOT_CRON_READY = false;
+
 // Surface the effective profile in the deploy/push logs so a typo'd profile
-// (which floors to 'essential') is visible rather than silently differing from
+// (which floors to 'contained') is visible rather than silently differing from
 // what the operator typed.
 if (RAW_CRON_PROFILE !== undefined && RESOLVED_PROFILE !== CRON_PROFILE) {
-  console.warn(
-    `[crons] Unrecognized CRON_PROFILE="${RAW_CRON_PROFILE}" — flooring to 'essential' (safety crons only).`,
-  );
+	console.warn(
+		`[crons] Unrecognized CRON_PROFILE="${RAW_CRON_PROFILE}" — flooring to 'contained' (zero registered crons).`
+	);
 } else {
-  console.log(`[crons] CRON_PROFILE resolved to '${RESOLVED_PROFILE}'.`);
+	console.log(`[crons] CRON_PROFILE resolved to '${RESOLVED_PROFILE}'.`);
 }
 
 const crons = cronJobs();
+const sweepStalePlanUsageRef = makeFunctionReference<'mutation'>(
+	'planUsage:sweepStale'
+) as unknown as FunctionReference<'mutation', 'internal', { cursor?: string }, unknown>;
+const sweepStalePlanUsageReservationsRef = makeFunctionReference<'mutation'>(
+	'planUsage:sweepStaleReservations'
+) as unknown as FunctionReference<'mutation', 'internal', { cursor?: string }, unknown>;
+const sweepPastDueGraceRef = makeFunctionReference<'mutation'>(
+	'subscriptions:sweepPastDueGrace'
+) as unknown as FunctionReference<'mutation', 'internal', { cursor?: string }, unknown>;
+const drainContactFanoutQueueRef = makeFunctionReference<'action'>(
+	'webhooks:drainContactFanoutQueue'
+) as unknown as FunctionReference<'action', 'internal', Record<string, never>, unknown>;
+const runContactAuthorityMigrationPageRef = makeFunctionReference<'mutation'>(
+	'webhooks:runContactAuthorityMigrationPage'
+) as unknown as FunctionReference<'mutation', 'internal', Record<string, never>, unknown>;
+
+// ---------------------------------------------------------------------------
+// 0. Expired distributed rate-limit buckets — one row per actor/window and a
+//    bounded self-paging global cleanup. ESSENTIAL because paid public-action
+//    abuse controls must not accumulate unbounded storage on a quiet product.
+// ---------------------------------------------------------------------------
+if (enabled('essential')) {
+	crons.daily(
+		'cleanup-rate-limit-buckets',
+		{ hourUTC: 2, minuteUTC: 47 },
+		internal._rateLimit.cleanupExpired,
+		{}
+	);
+
+	// Belt-and-suspenders scan for legacy/unarmed locks after quota activation.
+	// New clear/reseed acquisitions already own a zero-idle event-driven watchdog.
+	// Neither path auto-unlocks or publishes a partial corpus.
+	crons.interval(
+		'supervise-public-discovery-rebuild-lease',
+		{ minutes: 15 },
+		internal.observability.superviseCoordinatedPublicDiscoveryRebuildLease,
+		{}
+	);
+	crons.hourly('subscription-past-due-grace-sweep', { minuteUTC: 49 }, sweepPastDueGraceRef, {});
+}
+
+// Projection-only billing must recover missed Stripe period events and the UTC
+// month rollover without a request-path history scan. Each invocation reads ten
+// organizations and self-pages; per-org repair workers independently coalesce.
+if (enabled('essential')) {
+	crons.hourly('plan-usage-stale-sweep', { minuteUTC: 43 }, sweepStalePlanUsageRef, {});
+	crons.interval(
+		'plan-usage-reservation-lease-sweep',
+		{ minutes: 15 },
+		sweepStalePlanUsageReservationsRef,
+		{}
+	);
+}
+
+// Provider ingress schedules the first contact fanout page transactionally and
+// each page schedules its successor. This 15-minute cadence is only the bounded
+// orphan-recovery net: STOP/email authority takes effect synchronously even if
+// the denormalized supporter projection is temporarily behind. The wide
+// backstop avoids 1,440 empty action/query pairs per backend and day; the
+// sibling audit resumes a migration whose native continuation was lost.
+if (enabled('essential')) {
+	crons.interval('drain-contact-authority-fanout', { minutes: 15 }, drainContactFanoutQueueRef, {});
+	crons.interval(
+		'resume-contact-authority-migration',
+		{ minutes: 15 },
+		runContactAuthorityMigrationPageRef,
+		{}
+	);
+}
 
 // ---------------------------------------------------------------------------
 // 1. Legislation Sync — fetch Congress.gov → embed → score → alert → sync
 //    Original: every 6 hours
 //    SPECULATIVE: bulk ingest with no consumer yet (primary overage source).
 // ---------------------------------------------------------------------------
-if (enabled("speculative")) {
-  crons.interval(
-    "legislation-sync",
-    { hours: 6 },
-    internal.legislation.syncPipeline,
-    { source: "federal", limit: 50 },
-  );
+if (enabled('speculative')) {
+	crons.interval('legislation-sync', { hours: 6 }, internal.legislation.syncPipeline, {
+		source: 'federal',
+		limit: 50
+	});
 }
 
 // ---------------------------------------------------------------------------
@@ -132,12 +206,8 @@ if (enabled("speculative")) {
 //    Original: every 5 minutes
 //    OPERATIONAL: SMTP probes are meaningless without outbound mail.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.interval(
-    "process-bounces",
-    { minutes: 5 },
-    internal.email.processBounceReports,
-  );
+if (enabled('operational')) {
+	crons.interval('process-bounces', { minutes: 5 }, internal.email.processBounceReports);
 }
 
 // ---------------------------------------------------------------------------
@@ -145,12 +215,8 @@ if (enabled("operational")) {
 //    Original: every 2 hours
 //    SPECULATIVE: no consumer pre-launch.
 // ---------------------------------------------------------------------------
-if (enabled("speculative")) {
-  crons.interval(
-    "vote-tracker",
-    { hours: 2 },
-    internal.legislation.trackVotes,
-  );
+if (enabled('speculative')) {
+	crons.interval('vote-tracker', { hours: 2 }, internal.legislation.trackVotes);
 }
 
 // ---------------------------------------------------------------------------
@@ -158,12 +224,12 @@ if (enabled("speculative")) {
 //    Original: Monday 14:00 UTC
 //    OPERATIONAL: needs recipients / pending alerts.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.weekly(
-    "alert-digest",
-    { dayOfWeek: "monday", hourUTC: 14, minuteUTC: 0 },
-    internal.email.sendAlertDigests,
-  );
+if (enabled('operational')) {
+	crons.weekly(
+		'alert-digest',
+		{ dayOfWeek: 'monday', hourUTC: 14, minuteUTC: 0 },
+		internal.email.sendAlertDigests
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -173,12 +239,12 @@ if (enabled("operational")) {
 //    minute-cadence crons that align on :00).
 //    ESSENTIAL: PII expiry is a privacy obligation independent of traffic.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.daily(
-    "cleanup-witness",
-    { hourUTC: 1, minuteUTC: 11 },
-    internal.submissions.cleanupExpiredWitnesses,
-  );
+if (enabled('essential')) {
+	crons.daily(
+		'cleanup-witness',
+		{ hourUTC: 1, minuteUTC: 11 },
+		internal.submissions.cleanupExpiredWitnesses
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,26 +252,39 @@ if (enabled("essential")) {
 //    Original: daily 02:00 UTC
 //    OPERATIONAL: no debates to resolve pre-traffic; dispatches over HTTP.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "debate-resolution",
-    { hourUTC: 2, minuteUTC: 0 },
-    internal.debates.resolveExpiredDebates,
-  );
+if (enabled('operational')) {
+	crons.daily(
+		'debate-resolution',
+		{ hourUTC: 2, minuteUTC: 0 },
+		internal.debates.resolveExpiredDebates,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
-// 7. Analytics Snapshot — materialize noisy snapshots + rate limit cleanup
-//    Original: daily 00:05 UTC
-//    OPERATIONAL: no signal without traffic (piggybacks rate-limit cleanup —
-//    re-enable at launch so that maintenance path doesn't stay dark).
+// 7. Analytics Snapshot — bounded per-date coordinator + stale-run supervisor.
+//    OPERATIONAL and additionally launch-tombstoned until durable contribution
+//    authority exists and analytics:activateSnapshotPlane reports ready. Flip
+//    the code tombstone only in a later reviewed release; the coordinator also
+//    checks both durable and code-level readiness before it creates a run.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "analytics-snapshot",
-    { hourUTC: 0, minuteUTC: 5 },
-    internal.analytics.materializeSnapshot,
-  );
+if (
+	enabled('operational') &&
+	ANALYTICS_CONTRIBUTION_AUTHORITY_READY &&
+	ANALYTICS_SNAPSHOT_CRON_READY
+) {
+	crons.daily(
+		'analytics-snapshot',
+		{ hourUTC: 0, minuteUTC: 5 },
+		internal.analytics.materializeSnapshot,
+		{}
+	);
+	crons.interval(
+		'analytics-snapshot-supervisor',
+		{ minutes: 15 },
+		internal.analytics.superviseSnapshotRuns,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -213,12 +292,12 @@ if (enabled("operational")) {
 //     Was previously in the analytics-snapshot slot; now its own entry.
 //     ESSENTIAL: bounded-growth / retention hygiene.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.daily(
-    "intelligence-cleanup",
-    { hourUTC: 0, minuteUTC: 15 },
-    internal.intelligence.markExpired,
-  );
+if (enabled('essential')) {
+	crons.daily(
+		'intelligence-cleanup',
+		{ hourUTC: 0, minuteUTC: 15 },
+		internal.intelligence.markExpired
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -226,12 +305,8 @@ if (enabled("essential")) {
 //    Original: every 15 minutes
 //    OPERATIONAL: no A/B tests without campaigns.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.interval(
-    "ab-winner",
-    { minutes: 15 },
-    internal.email.pickAbWinners,
-  );
+if (enabled('operational')) {
+	crons.interval('ab-winner', { minutes: 15 }, internal.email.pickAbWinners);
 }
 
 // ---------------------------------------------------------------------------
@@ -239,12 +314,12 @@ if (enabled("operational")) {
 //    Original: Sunday 03:00 UTC
 //    SPECULATIVE: no consumer pre-launch.
 // ---------------------------------------------------------------------------
-if (enabled("speculative")) {
-  crons.weekly(
-    "scorecard-compute",
-    { dayOfWeek: "sunday", hourUTC: 3, minuteUTC: 0 },
-    internal.legislation.computeScorecards,
-  );
+if (enabled('speculative')) {
+	crons.weekly(
+		'scorecard-compute',
+		{ dayOfWeek: 'sunday', hourUTC: 3, minuteUTC: 0 },
+		internal.legislation.computeScorecards
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -255,14 +330,11 @@ if (enabled("speculative")) {
 //     resumes exactly when due. This cron is now a WIDE 15-min sweep that only
 //     recovers scheduler-restart orphans (same pattern as #16
 //     reschedule-stuck-revocations). ESSENTIAL: cheap (96 ticks/day) and
-//     correctness-protecting, so it runs on every profile incl. dev/pre-launch.
+//     correctness-protecting once an authorized essential-or-higher profile is
+//     deployed. It is intentionally absent from contained pre-launch backends.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.interval(
-    "workflow-scheduler",
-    { minutes: 15 },
-    internal.workflows.processScheduled,
-  );
+if (enabled('essential')) {
+	crons.interval('workflow-scheduler', { minutes: 15 }, internal.workflows.processScheduled);
 }
 
 // ---------------------------------------------------------------------------
@@ -270,12 +342,13 @@ if (enabled("essential")) {
 //     Runs daily at 01:30 UTC.
 //     ESSENTIAL: cheap retention hygiene.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.daily(
-    "contact-cache-cleanup",
-    { hourUTC: 1, minuteUTC: 30 },
-    internal.resolvedContacts.cleanupExpired,
-  );
+if (enabled('essential')) {
+	crons.daily(
+		'contact-cache-cleanup',
+		{ hourUTC: 1, minuteUTC: 30 },
+		internal.resolvedContacts.cleanupExpired,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,14 +359,15 @@ if (enabled("essential")) {
 //     dispatchScheduledBlast). claimForBlastDispatch (CAS scheduled→sending)
 //     makes the native path and this sweep mutually idempotent — no double-send.
 //     This cron is now a WIDE 15-min orphan-recovery sweep. ESSENTIAL: cheap and
-//     correctness-protecting, runs on every profile.
+//     correctness-protecting once an authorized essential-or-higher profile is
+//     deployed; intentionally absent from contained pre-launch backends.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.interval(
-    "process-scheduled-blasts",
-    { minutes: 15 },
-    internal.blasts.processScheduledBlasts,
-  );
+if (enabled('essential')) {
+	crons.interval(
+		'process-scheduled-blasts',
+		{ minutes: 15 },
+		internal.blasts.processScheduledBlasts
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -303,32 +377,33 @@ if (enabled("essential")) {
 //     deployed at the same minute).
 //     ESSENTIAL: sealedOrgKey TTL — key hygiene / safety.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "cleanup-sealed-keys",
-    { minuteUTC: 7 },
-    internal.blastCleanup.cleanupStaleSealedKeys,
-  );
+if (enabled('essential')) {
+	crons.hourly(
+		'cleanup-sealed-keys',
+		{ minuteUTC: 7 },
+		internal.blastCleanup.cleanupStaleSealedKeys,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
 // 14. Sweep Stuck Processing Submissions — recover from crashed delivery workers
 //     A worker that claimed a submission (deliveryStatus='processing') but died
 //     mid-flight leaves the submission unrecoverable — claimForDelivery refuses
-//     to re-claim a processing row. Every 2 minutes, revert rows that have been
+//     to re-claim a processing row. Every 5 minutes, revert rows that have been
 //     stuck in 'processing' for >15 minutes back to 'failed' so the next claim
 //     can retry. The threshold is implemented as STUCK_THRESHOLD_MS in
 //     `submissions.ts:sweepStuckProcessing` (15 min, not 5 — exceeds the
 //     /anchor-proof default 10-min execution budget so a slow-but-live worker
 //     isn't racially classified as stuck).
-//     ESSENTIAL: crashed-worker recovery (genuinely periodic; KEEP 2m).
+//     ESSENTIAL: crashed-worker recovery (genuinely periodic; KEEP 5m).
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.interval(
-    "sweep-stuck-processing",
-    { minutes: 2 },
-    internal.submissions.sweepStuckProcessing,
-  );
+if (enabled('essential')) {
+	crons.interval(
+		'sweep-stuck-processing',
+		{ minutes: 5 },
+		internal.submissions.sweepStuckProcessing
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -337,12 +412,8 @@ if (enabled("essential")) {
 //     Every 5 minutes, pick submissions with anchorStatus='failed' and retry.
 //     OPERATIONAL: no failed anchors without submissions.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.interval(
-    "retry-failed-anchors",
-    { minutes: 5 },
-    internal.submissions.retryFailedAnchors,
-  );
+if (enabled('operational')) {
+	crons.interval('retry-failed-anchors', { minutes: 5 }, internal.submissions.retryFailedAnchors);
 }
 
 // ---------------------------------------------------------------------------
@@ -353,12 +424,12 @@ if (enabled("operational")) {
 //     'failed' and alert operator via the standard /api/internal/alert path.
 //     ESSENTIAL: revocation-orphan recovery (F1 safety).
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.interval(
-    "reschedule-stuck-revocations",
-    { minutes: 15 },
-    internal.users.rescheduleStuckRevocations,
-  );
+if (enabled('essential')) {
+	crons.interval(
+		'reschedule-stuck-revocations',
+		{ minutes: 15 },
+		internal.users.rescheduleStuckRevocations
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -370,12 +441,12 @@ if (enabled("essential")) {
 //     constructor disagrees with our computed value. Every 1 hour.
 //     ESSENTIAL: on-chain/Convex root drift detection (security).
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "reconcile-revocation-smt-root",
-    { minuteUTC: 13 },
-    internal.revocations.reconcileSMTRoot,
-  );
+if (enabled('essential')) {
+	crons.hourly(
+		'reconcile-revocation-smt-root',
+		{ minuteUTC: 13 },
+		internal.revocations.reconcileSMTRoot
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -383,12 +454,12 @@ if (enabled("essential")) {
 //     after their short retention window.
 //     ESSENTIAL: encrypted-envelope retention expiry.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "cleanup-message-generation-jobs",
-    { minuteUTC: 21 },
-    internal.messageJobs.cleanupExpired,
-  );
+if (enabled('essential')) {
+	crons.hourly(
+		'cleanup-message-generation-jobs',
+		{ minuteUTC: 21 },
+		internal.messageJobs.cleanupExpired
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -399,12 +470,12 @@ if (enabled("essential")) {
 //     ESSENTIAL: privacy boundary-cell rate alarm (KEEP hourly — i2 test
 //     pins cadence).
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "monitor-boundary-cell-rate",
-    { minuteUTC: 47 },
-    internal.observability.monitorBoundaryCellRate,
-  );
+if (enabled('essential')) {
+	crons.hourly(
+		'monitor-boundary-cell-rate',
+		{ minuteUTC: 47 },
+		internal.observability.monitorBoundaryCellRate
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -415,51 +486,44 @@ if (enabled("essential")) {
 //     also fails to alert. 12:23 UTC chosen for stagger.
 //     ESSENTIAL: meta-monitor that detects a dead alert pipe.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.daily(
-    "alert-pipe-heartbeat",
-    { hourUTC: 12, minuteUTC: 23 },
-    internal.observability.heartbeatAlertPipe,
-  );
+if (enabled('essential')) {
+	crons.daily(
+		'alert-pipe-heartbeat',
+		{ hourUTC: 12, minuteUTC: 23 },
+		internal.observability.heartbeatAlertPipe
+	);
 }
 
 // ---------------------------------------------------------------------------
-// 21. Sweep stranded placeholder supporters — recover from crashed
-//     submitAction/importWithEncryption invocations that inserted a row with
-//     `encryptedEmail: ""` but never landed the follow-up patchEncryptedPii
-//     ciphertext. Deletes rows >15 min old still in the placeholder state.
-//     Bounds the PII-triple invariant violation to "one lost
-//     submission" instead of "permanent zombie row". Every 30 minutes,
-//     staggered to :17 so it's well off the :00 storm.
-//     ESSENTIAL: PII-triple invariant zombie-row bound (KEEP "17,47 * * * *").
+// 21. One-shot legacy placeholder supporter sweep. Current submission and
+//     import writers encrypt before the first insert; this job exists only to
+//     drain pre-cutover/operator-bootstrap rows after explicit versioned
+//     activation. It advances one CAS-fenced page per tick, then a durable
+//     completion tombstone makes every later invocation an O(1) no-op.
+//     Scheduled at :17/:47 only when an authorized cron profile is deployed.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.cron(
-    "sweep-stranded-placeholders",
-    "17,47 * * * *",
-    internal.supporters.sweepStrandedPlaceholders,
-  );
+if (enabled('essential')) {
+	crons.cron(
+		'sweep-stranded-placeholders',
+		'17,47 * * * *',
+		internal.supporters.sweepStrandedPlaceholders
+	);
 }
 
 // ---------------------------------------------------------------------------
-// 22. Sweep stranded donation placeholders — recover from crashed
-//     processCheckout invocations that inserted a donation row with
-//     `encryptedEmail: ""` but never landed the follow-up
-//     `patchEncryptedPii`. Parallels the supporters sweep + cross-tick
-//     checkpoint pattern. Donation-specific: rows in `completed`/`refunded`
-//     status are PRESERVED (money moved, audit trail must survive).
-//     Threshold 30 min — Stripe sessions expire after 24 h so a
-//     30-min-old pending row that never patched is genuinely stranded.
-//     Runs at :23/:53 (staggered off supporters sweep).
-//     ESSENTIAL: donation placeholder recovery (money-audit safety; KEEP
-//     "23,53 * * * *").
+// 22. One-shot legacy donation placeholder sweep. Current checkout writers
+//     encrypt before the first insert; explicit versioned activation drains
+//     only pre-cutover/operator-bootstrap rows. Completed/refunded audit rows
+//     are preserved. The CAS-fenced sweep advances one page per active tick,
+//     then its durable completion tombstone makes later invocations O(1).
+//     Scheduled at :23/:53 only when an authorized cron profile is deployed.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.cron(
-    "sweep-stranded-donations",
-    "23,53 * * * *",
-    internal.donations.sweepStrandedDonations,
-  );
+if (enabled('essential')) {
+	crons.cron(
+		'sweep-stranded-donations',
+		'23,53 * * * *',
+		internal.donations.sweepStrandedDonations
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -469,12 +533,8 @@ if (enabled("essential")) {
 //     stagger off the other hourly crons (:07, :13, :21, :47).
 //     ESSENTIAL: TTL purge — bounded growth / retention.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "agent-traces-expire",
-    { minuteUTC: 37 },
-    internal.agentTraces.expire,
-  );
+if (enabled('essential')) {
+	crons.hourly('agent-traces-expire', { minuteUTC: 37 }, internal.agentTraces.expire);
 }
 
 // ---------------------------------------------------------------------------
@@ -483,12 +543,8 @@ if (enabled("essential")) {
 //     each tick is bounded to RETRY_BATCH=50 (caps action time).
 //     OPERATIONAL: no webhook deliveries without orgs.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.interval(
-    "webhook-retry",
-    { minutes: 1 },
-    internal.orgWebhooks.retryPendingDeliveries,
-  );
+if (enabled('operational')) {
+	crons.interval('webhook-retry', { minutes: 1 }, internal.orgWebhooks.retryPendingDeliveries);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,12 +553,14 @@ if (enabled("operational")) {
 //     at :47 to stagger off the other hourly crons (:07, :13, :21, :37, :47).
 //     ESSENTIAL: SSE-table TTL purge — bounded growth.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.hourly(
-    "org-events-expire",
-    { minuteUTC: 47 },
-    internal.orgWebhooks.expireOldEvents,
-  );
+if (enabled('essential')) {
+	crons.hourly('org-events-expire', { minuteUTC: 47 }, internal.orgWebhooks.expireOldEvents, {});
+	crons.hourly(
+		'org-webhook-deliveries-expire',
+		{ minuteUTC: 53 },
+		internal.orgWebhooks.expireOldDeliveryHistory,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -513,13 +571,13 @@ if (enabled("essential")) {
 //     boundary work concentrated near midnight.
 //     OPERATIONAL: no users → no-op (traffic-dependent).
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "reputation-recompute",
-    { hourUTC: 3, minuteUTC: 11 },
-    internal.users.recomputeAllReputationTiers,
-    {},
-  );
+if (enabled('operational')) {
+	crons.daily(
+		'reputation-recompute',
+		{ hourUTC: 3, minuteUTC: 11 },
+		internal.users.recomputeAllReputationTiers,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -530,13 +588,13 @@ if (enabled("operational")) {
 //     03:41 UTC to stagger off the midnight crons.
 //     OPERATIONAL: embeds new tags (Gemini cost — needs authored tags).
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "tag-concept-embedding-backfill",
-    { hourUTC: 3, minuteUTC: 41 },
-    internal.templates.backfillTagEmbeddings,
-    {},
-  );
+if (enabled('operational')) {
+	crons.daily(
+		'tag-concept-embedding-backfill',
+		{ hourUTC: 3, minuteUTC: 41 },
+		internal.templates.backfillTagEmbeddings,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -548,13 +606,13 @@ if (enabled("operational")) {
 //      ESSENTIAL: durable freshness backstop for projection-affecting writes and
 //      any missed write-driven token; request paths still read compact rows only.
 // ---------------------------------------------------------------------------
-if (enabled("essential")) {
-  crons.daily(
-    "public-homepage-snapshot-rebuild",
-    { hourUTC: 4, minuteUTC: 17 },
-    internal.templates.rebuildHomepageSnapshotsForCron,
-    {},
-  );
+if (enabled('essential')) {
+	crons.daily(
+		'public-homepage-snapshot-rebuild',
+		{ hourUTC: 4, minuteUTC: 17 },
+		internal.templates.rebuildHomepageSnapshotsForCron,
+		{}
+	);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,13 +623,10 @@ if (enabled("essential")) {
 //     touchpoint and is decoupled from the metered request path.
 //     OPERATIONAL: nothing to report without metered API traffic.
 // ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.interval(
-    "drain-usage",
-    { minutes: 15 },
-    internal.metering.drainUsageToProvider,
-    { _secret: process.env.INTERNAL_API_SECRET ?? "" },
-  );
+if (enabled('operational')) {
+	crons.interval('drain-usage', { minutes: 15 }, internal.metering.drainUsageToProvider, {
+		_secret: process.env.INTERNAL_API_SECRET ?? ''
+	});
 }
 
 export default crons;

@@ -6,6 +6,7 @@ import { convexTest } from 'convex-test';
 import { api, internal } from './_generated/api';
 import type { Doc } from './_generated/dataModel';
 import schema from './schema';
+import { topicEmbeddingMarkerSplitRequiredResult } from './templates';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 const SECRET = 'embedding-backfill-test-secret-32-bytes-minimum';
@@ -62,10 +63,10 @@ function snapshotRebuildBudgetHarness() {
 		schema,
 		modules,
 		transactionLimits: {
-			// Fifty candidates require two indexed enrichment joins apiece. The
-			// shared list selection fits below this ceiling; preparing it again for
-			// relations would cross the limit and fail the publication transaction.
-			databaseQueries: 130,
+			// Fifty candidates require bounded enrichment joins plus one keyed topic
+			// vector lookup apiece. The shared list selection fits below this ceiling;
+			// preparing the enrichment set again for relations would still cross it.
+			databaseQueries: 240,
 			documentsRead: 500,
 			bytesRead: 5_000_000
 		}
@@ -77,11 +78,14 @@ function migrationHarness() {
 		schema,
 		modules,
 		transactionLimits: {
-			// The migration reads 100 rows and patches each valid row in the same
+			// The migration reads four near-limit rows and patches each valid row in the same
 			// bounded transaction; convex-test counts patch lookups toward this cap.
 			documentsRead: 225,
 			databaseQueries: 5,
-			bytesRead: 5_000_000
+			// Pagination itself is capped at 5 MiB. Patching the four returned
+			// near-limit rows performs keyed lookups too, so model the production
+			// transaction's larger 16 MiB ceiling rather than conflating the two.
+			bytesRead: 10_000_000
 		}
 	});
 }
@@ -122,6 +126,43 @@ async function seedTemplates(t: ReturnType<typeof harness>, missing: number, com
 			});
 		}
 	});
+}
+
+async function prepareDiscoveryRollout(t: ReturnType<typeof writeHarness>) {
+	let endorsements: any = await t.mutation(internal.templates.migrateEndorsementCounts, {
+		restart: true,
+		scheduleContinuation: false
+	});
+	while (endorsements.status === 'running') {
+		endorsements = await t.mutation(internal.templates.migrateEndorsementCounts, {
+			runToken: endorsements.runToken,
+			scheduleContinuation: false
+		});
+	}
+	expect(endorsements.status).toBe('complete');
+
+	let source: any = await t.mutation(internal.templates.migratePublicDiscoverySourcePage, {
+		scheduleContinuation: false
+	});
+	while (source.status === 'running') {
+		source = await t.mutation(internal.templates.migratePublicDiscoverySourcePage, {
+			runToken: source.runToken,
+			cursor: source.continueCursor,
+			startedAt: source.startedAt,
+			listDirtyAtAtStart: source.listDirtyAtAtStart,
+			relationsDirtyAtAtStart: source.relationsDirtyAtAtStart,
+			scanned: source.scanned,
+			eligible: source.eligible,
+			sourcesWritten: source.sourcesWritten,
+			topicVectorsWritten: source.topicVectorsWritten,
+			tagVectorsWritten: source.tagVectorsWritten,
+			rejected: source.rejected,
+			scheduleContinuation: false
+		});
+	}
+	expect(source.status).toBe('migrated');
+	await t.mutation(internal.templates.activatePublicDiscoverySourcePlane, {});
+	await t.mutation(internal.templates.migratePublicDiscoveryManifestAuthority, {});
 }
 
 describe('bounded embedding backfill discovery', () => {
@@ -170,6 +211,7 @@ describe('bounded embedding backfill discovery', () => {
 				})
 			)
 		}));
+		await prepareDiscoveryRollout(t);
 
 		// A cold deployment has no truthful displayed generation and must not
 		// fall back to an embedding-heavy live corpus scan.
@@ -187,6 +229,40 @@ describe('bounded embedding backfill discovery', () => {
 			new Set([String(emailId), String(cwcId)])
 		);
 		expect(missing.map(({ _id }) => _id)).not.toContain(liveEntrant);
+	});
+
+	it('keeps malformed legacy tag vectors eligible for bounded repair', async () => {
+		const t = writeHarness();
+		const { corruptId, coveredId } = await t.run(async (ctx) => ({
+			corruptId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('corrupt-tag-vector', { topics: ['libraries'] })
+			),
+			coveredId: await ctx.db.insert(
+				'templates',
+				missingTemplateValue('covered-tag-vector', { topics: ['district access'] })
+			)
+		}));
+		await prepareDiscoveryRollout(t);
+		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
+		await t.run(async (ctx) => {
+			await ctx.db.insert('publicTagEmbeddingVectors', {
+				tag: 'libraries',
+				embedding: [Number.NaN, ...new Array<number>(767).fill(0)],
+				embeddingVersion: 'legacy-corrupt',
+				updatedAt: 1_800_000_000_000
+			});
+			await ctx.db.insert('publicTagEmbeddingVectors', {
+				tag: 'district access',
+				embedding: validEmbedding(),
+				embeddingVersion: 'current',
+				updatedAt: 1_800_000_000_001
+			});
+		});
+
+		const missing = await t.query(internal.templates.listMissingTagEmbeddings, {});
+		expect(missing).toEqual([{ _id: corruptId, tags: ['libraries'] }]);
+		expect(missing.map(({ _id }) => _id)).not.toContain(coveredId);
 	});
 
 	it('serializes Pages isolates with an expiring token-checked lease', async () => {
@@ -334,7 +410,7 @@ describe('bounded embedding backfill discovery', () => {
 		).resolves.toMatchObject({ status: 'already-complete', scanned: 2, marked: 1 });
 	});
 
-	it('self-pages beyond 100 rows and exposes durable completion evidence', async () => {
+	it('self-pages near the document limit and exposes durable completion evidence', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-16T00:00:00.000Z'));
 		try {
@@ -342,7 +418,7 @@ describe('bounded embedding backfill discovery', () => {
 			const vector = new Array<number>(768).fill(0);
 			vector[0] = 1;
 			await t.run(async (ctx) => {
-				for (let index = 0; index < 101; index += 1) {
+				for (let index = 0; index < 9; index += 1) {
 					await ctx.db.insert('templates', {
 						slug: `legacy-page-${index}`,
 						title: `Legacy page ${index}`,
@@ -353,7 +429,7 @@ describe('bounded embedding backfill discovery', () => {
 						type: 'email',
 						deliveryMethod: 'email',
 						preview: 'Preview',
-						messageBody: 'Body',
+						messageBody: 'x'.repeat(900_000),
 						deliveryConfig: {},
 						recipientConfig: {},
 						status: 'published',
@@ -374,23 +450,47 @@ describe('bounded embedding backfill discovery', () => {
 				t.mutation(internal.templates.migrateTopicEmbeddingMarkers, {})
 			).resolves.toMatchObject({
 				status: 'running',
-				pageScanned: 100,
-				scanned: 100,
+				pageScanned: 4,
+				scanned: 4,
 				isDone: false
 			});
 			await expect(
 				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
-			).resolves.toMatchObject({ status: 'running', scanned: 100, marked: 100 });
+			).resolves.toMatchObject({ status: 'running', scanned: 4, marked: 4 });
 
-			vi.advanceTimersByTime(0);
-			await t.finishInProgressScheduledFunctions();
+			for (let page = 0; page < 4; page += 1) {
+				const state = await t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {});
+				if (state.status === 'complete') break;
+				vi.advanceTimersByTime(0);
+				await t.finishInProgressScheduledFunctions();
+			}
 
 			await expect(
 				t.query(internal.templates.topicEmbeddingMarkerMigrationStatus, {})
-			).resolves.toMatchObject({ status: 'complete', scanned: 101, marked: 101 });
+			).resolves.toMatchObject({ status: 'complete', scanned: 9, marked: 9 });
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it('maps a defensive SplitRequired page to zero-progress durable block state', () => {
+		expect(
+			topicEmbeddingMarkerSplitRequiredResult({
+				startedAt: 1_800_000_000_000,
+				scanned: 7,
+				marked: 3
+			})
+		).toEqual({
+			status: 'blocked',
+			failureCode: 'TOPIC_EMBEDDING_MARKER_MIGRATION_PAGE_SPLIT_REQUIRED',
+			pageScanned: 0,
+			pageMarked: 0,
+			scanned: 7,
+			marked: 3,
+			isDone: false,
+			startedAt: 1_800_000_000_000,
+			completedAt: null
+		});
 	});
 
 	it('explicitly restarts a marker migration whose continuation stopped', async () => {
@@ -531,7 +631,7 @@ describe('bounded embedding backfill discovery', () => {
 				leaseToken
 			})
 		).rejects.toThrow('INVALID_EMBEDDING_VALUE:finite-numbers-required');
-		for (const domainHue of [Number.POSITIVE_INFINITY, -0.01, 360.01]) {
+		for (const domainHue of [Number.POSITIVE_INFINITY, -0.01, 360, 360.01]) {
 			await expect(
 				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
 					templateId: await insertFixture(),
@@ -541,9 +641,9 @@ describe('bounded embedding backfill discovery', () => {
 					_secret: SECRET,
 					leaseToken
 				})
-			).rejects.toThrow('INVALID_DOMAIN_HUE:expected=0..360');
+			).rejects.toThrow('INVALID_DOMAIN_HUE:expected=0..<360');
 		}
-		for (const domainHue of [0, 360]) {
+		for (const domainHue of [0, 359.999]) {
 			await expect(
 				t.mutation(api.templates.updateMissingEmbeddingsForBackfill, {
 					templateId: await insertFixture(),
@@ -591,6 +691,7 @@ describe('bounded embedding backfill discovery', () => {
 				);
 				return { ownerId, otherId, templateId };
 			});
+			await prepareDiscoveryRollout(t);
 
 			const listToken = await t.mutation(
 				internal.templates.requestPublicTemplateSnapshotRefresh,
@@ -634,14 +735,18 @@ describe('bounded embedding backfill discovery', () => {
 			// remains behind the same 60-second coalescing window as creation.
 			vi.advanceTimersByTime(0);
 			await t.finishInProgressScheduledFunctions();
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			expect(
+				await t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET })
+			).toMatchObject({
 				list: { revision: 0 },
 				relations: { revision: 0 }
 			});
 
 			vi.advanceTimersByTime(60_000);
 			await t.finishInProgressScheduledFunctions();
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			expect(
+				await t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET })
+			).toMatchObject({
 				list: { ready: true, revision: 1 },
 				relations: { ready: true, revision: 1 }
 			});
@@ -735,6 +840,7 @@ describe('bounded embedding backfill discovery', () => {
 			const templateId = await t.run((ctx) =>
 				ctx.db.insert('templates', missingTemplateValue('authoritative-backfill-lease'))
 			);
+			await prepareDiscoveryRollout(t);
 			const firstToken = 'authoritative-lease-first';
 			const successorToken = 'authoritative-lease-successor';
 			await expect(
@@ -805,6 +911,7 @@ describe('bounded embedding backfill discovery', () => {
 				);
 			}
 		});
+		await prepareDiscoveryRollout(t);
 		await expect(
 			t.mutation(api.templates.claimEmbeddingBackfillLease, {
 				_secret: SECRET,

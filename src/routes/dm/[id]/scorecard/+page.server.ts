@@ -1,12 +1,16 @@
 import { error } from '@sveltejs/kit';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
 
 import type { PageServerLoad } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
-const toDateStr = (value: number | string | null, fmt: 'date' | 'month' = 'date'): string | null => {
+const toDateStr = (
+	value: number | string | null,
+	fmt: 'date' | 'month' = 'date'
+): string | null => {
 	if (typeof value === 'number') {
 		return new Date(value).toISOString().slice(0, fmt === 'month' ? 7 : 10);
 	}
@@ -17,6 +21,7 @@ export const load: PageServerLoad = async ({ params }) => {
 	const { id } = params;
 
 	const result = await serverQuery(api.legislation.getDmScorecard, {
+		_secret: getInternalSecret(),
 		identifier: id
 	});
 
@@ -24,11 +29,7 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Decision-maker not found');
 	}
 
-	canonicalizeOrRedirect(
-		result.canonicalSlug,
-		id,
-		(slug) => `/dm/${slug}/scorecard`
-	);
+	canonicalizeOrRedirect(result.canonicalSlug, id, (slug) => `/dm/${slug}/scorecard`);
 
 	return {
 		decisionMaker: {

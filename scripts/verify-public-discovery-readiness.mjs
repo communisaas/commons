@@ -13,6 +13,30 @@ const MAX_PUBLIC_CONCEPT_ENTRIES = 10_000;
 const MAX_COHERENT_READ_ATTEMPTS = 3;
 const MIN_INTERNAL_SECRET_BYTES = 32;
 const PUBLIC_TEMPLATE_PROJECTION_VERSION = 4;
+const PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_PROJECTION_VERSION = 1;
+const PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES = 4 * 1024;
+export const REQUIRED_LAUNCH_PROJECTION_PLANES = Object.freeze([
+	'discoverySource',
+	'endorsementCounts',
+	'templateList',
+	'recipientMetrics',
+	'sessionAuthority',
+	'campaignReadModel',
+	'campaignCounters',
+	'debateReadModel',
+	'organizationDirectory',
+	'coalitionMetrics',
+	'networkCharters',
+	'supporterBrowse',
+	'supporterAudienceActions',
+	'accountabilityReadModel',
+	'planUsage',
+	'subscriptionAuthority',
+	'contactAuthority',
+	'workflowExecutionCounts',
+	'donationConfirmationSummaries',
+	'smsReplySummaries'
+]);
 export const DEFAULT_MAX_SNAPSHOT_AGE_MS = 26 * 60 * 60 * 1000;
 
 /**
@@ -56,6 +80,46 @@ function positiveRevision(value) {
  */
 function currentTimestamp(value) {
 	return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * Validate the read-only deploy proof for the compact manifest authority.
+ * The recurring public manifest read never touches the wide control row; this
+ * direct Convex proof is intentionally deploy/on-demand only.
+ *
+ * @param {unknown} value
+ */
+export function validatePublicDiscoveryManifestAuthorityStatus(value) {
+	const status = isRecord(value) ? value : null;
+	if (!status) {
+		throw new Error('PUBLIC_DISCOVERY_NOT_READY: manifestAuthorityStatus is missing');
+	}
+	const errors = [];
+	{
+		if (status.ready !== true) errors.push('manifestAuthorityStatus.ready is not true');
+		if (status.matches !== true) errors.push('manifestAuthorityStatus.matches is not true');
+		if (
+			!Number.isSafeInteger(status.bytes) ||
+			/** @type {number} */ (status.bytes) <= 0 ||
+			/** @type {number} */ (status.bytes) > PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES
+		) {
+			errors.push('manifestAuthorityStatus.bytes exceeds the compact authority bound');
+		}
+		if (status.maxBytes !== PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES) {
+			errors.push('manifestAuthorityStatus.maxBytes is not the reviewed 4 KiB bound');
+		}
+		if (status.projectionVersion !== PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_PROJECTION_VERSION) {
+			errors.push('manifestAuthorityStatus.projectionVersion is not the reviewed version');
+		}
+	}
+	if (errors.length > 0) {
+		throw new Error(`PUBLIC_DISCOVERY_NOT_READY: ${errors.join('; ')}`);
+	}
+	return {
+		manifestAuthorityBytes: /** @type {number} */ (status?.bytes),
+		manifestAuthorityMaxBytes: PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES,
+		manifestAuthorityProjectionVersion: PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_PROJECTION_VERSION
+	};
 }
 
 /**
@@ -223,6 +287,65 @@ export function validatePublicDiscoveryReadiness(
 		}
 		if (producerState.discoveryManifestPresent !== true) {
 			errors.push('producerStatus.discoveryManifestPresent is not true');
+		}
+		if (producerState.discoverySourcePlaneReady !== true) {
+			errors.push('producerStatus.discoverySourcePlaneReady is not true');
+		}
+		if (producerState.discoveryEndorsementCountsReady !== true) {
+			errors.push('producerStatus.discoveryEndorsementCountsReady is not true');
+		}
+		if (producerState.templateListProjectionReady !== true) {
+			errors.push('producerStatus.templateListProjectionReady is not true');
+		}
+		if (producerState.templateListProjectionStatus !== 'ready') {
+			errors.push('producerStatus.templateListProjectionStatus is not ready');
+		}
+		if (producerState.recipientMetricsReady !== true) {
+			errors.push('producerStatus.recipientMetricsReady is not true');
+		}
+		if (producerState.recipientMetricsStatus !== 'ready') {
+			errors.push('producerStatus.recipientMetricsStatus is not ready');
+		}
+		if (producerState.launchProjectionsReady !== true) {
+			errors.push('producerStatus.launchProjectionsReady is not true');
+		}
+		const launchPlanes = isRecord(producerState.launchProjectionPlanes)
+			? producerState.launchProjectionPlanes
+			: null;
+		if (!launchPlanes) {
+			errors.push('producerStatus.launchProjectionPlanes is missing');
+		} else {
+			const requiredNames = [...REQUIRED_LAUNCH_PROJECTION_PLANES].sort();
+			const actualNames = Object.keys(launchPlanes).sort();
+			for (const name of requiredNames) {
+				if (!Object.hasOwn(launchPlanes, name)) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name} is missing`);
+					continue;
+				}
+				const plane = launchPlanes[name];
+				if (!isRecord(plane)) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name} is invalid`);
+					continue;
+				}
+				if (plane.ready !== true) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name}.ready is not true`);
+				}
+				if (
+					typeof plane.status !== 'string' ||
+					plane.status.length === 0 ||
+					plane.status === 'missing'
+				) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name}.status is not ready`);
+				}
+				if (plane.failureCode !== null) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name}.failureCode is not null`);
+				}
+			}
+			for (const name of actualNames) {
+				if (!REQUIRED_LAUNCH_PROJECTION_PLANES.includes(name)) {
+					errors.push(`producerStatus.launchProjectionPlanes.${name} is unexpected`);
+				}
+			}
 		}
 		if (producerState.discoveryProducerHealthy !== true) {
 			errors.push('producerStatus.discoveryProducerHealthy is not true');
@@ -502,39 +625,61 @@ export async function verifyPublicDiscoveryReadiness(
 	const client = new ConvexHttpClient(parsedUrl.origin);
 	for (let attempt = 1; attempt <= MAX_COHERENT_READ_ATTEMPTS; attempt += 1) {
 		const manifestBefore = await withTimeout(
-			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			client.query(anyApi.templates.publicDiscoveryManifest, { _secret: internalSecret }),
 			'templates:publicDiscoveryManifest(before)',
 			timeoutMs
 		);
 		const [allList, excludeCwcList, allRelations, excludeCwcRelations] = await Promise.all([
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: false }),
+				client.query(anyApi.templates.publicDiscoveryList, {
+					_secret: internalSecret,
+					excludeCwc: false
+				}),
 				'templates:publicDiscoveryList(all)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: true }),
+				client.query(anyApi.templates.publicDiscoveryList, {
+					_secret: internalSecret,
+					excludeCwc: true
+				}),
 				'templates:publicDiscoveryList(excludeCwc)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: false }),
+				client.query(anyApi.templates.publicDiscoveryRelations, {
+					_secret: internalSecret,
+					excludeCwc: false
+				}),
 				'templates:publicDiscoveryRelations(all)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: true }),
+				client.query(anyApi.templates.publicDiscoveryRelations, {
+					_secret: internalSecret,
+					excludeCwc: true
+				}),
 				'templates:publicDiscoveryRelations(excludeCwc)',
 				timeoutMs
 			)
 		]);
 		const manifestAfter = await withTimeout(
-			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			client.query(anyApi.templates.publicDiscoveryManifest, { _secret: internalSecret }),
 			'templates:publicDiscoveryManifest(after)',
 			timeoutMs
 		);
 
 		if (!sameManifestGeneration(manifestBefore, manifestAfter)) continue;
+
+		const manifestAuthorityStatus = await withTimeout(
+			client.query(anyApi.templates.publicDiscoveryManifestAuthorityStatus, {
+				_secret: internalSecret
+			}),
+			'templates:publicDiscoveryManifestAuthorityStatus',
+			timeoutMs
+		);
+		const manifestAuthorityReport =
+			validatePublicDiscoveryManifestAuthorityStatus(manifestAuthorityStatus);
 
 		// Health is deliberately the terminal read. Durable failure/dirty state
 		// can change without advancing public snapshot coordinates, so reading it
@@ -545,17 +690,20 @@ export async function verifyPublicDiscoveryReadiness(
 			timeoutMs
 		);
 
-		return validatePublicDiscoveryReadiness(
-			{
-				manifest: manifestAfter,
-				allList,
-				excludeCwcList,
-				allRelations,
-				excludeCwcRelations,
-				producerStatus
-			},
-			{ requireContent, contractOnly, maxAgeMs, now: now ?? Date.now() }
-		);
+		return {
+			...validatePublicDiscoveryReadiness(
+				{
+					manifest: manifestAfter,
+					allList,
+					excludeCwcList,
+					allRelations,
+					excludeCwcRelations,
+					producerStatus
+				},
+				{ requireContent, contractOnly, maxAgeMs, now: now ?? Date.now() }
+			),
+			...manifestAuthorityReport
+		};
 	}
 
 	throw new Error(

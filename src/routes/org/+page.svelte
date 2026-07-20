@@ -15,7 +15,18 @@
 	let { data }: { data: PageData } = $props();
 
 	const user = $derived(data.user);
-	const orgs = $derived((user?.orgMemberships ?? []).filter((org) => org !== null));
+	const membershipPage = $derived(data.membershipPage ?? null);
+	const orgs = $derived(
+		(membershipPage?.data ?? user?.orgMemberships ?? []).filter((org) => org !== null)
+	);
+	const membershipOverflow = $derived(
+		membershipPage
+			? {
+					hasMore: membershipPage.hasMore,
+					cursor: membershipPage.cursor
+				}
+			: (user?.orgMembershipsOverflow ?? null)
+	);
 
 	// Specimen: real CA-11 (San Francisco)
 	// Boundary: simplified from Census TIGER/Line 119th Congress (689 → 47 vertices)
@@ -285,7 +296,7 @@
 						<div class="org-card__info">
 							<span class="org-card__name">{org.orgName}</span>
 							<span class="org-card__meta">
-								{org.role}{#if org.activeCampaignCount > 0}
+								{org.role}{#if (org.activeCampaignCount ?? 0) > 0}
 									&middot; {org.activeCampaignCount} active
 								{/if}
 							</span>
@@ -294,6 +305,12 @@
 					</a>
 				{/each}
 			</div>
+
+			{#if membershipOverflow?.hasMore && membershipOverflow.cursor}
+				<a class="create-link" href="/org?cursor={encodeURIComponent(membershipOverflow.cursor)}">
+					More organizations
+				</a>
+			{/if}
 
 			{#if showCreate}
 				<form
@@ -625,7 +642,8 @@
 					<div class="platform__tile">
 						<span class="platform__tile-name">Events</span>
 						<span class="platform__tile-desc"
-							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays gated.</span
+							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays
+							gated.</span
 						>
 					</div>
 					<div class="platform__tile">

@@ -38,17 +38,19 @@ export type ResultsHeadline = {
  * siblings.
  */
 export function deriveResultsHeadline(data: ReturnSpaceData): ResultsHeadline {
-	const campaignVerifiedSum = data.campaigns.reduce(
+	const campaignVerifiedSum = (data.campaigns ?? []).reduce(
 		(sum, campaign) => sum + campaign.verifiedActions,
 		0
 	);
+	const receipts = data.receipts;
 	return {
 		verifiedConstituents: Math.max(campaignVerifiedSum, data.packet?.verified ?? 0),
 		districtsReached: data.packet?.districtCount ?? 0,
-		proofReportsDelivered: data.receipts.loadedCount,
+		proofReportsDelivered: receipts?.loadedCount ?? 0,
 		proofReportsAtSampleCap:
-			data.receipts.sampleLimit > 0 && data.receipts.loadedCount >= data.receipts.sampleLimit,
-		responsesLogged: data.receipts.responseLoggedCount
+			(receipts?.sampleLimit ?? 0) > 0 &&
+			(receipts?.loadedCount ?? 0) >= (receipts?.sampleLimit ?? 0),
+		responsesLogged: receipts?.responseLoggedCount ?? 0
 	};
 }
 

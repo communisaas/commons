@@ -1,0 +1,70 @@
+name: Cloudflare Pages Exposure Guard
+
+on:
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  # Must exactly match deploy.yml: forced deletion cannot race a Pages upload
+  # while canonical and branch aliases are moving.
+  group: cloudflare-pages-publication
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    # workflow_dispatch lets an operator choose a ref. Never execute that ref's
+    # repository script with the Pages Write token; only the protected default
+    # branch is an execution authority for this destructive reconciler.
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Production must externally allow deployments only from protected main.
+    # Repository-level Cloudflare credentials are forbidden.
+    environment: Production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout immutable protected exposure gate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: gate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authenticate immutable exposure gate before gate-owned execution
+        env:
+          TRUSTED_GATE_SHA: ${{ github.workflow_sha }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          REPOSITORY: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          expected_workflow_ref="${REPOSITORY}/.github/workflows/pages-exposure-guard.yml@refs/heads/${DEFAULT_BRANCH}"
+          if ! [[ "$TRUSTED_GATE_SHA" =~ ^[0-9a-f]{40}$ ]] || \
+            [ "$DEFAULT_BRANCH" != "main" ] || \
+            [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
+            echo "::error::Exposure authority requires an exact gate SHA on protected default branch main."
+            exit 1
+          fi
+          gate_checkout=$(git -C gate rev-parse --verify 'HEAD^{commit}')
+          trusted_default=$(git -C gate rev-parse --verify "refs/remotes/origin/${DEFAULT_BRANCH}^{commit}")
+          if [ "$gate_checkout" != "$TRUSTED_GATE_SHA" ] || \
+            [ "$TRUSTED_GATE_SHA" != "$trusted_default" ]; then
+            echo "::error::The trusted exposure workflow is not the current protected-main head."
+            exit 1
+          fi
+
+      - name: Setup trusted Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: 'gate/.node-version'
+
+      - name: Delete every noncanonical or unapproved Pages deployment
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CF_PAGES_PROJECT: communique-site
+          CF_PAGES_ALLOWED_ALIAS_BRANCHES: production
+        run: node gate/scripts/reconcile-cloudflare-pages-exposure.mjs --prune

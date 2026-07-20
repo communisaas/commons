@@ -63,11 +63,13 @@
 	/** The packet is computed for one campaign — name it so the proof artifact carries its scope. */
 	const packetCampaignTitle = $derived(
 		data?.packet && data.topCampaignId
-			? (data.campaigns.find((campaign) => campaign.id === data.topCampaignId)?.title ?? null)
+			? (data.campaigns?.find((campaign) => campaign.id === data.topCampaignId)?.title ?? null)
 			: null
 	);
 	const districtReach = $derived(deriveDistrictReach(data?.packet?.geography ?? null));
-	const responseActivity = $derived(data ? describeResponseActivity(data.receipts) : null);
+	const responseActivity = $derived(
+		data?.receipts ? describeResponseActivity(data.receipts) : null
+	);
 
 	// Personalized messages — the differentiator a board reacts to (a supporter
 	// who edited the org's template away from verbatim carries far more influence
@@ -92,11 +94,15 @@
 			count: funnel.identityVerified,
 			pct: Math.round((funnel.identityVerified / funnelMax) * 100)
 		},
-		{
-			label: 'District Signal',
-			count: funnel.districtVerified,
-			pct: Math.round((funnel.districtVerified / funnelMax) * 100)
-		}
+		...(funnel.districtVerified === null
+			? []
+			: [
+					{
+						label: 'District Signal',
+						count: funnel.districtVerified,
+						pct: Math.round((funnel.districtVerified / funnelMax) * 100)
+					}
+				])
 	]);
 
 	// Results is mounted at `/results` (the org root is now the authoring front
@@ -119,9 +125,7 @@
 	<header class="return-head">
 		<div class="return-head-copy">
 			<h1 class="return-title">Results</h1>
-			<p class="return-sub">
-				What your campaigns delivered and who responded.
-			</p>
+			<p class="return-sub">What your campaigns delivered and who responded.</p>
 		</div>
 		<div class="return-head-instrument">
 			{#if data && headline}
@@ -150,7 +154,7 @@
 							<span class="evidence-label"
 								>proof reports delivered{headline.proofReportsAtSampleCap ? ' (recent)' : ''}</span
 							>
-							{#if data.receipts.latestProofDeliveredAt}
+							{#if data.receipts?.latestProofDeliveredAt}
 								<span class="evidence-note"
 									>last delivered {formatReportDay(data.receipts.latestProofDeliveredAt)}</span
 								>
@@ -164,12 +168,12 @@
 						</span>
 					{/if}
 				</div>
-				{#if headline.verifiedConstituents === 0 || headline.responsesLogged === 0}
+				{#if headline.verifiedConstituents === 0 || (data.receipts && headline.responsesLogged === 0)}
 					<div class="evidence-absent-group">
 						{#if headline.verifiedConstituents === 0}
 							<p class="evidence-absent">{NO_VERIFIED_ACTIONS_SENTENCE}</p>
 						{/if}
-						{#if headline.responsesLogged === 0}
+						{#if data.receipts && headline.responsesLogged === 0}
 							<p class="evidence-absent">{NO_RESPONSES_LOGGED_SENTENCE}</p>
 						{/if}
 					</div>
@@ -216,7 +220,15 @@
 					<a href="{base}/campaigns" class="section-link">Open actions</a>
 				</div>
 
-				{#if campaigns.length === 0}
+				{#if data.campaigns === null}
+					<div class="empty-state">
+						<p class="empty-text">
+							Action records load in their owned page because this compact card page reached its
+							read budget.
+						</p>
+						<a href="{base}/campaigns" class="empty-action">Open action records</a>
+					</div>
+				{:else if campaigns.length === 0}
 					<div class="empty-state">
 						<p class="empty-text">
 							No action records yet — actions you send appear here with their verified counts.
@@ -304,7 +316,12 @@
 				<!-- Response activity — receipt evidence as sentences, not counters. -->
 				<div class="response-activity" aria-label="Response activity">
 					<span class="section-label">Response activity</span>
-					{#if responseActivity === null}
+					{#if data.receipts === null}
+						<p class="absence-note">
+							Response totals load in Action records while the compact receipt index is becoming
+							ready.
+						</p>
+					{:else if responseActivity === null}
 						<p class="absence-note">{NO_REPORTS_DELIVERED_SENTENCE}</p>
 					{:else}
 						<p class="response-sentence">{responseActivity}</p>

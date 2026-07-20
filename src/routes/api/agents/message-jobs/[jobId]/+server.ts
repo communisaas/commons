@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import { json } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 
 export const GET: RequestHandler = async (event) => {
@@ -16,5 +16,10 @@ export const GET: RequestHandler = async (event) => {
 		return json({ error: 'Message generation job not found' }, { status: 404 });
 	}
 
-	return json({ job });
+	const terminal =
+		job.status === 'completed' || job.status === 'failed' || job.status === 'expired';
+	const responseJob =
+		!terminal && job.expiresAt <= Date.now() ? { ...job, status: 'expired' as const } : job;
+
+	return json({ job: responseJob });
 };

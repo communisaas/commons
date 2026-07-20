@@ -88,8 +88,9 @@ export const list = query({
  * Used by: src/routes/e/[id]/+page.server.ts
  */
 export const getPublic = query({
-	args: { eventId: v.id('events') },
-	handler: async (ctx, { eventId }) => {
+	args: { _secret: v.string(), eventId: v.id('events') },
+	handler: async (ctx, { _secret, eventId }) => {
+		requireInternalSecret(_secret);
 		const event = await ctx.db.get(eventId);
 		if (!event || event.status === 'DRAFT') return null;
 
@@ -274,6 +275,8 @@ export const create = mutation({
 			capacity: args.capacity,
 			waitlistEnabled: args.waitlistEnabled ?? false,
 			rsvpCount: 0,
+			goingCount: 0,
+			maybeCount: 0,
 			attendeeCount: 0,
 			verifiedAttendees: 0,
 			checkinCode,
@@ -386,14 +389,36 @@ export const insertRsvp = internalMutation({
 				q.eq('eventId', args.eventId).eq('emailHash', args.emailHash)
 			)
 			.first();
+		const event = await ctx.db.get(args.eventId);
+		if (!event) throw new Error('Event not found');
 
 		if (existing) {
-			// Update existing RSVP
+			// Update existing RSVP and its compact status counters in the same
+			// transaction. Legacy events leave the optional counters undefined until
+			// backfilled; never initialize a partial count from a single transition.
 			await ctx.db.patch(existing._id, {
 				status: args.status,
 				guestCount: args.guestCount,
 				updatedAt: Date.now()
 			});
+			const eventPatch: { goingCount?: number; maybeCount?: number } = {};
+			if (event.goingCount !== undefined && existing.status !== args.status) {
+				eventPatch.goingCount = Math.max(
+					0,
+					event.goingCount +
+						(args.status === 'GOING' ? 1 : 0) -
+						(existing.status === 'GOING' ? 1 : 0)
+				);
+			}
+			if (event.maybeCount !== undefined && existing.status !== args.status) {
+				eventPatch.maybeCount = Math.max(
+					0,
+					event.maybeCount +
+						(args.status === 'MAYBE' ? 1 : 0) -
+						(existing.status === 'MAYBE' ? 1 : 0)
+				);
+			}
+			if (Object.keys(eventPatch).length > 0) await ctx.db.patch(args.eventId, eventPatch);
 			return { id: existing._id, updated: true };
 		}
 
@@ -413,8 +438,6 @@ export const insertRsvp = internalMutation({
 		// "GOING". WAITLISTED is reachable only when a caller passes it
 		// explicitly. The auto-promotion-on-overflow product feature is
 		// tracked but not yet implemented.
-		const event = await ctx.db.get(args.eventId);
-		if (!event) throw new Error('Event not found');
 		if (event.capacity && event.rsvpCount >= event.capacity && !event.waitlistEnabled) {
 			// Match the action-level error string so the SvelteKit
 			// endpoint's translator at `/api/e/[id]/rsvp:91` (substring
@@ -444,7 +467,13 @@ export const insertRsvp = internalMutation({
 		// Increment event RSVP counter using the just-fetched event row
 		// (already loaded above for the capacity check).
 		await ctx.db.patch(args.eventId, {
-			rsvpCount: event.rsvpCount + 1
+			rsvpCount: event.rsvpCount + 1,
+			...(event.goingCount !== undefined && args.status === 'GOING'
+				? { goingCount: event.goingCount + 1 }
+				: {}),
+			...(event.maybeCount !== undefined && args.status === 'MAYBE'
+				? { maybeCount: event.maybeCount + 1 }
+				: {})
 		});
 
 		await ctx.runMutation(internal.workflows.dispatchTrigger, {
@@ -829,7 +858,7 @@ export const publicCheckIn = mutation({
 				.withIndex('by_eventId_emailHash', (idx) =>
 					idx.eq('eventId', args.eventId).eq('emailHash', args.emailHash)
 				)
-				.collect();
+				.take(2);
 			if (sanity.length > 1) {
 				console.error(
 					`[publicCheckIn] OCC INVARIANT VIOLATED: ${sanity.length} eventRsvps rows share eventId+emailHash after walk-in insert. attendeeCount may double-count.`

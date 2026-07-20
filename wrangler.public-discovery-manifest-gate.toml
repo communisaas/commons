@@ -1,0 +1,21 @@
+name = "commons-public-discovery-manifest-gate"
+main = "workers/public-discovery-manifest-refresh-gate.ts"
+compatibility_date = "2026-07-20"
+workers_dev = false
+preview_urls = false
+
+[vars]
+RELEASE_AUTHORITY_HOST = "release-control.commons.email"
+RELEASE_AUTHORITY_REALM = "https://quirky-chinchilla-352.convex.cloud"
+
+[[routes]]
+pattern = "release-control.commons.email"
+custom_domain = true
+
+[[durable_objects.bindings]]
+name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
+class_name = "PublicDiscoveryManifestRefreshGate"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PublicDiscoveryManifestRefreshGate"]

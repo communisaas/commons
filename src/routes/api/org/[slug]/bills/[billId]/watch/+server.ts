@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -28,9 +28,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		slug: params.slug,
 		billId: params.billId as Id<'bills'>,
 		reason,
-		position: typeof body.position === 'string' && ['support', 'oppose'].includes(body.position)
-			? body.position
-			: undefined
+		position:
+			typeof body.position === 'string' && ['support', 'oppose'].includes(body.position)
+				? body.position
+				: undefined
 	});
 	return json(result, { status: 201 });
 };
@@ -40,9 +41,12 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const body = await request.json();
-	const position = typeof body.position === 'string' && ['support', 'oppose', 'neutral'].includes(body.position)
-		? (body.position === 'neutral' ? null : body.position)
-		: undefined;
+	const position =
+		typeof body.position === 'string' && ['support', 'oppose', 'neutral'].includes(body.position)
+			? body.position === 'neutral'
+				? null
+				: body.position
+			: undefined;
 
 	if (position === undefined) {
 		throw error(400, 'position must be "support", "oppose", or "neutral"');

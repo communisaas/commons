@@ -1,257 +1,96 @@
 # Analytics Snapshot Architecture
 
-## Overview
+## Status
 
-The snapshot system prevents privacy budget exhaustion attacks by materializing noisy data once per day instead of adding fresh noise to every query.
+The bounded snapshot plane is implemented but **not launchable for publication**.
+`ANALYTICS_CONTRIBUTION_AUTHORITY_READY=false` blocks activation,
+materialization, reads, and cron registration because the current isolate-local
+HTTP/IP counter does not prove central-DP sensitivity 1. See
+`docs/development/analytics.md` for the operator gate and cutover commands.
 
-## The Problem
+## Purpose
 
-**Before snapshots:**
+Materializing one noisy result per logical cell/day prevents repeated readers
+from averaging independently noised responses. It does not, by itself, bound
+how much one actor can change a cell. Both properties are required before an
+ε=1 claim is valid:
 
-- Each query applied fresh Laplace noise
-- Attackers could average out noise through repeated queries
-- Privacy budget (`MAX_DAILY_EPSILON = 10.0`) existed but was never enforced
+1. durable contribution authority bounds one actor's effect at the trusted
+   Convex writer;
+2. one immutable, pre-noised snapshot is published for each canonical cell.
 
-**Attack scenario:**
+## Data planes
 
-```typescript
-// Attacker makes 100 queries for the same data
-const results = [];
-for (let i = 0; i < 100; i++) {
-	results.push(await queryMetric('template_view'));
-}
-// Average out noise to recover true count
-const trueCount = average(results);
+- `analytics` contains raw `aggregate` rows and materialized `snapshot` rows.
+  Canonical aggregate and snapshot identities fail closed on duplicates.
+- `analyticsSnapshotMigrations` is the singleton launch migration state.
+- `analyticsSnapshotRuns` contains one durable coordinator per closed UTC date,
+  including its server-only noise seed and progress lease.
+- `privacyBudgets` binds one epsilon spend identity to one snapshot run.
+
+The secret seed exists only on the run row. New snapshot rows do not retain it,
+and `readSnapshotPage` returns an explicit DTO that excludes seeds, source IDs,
+logical identities, and Convex metadata.
+
+## Write and publication flow
+
+```text
+incrementBatch
+  -> exact aggregate identity upsert
+  -> bounded daily materialize pages (8 rows / 512 KiB)
+  -> HMAC-SHA-256(run seed, version + run + row identity)
+  -> idempotent snapshot insert + one budget claim
+  -> bounded cleanup with exact source-snapshot evidence
+  -> per-date ready/complete
+  -> allowlisted noisy DTO becomes visible
 ```
 
-## The Solution: CQRS with Materialized Views
+Each transaction stays under 20 writes. Pages schedule their own continuation;
+the 15-minute supervisor only resumes expired leases and blocks a run after a
+fixed retry limit. A partial materialization or cleanup is never visible.
 
-```
-WRITE PATH: Client → increment → analytics_aggregate (raw, no noise)
-                             │
-                             │ Daily Cron (00:05 UTC)
-                             ▼
-MATERIALIZATION: analytics_aggregate → applyNoise → analytics_snapshot
-                 (noise applied ONCE, immutable)
-                             │
-                             ▼
-READ PATH: Query → analytics_snapshot (pre-noised, safe to cache)
-```
+## Noise and replay
 
-### Key Properties
+The run seed is random server-side key material. HMAC-SHA-256 derives a stable,
+domain-separated coordinate for each `(plane version, run identity, snapshot
+identity)`. Inverse-CDF Laplace noise is therefore identical across retries and
+independent of pagination order. A retry validates an existing snapshot's
+noisy count instead of spending budget or inserting again.
 
-1. **Snapshots are immutable** - Created once per day, never updated
-2. **Noise applied once** - During materialization, not at query time
-3. **Seeded randomness** - Deterministic noise for auditability
-4. **Budget enforcement** - `privacy_budget` table tracks epsilon spent
+The seed is secret. Returning it with a noisy count would allow reconstruction
+of the exact aggregate, so seed secrecy is a tested publication invariant.
 
-## Database Schema
+## Caching
 
-### analytics_snapshot
+Only `ready/complete` snapshot DTOs are cacheable. A future HTTP/Cloudflare
+adapter may cache a completed date under a versioned key for a long TTL because
+that date is immutable. It must never cache raw aggregates, coordinator rows,
+or a `running`/`blocked` date. Current-day data is not a snapshot and needs a
+separate, explicitly non-DP product decision.
 
-```sql
-CREATE TABLE analytics_snapshot (
-  id              TEXT PRIMARY KEY,
-  snapshot_date   DATE NOT NULL,
-  metric          TEXT NOT NULL,
-  template_id     TEXT DEFAULT '',
-  jurisdiction    TEXT DEFAULT '',
-  delivery_method TEXT DEFAULT '',
-  utm_source      TEXT DEFAULT '',
-  error_type      TEXT DEFAULT '',
-  noisy_count     INTEGER NOT NULL,
-  epsilon_spent   REAL NOT NULL,
-  noise_seed      TEXT NOT NULL,
-  created_at      TIMESTAMP DEFAULT NOW(),
+## Launch gates
 
-  UNIQUE(snapshot_date, metric, template_id, jurisdiction,
-         delivery_method, utm_source, error_type)
-);
-```
+The required order is:
 
-### privacy_budget
+1. deploy schema/coordinator with both code gates false;
+2. complete the bounded legacy migration and stop at `migrated/complete`;
+3. implement and prove atomic durable contribution authority;
+4. set `ANALYTICS_CONTRIBUTION_AUTHORITY_READY=true` in that reviewed change;
+5. activate and require `ready=true` plus `contributionAuthorityReady=true`;
+6. in a later reviewed release, set `ANALYTICS_SNAPSHOT_CRON_READY=true` and
+   deploy the daily coordinator plus supervisor.
 
-```sql
-CREATE TABLE privacy_budget (
-  id            TEXT PRIMARY KEY,
-  budget_date   DATE UNIQUE NOT NULL,
-  epsilon_spent REAL DEFAULT 0,
-  epsilon_limit REAL DEFAULT 10.0,
-  queries_count INTEGER DEFAULT 0,
-  created_at    TIMESTAMP DEFAULT NOW(),
-  updated_at    TIMESTAMP DEFAULT NOW()
-);
-```
+`CRON_PROFILE=operational` or `full` cannot bypass either code gate.
 
-## Implementation
-
-### 1. Snapshot Materialization
-
-**File:** `src/lib/core/analytics/snapshot.ts`
-
-```typescript
-// Run this daily at 00:05 UTC
-const result = await materializeNoisySnapshot(yesterday);
-// Returns: { created: 1234, epsilonSpent: 1.0 }
-```
-
-**Process:**
-
-1. Check if snapshot already exists (idempotency)
-2. Fetch raw aggregates for the day
-3. Generate deterministic noise seed
-4. Apply seeded Laplace noise to each aggregate
-5. Create immutable snapshots
-6. Update privacy budget ledger
-
-### 2. Seeded Laplace Noise
-
-```typescript
-export function seededLaplace(
-	seed: string, // Date-based seed: "2025-01-12:hexrandom"
-	index: number, // Index of record (for unique noise per record)
-	epsilon: number // Privacy parameter (higher = less noise)
-): number;
-```
-
-**Properties:**
-
-- Same seed + index → same noise value (reproducible)
-- Different indexes → uncorrelated noise values
-- Uses HMAC-SHA256 for cryptographically secure PRNG
-- Implements inverse CDF of Laplace distribution
-
-### 3. Querying Snapshots
-
-```typescript
-const results = await queryNoisySnapshots({
-	metric: 'template_view',
-	start: new Date('2025-01-01'),
-	end: new Date('2025-01-31'),
-	groupBy: ['jurisdiction'],
-	filters: { template_id: 'climate-action' }
-});
-```
-
-**CRITICAL:** Never add additional noise - snapshots are already noisy!
-
-### 4. Privacy Budget Queries
-
-```typescript
-// Check remaining budget
-const remaining = await getRemainingBudget(new Date());
-
-// Get budget status for date range
-const status = await getBudgetStatus(startDate, endDate);
-```
-
-## Cron (Convex scheduler)
-
-**Registered in** `convex/crons.ts` — `crons.daily("analytics snapshot", { hourUTC: 0, minuteUTC: 5 }, internal.analytics.materializeSnapshot)`.
-
-**Schedule:** Daily at 00:05 UTC.
-
-**Authentication:** none — runs inside Convex with full `ctx` (internal). No HTTP endpoint, no shared secret.
-
-**Manual run:**
+## Verification
 
 ```bash
-npx convex run analytics:materializeSnapshot
+npx vitest --run \
+  convex/analytics-snapshot-plane.convex.test.ts \
+  convex/analytics-privacy-gate.convex.test.ts \
+  --config=vitest.config.ts
+
+npx vitest --run \
+  tests/unit/convex/analytics-snapshot-foundation.test.ts \
+  --config=vitest.config.ts
 ```
-
-**Return shape (from the action):**
-
-```json
-{
-	"success": true,
-	"date": "2026-04-23",
-	"snapshots_created": 1234,
-	"epsilon_spent": 1.0,
-	"budget_remaining": 9.0
-}
-```
-
-## Deployment
-
-### 1. Cron setup
-
-Declared jobs in `convex/crons.ts` register on the next `npx convex dev` / `npx convex deploy`. No external scheduler (Vercel Cron, GitHub Actions, Upstash QStash) is in use.
-
-### 2. Environment Variables
-
-None required for this job — Convex runs it with internal privileges.
-
-### 3. Migration Path
-
-**Phase 1 (Current):**
-
-- Keep existing `queryAggregates()` working with raw data + fresh noise
-- Run snapshot materialization in parallel
-- No breaking changes
-
-**Phase 2 (Future):**
-
-- Switch all queries to use `queryNoisySnapshots()`
-- Deprecate `queryAggregates()`
-- Enforce privacy budget limits
-
-## Privacy Guarantees
-
-### Differential Privacy Parameters
-
-- **Client-side (LDP):** ε = 2.0 (k-ary Randomized Response)
-- **Server-side (Central DP):** ε = 1.0 (Laplace noise)
-- **Daily budget:** ε = 10.0 (10 snapshot materializations per day)
-
-### Attack Prevention
-
-1. **Averaging attacks:** Snapshots are immutable - same noisy data returned every time
-2. **Budget exhaustion:** Budget tracked in `privacy_budget` table
-3. **Timing attacks:** Noise applied at fixed time (00:05 UTC), not query time
-4. **Correlation attacks:** Each snapshot uses unique noise seed
-
-## Testing
-
-**Unit tests:** `tests/unit/analytics-snapshot.test.ts`
-
-```bash
-npm run test:unit -- analytics-snapshot
-```
-
-**Integration tests:** (TODO)
-
-```typescript
-// Test snapshot materialization
-await materializeNoisySnapshot(yesterday);
-
-// Verify idempotency
-const result2 = await materializeNoisySnapshot(yesterday);
-expect(result2.created).toBe(0);
-
-// Verify budget tracking
-const budget = await getRemainingBudget(yesterday);
-expect(budget).toBe(9.0);
-```
-
-## Monitoring
-
-### Key Metrics to Track
-
-1. **Snapshot creation success rate**
-2. **Epsilon budget consumption**
-3. **Snapshot query latency**
-4. **Snapshot size growth over time**
-
-### Alerting Thresholds
-
-- ❌ Snapshot creation fails 2+ days in a row
-- ⚠️ Daily epsilon spent > 80% of limit
-- ⚠️ Snapshot query latency > 1s
-- ⚠️ Snapshot table size > 10GB
-
-## References
-
-- **Differential Privacy:** Dwork & Roth (2014), "The Algorithmic Foundations of Differential Privacy"
-- **Laplace Mechanism:** Section 3.3 of Dwork & Roth
-- **Privacy Budget:** Section 2.2 of Dwork & Roth
-- **CQRS Pattern:** Martin Fowler, "CQRS" (martinfowler.com)

@@ -1,11 +1,23 @@
 // CONVEX: Keep SvelteKit — calls blockchain (commitTrade). On-chain LMSR market operation.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { readBoundedJson } from '$lib/server/bounded-json';
+import {
+	isBoundedHexBytes,
+	isBytes32,
+	isRecord,
+	isSafeUint,
+	isThreeTreePublicInputs,
+	VALID_THREE_TREE_DEPTHS
+} from '$lib/server/debate-input-validation';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+
+const DEBATE_COMMIT_REQUEST_MAX_BYTES = 96 * 1024;
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -22,16 +34,37 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	const { debateId } = params;
-	const body = await request.json();
+	const parsed = await readBoundedJson(request, DEBATE_COMMIT_REQUEST_MAX_BYTES);
+	if (!isRecord(parsed)) throw error(400, 'Invalid trade commitment request');
+	const body = parsed;
 
 	const { commitHash, proof, publicInputs, verifierDepth, deadline } = body;
 
-	if (!commitHash || !proof) {
-		throw error(400, 'Missing required fields: commitHash, proof');
+	if (!isBytes32(commitHash)) {
+		throw error(400, 'commitHash must be a 0x-prefixed 32-byte hex string');
+	}
+	if (!isBoundedHexBytes(proof) || !isThreeTreePublicInputs(publicInputs)) {
+		throw error(400, 'proof and exactly 31 bounded publicInputs are required');
+	}
+	const normalizedVerifierDepth = verifierDepth ?? 20;
+	if (
+		!isSafeUint(normalizedVerifierDepth) ||
+		!(VALID_THREE_TREE_DEPTHS as readonly number[]).includes(normalizedVerifierDepth)
+	) {
+		throw error(400, 'verifierDepth must be one of 18, 20, 22, or 24');
+	}
+	if (deadline !== undefined) {
+		const nowSeconds = Math.floor(Date.now() / 1000);
+		if (!isSafeUint(deadline) || deadline < nowSeconds - 60 || deadline > nowSeconds + 3600) {
+			throw error(400, 'deadline must be within one hour of the current time');
+		}
 	}
 
 	// Validate debate exists and is active
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
+		debateId: debateId as Id<'debates'>
+	});
 
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'active') throw error(400, 'Debate is not active');
@@ -46,8 +79,8 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 			debateId: debate.debateIdOnchain,
 			commitHash,
 			proof,
-			publicInputs: publicInputs ?? [],
-			verifierDepth: verifierDepth ?? 20,
+			publicInputs,
+			verifierDepth: normalizedVerifierDepth,
 			deadline
 		});
 

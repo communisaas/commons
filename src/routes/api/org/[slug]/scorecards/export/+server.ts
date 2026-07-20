@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -24,9 +24,23 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(400, 'Only CSV format is supported');
 	}
 
-	const result = await serverQuery(api.legislation.exportScorecards, {
-		slug: params.slug
-	});
+	const cursor = url.searchParams.get('cursor') ?? undefined;
+	const requestedLimit = Number.parseInt(url.searchParams.get('limit') ?? '100', 10);
+	const limit = Number.isSafeInteger(requestedLimit)
+		? Math.min(Math.max(requestedLimit, 1), 100)
+		: 100;
+	let result;
+	try {
+		result = await serverQuery(api.legislation.exportScorecards, {
+			slug: params.slug,
+			cursor,
+			limit
+		});
+	} catch (cause) {
+		const message = cause instanceof Error ? cause.message : 'Failed to export scorecards';
+		if (message.includes('ACCOUNTABILITY_READ_MODEL_NOT_READY')) throw error(503, message);
+		throw error(400, message);
+	}
 
 	// Build CSV
 	const headers = [
@@ -63,11 +77,19 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	const csv = [headers.join(','), ...rows.map((r: unknown[]) => r.join(','))].join('\n');
 
+	const responseHeaders: Record<string, string> = {
+		'Content-Type': 'text/csv; charset=utf-8',
+		'Content-Disposition': `attachment; filename="${params.slug}-scorecards-${new Date().toISOString().slice(0, 10)}-part.csv"`,
+		'X-Export-Complete': result.meta.nextCursor ? 'false' : 'true'
+	};
+	if (result.meta.nextCursor) {
+		responseHeaders['X-Next-Cursor'] = result.meta.nextCursor;
+		const nextUrl = new URL(url);
+		nextUrl.searchParams.set('cursor', result.meta.nextCursor);
+		responseHeaders.Link = `<${nextUrl.pathname}${nextUrl.search}>; rel="next"`;
+	}
 	return new Response(csv, {
-		headers: {
-			'Content-Type': 'text/csv; charset=utf-8',
-			'Content-Disposition': `attachment; filename="${params.slug}-scorecards-${new Date().toISOString().slice(0, 10)}.csv"`
-		}
+		headers: responseHeaders
 	});
 };
 

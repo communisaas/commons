@@ -1,266 +1,113 @@
 # App-wide Convex query-efficiency audit
 
-Audit date: 2026-07-16
+Last reconciled: 2026-07-20
 
-This audit covers exported public queries under `convex/`, SvelteKit
-`serverQuery(api.*)` call sites, common authorization helpers, and the local
-query-budget/log tooling. It follows the public-discovery incident documented in
-`CONVEX-PUBLIC-DISCOVERY-IO.md`; the repaired homepage snapshot path is no longer
-the largest _remaining_ read risk once it is deployed and populated.
+This is the current launch audit for exported public queries under `convex/`,
+their reachable local helpers, SvelteKit `serverQuery(api.*)` consumers, and the
+transaction-budget tests that cover risks a syntax scan cannot see. The July
+public-discovery incident remains documented in
+`CONVEX-PUBLIC-DISCOVERY-IO.md`.
 
-## Static inventory
+## Current static inventory
 
-The module-aware guardrail currently sees:
+`npm run check:convex-queries` currently proves:
 
-- 231 exported public Convex queries in 36 modules;
-- 131 syntactic `.collect()` calls across 90 public queries;
-- 13 Convex query-builder `.filter()` calls across 10 public queries; and
-- 23 clock reads across 20 public queries.
+| Inventory | Current result |
+| --- | ---: |
+| Exported public queries | 247 in 38 modules |
+| Executable `.collect()` calls | 0 |
+| Query-builder `.filter()` calls | 0 |
+| Statically resolved `.take()` calls at or above 1,000 | 0 |
+| Database pagination inside reachable loops | 0 |
+| Reviewed wall-clock reads | 1 query / 1 read |
 
-These figures are a debt inventory, not a claim that every occurrence costs the
-same. An indexed collection of three rows is different from a full scan of
-embedding-bearing documents. The scanner follows statically resolved local and
-relative-import helper calls, so these totals include helper-factored hazards.
-It still cannot measure a large `.take(10_001)`, repeated SSR queries, dynamic
-dispatch, or an N+1 loop. The ranked findings below include those manually
-traced dependencies.
+The sole reviewed exception is
+`convex/passkeys.ts::getAuthMaterialByEmail`. Passkey authentication must compare
+an exact-indexed, constant-cardinality challenge with the current clock. Its
+baseline entry is owned, reasoned, and expires on 2027-01-31.
 
-The completion audit removed one especially dangerous baseline exception:
-`templates.listMissingEmbeddings` is now secret-gated and uses the exact
-`(status, isPublic, topicEmbeddingsUpdatedAt)` index with a 100-row hard cap. Both
-the SvelteKit admin repair route and the Convex-native backfill publish the
-homepage materializations once after a batch instead of scheduling one heavy
-composite rebuild per template.
+These numbers replace the pre-remediation inventory of collects, filters, and
+clock-bearing queries. Historical findings below are closed implementation
+history; they are not open launch findings.
 
-Eighty-five public queries call `requireOrgRole` directly and another 40 call
-`requireAuth` directly. `requireOrgRole` itself reads the caller's `users` row,
-the `organizations` row selected by slug, and `orgMemberships` before the domain
-query starts (`convex/_authHelpers.ts:23-46,52-65,71-85,105-119`). This shared
-edge matters for both bytes and invalidation fanout.
+The scanner follows statically resolved local and relative-import helper calls,
+including destructured or aliased database/query-builder parameters. It resolves
+literal, constant, imported, arithmetic, and common `Math.*` bounds. It cannot
+prove document byte size, dynamic dispatch, arbitrary point-read N+1 joins,
+custom higher-order iteration, or route-level repetition. Those properties are
+covered by the projection contracts and transaction-budget tests referenced
+below.
 
-## Ranked remediation
+## Historical P0/P1 closure map
 
-### P0 — real pagination for supporters
+| Former risk | Current foundation |
+| --- | --- |
+| Supporter pages and exports repeatedly reread whole organizations | FND-33 uses indexed cursor pages, bounded joins, byte ceilings, explicit export iteration, and fail-closed legacy overflow. |
+| Every org navigation hydrated every workspace | FND-28 makes the root layout a compact shell; workspace routes page their own data and use write-maintained counters/read models. |
+| Session validation depended on mutable user rows and request clocks | FND-26 uses a signed local cookie envelope plus one exact session row and compact session-authority row; the SvelteKit hook owns expiry checks. |
+| API-key authentication rewrote its own authority document per request | FND-31 separates credential authority, rate-tier signaling, and bounded usage accounting. |
+| Public share pages rescanned messages, positions, debate history, and receipts | FND-27, FND-29, and FND-37 use ready-gated campaign, deliberation, and accountability read models. |
+| Template list/search/relation reads hydrated embedding-heavy source rows | FND-10, FND-15, and FND-20 use compact source/projection rows, cursor-bounded authenticated lists, and capped snapshot publications. |
+| Coalition/network statistics and browse surfaces performed member/action N+1 reads | FND-34 and FND-42 use write-maintained coalition metrics and explicit indexed pages. |
+| Always-on workflow, SMS, donation, campaign, receipt, and configuration counts scanned history | FND-25, FND-27, FND-43, and FND-44 use compact counters, summaries, and bounded operator pages. |
+| Public catalogs, v1 reads, cleanup, migrations, and backfills admitted corpus-sized work | FND-32, FND-36, FND-38, and FND-49 enforce exact indexes, fixed row/byte/write envelopes, durable cursors, and fail-closed overflow. |
 
-`supporters.list` is cursor-shaped but not database-paginated. Every invocation
-reads up to 10,001 supporters, filters and slices them in memory, then collects
-tag links and loads tags per returned supporter (`convex/supporters.ts:157-298`).
-The browser export and full-row scan call this query repeatedly with successive
-cursors (`src/routes/org/[slug]/supporters/+page.svelte:208-219,420-438`). At a
-10,000-row org, a 100-row export can therefore revisit roughly one million
-supporter documents before tag joins.
+The release hypergraph is the authority for each foundation's acceptance proof.
+No ready node may depend on a pending node, and every ready node records exact
+commands, tests, artifacts, and a verification timestamp.
 
-Implement a true `.paginate()` path for the unfiltered list first. Add only the
-composite indexes justified by active filters (`orgId + emailStatus`, `orgId +
-verified`, and `orgId + source` are the obvious candidates), and invert the tag
-path through `supporterTags.by_tagId`. Preserve an explicit, separately gated
-bulk-export path instead of making every page query a disguised export.
+## Runtime and transaction proof
 
-### P0 — stop hydrating every org workspace on every navigation
+The zero-scan ratchet is necessary but not sufficient. Representative
+cardinality and byte proof lives in:
 
-The org layout deliberately mounts all workspaces and starts about twenty domain
-queries for every real org navigation (`src/routes/org/[slug]/+layout.server.ts:145-262`).
-The result spans campaigns, supporters, receipts, segments, donations,
-workflows, SMS, calls, networks, events, API state, decision-maker follows,
-bills, and scorecards. Inactive workspaces therefore consume reads and inherit
-invalidations from tables the user is not viewing.
+- `convex/templates-read-budget.convex.test.ts` and
+  `convex/org-shell-read-budget.convex.test.ts` for compact discovery and shell
+  reads;
+- `convex/templates-authenticated-list.convex.test.ts`,
+  `convex/users-template-list.convex.test.ts`, and
+  `convex/supporter-browse.convex.test.ts` for cursor and byte-bounded browsing;
+- `convex/campaign-read-model.convex.test.ts`,
+  `convex/debate-read-boundary.convex.test.ts`, and
+  `convex/accountability-read-model.convex.test.ts` for public aggregates;
+- `convex/plan-usage-projection.convex.test.ts`,
+  `convex/operator-read-models.convex.test.ts`, and
+  `convex/observability-service-ping.convex.test.ts` for plan, operator, and
+  readiness control planes; and
+- the focused contracts under `tests/unit/convex/` that reject executable
+  collects, oversized dynamic limits, cursor stalls, unbounded maintenance
+  drivers, and direct-origin compatibility fallbacks.
 
-There is also a concrete duplicate today: `organizations.getDashboardStats`
-calls `computeDistrictVerified`, which reads up to 10,001 verified actions
-(`convex/organizations.ts:277-290`, `convex/_dashboardStats.ts:35-57`), while the
-same layout also calls `supporters.getDistrictVerifiedCount`, which invokes the
-same helper (`src/routes/org/[slug]/+layout.server.ts:211-217`,
-`convex/supporters.ts:540-550`). The layout can use
-`dashboardStats.funnel.districtVerified` for both consumers and remove the
-second scan without changing the displayed value.
+The focused manifest in
+`.github/workflows/public-discovery-focused-tests.txt` is append-only for
+launch-critical proof: every listed file must exist, run once, and pass.
 
-Do not replace the twenty calls with one permanent mega-query: that would make
-every write to any participating table invalidate the entire shell. Prefer four
-workspace-sized queries, load the active workspace first, prefetch the others
-after interaction/idle, and reuse parent data in deep routes.
+Prefer cardinality-slope assertions (small versus maximum fixtures) plus byte
+ceilings over generous absolute document counts. A large cap can hide O(N)
+behavior until production reaches it; a slope assertion exposes the algorithm.
 
-### P0 — remove global auth and API-key cache churn
+## Guardrail contract
 
-Every request carrying `auth-session` calls `authOps.validateSession`
-(`src/hooks.server.ts:87-105`). The query reads a session and the full user row,
-then uses `Date.now()` for expiry and renewal (`convex/authOps.ts:484-520`). This
-puts a time-sensitive query and a potentially wide user document on the hottest
-request path. The root layout then reads the same user again with
-`users.getProfile` and calls `organizations.getMyMemberships`
-(`src/routes/+layout.server.ts:6-20`); the latter collects every membership and
-then every campaign for each org just to count active campaigns
-(`convex/organizations.ts:392-424`).
+`scripts/check-convex-query-efficiency.mjs` finds public queries through direct,
+renamed, namespace, and named-export forms of the generated query factory. It
+fails when:
 
-A safe session refactor is to query static session material (session creation
-time, stored expiry, and a narrow user projection) and perform exact clock
-comparisons in the SvelteKit hook. Deleting or updating the session still
-invalidates the cached material. The signed Convex JWT already places the user
-ID in `sub` (`src/lib/server/convex-jwt.ts:110-141`), so `requireAuth` can validate
-and normalize that subject before falling back to the user index; it need not
-make every authorized domain query depend on an otherwise unrelated user-row
-update.
+- a public query introduces an executable collect, query-builder filter,
+  oversized static take, looped database pagination, or unreviewed clock read;
+- a reviewed hazard count changes without an exact baseline update;
+- a stale baseline remains after its debt is removed;
+- a baseline entry lacks an owner, specific reason, or valid future expiry; or
+- an exception expires.
 
-The v1 path contains an even tighter invalidation loop. Authentication reads the
-`apiKeys` document and calls `Date.now()`, then every successful request
-fire-and-forgets `trackApiKeyUsage`, which patches `lastUsedAt` and
-`requestCount` on that same document (`convex/v1api.ts:30-77`,
-`src/lib/server/api-v1/auth.ts:43-60`). The write invalidates the auth query that
-read it. Put mutable usage telemetry in a separate counter/bucket document (or
-batch it), leaving credential/scopes/revocation state stable and cacheable.
-
-### P0 — retire repeated public share-page scans
-
-The public `/s/[slug]` page starts message-district, total-state, debate,
-position-count, existing-position, and relation queries in its first batch
-(`src/routes/s/[slug]/+page.server.ts:107-192`), then scans position registrations
-again for district engagement (`src/routes/s/[slug]/+page.server.ts:292-298`).
-
-Three reads are immediately suspect:
-
-- `templatePage.getTotalStates` collects every active decision maker and returns
-  a number (`convex/templatePage.ts:53-70`), but the caller reads it as
-  `{ count: number }`, so the current rendered value falls back to `50`
-  (`src/routes/s/[slug]/+page.server.ts:194-201`). Removing the query and using
-  the existing constant preserves current behavior.
-- `templatePage.getMessageDistrictCounts` collects the legacy `messages` range
-  (`convex/templatePage.ts:21-48`). There is no in-tree writer to `messages`.
-  Verified-delivery district counts are already maintained on the template by
-  `submissions.incrementTemplateReach` (`convex/submissions.ts:2010-2037`). Return
-  the K-floored aggregate from the public detail projection and remove the dead
-  scan after a parity/backfill check.
-- `positions.getCounts` and `positions.getEngagementByDistrict` each collect the
-  same template's registrations (`convex/positions.ts:17-40,160-223`). Return the
-  headline counts with the engagement result, or maintain one compact
-  per-template stats document transactionally from the registration mutations.
-
-### P1 — split embedding-heavy template records from read models
-
-`templates` co-locates public content, reach arrays, sources, and three families
-of 768-dimensional embeddings (`convex/schema.ts:251-283`). Projection after a
-read prevents vector egress but does not prevent Convex from reading the vector
-bytes.
-
-Remaining exposed paths include:
-
-- `users.getMyTemplates`, which returns every raw template document even though
-  the profile uses only ID, title, slug, status, visibility, and creation time
-  (`convex/users.ts:92-100`, `src/routes/profile/+page.server.ts:118-140`);
-- `templates.listByUser` and `templates.listByOrg`, which collect all heavy rows
-  before projecting small DTOs (`convex/templates.ts:1307-1366`); and
-- `templates.getBySlugPublic`, which reads one heavy row on each cache miss and
-  is called by the share layout, OG image, and template modal
-  (`convex/templates.ts:990-1049`, `src/routes/s/[slug]/+layout.server.ts:19`,
-  `src/routes/s/[slug]/og-image/+server.ts:10`,
-  `src/routes/template-modal/[slug]/+page.server.ts:10`).
-
-Cap and explicitly project raw-return queries now to reduce response leakage,
-but treat that only as containment. The durable fix is a compact template
-metadata/detail table or moving embeddings and large research caches to sidecar
-documents. Reach-counter writes should not invalidate and force rereads of
-embedding payloads.
-
-### P1 — remove coalition and accountability N+1 reads
-
-`networks.getStats` collects active members, then all supporters per member org,
-then all campaign actions per member org, and finally reads all campaign actions
-again to compute GDS (`convex/networks.ts:801-905`). Use the existing
-`orgNetworkMembers.by_networkId_status` index and build the district histogram in
-the first action pass. Longer term, materialize per-org network inputs.
-
-`networks.list` similarly collects all memberships, filters status in memory,
-and collects the complete member set for every resulting network
-(`convex/networks.ts:40-89`) despite existing status indexes
-(`convex/schema.ts:1657-1669`).
-
-`legislation.listMyReceipts` performs an unindexed `campaignActions.supporterId`
-filter for each supporter, followed by deliveries and receipts per action
-(`convex/legislation.ts:1353-1408`). Add `campaignActions.by_supporterId`, bound
-and paginate the traversal, or materialize the identity-to-receipt relationship.
-`legislation.listOrgScorecards` collects all receipts for each decision maker and
-then filters by org (`convex/legislation.ts:2467-2501`); add
-`accountabilityReceipts.by_orgId_decisionMakerId` or maintain an org/DM summary.
-
-### P1 — finish denormalizing the always-on org shell
-
-- `workflows.list` collects every execution for every workflow just to count
-  them (`convex/workflows.ts:319-347`). Maintain `executionCount`.
-- `sms.listBlasts` loads all messages for each of up to 200 blasts despite blast
-  counters, and `sms.getReplySummary` collects every reply for the org
-  (`convex/sms.ts:254-366`). Use validated blast counters and an org reply
-  summary.
-- `donations.getConfirmationSummary` collects every donation for the org, while
-  `donations.listByOrgWithDonors` accepts a cursor but ignores it and collects all
-  org campaigns (`convex/donations.ts:114-165,670-714`). Maintain confirmation
-  counters and use a real campaign type/status index plus pagination.
-- `organizations.getSettingsData` combines four collects, member joins,
-  `Date.now()`, in-memory invite filtering, and an all-campaign sum
-  (`convex/organizations.ts:723-825`). Add an active-invite index/state and read
-  a period/org usage counter instead of campaign history.
-
-### P2 — bound lower-frequency public/admin surfaces
-
-`organizations.listPublic` scans all organizations before applying `isPublic`
-and offset slicing (`convex/organizations.ts:100-136`). Use an indexed public
-directory snapshot or a compound public/name ordering. Similar baseline entries
-remain for governance, exports, admin embedding backfills, and v1 list
-endpoints; prioritize them using runtime byte totals rather than source order.
-
-## Query-dependency hypergraph
-
-The table expresses each request root as a hyperedge: one route depends on many
-functions/tables, while shared auth documents connect many otherwise unrelated
-functions. Any write to a read dependency can invalidate the corresponding
-cached query result.
-
-| Request root | Function hyperedge | Principal tables/read ranges | High-fanout invalidators |
-| --- | --- | --- | --- |
-| Any cookie-bearing request | `hooks.server` → `authOps.validateSession` | `sessions`, `users` | session renewal/revocation; any patch to the returned user; time-based cache churn |
-| Any org-authorized public query | query → `requireOrgRole` | `users.by_tokenIdentifier`, `organizations.by_slug`, `orgMemberships.by_userId_orgId`, plus domain tables | profile changes, mutable org counters, membership changes invalidate domain-query caches |
-| `/org/[slug]/*` shell | context + dashboard + supporters + receipts + segments + fundraising + workflows + SMS/calls + networks + events/API + legislation | union of `organizations`, `campaigns`, `campaignActions`, `supporters`, `accountabilityReceipts`, `segments`, `donations`, `workflows`, `workflowExecutions`, `smsBlasts`, `smsMessages`, `smsReplies`, `patchThroughCalls`, `orgNetworkMembers`, `orgEvents`, bill/follow/scorecard tables | almost any operational org write; duplicated district-action scan |
-| Supporters page/export | `supporters.list` (+ summary/tags/campaigns/segments) | up to 10,001 `supporters` per cursor call, then `supporterTags` and `tags` joins | supporter imports/status edits, tags, org counter patches; each export cursor repeats the large range |
-| `/s/[slug]` | template detail + message/state/debate/position/relation queries | heavy `templates`, legacy `messages`, `decisionMakers`, `debates`, `debateArguments`, `positionRegistrations`, `userDmRelations` | template reach updates reread heavy doc; every position write invalidates two aggregate scans |
-| `/api/v1/*` | `authenticateApiKey` → endpoint query → `trackApiKeyUsage` | `apiKeys`, `organizations`, `subscriptions`, endpoint domain tables | usage mutation patches the auth document after every successful request |
-| Network detail/report/stats API | `networks.get` + `getStats` + proof pressure | `orgNetworkMembers`, member `organizations`, all member `supporters`, repeated `campaignActions`, receipts/external IDs | any member action/supporter/member-roster write |
-| Profile/receipts | profile + templates + representatives + reverification + receipt traversal | `users`, heavy `templates`, `userDmRelations`, `districtCredentials`, `supporters`, actions, deliveries, receipts | user/profile/credential writes; any authored-template update; receipt/action chain writes |
-
-The most important structural edge is `requireOrgRole`: because it returns the
-full mutable org document, a supporter-count or sent-email counter patch can
-invalidate cached queries for workflows, bills, networks, SMS, and other domains
-that only needed the org ID for authorization. After the immediate query fixes,
-introduce an ID-based membership helper for calls that do not need org fields,
-or a compact access record, and pass the already-resolved org ID from the parent
-layout. Membership checking must remain inside every public function.
-
-## Guardrail now enforced
-
-`scripts/check-convex-query-efficiency.mjs` parses TypeScript modules and finds
-exported public queries through direct, renamed, or namespace imports of the
-generated `query` factory and named export forms. It follows reachable top-level
-local and relative-import helpers, propagates destructured/aliased `db` and
-query-builder parameters, and distinguishes query-builder `.filter()` from
-JavaScript array filtering. An unresolved delegated handler fails closed. The
-exact existing debt lives in `scripts/convex-query-efficiency-baseline.json`.
-
-Each baseline entry contains rule counts, an owner, a reason, and an expiry. The
-check fails when:
-
-- a new public query introduces one of the three hazards;
-- an existing query increases or decreases a hazard count without updating the
-  baseline;
-- a stale baseline entry remains after its debt is removed;
-- an entry lacks an owner/specific reason/valid expiry; or
-- an exception expires (the current baseline expires 2027-01-31).
-
-Run it locally with:
+Run the gate with:
 
 ```sh
 npm run check:convex-queries
 ```
 
-Baseline regeneration is deliberately not a one-command rubber stamp. It
-requires an explicit acknowledgement plus owner, reason, and future expiry; it
-preserves metadata for unchanged entries and applies the supplied metadata only
-to new or changed debt:
+Baseline regeneration is deliberately not a rubber stamp. A changed exception
+requires explicit owner, reason, and expiry metadata and review of the resulting
+JSON delta:
 
 ```sh
 CONVEX_QUERY_BASELINE_OWNER='@your-handle' \
@@ -271,59 +118,38 @@ node scripts/check-convex-query-efficiency.mjs \
   | npx prettier --parser json
 ```
 
-`CONVEX_QUERY_EFFICIENCY_TODAY` is rejected; expiry always uses the runner's UTC
-clock. Review and apply only the intended baseline delta. The npm `ci` aggregate
-and `.github/workflows/ci.yml` both run the guardrail.
+`CONVEX_QUERY_EFFICIENCY_TODAY` is rejected; expiry uses the runner's UTC clock.
+CI and the exact-SHA release verification both run this gate.
 
-The AST guard deliberately does not pretend to prove efficiency. It cannot see
-computed/dynamic dispatch, runtime package behavior, document byte size, N+1
-joins, `.take(10_001)`, or route-level repetition. Those require transaction
-budgets and runtime logs.
+## Remaining launch work
 
-## Transaction-budget follow-ups
+The query scan itself has no open collection/filter/large-take/looped-pagination
+debt. The remaining related gates are deliberately separate:
 
-The repository already has the right primitive. `convex-test` exposes
-`ctx.meta.getTransactionMetrics()` and transaction limits for bytes, documents,
-and database-query count. `convex/templates-read-budget.convex.test.ts:16-28,36-44`
-uses embedding-heavy fixtures and asserts compact snapshot reads below 2 KB;
-`convex/observability-service-ping.convex.test.ts:17-35` proves the health probe
-performs one indexed manifest read, returns one document, and stays below 2 KB.
+- FND-30: finish distributed cache/manifest recovery, withdrawal, cost, and
+  outage proof without reopening a request-side Convex amplification path;
+- FND-60: attach passing agy, Claude, and Codex verdicts to the exact reviewed
+  source commit through the signed separate-ref attestation; and
+- PD-00: external Convex reactivation and Cloudflare exposure containment.
 
-Add representative budgets in this order:
+Do not mark a query foundation open merely because one of those release gates is
+pending, and do not mark those release gates complete from this static scan.
 
-| Budget case | Fixture/claim |
-| --- | --- |
-| `supporters.list`, unfiltered first and later pages | Compare small and 10k-row orgs; documents/bytes for one page must stay proportional to page size, and a later cursor must not reread the prefix. Include tag links. |
-| Org shell critical slice | Seed 10k verified actions; the shell must execute the district scan once, not twice. Record the sum of per-function bytes for the initial active workspace. |
-| Session validation | Heavy user fixture; after refactor, require one session plus a compact user/auth record and assert bytes, not only document count. Verify expiry in the SvelteKit hook separately. |
-| `/s/[slug]` aggregate bundle | Seed a heavy template plus many messages/positions; detail reads must not hydrate embeddings, and district/position aggregates must be O(1) or one bounded read. |
-| `networks.getStats` | Seed multiple member orgs and action histories; assert each action range is read once and member-status selection uses the composite index. |
-| API-key authentication | Repeated auth plus usage tracking must not make auth depend on a mutable usage document. Verify query bytes and runtime cache-hit behavior. |
-| Scorecards/receipts | Large cross-org DM receipt fixture; org/DM reads must remain bounded to that org and receipt traversal must paginate. |
+## Post-reactivation usage monitoring
 
-Prefer cardinality-slope assertions (10 rows versus 10,000) over generous absolute
-caps. An absolute limit can still allow O(N) behavior until production crosses
-it; a slope test catches the algorithmic regression.
-
-## Runtime usage tooling
-
-There is no repository script that currently aggregates Convex function logs by
-read I/O. The installed CLI can emit historical successful executions as JSONL:
+After the production team is reactivated, use successful Convex execution logs
+as a read-only runtime audit:
 
 ```sh
 npx convex logs --prod --history 10000 --success --jsonl
 ```
 
-Its completion records include `identifier`, `cachedResult`, `returnBytes`, and
-`usageStats.databaseIoReadBytes`, `databaseReadBytes`, and
-`databaseReadDocuments`. Add a read-only report that groups by function
-identifier and reports total I/O, executions, cache-miss count/rate, bytes per
-miss, and p50/p95/p99 bytes. Store no arguments or PII. Run it daily and alert
-on both team quota (50/75/90%) and per-function regressions against a rolling
-baseline.
+Aggregate only function identifier, cache-hit state, return bytes, database I/O
+bytes, database read bytes, and database document counts. Do not retain
+arguments or PII. Report executions, cache-miss rate, total bytes, bytes per
+miss, and p50/p95/p99 by function; alert at team-quota thresholds and on
+per-function regressions.
 
-Static route-to-function mapping from this hypergraph plus function-log totals
-is enough to rank remediation without adding application writes. Send frequent
-process-liveness traffic only to the zero-dependency `/api/live` endpoint, never
-to a dynamic product page. Probe the one-document, indexed `/api/health`
-readiness control plane separately at a five-minute cadence.
+Public monitoring must use the zero-dependency `/api/live` endpoint. The
+authenticated `/api/health` readiness probe is a separate, low-frequency
+control-plane check and must never be exposed as an anonymous uptime target.

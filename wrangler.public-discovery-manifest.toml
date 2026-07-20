@@ -1,0 +1,12 @@
+name = "commons-public-discovery-manifest-cron"
+main = "workers/public-discovery-manifest-cron.ts"
+compatibility_date = "2026-07-20"
+workers_dev = false
+preview_urls = false
+
+[vars]
+PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL = "https://commons.email/api/internal/public-discovery-manifest-refresh"
+PUBLIC_DISCOVERY_MANIFEST_REFRESH_URL_NONPROD = "https://staging.commons.email/api/internal/public-discovery-manifest-refresh"
+
+[triggers]
+crons = ["* * * * *"]

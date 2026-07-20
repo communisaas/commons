@@ -3,10 +3,25 @@
  * Used by: src/routes/s/[slug]/+page.server.ts (Power Landscape)
  */
 
-import { query, mutation, internalQuery } from "./_generated/server";
-import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
-import { requireInternalSecret } from "./_internalAuth";
+import { query, mutation, internalQuery } from './_generated/server';
+import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel';
+import { requireInternalSecret } from './_internalAuth';
+import {
+	RECIPIENT_METRICS_VERSION,
+	applyPositionRegistrationMetric,
+	assertPositionDistrictCode,
+	readPositionMetrics,
+	requireRecipientMetricsWritable
+} from './lib/recipientMetrics';
+
+const DIRECT_DELIVERY_RECIPIENT_MAX = 20;
+const DIRECT_DELIVERY_INPUT_MAX_BYTES = 64 * 1024;
+const DIRECT_DELIVERY_ID_MAX_CHARS = 128;
+const DIRECT_DELIVERY_NAME_MAX_CHARS = 200;
+const DIRECT_DELIVERY_METHOD_MAX_CHARS = 32;
+const DIRECT_DELIVERY_ENVELOPE_MAX_CHARS = 2_048;
+const DIRECT_DELIVERY_METHODS = new Set(['cwc', 'email', 'recorded']);
 
 /**
  * Get aggregate position counts for a template. K-floor at 5 on stance counts,
@@ -15,81 +30,101 @@ import { requireInternalSecret } from "./_internalAuth";
  * intentionally visible.
  */
 export const getCounts = query({
-  args: { templateId: v.id("templates") },
-  handler: async (ctx, { templateId }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
+	args: { _secret: v.string(), templateId: v.id('templates') },
+	handler: async (ctx, { _secret, templateId }) => {
+		requireInternalSecret(_secret);
+		return (await readPositionMetrics(ctx, { templateId })).counts;
+	}
+});
 
-    let support = 0;
-    let oppose = 0;
-    const districtSet = new Set<string>();
+/** One compact recipient-page read replaces the former duplicate raw scans. */
+export const getMetrics = query({
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return {
+			counts: metrics.counts,
+			engagement: metrics.hasPositions ? metrics.engagement : null
+		};
+	}
+});
 
-    for (const r of registrations) {
-      if (r.stance === "support") support++;
-      else if (r.stance === "oppose") oppose++;
-      if (r.districtCode) districtSet.add(r.districtCode);
-    }
-
-    return {
-      support: support < 5 ? null : support,
-      oppose: oppose < 5 ? null : oppose,
-      districts: districtSet.size < 3 ? null : districtSet.size,
-    };
-  },
+/** Exact viewer-district overlay for the producer-published public base. */
+export const getViewerDistrictMetric = query({
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.string()
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const districtCode = assertPositionDistrictCode(userDistrictCode);
+		if (!districtCode) throw new Error('POSITION_DISTRICT_CODE_INVALID');
+		const row = await ctx.db
+			.query('templatePositionDistrictMetrics')
+			.withIndex('by_templateId_districtCode', (q) =>
+				q.eq('templateId', templateId).eq('districtCode', districtCode)
+			)
+			.unique();
+		const total = (row?.support ?? 0) + (row?.oppose ?? 0);
+		if (!row || total < 5) return null;
+		return {
+			district_code: districtCode,
+			support: row.support,
+			oppose: row.oppose,
+			total,
+			support_percent: Math.round((row.support / total) * 100),
+			is_user_district: true
+		};
+	}
 });
 
 /**
  * Get a user's existing position on a template (by identity commitment).
  */
 export const getExisting = query({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment }) => {
-    requireInternalSecret(_secret);
-    const reg = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string()
+	},
+	handler: async (ctx, { _secret, templateId, identityCommitment }) => {
+		requireInternalSecret(_secret);
+		const reg = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    if (!reg) return null;
+		if (!reg) return null;
 
-    return {
-      _id: reg._id,
-      stance: reg.stance,
-    };
-  },
+		return {
+			_id: reg._id,
+			stance: reg.stance
+		};
+	}
 });
 
 /**
  * Get position deliveries for a registration.
  */
 export const getDeliveries = internalQuery({
-  args: {
-    registrationId: v.id("positionRegistrations"),
-    deliveryMethod: v.optional(v.string()),
-  },
-  handler: async (ctx, { registrationId, deliveryMethod }) => {
-    let deliveries = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_registrationId", (idx) => idx.eq("registrationId", registrationId))
-      .collect();
-
-    if (deliveryMethod) {
-      deliveries = deliveries.filter((d) => d.deliveryMethod === deliveryMethod);
-    }
-
-    return deliveries.map((d) => ({
-      recipientName: d.recipientName,
-      recipientKey: d.recipientKey ?? null,
-    }));
-  },
+	args: {
+		registrationId: v.id('positionRegistrations'),
+		deliveryMethod: v.optional(v.string())
+	},
+	handler: async () => {
+		throw new Error('POSITION_DELIVERY_HISTORY_RETIRED');
+	}
 });
 
 /**
@@ -102,55 +137,15 @@ export const getDeliveries = internalQuery({
  * when DEBATE market mechanics apply.
  */
 export const getUserDeliveries = internalQuery({
-  args: {
-    templateId: v.id("templates"),
-    pseudonymousId: v.string(),
-    identityCommitment: v.optional(v.string()),
-    deliveryMethod: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, pseudonymousId, identityCommitment, deliveryMethod }) => {
-    // Direct (stance-agnostic) deliveries, keyed on pseudonymousId
-    const direct = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_templateId_pseudonymousId", (idx) =>
-        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
-      )
-      .collect();
-
-    // Stance-linked deliveries: look up via user's registration for this template.
-    // Only runs when identityCommitment is provided (tier-3+ users with ZK identity).
-    let linked: typeof direct = [];
-    if (identityCommitment) {
-      const reg = await ctx.db
-        .query("positionRegistrations")
-        .withIndex("by_templateId_identityCommitment", (idx) =>
-          idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-        )
-        .first();
-      if (reg) {
-        linked = await ctx.db
-          .query("positionDeliveries")
-          .withIndex("by_registrationId", (idx) => idx.eq("registrationId", reg._id))
-          .collect();
-      }
-    }
-
-    const all = [...direct, ...linked];
-    const filtered = deliveryMethod
-      ? all.filter((d) => d.deliveryMethod === deliveryMethod)
-      : all;
-
-    // Dedupe by recipientKey (new-path records always have a key; old-path may not)
-    const seen = new Set<string>();
-    const out: Array<{ recipientName: string; recipientKey: string | null }> = [];
-    for (const d of filtered) {
-      const key = d.recipientKey ?? d.recipientName;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ recipientName: d.recipientName, recipientKey: d.recipientKey ?? null });
-    }
-    return out;
-  },
+	args: {
+		templateId: v.id('templates'),
+		pseudonymousId: v.string(),
+		identityCommitment: v.optional(v.string()),
+		deliveryMethod: v.optional(v.string())
+	},
+	handler: async () => {
+		throw new Error('POSITION_USER_DELIVERY_HISTORY_RETIRED');
+	}
 });
 
 /**
@@ -158,211 +153,190 @@ export const getUserDeliveries = internalQuery({
  * Returns per-district action counts grouped by district code.
  */
 export const getEngagementByDistrict = query({
-  args: {
-    templateId: v.id("templates"),
-    userDistrictCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, userDistrictCode }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
-
-    // Group by district: track support/oppose separately
-    const byDistrict: Record<string, { support: number; oppose: number }> = {};
-    let totalSupport = 0;
-    let totalOppose = 0;
-
-    for (const r of registrations) {
-      if (r.districtCode) {
-        if (!byDistrict[r.districtCode]) {
-          byDistrict[r.districtCode] = { support: 0, oppose: 0 };
-        }
-        if (r.stance === "support") {
-          byDistrict[r.districtCode].support++;
-          totalSupport++;
-        } else {
-          byDistrict[r.districtCode].oppose++;
-          totalOppose++;
-        }
-      }
-    }
-
-    // K-floor at 5 on per-district totals: sub-K cohort sizes would name a
-    // specific resident. Above the floor, counts are exact — per-district
-    // engagement is the staffer-facing signal that drives this view.
-    const districts = Object.entries(byDistrict)
-      .map(([code, counts]) => ({
-        code,
-        support: counts.support,
-        oppose: counts.oppose,
-        total: counts.support + counts.oppose,
-      }))
-      .filter((d) => d.total >= 5)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 20)
-      .map((d) => ({
-        district_code: d.code,
-        support: d.support,
-        oppose: d.oppose,
-        total: d.total,
-        support_percent: d.total > 0 ? Math.round((d.support / d.total) * 100) : 0,
-        is_user_district: d.code === userDistrictCode,
-      }));
-
-    return {
-      template_id: templateId,
-      districts,
-      aggregate: {
-        total_districts: Object.keys(byDistrict).length < 3 ? null : Object.keys(byDistrict).length,
-        total_positions: registrations.length < 5 ? null : registrations.length,
-        total_support: totalSupport < 5 ? null : totalSupport,
-        total_oppose: totalOppose < 5 ? null : totalOppose,
-      },
-    };
-  },
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return metrics.hasPositions ? metrics.engagement : null;
+	}
 });
 
 /**
  * Register a position (upsert). Returns existing if duplicate.
  */
 export const register = mutation({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-    stance: v.string(),
-    districtCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
-    requireInternalSecret(_secret);
-    // Check template exists
-    const template = await ctx.db.get(templateId);
-    if (!template) throw new Error("Template not found");
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string(),
+		stance: v.string(),
+		districtCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
+		requireInternalSecret(_secret);
+		if (stance !== 'support' && stance !== 'oppose') {
+			throw new Error('POSITION_STANCE_INVALID');
+		}
+		const normalizedDistrictCode = assertPositionDistrictCode(districtCode);
+		await requireRecipientMetricsWritable(ctx);
+		// Check template exists
+		const template = await ctx.db.get(templateId);
+		if (!template) throw new Error('Template not found');
 
-    // Check for existing registration (upsert)
-    const existing = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+		// Check for existing registration (upsert)
+		const existing = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    if (existing) {
-      return { _id: existing._id, isNew: false };
-    }
+		if (existing) {
+			return { _id: existing._id, isNew: false };
+		}
 
-    const id = await ctx.db.insert("positionRegistrations", {
-      templateId,
-      identityCommitment,
-      stance,
-      districtCode: districtCode ?? undefined,
-      registeredAt: Date.now(),
-    });
+		const id = await ctx.db.insert('positionRegistrations', {
+			templateId,
+			identityCommitment,
+			stance,
+			districtCode: normalizedDistrictCode,
+			registeredAt: Date.now(),
+			recipientMetricsVersion: RECIPIENT_METRICS_VERSION
+		});
+		await applyPositionRegistrationMetric(ctx, {
+			templateId,
+			stance,
+			districtCode: normalizedDistrictCode
+		});
 
-    return { _id: id, isNew: true };
-  },
+		return { _id: id, isNew: true };
+	}
 });
 
 /**
  * Confirm a mailto send — upserts position + creates delivery record.
  */
 export const confirmMailtoSend = mutation({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-    districtCode: v.optional(v.string()),
-    templateTitle: v.optional(v.string()),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment, districtCode, templateTitle }) => {
-    requireInternalSecret(_secret);
-    // Upsert position (support implied by sending)
-    const existing = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string(),
+		districtCode: v.optional(v.string()),
+		templateTitle: v.optional(v.string())
+	},
+	handler: async (
+		ctx,
+		{ _secret, templateId, identityCommitment, districtCode, templateTitle }
+	) => {
+		requireInternalSecret(_secret);
+		const normalizedDistrictCode = assertPositionDistrictCode(districtCode);
+		await requireRecipientMetricsWritable(ctx);
+		// Upsert position (support implied by sending)
+		const existing = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    let registrationId: Id<"positionRegistrations">;
-    let isNewPosition = false;
-    if (existing) {
-      registrationId = existing._id;
-    } else {
-      registrationId = await ctx.db.insert("positionRegistrations", {
-        templateId,
-        identityCommitment,
-        stance: "support",
-        districtCode: districtCode ?? undefined,
-        registeredAt: Date.now(),
-      });
-      isNewPosition = true;
-    }
+		let registrationId: Id<'positionRegistrations'>;
+		let isNewPosition = false;
+		if (existing) {
+			registrationId = existing._id;
+		} else {
+			registrationId = await ctx.db.insert('positionRegistrations', {
+				templateId,
+				identityCommitment,
+				stance: 'support',
+				districtCode: normalizedDistrictCode,
+				registeredAt: Date.now(),
+				recipientMetricsVersion: RECIPIENT_METRICS_VERSION
+			});
+			await applyPositionRegistrationMetric(ctx, {
+				templateId,
+				stance: 'support',
+				districtCode: normalizedDistrictCode
+			});
+			isNewPosition = true;
+		}
 
-    // Create delivery record
-    await ctx.db.insert("positionDeliveries", {
-      registrationId,
-      recipientName: templateTitle ?? "mailto recipient",
-      deliveryMethod: "mailto_confirmed",
-      deliveryStatus: "user_confirmed",
-      deliveredAt: Date.now(),
-    });
+		// Create delivery record
+		await ctx.db.insert('positionDeliveries', {
+			registrationId,
+			recipientName: templateTitle ?? 'mailto recipient',
+			deliveryMethod: 'mailto_confirmed',
+			deliveryStatus: 'user_confirmed',
+			deliveredAt: Date.now()
+		});
 
-    return { registrationId, isNewPosition };
-  },
+		return { registrationId, isNewPosition };
+	}
 });
 
 /**
  * Batch-create delivery records for a position registration.
  */
 export const batchRegisterDeliveries = mutation({
-  args: {
-    _secret: v.string(),
-    registrationId: v.id("positionRegistrations"),
-    identityCommitment: v.string(),
-    recipients: v.array(v.object({
-      name: v.string(),
-      email: v.optional(v.string()),
-      deliveryMethod: v.string(),
-      // Optional pre-encrypted fields (caller encrypts before calling)
-      encryptedRecipientEmail: v.optional(v.string()),
-      recipientEmailHash: v.optional(v.string()),
-      encryptedRecipientName: v.optional(v.string()),
-    })),
-  },
-  handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
-    requireInternalSecret(_secret);
-    // Verify registration exists and belongs to caller
-    const reg = await ctx.db.get(registrationId);
-    if (!reg || reg.identityCommitment !== identityCommitment) {
-      throw new Error("Registration not found");
-    }
+	args: {
+		_secret: v.string(),
+		registrationId: v.id('positionRegistrations'),
+		identityCommitment: v.string(),
+		recipients: v.array(
+			v.object({
+				name: v.string(),
+				email: v.optional(v.string()),
+				deliveryMethod: v.string(),
+				// Optional pre-encrypted fields (caller encrypts before calling)
+				encryptedRecipientEmail: v.optional(v.string()),
+				recipientEmailHash: v.optional(v.string()),
+				encryptedRecipientName: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
+		requireInternalSecret(_secret);
+		// Verify registration exists and belongs to caller
+		const reg = await ctx.db.get(registrationId);
+		if (!reg || reg.identityCommitment !== identityCommitment) {
+			throw new Error('Registration not found');
+		}
 
-    let created = 0;
-    for (const r of recipients) {
-      // Schema requires `recipientName`; an unguarded `doc as any` cast
-      // would mask the missing required field and the mutation would
-      // be rejected by Convex's runtime validator.
-      await ctx.db.insert("positionDeliveries", {
-        registrationId,
-        recipientName: r.name,
-        recipientKey: slugify(r.name),
-        deliveryMethod: r.deliveryMethod,
-        deliveryStatus: "pending",
-        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
-        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
-        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
-      });
-      created++;
-    }
+		let created = 0;
+		for (const r of recipients) {
+			// Schema requires `recipientName`; an unguarded `doc as any` cast
+			// would mask the missing required field and the mutation would
+			// be rejected by Convex's runtime validator.
+			await ctx.db.insert('positionDeliveries', {
+				registrationId,
+				recipientName: r.name,
+				recipientKey: slugify(r.name),
+				deliveryMethod: r.deliveryMethod,
+				deliveryStatus: 'pending',
+				...(r.encryptedRecipientEmail
+					? { encryptedRecipientEmail: r.encryptedRecipientEmail }
+					: {}),
+				...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
+				...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {})
+			});
+			created++;
+		}
 
-    return { created };
-  },
+		return { created };
+	}
 });
 
 function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+	return s
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-|-$/g, '');
 }
 
 /**
@@ -385,131 +359,118 @@ function slugify(s: string): string {
  * recipientKey) tuple, no duplicate is created.
  */
 export const recordDirectDeliveries = mutation({
-  args: {
-    _secret: v.string(),
-    pseudonymousId: v.string(),
-    templateId: v.id("templates"),
-    districtCode: v.optional(v.string()),
-    recipients: v.array(v.object({
-      name: v.string(),
-      email: v.optional(v.string()),
-      deliveryMethod: v.string(),
-      // Optional pre-encrypted fields (caller encrypts before calling)
-      encryptedRecipientEmail: v.optional(v.string()),
-      recipientEmailHash: v.optional(v.string()),
-      encryptedRecipientName: v.optional(v.string()),
-    })),
-  },
-  handler: async (ctx, { _secret, pseudonymousId, templateId, districtCode, recipients }) => {
-    requireInternalSecret(_secret);
-    const now = Date.now();
-    // Pre-fetch the user's existing deliveries for this template to deduplicate
-    const existing = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_templateId_pseudonymousId", (idx) =>
-        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
-      )
-      .collect();
-    const existingKeys = new Set(existing.map((d) => d.recipientKey).filter(Boolean));
+	args: {
+		_secret: v.string(),
+		pseudonymousId: v.string(),
+		templateId: v.id('templates'),
+		districtCode: v.optional(v.string()),
+		recipients: v.array(
+			v.object({
+				name: v.string(),
+				email: v.optional(v.string()),
+				deliveryMethod: v.string(),
+				// Optional pre-encrypted fields (caller encrypts before calling)
+				encryptedRecipientEmail: v.optional(v.string()),
+				recipientEmailHash: v.optional(v.string()),
+				encryptedRecipientName: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, { _secret, pseudonymousId, templateId, districtCode, recipients }) => {
+		requireInternalSecret(_secret);
+		if (!pseudonymousId || pseudonymousId.length > DIRECT_DELIVERY_ID_MAX_CHARS) {
+			throw new Error('DIRECT_DELIVERY_PSEUDONYM_INVALID');
+		}
+		if (districtCode !== undefined && districtCode.length > 32) {
+			throw new Error('DIRECT_DELIVERY_DISTRICT_INVALID');
+		}
+		if (recipients.length < 1 || recipients.length > DIRECT_DELIVERY_RECIPIENT_MAX) {
+			throw new Error('DIRECT_DELIVERY_RECIPIENT_LIMIT_EXCEEDED');
+		}
+		if (
+			new TextEncoder().encode(JSON.stringify(recipients)).byteLength >
+			DIRECT_DELIVERY_INPUT_MAX_BYTES
+		) {
+			throw new Error('DIRECT_DELIVERY_INPUT_TOO_LARGE');
+		}
+		const normalized = recipients.map((recipient) => {
+			if (!recipient.name.trim() || recipient.name.length > DIRECT_DELIVERY_NAME_MAX_CHARS) {
+				throw new Error('DIRECT_DELIVERY_RECIPIENT_NAME_INVALID');
+			}
+			if (
+				!recipient.deliveryMethod ||
+				recipient.deliveryMethod.length > DIRECT_DELIVERY_METHOD_MAX_CHARS ||
+				!DIRECT_DELIVERY_METHODS.has(recipient.deliveryMethod)
+			) {
+				throw new Error('DIRECT_DELIVERY_METHOD_INVALID');
+			}
+			for (const value of [
+				recipient.email,
+				recipient.encryptedRecipientEmail,
+				recipient.recipientEmailHash,
+				recipient.encryptedRecipientName
+			]) {
+				if (value !== undefined && value.length > DIRECT_DELIVERY_ENVELOPE_MAX_CHARS) {
+					throw new Error('DIRECT_DELIVERY_ENVELOPE_TOO_LARGE');
+				}
+			}
+			const recipientKey = slugify(recipient.name);
+			if (!recipientKey) throw new Error('DIRECT_DELIVERY_RECIPIENT_KEY_INVALID');
+			return { recipient, recipientKey };
+		});
+		const now = Date.now();
 
-    let created = 0;
-    for (const r of recipients) {
-      const recipientKey = slugify(r.name);
-      if (existingKeys.has(recipientKey)) continue;
+		let created = 0;
+		for (const { recipient: r, recipientKey } of normalized) {
+			const existing = await ctx.db
+				.query('positionDeliveries')
+				.withIndex('by_templateId_pseudonymousId_recipientKey', (idx) =>
+					idx
+						.eq('templateId', templateId)
+						.eq('pseudonymousId', pseudonymousId)
+						.eq('recipientKey', recipientKey)
+				)
+				.take(2);
+			if (existing.length > 1) throw new Error('DIRECT_DELIVERY_IDENTITY_MULTIPLICITY');
+			if (existing.length === 1) continue;
 
-      await ctx.db.insert("positionDeliveries", {
-        pseudonymousId,
-        templateId,
-        recipientKey,
-        recipientName: r.name,
-        deliveryMethod: r.deliveryMethod,
-        deliveryStatus: "pending",
-        deliveredAt: now,
-        ...(districtCode ? { districtCode } : {}),
-        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
-        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
-        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
-      });
-      existingKeys.add(recipientKey);
-      created++;
-    }
+			await ctx.db.insert('positionDeliveries', {
+				pseudonymousId,
+				templateId,
+				recipientKey,
+				recipientName: r.name,
+				deliveryMethod: r.deliveryMethod,
+				deliveryStatus: 'pending',
+				deliveredAt: now,
+				...(districtCode ? { districtCode } : {}),
+				...(r.encryptedRecipientEmail
+					? { encryptedRecipientEmail: r.encryptedRecipientEmail }
+					: {}),
+				...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
+				...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {})
+			});
+			created++;
+		}
 
-    return { created };
-  },
+		return { created };
+	}
 });
 
 /**
  * Get full engagement by district with privacy threshold.
  */
 export const getFullEngagementByDistrict = query({
-  args: {
-    templateId: v.id("templates"),
-    userDistrictCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, userDistrictCode }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
-
-    if (registrations.length === 0) return null;
-
-    const byDistrict = new Map<string, { support: number; oppose: number }>();
-    for (const r of registrations) {
-      if (r.districtCode) {
-        const entry = byDistrict.get(r.districtCode) ?? { support: 0, oppose: 0 };
-        if (r.stance === "support") entry.support++;
-        else if (r.stance === "oppose") entry.oppose++;
-        byDistrict.set(r.districtCode, entry);
-      }
-    }
-
-    let totalPositions = 0;
-    let totalSupport = 0;
-    let totalOppose = 0;
-
-    const districts: Array<{
-      district_code: string;
-      support: number;
-      oppose: number;
-      total: number;
-      support_percent: number;
-      is_user_district: boolean;
-    }> = [];
-
-    for (const [code, counts] of byDistrict) {
-      const total = counts.support + counts.oppose;
-      totalPositions += total;
-      totalSupport += counts.support;
-      totalOppose += counts.oppose;
-
-      // K-floor at 5 on per-district totals: sub-K cohorts name a specific
-      // resident. Above the floor, exact counts power the engagement view.
-      if (total >= 5) {
-        districts.push({
-          district_code: code,
-          support: counts.support,
-          oppose: counts.oppose,
-          total,
-          support_percent: total > 0 ? Math.round((counts.support / total) * 100) : 0,
-          is_user_district: code === userDistrictCode,
-        });
-      }
-    }
-
-    districts.sort((a, b) => b.total - a.total);
-
-    if (districts.length === 0 && totalPositions === 0) return null;
-
-    return {
-      template_id: templateId,
-      districts,
-      aggregate: {
-        total_districts: byDistrict.size < 3 ? null : byDistrict.size,
-        total_positions: totalPositions < 5 ? null : totalPositions,
-        total_support: totalSupport < 5 ? null : totalSupport,
-        total_oppose: totalOppose < 5 ? null : totalOppose,
-      },
-    };
-  },
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return metrics.hasPositions ? metrics.engagement : null;
+	}
 });

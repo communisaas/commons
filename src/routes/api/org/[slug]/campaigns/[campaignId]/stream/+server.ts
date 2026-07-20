@@ -1,11 +1,12 @@
 import { error } from '@sveltejs/kit';
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import type { RequestHandler } from './$types';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /** Minimal debate snapshot for change detection. Counts are K-floored at 5
  * (null below 5, exact above) by the Convex query — see convex/debates.ts:getSnapshot. */
@@ -19,7 +20,7 @@ interface DebateSnapshot {
 }
 
 async function fetchDebateSnapshot(debateId: Id<'debates'>): Promise<DebateSnapshot | null> {
-	return serverQuery(api.debates.getSnapshot, { debateId });
+	return serverQuery(api.debates.getSnapshot, { _secret: getInternalSecret(), debateId });
 }
 
 /**
@@ -32,7 +33,7 @@ async function fetchDebateSnapshot(debateId: Id<'debates'>): Promise<DebateSnaps
  *
  * Auth: session cookie + org membership (viewer+).
  */
-export const GET: RequestHandler = async ({ params, locals, platform }) => {
+export const GET: RequestHandler = async ({ params, locals, platform, url }) => {
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
@@ -59,10 +60,6 @@ export const GET: RequestHandler = async ({ params, locals, platform }) => {
 		userId: locals.user.id
 	});
 
-	const packetKV = platform?.env?.PACKET_CACHE_KV as
-		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
-		| undefined;
-
 	let closed = false;
 	let lastPacketJson = '';
 	let lastDebateId = campaign.debateId ?? null;
@@ -70,7 +67,7 @@ export const GET: RequestHandler = async ({ params, locals, platform }) => {
 
 	// Send initial packet immediately
 	try {
-		const packet = await computeVerificationPacketCached(campaign._id, orgId, packetKV);
+		const packet = await computeVerificationPacketCached(campaign._id, orgId, { url, platform });
 		lastPacketJson = JSON.stringify(packet);
 		emitter.send('packet', packet);
 	} catch {
@@ -90,7 +87,10 @@ export const GET: RequestHandler = async ({ params, locals, platform }) => {
 	const pollTimer = setInterval(async () => {
 		if (closed) return;
 		try {
-			const packet = await computeVerificationPacketCached(campaign._id, orgId, packetKV);
+			const packet = await computeVerificationPacketCached(campaign._id, orgId, {
+				url,
+				platform
+			});
 			const json = JSON.stringify(packet);
 			if (json !== lastPacketJson) {
 				lastPacketJson = json;
@@ -105,6 +105,7 @@ export const GET: RequestHandler = async ({ params, locals, platform }) => {
 		try {
 			// Re-check campaign for newly spawned debate
 			const freshDebateId = await serverQuery(api.campaigns.getDebateId, {
+				_secret: getInternalSecret(),
 				campaignId: campaign._id
 			});
 			const currentDebateId = freshDebateId?.debateId ?? null;

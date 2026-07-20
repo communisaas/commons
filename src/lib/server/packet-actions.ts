@@ -9,7 +9,7 @@
  * the scan-cliff and without dropping any row across a page boundary.
  */
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 
@@ -33,9 +33,7 @@ const MAX_PACKET_PAGES = 1000;
 /**
  * Enumerate ALL packet actions for a campaign across paginated reads.
  */
-export async function fetchAllPacketActions(
-	campaignId: Id<'campaigns'>
-): Promise<PacketAction[]> {
+export async function fetchAllPacketActions(campaignId: Id<'campaigns'>): Promise<PacketAction[]> {
 	const all: PacketAction[] = [];
 	let cursor: string | null = null;
 	for (let page = 0; page < MAX_PACKET_PAGES; page++) {

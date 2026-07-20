@@ -3,120 +3,37 @@ import { env } from '$env/dynamic/public';
 import { env as privateEnv } from '$env/dynamic/private';
 import type { LayoutServerLoad } from './$types';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { getCallInitiationReadiness } from '$lib/server/calls/call-initiation-readiness';
 import { getMessageGenerationReadiness } from '$lib/server/agents/message-generation-readiness';
 import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispatch-readiness';
 import { getPlatformApiSyncReadiness } from '$lib/server/platform-api-sync-readiness';
 import { getTextDispatchReadiness } from '$lib/server/sms/text-dispatch-readiness';
 import { CLIENT_DIRECT_EMAIL_THRESHOLD } from '$lib/data/org-limit-sentences';
-import type { Id } from '$convex/_generated/dataModel';
 import type {
-	ReturnSpaceData,
-	BaseSpaceData,
-	LandscapeSpaceData,
-	LandscapeDecisionMaker,
-	LandscapeBill,
-	FundraisingGroundData,
-	CoordinationGroundData,
 	AuthoringRuntimeGroundData,
-	PlatformApiSyncGroundData,
-	TextDeliveryGroundData,
+	BaseSpaceData,
 	CallRoutingGroundData,
 	CongressionalDeliveryGroundData,
-	CoalitionGroundData,
-	PeopleSegmentationGroundData,
-	OrgSpacesData
+	LandscapeSpaceData,
+	OperatingGroundData,
+	OrgSpacesData,
+	PlatformApiSyncGroundData,
+	ReturnSpaceData,
+	TextDeliveryGroundData
 } from '$lib/components/org/os/spaces';
+import { orgShellLoadPolicy } from '$lib/server/org-shell-load-policy';
 
-function asString(value: unknown, fallback = ''): string {
-	return typeof value === 'string' ? value : fallback;
-}
+type Workspace = 'base' | 'operating' | 'landscape' | 'return';
 
-function asNumber(value: unknown, fallback = 0): number {
-	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
-}
-
-function asNumberRecord(value: unknown): Record<string, number> {
-	if (!value || typeof value !== 'object') return {};
-	return Object.entries(value as Record<string, unknown>).reduce<Record<string, number>>(
-		(record, [key, count]) => {
-			if (typeof key === 'string' && typeof count === 'number' && Number.isFinite(count)) {
-				record[key] = count;
-			}
-			return record;
-		},
-		{}
-	);
-}
-
-function asNumberOrNull(value: unknown): number | null {
-	return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function asIso(value: unknown): string {
-	return typeof value === 'number'
-		? new Date(value).toISOString()
-		: asString(value, new Date().toISOString());
-}
-
-function segmentConditionsFromFilters(filters: unknown): Record<string, unknown>[] {
-	if (!filters || typeof filters !== 'object') return [];
-	const conditions = (filters as { conditions?: unknown }).conditions;
-	if (!Array.isArray(conditions)) return [];
-	return conditions.filter(
-		(condition): condition is Record<string, unknown> =>
-			Boolean(condition) && typeof condition === 'object'
-	);
-}
-
-function segmentConditionCount(
-	conditions: Record<string, unknown>[],
-	fields: readonly string[]
-): number {
-	const fieldSet = new Set(fields);
-	return conditions.filter((condition) => fieldSet.has(asString(condition.field))).length;
-}
-
-function buildPeopleSegmentationGround(
-	segments: Record<string, unknown>[]
-): PeopleSegmentationGroundData {
-	const conditions = segments.flatMap((segment) => segmentConditionsFromFilters(segment.filters));
-
-	return {
-		segmentCount: segments.length,
-		conditionCount: conditions.length,
-		tagConditionCount: segmentConditionCount(conditions, ['tag']),
-		verificationConditionCount: segmentConditionCount(conditions, ['verification']),
-		sourceConditionCount: segmentConditionCount(conditions, ['source']),
-		emailStatusConditionCount: segmentConditionCount(conditions, ['emailStatus']),
-		dateConditionCount: segmentConditionCount(conditions, ['dateRange']),
-		postalCountryConditionCount: segmentConditionCount(conditions, ['postalCode', 'country']),
-		stateCodeConditionCount: segmentConditionCount(conditions, ['stateCode']),
-		congressionalDistrictConditionCount: segmentConditionCount(conditions, [
-			'congressionalDistrict'
-		]),
-		campaignParticipationConditionCount: segmentConditionCount(conditions, [
-			'campaignParticipation'
-		]),
-		actionDistrictHashConditionCount: segmentConditionCount(conditions, ['actionDistrict']),
-		actionDistrictLabelConditionCount: segmentConditionCount(conditions, ['actionDistrictLabel']),
-		engagementTierConditionCount: segmentConditionCount(conditions, ['engagementTier']),
-		humanReadableGeographyConditionCount: segmentConditionCount(conditions, [
-			'state',
-			'stateCode',
-			'district',
-			'congressionalDistrict',
-			'actionDistrictLabel',
-			'stateLegislativeDistrict',
-			'localDistrict',
-			'specialDistrict',
-			'civicGeography'
-		])
-	};
+function selectedWorkspace(policy: ReturnType<typeof orgShellLoadPolicy>): Workspace | undefined {
+	if (policy.base) return 'base';
+	if (policy.operating) return 'operating';
+	if (policy.landscape) return 'landscape';
+	if (policy.return) return 'return';
+	return undefined;
 }
 
 function messageGenerationEnv() {
@@ -136,237 +53,140 @@ function emailServerDispatchEnv() {
 	};
 }
 
-type KVNamespace = {
-	get(key: string): Promise<string | null>;
-	put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-};
-
 /**
- * Org-OS layout load — the ONE load that hydrates the persistent shell.
+ * Shared org layout contract.
  *
- * The four workspaces (Studio / People / Power / Results) are MOUNTED at once and
- * switching between them is a pure state toggle, never a navigation. So a space
- * switch must NOT trigger a route load. The data each space renders is therefore
- * loaded HERE, once per real navigation, and threaded into the spaces as props
- * via OrgShell. (STUDIO is the exception — it's driven by the live process
- * registry, not server data.)
- *
- * Each space's slice is loaded BEST-EFFORT: a transient failure (or a
- * configuration-gated/empty surface) resolves to null, so one space's hiccup can never
- * 500 the whole shell. The spaces render honest empty/dormant states on null.
- * The deep routes (/supporters, /representatives, …) keep their own loads, so
- * they stay independently resolvable; this layer only feeds the mounted shell.
+ * Every route performs one `organizations.getOrgContext` call. Deep routes stop
+ * there. A canonical Studio URL may make one additional configuration-only
+ * readiness query; Results and Power summaries are bounded branches inside the
+ * context transaction. Feature histories, supporter joins, workflow executions,
+ * donations, SMS messages/replies, calls, networks, bills and scorecards are
+ * deliberately page-owned and never loaded by this shared layout.
  */
-export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
+export const load: LayoutServerLoad = async ({ params, locals, url }) => {
 	if (!locals.user) {
 		throw redirect(302, `/auth/google?returnTo=/org/${params.slug}`);
 	}
 
-	const result = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
-
-	if (!result) {
-		// No org context found — redirect to home
-		throw redirect(302, '/');
-	}
-
-	const slug = params.slug;
-
-	// ─── RESULTS proof posture + watermark ────────────────────────────
-	// Reuses the org-root page load's Convex calls. dashboardStats also feeds the
-	// Mantle watermark, so we share the one query.
-	// One fan-out for the whole shell. Batches below take only `slug` and depend on
-	// nothing from each other; the prior four serial Promise.all waves added ~3
-	// extra round-trips per org navigation for no reason. The ONLY genuine serial
-	// dependency is the verification packet (needs topCampaignId from the
-	// dashboard) — it is awaited after this fan-out. Every query keeps its own
-	// `.catch(() => null)` so one slice's hiccup never 500s the shell.
-	const [
-		// RESULTS — dashboard + watermark source + receipts
-		dashboard,
-		dashboardStats,
-		receiptSummary,
-		// PEOPLE — verification + reach summary (full table stays on /supporters)
-		supporterSummary,
-		districtVerifiedResult,
-		orgKeyResult,
-		segmentsResult,
-		// OPERATING GROUND — fundraising posture (no donor PII), automation, sms, calls
-		fundraiserResult,
-		donationConfirmationSummary,
-		workflowResult,
-		smsBlastResult,
-		smsReplySummary,
-		callResult,
-		congressionalDeliveryResult,
-		networkResult,
-		signalEventsResult,
-		platformApiStateResult,
-		// LANDSCAPE — decision-makers + watched bills + scorecards
-		dmFollows,
-		watchedBills,
-		relevantBills,
-		scorecardResult
-	] = await Promise.all([
-		serverQuery(api.organizations.getDashboard, { slug }).catch(() => null),
-		serverQuery(api.organizations.getDashboardStats, { slug }).catch(() => null),
-		FEATURES.ACCOUNTABILITY
-			? serverQuery(api.legislation.getOrgReceiptSummary, { slug, limit: 200 }).catch(() => null)
-			: Promise.resolve(null),
-		serverQuery(api.supporters.getSummaryStats, { orgSlug: slug }).catch(() => null),
-		// District-of-record is set cardinality, served by a separate bounded query.
-		serverQuery(api.supporters.getDistrictVerifiedCount, { orgSlug: slug }).catch(() => null),
-		serverQuery(api.organizations.getOrgKeyVerifier, { slug }).catch(() => null),
-		serverQuery(api.segments.list, { slug }).catch(() => null),
-		FEATURES.FUNDRAISING
-			? serverQuery(api.donations.listByOrgWithDonors, {
-					orgSlug: slug,
-					limit: 100,
-					cursor: null
-				}).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.FUNDRAISING
-			? serverQuery(api.donations.getConfirmationSummary, { orgSlug: slug }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.AUTOMATION
-			? serverQuery(api.workflows.list, { slug }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.SMS
-			? serverQuery(api.sms.listBlasts, { slug, limit: 100 }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.SMS
-			? serverQuery(api.sms.getReplySummary, { slug }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.SMS
-			? serverQuery(api.calls.listCalls, { slug, limit: 200 }).catch(() => null)
-			: Promise.resolve(null),
-		serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null),
-		FEATURES.NETWORKS
-			? serverQuery(api.networks.list, { orgSlug: slug }).catch(() => null)
-			: Promise.resolve(null),
-		serverQuery(api.orgWebhooks.sessionListRecentEvents, { slug, limit: 8 }).catch(() => null),
-		serverQuery(api.organizations.getPlatformApiState, { slug }).catch(() => null),
-		serverQuery(api.legislation.listOrgDmFollows, { slug, limit: 12 }).catch(() => null),
-		FEATURES.LEGISLATION
-			? serverQuery(api.legislation.listWatchedBills, { slug, limit: 10 }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.LEGISLATION
-			? serverQuery(api.legislation.listRelevantBills, { slug, limit: 10 }).catch(() => null)
-			: Promise.resolve(null),
-		FEATURES.LEGISLATION
-			? serverQuery(api.legislation.listOrgScorecards, {
-					slug,
-					sortBy: 'score',
-					minReports: 1
-				}).catch(() => null)
-			: Promise.resolve(null)
+	const policy = orgShellLoadPolicy(url, params.slug);
+	const workspace = selectedWorkspace(policy);
+	const contextPromise = serverQuery(
+		api.organizations.getOrgContext,
+		workspace ? { slug: params.slug, workspace } : { slug: params.slug }
+	);
+	const congressionalPromise = policy.operating
+		? serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null)
+		: Promise.resolve(null);
+	const [result, congressionalDeliveryResult] = await Promise.all([
+		contextPromise,
+		congressionalPromise
 	]);
 
-	const watermark = dashboardStats
+	if (!result) throw redirect(302, '/');
+
+	const supporter = result.supporterSummary;
+	const baseSpace: BaseSpaceData | null = policy.base
 		? {
-				thisWeek: dashboardStats.growth.thisWeek,
-				lastWeek: dashboardStats.growth.lastWeek,
-				tiers: dashboardStats.tiers.map((t: { tier: number; count: number }) => ({
-					tier: t.tier,
-					count: t.count
+				total: supporter.total,
+				imported: supporter.total,
+				sourceCounts: supporter.sourceCounts,
+				postalResolved: supporter.postalResolved,
+				// District set cardinality is intentionally owned by the People tool.
+				districtVerified: null,
+				districtVerifiedTruncated: null,
+				identityVerified: supporter.identityVerified,
+				emailHealth: supporter.emailHealth,
+				smsHealth: supporter.smsHealth,
+				consentEvidence: supporter.consentEvidence,
+				// Segment definitions can contain arbitrary filters and are page-owned.
+				segmentation: null
+			}
+		: null;
+
+	const returnSummary = result.workspace?.kind === 'return' ? result.workspace : null;
+	const campaigns = returnSummary
+		? returnSummary.campaignCardsReady
+			? returnSummary.campaigns.map((campaign) => ({
+					id: String(campaign._id),
+					title: campaign.title,
+					type: campaign.type,
+					status: campaign.status,
+					totalActions: campaign.actionCount,
+					verifiedActions: campaign.verifiedActionCount,
+					updatedAt: new Date(campaign.updatedAt).toISOString()
 				}))
-			}
+			: null
 		: null;
+	const topCampaignId =
+		(campaigns?.find((campaign) => campaign.status === 'ACTIVE') ?? campaigns?.[0])?.id ?? null;
+	const returnSpace: ReturnSpaceData | null =
+		policy.return && returnSummary
+			? {
+					funnel: {
+						imported: supporter.total,
+						postalResolved: supporter.postalResolved,
+						identityVerified: supporter.identityVerified,
+						districtVerified: null
+					},
+					tiers: [],
+					growth: null,
+					campaigns,
+					topCampaignId,
+					// The report page owns packet construction and its campaign histories.
+					packet: null,
+					stats: {
+						supporters: result.navBadges.supporters,
+						campaigns: result.navBadges.campaigns,
+						activeCampaigns: result.navBadges.activeCampaigns,
+						members: result.navBadges.members,
+						sentEmails: result.navBadges.sentEmails
+					},
+					receipts: returnSummary.receipts
+						? {
+								loadedCount: returnSummary.receipts.receiptCount,
+								pendingCount: returnSummary.receipts.pendingCount,
+								responseLoggedCount: returnSummary.receipts.responseLoggedCount,
+								anchorFieldCount: returnSummary.receipts.anchorFieldCount,
+								proofWeightTotal: returnSummary.receipts.proofWeightTotal,
+								latestProofDeliveredAt: returnSummary.receipts.latestProofDeliveredAt
+									? new Date(returnSummary.receipts.latestProofDeliveredAt).toISOString()
+									: null,
+								sampleLimit: 0
+							}
+						: null
+				}
+			: null;
 
-	// ─── Compose RETURN space data (mirrors the org-root page mapping) ─
-	let returnSpace: ReturnSpaceData | null = null;
-	if (dashboard && dashboardStats) {
-		const campaigns = (dashboard.recentCampaigns ?? []).map((c: Record<string, unknown>) => ({
-			id: asString(c._id),
-			title: asString(c.title, 'Untitled campaign'),
-			type: asString(c.type),
-			status: asString(c.status, 'DRAFT'),
-			totalActions: asNumber(c.actionCount),
-			verifiedActions: asNumber(c.verifiedActionCount),
-			updatedAt: asIso(c.updatedAt)
-		}));
-
-		const activeCampaignCount = campaigns.filter((c) => c.status === 'ACTIVE').length;
-		const topCampaignId =
-			(campaigns.find((c) => c.status === 'ACTIVE') || campaigns[0])?.id ?? null;
-
-		// Verification packet for the org's top campaign. Null on new orgs.
-		const packet =
-			topCampaignId && dashboard.org?._id
-				? await computeVerificationPacketCached(
-						topCampaignId as Id<'campaigns'>,
-						dashboard.org._id as Id<'organizations'>,
-						(platform as { env?: { KV?: KVNamespace } })?.env?.KV
-					).catch(() => null)
-				: null;
-
-		returnSpace = {
-			funnel: dashboardStats.funnel,
-			tiers: dashboardStats.tiers,
-			growth: dashboardStats.growth,
-			campaigns,
-			topCampaignId,
-			packet,
-			stats: {
-				supporters: dashboard.stats?.supporters ?? 0,
-				campaigns: dashboard.stats?.campaigns ?? 0,
-				activeCampaigns: activeCampaignCount,
-				members: dashboard.stats?.members ?? 0,
-				sentEmails: dashboard.stats?.sentEmails ?? 0
-			},
-			receipts: {
-				loadedCount: asNumber(receiptSummary?.loadedCount),
-				pendingCount: asNumber(receiptSummary?.pendingCount),
-				responseLoggedCount: asNumber(receiptSummary?.responseLoggedCount),
-				anchorFieldCount: asNumber(receiptSummary?.anchorFieldCount),
-				proofWeightTotal: asNumber(receiptSummary?.proofWeightTotal),
-				latestProofDeliveredAt:
-					typeof receiptSummary?.latestProofDeliveredAt === 'number'
-						? new Date(receiptSummary.latestProofDeliveredAt).toISOString()
+	const landscapeSummary = result.workspace?.kind === 'landscape' ? result.workspace : null;
+	const landscapeSpace: LandscapeSpaceData | null =
+		policy.landscape && landscapeSummary
+			? {
+					legislationEnabled: FEATURES.LEGISLATION,
+					followed: landscapeSummary.followedReady
+						? landscapeSummary.followed.map((row) => ({
+								id: String(row.decisionMakerId),
+								reason: row.reason,
+								name: row.name,
+								party: row.party,
+								title: row.title,
+								jurisdiction: row.jurisdiction,
+								district: row.district
+							}))
 						: null,
-				sampleLimit: asNumber(receiptSummary?.sampleLimit, 200)
-			}
-		};
-	}
+					followedCount: landscapeSummary.followedReady ? landscapeSummary.followed.length : null,
+					followedCountTruncated: landscapeSummary.followedTruncated,
+					// Bill and scorecard collections remain behind their owned routes.
+					bills: null,
+					relevantBillCount: null,
+					positionedBillCount: null,
+					scorecards: null,
+					scorecardSnapshotCount: null,
+					scorecardAvg: null
+				}
+			: null;
 
-	// ─── Compose BASE space data ──────────────────────────────────────
-	const baseSpace: BaseSpaceData | null = supporterSummary
-		? {
-				total: asNumber(supporterSummary.total),
-				imported: asNumber(supporterSummary.imported),
-				sourceCounts: asNumberRecord(supporterSummary.sourceCounts),
-				postalResolved: asNumber(supporterSummary.postalResolved),
-				districtVerified: asNumber(districtVerifiedResult?.districtVerified),
-				districtVerifiedTruncated: Boolean(districtVerifiedResult?.truncated),
-				identityVerified: asNumber(supporterSummary.identityVerified),
-				emailHealth: {
-					subscribed: asNumber(supporterSummary.emailHealth?.subscribed),
-					unsubscribed: asNumber(supporterSummary.emailHealth?.unsubscribed),
-					bounced: asNumber(supporterSummary.emailHealth?.bounced),
-					complained: asNumber(supporterSummary.emailHealth?.complained)
-				},
-				smsHealth: {
-					subscribed: asNumber(supporterSummary.smsHealth?.subscribed),
-					unsubscribed: asNumber(supporterSummary.smsHealth?.unsubscribed),
-					stopped: asNumber(supporterSummary.smsHealth?.stopped),
-					none: asNumber(supporterSummary.smsHealth?.none),
-					phonePresent: asNumber(supporterSummary.smsHealth?.phonePresent)
-				},
-				consentEvidence: {
-					email: asNumber(supporterSummary.consentEvidence?.email),
-					emailSubscribed: asNumber(supporterSummary.consentEvidence?.emailSubscribed),
-					sms: asNumber(supporterSummary.consentEvidence?.sms),
-					smsSubscribed: asNumber(supporterSummary.consentEvidence?.smsSubscribed)
-				},
-				segmentation: Array.isArray(segmentsResult?.segments)
-					? buildPeopleSegmentationGround(segmentsResult.segments as Record<string, unknown>[])
-					: null
-			}
-		: null;
-	const emailServerDispatchReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
-		orgKeyConfigured: Boolean(orgKeyResult?.orgKeyVerifier)
-	});
 	const messageGenerationReadiness = getMessageGenerationReadiness(messageGenerationEnv());
-	const authoringGround: AuthoringRuntimeGroundData = {
+	const authoring: AuthoringRuntimeGroundData = {
 		runtimeReady: messageGenerationReadiness.ready,
 		modelProviderConfigured: messageGenerationReadiness.modelProviderConfigured,
 		sourceSearchConfigured: messageGenerationReadiness.sourceSearchConfigured,
@@ -375,28 +195,29 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 		runtimeDependency: messageGenerationReadiness.dependency,
 		runtimeMessage: messageGenerationReadiness.message
 	};
-	const platformApiSyncReadiness = getPlatformApiSyncReadiness();
-	const platformApiSyncGround: PlatformApiSyncGroundData = {
-		runtimeReady: platformApiSyncReadiness.ready,
-		credentialCustodyReady: platformApiSyncReadiness.credentialCustodyReady,
-		credentialStored: Boolean(platformApiStateResult?.credentialStoredAt),
-		credentialProbeComplete: Boolean(platformApiStateResult?.credentialProbeCompletedAt),
-		credentialProbeCompletedAt: platformApiStateResult?.credentialProbeCompletedAt
-			? new Date(platformApiStateResult.credentialProbeCompletedAt).toISOString()
+	const emailReadiness = getEmailServerDispatchReadiness(emailServerDispatchEnv(), {
+		orgKeyConfigured: result.operatingState.orgKeyConfigured
+	});
+	const platformReadiness = getPlatformApiSyncReadiness();
+	const platformState = result.operatingState.platformApi;
+	const platformApiSync: PlatformApiSyncGroundData = {
+		runtimeReady: platformReadiness.ready,
+		credentialCustodyReady: platformReadiness.credentialCustodyReady,
+		credentialStored: Boolean(platformState?.credentialStoredAt),
+		credentialProbeComplete: Boolean(platformState?.credentialProbeCompletedAt),
+		credentialProbeCompletedAt: platformState?.credentialProbeCompletedAt
+			? new Date(platformState.credentialProbeCompletedAt).toISOString()
 			: null,
-		adapterSource:
-			typeof platformApiStateResult?.adapterSource === 'string'
-				? platformApiStateResult.adapterSource
-				: null,
-		profileCount: platformApiSyncReadiness.profileCount,
-		runnerImplemented: platformApiSyncReadiness.runnerImplemented,
-		armedAdapterSources: platformApiSyncReadiness.armedAdapterSources,
-		runtimeMissing: platformApiSyncReadiness.missing,
-		runtimeDependency: platformApiSyncReadiness.dependency,
-		runtimeMessage: platformApiSyncReadiness.message,
-		runtimeFlag: platformApiSyncReadiness.runtimeFlag
+		adapterSource: platformState?.adapterSource ?? null,
+		profileCount: platformReadiness.profileCount,
+		runnerImplemented: platformReadiness.runnerImplemented,
+		armedAdapterSources: platformReadiness.armedAdapterSources,
+		runtimeMissing: platformReadiness.missing,
+		runtimeDependency: platformReadiness.dependency,
+		runtimeMessage: platformReadiness.message,
+		runtimeFlag: platformReadiness.runtimeFlag
 	};
-	const textDispatchReadiness = getTextDispatchReadiness(
+	const textReadiness = getTextDispatchReadiness(
 		{
 			TWILIO_ACCOUNT_SID: privateEnv.TWILIO_ACCOUNT_SID,
 			TWILIO_AUTH_TOKEN: privateEnv.TWILIO_AUTH_TOKEN,
@@ -404,300 +225,88 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 		},
 		{ featureEnabled: FEATURES.SMS_DISPATCH }
 	);
-
-	// ─── Compose LANDSCAPE space data ─────────────────────────────────
-	const followed = (dmFollows?.followed ?? [])
-		.map((f: Record<string, unknown>) => {
-			const dm = f.decisionMaker as Record<string, unknown> | null;
-			if (!dm) return null;
-			return {
-				id: asString(f._id),
-				reason: asString(f.reason, 'manual'),
-				name: asString(dm.name, 'Unknown'),
-				party: typeof dm.party === 'string' ? dm.party : null,
-				title: typeof dm.title === 'string' ? dm.title : null,
-				jurisdiction: typeof dm.jurisdiction === 'string' ? dm.jurisdiction : null,
-				district: typeof dm.district === 'string' ? dm.district : null
-			};
-		})
-		.filter((x): x is LandscapeDecisionMaker => x !== null);
-
-	const bills = (watchedBills ?? [])
-		.map((w: Record<string, unknown>) => {
-			const bill = w.bill as Record<string, unknown> | null;
-			if (!bill) return null;
-			return {
-				id: asString(w._id),
-				title: asString(bill.title, 'Untitled bill'),
-				externalId: asString(bill.externalId),
-				status: asString(bill.status),
-				jurisdiction: asString(bill.jurisdiction),
-				position: typeof w.position === 'string' ? w.position : null
-			};
-		})
-		.filter((x): x is LandscapeBill => x !== null);
-	const relevantBillCount = Array.isArray(relevantBills) ? relevantBills.length : null;
-	const positionedBillCount = Array.isArray(watchedBills)
-		? bills.filter((bill) => bill.position).length
-		: null;
-
-	const scorecards = (scorecardResult?.scorecards ?? []).map((s: Record<string, unknown>) => {
-		const dm = s.decisionMaker as Record<string, unknown> | undefined;
-		const sc = s.scorecard as Record<string, unknown> | undefined;
-		const composite = asNumberOrNull(sc?.composite);
-		const responsiveness = asNumberOrNull(sc?.responsiveness);
-		return {
-			name: asString(dm?.name, 'Unknown'),
-			title: asString(dm?.title),
-			district: asString(dm?.district),
-			reportsReceived: asNumber(sc?.deliveriesSent, asNumber(s.receiptCount)),
-			reportsOpened: asNumberOrNull(sc?.deliveriesOpened),
-			verifyLinksClicked: asNumberOrNull(sc?.deliveriesVerified),
-			repliesLogged: asNumberOrNull(sc?.repliesReceived),
-			relevantVotes: asNumberOrNull(sc?.totalScoredVotes),
-			alignedVotes: asNumberOrNull(sc?.alignedVotes),
-			alignmentRate: asNumberOrNull(sc?.alignment),
-			avgResponseTime:
-				responsiveness !== null ? Math.round((1 - responsiveness) * 168 * 10) / 10 : null,
-			lastContactDate: typeof sc?.periodEnd === 'string' ? sc.periodEnd : null,
-			score: composite !== null ? Math.round(composite * 100) : null,
-			proofWeighted: null
-		};
-	});
-	const scoredScorecards = scorecards.filter((scorecard) => scorecard.score !== null);
-
-	// LANDSCAPE is present whenever ANY of its three reads resolved — even empty,
-	// so the surface can render honest empty states. Null only when DM follows
-	// (the always-available read) failed entirely.
-	const landscapeSpace: LandscapeSpaceData | null = dmFollows
+	const textDelivery: TextDeliveryGroundData | null = FEATURES.SMS
 		? {
-				legislationEnabled: FEATURES.LEGISLATION,
-				followed,
-				followedCount: asNumber(dmFollows.followedCount, followed.length),
-				bills,
-				relevantBillCount,
-				positionedBillCount,
-				scorecards,
-				scorecardSnapshotCount: scoredScorecards.length,
-				scorecardAvg:
-					scoredScorecards.length > 0
-						? Math.round(
-								scoredScorecards.reduce((sum, scorecard) => sum + (scorecard.score ?? 0), 0) /
-									scoredScorecards.length
-							)
-						: null
+				draftCount: null,
+				plannedRecipientCount: null,
+				sentCount: null,
+				deliveredCount: null,
+				failedCount: null,
+				messageCount: null,
+				replyCount: null,
+				dispatchRuntimeReady: textReadiness.ready,
+				dispatchRuntimeMissing: textReadiness.missing,
+				dispatchRuntimeDependency: textReadiness.dependency,
+				dispatchRuntimeMessage: textReadiness.message,
+				dispatchRunnerImplemented: textReadiness.runnerImplemented,
+				dispatchClientBatchRouteMounted: textReadiness.clientBatchRouteMounted
 			}
 		: null;
-
-	const fundraisingRows = fundraiserResult?.data ?? null;
-	const fundraisingGround: FundraisingGroundData | null =
-		FEATURES.FUNDRAISING && (fundraisingRows || donationConfirmationSummary)
-			? {
-					fundraiserCount: fundraisingRows?.length ?? 0,
-					activeCount:
-						fundraisingRows?.filter((f: Record<string, unknown>) => f.status === 'ACTIVE').length ??
-						0,
-					raisedAmountCents:
-						fundraisingRows?.reduce(
-							(sum: number, f: Record<string, unknown>) => sum + asNumber(f.raisedAmountCents),
-							0
-						) ?? 0,
-					donationCount:
-						fundraisingRows?.reduce(
-							(sum: number, f: Record<string, unknown>) => sum + asNumber(f.donorCount),
-							0
-						) ?? 0,
-					receiptPolicyCount:
-						fundraisingRows?.filter((f: Record<string, unknown>) => f.donationReceiptPolicy)
-							.length ?? 0,
-					confirmation: {
-						completed: asNumber(donationConfirmationSummary?.completed),
-						sent: asNumber(donationConfirmationSummary?.sent),
-						sending: asNumber(donationConfirmationSummary?.sending),
-						skipped: asNumber(donationConfirmationSummary?.skipped),
-						failed: asNumber(donationConfirmationSummary?.failed),
-						notRecorded: asNumber(donationConfirmationSummary?.notRecorded),
-						attempted: asNumber(donationConfirmationSummary?.attempted),
-						providerAccepted: asNumber(donationConfirmationSummary?.providerAccepted)
-					}
-				}
-			: null;
-	const workflowRows = Array.isArray(workflowResult)
-		? (workflowResult as Record<string, unknown>[])
-		: null;
-	const coordinationGround: CoordinationGroundData | null =
-		FEATURES.AUTOMATION && workflowRows
-			? {
-					definitionCount: workflowRows.length,
-					enabledCount: workflowRows.filter((workflow) => workflow.enabled === true).length,
-					triggerFamilyCount: new Set(
-						workflowRows
-							.map((workflow) => (workflow.trigger as Record<string, unknown> | null)?.type)
-							.filter((type): type is string => typeof type === 'string')
-					).size,
-					plannedStepCount: workflowRows.reduce(
-						(sum, workflow) => sum + (Array.isArray(workflow.steps) ? workflow.steps.length : 0),
-						0
-					),
-					emailStepCount: workflowRows.reduce(
-						(sum, workflow) =>
-							sum +
-							(Array.isArray(workflow.steps)
-								? workflow.steps.filter(
-										(step) => (step as Record<string, unknown>).type === 'send_email'
-									).length
-								: 0),
-						0
-					),
-					tagStepCount: workflowRows.reduce(
-						(sum, workflow) =>
-							sum +
-							(Array.isArray(workflow.steps)
-								? workflow.steps.filter((step) =>
-										['add_tag', 'remove_tag'].includes(
-											String((step as Record<string, unknown>).type)
-										)
-									).length
-								: 0),
-						0
-					),
-					conditionStepCount: workflowRows.reduce(
-						(sum, workflow) =>
-							sum +
-							(Array.isArray(workflow.steps)
-								? workflow.steps.filter(
-										(step) => (step as Record<string, unknown>).type === 'condition'
-									).length
-								: 0),
-						0
-					),
-					runEvidenceCount: workflowRows.reduce(
-						(sum, workflow) => sum + asNumber(workflow.executionCount),
-						0
-					)
-				}
-			: null;
-	const smsBlastRows = Array.isArray(smsBlastResult)
-		? (smsBlastResult as Record<string, unknown>[])
-		: null;
-	const smsReplySummaryRow = smsReplySummary as Record<string, unknown> | null;
-	const textDeliveryGround: TextDeliveryGroundData | null =
-		FEATURES.SMS && smsBlastRows
-			? {
-					draftCount: smsBlastRows.filter((blast) => blast.status === 'draft').length,
-					plannedRecipientCount: smsBlastRows.reduce(
-						(sum, blast) => sum + asNumber(blast.totalRecipients),
-						0
-					),
-					sentCount: smsBlastRows.reduce((sum, blast) => sum + asNumber(blast.sentCount), 0),
-					deliveredCount: smsBlastRows.reduce(
-						(sum, blast) => sum + asNumber(blast.deliveredCount),
-						0
-					),
-					failedCount: smsBlastRows.reduce((sum, blast) => sum + asNumber(blast.failedCount), 0),
-					messageCount: smsBlastRows.reduce((sum, blast) => sum + asNumber(blast.messageCount), 0),
-					replyCount: asNumber(smsReplySummaryRow?.replyCount),
-					dispatchRuntimeReady: textDispatchReadiness.ready,
-					dispatchRuntimeMissing: textDispatchReadiness.missing,
-					dispatchRuntimeDependency: textDispatchReadiness.dependency,
-					dispatchRuntimeMessage: textDispatchReadiness.message,
-					dispatchRunnerImplemented: textDispatchReadiness.runnerImplemented,
-					dispatchClientBatchRouteMounted: textDispatchReadiness.clientBatchRouteMounted
-				}
-			: null;
-	const callRows = Array.isArray(callResult) ? (callResult as Record<string, unknown>[]) : null;
 	const canManageCalls = result.membership.role === 'owner' || result.membership.role === 'editor';
-	const callInitiationReadiness = getCallInitiationReadiness(
+	const callReadiness = getCallInitiationReadiness(
 		{
 			TWILIO_ACCOUNT_SID: privateEnv.TWILIO_ACCOUNT_SID,
 			TWILIO_AUTH_TOKEN: privateEnv.TWILIO_AUTH_TOKEN,
 			TWILIO_PHONE_NUMBER: privateEnv.TWILIO_PHONE_NUMBER
 		},
-		{
-			featureEnabled: FEATURES.SMS,
-			canManageCalls,
-			scope: 'os_surface'
-		}
+		{ featureEnabled: FEATURES.SMS, canManageCalls, scope: 'os_surface' }
 	);
-	const callRoutingGround: CallRoutingGroundData | null =
-		FEATURES.SMS && callRows
-			? {
-					callCount: callRows.length,
-					completedCallCount: callRows.filter((call) => call.status === 'completed').length,
-					campaignCount: asNumber(dashboard?.stats?.campaigns),
-					twilioConfigured: callInitiationReadiness.twilioConfigured,
-					canManageCalls,
-					initiationRuntimeReady: callInitiationReadiness.ready,
-					initiationRuntimeMissing: callInitiationReadiness.missing,
-					initiationRuntimeDependency: callInitiationReadiness.dependency,
-					initiationRuntimeMessage: callInitiationReadiness.message,
-					initiationSurfaceMounted: callInitiationReadiness.surfaceMounted,
-					initiationProxyImplemented: callInitiationReadiness.proxyImplemented
-				}
-			: null;
-	const congressionalDeliveryRuntime = congressionalDeliveryResult as Record<
-		string,
-		unknown
-	> | null;
-	const congressionalDeliveryGround: CongressionalDeliveryGroundData | null =
-		congressionalDeliveryRuntime
-			? {
-					runtimeReady: congressionalDeliveryRuntime.ready === true,
-					runtimeMissing: Array.isArray(congressionalDeliveryRuntime.missing)
-						? congressionalDeliveryRuntime.missing.filter(
-								(value): value is string => typeof value === 'string'
-							)
-						: [],
-					runtimeDependency: asString(
-						congressionalDeliveryRuntime.dependency,
-						'congressional launch flag + House CWC proxy env + Senate CWC API env + per-submission proof/template checks'
-					),
-					runtimeMessage: asString(
-						congressionalDeliveryRuntime.message,
-						'Congressional delivery runtime posture is unread; CWC remains context-only until transport and proof-delivery checks are visible.'
-					),
-					launched: congressionalDeliveryRuntime.launched === true,
-					houseTransportConfigured: congressionalDeliveryRuntime.houseTransportConfigured === true,
-					senateTransportConfigured: congressionalDeliveryRuntime.senateTransportConfigured === true
-				}
-			: null;
-	const networkRows = Array.isArray(networkResult)
-		? (networkResult as Record<string, unknown>[])
+	const callRouting: CallRoutingGroundData | null = FEATURES.SMS
+		? {
+				callCount: null,
+				completedCallCount: null,
+				campaignCount: result.navBadges.campaigns,
+				twilioConfigured: callReadiness.twilioConfigured,
+				canManageCalls,
+				initiationRuntimeReady: callReadiness.ready,
+				initiationRuntimeMissing: callReadiness.missing,
+				initiationRuntimeDependency: callReadiness.dependency,
+				initiationRuntimeMessage: callReadiness.message,
+				initiationSurfaceMounted: callReadiness.surfaceMounted,
+				initiationProxyImplemented: callReadiness.proxyImplemented
+			}
 		: null;
-	const activeNetworkRows =
-		networkRows?.filter((network) => network.memberStatus === 'active') ?? [];
-	const coalitionGround: CoalitionGroundData | null =
-		FEATURES.NETWORKS && networkRows
-			? {
-					activeNetworkCount: activeNetworkRows.length,
-					pendingInviteCount: networkRows.filter((network) => network.memberStatus === 'pending')
-						.length,
-					activeMemberRows: activeNetworkRows.reduce(
-						(sum, network) => sum + asNumber(network.memberCount),
-						0
-					),
-					topActiveNetworkId:
-						typeof activeNetworkRows[0]?._id === 'string' ? activeNetworkRows[0]._id : null
-				}
-			: null;
-	const signalEvents = Array.isArray(signalEventsResult)
-		? signalEventsResult.flatMap((event) =>
-				typeof event.id === 'string' &&
-				typeof event.event === 'string' &&
-				typeof event.emittedAt === 'number'
-					? [
-							{
-								id: String(event.id),
-								event: event.event,
-								emittedAt: event.emittedAt
-							}
-						]
-					: []
-			)
+	const congressional = congressionalDeliveryResult as Record<string, unknown> | null;
+	const congressionalDelivery: CongressionalDeliveryGroundData | null = congressional
+		? {
+				runtimeReady: congressional.ready === true,
+				runtimeMissing: Array.isArray(congressional.missing)
+					? congressional.missing.filter((item): item is string => typeof item === 'string')
+					: [],
+				runtimeDependency:
+					typeof congressional.dependency === 'string' ? congressional.dependency : '',
+				runtimeMessage: typeof congressional.message === 'string' ? congressional.message : '',
+				launched: congressional.launched === true,
+				houseTransportConfigured: congressional.houseTransportConfigured === true,
+				senateTransportConfigured: congressional.senateTransportConfigured === true
+			}
 		: null;
 
+	// Readiness is shell state, not feature history. Keep it present on deep routes
+	// so child navigation cannot erase the Mantle's authoring and delivery posture.
+	const operating: OperatingGroundData = {
+		authoring,
+		emailDelivery: {
+			subscribedCount: supporter.emailHealth.subscribed,
+			clientDirectThreshold: CLIENT_DIRECT_EMAIL_THRESHOLD,
+			sesProxyConfigured: Boolean(env.PUBLIC_SES_PROXY_URL),
+			orgKeyConfigured: result.operatingState.orgKeyConfigured,
+			serverDispatchRuntimeReady: emailReadiness.ready,
+			serverDispatchRuntimeMissing: emailReadiness.missing,
+			serverDispatchRuntimeDependency: emailReadiness.dependency,
+			serverDispatchRuntimeMessage: emailReadiness.message
+		},
+		platformApiSync,
+		textDelivery,
+		callRouting,
+		congressionalDelivery,
+		fundraising: null,
+		coordination: null,
+		coalition: null
+	};
+
 	return {
-		watermark,
+		watermark: null,
 		org: {
 			id: result.org._id,
 			name: result.org.name,
@@ -711,39 +320,21 @@ export const load: LayoutServerLoad = async ({ params, locals, platform }) => {
 			brandingAccent: result.org.brandingAccent ?? null,
 			logoUrl: result.org.logoUrl ?? null,
 			whiteLabel: result.org.whiteLabel ?? false,
+			isPublic: result.org.isPublic,
 			createdAt: new Date(result.org._creationTime)
 		},
 		membership: {
 			role: result.membership.role,
 			joinedAt: new Date(result.membership.joinedAt)
 		},
-		signalEvents,
-		// Per-space slices for the mounted OrgShell. Each is independently
-		// best-effort: null = render the space's honest dormant/empty state.
+		navBadges: result.navBadges,
+		badgeReadiness: result.badgeReadiness,
+		signalEvents: null,
 		spaces: {
 			return: returnSpace,
 			base: baseSpace,
 			landscape: landscapeSpace,
-			operating: {
-				authoring: authoringGround,
-				emailDelivery: {
-					subscribedCount: baseSpace?.emailHealth.subscribed ?? 0,
-					clientDirectThreshold: CLIENT_DIRECT_EMAIL_THRESHOLD,
-					sesProxyConfigured: Boolean(env.PUBLIC_SES_PROXY_URL),
-					orgKeyConfigured: Boolean(orgKeyResult?.orgKeyVerifier),
-					serverDispatchRuntimeReady: emailServerDispatchReadiness.ready,
-					serverDispatchRuntimeMissing: emailServerDispatchReadiness.missing,
-					serverDispatchRuntimeDependency: emailServerDispatchReadiness.dependency,
-					serverDispatchRuntimeMessage: emailServerDispatchReadiness.message
-				},
-				platformApiSync: platformApiSyncGround,
-				textDelivery: textDeliveryGround,
-				callRouting: callRoutingGround,
-				congressionalDelivery: congressionalDeliveryGround,
-				fundraising: fundraisingGround,
-				coordination: coordinationGround,
-				coalition: coalitionGround
-			}
+			operating
 		} satisfies OrgSpacesData
 	};
 };

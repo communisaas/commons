@@ -80,6 +80,7 @@
 
 	// Org memberships — the bridge between individual and org layers
 	const orgMemberships = $derived(user.orgMemberships ?? []);
+	const hasMoreOrgMemberships = $derived(user.orgMembershipsOverflow?.hasMore ?? false);
 
 	function handleOrgClick(event: MouseEvent, slug: string): void {
 		event.preventDefault();
@@ -152,11 +153,19 @@
 						<div class="header-org-info">
 							<span class="header-org-name">{org.orgName}</span>
 							<span class="header-org-meta">
-								{org.role}{#if org.activeCampaignCount > 0}<span class="header-org-dot"></span>{org.activeCampaignCount} campaign{org.activeCampaignCount !== 1 ? 's' : ''}{/if}
+								{org.role}{#if (org.activeCampaignCount ?? 0) > 0}<span class="header-org-dot"
+									></span>{org.activeCampaignCount} campaign{org.activeCampaignCount !== 1
+										? 's'
+										: ''}{/if}
 							</span>
 						</div>
 					</a>
 				{/each}
+				{#if hasMoreOrgMemberships}
+					<a href="/org" class="header-dropdown-item" role="menuitem">
+						<span>More organizations…</span>
+					</a>
+				{/if}
 			{/if}
 			{#if FEATURES.DEBATE && FEATURES.WALLET}
 				<div class="header-dropdown-divider"></div>
@@ -169,7 +178,12 @@
 						</div>
 					</div>
 				{:else}
-					<button type="button" onclick={handleConnectWallet} class="header-dropdown-item" role="menuitem">
+					<button
+						type="button"
+						onclick={handleConnectWallet}
+						class="header-dropdown-item"
+						role="menuitem"
+					>
 						<Wallet class="header-dropdown-item-icon" />
 						<span>Connect Wallet</span>
 					</button>
@@ -242,8 +256,13 @@
 	}
 
 	@keyframes identity-pulse {
-		0%, 100% { opacity: 0.5; }
-		50% { opacity: 0.9; }
+		0%,
+		100% {
+			opacity: 0.5;
+		}
+		50% {
+			opacity: 0.9;
+		}
 	}
 
 	.header-avatar-name {
@@ -258,8 +277,14 @@
 	}
 
 	@keyframes identity-resolve {
-		from { opacity: 0; transform: translateY(2px); }
-		to { opacity: 1; transform: translateY(0); }
+		from {
+			opacity: 0;
+			transform: translateY(2px);
+		}
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
 	}
 
 	/* Hide name on very small screens */

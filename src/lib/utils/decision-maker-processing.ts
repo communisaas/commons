@@ -14,6 +14,15 @@ export function processDecisionMakers(
 		sourceUrl?: string; // Agent returns camelCase
 		source_url?: string; // Legacy snake_case support
 		emailSource?: string; // How email was verified
+		emailGrounded?: boolean;
+		emailSourceTitle?: string;
+		isAiResolved?: boolean;
+		accountabilityOpener?: string | null;
+		roleCategory?: ProcessedDecisionMaker['roleCategory'];
+		relevanceRank?: number;
+		publicActions?: string[];
+		personalPrompt?: string | null;
+		publicRecipientProvenance?: ProcessedDecisionMaker['publicRecipientProvenance'];
 		recencyCheck?: string; // Verification text
 		metadata?: { positionSourceDate?: string }; // Structure from agent
 	}>
@@ -23,7 +32,8 @@ export function processDecisionMakers(
 		const reasoningText =
 			dm.reasoning || (dm.provenance ? extractReasoning(dm.provenance) : 'No reasoning provided');
 		// Support both camelCase (agent output) and snake_case (legacy)
-		const sourceUrl = dm.sourceUrl || dm.source_url || (dm.provenance ? extractSource(dm.provenance) : undefined);
+		const sourceUrl =
+			dm.sourceUrl || dm.source_url || (dm.provenance ? extractSource(dm.provenance) : undefined);
 
 		return {
 			...dm,

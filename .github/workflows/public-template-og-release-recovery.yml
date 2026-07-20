@@ -1,0 +1,379 @@
+name: Recover public-template OG release transaction
+
+on:
+  workflow_run:
+    workflows:
+      - Deploy to Cloudflare Pages
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Exact Deploy to Cloudflare Pages run id
+        required: true
+        type: string
+      run_attempt:
+        description: Exact Deploy to Cloudflare Pages run attempt
+        required: true
+        type: string
+      realm:
+        description: Realm to force through recovery
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - preview
+          - production
+
+concurrency:
+  group: cloudflare-pages-publication
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  validate-source-run:
+    name: Validate exact protected Deploy workflow attempt
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      conclusion: ${{ steps.resolve.outputs.conclusion }}
+      force: ${{ steps.resolve.outputs.force }}
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      repository: ${{ steps.resolve.outputs.repository }}
+      repository_id: ${{ steps.resolve.outputs.repository_id }}
+      run_attempt: ${{ steps.resolve.outputs.run_attempt }}
+      run_id: ${{ steps.resolve.outputs.run_id }}
+      transaction_id: ${{ steps.resolve.outputs.transaction_id }}
+      trusted_gate_sha: ${{ steps.resolve.outputs.trusted_gate_sha }}
+    steps:
+      - name: Checkout the current protected recovery workflow
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        timeout-minutes: 3
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+
+      - name: Prove recovery code is the current protected default branch
+        env:
+          ACTUAL_REPOSITORY_ID: ${{ github.repository_id }}
+          EXPECTED_REPOSITORY: communisaas/commons
+          EXPECTED_REPOSITORY_ID: '599295397'
+          EXPECTED_WORKFLOW_REF: communisaas/commons/.github/workflows/public-template-og-release-recovery.yml@refs/heads/main
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$EXPECTED_REPOSITORY"
+          test "$ACTUAL_REPOSITORY_ID" = "$EXPECTED_REPOSITORY_ID"
+          test "$GITHUB_WORKFLOW_REF" = "$EXPECTED_WORKFLOW_REF"
+          test "$(git rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"
+          git fetch --no-tags --force origin refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse refs/remotes/origin/main)" = "$GITHUB_WORKFLOW_SHA"
+          git diff --no-ext-diff --quiet --exit-code
+          git diff --cached --no-ext-diff --quiet --exit-code
+
+      - name: Resolve and validate the exact source attempt
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MANUAL_REALM: ${{ github.event_name == 'workflow_dispatch' && inputs.realm || 'automatic' }}
+          MANUAL_RUN_ATTEMPT: ${{ github.event_name == 'workflow_dispatch' && inputs.run_attempt || 'automatic' }}
+          MANUAL_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.run_id || 'automatic' }}
+        run: |
+          set -euo pipefail
+          resolved=$(node scripts/resolve-public-template-og-release-recovery-run.mjs \
+            --event-name "$GITHUB_EVENT_NAME" \
+            --event-path "$GITHUB_EVENT_PATH" \
+            --run-id "$MANUAL_RUN_ID" \
+            --run-attempt "$MANUAL_RUN_ATTEMPT" \
+            --realm "$MANUAL_REALM")
+          test "$(jq -r '.repository' <<<"$resolved")" = communisaas/commons
+          test "$(jq -r '.repositoryId' <<<"$resolved")" = 599295397
+          realm=$(jq -r '.realm' <<<"$resolved")
+          case "$realm" in
+            all)
+              matrix='[{"realm":"preview","environment":"Staging","branch":"staging"},{"realm":"production","environment":"Production","branch":"production"}]'
+              ;;
+            preview)
+              matrix='[{"realm":"preview","environment":"Staging","branch":"staging"}]'
+              ;;
+            production)
+              matrix='[{"realm":"production","environment":"Production","branch":"production"}]'
+              ;;
+            *) exit 1 ;;
+          esac
+          {
+            echo "conclusion=$(jq -r '.conclusion' <<<"$resolved")"
+            echo "force=$(jq -r '.force' <<<"$resolved")"
+            echo "matrix=$matrix"
+            echo "repository=$(jq -r '.repository' <<<"$resolved")"
+            echo "repository_id=$(jq -r '.repositoryId' <<<"$resolved")"
+            echo "run_attempt=$(jq -r '.runAttempt' <<<"$resolved")"
+            echo "run_id=$(jq -r '.runId' <<<"$resolved")"
+            echo "transaction_id=$(jq -r '.transactionId' <<<"$resolved")"
+            echo "trusted_gate_sha=$(jq -r '.trustedGateSha' <<<"$resolved")"
+          } >> "$GITHUB_OUTPUT"
+
+  recover-realm:
+    name: Recover ${{ matrix.realm }} from private immutable custody
+    needs:
+      - validate-source-run
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.validate-source-run.outputs.matrix) }}
+    environment: ${{ matrix.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+      CF_PAGES_PROJECT: communique-site
+    steps:
+      - name: Checkout immutable trusted source-run gate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        timeout-minutes: 3
+        with:
+          ref: ${{ needs.validate-source-run.outputs.trusted_gate_sha }}
+          persist-credentials: false
+
+      - name: Setup immutable recovery runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        timeout-minutes: 3
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: .github/release-gate/package-lock.json
+
+      - name: Install exact trusted recovery dependencies
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ needs.validate-source-run.outputs.trusted_gate_sha }}"
+          npm ci --ignore-scripts --prefix .github/release-gate
+          test ! -e node_modules
+          ln -s .github/release-gate/node_modules node_modules
+          {
+            echo "RECOVERY_JOURNAL=$RUNNER_TEMP/public-template-og-release-${{ matrix.realm }}.json"
+            echo "RECOVERY_KIT=$RUNNER_TEMP/queue-release-kit-${{ matrix.realm }}.tar.gz"
+            echo "BOOTSTRAP_RECOVERY_JOURNAL=$RUNNER_TEMP/public-discovery-bootstrap-production.json"
+          } >> "$GITHUB_ENV"
+
+      - name: Hydrate exact journal and kit from private append-only R2
+        id: hydrate
+        timeout-minutes: 5
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          RELEASE_RECOVERY_R2_ACCESS_KEY_ID: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_ACCESS_KEY_ID }}
+          RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          result=$(node scripts/prepare-public-template-og-release-recovery.mjs \
+            --repository "${{ needs.validate-source-run.outputs.repository }}" \
+            --repository-id "${{ needs.validate-source-run.outputs.repository_id }}" \
+            --run-id "${{ needs.validate-source-run.outputs.run_id }}" \
+            --run-attempt "${{ needs.validate-source-run.outputs.run_attempt }}" \
+            --transaction-id "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            --realm "${{ matrix.realm }}" \
+            --trusted-gate-sha "${{ needs.validate-source-run.outputs.trusted_gate_sha }}" \
+            --journal "$RECOVERY_JOURNAL" \
+            --release-kit "$RECOVERY_KIT")
+          state=$(jq -r '.state' <<<"$result")
+          test "$state" = absent || test "$state" = present
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = present ]; then
+            source_sha=$(jq -r '.sourceSha' <<<"$result")
+            artifact_digest=$(jq -r '.artifactDigest' <<<"$result")
+            kit_digest=$(jq -r '.releaseKitDigest' <<<"$result")
+            [[ "$source_sha" =~ ^[a-f0-9]{40}$ ]]
+            [[ "$artifact_digest" =~ ^[a-f0-9]{64}$ ]]
+            [[ "$kit_digest" =~ ^[a-f0-9]{64}$ ]]
+            {
+              echo "source_sha=$source_sha"
+              echo "artifact_digest=$artifact_digest"
+              echo "kit_digest=$kit_digest"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      # Bootstrap custody precedes the schema-v4 activation baseline and has
+      # its own fixed R2 path. Hydrate it independently so cancellation between
+      # the temporary route deployment and normal activation remains recoverable.
+      - name: Hydrate independent production bootstrap custody
+        id: bootstrap_hydrate
+        if: always() && matrix.realm == 'production'
+        timeout-minutes: 5
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          RELEASE_RECOVERY_R2_ACCESS_KEY_ID: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_ACCESS_KEY_ID }}
+          RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          result=$(node scripts/public-discovery-bootstrap-recovery-custody.mjs hydrate \
+            --repository "${{ needs.validate-source-run.outputs.repository }}" \
+            --repository-id "${{ needs.validate-source-run.outputs.repository_id }}" \
+            --run-id "${{ needs.validate-source-run.outputs.run_id }}" \
+            --run-attempt "${{ needs.validate-source-run.outputs.run_attempt }}" \
+            --transaction-id "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            --trusted-gate-sha "${{ needs.validate-source-run.outputs.trusted_gate_sha }}" \
+            --journal "$BOOTSTRAP_RECOVERY_JOURNAL")
+          state=$(jq -er '.state | select(. == "absent" or . == "present")' <<<"$result")
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          if [ "$state" = present ]; then
+            source_sha=$(jq -er '.sourceSha | select(test("^[a-f0-9]{40}$"))' <<<"$result")
+            stage=$(jq -er '.stage | select(. == "intent" or . == "deployed" or . == "cleaned")' <<<"$result")
+            test "$(jq -er '.transactionId' <<<"$result")" = "${{ needs.validate-source-run.outputs.transaction_id }}"
+            test "$(jq -er '.trustedGateSha' <<<"$result")" = "${{ needs.validate-source-run.outputs.trusted_gate_sha }}"
+            if [ "${{ steps.hydrate.outputs.state }}" = present ]; then
+              test "$source_sha" = "${{ steps.hydrate.outputs.source_sha }}"
+            fi
+            {
+              echo "source_sha=$source_sha"
+              echo "stage=$stage"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate and extract the immutable release kit
+        if: steps.hydrate.outputs.state == 'present'
+        timeout-minutes: 3
+        run: |
+          set -euo pipefail
+          python3 - "$RECOVERY_KIT" "$GITHUB_WORKSPACE" <<'PY'
+          import pathlib, sys, tarfile
+          archive = pathlib.Path(sys.argv[1])
+          destination = pathlib.Path(sys.argv[2]).resolve()
+          members_seen = set()
+          total = 0
+          with tarfile.open(archive, mode='r:gz') as source:
+              members = source.getmembers()
+              if not members or len(members) > 100000:
+                  raise SystemExit('release kit member count is invalid')
+              for member in members:
+                  name = pathlib.PurePosixPath(member.name)
+                  if name.is_absolute() or '..' in name.parts or not name.parts or name.parts[0] != 'queue-release-kit':
+                      raise SystemExit(f'unsafe release kit path: {member.name}')
+                  if member.name in members_seen:
+                      raise SystemExit(f'duplicate release kit path: {member.name}')
+                  members_seen.add(member.name)
+                  total += max(0, member.size)
+                  if total > 1024 * 1024 * 1024:
+                      raise SystemExit('release kit is oversized')
+                  if member.issym():
+                      if member.name != 'queue-release-kit/gate/node_modules' or member.linkname != '.github/release-gate/node_modules':
+                          raise SystemExit(f'unsafe release kit symlink: {member.name}')
+                  elif member.name.startswith('queue-release-kit/gate/node_modules/'):
+                      raise SystemExit(f'release kit writes through its node_modules symlink: {member.name}')
+                  elif not (member.isdir() or member.isfile()):
+                      raise SystemExit(f'unsupported release kit member: {member.name}')
+              source.extractall(destination)
+          PY
+          test "$(git -C queue-release-kit/gate rev-parse HEAD)" = "${{ needs.validate-source-run.outputs.trusted_gate_sha }}"
+          test "$(sha256sum "$RECOVERY_KIT" | awk '{print $1}')" = "${{ steps.hydrate.outputs.kit_digest }}"
+          node queue-release-kit/gate/scripts/canonical-artifact-tree-digest.mjs \
+            --artifact-root queue-release-kit/release-artifact \
+            --expected-digest "${{ steps.hydrate.outputs.artifact_digest }}"
+
+      - name: Recover only the exact live transaction
+        id: recover_core
+        if: steps.hydrate.outputs.state == 'present'
+        timeout-minutes: 15
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          RELEASE_CONTROL_SECRET: ${{ matrix.realm == 'preview' && secrets.PROTECTED_RELEASE_CONTROL_SECRET_PREVIEW || secrets.PROTECTED_RELEASE_CONTROL_SECRET_PRODUCTION }}
+          RELEASE_RECOVERY_R2_ACCESS_KEY_ID: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_ACCESS_KEY_ID }}
+          RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          core_result="$RUNNER_TEMP/public-template-og-${{ matrix.realm }}-core-recovery.json"
+          node queue-release-kit/gate/scripts/run-public-template-og-release-phase.mjs recover \
+            --journal "$RECOVERY_JOURNAL" \
+            --trusted-root "$GITHUB_WORKSPACE/queue-release-kit/gate" \
+            --wrangler "$GITHUB_WORKSPACE/queue-release-kit/gate/node_modules/.bin/wrangler" \
+            --realm "${{ matrix.realm }}" \
+            --source-sha "${{ steps.hydrate.outputs.source_sha }}" \
+            --trusted-gate-sha "${{ needs.validate-source-run.outputs.trusted_gate_sha }}" \
+            --artifact-digest "${{ steps.hydrate.outputs.artifact_digest }}" \
+            --release-kit-digest "${{ steps.hydrate.outputs.kit_digest }}" \
+            --repository "${{ needs.validate-source-run.outputs.repository }}" \
+            --repository-id "${{ needs.validate-source-run.outputs.repository_id }}" \
+            --run-id "${{ needs.validate-source-run.outputs.run_id }}" \
+            --run-attempt "${{ needs.validate-source-run.outputs.run_attempt }}" \
+            --transaction-id "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            --force "${{ needs.validate-source-run.outputs.force }}" > "$core_result"
+          jq -e \
+            --arg realm "${{ matrix.realm }}" \
+            --arg sha "${{ steps.hydrate.outputs.source_sha }}" \
+            --arg transaction "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            '.realm == $realm and .sourceSha == $sha and .transactionId == $transaction and
+             ((.recovered == true and (.reason == "recovered" or .reason == "already-recovered")) or
+              (.recovered == false and (.reason == "committed-terminal" or .reason == "superseded")))' \
+            "$core_result" >/dev/null
+          echo "result=$core_result" >> "$GITHUB_OUTPUT"
+
+      - name: Recover production scheduler edge and exposure from immutable custody
+        id: recover_coordination
+        if: matrix.realm == 'production' && steps.hydrate.outputs.state == 'present'
+        timeout-minutes: 45
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CLOUDFLARE_ZONE_ID: ${{ secrets.PROTECTED_CLOUDFLARE_ZONE_ID }}
+          CF_PAGES_PROJECT: communique-site
+          INTERNAL_API_SECRET: ${{ secrets.PROTECTED_INTERNAL_API_SECRET_PRODUCTION }}
+          RELEASE_ORIGIN_PROOF_SECRET: ${{ secrets.PROTECTED_RELEASE_ORIGIN_PROOF_SECRET_PRODUCTION }}
+        run: |
+          set -euo pipefail
+          coordination=$(node queue-release-kit/gate/scripts/recover-public-template-og-production-coordination.mjs \
+            --journal "$RECOVERY_JOURNAL" \
+            --core-recovery-result "${{ steps.recover_core.outputs.result }}" \
+            --trusted-root "$GITHUB_WORKSPACE/queue-release-kit/gate" \
+            --wrangler "$GITHUB_WORKSPACE/queue-release-kit/gate/node_modules/.bin/wrangler")
+          printf '%s\n' "$coordination"
+          printf '%s' "$coordination" | jq -e \
+            --arg sha "${{ steps.hydrate.outputs.source_sha }}" \
+            --arg transaction "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            '.sourceSha == $sha and .transactionId == $transaction and
+             (.state == "candidate-proved" or .state == "baseline-restored" or
+              .state == "superseded-noop")' >/dev/null
+
+      # When both journals exist, the core and outer Pages/T/cron recovery above
+      # is ordered first. This final exact-ownership step still runs after an
+      # earlier recovery error so a temporary hidden-origin route is contained
+      # instead of remaining live while the job reports that error.
+      - name: Contain exact temporary production bootstrap after recovery settles
+        id: recover_bootstrap
+        if: >-
+          always() &&
+          matrix.realm == 'production' &&
+          steps.bootstrap_hydrate.outcome == 'success' &&
+          steps.bootstrap_hydrate.outputs.state == 'present'
+        timeout-minutes: 15
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CLOUDFLARE_ZONE_ID: ${{ secrets.PROTECTED_CLOUDFLARE_ZONE_ID }}
+          RELEASE_RECOVERY_R2_ACCESS_KEY_ID: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_ACCESS_KEY_ID }}
+          RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY: ${{ secrets.PROTECTED_RELEASE_RECOVERY_R2_SECRET_ACCESS_KEY }}
+        run: |
+          set -euo pipefail
+          result=$(node scripts/recover-public-discovery-bootstrap.mjs \
+            --journal "$BOOTSTRAP_RECOVERY_JOURNAL" \
+            --config "$GITHUB_WORKSPACE/wrangler.public-discovery-bootstrap.toml" \
+            --wrangler "$GITHUB_WORKSPACE/node_modules/.bin/wrangler" \
+            --trusted-gate-sha "${{ needs.validate-source-run.outputs.trusted_gate_sha }}")
+          printf '%s\n' "$result"
+          printf '%s' "$result" | jq -e \
+            --arg sha "${{ steps.bootstrap_hydrate.outputs.source_sha }}" \
+            --arg transaction "${{ needs.validate-source-run.outputs.transaction_id }}" \
+            '.sourceSha == $sha and .transactionId == $transaction and
+             (.state == "bootstrap-contained" or .state == "already-cleaned" or
+              .state == "superseded-noop")' >/dev/null
+
+      - name: Record absent schema-v4 activation custody
+        if: steps.hydrate.outputs.state == 'absent'
+        run: echo 'No schema-v4 Queue/Pages activation mutation could have preceded its absent baseline; bootstrap custody was evaluated independently.'

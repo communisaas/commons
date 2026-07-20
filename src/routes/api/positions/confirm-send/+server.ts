@@ -13,7 +13,7 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
@@ -47,7 +47,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const districtCode = atlas?.congressionalDistrict ?? undefined;
 
 		// Get template title for delivery record
-		const template = await serverQuery(api.templates.getBySlug, { slug: templateId });
+		const template = await serverQuery(api.templates.getBySlug, {
+			_secret: getInternalSecret(),
+			slug: templateId
+		});
 		const templateTitle = template?.title;
 
 		const result = await serverMutation(api.positions.confirmMailtoSend, {

@@ -4,14 +4,15 @@
  */
 
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const result = await serverQuery(api.legislation.listMyReceipts, {});
+	const cursor = url.searchParams.get('cursor') ?? undefined;
+	const result = await serverQuery(api.legislation.listMyReceipts, { cursor, limit: 20 });
 	return {
 		items: result.items.map((r) => ({
 			receiptId: String(r.receiptId),
@@ -22,6 +23,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 			causalityClass: r.causalityClass,
 			proofDeliveredAt: new Date(r.proofDeliveredAt).toISOString()
 		})),
-		total: result.total
+		total: result.total,
+		nextCursor: result.nextCursor
 	};
 };

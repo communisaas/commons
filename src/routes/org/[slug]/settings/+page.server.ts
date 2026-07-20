@@ -1,7 +1,7 @@
 // Member PII: plaintext name/email returned from Convex (user-level, not org-encrypted)
 import type { PageServerLoad } from './$types';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { PLAN_ORDER, PLANS } from '$lib/server/billing/plans';
 
@@ -17,6 +17,7 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 	const { org, membership } = await parent();
 
 	const isEditor = membership.role === 'owner' || membership.role === 'editor';
+	const now = Date.now();
 	const [data, keyInfo, planUsage] = await Promise.all([
 		serverQuery(api.organizations.getSettingsData, { slug: params.slug }),
 		isEditor
@@ -24,23 +25,28 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			: Promise.resolve({ orgKeyVerifier: null, hasRecoveryKey: false, piiVersion: 'legacy' }),
 		serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug })
 	]);
+	if (planUsage.usageRepairRequired) {
+		await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+	}
 
 	// Invite emails are client-encrypted — pass through as-is for client-side decryption
-	const invites = (data.invites ?? []).map(
-		(i: {
-			_id: string;
-			encryptedEmail: string;
-			emailHash?: string;
-			role: string;
-			expiresAt: number;
-		}) => ({
-			id: i._id,
-			encryptedEmail: i.encryptedEmail,
-			emailHash: i.emailHash ?? null,
-			role: i.role,
-			expiresAt: new Date(i.expiresAt).toISOString()
-		})
-	);
+	const invites = (data.invites ?? [])
+		.filter((invite: { expiresAt: number }) => invite.expiresAt > now)
+		.map(
+			(i: {
+				_id: string;
+				encryptedEmail: string;
+				emailHash?: string;
+				role: string;
+				expiresAt: number;
+			}) => ({
+				id: i._id,
+				encryptedEmail: i.encryptedEmail,
+				emailHash: i.emailHash ?? null,
+				role: i.role,
+				expiresAt: new Date(i.expiresAt).toISOString()
+			})
+		);
 
 	return {
 		subscription: data.subscription
@@ -55,6 +61,9 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			plan: planUsage.plan,
 			status: planUsage.status,
 			periodStart: new Date(planUsage.periodStart).toISOString(),
+			ready: planUsage.usageReady,
+			failureCode: planUsage.usageFailureCode,
+			repairStatus: planUsage.usageRepairRequired ? 'pending' : planUsage.usageRepairStatus,
 			verifiedActions: planUsage.current.verifiedActions,
 			maxVerifiedActions: planUsage.limits.maxVerifiedActions,
 			emailsSent: planUsage.current.emailsSent,

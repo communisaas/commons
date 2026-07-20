@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { matchFilter } from '../../../convex/_segmentMatch';
 
 const segmentTypesSource = readFileSync('src/lib/types/segment.ts', 'utf8');
 const segmentBuilderSource = readFileSync('src/lib/components/segments/SegmentBuilder.svelte', 'utf8');
@@ -40,11 +41,52 @@ describe('action-context segment filters', () => {
 		expect(segmentMatchSource).toContain('actionContext?.districtHashes.has(districtHash)');
 		expect(segmentMatchSource).toContain('actionContext?.districtCodes.has(districtCode)');
 		expect(segmentMatchSource).toContain('actionContext?.maxEngagementTier');
-		expect(segmentsSource).toContain('normalizeSegmentFilter(filters)');
+		expect(segmentsSource).toContain('const typedFilter = boundedSegmentFilter(filters)');
+		expect(segmentsSource).toContain('return normalizeSegmentFilter(raw)');
 		expect(segmentsSource).toContain('matchFilter(');
-		expect(segmentsSource).toContain('action.districtCode?.trim().toUpperCase()');
+		expect(segmentsSource).toContain('assertSupporterAudienceActionReady(ctx)');
+		expect(segmentsSource).toContain('s.audienceDistrictCodes ?? []');
+		expect(segmentsSource).toContain('s.audienceDistrictHashes ?? []');
+		expect(segmentsSource).toContain('s.audienceCampaignIds ?? []');
 		expect(schemaSource).toContain('districtCode: v.optional(v.string())');
 		expect(segmentsSource).not.toContain('campaignParticipation needs enriched context');
+
+		const actionContext = {
+			campaignIds: new Set(['campaign-1']),
+			districtHashes: new Set(['district-hash']),
+			districtCodes: new Set(['CA-11']),
+			maxEngagementTier: 3
+		};
+		expect(
+			matchFilter(
+				{} as never,
+				new Set(),
+				{
+					logic: 'AND',
+					conditions: [
+						{
+							id: 'campaign',
+							field: 'campaignParticipation',
+							operator: 'participated',
+							value: 'campaign-1'
+						},
+						{
+							id: 'district-hash',
+							field: 'actionDistrict',
+							operator: 'equals',
+							value: 'DISTRICT-HASH'
+						},
+						{
+							id: 'district-code',
+							field: 'actionDistrictLabel',
+							operator: 'equals',
+							value: 'ca-11'
+						}
+					]
+				},
+				actionContext
+			)
+		).toBe(true);
 	});
 
 	it('renders controls for the real geography and action-context filters', () => {

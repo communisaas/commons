@@ -6,7 +6,7 @@ import {
 	type AuthenticationResponseJSON,
 	type WebAuthnCredential
 } from '@simplewebauthn/server';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$convex/_generated/api';
 import { base64urlDecode } from '$lib/core/encoding/base64url';
 import { getPasskeyRPConfig } from '$lib/core/identity/passkey-rp-config';

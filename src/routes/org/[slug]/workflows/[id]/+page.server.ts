@@ -1,6 +1,6 @@
 import { error, redirect } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getWorkflowEmailRuntimeReadinessFromEnv } from '$lib/server/workflows/workflow-email-readiness';
 import type { Id } from '$convex/_generated/dataModel';

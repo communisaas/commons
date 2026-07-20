@@ -1,7 +1,7 @@
 /**
  * Poseidon2 Hash Function Tests
  *
- * Validates Barretenberg-backed Poseidon2 primitives used for:
+ * Validates Barretenberg-compatible Poseidon2 primitives used for:
  * - Nullifier computation (CVE-002 fix)
  * - Leaf hash computation (three-tree registration)
  * - Merkle root computation (proof verification)
@@ -15,9 +15,7 @@ import { describe, it, expect } from 'vitest';
 const BN254_MODULUS =
 	21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
-// We import lazily because these modules require WASM (bb.js)
-// and may not be available in all test environments.
-// Tests are structured to fail clearly if WASM is unavailable.
+// Import lazily to exercise the same module boundary used by application code.
 
 describe('hexToFr', () => {
 	it('rejects empty hex string (M-05)', async () => {

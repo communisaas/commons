@@ -1,13 +1,22 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 
 const IssueDomainSchema = z.object({
-	label: z.string().trim().min(1, 'Label is required').max(100, 'Label must be 100 characters or fewer'),
-	description: z.string().trim().max(500, 'Description must be 500 characters or fewer').optional().nullable(),
+	label: z
+		.string()
+		.trim()
+		.min(1, 'Label is required')
+		.max(100, 'Label must be 100 characters or fewer'),
+	description: z
+		.string()
+		.trim()
+		.max(500, 'Description must be 500 characters or fewer')
+		.optional()
+		.nullable(),
 	weight: z.number().min(0.5).max(2.0).optional()
 });
 
@@ -51,7 +60,9 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	// Bound id (Convex doc ids are 32 chars; 64 = slack).
-	const PatchSchema = z.object({ id: z.string().min(1).max(64) }).merge(IssueDomainSchema.partial());
+	const PatchSchema = z
+		.object({ id: z.string().min(1).max(64) })
+		.merge(IssueDomainSchema.partial());
 
 	let id: string;
 	let fields: Partial<z.infer<typeof IssueDomainSchema>>;

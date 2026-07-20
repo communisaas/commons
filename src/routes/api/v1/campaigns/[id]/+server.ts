@@ -8,7 +8,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { VALID_JURISDICTIONS, VALID_COUNTRY_CODES } from '$lib/server/geographic/types';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { JurisdictionType, CountryCode } from '$lib/server/geographic/types';
@@ -24,7 +24,10 @@ export const GET: RequestHandler = async ({ request, params }) => {
 	if (scopeErr) return scopeErr;
 
 	const campaign = await serverQuery(api.v1api.getCampaignById, {
- _secret: getInternalSecret(), campaignId: params.id, orgId: auth.orgId});
+		_secret: getInternalSecret(),
+		campaignId: params.id,
+		orgId: auth.orgId
+	});
 	if (!campaign) return apiError('NOT_FOUND', 'Campaign not found', 404);
 
 	return apiOk({
@@ -58,29 +61,51 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (scopeErr) return scopeErr;
 
 	let body: Record<string, unknown>;
-	try { body = await request.json(); } catch { return apiError('BAD_REQUEST', 'Invalid JSON body', 400); }
+	try {
+		body = await request.json();
+	} catch {
+		return apiError('BAD_REQUEST', 'Invalid JSON body', 400);
+	}
 
-	const { title, body: campaignBody, status, targetJurisdiction, targetCountry } = body as {
-		title?: string; body?: string; status?: string; targetJurisdiction?: string | null; targetCountry?: string;
+	const {
+		title,
+		body: campaignBody,
+		status,
+		targetJurisdiction,
+		targetCountry
+	} = body as {
+		title?: string;
+		body?: string;
+		status?: string;
+		targetJurisdiction?: string | null;
+		targetCountry?: string;
 	};
 	const data: Record<string, unknown> = {};
 	if (typeof title === 'string') {
-		if (title.length > 200) return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
+		if (title.length > 200)
+			return apiError('BAD_REQUEST', 'Title must be 200 characters or fewer', 400);
 		data.title = title.trim();
 	}
 	if (typeof campaignBody === 'string') {
-		if (campaignBody.length > 50000) return apiError('BAD_REQUEST', 'Body must be 50,000 characters or fewer', 400);
+		if (campaignBody.length > 50000)
+			return apiError('BAD_REQUEST', 'Body must be 50,000 characters or fewer', 400);
 		data.body = campaignBody.trim();
 	}
 	if (status && ['DRAFT', 'ACTIVE', 'PAUSED', 'COMPLETE'].includes(status)) data.status = status;
 	if (targetJurisdiction !== undefined) {
-		if (targetJurisdiction !== null && !VALID_JURISDICTIONS.includes(targetJurisdiction as JurisdictionType)) {
+		if (
+			targetJurisdiction !== null &&
+			!VALID_JURISDICTIONS.includes(targetJurisdiction as JurisdictionType)
+		) {
 			return apiError('BAD_REQUEST', `Invalid jurisdiction: ${targetJurisdiction}`, 400);
 		}
 		data.targetJurisdiction = targetJurisdiction;
 	}
 	if (targetCountry !== undefined) {
-		if (typeof targetCountry !== 'string' || !VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)) {
+		if (
+			typeof targetCountry !== 'string' ||
+			!VALID_COUNTRY_CODES.includes(targetCountry.toUpperCase() as CountryCode)
+		) {
 			return apiError('BAD_REQUEST', `Invalid country code: ${targetCountry}`, 400);
 		}
 		data.targetCountry = targetCountry.toUpperCase();
@@ -89,7 +114,11 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 	if (Object.keys(data).length === 0) return apiError('BAD_REQUEST', 'No fields to update', 400);
 
 	const result = await serverMutation(api.v1api.updateCampaign, {
- _secret: getInternalSecret(), campaignId: params.id, orgId: auth.orgId, data});
+		_secret: getInternalSecret(),
+		campaignId: params.id,
+		orgId: auth.orgId,
+		data
+	});
 	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
 	return apiOk({ id: result.id, updatedAt: new Date(result.updatedAt).toISOString() });
 };

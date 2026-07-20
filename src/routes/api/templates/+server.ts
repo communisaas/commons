@@ -3,7 +3,7 @@
 import { json } from '@sveltejs/kit';
 import { ConvexError } from 'convex/values';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import {
 	getCachedPublicTemplates,
@@ -32,6 +32,7 @@ import {
 	validateTemplateInputBudgets,
 	type TemplateInputBudgetResult
 } from '$convex/lib/templateInputBudget';
+import { invalidatePublicTemplateCaches } from '$lib/server/public-template-detail-cache';
 
 /** Content-addressable fingerprint: same title + body = same template */
 function contentHash(title: string, body: string): string {
@@ -498,7 +499,7 @@ export const GET: RequestHandler = async ({ url, platform }) => {
 		// Browsers revalidate after one minute. If a route-scoped Cloudflare Worker
 		// cache is enabled later, the more specific header preserves edge-only stale
 		// resilience without forwarding that allowance to browsers. The current
-		// Convex cost shield is the explicit Cache API/KV state machine, not this
+		// Convex cost shield is the explicit Cache API/R2 state machine, not this
 		// advisory front-of-Worker policy.
 		'Cache-Control': 'public, max-age=60, must-revalidate',
 		'Cloudflare-CDN-Cache-Control':
@@ -540,6 +541,14 @@ export const GET: RequestHandler = async ({ url, platform }) => {
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	try {
+		const requestUrl = new URL(request.url);
+		const invalidateDetailCaches = async (slug: string): Promise<void> => {
+			try {
+				await invalidatePublicTemplateCaches({ slug, url: requestUrl, platform });
+			} catch (error) {
+				console.warn('[api/templates] Public template cache invalidation failed', error);
+			}
+		};
 		// Reject before parsing or invoking the two-provider moderation pipeline.
 		// The global hook already caps this mutating route at 10 requests/day;
 		// this early account/trust gate prevents distributed anonymous traffic from
@@ -775,6 +784,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						}
 					};
 
+					await invalidateDetailCaches(existingByContent.slug);
 					return json(response);
 				}
 
@@ -824,6 +834,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 						if (isCwc) {
 							try {
 								await serverMutation(api.templates.setCwcVerification, {
+									_secret: getInternalSecret(),
+									expectedUserId: user.id as Id<'users'>,
 									templateId: templateId as Id<'templates'>,
 									verificationStatus: 'pending',
 									countryCode: 'US',
@@ -914,6 +926,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					}
 				};
 
+				await invalidateDetailCaches(newTemplate.slug);
 				return json(response);
 			} catch (error) {
 				// Slug uniqueness belongs to the create transaction; translate its

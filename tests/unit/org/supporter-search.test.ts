@@ -11,7 +11,6 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-	SUPPORTER_SEARCH_SCAN_CAP,
 	isFullEmail,
 	normalizeSearchText,
 	parseSearchQuery,
@@ -192,39 +191,24 @@ describe('searchCoverage', () => {
 		expect(starting.message.length).toBeGreaterThan(0);
 	});
 
-	it('states the scan cap honestly when rows are beyond reach', () => {
-		const capped = searchCoverage({
-			scannedCount: SUPPORTER_SEARCH_SCAN_CAP,
-			totalCount: 12400,
-			scanning: false
-		});
-		expect(capped.complete).toBe(false);
-		expect(capped.message).toContain('first 10,000 of 12,400');
-	});
-
-	it('reports partial coverage below the cap without claiming completeness', () => {
-		const partial = searchCoverage({ scannedCount: 900, totalCount: 1000, scanning: false });
-		expect(partial.complete).toBe(false);
-		expect(partial.message).toContain('900 of 1,000');
-	});
-
-	it('goes quiet once every row is searched', () => {
+	it('goes quiet only after the cursor walker reports exhaustion', () => {
 		expect(searchCoverage({ scannedCount: 1000, totalCount: 1000, scanning: false })).toEqual({
 			complete: true,
 			message: ''
 		});
 	});
 
-	it('mirrors the server-side per-query scan bound', () => {
+	it('pins cursor exhaustion instead of a fixed server-side scan cap', () => {
 		const convexSource = readFileSync(
 			path.resolve(process.cwd(), 'convex/supporters.ts'),
 			'utf8'
 		);
-		expect(SUPPORTER_SEARCH_SCAN_CAP).toBe(10_000);
-		expect(convexSource).toContain('MAX_SCAN = 10_000');
-		// The scan takes MAX_SCAN + 1 as a truncation sentinel (an org sitting at
-		// exactly the cap is complete, not truncated), then slices back to the cap.
-		expect(convexSource).toContain('.take(MAX_SCAN + 1)');
+		const listBody = convexSource.slice(
+			convexSource.indexOf('export const list = query'),
+			convexSource.indexOf('export const get = query')
+		);
+		expect(listBody).toContain('readSupporterBrowsePage(ctx');
+		expect(listBody).not.toMatch(/MAX_SCAN|\.take\(10_?00/);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -23,7 +23,11 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, `Status must be one of: ${validStatuses.join(', ')}`);
 	}
 
-	if (status === 'acted' && actionTaken && !['created_campaign', 'sent_email'].includes(actionTaken)) {
+	if (
+		status === 'acted' &&
+		actionTaken &&
+		!['created_campaign', 'sent_email'].includes(actionTaken)
+	) {
 		throw error(400, 'Invalid actionTaken value');
 	}
 

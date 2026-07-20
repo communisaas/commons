@@ -22,6 +22,7 @@ import {
 } from '$lib/types/analytics';
 import { sanitizeDimensions, categorizeError } from './sanitize';
 import { applyKaryRR } from './noise';
+import { FEATURES } from '$lib/config/features';
 
 // =============================================================================
 // CONFIGURATION
@@ -148,7 +149,7 @@ class AnalyticsClient {
 	 * This is the ONLY public method for recording analytics.
 	 */
 	increment(metric: Metric, dimensions?: Dimensions): void {
-		if (!browser) return;
+		if (!browser || !FEATURES.ANALYTICS_INGESTION) return;
 
 		// Validate metric
 		if (!isMetric(metric)) {

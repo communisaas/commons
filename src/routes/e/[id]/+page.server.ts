@@ -1,14 +1,18 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const load: PageServerLoad = async ({ params }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
 
-	const event = await serverQuery(api.events.getPublic, { eventId: params.id as Id<'events'> });
+	const event = await serverQuery(api.events.getPublic, {
+		_secret: getInternalSecret(),
+		eventId: params.id as Id<'events'>
+	});
 
 	if (!event) throw error(404, 'Event not found');
 

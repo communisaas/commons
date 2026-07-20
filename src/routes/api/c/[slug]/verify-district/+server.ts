@@ -2,7 +2,7 @@
 // over our published address-index artifacts + H3 district lookup), rate limiting
 // (IP-based), address validation (zod).
 import { json } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
@@ -11,6 +11,7 @@ import { z } from 'zod';
 import type { RequestHandler } from './$types';
 import { resolveAddress } from '$lib/core/shadow-atlas/client';
 import { getCurrentAtlasVersion } from '$lib/core/shadow-atlas/district-bundle';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * POST /api/c/[slug]/verify-district
@@ -56,6 +57,7 @@ export const POST: RequestHandler = async ({ request, params, getClientAddress }
 
 	// Validate campaign exists (prevents blind address enumeration)
 	const campaign = await serverQuery(api.campaigns.getPublicActive, {
+		_secret: getInternalSecret(),
 		campaignId: params.slug as Id<'campaigns'>
 	});
 

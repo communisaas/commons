@@ -62,14 +62,16 @@
 </script>
 
 <svelte:head>
-	<title>{debate?.propositionText ? `Debate: ${debate.propositionText.slice(0, 60)}` : 'Debate'} | Commons</title>
+	<title
+		>{debate?.propositionText ? `Debate: ${debate.propositionText.slice(0, 60)}` : 'Debate'} | Commons</title
+	>
 </svelte:head>
 
 <div class="py-8">
 	<!-- Back to template -->
 	<a
 		href="/s/{template?.slug}"
-		class="inline-flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 transition-colors mb-6"
+		class="mb-6 inline-flex items-center gap-1.5 text-sm text-slate-500 transition-colors hover:text-slate-700"
 	>
 		<ArrowLeft class="h-4 w-4" />
 		Back to {template?.title ?? 'template'}
@@ -80,7 +82,7 @@
 		<div class="mb-6 rounded-lg border border-slate-200 bg-white p-4">
 			<h1 class="text-lg font-semibold text-slate-900">{template.title}</h1>
 			{#if template.description}
-				<p class="text-sm text-slate-600 mt-1 line-clamp-2">{template.description}</p>
+				<p class="mt-1 line-clamp-2 text-sm text-slate-600">{template.description}</p>
 			{/if}
 		</div>
 	{/if}
@@ -127,25 +129,27 @@
 				cosignArgumentIndex: argumentIndex
 			});
 		}}
-		onVerifyIdentity={data.user ? () => {
-			if (data.user!.trust_tier != null && data.user!.trust_tier < 2) {
-				modalActions.openModal('address-modal', 'address', {
-					template,
-					user: data.user,
-					context: 'debate'
-				});
-			} else {
-				// Tier 2+: open real mDL identity verification
-				modalActions.openModal('identity-verification-modal', 'identity-verification', {
-					userId: data.user!.id,
-					userEmail: decryptedUser.email ?? undefined,
-					templateSlug: template?.slug,
-					onComplete: async () => {
-						await invalidateAll();
+		onVerifyIdentity={data.user
+			? () => {
+					if (data.user!.trust_tier != null && data.user!.trust_tier < 2) {
+						modalActions.openModal('address-modal', 'address', {
+							template,
+							user: data.user,
+							context: 'debate'
+						});
+					} else {
+						// Tier 2+: open real mDL identity verification
+						modalActions.openModal('identity-verification-modal', 'identity-verification', {
+							userId: data.user!.id,
+							userEmail: decryptedUser.email ?? undefined,
+							templateSlug: template?.slug,
+							onComplete: async () => {
+								await invalidateAll();
+							}
+						});
 					}
-				});
-			}
-		} : undefined}
+				}
+			: undefined}
 		onCommit={async (trade) => {
 			const res = await fetch(`/api/debates/${debate.id}/commit`, {
 				method: 'POST',
@@ -157,7 +161,7 @@
 					proof: trade.proof ? Array.from(trade.proof) : [],
 					argumentIndex: trade.argumentIndex,
 					direction: trade.direction,
-					stakeAmount: trade.stakeAmount,
+					stakeAmount: trade.stakeAmount
 				})
 			});
 			if (!res.ok) {
@@ -165,4 +169,20 @@
 			}
 		}}
 	/>
+	{#if !data.argumentPagination.isFirstPage || data.argumentPagination.hasMore}
+		<nav class="mt-6 flex items-center justify-between text-sm" aria-label="Debate arguments pages">
+			{#if !data.argumentPagination.isFirstPage}
+				<a class="text-slate-600 underline" href={data.argumentPagination.firstPageUrl}
+					>First arguments</a
+				>
+			{:else}
+				<span></span>
+			{/if}
+			{#if data.argumentPagination.nextPageUrl}
+				<a class="text-slate-600 underline" href={data.argumentPagination.nextPageUrl}
+					>More arguments</a
+				>
+			{/if}
+		</nav>
+	{/if}
 </div>

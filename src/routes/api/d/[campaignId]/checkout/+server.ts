@@ -5,11 +5,12 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -19,10 +20,13 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
 	const ip = getClientAddress();
-	const rl = await getRateLimiter().check(`ratelimit:donation-checkout:${params.campaignId}:ip:${ip}`, {
-		maxRequests: 10,
-		windowMs: 60_000
-	});
+	const rl = await getRateLimiter().check(
+		`ratelimit:donation-checkout:${params.campaignId}:ip:${ip}`,
+		{
+			maxRequests: 10,
+			windowMs: 60_000
+		}
+	);
 	if (!rl.allowed) throw error(429, 'Too many requests');
 
 	const body = await request.json();
@@ -42,7 +46,12 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	}
 
 	// Validate amount: integer, $1 min, $1M max
-	if (typeof amountCents !== 'number' || !Number.isInteger(amountCents) || amountCents < 100 || amountCents > 100_000_000) {
+	if (
+		typeof amountCents !== 'number' ||
+		!Number.isInteger(amountCents) ||
+		amountCents < 100 ||
+		amountCents > 100_000_000
+	) {
 		throw error(400, 'Amount must be between $1.00 and $1,000,000.00');
 	}
 
@@ -57,12 +66,16 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 	if (postalCode !== undefined && (typeof postalCode !== 'string' || postalCode.length > 16)) {
 		throw error(400, 'Invalid postal code');
 	}
-	if (districtCode !== undefined && (typeof districtCode !== 'string' || districtCode.length > 64)) {
+	if (
+		districtCode !== undefined &&
+		(typeof districtCode !== 'string' || districtCode.length > 64)
+	) {
 		throw error(400, 'Invalid district code');
 	}
 
 	// Fetch campaign via Convex
 	const campaign = await serverQuery(api.campaigns.getPublic, {
+		_secret: getInternalSecret(),
 		campaignId: params.campaignId as Id<'campaigns'>
 	});
 
@@ -77,6 +90,7 @@ export const POST: RequestHandler = async ({ params, request, url, getClientAddr
 
 	// Convex owns PII encryption, donation record creation, Stripe checkout creation, and session persistence.
 	const donationResult = await serverAction(api.donations.processCheckout, {
+		_secret: getInternalSecret(),
 		campaignId: params.campaignId as Id<'campaigns'>,
 		email: email.toLowerCase(),
 		name: name.trim(),

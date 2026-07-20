@@ -7,14 +7,11 @@
 
 	const filtered = $derived(
 		search.trim().length > 0
-			? data.orgs.filter((o) =>
-					o.name.toLowerCase().includes(search.trim().toLowerCase())
-				)
+			? data.orgs.filter((o) => o.name.toLowerCase().includes(search.trim().toLowerCase()))
 			: data.orgs
 	);
 
-	const hasNext = $derived(data.offset + data.limit < data.total);
-	const hasPrev = $derived(data.offset > 0);
+	const hasNext = $derived(data.hasMore && data.cursor !== null);
 
 	function initials(name: string): string {
 		return name
@@ -31,8 +28,8 @@
 
 <div class="mx-auto max-w-4xl px-4 py-10">
 	<div class="mb-8">
-		<h1 class="text-2xl font-semibold text-text-primary">Organization Directory</h1>
-		<p class="mt-1 text-sm text-text-tertiary">
+		<h1 class="text-text-primary text-2xl font-semibold">Organization Directory</h1>
+		<p class="text-text-tertiary mt-1 text-sm">
 			Discover organizations building proof of constituent voice.
 		</p>
 	</div>
@@ -41,8 +38,8 @@
 	<div class="mb-6">
 		<input
 			type="text"
-			class="w-full rounded-lg border border-surface-border bg-surface-base px-4 py-2.5 text-sm text-text-primary placeholder-text-quaternary focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500"
-			placeholder="Search organizations..."
+			class="border-surface-border bg-surface-base text-text-primary placeholder-text-quaternary w-full rounded-lg border px-4 py-2.5 text-sm focus:border-teal-500 focus:ring-1 focus:ring-teal-500 focus:outline-none"
+			placeholder="Filter this page..."
 			bind:value={search}
 		/>
 	</div>
@@ -50,37 +47,41 @@
 	<!-- Grid -->
 	{#if filtered.length === 0}
 		<div class="py-16 text-center">
-			<p class="text-sm text-text-quaternary">
+			<p class="text-text-quaternary text-sm">
 				{search.trim().length > 0
 					? 'No organizations match your search.'
 					: 'No public organizations yet.'}
 			</p>
 		</div>
 	{:else}
-		<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+		<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
 			{#each filtered as org (org.slug)}
 				<a
 					href="/org/{org.slug}"
-					class="rounded-md bg-surface-base border border-surface-border p-5 transition-colors hover:border-teal-500/40 group"
+					class="bg-surface-base border-surface-border group rounded-md border p-5 transition-colors hover:border-teal-500/40"
 				>
 					<!-- Logo / initials -->
-					<div class="flex items-center gap-3 mb-3">
+					<div class="mb-3 flex items-center gap-3">
 						{#if org.logoUrl}
 							<img
 								src={org.logoUrl}
 								alt={org.name}
-								class="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+								class="h-10 w-10 flex-shrink-0 rounded-lg object-cover"
 							/>
 						{:else}
-							<div class="w-10 h-10 rounded-lg bg-surface-raised flex items-center justify-center text-sm font-bold text-text-tertiary flex-shrink-0">
+							<div
+								class="bg-surface-raised text-text-tertiary flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg text-sm font-bold"
+							>
 								{initials(org.name)}
 							</div>
 						{/if}
 						<div class="min-w-0 flex-1">
-							<p class="text-sm font-medium text-text-primary group-hover:text-teal-500 transition-colors truncate">
+							<p
+								class="text-text-primary truncate text-sm font-medium transition-colors group-hover:text-teal-500"
+							>
 								{org.name}
 							</p>
-							<p class="text-[10px] font-mono text-text-quaternary">
+							<p class="text-text-quaternary font-mono text-[10px]">
 								{org.memberCount} member{org.memberCount === 1 ? '' : 's'}
 							</p>
 						</div>
@@ -88,9 +89,9 @@
 
 					<!-- Mission -->
 					{#if org.mission}
-						<p class="text-xs text-text-secondary line-clamp-3">{org.mission}</p>
+						<p class="text-text-secondary line-clamp-3 text-xs">{org.mission}</p>
 					{:else if org.description}
-						<p class="text-xs text-text-secondary line-clamp-3">{org.description}</p>
+						<p class="text-text-secondary line-clamp-3 text-xs">{org.description}</p>
 					{/if}
 				</a>
 			{/each}
@@ -98,24 +99,24 @@
 	{/if}
 
 	<!-- Pagination -->
-	{#if data.total > data.limit}
-		<div class="flex items-center justify-between mt-8 text-sm">
+	{#if data.total > 0}
+		<div class="mt-8 flex items-center justify-between text-sm">
 			<span class="text-text-quaternary font-mono tabular-nums">
-				{data.offset + 1}&ndash;{Math.min(data.offset + data.limit, data.total)} of {data.total}
+				Showing {data.orgs.length} of {data.total}
 			</span>
 			<div class="flex gap-2">
-				{#if hasPrev}
+				{#if !data.isFirstPage}
 					<a
-						href="/directory?offset={Math.max(data.offset - data.limit, 0)}"
-						class="rounded-lg border border-surface-border px-3 py-1.5 text-text-secondary hover:border-teal-500/40 hover:text-teal-500 transition-colors"
+						href="/directory"
+						class="border-surface-border text-text-secondary rounded-lg border px-3 py-1.5 transition-colors hover:border-teal-500/40 hover:text-teal-500"
 					>
-						Previous
+						First page
 					</a>
 				{/if}
 				{#if hasNext}
 					<a
-						href="/directory?offset={data.offset + data.limit}"
-						class="rounded-lg border border-surface-border px-3 py-1.5 text-text-secondary hover:border-teal-500/40 hover:text-teal-500 transition-colors"
+						href="/directory?cursor={encodeURIComponent(data.cursor!)}"
+						class="border-surface-border text-text-secondary rounded-lg border px-3 py-1.5 transition-colors hover:border-teal-500/40 hover:text-teal-500"
 					>
 						Next
 					</a>

@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { orgLimitSentence } from '$lib/data/org-limit-sentences';
 import {

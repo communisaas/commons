@@ -25,8 +25,10 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { issuePublicRecipientProvenance } from '$convex/lib/publicRecipientProvenance';
 
 interface RequestBody {
 	subject_line: string;
@@ -54,7 +56,10 @@ export const POST: RequestHandler = async (event) => {
 		try {
 			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
 		} catch (err) {
-			console.warn('[stream-decision-makers] paid-individual lookup failed, using free ceiling:', err);
+			console.warn(
+				'[stream-decision-makers] paid-individual lookup failed, using free ceiling:',
+				err
+			);
 		}
 	}
 
@@ -165,7 +170,9 @@ export const POST: RequestHandler = async (event) => {
 	const abortController = new AbortController();
 	const serverTimeout = setTimeout(() => abortController.abort(), 480_000);
 	event.request.signal.addEventListener('abort', () => {
-		console.debug(`[stream-decision-makers] Client disconnected, aborting resolution (trace: ${traceId})`);
+		console.debug(
+			`[stream-decision-makers] Client disconnected, aborting resolution (trace: ${traceId})`
+		);
 		abortController.abort();
 	});
 
@@ -216,34 +223,54 @@ export const POST: RequestHandler = async (event) => {
 			});
 
 			resultTokenUsage = result.tokenUsage;
-			resultExternalCounts = result.metadata?.externalCounts as import('$lib/core/agents/types').ExternalApiCounts | undefined;
+			resultExternalCounts = result.metadata?.externalCounts as
+				| import('$lib/core/agents/types').ExternalApiCounts
+				| undefined;
 
-			// Build response - source is the email source (verified)
+			// Build response - source is the email source (verified). The public
+			// recipient proof is author-bound and covers every field the anonymous
+			// detail projection may publish; mutable client flags alone grant nothing.
+			const provenanceIssuedAt = Date.now();
+			const provenanceSecret = getInternalSecret();
+			const decisionMakers = await Promise.all(
+				result.decisionMakers.map(async (dm) => {
+					const publicRecipientProvenance = await issuePublicRecipientProvenance(
+						dm,
+						String(userId),
+						provenanceSecret,
+						provenanceIssuedAt
+					);
+					return {
+						name: dm.name,
+						title: dm.title,
+						organization: dm.organization,
+						email: dm.email || '',
+						reasoning: dm.reasoning,
+						sourceUrl: dm.emailSource || dm.source || '',
+						sourceTitle: dm.emailSourceTitle || '',
+						provenance: dm.provenance,
+						discovered: dm.discovered || false,
+						isAiResolved: dm.isAiResolved === true,
+						emailGrounded: dm.emailGrounded === true,
+						emailSource: dm.emailSource || '',
+						confidence: dm.confidence,
+						contactNotes: dm.contactNotes,
+						// Phase 4: Accountability & Classification
+						accountabilityOpener: dm.accountabilityOpener || null,
+						roleCategory: dm.roleCategory || null,
+						relevanceRank: dm.relevanceRank ?? null,
+						publicActions: dm.publicActions || [],
+						personalPrompt: dm.personalPrompt || null,
+						...(publicRecipientProvenance ? { publicRecipientProvenance } : {})
+					};
+				})
+			);
 			const response = {
-				decision_makers: result.decisionMakers.map((dm) => ({
-					name: dm.name,
-					title: dm.title,
-					organization: dm.organization,
-					email: dm.email || '',
-					reasoning: dm.reasoning,
-					sourceUrl: dm.emailSource || dm.source || '',
-					sourceTitle: dm.emailSourceTitle || '',
-					provenance: dm.provenance,
-					discovered: dm.discovered || false,
-					emailGrounded: dm.emailGrounded || false,
-					emailSource: dm.emailSource || '',
-					confidence: dm.confidence,
-					contactNotes: dm.contactNotes,
-					// Phase 4: Accountability & Classification
-					accountabilityOpener: dm.accountabilityOpener || null,
-					roleCategory: dm.roleCategory || null,
-					relevanceRank: dm.relevanceRank ?? null,
-					publicActions: dm.publicActions || [],
-					personalPrompt: dm.personalPrompt || null
-				})),
+				decision_makers: decisionMakers,
 				research_summary: result.researchSummary || 'Decision-makers resolved successfully.',
 				pipeline_stats: {
-					total_resolved: result.decisionMakers.length + ((result.metadata?.droppedEmailless as number) || 0),
+					total_resolved:
+						result.decisionMakers.length + ((result.metadata?.droppedEmailless as number) || 0),
 					candidates_found: result.decisionMakers.length,
 					verified_emails: result.decisionMakers.length,
 					total_latency_ms: result.latencyMs
@@ -266,7 +293,7 @@ export const POST: RequestHandler = async (event) => {
 				contactable: result.decisionMakers.length,
 				droppedEmailless: (result.metadata?.droppedEmailless as number) || 0,
 				provider: result.provider,
-				latencyMs: result.latencyMs,
+				latencyMs: result.latencyMs
 			});
 		} catch (error) {
 			console.error('[stream-decision-makers] Resolution failed:', error);

@@ -39,6 +39,71 @@ declare global {
 		}): Promise<KVNamespaceListResult<unknown, Key>>;
 	}
 
+	interface R2Conditional {
+		etagMatches?: string;
+		etagDoesNotMatch?: string;
+		uploadedBefore?: Date;
+		uploadedAfter?: Date;
+	}
+
+	interface R2HTTPMetadata {
+		contentType?: string;
+	}
+
+	interface R2Object {
+		readonly key: string;
+		readonly etag: string;
+		readonly httpEtag: string;
+		readonly size: number;
+		readonly uploaded: Date;
+		readonly customMetadata?: Record<string, string>;
+	}
+
+	interface R2ObjectBody extends R2Object {
+		json<T>(): Promise<T>;
+		text(): Promise<string>;
+	}
+
+	interface R2Objects {
+		objects: R2Object[];
+		truncated: boolean;
+		cursor?: string;
+	}
+
+	interface R2Bucket {
+		get(key: string): Promise<R2ObjectBody | null>;
+		head(key: string): Promise<R2Object | null>;
+		put(
+			key: string,
+			value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null | Blob,
+			options?: {
+				customMetadata?: Record<string, string>;
+				httpMetadata?: R2HTTPMetadata | Headers;
+				onlyIf?: R2Conditional | Headers;
+			}
+		): Promise<R2Object | null>;
+		delete(keys: string | string[]): Promise<void>;
+		list(options?: {
+			cursor?: string;
+			include?: Array<'customMetadata'>;
+			limit?: number;
+			prefix?: string;
+		}): Promise<R2Objects>;
+	}
+
+	interface DurableObjectId {
+		toString(): string;
+	}
+
+	interface DurableObjectStub {
+		fetch(input: Request | string | URL, init?: RequestInit): Promise<Response>;
+	}
+
+	interface DurableObjectNamespace {
+		idFromName(name: string): DurableObjectId;
+		get(id: DurableObjectId): DurableObjectStub;
+	}
+
 	namespace App {
 		interface Error {
 			message: string;
@@ -53,6 +118,49 @@ declare global {
 			eventId?: string;
 		}
 		interface Locals {
+			/** Hook-owned proof for the one inert Access-fronted staging candidate request. */
+			releaseCandidateOriginAuthority?: Readonly<{
+				sourceSha: string;
+				transactionId: string;
+			}>;
+			/** Hook-owned proof for the exact post-commit production origin-chain request. */
+			releaseOriginAuthority?: Readonly<{
+				sourceSha: string;
+				transactionId: string;
+			}>;
+			/** Outer capability gate proved the dedicated manifest refresh bearer. */
+			publicDiscoveryManifestRefreshAuthenticated?: boolean;
+			/** Lease-bound, atomic daily Queue-send budget owned by the refresh gate. */
+			reservePublicTemplateOgQueueAttempts?: (messageKeys: readonly string[]) => Promise<{
+				remaining: number;
+				resetAtMs: number;
+				status: 'exhausted' | 'reserved';
+			}>;
+			/** Exact-release deployment seed may advance the resumable page-artifact backfill. */
+			publicDiscoveryPageArtifactBackfillAuthorized?: boolean;
+			/** Most conservative observed balance across this request's admitted Convex calls. */
+			convexWorkBudgetObservation?: {
+				dailyRemainingUnits: number;
+				dailyResetAtSeconds: number;
+				monthlyRemainingUnits: number;
+				monthlyResetAtSeconds: number;
+			};
+			/** First fail-closed budget result; the outer hook owns its typed response. */
+			convexWorkBudgetRejection?: {
+				code: 'CONVEX_WORK_BUDGET_EXHAUSTED' | 'CONVEX_WORK_BUDGET_UNAVAILABLE';
+				observation?: {
+					dailyRemainingUnits: number;
+					dailyResetAtSeconds: number;
+					monthlyRemainingUnits: number;
+					monthlyResetAtSeconds: number;
+				};
+				retryAfterSeconds: number;
+				status: 429 | 503;
+			};
+			/** Pending reservation handshakes, including fire-and-forget helper callers. */
+			convexWorkBudgetReservations?: Set<Promise<void>>;
+			/** Secret-gated operator surface may receive exact budget observations. */
+			convexWorkBudgetOperatorAuthorized?: boolean;
 			/** RS256 JWT for authenticating server-side Convex queries via convex-sveltekit's serverQuery(). */
 			convexToken?: string;
 			user: {
@@ -110,13 +218,26 @@ declare global {
 		interface PageState {}
 		interface Platform {
 			env?: {
-				PUBLIC_DISCOVERY_KV?: KVNamespace;
+				PUBLIC_DISCOVERY_R2?: R2Bucket;
+				PUBLIC_TEMPLATE_OG_QUEUE?: {
+					sendBatch(messages: Iterable<{ body: unknown; contentType?: 'json' }>): Promise<unknown>;
+				};
+				PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE?: DurableObjectNamespace;
+				CONVEX_WORK_BUDGET?: DurableObjectNamespace;
 				PUBLIC_CONVEX_URL?: string;
+				PUBLIC_RELEASE_TRANSACTION_ID?: string;
+				INTERNAL_API_SECRET?: string;
+				INTERNAL_API_SECRET_PREVIOUS?: string;
+				DISCOVERY_MANIFEST_REFRESH_SECRET?: string;
+				DISCOVERY_MANIFEST_REFRESH_SECRET_PREVIOUS?: string;
+				SESSION_CREATION_SECRET?: string;
+				SESSION_CREATION_SECRET_PREVIOUS?: string;
+				SESSION_COOKIE_SIGNING_SECRET?: string;
+				SESSION_COOKIE_SIGNING_SECRET_PREVIOUS?: string;
 				DC_SESSION_KV?: KVNamespace;
 				REGISTRATION_RETRY_KV?: KVNamespaceWithList;
 				REJECTION_MONITOR_KV?: KVNamespace;
 				VICAL_KV?: KVNamespace;
-				PACKET_CACHE_KV?: KVNamespace;
 				PUBLIC_APP_URL?: string;
 				SENTRY_DSN?: string;
 				SENTRY_ENVIRONMENT?: string;
@@ -168,6 +289,12 @@ declare global {
 			// Core Environment
 			NODE_ENV: 'development' | 'production' | 'test';
 			ORIGIN?: string;
+			VITE_RELEASE_SHA?: string; // Exact 40-character SHA inlined into the deployed Worker bundle
+			PUBLIC_RELEASE_TRANSACTION_ID?: string; // Server-only run_id-run_attempt publication identity
+			RELEASE_CONTROL_SECRET?: string; // T-owned release-state control capability; never expose via PUBLIC_*
+			RELEASE_CONTROL_SECRET_PREVIOUS?: string; // Receiver-only bounded rotation overlap
+			RELEASE_PROBE_SECRET?: string; // Purpose-only trusted-edge staging probe capability
+			VITE_RUNTIME_CONTAINMENT_MODE?: 'maintenance'; // Build-only emergency containment artifact mode
 
 			// Security & Authentication
 			JWT_SECRET?: string; // Used for token signing
@@ -178,6 +305,9 @@ declare global {
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)
 			SESSION_CREATION_SECRET?: string; // HMAC proof key for SvelteKit-created Convex sessions
+			SESSION_CREATION_SECRET_PREVIOUS?: string; // Short overlap for in-flight creation proofs only
+			SESSION_COOKIE_SIGNING_SECRET?: string; // Pages-only HMAC key for auth-session cookies
+			SESSION_COOKIE_SIGNING_SECRET_PREVIOUS?: string; // Bounded cookie-key rotation overlap
 			DEV_LOGIN_TOKEN?: string; // Non-production Playwright/dev login bearer token
 			PLAYWRIGHT_DEV_LOGIN_TOKEN?: string; // Test runner token forwarded to DEV_LOGIN_TOKEN
 

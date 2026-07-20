@@ -1,6 +1,6 @@
 // CONVEX: Fully migrated — segment CRUD + bulk operations via Convex
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverMutation, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { validateSegmentFilter, type SegmentFilter } from '$lib/types/segment';
@@ -41,10 +41,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	const action = body.action as string;
 
 	if (action === 'count') {
-		const limit = await getRateLimiter().check(
-			`ratelimit:segment:count:org:${params.slug}`,
-			{ maxRequests: 60, windowMs: 60_000 }
-		);
+		const limit = await getRateLimiter().check(`ratelimit:segment:count:org:${params.slug}`, {
+			maxRequests: 60,
+			windowMs: 60_000
+		});
 		if (!limit.allowed) throw error(429, 'Too many requests');
 
 		const filters = body.filters as SegmentFilter;
@@ -98,10 +98,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 	}
 
 	if (action === 'apply_tag' || action === 'remove_tag') {
-		const bulkLimit = await getRateLimiter().check(
-			`ratelimit:segment:bulk:org:${params.slug}`,
-			{ maxRequests: 1, windowMs: 60_000 }
-		);
+		const bulkLimit = await getRateLimiter().check(`ratelimit:segment:bulk:org:${params.slug}`, {
+			maxRequests: 1,
+			windowMs: 60_000
+		});
 		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
 
 		// bound tagId length (Convex doc id is 32 chars; cap at 64).
@@ -123,7 +123,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 				tagId: tagId as Id<'tags'>,
 				filters
 			});
-			console.info(`[bulk] apply_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`);
+			console.info(
+				`[bulk] apply_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`
+			);
 			return json({ affected: result.affected, partial: result.partial ?? false });
 		} else {
 			const result = await serverAction(api.segments.bulkRemoveTag, {
@@ -131,7 +133,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 				tagId: tagId as Id<'tags'>,
 				filters
 			});
-			console.info(`[bulk] remove_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`);
+			console.info(
+				`[bulk] remove_tag org=${params.slug} user=${safeUserId(locals.user.id)} tag=${tagId} affected=${result.affected} partial=${result.partial}`
+			);
 			return json({ affected: result.affected, partial: result.partial ?? false });
 		}
 	}
@@ -141,10 +145,10 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		const validationError = validateSegmentFilter(filters);
 		if (validationError) throw error(400, validationError);
 
-		const bulkLimit = await getRateLimiter().check(
-			`ratelimit:segment:bulk:org:${params.slug}`,
-			{ maxRequests: 1, windowMs: 60_000 }
-		);
+		const bulkLimit = await getRateLimiter().check(`ratelimit:segment:bulk:org:${params.slug}`, {
+			maxRequests: 1,
+			windowMs: 60_000
+		});
 		if (!bulkLimit.allowed) throw error(429, 'Bulk operations limited to 1 per minute');
 
 		// exportMatching is an action (paginated dispatch). Reads the
@@ -155,7 +159,9 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 			filters
 		});
 		if ((supporters as { partial?: boolean }).partial) {
-			console.warn(`[bulk] export_csv partial org=${params.slug} — action hit per-invocation page cap`);
+			console.warn(
+				`[bulk] export_csv partial org=${params.slug} — action hit per-invocation page cap`
+			);
 		}
 
 		// Decrypt via Convex action (uses org key)
@@ -176,14 +182,13 @@ export const POST: RequestHandler = async ({ request, params, locals }) => {
 		}
 
 		const header = 'email,name,phone,tags';
-		const rows = decryptedRows.map((r) => [
-			csvEscape(r.email),
-			csvEscape(r.name),
-			csvEscape(r.phone),
-			csvEscape(r.tags)
-		].join(','));
+		const rows = decryptedRows.map((r) =>
+			[csvEscape(r.email), csvEscape(r.name), csvEscape(r.phone), csvEscape(r.tags)].join(',')
+		);
 
-		console.info(`[bulk] export_csv org=${params.slug} user=${safeUserId(locals.user.id)} rows=${supporters.length}`);
+		console.info(
+			`[bulk] export_csv org=${params.slug} user=${safeUserId(locals.user.id)} rows=${supporters.length}`
+		);
 		const csv = [header, ...rows].join('\n');
 		return new Response(csv, {
 			headers: {

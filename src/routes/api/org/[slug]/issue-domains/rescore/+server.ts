@@ -9,7 +9,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';

@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — security-critical verification flow (public endpoint)
 import type { PageServerLoad } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { formatTierDisplay } from '$lib/core/identity/tier-display';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
@@ -21,7 +21,10 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	try {
 		// Try CampaignDelivery lookup first (per-delivery verify URLs)
-		const delivery = await serverQuery(api.verify.getDelivery, { deliveryId: hash });
+		const delivery = await serverQuery(api.verify.getDelivery, {
+			_secret: getInternalSecret(),
+			deliveryId: hash
+		});
 
 		if (delivery) {
 			const snap = delivery.packetSnapshot as Record<string, unknown> | null;
@@ -39,7 +42,10 @@ export const load: PageServerLoad = async ({ params }) => {
 		}
 
 		// Try Campaign lookup (backward compat for campaign-level verify URLs)
-		const campaign = await serverQuery(api.verify.getCampaignForVerify, { campaignId: hash });
+		const campaign = await serverQuery(api.verify.getCampaignForVerify, {
+			_secret: getInternalSecret(),
+			campaignId: hash
+		});
 
 		if (campaign) {
 			return {
@@ -78,16 +84,14 @@ export const load: PageServerLoad = async ({ params }) => {
 		// we can't tell.
 		let currentAtlasVersion: string | null = null;
 		try {
-			const { getCurrentAtlasVersion } = await import(
-				'$lib/core/shadow-atlas/district-bundle'
-			);
+			const { getCurrentAtlasVersion } = await import('$lib/core/shadow-atlas/district-bundle');
 			// 5 s budget — verification page is cold and shouldn't hang on a
 			// down atlas worker.
 			currentAtlasVersion = await getCurrentAtlasVersion(AbortSignal.timeout(5_000));
 		} catch (err) {
 			console.warn(
 				'[verify] currentAtlasVersion lookup failed:',
-				err instanceof Error ? err.message : String(err),
+				err instanceof Error ? err.message : String(err)
 			);
 		}
 
@@ -96,7 +100,7 @@ export const load: PageServerLoad = async ({ params }) => {
 			trustTier: credential.trustTier,
 			cellStraddles: credential.cellStraddles,
 			atlasVersion: credential.atlasVersion,
-			currentAtlasVersion,
+			currentAtlasVersion
 		});
 
 		return {
@@ -115,13 +119,16 @@ export const load: PageServerLoad = async ({ params }) => {
 				cellStraddles: credential.cellStraddles,
 				cellAnchorMode: credential.cellAnchorMode,
 				atlasVersion: credential.atlasVersion,
-				currentAtlasVersion,
+				currentAtlasVersion
 			},
 			delivery: null,
 			error: null
 		};
 	} catch (error) {
-		console.error('[Verify] Lookup failed:', error instanceof Error ? error.message : String(error));
+		console.error(
+			'[Verify] Lookup failed:',
+			error instanceof Error ? error.message : String(error)
+		);
 		return { credential: null, delivery: null, error: 'Verification temporarily unavailable' };
 	}
 };

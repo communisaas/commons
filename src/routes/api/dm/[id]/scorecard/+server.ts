@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
@@ -35,11 +35,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 		throw error(404, 'Decision-maker not found');
 	}
 
-	canonicalizeOrRedirect(
-		result.canonicalSlug,
-		id,
-		(slug) => `/api/dm/${slug}/scorecard`
-	);
+	canonicalizeOrRedirect(result.canonicalSlug, id, (slug) => `/api/dm/${slug}/scorecard`);
 
 	return json(result);
 };

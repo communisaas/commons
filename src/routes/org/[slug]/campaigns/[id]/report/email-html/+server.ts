@@ -1,6 +1,6 @@
 import { error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { renderReport } from '$lib/server/email/report-template';
@@ -31,16 +31,10 @@ export const GET: RequestHandler = async ({ params, locals, platform, request })
 		throw error(404, 'Campaign not found');
 	}
 
-	const packetKV = (
-		platform as { env?: Record<string, unknown> } | undefined
-	)?.env?.PACKET_CACHE_KV as
-		| { get(key: string): Promise<string | null>; put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void> }
-		| undefined;
-	const packet = await computeVerificationPacketCached(
-		preview.campaign._id,
-		ctx.org._id,
-		packetKV
-	);
+	const packet = await computeVerificationPacketCached(preview.campaign._id, ctx.org._id, {
+		url: new URL(request.url),
+		platform
+	});
 
 	const rendered = await renderReport({
 		campaignId: String(preview.campaign._id),
@@ -57,12 +51,8 @@ export const GET: RequestHandler = async ({ params, locals, platform, request })
 	// `Content-Disposition: inline` so the browser opens the page directly;
 	// the staffer uses File → Print → Save as PDF. `?download=1` toggles to
 	// `attachment` for direct file download.
-	const disposition = new URL(request.url).searchParams.get('download')
-		? 'attachment'
-		: 'inline';
-	const safeFilename = preview.campaign.title
-		.replace(/[^A-Za-z0-9._-]/g, '_')
-		.slice(0, 80);
+	const disposition = new URL(request.url).searchParams.get('download') ? 'attachment' : 'inline';
+	const safeFilename = preview.campaign.title.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80);
 
 	return new Response(rendered.html, {
 		headers: {

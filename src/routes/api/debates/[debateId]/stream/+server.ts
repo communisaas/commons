@@ -1,12 +1,13 @@
 // Kept in SvelteKit: uses createSSEStream, ReadableStream piping, setInterval polling.
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import { env } from '$env/dynamic/private';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
 import { error } from '@sveltejs/kit';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * GET /api/debates/[debateId]/stream
@@ -60,7 +61,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 		if (closed) return;
 
 		try {
-			const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+			const debate = await serverQuery(api.debates.get, {
+				_secret: getInternalSecret(),
+				debateId: debateId as Id<'debates'>
+			});
 
 			if (!debate || closed) return;
 
@@ -82,10 +86,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 			}
 
 			// Detect argument count changes
-			if (
-				lastArgumentCount !== null &&
-				debate.argumentCount !== lastArgumentCount
-			) {
+			if (lastArgumentCount !== null && debate.argumentCount !== lastArgumentCount) {
 				emitter.send('debate:argument', {
 					debateId,
 					argumentCount: debate.argumentCount,
@@ -95,10 +96,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 			lastArgumentCount = debate.argumentCount;
 
 			// Detect participant count changes
-			if (
-				lastParticipantCount !== null &&
-				debate.uniqueParticipants !== lastParticipantCount
-			) {
+			if (lastParticipantCount !== null && debate.uniqueParticipants !== lastParticipantCount) {
 				emitter.send('debate:position', {
 					debateId,
 					uniqueParticipants: debate.uniqueParticipants
@@ -173,7 +171,10 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 	// Initialize: fetch current state so we only emit on transitions
 	try {
-		const initial = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+		const initial = await serverQuery(api.debates.get, {
+			_secret: getInternalSecret(),
+			debateId: debateId as Id<'debates'>
+		});
 		if (initial) {
 			lastStatus = initial.status;
 			lastSignatureCount = initial.aiSignatureCount;
@@ -253,9 +254,15 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 						if (done) break;
 						controller.enqueue(value);
 					}
-					if (!controllerClosed) { controllerClosed = true; controller.close(); }
+					if (!controllerClosed) {
+						controllerClosed = true;
+						controller.close();
+					}
 				} catch {
-					if (!controllerClosed) { controllerClosed = true; controller.close(); }
+					if (!controllerClosed) {
+						controllerClosed = true;
+						controller.close();
+					}
 				} finally {
 					closed = true;
 					if (pollTimer) {

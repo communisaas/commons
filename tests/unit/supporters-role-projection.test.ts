@@ -125,13 +125,15 @@ describe('every member-gated reader routes through the shared projection', () =>
 
 	it('defines a single shared projection helper', () => {
 		expect(convexSource).toContain('function projectSupporterFields<');
+		expect(convexSource).toContain('function projectSupporterBrowseRow(');
+		expect(convexSource).toContain('return projectSupporterFields(');
 		expect(convexSource).toContain('function membershipIsEditor(');
 	});
 
 	it('list derives isEditor from membership.role and projects each row', () => {
 		const body = readerBody('export const list = query', 'export const get = query');
 		expect(body).toContain('membershipIsEditor(membership.role)');
-		expect(body).toContain('return projectSupporterFields(');
+		expect(body).toContain('projectSupporterBrowseRow(doc, isEditor)');
 	});
 
 	it('get derives isEditor from membership.role and projects the row', () => {

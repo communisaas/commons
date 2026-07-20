@@ -464,10 +464,25 @@ describe('findRateLimitConfig', () => {
 		expect(config!.windowMs).toBe(24 * 60 * 60 * 1000); // 24 hours
 	});
 
-	it('should match /api/templates/check-slug as a sub-route of /api/templates', () => {
+	it('should give template search its specific per-minute rule before authoring', () => {
+		const config = findRateLimitConfig('/api/templates/search');
+		expect(config).toBeDefined();
+		expect(config!.pattern).toBe('/api/templates/search');
+		expect(config!.maxRequests).toBe(30);
+		expect(config!.windowMs).toBe(60 * 1000);
+		expect(config!.keyStrategy).toBe('user');
+	});
+
+	it('should give /api/templates/check-slug its public GET cost bound', () => {
 		const config = findRateLimitConfig('/api/templates/check-slug');
 		expect(config).toBeDefined();
-		expect(config!.pattern).toBe('/api/templates');
+		expect(config).toMatchObject({
+			pattern: '/api/templates/check-slug',
+			maxRequests: 30,
+			windowMs: 60 * 1000,
+			keyStrategy: 'ip',
+			includeGet: true
+		});
 	});
 
 	it('should find config for /api/moderation/ routes', () => {

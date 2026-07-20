@@ -1,144 +1,62 @@
 /**
- * Poseidon2 Hash Utility (Barretenberg-Compatible)
+ * Poseidon2 hash utility (Barretenberg-compatible).
  *
- * Uses @aztec/bb.js BarretenbergSync for Poseidon2 to match Noir circuit exactly.
- * This ensures nullifier and merkle root computations match the ZK circuit.
- *
- * NOTE: This module uses lazy loading to avoid SSR issues with @aztec/bb.js.
- * It should only be used in browser/worker contexts, not during SSR.
- *
- * IMPORTANT: We use BarretenbergSync.initSingleton() instead of Barretenberg.new() because:
- * 1. BarretenbergSync uses threads: 1 (single-threaded WASM without nested workers)
- * 2. Barretenberg.new() creates internal workers which causes deadlocks in nested worker contexts
- * 3. For lightweight operations like hashing, single-threaded is actually faster (no worker overhead)
- *
- * bb.js v4 migration notes:
- * - `Fr` is no longer in the top-level package exports (lives in a subpath under
- *   `barretenberg/testing/fields.js`). We work directly with `Uint8Array` instead,
- *   which also matches the v4 `poseidon2Permutation` msgpack API shape:
- *     input:  { inputs: Uint8Array[] }
- *     output: { outputs: Uint8Array[] }
- * - `BarretenbergSync.initSingleton()` is still the sync entry point.
+ * The width-4 BN254 permutation comes from the zero-dependency, pure-TypeScript
+ * `@zkpassport/poseidon2` implementation. Its outputs are byte-for-byte equal
+ * to Barretenberg/Noir, without pulling Barretenberg's proving WASM into every
+ * runtime that only needs hashing. `@aztec/bb.js` remains the proving backend
+ * elsewhere in the application.
  */
 
-import type { BarretenbergSync as BarretenbergSyncType } from '@aztec/bb.js';
-
-// Lazy-loaded module references
-let BarretenbergSync: typeof import('@aztec/bb.js').BarretenbergSync | null = null;
-
-// Singleton BarretenbergSync instance (initialized lazily)
-let bbSyncInstance: BarretenbergSyncType | null = null;
-
-/**
- * Lazy-load @aztec/bb.js (avoids SSR issues)
- */
-async function loadBbJs() {
-	if (!BarretenbergSync) {
-		// Import buffer shim first to install Buffer globally
-		await import('$lib/core/proof/buffer-shim');
-		// Then import bb.js
-		const bbjs = await import('@aztec/bb.js');
-		BarretenbergSync = bbjs.BarretenbergSync;
-	}
-	if (!BarretenbergSync) {
-		throw new Error('Failed to load @aztec/bb.js: BarretenbergSync is undefined');
-	}
-	return { BarretenbergSync };
-}
-
-/**
- * Get or initialize the BarretenbergSync instance
- *
- * Uses BarretenbergSync.initSingleton() which:
- * - Uses threads: 1 (single-threaded WASM)
- * - Does NOT create nested workers (safe in worker context)
- * - Is optimized for hash operations
- */
-async function getBarretenbergSync(): Promise<BarretenbergSyncType> {
-	if (!bbSyncInstance) {
-		console.debug('[Poseidon] Loading bb.js (BarretenbergSync)...');
-		const { BarretenbergSync } = await loadBbJs();
-
-		const sabSupport = typeof SharedArrayBuffer !== 'undefined';
-		const threads = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency || 4 : 4;
-		console.debug(
-			`[Poseidon] Environment check: SAB=${sabSupport}, Threads=${threads}, Context=${typeof self !== 'undefined' && 'WorkerGlobalScope' in self ? 'Worker' : 'Main'}`
-		);
-
-		console.debug(
-			'[Poseidon] Initializing BarretenbergSync singleton (threads: 1, no nested workers)...'
-		);
-		const startTime = performance.now();
-
-		try {
-			// BarretenbergSync.initSingleton() uses threads: 1 internally
-			// This is the correct way to use Barretenberg for hashing in worker contexts
-			bbSyncInstance = await BarretenbergSync.initSingleton();
-			const duration = performance.now() - startTime;
-			console.debug(`[Poseidon] BarretenbergSync initialized in ${duration.toFixed(0)}ms`);
-		} catch (e) {
-			console.error('[Poseidon] Failed to initialize BarretenbergSync:', e);
-			throw e;
-		}
-	}
-	return bbSyncInstance;
-}
-
+import { permute } from '@zkpassport/poseidon2';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 
-/** Zero field element as a 32-byte big-endian Uint8Array. */
-const FR_ZERO: Uint8Array = new Uint8Array(32);
+const FR_ZERO = 0n;
+type PoseidonState = [bigint, bigint, bigint, bigint];
 
 /**
- * Convert hex string to a 32-byte big-endian Uint8Array field element.
+ * Convert a hex string to a BN254 field element.
  * Validates hex format and BN254 field modulus bound.
  */
-function hexToFrBytes(hex: string): Uint8Array {
+function hexToField(hex: string): bigint {
 	// Remove 0x prefix if present
 	const cleanHex = hex.startsWith('0x') ? hex.slice(2) : hex;
 	// M-05: Reject empty hex strings (would silently become 0)
 	if (cleanHex.length === 0) {
 		throw new Error(`Empty hex string: "${hex}"`);
 	}
+	// Reject before BigInt parsing so an attacker-shaped value cannot allocate or
+	// spend CPU on an unbounded hexadecimal integer merely to fail the field check.
+	if (cleanHex.length > 64) {
+		throw new Error(`Invalid field element length: ${cleanHex.length} hex characters`);
+	}
 	// Validate hex characters
 	if (!/^[0-9a-fA-F]+$/.test(cleanHex)) {
 		throw new Error(`Invalid hex string: "${hex}"`);
 	}
-	// Pad to 64 chars (32 bytes)
-	const padded = cleanHex.padStart(64, '0');
 	// Validate BN254 field modulus bound
-	const value = BigInt('0x' + padded);
+	const value = BigInt('0x' + cleanHex);
 	if (value >= BN254_MODULUS) {
-		throw new Error(`Value exceeds BN254 field modulus: 0x${padded}`);
+		throw new Error(`Value exceeds BN254 field modulus: 0x${cleanHex.padStart(64, '0')}`);
 	}
-	// Convert to Uint8Array (big-endian)
-	const bytes = new Uint8Array(32);
-	for (let i = 0; i < 32; i++) {
-		bytes[i] = parseInt(padded.slice(i * 2, i * 2 + 2), 16);
-	}
-	return bytes;
+	return value;
 }
 
 /**
- * Convert 32-byte field element Uint8Array to hex string
+ * Convert a field element to a canonical 32-byte, lower-case hex string.
  */
-function frBytesToHex(bytes: Uint8Array): string {
-	let hex = '';
-	for (let i = 0; i < bytes.length; i++) {
-		hex += bytes[i].toString(16).padStart(2, '0');
-	}
-	return '0x' + hex;
+function fieldToHex(value: bigint): string {
+	return '0x' + value.toString(16).padStart(64, '0');
 }
 
 /**
- * Run the Poseidon2 permutation on a 4-element state (bb.js v4 API).
+ * Run the exact BN254 Poseidon2 width-4 permutation.
  *
- * v4 signature: `poseidon2Permutation({ inputs: Uint8Array[] }): { outputs: Uint8Array[] }`
- * We wrap it so the rest of this module can keep passing/receiving plain Uint8Array[].
+ * The dependency mutates its input, so clone the state at this boundary. That
+ * keeps shared constants and intermediate states immutable to callers.
  */
-function permute4(bb: BarretenbergSyncType, state: Uint8Array[]): Uint8Array[] {
-	const { outputs } = bb.poseidon2Permutation({ inputs: state });
-	return outputs;
+function permute4(state: readonly [bigint, bigint, bigint, bigint]): PoseidonState {
+	return permute([...state]) as PoseidonState;
 }
 
 /**
@@ -171,11 +89,8 @@ export const DOMAIN_HASH2 = '0x' + (0x48324d).toString(16).padStart(64, '0');
  * @returns Hash as hex string (0x-prefixed)
  */
 export async function poseidon2Hash1(input: string): Promise<string> {
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
-	const state = [hexToFrBytes(input), hexToFrBytes(DOMAIN_HASH1), FR_ZERO, FR_ZERO];
-	const result = permute4(bb, state);
-	return frBytesToHex(result[0]);
+	const state: PoseidonState = [hexToField(input), hexToField(DOMAIN_HASH1), FR_ZERO, FR_ZERO];
+	return fieldToHex(permute4(state)[0]);
 }
 
 /**
@@ -185,11 +100,13 @@ export async function poseidon2Hash1(input: string): Promise<string> {
  * BA-003: Domain separation tag in slot 2 prevents collision with hash4(a, b, 0, 0).
  */
 export async function poseidon2Hash2(left: string, right: string): Promise<string> {
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
-	const state = [hexToFrBytes(left), hexToFrBytes(right), hexToFrBytes(DOMAIN_HASH2), FR_ZERO];
-	const result = permute4(bb, state);
-	return frBytesToHex(result[0]);
+	const state: PoseidonState = [
+		hexToField(left),
+		hexToField(right),
+		hexToField(DOMAIN_HASH2),
+		FR_ZERO
+	];
+	return fieldToHex(permute4(state)[0]);
 }
 
 /**
@@ -206,11 +123,13 @@ export const DOMAIN_HASH3 = '0x' + (0x48334d).toString(16).padStart(64, '0');
  * state = [a, b, c, DOMAIN_HASH3], output = permutation(state)[0]
  */
 export async function poseidon2Hash3(a: string, b: string, c: string): Promise<string> {
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
-	const state = [hexToFrBytes(a), hexToFrBytes(b), hexToFrBytes(c), hexToFrBytes(DOMAIN_HASH3)];
-	const result = permute4(bb, state);
-	return frBytesToHex(result[0]);
+	const state: PoseidonState = [
+		hexToField(a),
+		hexToField(b),
+		hexToField(c),
+		hexToField(DOMAIN_HASH3)
+	];
+	return fieldToHex(permute4(state)[0]);
 }
 
 /**
@@ -234,22 +153,18 @@ export const DOMAIN_HASH4 = '0x' + (0x48344d).toString(16).padStart(64, '0');
  *   Round 2: state[1] += d, state = permute(state), return state[0]
  */
 export async function poseidon2Hash4(a: string, b: string, c: string, d: string): Promise<string> {
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
+	const aField = hexToField(a);
+	const bField = hexToField(b);
+	const cField = hexToField(c);
+	const dField = hexToField(d);
 
 	// Round 1: permute([DOMAIN_HASH4, a, b, c])
-	const state1 = [hexToFrBytes(DOMAIN_HASH4), hexToFrBytes(a), hexToFrBytes(b), hexToFrBytes(c)];
-	const r1 = permute4(bb, state1);
+	const state1: PoseidonState = [hexToField(DOMAIN_HASH4), aField, bField, cField];
+	const r1 = permute4(state1);
 
 	// Round 2: state[1] += d, then permute
-	const s1BigInt = BigInt(frBytesToHex(r1[1]));
-	const dBigInt = BigInt(d.startsWith('0x') ? d : '0x' + d);
-	const s1PlusD = (s1BigInt + dBigInt) % BN254_MODULUS;
-	const s1PlusDHex = '0x' + s1PlusD.toString(16).padStart(64, '0');
-
-	const state2 = [r1[0], hexToFrBytes(s1PlusDHex), r1[2], r1[3]];
-	const r2 = permute4(bb, state2);
-	return frBytesToHex(r2[0]);
+	const state2: PoseidonState = [r1[0], (r1[1] + dField) % BN254_MODULUS, r1[2], r1[3]];
+	return fieldToHex(permute4(state2)[0]);
 }
 
 /**
@@ -274,36 +189,24 @@ export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
 	if (inputs.length !== 24) {
 		throw new Error(`poseidon2Sponge24 requires exactly 24 inputs, got ${inputs.length}`);
 	}
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
+	const fields = inputs.map(hexToField);
 
 	// Initialize state: [DOMAIN_SPONGE_24, 0, 0, 0]
-	let state: Uint8Array[] = [hexToFrBytes(DOMAIN_SPONGE_24), FR_ZERO, FR_ZERO, FR_ZERO];
+	let state: PoseidonState = [hexToField(DOMAIN_SPONGE_24), FR_ZERO, FR_ZERO, FR_ZERO];
 
 	// Absorb: 24 inputs / 3 rate = 8 rounds
 	for (let i = 0; i < 8; i++) {
 		// ADD inputs to rate elements (state[1], state[2], state[3])
-		const s1 = BigInt(frBytesToHex(state[1]));
-		const s2 = BigInt(frBytesToHex(state[2]));
-		const s3 = BigInt(frBytesToHex(state[3]));
-		const in0 = BigInt(inputs[i * 3].startsWith('0x') ? inputs[i * 3] : '0x' + inputs[i * 3]);
-		const in1 = BigInt(inputs[i * 3 + 1].startsWith('0x') ? inputs[i * 3 + 1] : '0x' + inputs[i * 3 + 1]);
-		const in2 = BigInt(inputs[i * 3 + 2].startsWith('0x') ? inputs[i * 3 + 2] : '0x' + inputs[i * 3 + 2]);
-
-		const new1 = (s1 + in0) % BN254_MODULUS;
-		const new2 = (s2 + in1) % BN254_MODULUS;
-		const new3 = (s3 + in2) % BN254_MODULUS;
-
-		state[1] = hexToFrBytes('0x' + new1.toString(16).padStart(64, '0'));
-		state[2] = hexToFrBytes('0x' + new2.toString(16).padStart(64, '0'));
-		state[3] = hexToFrBytes('0x' + new3.toString(16).padStart(64, '0'));
+		state[1] = (state[1] + fields[i * 3]) % BN254_MODULUS;
+		state[2] = (state[2] + fields[i * 3 + 1]) % BN254_MODULUS;
+		state[3] = (state[3] + fields[i * 3 + 2]) % BN254_MODULUS;
 
 		// Permute
-		state = permute4(bb, state);
+		state = permute4(state);
 	}
 
 	// Squeeze: return state[0]
-	return frBytesToHex(state[0]);
+	return fieldToHex(state[0]);
 }
 
 /**
@@ -313,16 +216,13 @@ export async function poseidon2Sponge24(inputs: string[]): Promise<string> {
  * @returns Field element as hex string (0x...)
  */
 export async function poseidonHash(input: string): Promise<string> {
-	await loadBbJs();
-	const bb = await getBarretenbergSync();
-
 	// Convert string to bytes
 	const encoder = new TextEncoder();
 	const bytes = encoder.encode(input);
 
 	// Poseidon2 works on field elements (BN254)
 	// Each field element can hold ~31 bytes (248 bits)
-	const chunks: Uint8Array[] = [];
+	const chunks: bigint[] = [];
 
 	for (let i = 0; i < bytes.length; i += 31) {
 		const chunk = bytes.slice(i, i + 31);
@@ -330,9 +230,7 @@ export async function poseidonHash(input: string): Promise<string> {
 		for (let j = 0; j < chunk.length; j++) {
 			value = (value << 8n) | BigInt(chunk[j]);
 		}
-		// Convert bigint to field element Uint8Array
-		const hexValue = '0x' + value.toString(16).padStart(64, '0');
-		chunks.push(hexToFrBytes(hexValue));
+		chunks.push(value);
 	}
 
 	// Pad to 4 elements for permutation
@@ -340,9 +238,9 @@ export async function poseidonHash(input: string): Promise<string> {
 		chunks.push(FR_ZERO);
 	}
 
-	// Hash with Poseidon2 permutation (synchronous on BarretenbergSync)
-	const result = permute4(bb, chunks.slice(0, 4));
-	return frBytesToHex(result[0]);
+	// Preserve the historical four-element, first-124-byte construction.
+	const state = chunks.slice(0, 4) as PoseidonState;
+	return fieldToHex(permute4(state)[0]);
 }
 
 /**
@@ -395,7 +293,7 @@ export async function computeNullifier(
  * See REVOCATION-NULLIFIER-SPEC-001 §2.1.
  */
 export const REVOCATION_DOMAIN =
-	'0x' + (0x766f7465722d70726f746f636f6c2d7265766f636174696f6e2d7631n).toString(16).padStart(64, '0');
+	'0x' + 0x766f7465722d70726f746f636f6c2d7265766f636174696f6e2d7631n.toString(16).padStart(64, '0');
 
 /**
  * Compute revocation nullifier = H2(districtCommitment, REVOCATION_DOMAIN).
@@ -412,9 +310,7 @@ export const REVOCATION_DOMAIN =
  * @param districtCommitment - The 24-slot Poseidon2 sponge output (hex string)
  * @returns Revocation nullifier as hex string
  */
-export async function computeRevocationNullifier(
-	districtCommitment: string
-): Promise<string> {
+export async function computeRevocationNullifier(districtCommitment: string): Promise<string> {
 	return poseidon2Hash2(districtCommitment, REVOCATION_DOMAIN);
 }
 

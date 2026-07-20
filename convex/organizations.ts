@@ -12,17 +12,35 @@ import { v } from 'convex/values';
 import { requireAuth, requireOrgRole, loadOrg } from './_authHelpers';
 import {
 	effectivePlan,
-	effectivePlanWithGrace,
 	decideAccentWrite,
 	logoWriteAllowed,
 	whiteLabelWriteAllowed
 } from './_brandingGate';
 import { capOrThrow, parseHttpUrlOrThrow } from './_validators';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
-import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
-import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
+import { emptySupporterStats, computeSupporterStats, visibleSourceCounts } from './_supporterStats';
 import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
 import type { Doc, Id } from './_generated/dataModel';
+import { requireInternalSecret } from './_internalAuth';
+import {
+	PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_KEY,
+	PUBLIC_ORGANIZATION_DIRECTORY_PAGE_LIMIT,
+	PUBLIC_ORGANIZATION_DIRECTORY_VERSION,
+	getPublicOrganizationDirectoryMigration,
+	syncPublicOrganizationDirectory,
+	writePublicOrganizationProjection
+} from './lib/publicOrganizationDirectory';
+import {
+	CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY,
+	CAMPAIGN_ACTIVE_COUNTER_VERSION,
+	adoptLegacyCampaignCounter
+} from './lib/campaignOrgCounters';
+import { isAccountabilityReadModelReady } from './lib/accountabilityReadModel';
+import {
+	boundedOrgSeatLimit,
+	MAX_INVITE_RECORDS_PER_ORG,
+	MAX_ORG_SEATS
+} from './lib/orgConfigurationLimits';
 // Billing email: returned as encrypted blob, client decrypts with org key
 
 // =============================================================================
@@ -77,8 +95,9 @@ export const slugExists = query({
  * Used by: src/routes/api/embed/scorecard/[id]/+server.ts
  */
 export const getPublicBrandingBySlug = query({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
+	args: { _secret: v.string(), slug: v.string() },
+	handler: async (ctx, { _secret, slug }) => {
+		requireInternalSecret(_secret);
 		const org = await ctx.db
 			.query('organizations')
 			.withIndex('by_slug', (q) => q.eq('slug', slug))
@@ -94,262 +113,108 @@ export const getPublicBrandingBySlug = query({
 });
 
 /**
- * Public paginated list of orgs (isPublic: true). No auth required.
- * Returns public-safe fields only. Manual offset pagination (no cursor).
- * Used by: src/routes/directory/+page.server.ts
+ * SSR-only public organization directory.
+ *
+ * Reads the compact projection in deterministic name order. The direct Convex
+ * surface is secret-gated before any database access; the browser reaches it
+ * through `/directory`, which hard-bounds opaque cursors and page size.
  */
 export const listPublic = query({
 	args: {
-		limit: v.optional(v.number()),
-		offset: v.optional(v.number())
+		_secret: v.string(),
+		paginationOpts: v.object({
+			numItems: v.number(),
+			cursor: v.union(v.string(), v.null())
+		})
 	},
 	handler: async (ctx, args) => {
-		const limit = Math.min(args.limit ?? 20, 50);
-		const offset = Math.max(args.offset ?? 0, 0);
-
-		// Collect all public orgs (filtered in-memory since there's no by_isPublic index)
-		const allOrgs = await ctx.db.query('organizations').collect();
-		const publicOrgs = allOrgs.filter((o) => o.isPublic);
-
-		// Sort alphabetically by name
-		publicOrgs.sort((a, b) => a.name.localeCompare(b.name));
-
-		const total = publicOrgs.length;
-		const page = publicOrgs.slice(offset, offset + limit);
-
+		requireInternalSecret(args._secret);
+		if (args.paginationOpts.cursor !== null && args.paginationOpts.cursor.length > 2_048) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_CURSOR_TOO_LARGE');
+		}
+		if (!Number.isSafeInteger(args.paginationOpts.numItems) || args.paginationOpts.numItems < 1) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_LIMIT_INVALID');
+		}
+		const migration = await getPublicOrganizationDirectoryMigration(ctx);
+		if (migration?.status !== 'ready') {
+			return {
+				ready: false as const,
+				status: migration?.status ?? 'missing',
+				data: [],
+				cursor: null,
+				hasMore: false,
+				total: migration?.total ?? 0,
+				revision: null,
+				updatedAt: migration?.updatedAt ?? null
+			};
+		}
+		const numItems = Math.min(
+			args.paginationOpts.numItems,
+			PUBLIC_ORGANIZATION_DIRECTORY_PAGE_LIMIT
+		);
+		const page = await ctx.db
+			.query('publicOrganizationDirectory')
+			.withIndex('by_nameSort_orgId')
+			.paginate({
+				numItems,
+				cursor: args.paginationOpts.cursor,
+				maximumRowsRead: numItems + 1,
+				maximumBytesRead: 512 * 1_024
+			});
 		return {
-			orgs: page.map((o) => ({
-				_id: o._id,
+			ready: true as const,
+			status: 'ready' as const,
+			data: page.page.map((o) => ({
+				orgId: o.orgId,
 				name: o.name,
 				slug: o.slug,
 				description: o.description ?? null,
 				mission: o.mission ?? null,
 				avatar: o.avatar ?? null,
 				logoUrl: o.logoUrl ?? null,
-				supporterCount: o.supporterCount ?? 0,
-				campaignCount: o.campaignCount ?? 0,
-				memberCount: o.memberCount ?? 0
+				supporterCount: o.supporterCount,
+				campaignCount: o.campaignCount,
+				memberCount: o.memberCount
 			})),
-			total,
-			limit,
-			offset
+			cursor: page.isDone ? null : page.continueCursor,
+			hasMore: !page.isDone,
+			total: migration.total,
+			revision: `${PUBLIC_ORGANIZATION_DIRECTORY_VERSION}:${migration.updatedAt}`,
+			updatedAt: migration.updatedAt
 		};
 	}
 });
 
 /**
- * Authenticated query: full dashboard payload.
- * Reads denormalized counters from org doc + recent campaigns/supporters/members.
+ * @deprecated The route-owned organization shell superseded this wide payload.
+ * Retain the generated API name so stale clients receive an explicit pre-I/O
+ * failure instead of rebuilding memberships and user documents.
  */
 export const getDashboard = query({
 	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const { org, membership, userId } = await requireOrgRole(ctx, slug, 'member');
-
-		// Recent campaigns (take 10, most recently updated first)
-		const recentCampaigns = await ctx.db
-			.query('campaigns')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.order('desc')
-			.take(10);
-
-		// Recent supporters (take 5, most recently created first)
-		const recentSupporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.order('desc')
-			.take(5);
-
-		// Team members: memberships + user lookups
-		const memberships = await ctx.db
-			.query('orgMemberships')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const members = await Promise.all(
-			memberships.map(async (m) => {
-				const user = await ctx.db.get(m.userId);
-				return {
-					_id: m._id,
-					userId: m.userId,
-					role: m.role,
-					joinedAt: m.joinedAt,
-					userName: user?.name ?? null,
-					userEmail: user?.email ?? null,
-					userAvatar: user?.avatar ?? null
-				};
-			})
-		);
-
-		const onboardingState = org.onboardingState ?? {
-			hasDescription: !!org.description,
-			hasIssueDomains: false,
-			hasSupporters: (org.supporterCount ?? 0) > 0,
-			hasCampaigns: (org.campaignCount ?? 0) > 0,
-			hasTeam: (org.memberCount ?? 0) > 1,
-			hasSentEmail: (org.sentEmailCount ?? 0) > 0
-		};
-
-		const onboardingComplete =
-			onboardingState.hasSupporters && onboardingState.hasCampaigns && onboardingState.hasSentEmail;
-
-		return {
-			org: {
-				_id: org._id,
-				name: org.name,
-				slug: org.slug,
-				description: org.description ?? null,
-				avatar: org.avatar ?? null,
-				mission: org.mission ?? null,
-				websiteUrl: org.websiteUrl ?? null,
-				logoUrl: org.logoUrl ?? null,
-				isPublic: org.isPublic,
-				countryCode: org.countryCode,
-				maxSeats: org.maxSeats,
-				maxTemplatesMonth: org.maxTemplatesMonth,
-				identityCommitment: org.identityCommitment ?? null,
-				_creationTime: org._creationTime
-			},
-
-			membership: {
-				role: membership.role,
-				joinedAt: membership.joinedAt
-			},
-
-			stats: {
-				supporters: org.supporterCount ?? 0,
-				campaigns: org.campaignCount ?? 0,
-				members: org.memberCount ?? 0,
-				sentEmails: org.sentEmailCount ?? 0
-			},
-
-			recentCampaigns: recentCampaigns.map((c) => ({
-				_id: c._id,
-				title: c.title,
-				type: c.type,
-				status: c.status,
-				actionCount: c.actionCount ?? 0,
-				verifiedActionCount: c.verifiedActionCount ?? 0,
-				updatedAt: c.updatedAt
-			})),
-
-			recentSupporters: recentSupporters.map((s) => ({
-				_id: s._id,
-				encryptedName: s.encryptedName ?? null,
-				source: s.source ?? null,
-				verified: s.verified,
-				emailStatus: s.emailStatus,
-				_creationTime: s._creationTime
-			})),
-
-			members,
-
-			encryptedBillingEmail:
-				membership.role === 'owner' ? (org.encryptedBillingEmail ?? null) : null,
-
-			onboardingState,
-			onboardingComplete
-		};
+	handler: async () => {
+		throw new Error('ORGANIZATION_DASHBOARD_RETIRED');
 	}
 });
 
 /**
- * Dashboard stats: funnel, engagement-tier histogram, growth. Held separately
- * from `getDashboard` because these are aggregates — but NONE of them scan a
- * scalable collection anymore. The previous implementation `.collect()`ed every
- * supporter AND every verified action, which throws past the per-query document
- * cap and 500s the dashboard once an org passes ~16K of either. Now:
- *
- * - funnel.imported/postalResolved/identityVerified: read O(1) from the
- *   denormalized org.supporterStats counters (maintained at every supporter
- *   writer), exactly as getSummaryStats does. No supporters scan.
- * - funnel.districtVerified: distinct supporters with a verified action carrying
- *   a districtHash. Set cardinality, can't be a scalar counter, so it is
- *   computed via the shared BOUNDED scan (computeDistrictVerified, capped at
- *   10K) — the same path getDistrictVerifiedCount uses, so the two never drift.
- * - tiers: action-level engagementTier histogram (T0 New ... T4 Pillar). Read
- *   O(1) from org.actionTierCounts — a monotonic counter bumped in
- *   createCampaignAction (engagementTier is immutable post-creation). No actions
- *   scan.
- * - growth: verified actions this week vs last week via two BOUNDED sentAt range
- *   reads on by_orgId_verified_sentAt (computeGrowthWindow). One week's volume is
- *   bounded, never the lifetime table.
+ * @deprecated The org shell now reads compact workspace projections through
+ * `getOrgContext`. Keep the exported name as an explicit tombstone so stale
+ * clients fail before database work instead of retaining a 30,003-row read
+ * surface.
  */
 export const getDashboardStats = query({
 	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'member');
-
-		// Supporter funnel — O(1) denormalized counters (same as getSummaryStats).
-		const total = org.supporterCount ?? 0;
-		const stats = org.supporterStats ?? emptySupporterStats();
-
-		// District-of-record — shared bounded scan (capped at 10K, never .collect()).
-		const district = await computeDistrictVerified(ctx, org._id);
-
-		// Growth window — two bounded sentAt range reads, one week's volume each.
-		const growth = await computeGrowthWindow(ctx, org._id);
-
-		// Engagement-tier histogram — O(1) monotonic counter, padded to 5 slots.
-		const TIER_LABELS = ['New', 'Active', 'Established', 'Veteran', 'Pillar'];
-		const tierCounts = org.actionTierCounts ?? [];
-		const tiers = TIER_LABELS.map((label, tier) => ({
-			tier,
-			label,
-			count: tierCounts[tier] ?? 0
-		}));
-
-		return {
-			funnel: {
-				imported: total,
-				postalResolved: stats.postalResolved,
-				identityVerified: stats.identityVerified,
-				districtVerified: district.districtVerified,
-				// Surface the cap so a consumer can render a floor (">= N") instead of
-				// presenting a truncated district count as exact past the scan cap.
-				districtVerifiedTruncated: district.truncated
-			},
-			tiers,
-			growth: {
-				thisWeek: growth.thisWeek,
-				lastWeek: growth.lastWeek,
-				// Surface the per-week caps like districtVerifiedTruncated above, so a
-				// consumer renders a floor instead of a wrong exact past the scan cap.
-				thisWeekTruncated: growth.thisWeekTruncated,
-				lastWeekTruncated: growth.lastWeekTruncated
-			}
-		};
+	handler: async () => {
+		throw new Error('ORGANIZATION_DASHBOARD_STATS_RETIRED');
 	}
 });
 
-/**
- * Authenticated query: org members with user details.
- */
+/** @deprecated Memberships are supplied by compact, route-owned settings reads. */
 export const getMembers = query({
 	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'member');
-
-		const memberships = await ctx.db
-			.query('orgMemberships')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		return await Promise.all(
-			memberships.map(async (m) => {
-				const user = await ctx.db.get(m.userId);
-				return {
-					_id: m._id,
-					userId: m.userId,
-					role: m.role,
-					joinedAt: m.joinedAt,
-					invitedBy: m.invitedBy ?? null,
-					userName: user?.name ?? null,
-					userEmail: user?.email ?? null,
-					userAvatar: user?.avatar ?? null
-				};
-			})
-		);
+	handler: async () => {
+		throw new Error('ORGANIZATION_MEMBERS_QUERY_RETIRED');
 	}
 });
 
@@ -358,9 +223,172 @@ export const getMembers = query({
  * Lighter than getDashboard — returns only what loadOrgContext() provides.
  */
 export const getOrgContext = query({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
+	args: {
+		slug: v.string(),
+		workspace: v.optional(
+			v.union(
+				v.literal('base'),
+				v.literal('operating'),
+				v.literal('landscape'),
+				v.literal('return')
+			)
+		)
+	},
+	handler: async (ctx, { slug, workspace }) => {
 		const { org, membership } = await requireOrgRole(ctx, slug, 'member');
+		const supporterStats = org.supporterStats ?? emptySupporterStats();
+		const campaignCounterMigration = await ctx.db
+			.query('campaignActiveCounterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+			.unique();
+		const campaignCountersReady = campaignCounterMigration?.status === 'ready';
+
+		// A canonical workspace may add one purpose-built, bounded read inside
+		// this transaction. Deep routes pass no workspace and therefore stop after
+		// the four compact exact-index reads above (user, org, membership, marker).
+		let workspaceSummary:
+			| null
+			| {
+					kind: 'return';
+					campaigns: Array<{
+						_id: Id<'campaigns'>;
+						title: string;
+						type: string;
+						status: string;
+						actionCount: number;
+						verifiedActionCount: number;
+						updatedAt: number;
+					}>;
+					receipts: null | {
+						receiptCount: number;
+						pendingCount: number;
+						responseLoggedCount: number;
+						anchorFieldCount: number;
+						proofWeightTotal: number;
+						latestProofDeliveredAt: number | null;
+					};
+					campaignCardsReady: boolean;
+					readModelReady: boolean;
+			  }
+			| {
+					kind: 'landscape';
+					followed: Array<{
+						decisionMakerId: Id<'decisionMakers'>;
+						reason: string;
+						name: string;
+						party: string | null;
+						title: string | null;
+						jurisdiction: string | null;
+						district: string | null;
+					}>;
+					followedReady: boolean;
+					followedTruncated: boolean;
+					readModelReady: boolean;
+			  } = null;
+
+		if (workspace === 'return') {
+			const [campaignPage, accountabilityMigration] = await Promise.all([
+				ctx.db
+					.query('campaigns')
+					.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+					.order('desc')
+					.paginate({
+						cursor: null,
+						numItems: 10,
+						maximumRowsRead: 11,
+						maximumBytesRead: 256 * 1024
+					}),
+				ctx.db
+					.query('accountabilityReadModelMigrations')
+					.withIndex('by_key', (q) => q.eq('key', 'v1'))
+					.unique()
+			]);
+			const campaignCardsReady = campaignPage.pageStatus !== 'SplitRequired';
+			const campaigns = campaignCardsReady ? campaignPage.page : [];
+			const readModelReady = isAccountabilityReadModelReady(accountabilityMigration);
+			const receipts = readModelReady
+				? await ctx.db
+						.query('accountabilityOrganizationAggregates')
+						.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+						.unique()
+				: null;
+			workspaceSummary = {
+				kind: 'return',
+				campaigns: campaigns.map((campaign) => ({
+					_id: campaign._id,
+					title: campaign.title,
+					type: campaign.type,
+					status: campaign.status,
+					actionCount: campaign.actionCount ?? 0,
+					verifiedActionCount: campaign.verifiedActionCount ?? 0,
+					updatedAt: campaign.updatedAt
+				})),
+				receipts: receipts
+					? {
+							receiptCount: receipts.receiptCount,
+							pendingCount: receipts.pendingCount,
+							responseLoggedCount: receipts.responseLoggedCount,
+							anchorFieldCount: receipts.anchorFieldCount,
+							proofWeightTotal: receipts.proofWeightTotal,
+							latestProofDeliveredAt: receipts.latestProofDeliveredAt ?? null
+						}
+					: readModelReady
+						? {
+								receiptCount: 0,
+								pendingCount: 0,
+								responseLoggedCount: 0,
+								anchorFieldCount: 0,
+								proofWeightTotal: 0,
+								latestProofDeliveredAt: null
+							}
+						: null,
+				campaignCardsReady,
+				readModelReady
+			};
+		} else if (workspace === 'landscape') {
+			const accountabilityMigration = await ctx.db
+				.query('accountabilityReadModelMigrations')
+				.withIndex('by_key', (q) => q.eq('key', 'v1'))
+				.unique();
+			const readModelReady = isAccountabilityReadModelReady(accountabilityMigration);
+			const followedPage = readModelReady
+				? await ctx.db
+						.query('accountabilityOrgDmProjections')
+						.withIndex('by_orgId_followed_decisionMakerId', (q) =>
+							q.eq('orgId', org._id).eq('followed', true)
+						)
+						.order('asc')
+						.paginate({
+							cursor: null,
+							numItems: 13,
+							maximumRowsRead: 14,
+							maximumBytesRead: 256 * 1024
+						})
+				: null;
+			const followedRows =
+				followedPage && followedPage.pageStatus !== 'SplitRequired' ? followedPage.page : [];
+			const followedReady = Boolean(
+				readModelReady && followedPage && followedPage.pageStatus !== 'SplitRequired'
+			);
+			workspaceSummary = {
+				kind: 'landscape',
+				followed: followedRows.slice(0, 12).map((row) => ({
+					decisionMakerId: row.decisionMakerId,
+					reason: row.followReason ?? 'manual',
+					name: row.name,
+					party: row.party ?? null,
+					title: row.title ?? null,
+					jurisdiction: row.jurisdiction ?? null,
+					district: row.district ?? null
+				})),
+				followedReady,
+				followedTruncated:
+					followedPage?.pageStatus === 'SplitRequired' ||
+					followedRows.length > 12 ||
+					Boolean(followedPage && !followedPage.isDone),
+				readModelReady
+			};
+		}
 
 		return {
 			org: {
@@ -376,12 +404,66 @@ export const getOrgContext = query({
 				brandingAccent: org.brandingAccent ?? null,
 				logoUrl: org.logoUrl ?? null,
 				whiteLabel: org.whiteLabel ?? false,
+				isPublic: org.isPublic,
 				_creationTime: org._creationTime
 			},
 			membership: {
 				role: membership.role,
 				joinedAt: membership.joinedAt
-			}
+			},
+			// Compact shell badges are write-maintained scalars on the org row.
+			// Do not add feature histories here: this query runs for every org
+			// route, including deep tools that own their own data loads.
+			navBadges: {
+				supporters: org.supporterCount ?? 0,
+				campaigns: org.campaignCount ?? 0,
+				members: org.memberCount ?? 0,
+				sentEmails: org.sentEmailCount ?? 0,
+				activeCampaigns: campaignCountersReady ? (org.activeCampaignCount ?? 0) : null
+			},
+			badgeReadiness: {
+				campaignCounters: {
+					ready: campaignCountersReady,
+					status: campaignCounterMigration?.status ?? 'missing'
+				}
+			},
+			supporterSummary: {
+				total: org.supporterCount ?? 0,
+				identityVerified: supporterStats.identityVerified,
+				postalResolved: supporterStats.postalResolved,
+				sourceCounts: visibleSourceCounts(supporterStats.sourceCounts),
+				emailHealth: {
+					subscribed: supporterStats.emailSubscribed,
+					unsubscribed: supporterStats.emailUnsubscribed,
+					bounced: supporterStats.emailBounced,
+					complained: supporterStats.emailComplained
+				},
+				smsHealth: {
+					subscribed: supporterStats.smsSubscribed,
+					unsubscribed: supporterStats.smsUnsubscribed,
+					stopped: supporterStats.smsStopped,
+					none: supporterStats.smsNone,
+					phonePresent: supporterStats.phonePresent
+				},
+				consentEvidence: {
+					email: supporterStats.emailConsentEvidence,
+					emailSubscribed: supporterStats.emailSubscribedConsentEvidence,
+					sms: supporterStats.smsConsentEvidence,
+					smsSubscribed: supporterStats.smsSubscribedConsentEvidence
+				}
+			},
+			operatingState: {
+				orgKeyConfigured: Boolean(org.orgKeyVerifier),
+				platformApi:
+					membership.role === 'owner' || membership.role === 'editor'
+						? {
+								credentialStoredAt: org.anSync?.credentialStoredAt ?? null,
+								credentialProbeCompletedAt: org.anSync?.credentialProbeCompletedAt ?? null,
+								adapterSource: org.anSync?.adapterSource ?? null
+							}
+						: null
+			},
+			workspace: workspaceSummary
 		};
 	}
 });
@@ -391,38 +473,279 @@ export const getOrgContext = query({
  * Used by the root layout to populate user.orgMemberships.
  */
 export const getMyMemberships = query({
-	args: {},
-	handler: async (ctx) => {
+	args: {
+		cursor: v.optional(v.union(v.string(), v.null())),
+		limit: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
 		const { userId } = await requireAuth(ctx);
+		const limit = Math.min(Math.max(Math.floor(args.limit ?? 12), 1), 24);
+		const counterMigration = await ctx.db
+			.query('campaignActiveCounterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+			.unique();
+		const countersReady = counterMigration?.status === 'ready';
 
-		const memberships = await ctx.db
+		const page = await ctx.db
 			.query('orgMemberships')
 			.withIndex('by_userId_orgId', (q) => q.eq('userId', userId))
-			.collect();
+			.paginate({ numItems: limit, cursor: args.cursor ?? null });
 
-		return await Promise.all(
-			memberships.map(async (m) => {
+		const rows = await Promise.all(
+			page.page.map(async (m) => {
 				const org = await ctx.db.get(m.orgId);
 				if (!org) return null;
-
-				// Count active campaigns for this org
-				const campaigns = await ctx.db
-					.query('campaigns')
-					.withIndex('by_orgId', (q) => q.eq('orgId', m.orgId))
-					.collect();
-				const activeCampaignCount = campaigns.filter(
-					(c) => c.status === 'ACTIVE' || c.status === 'PAUSED'
-				).length;
 
 				return {
 					orgSlug: org.slug,
 					orgName: org.name,
 					orgAvatar: org.avatar ?? null,
 					role: m.role,
-					activeCampaignCount
+					// Optional until the bounded counter migration reaches its explicit
+					// ready cutover. Null is an honest unread state; never substitute a
+					// campaign scan on this every-navigation identity shell.
+					activeCampaignCount: countersReady ? (org.activeCampaignCount ?? 0) : null
 				};
 			})
-		).then((results) => results.filter(Boolean));
+		);
+
+		return {
+			data: rows.filter((row): row is NonNullable<typeof row> => row !== null),
+			cursor: page.isDone ? null : page.continueCursor,
+			hasMore: !page.isDone,
+			limit
+		};
+	}
+});
+
+const CAMPAIGN_COUNTER_MIGRATION_PAGE = 64;
+
+/** Marker-safe, self-paging adoption of legacy campaign status counters. */
+export const migrateCampaignActiveCounters = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, args) => {
+		const now = Date.now();
+		let migration = await ctx.db
+			.query('campaignActiveCounterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+			.unique();
+		if (!migration) {
+			const id = await ctx.db.insert('campaignActiveCounterMigrations', {
+				key: CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY,
+				status: 'running',
+				scanned: 0,
+				adopted: 0,
+				activeCounted: 0,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(id);
+		}
+		if (!migration) throw new Error('CAMPAIGN_ACTIVE_COUNTER_MIGRATION_STATE_MISSING');
+		if (migration.status === 'ready' || migration.status === 'migrated') return migration;
+		if (migration.status === 'blocked') {
+			throw new Error(migration.failureCode ?? 'CAMPAIGN_ACTIVE_COUNTER_MIGRATION_BLOCKED');
+		}
+		if (migration.status === 'pending') {
+			await ctx.db.patch(migration._id, { status: 'running', updatedAt: now });
+		}
+		const expectedCursor = migration.cursor ?? null;
+		if ((args.cursor ?? null) !== expectedCursor) {
+			throw new Error('CAMPAIGN_ACTIVE_COUNTER_MIGRATION_CURSOR_MISMATCH');
+		}
+
+		const page = await ctx.db.query('campaigns').paginate({
+			numItems: CAMPAIGN_COUNTER_MIGRATION_PAGE,
+			cursor: expectedCursor,
+			maximumRowsRead: CAMPAIGN_COUNTER_MIGRATION_PAGE + 1,
+			maximumBytesRead: 4 * 1024 * 1024
+		});
+		let adopted = 0;
+		let activeCounted = 0;
+		for (const campaign of page.page) {
+			if (campaign.orgCounterVersion === CAMPAIGN_ACTIVE_COUNTER_VERSION) continue;
+			await adoptLegacyCampaignCounter(ctx, campaign, now);
+			adopted += 1;
+			if (campaign.status === 'ACTIVE' || campaign.status === 'PAUSED') activeCounted += 1;
+		}
+
+		const patch = {
+			status: page.isDone ? ('migrated' as const) : ('running' as const),
+			cursor: page.isDone ? undefined : page.continueCursor,
+			scanned: migration.scanned + page.page.length,
+			adopted: migration.adopted + adopted,
+			activeCounted: migration.activeCounted + activeCounted,
+			updatedAt: now
+		};
+		await ctx.db.patch(migration._id, patch);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.organizations.migrateCampaignActiveCounters, {
+				cursor: page.continueCursor
+			});
+		}
+		return { ...migration, ...patch };
+	}
+});
+
+export const activateCampaignActiveCounters = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('campaignActiveCounterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+			.unique();
+		if (migration?.status === 'ready') return migration;
+		if (!migration || migration.status !== 'migrated') {
+			throw new Error('CAMPAIGN_ACTIVE_COUNTER_MIGRATION_INCOMPLETE');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { ...migration, status: 'ready' as const };
+	}
+});
+
+const PUBLIC_ORG_DIRECTORY_MIGRATION_PAGE = 16;
+
+/** Self-paging, idempotent directory materialization. Activation is separate. */
+export const migratePublicOrganizationDirectory = internalMutation({
+	args: {
+		token: v.string(),
+		cursor: v.optional(v.union(v.string(), v.null()))
+	},
+	handler: async (ctx, args) => {
+		if (args.token.length < 16 || args.token.length > 128) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_TOKEN_INVALID');
+		}
+		const now = Date.now();
+		let migration = await getPublicOrganizationDirectoryMigration(ctx);
+		if (!migration) {
+			const id = await ctx.db.insert('publicOrganizationDirectoryMigrations', {
+				key: PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_KEY,
+				status: 'running',
+				token: args.token,
+				scanned: 0,
+				processed: 0,
+				written: 0,
+				rejected: 0,
+				total: 0,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(id);
+		}
+		if (!migration) throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_STATE_MISSING');
+		if (migration.token !== args.token) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_TOKEN_MISMATCH');
+		}
+		if (migration.status === 'ready') return migration;
+		if (migration.status === 'failed') {
+			throw new Error(migration.failureCode ?? 'PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_FAILED');
+		}
+		if (migration.scanComplete) return migration;
+		const expectedCursor = migration.cursor ?? null;
+		if ((args.cursor ?? null) !== expectedCursor) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_CURSOR_MISMATCH');
+		}
+
+		const page = await ctx.db.query('organizations').paginate({
+			numItems: PUBLIC_ORG_DIRECTORY_MIGRATION_PAGE,
+			cursor: expectedCursor,
+			maximumRowsRead: PUBLIC_ORG_DIRECTORY_MIGRATION_PAGE + 1,
+			maximumBytesRead: 4 * 1024 * 1024
+		});
+		let processed = 0;
+		let written = 0;
+		let rejected = 0;
+		let totalDelta = 0;
+		try {
+			for (const org of page.page) {
+				if (org.publicDirectoryVersion === PUBLIC_ORGANIZATION_DIRECTORY_VERSION) continue;
+				const result = await writePublicOrganizationProjection(ctx, org);
+				await ctx.db.patch(org._id, {
+					publicDirectoryVersion: PUBLIC_ORGANIZATION_DIRECTORY_VERSION
+				});
+				processed += 1;
+				if (result.exists) {
+					written += 1;
+					totalDelta += 1;
+				} else {
+					rejected += 1;
+				}
+			}
+		} catch (error) {
+			const failureCode =
+				error instanceof Error ? error.message.slice(0, 200) : 'DIRECTORY_PROJECTION_WRITE_FAILED';
+			await ctx.db.patch(migration._id, { status: 'failed', failureCode, updatedAt: now });
+			return { ...migration, status: 'failed' as const, failureCode };
+		}
+
+		const patch = {
+			status: 'running' as const,
+			cursor: page.isDone ? undefined : page.continueCursor,
+			scanComplete: page.isDone,
+			scanned: migration.scanned + page.page.length,
+			processed: migration.processed + processed,
+			written: migration.written + written,
+			rejected: migration.rejected + rejected,
+			total: migration.total + totalDelta,
+			updatedAt: now
+		};
+		await ctx.db.patch(migration._id, patch);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.organizations.migratePublicOrganizationDirectory, {
+				token: args.token,
+				cursor: page.continueCursor
+			});
+		}
+		return { ...migration, ...patch };
+	}
+});
+
+export const activatePublicOrganizationDirectory = internalMutation({
+	args: { token: v.string() },
+	handler: async (ctx, args) => {
+		const migration = await getPublicOrganizationDirectoryMigration(ctx);
+		if (migration?.status === 'ready') return migration;
+		if (
+			!migration ||
+			migration.token !== args.token ||
+			migration.status !== 'running' ||
+			migration.scanComplete !== true
+		) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_MIGRATION_INCOMPLETE');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { ...migration, status: 'ready' as const };
+	}
+});
+
+export const getOrganizationProjectionReadiness = query({
+	args: { _secret: v.string() },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const [directory, counters] = await Promise.all([
+			getPublicOrganizationDirectoryMigration(ctx),
+			ctx.db
+				.query('campaignActiveCounterMigrations')
+				.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+				.unique()
+		]);
+		return {
+			directory: directory
+				? {
+						status: directory.status,
+						ready: directory.status === 'ready',
+						total: directory.total,
+						failureCode: directory.failureCode ?? null,
+						updatedAt: directory.updatedAt
+					}
+				: { status: 'missing', ready: false, total: 0, failureCode: null, updatedAt: null },
+			campaignCounters: counters
+				? {
+						status: counters.status,
+						ready: counters.status === 'ready',
+						failureCode: counters.failureCode ?? null,
+						updatedAt: counters.updatedAt
+					}
+				: { status: 'missing', ready: false, failureCode: null, updatedAt: null }
+		};
 	}
 });
 
@@ -458,9 +781,8 @@ export const removeMember = mutation({
 		if (target.role === 'owner') {
 			const owners = await ctx.db
 				.query('orgMemberships')
-				.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-				.collect()
-				.then((rows) => rows.filter((m) => m.role === 'owner'));
+				.withIndex('by_orgId_role', (q) => q.eq('orgId', org._id).eq('role', 'owner'))
+				.take(2);
 			if (owners.length <= 1) {
 				throw new Error('Cannot remove the last owner — promote another member to owner first');
 			}
@@ -471,6 +793,7 @@ export const removeMember = mutation({
 		await ctx.db.patch(org._id, {
 			memberCount: Math.max(0, currentCount - 1)
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 		return { removed: true as const };
 	}
 });
@@ -497,9 +820,8 @@ export const updateMemberRole = mutation({
 		if (target.role === 'owner' && role !== 'owner') {
 			const owners = await ctx.db
 				.query('orgMemberships')
-				.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-				.collect()
-				.then((rows) => rows.filter((m) => m.role === 'owner'));
+				.withIndex('by_orgId_role', (q) => q.eq('orgId', org._id).eq('role', 'owner'))
+				.take(2);
 			if (owners.length <= 1) {
 				throw new Error('Cannot demote the last owner — promote another member to owner first');
 			}
@@ -527,10 +849,12 @@ async function resolveOrgPlan(
 	ctx: MutationCtx | QueryCtx,
 	orgId: Id<'organizations'>
 ): Promise<string> {
-	const sub = await ctx.db
+	const rows = await ctx.db
 		.query('subscriptions')
 		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
-		.first();
+		.take(2);
+	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	const sub = rows[0] ?? null;
 	return effectivePlan(sub);
 }
 
@@ -618,7 +942,33 @@ export const setBranding = mutation({
 		if (!touched) throw new Error('No branding fields to update');
 
 		await ctx.db.patch(org._id, updates);
+		await syncPublicOrganizationDirectory(ctx, org._id);
 		return org._id;
+	}
+});
+
+/**
+ * Privileged publication transition for the public organization directory.
+ * The canonical flag and compact projection change atomically, so there is no
+ * interval where an unpublished organization remains discoverable.
+ */
+export const setPublicDirectoryVisibility = mutation({
+	args: { slug: v.string(), isPublic: v.boolean() },
+	handler: async (ctx, { slug, isPublic }) => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		const now = Date.now();
+		if (org.isPublic !== isPublic) {
+			await ctx.db.patch(org._id, { isPublic, updatedAt: now });
+		}
+		await syncPublicOrganizationDirectory(ctx, org._id);
+		const projection = await ctx.db
+			.query('publicOrganizationDirectory')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.unique();
+		if (isPublic !== Boolean(projection)) {
+			throw new Error('PUBLIC_ORGANIZATION_DIRECTORY_VISIBILITY_DIVERGED');
+		}
+		return { orgId: org._id, isPublic };
 	}
 });
 
@@ -713,6 +1063,7 @@ export const update = mutation({
 		}
 
 		await ctx.db.patch(org._id, updates);
+		await syncPublicOrganizationDirectory(ctx, org._id);
 		// Public template cards read exactly organization `{ name, slug, avatar }`.
 		// This mutation cannot rename an organization or change its slug, so avatar
 		// is its only projection-affecting input. Invalidate the one list singleton
@@ -720,7 +1071,7 @@ export const update = mutation({
 		// into an unbounded reverse scan. The writer-contract test couples this field
 		// inventory to the materializer so adding another public org field fails CI.
 		if (avatarChanged) {
-			await markPublicDiscoveryListDirty(ctx);
+			await markPublicDiscoveryListDirty(ctx, 'visibility');
 		}
 		return org._id;
 	}
@@ -735,18 +1086,26 @@ export const getSettingsData = query({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
 		const { org, membership } = await requireOrgRole(ctx, slug, 'member');
+		const seatLimit = boundedOrgSeatLimit(org.maxSeats);
 
 		// Subscription
-		const sub = await ctx.db
+		const subscriptionRows = await ctx.db
 			.query('subscriptions')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.first();
+			.take(2);
+		if (subscriptionRows.length > 1) {
+			throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+		}
+		const sub = subscriptionRows[0] ?? null;
 
 		// Members with user data
 		const memberships = await ctx.db
 			.query('orgMemberships')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+			.take(MAX_ORG_SEATS + 1);
+		if (memberships.length > seatLimit) {
+			throw new Error('ORG_MEMBERSHIP_CARDINALITY_REPAIR_REQUIRED');
+		}
 
 		// Sort by joinedAt ascending
 		memberships.sort((a, b) => a.joinedAt - b.joinedAt);
@@ -766,22 +1125,25 @@ export const getSettingsData = query({
 			})
 		);
 
-		// Invites (active only: not accepted, not expired)
-		const now = Date.now();
+		// Return the bounded pending register. The route applies wall-clock expiry
+		// after this deterministic read, so time passing does not invalidate an
+		// otherwise unchanged Convex result.
 		const allInvites = await ctx.db
 			.query('orgInvites')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
+			.take(MAX_INVITE_RECORDS_PER_ORG + 1);
+		if (allInvites.length > MAX_INVITE_RECORDS_PER_ORG) {
+			throw new Error('ORG_INVITE_CARDINALITY_REPAIR_REQUIRED');
+		}
 
-		const activeInvites = allInvites
-			.filter((i) => !i.accepted && i.expiresAt > now)
-			.sort((a, b) => a.expiresAt - b.expiresAt)
-			.slice(0, 200);
+		const pendingInvites = allInvites
+			.filter((i) => !i.accepted)
+			.sort((a, b) => a.expiresAt - b.expiresAt);
 
 		// Only show invite emails to editors/owners
 		const invites =
 			membership.role === 'editor' || membership.role === 'owner'
-				? activeInvites.map((i) => ({
+				? pendingInvites.map((i) => ({
 						_id: i._id,
 						encryptedEmail: i.encryptedEmail,
 						emailHash: i.emailHash,
@@ -794,22 +1156,14 @@ export const getSettingsData = query({
 		const issueDomains = await ctx.db
 			.query('orgIssueDomains')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.collect();
+			.order('asc')
+			.take(MAX_DOMAINS_PER_ORG + 1);
+		if (issueDomains.length > MAX_DOMAINS_PER_ORG) {
+			throw new Error('ISSUE_DOMAIN_CARDINALITY_REPAIR_REQUIRED');
+		}
 
 		// Sort by creation time ascending
 		issueDomains.sort((a, b) => a._creationTime - b._creationTime);
-
-		// Usage counts (approximate — counts from denormalized fields + queries)
-		// Verified actions: count campaignActions with verified=true for this org's campaigns
-		const campaigns = await ctx.db
-			.query('campaigns')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		let verifiedActions = 0;
-		for (const c of campaigns) {
-			verifiedActions += c.verifiedActionCount ?? 0;
-		}
 
 		return {
 			subscription: sub
@@ -822,14 +1176,14 @@ export const getSettingsData = query({
 				: null,
 
 			usage: {
-				verifiedActions,
+				verifiedActions: org.verifiedActionsLifetime ?? 0,
 				emailsSent: org.sentEmailCount ?? 0
 			},
 
 			members,
 			invites,
 
-			issueDomains: issueDomains.slice(0, 500).map((d) => ({
+			issueDomains: issueDomains.map((d) => ({
 				_id: d._id,
 				_creationTime: d._creationTime,
 				label: d.label,
@@ -887,6 +1241,7 @@ export const reconcileOrgStats = internalMutation({
 			supporterCount: supporters.length,
 			actionTierCounts: tierCounts
 		});
+		await syncPublicOrganizationDirectory(ctx, args.orgId);
 
 		return {
 			supporterCount: supporters.length,
@@ -969,6 +1324,8 @@ export const create = mutation({
 		}
 
 		const now = Date.now();
+		const nowDate = new Date(now);
+		const calendarPeriodStart = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), 1);
 
 		const orgId = await ctx.db.insert('organizations', {
 			name: args.name,
@@ -985,12 +1342,26 @@ export const create = mutation({
 			countryCode: 'US',
 			isPublic: false,
 			supporterCount: 0,
+			districtVerifiedSupporterCount: 0,
+			supporterStats: emptySupporterStats(),
 			campaignCount: 0,
+			activeCampaignCount: 0,
 			memberCount: 1,
 			sentEmailCount: 0,
 			smsSentCount: 0,
+			verifiedActionsLifetime: 0,
+			verifiedActionsPeriodBaseline: 0,
+			verifiedActionsPeriodBaselineAt: calendarPeriodStart,
+			sentEmailPeriodBaseline: 0,
+			sentEmailPeriodBaselineAt: calendarPeriodStart,
+			emailReservedCount: 0,
+			emailReservationPeriodStart: calendarPeriodStart,
+			emailReservationState: 'ready',
+			smsSentPeriodBaseline: 0,
+			smsSentPeriodBaselineAt: calendarPeriodStart,
 			updatedAt: now
 		});
+		await syncPublicOrganizationDirectory(ctx, orgId);
 
 		// Create owner membership
 		await ctx.db.insert('orgMemberships', {
@@ -1022,10 +1393,12 @@ export const listIssueDomains = query({
 		const domains = await ctx.db
 			.query('orgIssueDomains')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+			.order('asc')
+			.take(MAX_DOMAINS_PER_ORG + 1);
 
-		// Sort by _creationTime ascending
-		domains.sort((a, b) => a._creationTime - b._creationTime);
+		if (domains.length > MAX_DOMAINS_PER_ORG) {
+			throw new Error('ISSUE_DOMAIN_CARDINALITY_REPAIR_REQUIRED');
+		}
 
 		return {
 			domains: domains.map((d) => ({
@@ -1057,13 +1430,17 @@ export const createIssueDomain = mutation({
 		if (!label || label.length > 100) {
 			throw new Error('Label is required (max 100 chars)');
 		}
+		const description = args.description?.trim();
+		if (description && description.length > 500) {
+			throw new Error('Description must be 500 characters or fewer');
+		}
 
 		if (RESERVED_LABELS.some((r) => label.startsWith(r))) {
 			throw new Error('This label is reserved');
 		}
 
 		const weight = args.weight ?? 1.0;
-		if (weight < 0.5 || weight > 2.0) {
+		if (!Number.isFinite(weight) || weight < 0.5 || weight > 2.0) {
 			throw new Error('Weight must be between 0.5 and 2.0');
 		}
 
@@ -1071,7 +1448,7 @@ export const createIssueDomain = mutation({
 		const existingDomains = await ctx.db
 			.query('orgIssueDomains')
 			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
+			.take(MAX_DOMAINS_PER_ORG + 1);
 
 		if (existingDomains.length >= MAX_DOMAINS_PER_ORG) {
 			throw new Error(`Maximum of ${MAX_DOMAINS_PER_ORG} issue domains per organization`);
@@ -1091,7 +1468,7 @@ export const createIssueDomain = mutation({
 		const domainId = await ctx.db.insert('orgIssueDomains', {
 			orgId: org._id,
 			label,
-			description: args.description || undefined,
+			description: description || undefined,
 			weight,
 			updatedAt: now
 		});
@@ -1514,29 +1891,8 @@ export const disconnectPlatformApiCredential = mutation({
  */
 export const getUserOrgPlan = query({
 	args: {},
-	handler: async (ctx) => {
-		const { userId } = await requireAuth(ctx);
-		const membership = await ctx.db
-			.query('orgMemberships')
-			.withIndex('by_userId_orgId', (idx) => idx.eq('userId', userId))
-			.first();
-		if (!membership) return null;
-		const org = await ctx.db.get(membership.orgId);
-		if (!org) return null;
-		// Get subscription
-		const sub = await ctx.db
-			.query('subscriptions')
-			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.first();
-		return {
-			orgId: org._id,
-			orgSlug: org.slug,
-			// EFFECTIVE plan, status-gated like every other plan read: a canceled
-			// or lapsed subscription floors to 'inactive' (past_due keeps its plan
-			// through the 7-day grace). A raw `sub?.plan` here would leak the paid
-			// slug for churned orgs to any future caller of this query.
-			plan: effectivePlanWithGrace(sub, Date.now())
-		};
+	handler: async () => {
+		throw new Error('ORGANIZATION_USER_PLAN_QUERY_RETIRED');
 	}
 });
 
@@ -1553,10 +1909,14 @@ export const getBillingContext = query({
 	handler: async (ctx, { slug }) => {
 		const { org, membership } = await requireOrgRole(ctx, slug, 'owner');
 
-		const sub = await ctx.db
+		const subscriptionRows = await ctx.db
 			.query('subscriptions')
 			.withIndex('by_orgId', (idx) => idx.eq('orgId', org._id))
-			.first();
+			.take(2);
+		if (subscriptionRows.length > 1) {
+			throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+		}
+		const sub = subscriptionRows[0] ?? null;
 
 		return {
 			org: {
@@ -1581,13 +1941,14 @@ export const getBillingContext = query({
 export const updateStripeCustomerId = mutation({
 	args: {
 		orgId: v.id('organizations'),
+		slug: v.string(),
 		stripeCustomerId: v.string()
 	},
-	handler: async (ctx, { orgId, stripeCustomerId }) => {
-		// Security: verify the caller is an owner of this org
-		const org = await ctx.db.get(orgId);
-		if (!org) throw new Error('Organization not found');
-		await requireOrgRole(ctx, org.slug, 'owner');
+	handler: async (ctx, { orgId, slug, stripeCustomerId }) => {
+		// Authorize by caller-supplied slug before touching an attacker-selected
+		// org ID, then bind the authorized row back to that ID.
+		const { org } = await requireOrgRole(ctx, slug, 'owner');
+		if (org._id !== orgId) throw new Error('Organization not found');
 
 		await ctx.db.patch(orgId, { stripeCustomerId });
 	}
@@ -1751,18 +2112,8 @@ export const patchServerSealedKey = internalMutation({
  */
 export const listTwilioNumbers = query({
 	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const { org } = await requireOrgRole(ctx, slug, 'owner');
-		const rows = await ctx.db
-			.query('orgTwilioNumbers')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-		return rows.map((r) => ({
-			_id: r._id,
-			phoneNumber: r.phoneNumber,
-			verifiedAt: r.verifiedAt ?? null,
-			updatedAt: r.updatedAt
-		}));
+	handler: async () => {
+		throw new Error('ORGANIZATION_TWILIO_NUMBER_LIST_RETIRED');
 	}
 });
 

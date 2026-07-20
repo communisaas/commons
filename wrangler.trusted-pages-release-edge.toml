@@ -1,0 +1,19 @@
+name = "commons-trusted-pages-edge"
+main = "workers/trusted-pages-release-edge-entry.ts"
+compatibility_date = "2026-07-20"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = false
+preview_urls = false
+
+[vars]
+PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
+PUBLIC_RELEASE_TRANSACTION_ID = "__PUBLIC_RELEASE_TRANSACTION_ID__"
+
+[[routes]]
+pattern = "commons.email/*"
+zone_name = "commons.email"
+
+[[durable_objects.bindings]]
+name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
+class_name = "PublicDiscoveryManifestRefreshGate"
+script_name = "commons-public-discovery-manifest-gate"

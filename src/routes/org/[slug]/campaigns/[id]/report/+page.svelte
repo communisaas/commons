@@ -359,13 +359,13 @@
 						href="email-html"
 						target="_blank"
 						rel="noopener"
-						class="font-brand text-xs text-text-secondary hover:text-text-primary"
+						class="font-brand text-text-secondary hover:text-text-primary text-xs"
 					>
 						Open for printing →
 					</a>
 					<a
 						href="email-html?download=1"
-						class="font-brand text-xs text-text-secondary hover:text-text-primary"
+						class="font-brand text-text-secondary hover:text-text-primary text-xs"
 					>
 						Download HTML
 					</a>
@@ -451,7 +451,7 @@
 									{delivery.targetName ?? delivery.targetEmail}
 								</span>
 								<span
-									class="font-mono text-xs uppercase tracking-wide {statusBadgeClass(
+									class="font-mono text-xs tracking-wide uppercase {statusBadgeClass(
 										delivery.status
 									)}"
 								>
@@ -471,11 +471,7 @@
 							</div>
 						</div>
 						<div class="flex shrink-0 items-center gap-2">
-							<span
-								class="font-mono text-[10px] uppercase {receiptBadgeClass(
-									delivery
-								)}"
-							>
+							<span class="font-mono text-[10px] uppercase {receiptBadgeClass(delivery)}">
 								{receiptBadgeLabel(delivery)}
 							</span>
 							{#if delivery.receiptId}
@@ -556,6 +552,22 @@
 					</div>
 				</div>
 			{/each}
+			{#if !data.deliveryPagination.isFirstPage || data.deliveryPagination.hasMore}
+				<nav class="flex items-center justify-between text-xs" aria-label="Delivery history pages">
+					{#if !data.deliveryPagination.isFirstPage}
+						<a class="text-text-tertiary underline" href={data.deliveryPagination.firstPageUrl}
+							>Newest deliveries</a
+						>
+					{:else}
+						<span></span>
+					{/if}
+					{#if data.deliveryPagination.nextPageUrl}
+						<a class="text-text-tertiary underline" href={data.deliveryPagination.nextPageUrl}
+							>Older deliveries</a
+						>
+					{/if}
+				</nav>
+			{/if}
 		</div>
 	{/if}
 

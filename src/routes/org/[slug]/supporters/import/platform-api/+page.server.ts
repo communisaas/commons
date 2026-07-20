@@ -1,5 +1,5 @@
 import { fail, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverMutation, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
 import { orgLimitSentence, type PlatformApiLimitCode } from '$lib/data/org-limit-sentences';

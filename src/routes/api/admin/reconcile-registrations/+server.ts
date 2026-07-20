@@ -15,7 +15,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -49,7 +49,7 @@ export const POST: RequestHandler = async (event) => {
 		retriesSucceeded: 0,
 		retriesFailed: 0,
 		reconciled: 0,
-		mismatches: [] as Array<{ userId: string; leafIndex: number; reason: string }>,
+		mismatches: [] as Array<{ userId: string; leafIndex: number; reason: string }>
 	};
 
 	// Phase 1: Process KV retry queue
@@ -94,13 +94,13 @@ export const POST: RequestHandler = async (event) => {
 					results.retriesSucceeded++;
 					console.log('[Reconciliation] Retry succeeded', {
 						userId: data.userId,
-						leafIndex: data.atlasResult.leafIndex,
+						leafIndex: data.atlasResult.leafIndex
 					});
 				} catch (retryError) {
 					results.retriesFailed++;
 					console.error('[Reconciliation] Retry failed', {
 						key: key.name,
-						error: retryError instanceof Error ? retryError.message : String(retryError),
+						error: retryError instanceof Error ? retryError.message : String(retryError)
 					});
 				}
 			}
@@ -113,14 +113,22 @@ export const POST: RequestHandler = async (event) => {
 	try {
 		const treeInfoResponse = await fetch(`${SHADOW_ATLAS_URL}/v1/tree/info`, {
 			headers: atlasHeaders(),
-			signal: AbortSignal.timeout(10_000),
+			signal: AbortSignal.timeout(10_000)
 		});
 
 		if (treeInfoResponse.ok) {
-			const treeInfo = await treeInfoResponse.json() as { treeSize: number };
-			const pgCount = await serverQuery(api.users.countRegistrations, {
-				_secret: getInternalSecret()
-			});
+			const treeInfo = (await treeInfoResponse.json()) as { treeSize: number };
+			let pgCount = 0;
+			let registrationCursor: string | undefined;
+			do {
+				const page = await serverQuery(api.users.countRegistrations, {
+					_secret: getInternalSecret(),
+					cursor: registrationCursor
+				});
+				pgCount += page.count;
+				registrationCursor = page.continueCursor ?? undefined;
+				if (page.isDone) break;
+			} while (registrationCursor);
 
 			// Tree size >= pg count is expected (tree has padding/replaced zeros).
 			// pg count > tree size is a bug.
@@ -128,7 +136,7 @@ export const POST: RequestHandler = async (event) => {
 				results.mismatches.push({
 					userId: 'GLOBAL',
 					leafIndex: -1,
-					reason: `Convex has ${pgCount} records but atlas tree has only ${treeInfo.treeSize} leaves`,
+					reason: `Convex has ${pgCount} records but atlas tree has only ${treeInfo.treeSize} leaves`
 				});
 			}
 
@@ -140,16 +148,13 @@ export const POST: RequestHandler = async (event) => {
 
 			for (const reg of recentRegistrations) {
 				try {
-					const leafResponse = await fetch(
-						`${SHADOW_ATLAS_URL}/v1/tree/leaf/${reg.leafIndex}`,
-						{
-							headers: atlasHeaders(),
-							signal: AbortSignal.timeout(5_000),
-						}
-					);
+					const leafResponse = await fetch(`${SHADOW_ATLAS_URL}/v1/tree/leaf/${reg.leafIndex}`, {
+						headers: atlasHeaders(),
+						signal: AbortSignal.timeout(5_000)
+					});
 
 					if (leafResponse.ok) {
-						const leafData = await leafResponse.json() as {
+						const leafData = (await leafResponse.json()) as {
 							leaf: string;
 							isEmpty: boolean;
 						};
@@ -158,7 +163,7 @@ export const POST: RequestHandler = async (event) => {
 							results.mismatches.push({
 								userId: reg.userId,
 								leafIndex: reg.leafIndex,
-								reason: 'Convex points to zeroed leaf (may need replacement record update)',
+								reason: 'Convex points to zeroed leaf (may need replacement record update)'
 							});
 						}
 						results.reconciled++;
@@ -170,7 +175,7 @@ export const POST: RequestHandler = async (event) => {
 		}
 	} catch (treeError) {
 		console.warn('[Reconciliation] Tree info check failed', {
-			error: treeError instanceof Error ? treeError.message : String(treeError),
+			error: treeError instanceof Error ? treeError.message : String(treeError)
 		});
 	}
 

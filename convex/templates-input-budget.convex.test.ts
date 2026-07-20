@@ -184,6 +184,60 @@ describe('templates.createTemplate input budgets', () => {
 		});
 	});
 
+	it('accepts a valid 3,800-byte title without overflowing the compact list plane', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+		const title = '🧱'.repeat(950);
+		expect(new TextEncoder().encode(title)).toHaveLength(3_800);
+
+		const created = await authenticated.mutation(api.templates.createTemplate, {
+			...baseCreateArgs(userId),
+			title,
+			slug: 'valid-long-title',
+			contentHash: 'valid-long-title'
+		});
+
+		await t.run(async (ctx) => {
+			const [projection, detailProjection] = await Promise.all([
+				ctx.db
+					.query('templateListProjections')
+					.withIndex('by_templateId', (q) => q.eq('templateId', created!._id))
+					.unique(),
+				ctx.db
+					.query('publicTemplateDetailProjections')
+					.withIndex('by_templateId', (q) => q.eq('templateId', created!._id))
+					.unique()
+			]);
+			expect(projection).toMatchObject({
+				titleTruncated: true,
+				titleOriginalBytes: 3_800
+			});
+			expect(new TextEncoder().encode(projection!.title).byteLength).toBeLessThanOrEqual(512);
+			expect(projection!.projectionBytes).toBeLessThanOrEqual(4_000);
+			expect(detailProjection?.detail).toMatchObject({ title, subject: title });
+			expect(detailProjection!.detailBytes).toBeLessThanOrEqual(48 * 1024);
+		});
+	});
+
+	it('rejects an individually oversized public-detail field before writing source state', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+
+		await expect(
+			authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(userId),
+				title: 'x'.repeat(4_001),
+				slug: 'oversized-detail-title',
+				contentHash: 'oversized-detail-title'
+			})
+		).rejects.toThrow('TEMPLATE_INPUT_BUDGET_EXCEEDED:public_input:max_bytes');
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('templates').take(1)).toEqual([]);
+			expect(await ctx.db.query('publicTemplateDetailProjections').take(1)).toEqual([]);
+		});
+	});
+
 	it('enforces slug uniqueness inside the authoritative create mutation', async () => {
 		const t = newHarness();
 		const { authenticated, userId } = await createAuthenticatedUser(t);
@@ -232,6 +286,49 @@ describe('templates.createTemplate input budgets', () => {
 		await expect(t.run((ctx) => ctx.db.get(created!._id))).resolves.toMatchObject({
 			domain: 'civic',
 			topics: ['availability']
+		});
+	});
+
+	it('grandfathers unchanged oversized legacy config during a bounded metadata patch', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+		const templateId = await t.run((ctx) =>
+			ctx.db.insert('templates', {
+				userId,
+				slug: 'legacy-oversized-config',
+				title: 'Legacy oversized config',
+				description: 'Predates the current authoring boundary',
+				topics: ['legacy'],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig: { legacy: 'x'.repeat(20_000) },
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'legacy',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1
+			})
+		);
+
+		await expect(
+			authenticated.mutation(api.templates.patchMetadata, {
+				templateId,
+				domain: 'water',
+				topics: ['clean water']
+			})
+		).resolves.toBeNull();
+		await expect(t.run((ctx) => ctx.db.get(templateId))).resolves.toMatchObject({
+			domain: 'water',
+			topics: ['clean water'],
+			deliveryConfig: { legacy: 'x'.repeat(20_000) }
 		});
 	});
 });

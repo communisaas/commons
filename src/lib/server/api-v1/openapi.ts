@@ -10,7 +10,7 @@ export const openApiSpec = {
 		title: 'Commons Public API',
 		version: '1.1.0',
 		description:
-			'Public REST API for Commons — campaign management, supporter CRM, and verified civic action. All endpoints require Bearer token authentication via API key (prefix ck_live_). Rate limited to 100 requests per minute per key.'
+			'Public REST API for Commons — campaign management, supporter CRM, and verified civic action. All endpoints require Bearer token authentication via API key (prefix ck_live_). Requests consume both a per-key and organization-global minute budget determined by plan.'
 	},
 	servers: [{ url: '/api/v1' }],
 	security: [{ bearerAuth: [] }],
@@ -62,7 +62,10 @@ export const openApiSpec = {
 					},
 					'401': { $ref: '#/components/responses/Unauthorized' },
 					'403': { $ref: '#/components/responses/Forbidden' },
-					'500': { $ref: '#/components/responses/InternalError' }
+					'500': { $ref: '#/components/responses/InternalError' },
+					'503': {
+						description: 'The compact organization API projection is unavailable'
+					}
 				}
 			}
 		},
@@ -71,7 +74,7 @@ export const openApiSpec = {
 				operationId: 'listSupporters',
 				summary: 'List supporters',
 				description:
-					'List supporters with cursor pagination and optional filters. Requires read scope.',
+					'List supporters with opaque database-cursor pagination and optional indexed filters. Filtered totals are omitted; follow cursor until hasMore is false for complete traversal. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
@@ -440,7 +443,11 @@ export const openApiSpec = {
 				operationId: 'listTags',
 				summary: 'List tags',
 				description:
-					'List all tags for the organization. Requires read scope. Ordered alphabetically.',
+					'List tags using an opaque database cursor. Exact supporter counts come from the tag projection; a complete traversal must follow the cursor until hasMore is false. Requires read scope.',
+				parameters: [
+					{ $ref: '#/components/parameters/cursor' },
+					{ $ref: '#/components/parameters/limit' }
+				],
 				responses: {
 					'200': {
 						description: 'List of tags',
@@ -449,7 +456,8 @@ export const openApiSpec = {
 								schema: {
 									type: 'object',
 									properties: {
-										data: { type: 'array', items: { $ref: '#/components/schemas/Tag' } }
+										data: { type: 'array', items: { $ref: '#/components/schemas/Tag' } },
+										meta: { $ref: '#/components/schemas/PaginationMeta' }
 									}
 								}
 							}
@@ -1018,21 +1026,16 @@ export const openApiSpec = {
 				operationId: 'listRepresentatives',
 				summary: 'List representatives',
 				description:
-					'List international representatives with cursor pagination and optional filters. Requires read scope.',
+					'List international representatives for one required country from a single byte-bounded database page. Constituency lookup remains unavailable until a compact constituency projection exists. Requires read scope.',
 				parameters: [
 					{ $ref: '#/components/parameters/cursor' },
 					{ $ref: '#/components/parameters/limit' },
 					{
 						name: 'country',
 						in: 'query',
+						required: true,
 						schema: { type: 'string' },
-						description: 'Filter by ISO country code'
-					},
-					{
-						name: 'constituency',
-						in: 'query',
-						schema: { type: 'string' },
-						description: 'Filter by constituency ID'
+						description: 'Country scope'
 					}
 				],
 				responses: {
@@ -1050,6 +1053,53 @@ export const openApiSpec = {
 							}
 						}
 					},
+					'401': { $ref: '#/components/responses/Unauthorized' },
+					'400': { $ref: '#/components/responses/BadRequest' },
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'503': {
+						description: 'Constituency lookup is unavailable pending a compact projection'
+					}
+				}
+			}
+		},
+		'/activity': {
+			get: {
+				operationId: 'listDecisionMakerActivity',
+				summary: 'List scoped decision-maker activity',
+				description:
+					'Returns one bounded indexed page for one followed decision-maker and one activity source. vote/sponsor pages may be sparse; follow the opaque cursor until hasMore is false. Receipt activity is served only from the compact accountability projection. Requires read scope.',
+				parameters: [
+					{ $ref: '#/components/parameters/cursor' },
+					{ $ref: '#/components/parameters/limit' },
+					{
+						name: 'decision_maker_id',
+						in: 'query',
+						required: true,
+						schema: { type: 'string' }
+					},
+					{
+						name: 'activity_type',
+						in: 'query',
+						required: true,
+						schema: { type: 'string', enum: ['vote', 'sponsor', 'receipt'] }
+					}
+				],
+				responses: {
+					'200': {
+						description: 'Paginated activity from one compact source',
+						content: {
+							'application/json': {
+								schema: {
+									type: 'object',
+									properties: {
+										data: { type: 'array', items: { type: 'object' } },
+										meta: { $ref: '#/components/schemas/PaginationMeta' }
+									}
+								}
+							}
+						}
+					},
+					'400': { $ref: '#/components/responses/BadRequest' },
 					'401': { $ref: '#/components/responses/Unauthorized' },
 					'403': { $ref: '#/components/responses/Forbidden' }
 				}
@@ -1168,11 +1218,11 @@ export const openApiSpec = {
 				operationId: 'getNetwork',
 				summary: 'Get network detail',
 				description:
-					'Returns network details including member list. Requires the org to be an active member. Requires read scope.',
+					'Returns bounded network metadata. The complete member roster is intentionally omitted; memberCount is exposed only when the compact coalition projection is exact. Requires the org to be an active member and read scope.',
 				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				responses: {
 					'200': {
-						description: 'Network detail with members',
+						description: 'Network detail without roster expansion',
 						content: {
 							'application/json': {
 								schema: {
@@ -1222,7 +1272,11 @@ export const openApiSpec = {
 				operationId: 'listWebhooks',
 				summary: 'List webhook subscriptions',
 				description:
-					'Returns all webhook subscriptions for the authenticated org. Requires read scope.',
+					'Returns one opaque database-cursor page of webhook subscriptions. Requires read scope.',
+				parameters: [
+					{ $ref: '#/components/parameters/cursor' },
+					{ $ref: '#/components/parameters/limit' }
+				],
 				responses: {
 					'200': {
 						description: 'Array of webhook subscriptions',
@@ -1234,7 +1288,8 @@ export const openApiSpec = {
 										data: {
 											type: 'array',
 											items: { $ref: '#/components/schemas/Webhook' }
-										}
+										},
+										meta: { $ref: '#/components/schemas/PaginationMeta' }
 									}
 								}
 							}
@@ -1271,7 +1326,17 @@ export const openApiSpec = {
 					},
 					'400': { $ref: '#/components/responses/BadRequest' },
 					'401': { $ref: '#/components/responses/Unauthorized' },
-					'403': { $ref: '#/components/responses/Forbidden' }
+					'403': { $ref: '#/components/responses/Forbidden' },
+					'409': { $ref: '#/components/responses/Conflict' },
+					'429': { $ref: '#/components/responses/TooManyRequests' },
+					'503': {
+						description: 'Webhook destination policy is unavailable',
+						content: {
+							'application/json': {
+								schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+							}
+						}
+					}
 				}
 			}
 		},
@@ -1332,7 +1397,8 @@ export const openApiSpec = {
 			delete: {
 				operationId: 'deleteWebhook',
 				summary: 'Delete webhook subscription',
-				description: 'Removes the subscription and its delivery history. Requires write scope.',
+				description:
+					'Removes the subscription atomically and drains delivery history asynchronously in bounded pages. Requires write scope.',
 				parameters: [{ $ref: '#/components/parameters/resourceId' }],
 				responses: {
 					'200': {
@@ -1440,7 +1506,7 @@ export const openApiSpec = {
 				name: 'cursor',
 				in: 'query',
 				schema: { type: 'string' },
-				description: 'Cursor for pagination (ID of last item from previous page)'
+				description: 'Opaque database cursor returned by the previous page'
 			},
 			limit: {
 				name: 'limit',
@@ -1650,13 +1716,21 @@ export const openApiSpec = {
 							slug: { type: 'string' },
 							description: { type: ['string', 'null'] },
 							avatar: { type: ['string', 'null'] },
-							createdAt: { type: 'string', format: 'date-time' },
+							createdAt: { type: 'null' },
 							counts: {
 								type: 'object',
 								properties: {
-									supporters: { type: 'integer' },
-									campaigns: { type: 'integer' },
-									templates: { type: 'integer' }
+									supporters: { type: ['integer', 'null'] },
+									campaigns: { type: ['integer', 'null'] },
+									templates: { type: 'null' }
+								}
+							},
+							countsExact: {
+								type: 'object',
+								properties: {
+									supporters: { type: 'boolean' },
+									campaigns: { type: 'boolean' },
+									templates: { type: 'boolean', enum: [false] }
 								}
 							}
 						}
@@ -1885,7 +1959,8 @@ export const openApiSpec = {
 					description: { type: ['string', 'null'] },
 					status: { type: 'string', enum: ['active', 'suspended'] },
 					ownerOrgId: { type: 'string' },
-					memberCount: { type: 'integer' },
+					memberCount: { type: ['integer', 'null'] },
+					memberCountExact: { type: 'boolean' },
 					role: { type: 'string', enum: ['admin', 'member'] },
 					joinedAt: { type: 'string', format: 'date-time' },
 					createdAt: { type: 'string', format: 'date-time' },
@@ -1901,7 +1976,8 @@ export const openApiSpec = {
 					description: { type: ['string', 'null'] },
 					status: { type: 'string', enum: ['active', 'suspended'] },
 					ownerOrgId: { type: 'string' },
-					memberCount: { type: 'integer' },
+					memberCount: { type: ['integer', 'null'] },
+					memberCountExact: { type: 'boolean' },
 					ownerOrg: {
 						type: 'object',
 						properties: {
@@ -1910,19 +1986,8 @@ export const openApiSpec = {
 							slug: { type: 'string' }
 						}
 					},
-					members: {
-						type: 'array',
-						items: {
-							type: 'object',
-							properties: {
-								orgId: { type: 'string' },
-								orgName: { type: 'string' },
-								orgSlug: { type: 'string' },
-								role: { type: 'string', enum: ['admin', 'member'] },
-								joinedAt: { type: 'string', format: 'date-time' }
-							}
-						}
-					},
+					members: { type: 'null' },
+					membersAvailable: { type: 'boolean', enum: [false] },
 					createdAt: { type: 'string', format: 'date-time' },
 					updatedAt: { type: 'string', format: 'date-time' }
 				}
@@ -1996,9 +2061,8 @@ export const openApiSpec = {
 			},
 			WebhookSecretRotated: {
 				type: 'object',
-				required: ['id', 'signingSecret'],
+				required: ['signingSecret'],
 				properties: {
-					id: { type: 'string' },
 					signingSecret: {
 						type: 'string',
 						description:
@@ -2029,23 +2093,43 @@ export const openApiSpec = {
 					url: {
 						type: 'string',
 						format: 'uri',
-						description: 'HTTPS endpoint to receive POST deliveries'
+						maxLength: 2048,
+						description: 'HTTPS endpoint to receive POST deliveries; maximum 2,048 UTF-8 bytes'
 					},
 					events: {
 						type: 'array',
 						minItems: 1,
+						maxItems: 16,
 						items: { $ref: '#/components/schemas/WebhookEvent' }
 					},
-					description: { type: 'string', maxLength: 500 }
+					description: {
+						type: 'string',
+						maxLength: 512,
+						description: 'Maximum 512 UTF-8 bytes'
+					}
 				}
 			},
 			UpdateWebhookInput: {
 				type: 'object',
 				properties: {
-					url: { type: 'string', format: 'uri' },
-					events: { type: 'array', items: { $ref: '#/components/schemas/WebhookEvent' } },
+					url: {
+						type: 'string',
+						format: 'uri',
+						maxLength: 2048,
+						description: 'Maximum 2,048 UTF-8 bytes'
+					},
+					events: {
+						type: 'array',
+						minItems: 1,
+						maxItems: 16,
+						items: { $ref: '#/components/schemas/WebhookEvent' }
+					},
 					enabled: { type: 'boolean', description: 'Re-enabling resets failureCount to 0.' },
-					description: { type: 'string', maxLength: 500 }
+					description: {
+						type: 'string',
+						maxLength: 512,
+						description: 'Maximum 512 UTF-8 bytes'
+					}
 				}
 			},
 			ResolutionProvenance: {
@@ -2086,69 +2170,69 @@ export const openApiSpec = {
 			ResolveAddressResult: {
 				type: 'object',
 				properties: {
-							district: {
-								type: ['object', 'null'],
+					district: {
+						type: ['object', 'null'],
+						description:
+							'Resolved district object. null means the address is outside coverage — a valid result, NOT an error.',
+						properties: {
+							id: { type: 'string', description: 'District id, e.g. "CA-12"' },
+							name: { type: 'string', description: 'Human-readable district name' },
+							jurisdiction: { type: 'string' },
+							district_type: {
+								type: 'string',
+								enum: ['congressional'],
 								description:
-									'Resolved district object. null means the address is outside coverage — a valid result, NOT an error.',
-								properties: {
-									id: { type: 'string', description: 'District id, e.g. "CA-12"' },
-									name: { type: 'string', description: 'Human-readable district name' },
-									jurisdiction: { type: 'string' },
-									district_type: {
-										type: 'string',
-										enum: ['congressional'],
-										description:
-											"Always 'congressional' — this field is the congressional district. See districts[] for all boundary types."
-									}
-								}
-							},
-							districts: {
-								type: 'array',
-								items: { $ref: '#/components/schemas/ResolvedDistrict' },
-								description:
-									'All boundary types served at this address, ordered by broadest federal first ' +
-									'(congressional, then state legislative, county, city, school, township, tribal). ' +
-									'Includes the congressional entry (same id as district) when present. Empty when outside coverage; may be non-empty with district null if only non-congressional types resolve. ' +
-									'Only types listed in coverage.boundaryTypes can appear; absence of a listed type means ' +
-									'either no such district exists at this address or the data is partial for that type — ' +
-									'consult its coverage class. district_type is an open set: new types may be added, ' +
-									'existing values are never renamed.'
-							},
-							coverage: { $ref: '#/components/schemas/ResolveCoverage' },
-							provenance: { $ref: '#/components/schemas/ResolutionProvenance' },
-							confidence: {
-								type: 'number',
-								minimum: 0,
-								maximum: 1,
-								description: 'Match confidence; degraded results lower this rather than throwing'
-							},
-							asOf: {
-								type: 'object',
-								description:
-									'Two independent freshness clocks, kept as distinct keys and never collapsed into one.',
-								properties: {
-									boundaryAsOf: {
-										type: ['string', 'null'],
-										description:
-											'Boundary-geometry vintage. null = degraded/unknown vintage (honest, never fabricated).'
-									},
-									officialsAsOf: {
-										type: ['string', 'null'],
-										description:
-											'Officials-sync timestamp. null = degraded/unknown vintage (honest, never fabricated).'
-									}
-								}
-							},
-							officials: {
-								type: 'array',
-								items: { type: 'object' },
-								description: 'Officials for the resolved district (empty when outside coverage)'
-							},
-							warning: {
+									"Always 'congressional' — this field is the congressional district. See districts[] for all boundary types."
+							}
+						}
+					},
+					districts: {
+						type: 'array',
+						items: { $ref: '#/components/schemas/ResolvedDistrict' },
+						description:
+							'All boundary types served at this address, ordered by broadest federal first ' +
+							'(congressional, then state legislative, county, city, school, township, tribal). ' +
+							'Includes the congressional entry (same id as district) when present. Empty when outside coverage; may be non-empty with district null if only non-congressional types resolve. ' +
+							'Only types listed in coverage.boundaryTypes can appear; absence of a listed type means ' +
+							'either no such district exists at this address or the data is partial for that type — ' +
+							'consult its coverage class. district_type is an open set: new types may be added, ' +
+							'existing values are never renamed.'
+					},
+					coverage: { $ref: '#/components/schemas/ResolveCoverage' },
+					provenance: { $ref: '#/components/schemas/ResolutionProvenance' },
+					confidence: {
+						type: 'number',
+						minimum: 0,
+						maximum: 1,
+						description: 'Match confidence; degraded results lower this rather than throwing'
+					},
+					asOf: {
+						type: 'object',
+						description:
+							'Two independent freshness clocks, kept as distinct keys and never collapsed into one.',
+						properties: {
+							boundaryAsOf: {
 								type: ['string', 'null'],
 								description:
-									'Degraded-but-resolved guard. Its own field — never borrows either asOf clock.'
+									'Boundary-geometry vintage. null = degraded/unknown vintage (honest, never fabricated).'
+							},
+							officialsAsOf: {
+								type: ['string', 'null'],
+								description:
+									'Officials-sync timestamp. null = degraded/unknown vintage (honest, never fabricated).'
 							}
+						}
+					},
+					officials: {
+						type: 'array',
+						items: { type: 'object' },
+						description: 'Officials for the resolved district (empty when outside coverage)'
+					},
+					warning: {
+						type: ['string', 'null'],
+						description:
+							'Degraded-but-resolved guard. Its own field — never borrows either asOf clock.'
+					}
 				}
 			},
 			ResolvedDistrict: {

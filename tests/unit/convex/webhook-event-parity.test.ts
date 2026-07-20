@@ -65,14 +65,16 @@ describe('webhook event-catalog parity', () => {
 		expect(orphan).toEqual([]);
 	});
 
-	it('both validators derive from the canonical set, not a private copy', () => {
+	it('both adapters delegate to one validator derived from the canonical set', () => {
 		for (const file of ['orgWebhooks.ts', 'v1api.ts']) {
 			const text = readFileSync(join(CONVEX, file), 'utf8');
-			expect(text).toContain('WEBHOOK_EVENT_SET');
+			expect(text).toContain('orgWebhookPolicy');
 			// The hand-written 8-string Set is gone — a catalog literal no longer
 			// appears in the validator files (only in _webhookEvents.ts + emit sites).
 			expect(text).not.toContain("'supporter.updated'");
 		}
+		const policy = readFileSync(join(CONVEX, 'lib/orgWebhookPolicy.ts'), 'utf8');
+		expect(policy).toContain('WEBHOOK_EVENT_SET');
 	});
 
 	it('every advertising surface lists exactly the canonical 8', () => {

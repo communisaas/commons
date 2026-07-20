@@ -1,0 +1,1565 @@
+{
+	"protocol": "4",
+	"coordinatorGeneration": "v4",
+	"teamAuthorityId": "shared-convex-quota-01",
+	"realms": {
+		"production": "quirky-chinchilla-352.convex.cloud",
+		"preview": "outstanding-firefly-831.convex.cloud"
+	},
+	"unitBytes": 1024,
+	"caps": {
+		"dailyUnits": 327680,
+		"monthlyUnits": 524288
+	},
+	"cloudflareEnvelope": {
+		"workerDailyRequestFreeLimit": 100000,
+		"durableObjectDailyRequestFreeLimit": 100000,
+		"sqliteDailyRowsReadFreeLimit": 5000000,
+		"sqliteRowsWrittenPerAdmission": 2,
+		"sqliteDailyRowsWrittenFreeLimit": 100000
+	},
+	"launchEnvelope": {
+		"ordinaryManifestRefreshGateWindowMinutes": 5,
+		"continuationGateWindowMinutes": 2,
+		"manifestCronPollSeconds": 60,
+		"manifestCronHttpTimeoutSeconds": 10,
+		"manifestSchedulerJitterBudgetSeconds": 30,
+		"manifestAuthoritySurvivalReserveSeconds": 20,
+		"manifestAuthorityFreshnessSeconds": 540,
+		"maximumCalendarMonthDays": 31,
+		"maximumCleanBackfillAttemptsPerRelease": 16,
+		"maximumMaterializationReplayAttemptsPerRelease": 3,
+		"maximumOrdinaryManifestRefreshCallsPerDayPerRealm": 288,
+		"maximumDeploymentHealthChecksPerRelease": 2,
+		"maximumReleaseEnvelopesPerTeamMonth": 1,
+		"recurringHealthChecksPerDayPerRealm": 0,
+		"softLaunchDailyUnitsPerRealm": 512
+	},
+	"classes": {
+		"auth": 16,
+		"control": 8,
+		"point": 64,
+		"mutation": 128,
+		"collection": 1024,
+		"bulk": 1024,
+		"maximum": 4096
+	},
+	"operations": {
+		"agentTraces:listByTrace": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"agentTraces:record": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"analytics:incrementBatch": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"authOps:backfillTokenIdentifier": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"authOps:createSession": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"authOps:invalidateSession": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"authOps:renewSession": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"authOps:upsertFromOAuth": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"blasts:getEncryptedSupportersForBlast": {
+			"kind": "query",
+			"class": "point"
+		},
+		"calls:createCall": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"calls:listCalls": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"calls:listCallsPaginated": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"calls:updateCallSid": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"calls:updateCallStatus": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"calls:validateCampaign": {
+			"kind": "query",
+			"class": "point"
+		},
+		"calls:validateSupporter": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:addTarget": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:clone": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getActionsForPacket": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getCampaignByDebateId": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getCampaignPacketSummary": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getDebateId": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getDeliveryMetrics": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getForOrgPage": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getPastDeliveries": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getPublic": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getPublicActive": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getPublicAny": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getReadModelBundle": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getReportPreview": {
+			"kind": "query",
+			"class": "point"
+		},
+		"campaigns:getStats": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:getStatusCounts": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"campaigns:recordResponse": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:removeTarget": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:sendReport": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"campaigns:submitAction": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"campaigns:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"campaigns:updateStatus": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"debates:cosign": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"debates:createArgument": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"debates:findNullifier": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:forceSpawnDebateForCampaign": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"debates:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:getArgumentByIndexForSsr": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:getByTemplateId": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:getCampaignForDebate": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:getFullByTemplateId": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"debates:getPublicDetail": {
+			"kind": "query",
+			"class": "point"
+		},
+		"debates:getSnapshot": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"debates:insertDebateForCaller": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"debates:listArguments": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"debates:listAwaitingGovernance": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"debates:listPublic": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"debates:updateArgumentScores": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"debates:updateStatus": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"delegation:createGrant": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"delegation:listGrants": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"delegation:revokeGrant": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"donations:createFundraiser": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"donations:deleteFundraiser": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"donations:getConfirmationSummary": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"donations:listByOrgWithDonors": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"donations:listDonors": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"donations:processCheckout": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"donations:updateFundraiser": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:applyUnsubscribeByBlastEmail": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:countActiveReports": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"email:countRecipientsForFilter": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"email:createAbRemainderDraft": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:createAbTestDrafts": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:createBlast": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:createBounceReport": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"email:enqueueAbRemainderDispatch": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"email:enqueueAbTestDispatch": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"email:enqueueServerDispatch": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"email:findUnresolvedReport": {
+			"kind": "query",
+			"class": "point"
+		},
+		"email:getAbTestGroup": {
+			"kind": "query",
+			"class": "point"
+		},
+		"email:getBlast": {
+			"kind": "query",
+			"class": "point"
+		},
+		"email:getBlastForEditor": {
+			"kind": "query",
+			"class": "point"
+		},
+		"email:listBlasts": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"email:listReceiptsForBlast": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"email:resolveRecipientHashesForFilter": {
+			"kind": "query",
+			"class": "point"
+		},
+		"email:updateBlast": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"events:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"events:createRsvp": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"events:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"events:getEventInternalForCaller": {
+			"kind": "query",
+			"class": "point"
+		},
+		"events:getPublic": {
+			"kind": "query",
+			"class": "point"
+		},
+		"events:getRsvps": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"events:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"events:publicCheckIn": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"events:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"ground:addPasskeyWrapperToActiveVault": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"ground:getMyGroundRestoreState": {
+			"kind": "query",
+			"class": "point"
+		},
+		"ground:getMyGroundState": {
+			"kind": "query",
+			"class": "point"
+		},
+		"ground:persistGroundBundle": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"invites:accept": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"invites:create": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"invites:getByToken": {
+			"kind": "query",
+			"class": "point"
+		},
+		"invites:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"invites:remove": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"invites:resend": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"legislation:browseBills": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:discoverDms": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:dismissAlert": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:exportReceiptsByOrg": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:exportScorecards": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:followDm": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:getAlertPreferences": {
+			"kind": "query",
+			"class": "point"
+		},
+		"legislation:getAlertWithBill": {
+			"kind": "query",
+			"class": "point"
+		},
+		"legislation:getDmActivity": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:getDmDetail": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:getDmFeed": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:getDmPublicProfile": {
+			"kind": "query",
+			"class": "point"
+		},
+		"legislation:getDmScorecard": {
+			"kind": "query",
+			"class": "point"
+		},
+		"legislation:importRepresentatives": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"legislation:listAlerts": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listMyReceipts": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listOrgDmFollows": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listOrgScorecards": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listReceiptsByCampaign": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listReceiptsByOrg": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listRecentBills": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listRelevantBills": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listRepresentatives": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:listWatchedBills": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:rescoreBills": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"legislation:searchBills": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"legislation:unfollowDm": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:unwatchBill": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:updateAlertPreferences": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:updateBillWatch": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:updateDmFollow": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"legislation:watchBill": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"messageJobs:checkpointPhase": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"messageJobs:completeEncrypted": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"messageJobs:fail": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"messageJobs:getForUser": {
+			"kind": "query",
+			"class": "point"
+		},
+		"messageJobs:markRunning": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"messageJobs:startOrGet": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"metering:getUsageForPeriod": {
+			"kind": "query",
+			"class": "point"
+		},
+		"metering:recordUsage": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"networks:checkMembership": {
+			"kind": "query",
+			"class": "point"
+		},
+		"networks:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"networks:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"networks:getProofPressure": {
+			"kind": "query",
+			"class": "point"
+		},
+		"networks:getPublicCharter": {
+			"kind": "query",
+			"class": "point"
+		},
+		"networks:getStats": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"networks:invite": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"networks:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"networks:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"networks:updateMemberRole": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"networks:updateMemberStatus": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"observability:discoveryProducerStatus": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"organizations:completePlatformApiSync": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"organizations:connectPlatformApiCredential": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:createIssueDomain": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:deleteIssueDomain": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:disconnectPlatformApiCredential": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:failPlatformApiSync": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:generateBrandingUploadUrl": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:getBillingContext": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getBySlug": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getMyMemberships": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getOrgContext": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getOrgKeyVerifier": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getPlatformApiState": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getPublicBrandingBySlug": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:getSettingsData": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:listIssueDomains": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"organizations:listPublic": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"organizations:recordPlatformApiCredentialProbe": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:recordPlatformApiSyncProgress": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:removeMember": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:setBranding": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:setPublicDirectoryVisibility": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:slugExists": {
+			"kind": "query",
+			"class": "point"
+		},
+		"organizations:startPlatformApiSync": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"organizations:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:updateIssueDomain": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:updateMemberRole": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"organizations:updateStripeCustomerId": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"orgWebhooks:sessionCreateWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"orgWebhooks:sessionDeleteWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"orgWebhooks:sessionListRecentDeliveries": {
+			"kind": "query",
+			"class": "point"
+		},
+		"orgWebhooks:sessionListWebhooks": {
+			"kind": "query",
+			"class": "point"
+		},
+		"orgWebhooks:sessionRotateWebhookSecret": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"orgWebhooks:sessionTestWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"orgWebhooks:sessionUpdateWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"passkeys:consumeAuthenticationCeremony": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"passkeys:consumeRegistrationCeremony": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"passkeys:createAuthenticationCeremony": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"passkeys:createRegistrationCeremony": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"passkeys:getAuthMaterialByEmail": {
+			"kind": "query",
+			"class": "point"
+		},
+		"passkeys:updatePasskeyAfterAuthentication": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"positions:batchRegisterDeliveries": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"positions:confirmMailtoSend": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"positions:getCounts": {
+			"kind": "query",
+			"class": "point"
+		},
+		"positions:getExisting": {
+			"kind": "query",
+			"class": "point"
+		},
+		"positions:getFullEngagementByDistrict": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"positions:getViewerDistrictMetric": {
+			"kind": "query",
+			"class": "point"
+		},
+		"positions:recordDirectDeliveries": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"positions:register": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"resolvedContacts:getCached": {
+			"kind": "query",
+			"class": "point"
+		},
+		"resolvedContacts:updateVerification": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"resolvedContacts:upsert": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"revocations:applyRevocationSMTUpdate": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"revocations:getRevocationHaltStatus": {
+			"kind": "query",
+			"class": "point"
+		},
+		"revocations:getRevocationRoot": {
+			"kind": "query",
+			"class": "point"
+		},
+		"revocations:getRevocationSMTPath": {
+			"kind": "query",
+			"class": "point"
+		},
+		"revocations:setRevocationHaltForCaller": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"segments:bulkApplyTag": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"segments:bulkRemoveTag": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"segments:countMatching": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"segments:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"segments:exportDecrypted": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"segments:exportMatching": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"segments:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"segments:remove": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"segments:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"sessionAuthority:get": {
+			"kind": "query",
+			"class": "auth"
+		},
+		"sms:assertDispatchRecipientsAuthorized": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:countEligibleRecipientsForFilter": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:createBlast": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"sms:deleteBlast": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"sms:getBlast": {
+			"kind": "query",
+			"class": "point"
+		},
+		"sms:getBlastMessages": {
+			"kind": "query",
+			"class": "point"
+		},
+		"sms:getEncryptedRecipientsForBlast": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:getReplySummary": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:listBlasts": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:listReplies": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"sms:recordDispatchBatch": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"sms:updateBlast": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"submissions:create": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"submissions:getCongressionalDeliveryReadiness": {
+			"kind": "query",
+			"class": "point"
+		},
+		"submissions:listAnchorIncidents": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"submissions:retryDelivery": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"subscriptions:checkPlanLimits": {
+			"kind": "query",
+			"class": "point"
+		},
+		"subscriptions:checkPlanLimitsByOrgIdForCaller": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"subscriptions:getByOrg": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"subscriptions:getMyBillingContext": {
+			"kind": "query",
+			"class": "point"
+		},
+		"subscriptions:hasActivePaidIndividual": {
+			"kind": "query",
+			"class": "point"
+		},
+		"subscriptions:requestPlanUsageRepair": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"subscriptions:requestPlanUsageRepairByOrgIdForCaller": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"subscriptions:updateMyStripeCustomerId": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:addTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:createTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:deleteTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:ensureTags": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"supporters:getDistrictVerifiedCount": {
+			"kind": "query",
+			"class": "point"
+		},
+		"supporters:getEmailStatus": {
+			"kind": "query",
+			"class": "point"
+		},
+		"supporters:getSummaryStats": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"supporters:getTags": {
+			"kind": "query",
+			"class": "point"
+		},
+		"supporters:importWithEncryption": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"supporters:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"supporters:removeTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:renameTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:unsubscribe": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"supporters:updateSmsStatus": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"targets:cohortDistrictHistogram": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templatePage:getUserDmRelation": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templatePage:getViewerAuthorRelation": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templatePage:getViewerMessageDistrictCount": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:claimEmbeddingBackfillLease": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:completePublicTemplateEmbeddings": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"templates:createTemplate": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:endorse": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:findByContentHash": {
+			"kind": "query",
+			"class": "point"
+		},
+		"templates:getBySlug": {
+			"kind": "query",
+			"class": "point"
+		},
+		"templates:getSourceCache": {
+			"kind": "query",
+			"class": "point"
+		},
+		"templates:listByOrgPage": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:listByUserPage": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:listMissingEmbeddings": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:patchMetadata": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:publicDiscoveryList": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:publicDiscoveryManifest": {
+			"kind": "query",
+			"class": "control"
+		},
+		"templates:publicDiscoveryRelations": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:publicTemplatePageArtifactInventoryPage": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"templates:publicTemplatePageArtifactsByCoordinates": {
+			"kind": "query",
+			"class": "maximum"
+		},
+		"templates:rebuildHomepageSnapshotsAfterBackfill": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"templates:releaseEmbeddingBackfillLease": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:removeEndorsement": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:search": {
+			"kind": "action",
+			"class": "bulk"
+		},
+		"templates:setCwcVerification": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"templates:templateSlugsExist": {
+			"kind": "query",
+			"class": "point"
+		},
+		"templates:updateMissingEmbeddingsForBackfill": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"templates:updateSourceCache": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:clearPasskey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:connectWallet": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:countRegistrations": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"users:createShadowAtlasRegistration": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:disconnectWallet": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:finalizeMdlVerification": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:getActiveCredentialDistrictCommitment": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getActiveCredentialHash": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getDidKey": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getIdentityForAtlas": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getIdentityForEngagement": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getMyActionCount": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getMyRepresentatives": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getMyTemplatesPage": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"users:getNearAccountId": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getProfile": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getReverificationBudget": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getShadowAtlasRegistration": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:getWalletStatus": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:listRecentRegistrations": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"users:resolveCredentialHash": {
+			"kind": "query",
+			"class": "point"
+		},
+		"users:storePasskey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:updateProfile": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:updateShadowAtlasRegistration": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:upsertRegistration": {
+			"kind": "mutation",
+			"class": "bulk"
+		},
+		"users:verifyAddress": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:authenticateApiKey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:compareDmScorecards": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:confirmEmailDelivery": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:createApiKey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:createCampaign": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:createSupporter": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:createTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:createWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:deleteSupporter": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:deleteTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:deleteWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:getCampaignById": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getCampaignStats": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:getDelegationGrant": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getDmScorecard": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getDonationById": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getEventById": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getEventStats": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:getNetworkByIdV1": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getOrgForApiKey": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getSubmissionStatus": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getSupporterById": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getWebhook": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:getWorkflowById": {
+			"kind": "query",
+			"class": "point"
+		},
+		"v1api:listActivityFeed": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listCallsV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listCampaignActions": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listCampaigns": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listDonationsV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listEventsV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listNetworksV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listRepresentativesV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listSmsBlastsV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listSupporters": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listTags": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listWebhooks": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:listWorkflowsV1": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:pollOrgEvents": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"v1api:renameApiKey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:revokeApiKey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:rotateWebhookSecret": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:submitDelegationReview": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:testWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:updateCampaign": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:updateDelegationGrant": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:updateSupporter": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:updateTag": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"v1api:updateWebhook": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"verify:getCampaignForVerify": {
+			"kind": "query",
+			"class": "point"
+		},
+		"verify:getCredentialByHash": {
+			"kind": "query",
+			"class": "point"
+		},
+		"verify:getDelivery": {
+			"kind": "query",
+			"class": "point"
+		},
+		"verify:getReceipt": {
+			"kind": "query",
+			"class": "point"
+		},
+		"waitlist:join": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"workflows:create": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"workflows:get": {
+			"kind": "query",
+			"class": "point"
+		},
+		"workflows:getExecutions": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"workflows:list": {
+			"kind": "query",
+			"class": "collection"
+		},
+		"workflows:processScheduledNow": {
+			"kind": "action",
+			"class": "maximum"
+		},
+		"workflows:remove": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"workflows:setEnabled": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"workflows:update": {
+			"kind": "mutation",
+			"class": "mutation"
+		}
+	}
+}

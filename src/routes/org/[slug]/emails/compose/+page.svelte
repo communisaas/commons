@@ -36,6 +36,21 @@
 		label: string;
 		count: number;
 	};
+	type ClientDirectRecipientPage = {
+		recipients: Array<{
+			_id: Id<'supporters'>;
+			encryptedEmail: string;
+			emailHash: string;
+			encryptedName?: string;
+			postalCode?: string;
+			verified: boolean;
+		}>;
+		continueCursor: string | null;
+		isDone: boolean;
+		scannedCount: number;
+		maxRecipients: number;
+		maxScanned: number;
+	};
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	let subject = $state('');
@@ -151,7 +166,11 @@
 		FEATURES.EMAIL_SERVER_DISPATCH && data.serverDispatchRuntimeReady
 	);
 	const browserDirectReady = $derived(
-		canPublish && isClientDirectEmailCount(recipientCount) && hasOrgKey && clientDirectConfigured
+		FEATURES.EMAIL_SERVER_DISPATCH &&
+			canPublish &&
+			isClientDirectEmailCount(recipientCount) &&
+			hasOrgKey &&
+			clientDirectConfigured
 	);
 	const browserDirectExecutable = $derived(browserDirectReady && !mergeFieldsBlockClientSend);
 	const emailLimitNotice = $derived(
@@ -559,13 +578,45 @@
 		};
 
 		try {
-			// Fetch encrypted supporters via Convex client — pass blastId so the
-			// recipientFilter persisted at compose time is enforced at load
-			// (F-119 closure: filter is no longer just a count-time UI hint).
-			const supporters = await convex.query(api.blasts.getEncryptedSupportersForBlast, {
-				orgSlug: data.org.slug,
-				blastId: blastData.blastId as Id<'emailBlasts'>
-			});
+			// One Convex query transaction per supporter cursor page. Browser-direct
+			// delivery is capped at 10K scanned/matched rows; sparse filters never turn
+			// one query into a hidden full-roster loop.
+			let cursor: string | null = null;
+			let scanned = 0;
+			const supporters: Array<{
+				_id: Id<'supporters'>;
+				encryptedEmail: string;
+				emailHash: string;
+				encryptedName?: string;
+				postalCode?: string;
+				verified: boolean;
+			}> = [];
+			for (;;) {
+				const recipientPage: ClientDirectRecipientPage = await convex.query(
+					api.blasts.getEncryptedSupportersForBlast,
+					{
+						orgSlug: data.org.slug,
+						blastId: blastData.blastId as Id<'emailBlasts'>,
+						cursor
+					}
+				);
+				scanned += recipientPage.scannedCount;
+				supporters.push(...recipientPage.recipients);
+				if (scanned > recipientPage.maxScanned) {
+					throw new Error('Exact audience scan exceeds 10,000 people.');
+				}
+				if (supporters.length > recipientPage.maxRecipients) {
+					throw new Error('Email audience exceeds 10,000 recipients. Narrow the filters.');
+				}
+				if (recipientPage.isDone) break;
+				if (!recipientPage.continueCursor || recipientPage.continueCursor === cursor) {
+					throw new Error('Audience cursor did not advance.');
+				}
+				if (scanned >= recipientPage.maxScanned) {
+					throw new Error('Exact audience scan exceeds 10,000 people. Narrow the filters.');
+				}
+				cursor = recipientPage.continueCursor;
+			}
 
 			// Fetch dispatch claim once per blast (caller-cohort
 			// validation). Claim is server-signed and binds (orgId, blastId,
@@ -1442,8 +1493,8 @@
 							Personalized fields can't be sent from the browser yet
 						</p>
 						<p class="text-text-tertiary mt-1 text-xs">
-							Preview fills the fields with sample values. Remove the merge fields to send from
-							the browser, or save this as a draft.
+							Preview fills the fields with sample values. Remove the merge fields to send from the
+							browser, or save this as a draft.
 						</p>
 					</div>
 				{:else if hasMergeFields}

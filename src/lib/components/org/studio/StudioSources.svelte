@@ -14,20 +14,9 @@
   counts it as search-only source ground rather than fake evaluated confidence
   (the HONESTY RULE).
 -->
-<script lang="ts" module>
-	export interface StudioSource {
-		num: number;
-		title: string;
-		url: string;
-		type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
-		credibility_rationale?: string;
-		incentive_position?: 'adversarial' | 'neutral' | 'aligned';
-		source_order?: 'primary' | 'secondary' | 'opinion';
-	}
-</script>
-
 <script lang="ts">
 	import { Datum } from '$lib/design';
+	import type { StudioSource } from './types';
 
 	let {
 		sources
@@ -124,9 +113,7 @@
 		<ol class="sources-list">
 			{#each ranked as source (source.num)}
 				{@const fallback = isFallback(source)}
-				{@const meta = source.incentive_position
-					? INCENTIVE_META[source.incentive_position]
-					: null}
+				{@const meta = source.incentive_position ? INCENTIVE_META[source.incentive_position] : null}
 				<li class="source">
 					<span class="source-num">[{source.num}]</span>
 					<div class="source-body">
@@ -145,14 +132,11 @@
 
 						{#if fallback}
 							<p class="source-boundary">
-								Credibility assessment not available — this source was included on search
-								relevance only.
+								Credibility assessment not available — this source was included on search relevance
+								only.
 							</p>
 						{:else if meta}
-							<span
-								class="source-incentive"
-								style="--inc-color: {meta.color};"
-							>
+							<span class="source-incentive" style="--inc-color: {meta.color};">
 								<span class="source-incentive-dot" aria-hidden="true"></span>
 								<span class="source-incentive-label">{meta.label}</span>
 								<span class="source-incentive-gloss">{meta.gloss}</span>

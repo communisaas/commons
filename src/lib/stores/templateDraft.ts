@@ -255,6 +255,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							emailSourceTitle: dm.emailSourceTitle,
 							contactNotes: dm.contactNotes,
 							discovered: dm.discovered,
+							publicRecipientProvenance: dm.publicRecipientProvenance
+								? { ...dm.publicRecipientProvenance }
+								: undefined,
 							accountabilityOpener: dm.accountabilityOpener,
 							roleCategory: dm.roleCategory,
 							relevanceRank: dm.relevanceRank,

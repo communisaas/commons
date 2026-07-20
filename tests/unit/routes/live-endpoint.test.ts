@@ -10,6 +10,7 @@ describe('/api/live', () => {
 		expect(response.headers.get('Cache-Control')).toBe('no-store');
 		await expect(response.json()).resolves.toMatchObject({
 			status: 'ok',
+			release: { sha: expect.stringMatching(/^[a-f0-9]{40}$/) },
 			uptime: expect.any(Number)
 		});
 	});

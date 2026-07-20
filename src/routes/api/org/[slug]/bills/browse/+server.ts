@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -18,7 +18,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1), 50);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1),
+		50
+	);
 	const offset = Math.max(parseInt(url.searchParams.get('offset') ?? '0', 10) || 0, 0);
 
 	const result = await serverQuery(api.legislation.browseBills, {

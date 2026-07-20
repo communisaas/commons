@@ -1,12 +1,19 @@
 // CONVEX: Keep SvelteKit — POST uses blockchain (submitArgument), solidityPackedKeccak256, tx-verifier
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const DEBATE_ARGUMENT_REQUEST_MAX_BYTES = 128 * 1024;
+const DEBATE_ARGUMENT_BODY_MAX = 8_000;
+const DEBATE_AMENDMENT_BODY_MAX = 4_000;
 
 function verifyTransactionAsync(_txHash: string, _context: Record<string, unknown>): void {
 	// Transaction verification worker is not wired in this API boundary yet.
@@ -22,21 +29,33 @@ function isValidEthAddress(addr: unknown): addr is string {
  *
  * List arguments for a debate, sorted by weighted score.
  */
-export const GET: RequestHandler = async ({ params, url }) => {
+export const GET: RequestHandler = async ({ params, url, getClientAddress }) => {
 	if (!FEATURES.DEBATE) {
 		throw error(404, 'Not found');
 	}
+	const rate = await getRateLimiter().check(`ratelimit:debate-arguments:${getClientAddress()}`, {
+		maxRequests: 60,
+		windowMs: 60_000
+	});
+	if (!rate.allowed) return json({ error: 'Too many requests' }, { status: 429 });
 	const { debateId } = params;
 
 	const stance = url.searchParams.get('stance');
-	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50'), 100);
-	const offset = parseInt(url.searchParams.get('offset') ?? '0');
+	if (stance !== null && !['SUPPORT', 'OPPOSE', 'AMEND'].includes(stance)) {
+		throw error(400, 'Invalid stance');
+	}
+	const rawLimit = Number(url.searchParams.get('limit') ?? '25');
+	if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) throw error(400, 'Invalid limit');
+	const limit = Math.min(rawLimit, 50);
+	const cursor = url.searchParams.get('cursor');
+	if (cursor && cursor.length > 2_048) throw error(400, 'Invalid cursor');
 
 	const result = await serverQuery(api.debates.listArguments, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>,
-		stance: stance ?? undefined,
+		stance: (stance ?? undefined) as 'SUPPORT' | 'OPPOSE' | 'AMEND' | undefined,
 		limit,
-		offset
+		cursor
 	});
 	return json(result);
 };
@@ -46,7 +65,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
  *
  * Submit a new argument to a debate. Requires Tier 3+ and ZK proof.
  */
-export const POST: RequestHandler = async ({ params, request, locals }) => {
+export const POST: RequestHandler = async ({ params, request, locals, getClientAddress }) => {
 	if (!FEATURES.DEBATE) {
 		throw error(404, 'Not found');
 	}
@@ -62,8 +81,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!user || (user.trust_tier ?? 0) < 3) {
 		throw error(403, 'Tier 3+ verification required to submit arguments');
 	}
+	const rate = await getRateLimiter().check(
+		`ratelimit:debate-argument-submit:${getClientAddress()}`,
+		{ maxRequests: 10, windowMs: 60_000 }
+	);
+	if (!rate.allowed) return json({ error: 'Too many requests' }, { status: 429 });
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
+		debateId: debateId as Id<'debates'>
+	});
 	if (!debate) {
 		throw error(404, 'Debate not found');
 	}
@@ -74,8 +101,21 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Debate deadline has passed');
 	}
 
-	const body = await request.json();
-	const { stance, body: argumentBody, amendmentText, stakeAmount, proofHex, publicInputs, nullifierHex, walletAddress } = body;
+	const parsed = await readBoundedJson(request, DEBATE_ARGUMENT_REQUEST_MAX_BYTES);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw error(400, 'Invalid argument request');
+	}
+	const body = parsed as Record<string, any>;
+	const {
+		stance,
+		body: argumentBody,
+		amendmentText,
+		stakeAmount,
+		proofHex,
+		publicInputs,
+		nullifierHex,
+		walletAddress
+	} = body;
 
 	const stakeNum = Number(stakeAmount);
 	if (!stakeAmount || isNaN(stakeNum) || stakeNum <= 0 || stakeNum > 100_000_000_000) {
@@ -88,16 +128,34 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!argumentBody || typeof argumentBody !== 'string' || argumentBody.length < 20) {
 		throw error(400, 'Argument body must be at least 20 characters');
 	}
+	if (argumentBody.length > DEBATE_ARGUMENT_BODY_MAX) {
+		throw error(400, `Argument body must be ${DEBATE_ARGUMENT_BODY_MAX} characters or fewer`);
+	}
+	if (
+		amendmentText !== undefined &&
+		(typeof amendmentText !== 'string' || amendmentText.length > DEBATE_AMENDMENT_BODY_MAX)
+	) {
+		throw error(400, `Amendment text must be ${DEBATE_AMENDMENT_BODY_MAX} characters or fewer`);
+	}
 	if (stance === 'AMEND' && (!amendmentText || amendmentText.length < 5)) {
 		throw error(400, 'Amendment text is required for AMEND stance');
 	}
-	if (!proofHex || !publicInputs || !nullifierHex) {
+	if (
+		typeof proofHex !== 'string' ||
+		proofHex.length > 64 * 1024 ||
+		!Array.isArray(publicInputs) ||
+		publicInputs.length !== 31 ||
+		typeof nullifierHex !== 'string' ||
+		nullifierHex.length === 0 ||
+		nullifierHex.length > 256
+	) {
 		throw error(400, 'ZK proof data is required');
 	}
 
 	// Nullifier dedup
 	if (nullifierHex) {
 		const existingNullifier = await serverQuery(api.debates.findNullifier, {
+			_secret: getInternalSecret(),
 			debateId: debateId as Id<'debates'>,
 			nullifierHash: nullifierHex
 		});
@@ -109,7 +167,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (walletAddress !== undefined && walletAddress !== null && !isValidEthAddress(walletAddress)) {
 		throw error(400, 'walletAddress must be a valid Ethereum address (0x-prefixed, 42 chars)');
 	}
-	const beneficiary: string | undefined = isValidEthAddress(walletAddress) ? walletAddress : undefined;
+	const beneficiary: string | undefined = isValidEthAddress(walletAddress)
+		? walletAddress
+		: undefined;
 
 	// Compute content hashes
 	const bodyHash = solidityPackedKeccak256(['string'], [argumentBody]);
@@ -123,7 +183,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	let offchainOnly = false;
 
 	const clientTxHash = body.txHash;
-	if (clientTxHash && typeof clientTxHash === 'string' && /^0x[0-9a-fA-F]{64}$/.test(clientTxHash)) {
+	if (
+		clientTxHash &&
+		typeof clientTxHash === 'string' &&
+		/^0x[0-9a-fA-F]{64}$/.test(clientTxHash)
+	) {
 		txHash = clientTxHash;
 	} else {
 		try {
@@ -163,6 +227,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	// ── Convex DB write (atomic) ─────────────────────────────────────
 	const argId = await serverMutation(api.debates.createArgument, {
+		_secret: getInternalSecret(),
 		debateId: debateId as Id<'debates'>,
 		stance,
 		body: argumentBody,

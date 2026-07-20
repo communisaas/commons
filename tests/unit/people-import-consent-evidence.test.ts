@@ -69,8 +69,10 @@ describe('People import consent evidence custody', () => {
 
 	it('threads aggregate consent evidence into space load data', () => {
 		expect(spaces).toContain('consentEvidence: {');
-		expect(layoutServer).toContain('consentEvidence: {');
-		expect(layoutServer).toContain('emailSubscribed: asNumber');
+		// The compact context already carries the write-maintained aggregate; the
+		// layout threads it directly without a supporter-history query or remap.
+		expect(layoutServer).toContain('consentEvidence: supporter.consentEvidence');
+		expect(layoutServer).not.toContain('api.supporters.getSummaryStats');
 	});
 });
 

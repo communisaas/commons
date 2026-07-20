@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 

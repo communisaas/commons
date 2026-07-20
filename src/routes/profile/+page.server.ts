@@ -1,7 +1,8 @@
-import { redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { error, redirect } from '@sveltejs/kit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad } from './$types';
 
 type ProfileTemplateDTO = {
@@ -86,11 +87,15 @@ const isoDate = (value: number | string | Date | null | undefined): string | nul
 	return null;
 };
 
-const countRelations = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
-
-export const load: PageServerLoad = async ({ locals }) => {
+export const load: PageServerLoad = async ({ locals, url }) => {
 	if (!locals.user) {
 		throw redirect(302, '/');
+	}
+	const queryAsOf = Date.now();
+	const internalSecret = getInternalSecret();
+	const templateCursor = url.searchParams.get('templateCursor');
+	if (templateCursor && templateCursor.length > 2_048) {
+		throw error(400, 'Invalid template pagination cursor');
 	}
 
 	let convexProfile = null;
@@ -114,15 +119,23 @@ export const load: PageServerLoad = async ({ locals }) => {
 			convexBudget,
 			convexGroundState,
 			convexGroundRestoreState
-		] =
-			await Promise.all([
-				serverQuery(api.users.getProfile, {}),
-				serverQuery(api.users.getMyTemplates, {}),
-				serverQuery(api.users.getMyRepresentatives, {}),
-				serverQuery(api.users.getReverificationBudget, { userId: locals.user.id as Id<'users'> }),
-				serverQuery(api.ground.getMyGroundState, {}),
-				serverQuery(api.ground.getMyGroundRestoreState, {})
-			]);
+		] = await Promise.all([
+			serverQuery(api.users.getProfile, {}),
+			serverQuery(api.users.getMyTemplatesPage, {
+				paginationOpts: { numItems: 5, cursor: templateCursor }
+			}),
+			serverQuery(api.users.getMyRepresentatives, {}),
+			serverQuery(api.users.getReverificationBudget, {
+				_secret: internalSecret,
+				userId: locals.user.id as Id<'users'>,
+				asOf: queryAsOf
+			}),
+			serverQuery(api.ground.getMyGroundState, {}),
+			serverQuery(api.ground.getMyGroundRestoreState, {
+				_secret: internalSecret,
+				asOf: queryAsOf
+			})
+		]);
 	} catch (err) {
 		console.error(
 			'[Profile Page] Convex query failed:',
@@ -130,14 +143,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		);
 	}
 
-	const templates: ProfileTemplateDTO[] = (convexTemplates ?? []).map((template) => ({
+	const templates: ProfileTemplateDTO[] = (convexTemplates?.page ?? []).map((template) => ({
 		id: template._id,
 		title: template.title,
 		slug: template.slug,
 		status: template.status,
 		isPublic: template.isPublic,
 		createdAt: isoDate(template._creationTime) ?? new Date(0).toISOString(),
-		useCount: countRelations((template as { campaigns?: unknown }).campaigns)
+		useCount: 0
 	}));
 	const templateStats = templates.reduce(
 		(acc, template) => {
@@ -153,6 +166,12 @@ export const load: PageServerLoad = async ({ locals }) => {
 		? new Date(convexProfile.addressVerifiedAt).toISOString()
 		: (locals.user.address_verified_at?.toISOString() ?? null);
 	const profileGroundState = toProfileGroundState(convexGroundState);
+	const firstTemplatePageUrl = new URL(url);
+	firstTemplatePageUrl.searchParams.delete('templateCursor');
+	const nextTemplatePageUrl = new URL(url);
+	if (convexTemplates && !convexTemplates.isDone) {
+		nextTemplatePageUrl.searchParams.set('templateCursor', convexTemplates.continueCursor);
+	}
 
 	return {
 		user: {
@@ -205,7 +224,20 @@ export const load: PageServerLoad = async ({ locals }) => {
 						}
 					: null
 			),
-			templatesData: Promise.resolve({ templates, templateStats }),
+			templatesData: Promise.resolve({
+				templates,
+				templateStats,
+				pagination: {
+					isFirstPage: templateCursor === null,
+					isCompleteCorpus:
+						convexTemplates !== null && templateCursor === null && convexTemplates.isDone,
+					firstPageUrl: `${firstTemplatePageUrl.pathname}${firstTemplatePageUrl.search}`,
+					nextPageUrl:
+						convexTemplates && !convexTemplates.isDone
+							? `${nextTemplatePageUrl.pathname}${nextTemplatePageUrl.search}`
+							: null
+				}
+			}),
 			representatives: Promise.resolve(
 				(convexReps ?? []).flatMap((rep): ProfileRepresentativeDTO[] => {
 					if (!rep) return [];
@@ -215,18 +247,18 @@ export const load: PageServerLoad = async ({ locals }) => {
 						chamber?: string;
 						state?: string | null;
 						district?: string | null;
-						};
-						return [
-							{
-								name: record.name,
-								party: record.party ?? null,
-								chamber: record.chamber ?? '',
-								state: record.state ?? null,
-								district: record.district ?? null
-							}
-						];
-					})
-				)
+					};
+					return [
+						{
+							name: record.name,
+							party: record.party ?? null,
+							chamber: record.chamber ?? '',
+							state: record.state ?? null,
+							district: record.district ?? null
+						}
+					];
+				})
+			)
 		}
 	};
 };

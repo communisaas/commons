@@ -1,4 +1,4 @@
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { FunctionArgs } from 'convex/server';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
@@ -134,10 +134,13 @@ export async function verifyGroundCommitmentAuthenticity(
 			msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT')
 		) {
 			const isTimeout = msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT');
-			console.error(`[ground] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`, {
-				userId,
-				detail: msg.slice(0, 200)
-			});
+			console.error(
+				`[ground] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`,
+				{
+					userId,
+					detail: msg.slice(0, 200)
+				}
+			);
 			throw new GroundServiceError(
 				503,
 				isTimeout ? 'COMMITMENT_VERIFY_IPFS_TIMEOUT' : 'COMMITMENT_VERIFY_IPFS_UNAVAILABLE',
@@ -258,7 +261,10 @@ export async function getMyGroundState(): Promise<unknown> {
 }
 
 export async function getMyGroundRestoreState(): Promise<unknown> {
-	return serverQuery(api.ground.getMyGroundRestoreState, {});
+	return serverQuery(api.ground.getMyGroundRestoreState, {
+		_secret: getInternalSecret(),
+		asOf: Date.now()
+	});
 }
 
 export async function persistGroundBundle(input: {

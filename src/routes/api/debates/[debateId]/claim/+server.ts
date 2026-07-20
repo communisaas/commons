@@ -1,12 +1,17 @@
 // Settlement requires on-chain tx execution. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { claimSettlement, settlePrivatePosition } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { readBoundedJson } from '$lib/server/bounded-json';
+import { isBoundedHexBytes, isBytes32, isRecord } from '$lib/server/debate-input-validation';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+
+const DEBATE_CLAIM_REQUEST_MAX_BYTES = 80 * 1024;
 
 /** Returns true for a valid Ethereum address (0x-prefixed, 42 hex chars). */
 function isValidEthAddress(addr: unknown): addr is string {
@@ -22,13 +27,13 @@ function isValidEthAddress(addr: unknown): addr is string {
  *   Calls DebateMarket.claimSettlement(debateId, nullifier).
  *   Used when the user staked via submitArgument / coSignArgument and the
  *   settlement record is stored directly in the contract.
- *   Body: { nullifierHex, proofHex, publicInputs, walletAddress? }
+ *   Body: { nullifierHex, walletAddress? }
  *
  * Path 2 — Private position settlement (Phase 2):
  *   Calls DebateMarket.settlePrivatePosition(debateId, positionProof, positionPublicInputs).
  *   Used when the user held a private LMSR position (committed via commitTrade /
  *   revealTrade) and wants to settle without revealing their identity on-chain.
- *   Body: { nullifierHex, proofHex, publicInputs, positionProof, positionPublicInputs, walletAddress? }
+ *   Body: { positionProof, positionPublicInputs, walletAddress? }
  *
  * Post R-01: the contract transfers payout to record.beneficiary (set at
  * argument submission time), not to msg.sender (the relayer). The relayer
@@ -50,28 +55,10 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		throw error(401, 'Authentication required');
 	}
 
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
-
-	if (!debate) {
-		throw error(404, 'Debate not found');
-	}
-	if (debate.status !== 'resolved') {
-		throw error(400, 'Debate has not been resolved yet');
-	}
-
-	const body = await request.json();
-	const {
-		nullifierHex,
-		proofHex,
-		publicInputs,
-		positionProof,
-		positionPublicInputs,
-		walletAddress
-	} = body;
-
-	if (!nullifierHex || !proofHex || !publicInputs) {
-		throw error(400, 'ZK proof data is required for settlement claims');
-	}
+	const parsed = await readBoundedJson(request, DEBATE_CLAIM_REQUEST_MAX_BYTES);
+	if (!isRecord(parsed)) throw error(400, 'Invalid settlement claim request');
+	const body = parsed;
+	const { nullifierHex, positionProof, positionPublicInputs, walletAddress } = body;
 
 	// Phase 2: private position settlement requires exactly 5 bytes32 public inputs.
 	const isPrivateSettlement = positionProof !== undefined && positionProof !== null;
@@ -88,10 +75,17 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				throw error(400, `positionPublicInputs[${i}] must be a 0x-prefixed 32-byte hex string`);
 			}
 		}
-		if (typeof positionProof !== 'string' || !/^(0x)?[0-9a-fA-F]+$/.test(positionProof)) {
+		if (!isBoundedHexBytes(positionProof)) {
 			throw error(400, 'positionProof must be a hex-encoded byte string');
 		}
+	} else if (positionPublicInputs !== undefined && positionPublicInputs !== null) {
+		throw error(400, 'positionPublicInputs requires positionProof');
+	} else if (!isBytes32(nullifierHex)) {
+		throw error(400, 'nullifierHex must be a 0x-prefixed 32-byte hex string');
 	}
+	const claimNullifier = isPrivateSettlement
+		? (positionPublicInputs as string[])[1]
+		: (nullifierHex as string);
 
 	// Validate walletAddress for audit logging when provided.
 	// This is NOT used to gate the claim — the contract enforces the beneficiary check.
@@ -101,6 +95,19 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	}
 	const claimantWallet: string | null = isValidEthAddress(walletAddress) ? walletAddress : null;
 	let chainBoundary: string | null = null;
+
+	// Reject malformed/oversized payloads before spending a Convex read.
+	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
+		debateId: debateId as Id<'debates'>
+	});
+
+	if (!debate) {
+		throw error(404, 'Debate not found');
+	}
+	if (debate.status !== 'resolved') {
+		throw error(400, 'Debate has not been resolved yet');
+	}
 
 	// Attempt on-chain settlement if the debate has been registered on-chain
 	if (debate.debateIdOnchain) {
@@ -133,19 +140,21 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				allowChainMisconfig({ op: 'debates/claim' });
 				chainBoundary =
 					'Blockchain runtime is not configured; no on-chain private-position settlement was executed.';
-				console.warn('[debates/claim] Blockchain not configured, recording off-chain claim boundary');
+				console.warn(
+					'[debates/claim] Blockchain not configured, recording off-chain claim boundary'
+				);
 			} else {
 				throw error(502, `On-chain private settlement failed: ${onchainResult.error}`);
 			}
 		} else {
 			// Path 1: Simple nullifier-based claim
-			const onchainResult = await claimSettlement(debate.debateIdOnchain, nullifierHex);
+			const onchainResult = await claimSettlement(debate.debateIdOnchain, claimNullifier);
 
 			if (onchainResult.success) {
 				console.info('[debates/claim] Settlement claimed on-chain', {
 					debateId: debate._id,
 					debateIdOnchain: debate.debateIdOnchain,
-					nullifier: nullifierHex.slice(0, 16) + '...',
+					nullifier: claimNullifier.slice(0, 16) + '...',
 					txHash: onchainResult.txHash,
 					winningStance: debate.winningStance,
 					...(claimantWallet ? { beneficiaryWallet: claimantWallet } : {})
@@ -162,7 +171,9 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 				allowChainMisconfig({ op: 'debates/claim' });
 				chainBoundary =
 					'Blockchain runtime is not configured; no on-chain settlement claim was executed.';
-				console.warn('[debates/claim] Blockchain not configured, recording off-chain claim boundary');
+				console.warn(
+					'[debates/claim] Blockchain not configured, recording off-chain claim boundary'
+				);
 			} else {
 				throw error(502, `On-chain settlement claim failed: ${onchainResult.error}`);
 			}
@@ -178,7 +189,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	console.info('[debates/claim] Settlement claim recorded (off-chain)', {
 		debateId: debate._id,
 		settlementPath,
-		nullifier: nullifierHex.slice(0, 16) + '...',
+		nullifier: claimNullifier.slice(0, 16) + '...',
 		winningStance: debate.winningStance,
 		note: 'Off-chain only — no on-chain settlement executed',
 		...(claimantWallet ? { beneficiaryWallet: claimantWallet } : {})

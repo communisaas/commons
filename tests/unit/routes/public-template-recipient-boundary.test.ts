@@ -1,16 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockServerQuery, api } = vi.hoisted(() => ({
-	mockServerQuery: vi.fn(),
-	api: {
-		templates: {
-			getBySlugPublic: 'templates.getBySlugPublic'
-		}
-	}
+const { mockGetCachedPublicTemplatePageArtifact } = vi.hoisted(() => ({
+	mockGetCachedPublicTemplatePageArtifact: vi.fn()
 }));
 
-vi.mock('convex-sveltekit', () => ({ serverQuery: mockServerQuery }));
-vi.mock('$lib/convex', () => ({ api }));
+vi.mock('$lib/server/public-template-queries', () => ({
+	getCachedPublicTemplatePageArtifact: mockGetCachedPublicTemplatePageArtifact
+}));
 vi.mock('$lib/config/features', () => ({
 	FEATURES: { CONGRESSIONAL: false }
 }));
@@ -54,8 +50,11 @@ const convexDetail = {
 
 describe('public template recipient boundary', () => {
 	beforeEach(() => {
-		mockServerQuery.mockReset();
-		mockServerQuery.mockResolvedValue(convexDetail);
+		mockGetCachedPublicTemplatePageArtifact.mockReset();
+		mockGetCachedPublicTemplatePageArtifact.mockResolvedValue({
+			detail: convexDetail,
+			aggregate: {}
+		});
 	});
 
 	it('keeps /s detail data uncached and usable by the direct-email action', async () => {
@@ -63,12 +62,18 @@ describe('public template recipient boundary', () => {
 		const result = (await loadTemplateDetail({
 			params: { slug: convexDetail.slug },
 			request: new Request(`https://commons.email/s/${convexDetail.slug}`),
-			setHeaders
+			setHeaders,
+			url: new URL(`https://commons.email/s/${convexDetail.slug}`),
+			platform: undefined
 		} as never)) as { template: ComponentTemplate };
 
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.getBySlugPublic, {
-			slug: convexDetail.slug
-		});
+		expect(mockGetCachedPublicTemplatePageArtifact).toHaveBeenCalledWith(
+			{
+				url: new URL(`https://commons.email/s/${convexDetail.slug}`),
+				platform: undefined
+			},
+			convexDetail.slug
+		);
 		expect(setHeaders).toHaveBeenCalledWith({
 			'Cache-Control': 'private, no-store, max-age=0'
 		});
@@ -84,7 +89,9 @@ describe('public template recipient boundary', () => {
 		const result = (await loadTemplateModal({
 			params: { slug: convexDetail.slug },
 			locals: { user: null },
-			setHeaders
+			setHeaders,
+			url: new URL(`https://commons.email/template-modal/${convexDetail.slug}`),
+			platform: undefined
 		} as never)) as { template: ComponentTemplate };
 
 		expect(setHeaders).toHaveBeenCalledWith({

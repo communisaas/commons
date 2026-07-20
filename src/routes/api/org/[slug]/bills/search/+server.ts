@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -28,10 +28,21 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 
 	const jurisdiction = url.searchParams.get('jurisdiction');
 	const status = url.searchParams.get('status');
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1), 50);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') ?? '20', 10) || 20, 1),
+		50
+	);
 	const offset = Math.max(parseInt(url.searchParams.get('offset') ?? '0', 10) || 0, 0);
 
-	const validStatuses = ['introduced', 'committee', 'floor', 'passed', 'failed', 'signed', 'vetoed'];
+	const validStatuses = [
+		'introduced',
+		'committee',
+		'floor',
+		'passed',
+		'failed',
+		'signed',
+		'vetoed'
+	];
 	if (status && !validStatuses.includes(status)) {
 		throw error(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
 	}

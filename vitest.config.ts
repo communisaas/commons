@@ -11,6 +11,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load .env file for tests (needed for smoke tests that hit real APIs)
 const env = loadEnv('test', process.cwd(), '');
 Object.assign(process.env, env);
+const TEST_RELEASE_SHA =
+	typeof process.env.VITE_RELEASE_SHA === 'string' &&
+	/^[a-f0-9]{40}$/.test(process.env.VITE_RELEASE_SHA)
+		? process.env.VITE_RELEASE_SHA
+		: '0'.repeat(40);
 
 /**
  * Test-only module resolver:
@@ -22,10 +27,14 @@ Object.assign(process.env, env);
  */
 function testModuleStubsPlugin(): Plugin {
 	const sentryStubPath = path.join(__dirname, 'tests/mocks/sentry-stub.ts');
+	const publicEnvStubPath = path.join(__dirname, 'tests/mocks/public-env-stub.ts');
 	return {
 		name: 'test-module-stubs',
 		enforce: 'pre',
 		resolveId(source) {
+			if (source === '$env/dynamic/public') {
+				return publicEnvStubPath;
+			}
 			if (
 				source === '$lib/server/monitoring/sentry' ||
 				source.endsWith('/src/lib/server/monitoring/sentry.ts') ||
@@ -41,6 +50,13 @@ function testModuleStubsPlugin(): Plugin {
 }
 
 export default defineConfig({
+	define: {
+		// Production receives the source-verified SHA from the deploy workflow.
+		// Unit tests use a syntactically valid sentinel so readiness behavior can
+		// be exercised without pretending a mutable runtime variable is identity.
+		'import.meta.env.VITE_RELEASE_SHA': JSON.stringify(TEST_RELEASE_SHA),
+		'import.meta.env.VITE_RUNTIME_CONTAINMENT_MODE': JSON.stringify('disabled')
+	},
 	plugins: [
 		testModuleStubsPlugin(),
 		sveltekit(),
@@ -61,7 +77,10 @@ export default defineConfig({
 		conditions: ['node', 'import', 'module', 'default'],
 		alias: {
 			// Stub @voter-protocol/noir-prover in CI where the local package isn't linked
-			'@voter-protocol/noir-prover': path.join(__dirname, 'src/lib/core/crypto/voter-protocol-stub.ts')
+			'@voter-protocol/noir-prover': path.join(
+				__dirname,
+				'src/lib/core/crypto/voter-protocol-stub.ts'
+			)
 			// Note: $lib/server/monitoring/sentry stub is wired via testModuleStubsPlugin
 			// (pre-plugin) because SvelteKit's $lib resolver overrides resolve.alias.
 		}

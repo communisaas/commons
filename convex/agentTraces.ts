@@ -29,10 +29,10 @@
  * exclusions (Authorization/Cookie headers + `_secret` keys) are scrubbed
  * at the SvelteKit boundary before payloads cross the wire.
  *
- * GDPR cascade: `deleteByUserId` (internalMutation) is provided so the
- * user-deletion pipeline can erase a user's traces immediately on
- * account delete. NOTE: the user-deletion mutation does not yet call
- * this helper — until it does, deletion relies on the 7-day TTL.
+ * Account deletion is not launched. The historical `deleteByUserId` helper is
+ * a pre-I/O tombstone because its partial batches could delete the only
+ * user-stamped anchor before deleting the rest of a trace. Until a durable
+ * erasure coordinator ships, deletion relies on the 7-day TTL.
  *
  * Accepted residual
  * -----------------
@@ -52,12 +52,12 @@
  *     '{"_secret":"$INTERNAL_API_SECRET","traceId":"abc-def-..."}'
  *
  *   npx convex run agentTraces:findStuck --prod -- \
- *     '{"_secret":"$INTERNAL_API_SECRET","endpoint":"message-generation","olderThanMs":300000}'
+ *     '{"_secret":"$INTERNAL_API_SECRET","endpoint":"message-generation","olderThanMs":300000,"asOf":1784462400000}'
  */
 
-import { mutation, query, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
-import { requireInternalSecret } from "./_internalAuth";
+import { mutation, query, internalMutation } from './_generated/server';
+import { v } from 'convex/values';
+import { requireInternalSecret } from './_internalAuth';
 
 // Hourly cron deletes this many rows per tick. At 1000/hour = 24,000/day,
 // which gives ~2.4x headroom over a 10k events/day projection (1000 traces
@@ -65,15 +65,12 @@ import { requireInternalSecret } from "./_internalAuth";
 // operator can see backlog forming in Convex function logs.
 const EXPIRE_BATCH_SIZE = 1000;
 
-// `recentByEndpoint` scans this many recent events to fold into trace
-// summaries. With ~10 events per trace, 5000 events yields ~500 trace
-// summaries — plenty to satisfy the max 200 cap. If we add many more
-// endpoints or per-trace events, replace with a compound
-// `[endpoint, eventType]` index and scan trace.start events directly.
-const RECENT_SCAN_LIMIT = 5000;
-
-const STUCK_SCAN_LIMIT = 2000;
-const STUCK_RESULT_CAP = 500;
+// Operator reads are cursor-paged and byte-bounded even though they require the
+// internal secret. A trace may straddle page boundaries; the response makes
+// that pagination explicit instead of hiding a multi-thousand-row scan.
+const TRACE_EVENT_PAGE_SIZE = 500;
+const TRACE_EVENT_PAGE_MAX_BYTES = 512 * 1024;
+const STUCK_RESULT_CAP = 50;
 
 // Hard cap on TTL to defend against a caller passing
 // `Number.MAX_SAFE_INTEGER` or a misconfigured `AGENT_TRACE_TTL_DAYS`.
@@ -101,7 +98,7 @@ export const record = mutation({
 		success: v.optional(v.boolean()),
 		durationMs: v.optional(v.number()),
 		costUsd: v.optional(v.float64()),
-		expiresAt: v.number(),
+		expiresAt: v.number()
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
@@ -109,7 +106,7 @@ export const record = mutation({
 		// AGENT_TRACE_TTL_DAYS cannot convert "7-day retention" into
 		// effectively-permanent retention of full prompts/responses.
 		const clampedExpiresAt = Math.min(args.expiresAt, Date.now() + MAX_TTL_MS);
-		await ctx.db.insert("agentTraces", {
+		await ctx.db.insert('agentTraces', {
 			traceId: args.traceId,
 			endpoint: args.endpoint,
 			eventType: args.eventType,
@@ -118,31 +115,50 @@ export const record = mutation({
 			success: args.success,
 			durationMs: args.durationMs,
 			costUsd: args.costUsd,
-			expiresAt: clampedExpiresAt,
+			expiresAt: clampedExpiresAt
 		});
-	},
+	}
 });
 
 /**
- * Return every event for one `traceId`, oldest first.
+ * Return one byte-bounded page of events for one `traceId`, oldest first.
  *
- * Useful for replay: walk the events in order and reconstruct what the
- * pipeline saw and decided at each phase.
+ * The first event is returned separately as authorization metadata so the
+ * caller can authenticate every cursor page without rehydrating the full
+ * trace. Replay clients follow `continueCursor`; no operator read is allowed
+ * to turn a large trace into one unbounded database transaction.
  */
 export const listByTrace = query({
 	args: {
 		_secret: v.string(),
 		traceId: v.string(),
+		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
-		const events = await ctx.db
-			.query("agentTraces")
-			.withIndex("by_traceId", (q) => q.eq("traceId", args.traceId))
-			.collect();
-		events.sort((a, b) => a._creationTime - b._creationTime);
-		return events;
-	},
+		if (!args.traceId || args.traceId.length > 128) {
+			throw new Error('INVALID_TRACE_ID');
+		}
+		const trace = ctx.db
+			.query('agentTraces')
+			.withIndex('by_traceId', (q) => q.eq('traceId', args.traceId))
+			.order('asc');
+		const [firstEvent, page] = await Promise.all([
+			trace.first(),
+			trace.paginate({
+				cursor: args.cursor ?? null,
+				numItems: TRACE_EVENT_PAGE_SIZE,
+				maximumRowsRead: TRACE_EVENT_PAGE_SIZE,
+				maximumBytesRead: TRACE_EVENT_PAGE_MAX_BYTES
+			})
+		]);
+		return {
+			firstEvent,
+			events: page.page,
+			isDone: page.isDone,
+			continueCursor: page.isDone ? null : page.continueCursor
+		};
+	}
 });
 
 /**
@@ -157,16 +173,23 @@ export const recentByEndpoint = query({
 		_secret: v.string(),
 		endpoint: v.string(),
 		limit: v.optional(v.number()),
+		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
 		const cap = Math.min(args.limit ?? 20, 200);
 
-		const events = await ctx.db
-			.query("agentTraces")
-			.withIndex("by_endpoint", (q) => q.eq("endpoint", args.endpoint))
-			.order("desc")
-			.take(RECENT_SCAN_LIMIT);
+		const eventPage = await ctx.db
+			.query('agentTraces')
+			.withIndex('by_endpoint', (q) => q.eq('endpoint', args.endpoint))
+			.order('desc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: TRACE_EVENT_PAGE_SIZE,
+				maximumRowsRead: TRACE_EVENT_PAGE_SIZE,
+				maximumBytesRead: TRACE_EVENT_PAGE_MAX_BYTES
+			});
+		const events = eventPage.page;
 
 		const byTrace = new Map<string, typeof events>();
 		for (const e of events) {
@@ -179,11 +202,9 @@ export const recentByEndpoint = query({
 		}
 
 		const summaries = Array.from(byTrace.entries()).map(([traceId, evts]) => {
-			const sorted = [...evts].sort(
-				(a, b) => a._creationTime - b._creationTime
-			);
-			const start = sorted.find((e) => e.eventType === "trace.start");
-			const end = sorted.find((e) => e.eventType === "trace.end");
+			const sorted = [...evts].sort((a, b) => a._creationTime - b._creationTime);
+			const start = sorted.find((e) => e.eventType === 'trace.start');
+			const end = sorted.find((e) => e.eventType === 'trace.end');
 			return {
 				traceId,
 				userId: start?.userId ?? end?.userId ?? null,
@@ -193,13 +214,18 @@ export const recentByEndpoint = query({
 				durationMs: end?.durationMs ?? null,
 				costUsd: end?.costUsd ?? null,
 				eventCount: sorted.length,
-				lastEventType: sorted[sorted.length - 1]?.eventType ?? null,
+				lastEventType: sorted[sorted.length - 1]?.eventType ?? null
 			};
 		});
 
 		summaries.sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0));
-		return summaries.slice(0, cap);
-	},
+		return {
+			summaries: summaries.slice(0, cap),
+			scanned: events.length,
+			isDone: eventPage.isDone,
+			continueCursor: eventPage.isDone ? null : eventPage.continueCursor
+		};
+	}
 });
 
 /**
@@ -219,19 +245,31 @@ export const findStuck = query({
 		_secret: v.string(),
 		endpoint: v.string(),
 		olderThanMs: v.number(),
+		asOf: v.number(),
+		cursor: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret);
-		const cutoff = Date.now() - args.olderThanMs;
+		if (!Number.isSafeInteger(args.asOf) || args.asOf <= 0) throw new Error('INVALID_AS_OF');
+		if (!Number.isFinite(args.olderThanMs) || args.olderThanMs < 0) {
+			throw new Error('INVALID_OLDER_THAN_MS');
+		}
+		const cutoff = args.asOf - args.olderThanMs;
 
-		const events = await ctx.db
-			.query("agentTraces")
-			.withIndex("by_endpoint", (q) => q.eq("endpoint", args.endpoint))
-			.order("desc")
-			.take(STUCK_SCAN_LIMIT);
+		const eventPage = await ctx.db
+			.query('agentTraces')
+			.withIndex('by_endpoint', (q) => q.eq('endpoint', args.endpoint))
+			.order('desc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: TRACE_EVENT_PAGE_SIZE,
+				maximumRowsRead: TRACE_EVENT_PAGE_SIZE,
+				maximumBytesRead: TRACE_EVENT_PAGE_MAX_BYTES
+			});
+		const events = eventPage.page;
 
 		const oldStarts = events.filter(
-			(e) => e.eventType === "trace.start" && e._creationTime < cutoff
+			(e) => e.eventType === 'trace.start' && e._creationTime < cutoff
 		);
 
 		const stuck: Array<{
@@ -244,24 +282,29 @@ export const findStuck = query({
 
 		for (const start of oldStarts.slice(0, STUCK_RESULT_CAP)) {
 			const latest = await ctx.db
-				.query("agentTraces")
-				.withIndex("by_traceId", (q) => q.eq("traceId", start.traceId))
-				.order("desc")
+				.query('agentTraces')
+				.withIndex('by_traceId', (q) => q.eq('traceId', start.traceId))
+				.order('desc')
 				.first();
-			if (latest && latest.eventType !== "trace.end") {
+			if (latest && latest.eventType !== 'trace.end') {
 				stuck.push({
 					traceId: start.traceId,
 					userId: start.userId ?? null,
 					startedAt: start._creationTime,
 					latestEventType: latest.eventType,
-					ageMs: Date.now() - start._creationTime,
+					ageMs: args.asOf - start._creationTime
 				});
 			}
 		}
 
 		stuck.sort((a, b) => b.ageMs - a.ageMs);
-		return stuck;
-	},
+		return {
+			stuck,
+			scanned: events.length,
+			isDone: eventPage.isDone,
+			continueCursor: eventPage.isDone ? null : eventPage.continueCursor
+		};
+	}
 });
 
 /**
@@ -281,8 +324,8 @@ export const expire = internalMutation({
 	handler: async (ctx) => {
 		const now = Date.now();
 		const expired = await ctx.db
-			.query("agentTraces")
-			.withIndex("by_expiresAt", (q) => q.lt("expiresAt", now))
+			.query('agentTraces')
+			.withIndex('by_expiresAt', (q) => q.lt('expiresAt', now))
 			.take(EXPIRE_BATCH_SIZE);
 
 		// Per-row try/catch so a malformed or migration-orphaned row can't
@@ -314,77 +357,17 @@ export const expire = internalMutation({
 		}
 
 		return { deleted, failed };
-	},
+	}
 });
 
 /**
- * GDPR right-to-erasure: delete every trace event for one userId.
- *
- * Internal — called from the user-deletion pipeline. Two-pass: find
- * the unique traceIds anchored to this user via `by_userId`, then
- * delete every event for each of those traces via `by_traceId`. The
- * second pass is necessary because the writer only stamps `userId` on
- * the `trace.start` event — phase events and `trace.end` carry the
- * same `traceId` but no userId — so a single-pass scan by `by_userId`
- * would orphan the rest of the trace.
- *
- * Batched against the mutation op budget: returns `more: true` if
- * the per-trace deletes saturate `EXPIRE_BATCH_SIZE`, so callers can
- * loop until `more === false`.
- *
- * Without this helper, deleting a user leaves their trace rows to age
- * out via TTL (up to 7 days of plaintext retention after they asked
- * to be forgotten) — which doesn't satisfy "the moment they delete."
+ * @deprecated Account deletion is not launched. A safe replacement needs a
+ * durable trace-level erasure ledger so losing the user-stamped start row can
+ * never orphan phase/end rows across transaction boundaries.
  */
 export const deleteByUserId = internalMutation({
 	args: { userId: v.string() },
-	handler: async (ctx, args) => {
-		// Pass 1: collect every unique traceId anchored to this user.
-		const userRows = await ctx.db
-			.query("agentTraces")
-			.withIndex("by_userId", (q) => q.eq("userId", args.userId))
-			.collect();
-		const traceIds = Array.from(new Set(userRows.map((r) => r.traceId)));
-
-		// Pass 2: delete every event for each traceId, bounded by
-		// EXPIRE_BATCH_SIZE across the whole call. Per-row try/catch so a
-		// poison row can't block the rest (same posture as `expire`).
-		let deleted = 0;
-		let failed = 0;
-		let saturated = false;
-		for (const traceId of traceIds) {
-			if (deleted + failed >= EXPIRE_BATCH_SIZE) {
-				saturated = true;
-				break;
-			}
-			const events = await ctx.db
-				.query("agentTraces")
-				.withIndex("by_traceId", (q) => q.eq("traceId", traceId))
-				.collect();
-			for (const evt of events) {
-				if (deleted + failed >= EXPIRE_BATCH_SIZE) {
-					saturated = true;
-					break;
-				}
-				try {
-					await ctx.db.delete(evt._id);
-					deleted++;
-				} catch (err) {
-					failed++;
-					console.warn(
-						`[agentTraces.deleteByUserId] Delete failed for _id=${evt._id}: ${
-							err instanceof Error ? err.message : String(err)
-						}`
-					);
-				}
-			}
-		}
-
-		return {
-			deleted,
-			failed,
-			traceCount: traceIds.length,
-			more: saturated,
-		};
-	},
+	handler: async () => {
+		throw new Error('AGENT_TRACE_USER_ERASURE_NOT_LAUNCHED');
+	}
 });

@@ -8,9 +8,7 @@ function isExpired(job: any) {
 	return job.expiresAt <= Date.now() && !TERMINAL_STATUSES.has(job.status);
 }
 
-function publicJob(job: any) {
-	const status = isExpired(job) ? 'expired' : job.status;
-
+function serializeJob(job: any, status: string) {
 	return {
 		jobId: job.jobId,
 		inputHash: job.inputHash,
@@ -25,6 +23,17 @@ function publicJob(job: any) {
 		updatedAt: job.updatedAt,
 		expiresAt: job.expiresAt
 	};
+}
+
+function publicJob(job: any) {
+	return serializeJob(job, isExpired(job) ? 'expired' : job.status);
+}
+
+// Query-safe projection. Expiry is evaluated by the authenticated SvelteKit
+// request boundary so this Convex query remains deterministic and cacheable;
+// mutations and the cleanup supervisor remain the storage authority.
+function storedPublicJob(job: any) {
+	return serializeJob(job, job.status);
 }
 
 async function expireJob(ctx: any, job: any) {
@@ -107,7 +116,7 @@ export const getForUser = query({
 	args: { jobId: v.string() },
 	handler: async (ctx: any, args: any) => {
 		const { job } = await loadOwnedJob(ctx, args.jobId);
-		return job ? publicJob(job) : null;
+		return job ? storedPublicJob(job) : null;
 	}
 });
 

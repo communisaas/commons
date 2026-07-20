@@ -1,7 +1,7 @@
 // CONVEX: Keep SvelteKit — credential TTL validation, proof validation, blockchain verification (verifyOnChain)
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverAction, serverQuery } from 'convex-sveltekit';
+import { serverAction, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
@@ -13,6 +13,7 @@ import {
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
 import { FEATURES } from '$lib/config/features';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * Server-held session constant. The client's submitted sessionId must match
@@ -317,8 +318,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (rawInputsArray.length === 33) {
 			const claimedRoot = rawInputsArray[32] as string;
 			const [convexRoot, haltStatus] = await Promise.all([
-				serverQuery(api.revocations.getRevocationRoot, {}),
-				serverQuery(api.revocations.getRevocationHaltStatus, {})
+				serverQuery(api.revocations.getRevocationRoot, { _secret: getInternalSecret() }),
+				serverQuery(api.revocations.getRevocationHaltStatus, {
+					_secret: getInternalSecret()
+				})
 			]);
 			if ((haltStatus as { halted?: boolean })?.halted === true) {
 				return json(
@@ -375,7 +378,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// the client-submitted payload) prevents a malicious client from
 		// supplying a fake commitment to forge a new nullifier scope.
 		const credData = await serverQuery(api.users.getActiveCredentialDistrictCommitment, {
-			userId: locals.user.id as Id<'users'>
+			_secret: getInternalSecret(),
+			userId: locals.user.id as Id<'users'>,
+			asOf: Date.now()
 		});
 		if (!credData?.districtCommitment) {
 			return json(
@@ -444,9 +449,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		//      userRoot, cellMapRoot, districts, engagementRoot,
 		//      engagementTier, revocation* (V2). Passing through is the
 		//      only safe form when we don't enumerate the contract.
-		const normalizedPublicInputs: Record<string, unknown> = Array.isArray(
-			publicInputs
-		)
+		const normalizedPublicInputs: Record<string, unknown> = Array.isArray(publicInputs)
 			? {
 					publicInputsArray: normalizedInputsArray,
 					nullifier: canonicalNullifier,

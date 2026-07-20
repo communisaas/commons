@@ -34,6 +34,35 @@ describe('observability module', () => {
 		expect(source).toMatch(/if \(row\.cellStraddles === undefined\) continue/);
 	});
 
+	it('reads one byte-bounded indexed page and persists an explicit saturation outcome', async () => {
+		const source = await fs.readFile(observabilityPath, 'utf8');
+		const query = source.slice(
+			source.indexOf('export const getBoundaryCellRate24h'),
+			source.indexOf('export const recordBoundaryCellRateResult')
+		);
+		expect(query).toContain("withIndex('by_issuedAt'");
+		expect(query).toContain('.paginate({');
+		expect(query).toContain('maximumRowsRead: BOUNDARY_CELL_MONITOR_PAGE_ROWS + 1');
+		expect(query).toContain('maximumBytesRead: BOUNDARY_CELL_MONITOR_PAGE_BYTES');
+		expect(query).toContain("page.pageStatus === 'SplitRequired'");
+		expect(query).not.toContain('.collect(');
+		expect(query).not.toContain('for await');
+		expect(source).toContain('BOUNDARY_CELL_MONITOR_CAPACITY_EXCEEDED');
+	});
+
+	it('rejects malformed windows/results and cannot overwrite newer evidence', async () => {
+		const source = await fs.readFile(observabilityPath, 'utf8');
+		const record = source.slice(
+			source.indexOf('export const recordBoundaryCellRateResult'),
+			source.indexOf('export const monitorBoundaryCellRate')
+		);
+		expect(record).toContain('Number.isSafeInteger(value)');
+		expect(record).toContain('args.asOf - args.cutoff !== TWENTY_FOUR_HOURS_MS');
+		expect(record).toContain('(args.rate !== undefined) !== rateRequired');
+		expect(record).toContain('existing.asOf >= args.asOf');
+		expect(record).toContain("status: 'stale_ignored' as const");
+	});
+
 	it('uses an explicit BOUNDARY_RATE_ALERT_THRESHOLD constant', async () => {
 		const source = await fs.readFile(observabilityPath, 'utf8');
 		expect(source).toMatch(/BOUNDARY_RATE_ALERT_THRESHOLD\s*=\s*0\.28/);

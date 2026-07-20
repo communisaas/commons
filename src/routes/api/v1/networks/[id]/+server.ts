@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -24,9 +24,13 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	if (scopeErr) return scopeErr;
 
 	const result = await serverQuery(api.v1api.getNetworkByIdV1, {
- _secret: getInternalSecret(), networkId: params.id, orgId: auth.orgId});
+		_secret: getInternalSecret(),
+		networkId: params.id,
+		orgId: auth.orgId
+	});
 	if (!result) return apiError('NOT_FOUND', 'Network not found', 404);
-	if (result.forbidden) return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
+	if (result.forbidden)
+		return apiError('FORBIDDEN', 'Organization is not an active member of this network', 403);
 
 	const n = result.network!;
 	return apiOk({
@@ -37,14 +41,10 @@ export const GET: RequestHandler = async ({ params, request }) => {
 		status: n.status,
 		ownerOrgId: n.ownerOrgId,
 		memberCount: n.memberCount,
+		memberCountExact: n.memberCountExact,
 		ownerOrg: n.ownerOrg,
-		members: n.members.map((m: any) => ({
-			orgId: m.orgId,
-			orgName: m.orgName,
-			orgSlug: m.orgSlug,
-			role: m.role,
-			joinedAt: new Date(m.joinedAt).toISOString()
-		})),
+		members: n.members,
+		membersAvailable: n.membersAvailable,
 		createdAt: new Date(n.createdAt).toISOString(),
 		updatedAt: new Date(n.updatedAt).toISOString()
 	});

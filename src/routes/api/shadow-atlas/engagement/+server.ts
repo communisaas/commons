@@ -21,14 +21,14 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 import {
 	registerEngagement,
 	getEngagementPath,
-	getEngagementMetrics,
+	getEngagementMetrics
 } from '$lib/core/shadow-atlas/client';
 
 /** Default engagement depth (must match CIRCUIT_DEPTH / engagement tree depth) */
@@ -43,7 +43,7 @@ function tier0Defaults(depth: number = DEFAULT_ENGAGEMENT_DEPTH) {
 		engagementIndex: 0,
 		engagementTier: 0 as const,
 		actionCount: '0',
-		diversityScore: '0',
+		diversityScore: '0'
 	};
 }
 
@@ -57,7 +57,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Look up canonical identity commitment and signer address
 		const user = await serverQuery(api.users.getIdentityForEngagement, {
-			userId: session.userId as Id<'users'>,
+			userId: session.userId as Id<'users'>
 		});
 
 		if (!user?.identityCommitment) {
@@ -74,7 +74,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (!signerAddress) {
 			// No signer address available -- return tier-0 defaults.
 			// Engagement registration requires an Ethereum address for Sybil mapping.
-			console.warn('[Shadow Atlas] No signer address for engagement registration, returning tier-0 defaults');
+			console.warn(
+				'[Shadow Atlas] No signer address for engagement registration, returning tier-0 defaults'
+			);
 			return json(tier0Defaults());
 		}
 
@@ -131,7 +133,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 				engagementIndex: leafIndex,
 				engagementTier: tier,
 				actionCount: String(actionCount),
-				diversityScore: String(diversityScore),
+				diversityScore: String(diversityScore)
 			});
 		} catch (error) {
 			const msg = error instanceof Error ? error.message : String(error);
@@ -141,9 +143,6 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		}
 	} catch (error) {
 		console.error('[Shadow Atlas] Engagement endpoint error:', error);
-		return json(
-			{ error: 'Engagement service unavailable' },
-			{ status: 502 }
-		);
+		return json({ error: 'Engagement service unavailable' }, { status: 502 });
 	}
 };

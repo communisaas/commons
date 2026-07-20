@@ -98,8 +98,10 @@ describe('readable civic geography segment labels', () => {
 	it('threads imported district filters into segment condition counts', () => {
 		expect(spaces).toContain('congressionalDistrictConditionCount');
 		expect(spaces).toContain('actionDistrictLabelConditionCount');
-		expect(layoutServer).toContain("segmentConditionCount(conditions, [\n\t\t\t'congressionalDistrict'");
-		expect(layoutServer).toContain("segmentConditionCount(conditions, ['actionDistrictLabel'])");
+		// Segment definitions are feature-owned: the shared org layout must not
+		// collect arbitrary filters on every People-shell navigation.
+		expect(layoutServer).toContain('segmentation: null');
+		expect(layoutServer).not.toContain('api.segments.list');
 		expect(supportersServer).toContain(
 			"segmentConditionCount(conditions, [\n\t\t\t'congressionalDistrict'"
 		);

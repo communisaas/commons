@@ -9,10 +9,17 @@ import {
 import { internal } from './_generated/api';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
-import { v } from 'convex/values';
+import type { MutationCtx } from './_generated/server';
+import { ConvexError, v } from 'convex/values';
 import { campaignType, campaignStatus } from './_validators';
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import {
+	TEMPLATE_LIST_MAX_PAGE_SIZE,
+	readTemplateListPageByOrg,
+	templateListPaginationValidator,
+	toOrgTemplateListItem
+} from './lib/templateListProjection';
 import type { Doc, Id } from './_generated/dataModel';
 import {
 	computeOrgScopedEmailHash,
@@ -23,25 +30,140 @@ import {
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
-import { computeCampaignDistrictSets } from './_campaignStats';
+import {
+	CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY,
+	CAMPAIGN_ACTIVE_COUNTER_VERSION,
+	recordCampaignCreated,
+	recordCampaignRemoved,
+	recordCampaignStatusTransition
+} from './lib/campaignOrgCounters';
+import { syncPublicOrganizationDirectory } from './lib/publicOrganizationDirectory';
+import {
+	applyCampaignActionReadModel,
+	applyCampaignDeliveryBaselineReadModel,
+	applyCampaignDeliveryTransitionReadModel
+} from './lib/campaignReadModelDb';
+import {
+	CAMPAIGN_READ_MODEL_MIGRATION_KEY,
+	CAMPAIGN_READ_MODEL_VERSION,
+	emptyCampaignReadModel
+} from './lib/campaignReadModel';
+import { requireDebateReadModelReady } from './lib/debateReadModel';
+import {
+	applyCoalitionActionTransition,
+	applyCoalitionReceiptProjection
+} from './lib/coalitionMetrics';
+import { ACCOUNTABILITY_RESPONSE_MAX } from './lib/accountabilityReadModel';
+import {
+	syncAccountabilityReceiptProjection,
+	syncSupporterIdentityReceiptProjections
+} from './lib/accountabilityReadModelDb';
+import { normalizeSupporterBrowseSource, SUPPORTER_BROWSE_VERSION } from './lib/supporterBrowse';
+import {
+	applySupporterAudienceActionTransition,
+	SUPPORTER_AUDIENCE_ACTION_VERSION
+} from './lib/supporterAudience';
+import { assertSupporterInputBudget } from './lib/supporterInputBudget';
+import {
+	blockEmailReservation,
+	EMAIL_RESERVATION_LEASE_MS,
+	reconcileEmailReservation,
+	renewEmailReservationLease,
+	reserveEmailUsage
+} from './lib/planUsageReservations';
 
 declare const process: { env: Record<string, string | undefined> };
 
-/**
- * Cap on the public packet-summary scan (`getCampaignPacketSummary`). Bounded
- * so it never hits the per-query doc cap; the surface is aggregate/qualitative
- * and K-floored, so a most-recent capped sample is a sound floor.
- */
-const PACKET_SUMMARY_SCAN_CAP = 10_000;
+const enqueuePlanUsageRepairRef = makeFunctionReference<'mutation'>(
+	'planUsage:enqueueForOrg'
+) as unknown as FunctionReference<'mutation', 'internal', { orgId: Id<'organizations'> }, unknown>;
+
+const CAMPAIGN_REPORT_TARGET_LIMIT = 50;
+const CAMPAIGN_REPORT_HTML_MAX_BYTES = 64 * 1024;
+const CAMPAIGN_REPORT_DIGEST_RE = /^[a-f0-9]{64}$/i;
+
+async function assertActiveTemplateAttributionAvailable(
+	ctx: MutationCtx,
+	args: {
+		templateId: Id<'templates'>;
+		orgId: Id<'organizations'>;
+		excludeCampaignId: Id<'campaigns'>;
+	}
+): Promise<void> {
+	const active = await ctx.db
+		.query('campaigns')
+		.withIndex('by_templateId_orgId_status', (q) =>
+			q.eq('templateId', args.templateId).eq('orgId', args.orgId).eq('status', 'ACTIVE')
+		)
+		.take(2);
+	if (active.some((campaign) => campaign._id !== args.excludeCampaignId)) {
+		throw new Error('CAMPAIGN_ACTIVE_TEMPLATE_ATTRIBUTION_CONFLICT');
+	}
+	if (active.length > 1) {
+		throw new Error('CAMPAIGN_ACTIVE_TEMPLATE_ATTRIBUTION_MULTIPLICITY');
+	}
+}
+
+function assertCampaignReportPacketInput(args: {
+	renderedHtml?: string;
+	packetDigest?: string;
+	proofWeight?: number;
+	packetSummary?: ProofPacketSummary;
+}): void {
+	if (
+		args.renderedHtml !== undefined &&
+		new TextEncoder().encode(args.renderedHtml).byteLength > CAMPAIGN_REPORT_HTML_MAX_BYTES
+	) {
+		throw new Error('CAMPAIGN_REPORT_HTML_TOO_LARGE');
+	}
+	if (args.packetDigest !== undefined && !CAMPAIGN_REPORT_DIGEST_RE.test(args.packetDigest)) {
+		throw new Error('CAMPAIGN_REPORT_PACKET_DIGEST_INVALID');
+	}
+	if (
+		args.proofWeight !== undefined &&
+		(!Number.isFinite(args.proofWeight) || args.proofWeight < 0 || args.proofWeight > 1)
+	) {
+		throw new Error('CAMPAIGN_REPORT_PROOF_WEIGHT_INVALID');
+	}
+	const summary = args.packetSummary;
+	if (!summary) return;
+	for (const [name, value] of [
+		['verified', summary.verified],
+		['total', summary.total],
+		['districtCount', summary.districtCount]
+	] as const) {
+		if (!Number.isSafeInteger(value) || value < 0) {
+			throw new Error(`CAMPAIGN_REPORT_PACKET_${name.toUpperCase()}_INVALID`);
+		}
+	}
+	if (summary.verified > summary.total || summary.districtCount > summary.total) {
+		throw new Error('CAMPAIGN_REPORT_PACKET_COUNTS_INCONSISTENT');
+	}
+	for (const [name, value] of [
+		['gds', summary.gds],
+		['ald', summary.ald],
+		['cai', summary.cai],
+		['temporalEntropy', summary.temporalEntropy]
+	] as const) {
+		if (value != null && (!Number.isFinite(value) || value < 0)) {
+			throw new Error(`CAMPAIGN_REPORT_PACKET_${name.toUpperCase()}_INVALID`);
+		}
+	}
+	if ((summary.gds ?? 0) > 1 || (summary.ald ?? 0) > 1) {
+		throw new Error('CAMPAIGN_REPORT_PACKET_RATIO_INVALID');
+	}
+}
 
 type ActiveCampaignForSubmission = {
 	_id: Id<'campaigns'>;
 	orgId: Id<'organizations'>;
 };
 
-type UserTrustTier = {
+type AuthenticatedCampaignSubmitter = {
 	userId: Id<'users'>;
-	trustTier?: number;
+	normalizedEmail: string;
+	identityCommitment?: string;
+	trustTier: number;
 	engagementTier: number;
 } | null;
 
@@ -196,9 +318,33 @@ const getActiveCampaignRef = makeFunctionReference<'query'>(
 	{ campaignId: string },
 	ActiveCampaignForSubmission | null
 >;
-const getUserTrustTierRef = makeFunctionReference<'query'>(
-	'campaigns:getUserTrustTier'
-) as unknown as FunctionReference<'query', 'internal', { email: string }, UserTrustTier>;
+
+type EmailPlanAdmission = {
+	periodStart: number;
+	usageReady: boolean;
+	usageFailureCode: string | null;
+	usageRepairRequired: boolean;
+	usageRepairStatus: 'not_requested' | 'pending' | 'running' | 'ready' | 'blocked';
+	limits: { maxEmails: number };
+	current: { emailsSent: number; emailsReserved: number };
+} | null;
+
+const checkPlanLimitsByOrgIdRef = makeFunctionReference<'query'>(
+	'subscriptions:checkPlanLimitsByOrgId'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ orgId: Id<'organizations'> },
+	EmailPlanAdmission
+>;
+const getAuthenticatedCampaignSubmitterRef = makeFunctionReference<'query'>(
+	'campaigns:getAuthenticatedCampaignSubmitter'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ userId: Id<'users'> },
+	AuthenticatedCampaignSubmitter
+>;
 const findOrCreateSupporterRef = makeFunctionReference<'mutation'>(
 	'campaigns:findOrCreateSupporter'
 ) as unknown as FunctionReference<
@@ -214,6 +360,7 @@ const findOrCreateSupporterRef = makeFunctionReference<'mutation'>(
 		phoneHash?: string;
 		globalEmailHash?: string;
 		globalPhoneHash?: string;
+		identityCommitment?: string;
 		source: string;
 	},
 	FindOrCreateSupporterResult
@@ -251,19 +398,33 @@ const createCampaignActionRef = makeFunctionReference<'mutation'>(
 export const list = query({
 	args: {
 		slug: v.string(),
+		status: v.optional(campaignStatus),
 		paginationOpts: v.object({
 			numItems: v.number(),
 			cursor: v.union(v.string(), v.null())
 		})
 	},
-	handler: async (ctx, { slug, paginationOpts }) => {
+	handler: async (ctx, { slug, status, paginationOpts }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'member');
+		if (!Number.isSafeInteger(paginationOpts.numItems) || paginationOpts.numItems < 1) {
+			throw new Error('CAMPAIGN_LIST_PAGE_SIZE_INVALID');
+		}
+		if (paginationOpts.cursor !== null && paginationOpts.cursor.length > 2_048) {
+			throw new Error('CAMPAIGN_LIST_CURSOR_INVALID');
+		}
+		const numItems = Math.min(paginationOpts.numItems, 100);
 
-		const results = await ctx.db
-			.query('campaigns')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.order('desc')
-			.paginate({ numItems: paginationOpts.numItems, cursor: paginationOpts.cursor });
+		const campaignQuery = status
+			? ctx.db
+					.query('campaigns')
+					.withIndex('by_orgId_status', (q) => q.eq('orgId', org._id).eq('status', status))
+			: ctx.db.query('campaigns').withIndex('by_orgId', (q) => q.eq('orgId', org._id));
+		const results = await campaignQuery.order('desc').paginate({
+			numItems,
+			cursor: paginationOpts.cursor,
+			maximumRowsRead: numItems + 1,
+			maximumBytesRead: 4 * 1024 * 1024
+		});
 
 		// Resolve template titles for campaigns that reference a template.
 		// Pre-F19 the schema stored templateId as v.string() which forced a
@@ -313,8 +474,9 @@ export const list = query({
  * Returns public-safe fields. Used by submission pages (c/[slug], embed/campaign/[slug]).
  */
 export const getPublicAny = query({
-	args: { campaignId: v.string() },
-	handler: async (ctx, { campaignId }) => {
+	args: { _secret: v.string(), campaignId: v.string() },
+	handler: async (ctx, { _secret, campaignId }) => {
+		requireInternalSecret(_secret);
 		let campaign;
 		try {
 			campaign = await ctx.db.get(campaignId as Id<'campaigns'>);
@@ -360,8 +522,9 @@ export const getPublicAny = query({
  * Used by: src/routes/d/[campaignId]/+page.server.ts
  */
 export const getPublic = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: { _secret: v.string(), campaignId: v.id('campaigns') },
+	handler: async (ctx, { _secret, campaignId }) => {
+		requireInternalSecret(_secret);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) return null;
 
@@ -440,34 +603,26 @@ export const get = query({
 	}
 });
 
-/**
- * Count campaigns per status for an org.
- * Uses the by_orgId index and filters in-memory (status is not part of a compound index with orgId).
- */
+/** Exact O(1) status counts maintained by the shared org-counter writer. */
 export const getStatusCounts = query({
 	args: { slug: v.string() },
 	handler: async (ctx, { slug }) => {
 		const { org } = await requireOrgRole(ctx, slug, 'member');
 
-		const allCampaigns = await ctx.db
-			.query('campaigns')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const counts: Record<string, number> = {
-			ALL: 0,
-			DRAFT: 0,
-			ACTIVE: 0,
-			PAUSED: 0,
-			COMPLETE: 0
-		};
-
-		for (const c of allCampaigns) {
-			counts[c.status] = (counts[c.status] ?? 0) + 1;
-			counts.ALL += 1;
+		const migration = await ctx.db
+			.query('campaignActiveCounterMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready' || !org.campaignStatusCounts) {
+			throw new Error('CAMPAIGN_STATUS_COUNTERS_NOT_READY');
 		}
-
-		return counts;
+		return {
+			ALL: org.campaignStatusCounts.total,
+			DRAFT: org.campaignStatusCounts.DRAFT,
+			ACTIVE: org.campaignStatusCounts.ACTIVE,
+			PAUSED: org.campaignStatusCounts.PAUSED,
+			COMPLETE: org.campaignStatusCounts.COMPLETE
+		};
 	}
 });
 
@@ -544,11 +699,11 @@ export const create = mutation({
 			donorCount: 0,
 			actionCount: 0,
 			verifiedActionCount: 0,
+			orgCounterVersion: CAMPAIGN_ACTIVE_COUNTER_VERSION,
 			updatedAt: now
 		});
 
-		// Increment org's campaignCount
-		const newCount = (org.campaignCount ?? 0) + 1;
+		await recordCampaignCreated(ctx, org._id, 'DRAFT', now);
 		const currentOnboarding = org.onboardingState ?? {
 			hasDescription: !!org.description,
 			hasIssueDomains: false,
@@ -559,13 +714,13 @@ export const create = mutation({
 		};
 
 		await ctx.db.patch(org._id, {
-			campaignCount: newCount,
 			onboardingState: {
 				...currentOnboarding,
 				hasCampaigns: true
 			},
 			updatedAt: now
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		return campaignId;
 	}
@@ -617,14 +772,12 @@ export const clone = mutation({
 			actionCount: 0,
 			verifiedActionCount: 0,
 			tier3VerifiedActionCount: 0,
+			orgCounterVersion: CAMPAIGN_ACTIVE_COUNTER_VERSION,
 			updatedAt: now
 		});
 
-		const newCount = (org.campaignCount ?? 0) + 1;
-		await ctx.db.patch(org._id, {
-			campaignCount: newCount,
-			updatedAt: now
-		});
+		await recordCampaignCreated(ctx, org._id, 'DRAFT', now);
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		return newCampaignId;
 	}
@@ -655,7 +808,6 @@ export const update = mutation({
 		if (!campaign || campaign.orgId !== org._id) {
 			throw new Error('Campaign not found');
 		}
-
 		const updates: Record<string, unknown> = {
 			updatedAt: Date.now()
 		};
@@ -694,13 +846,33 @@ export const update = mutation({
 			}
 			updates.templateId = args.templateId || undefined;
 		}
+		const effectiveStatus = args.status ?? campaign.status;
+		const effectiveTemplateId =
+			args.templateId !== undefined ? args.templateId || undefined : campaign.templateId;
+		if (
+			effectiveStatus === 'ACTIVE' &&
+			effectiveTemplateId &&
+			(args.status !== undefined || args.templateId !== undefined)
+		) {
+			await assertActiveTemplateAttributionAvailable(ctx, {
+				templateId: effectiveTemplateId,
+				orgId: org._id,
+				excludeCampaignId: campaign._id
+			});
+		}
 		if (args.debateEnabled !== undefined) updates.debateEnabled = args.debateEnabled;
 		if (args.debateThreshold !== undefined) updates.debateThreshold = args.debateThreshold;
 		if (args.targetCountry !== undefined) updates.targetCountry = args.targetCountry;
 		if (args.targetJurisdiction !== undefined) updates.targetJurisdiction = args.targetJurisdiction;
 		if (args.position !== undefined) updates.position = args.position;
 
+		if (args.status !== undefined && args.status !== campaign.status) {
+			await recordCampaignStatusTransition(ctx, campaign, args.status);
+		}
 		await ctx.db.patch(args.campaignId, updates);
+		if (args.status !== undefined && args.status !== campaign.status) {
+			await syncPublicOrganizationDirectory(ctx, org._id);
+		}
 
 		// Emit campaign.updated (A4) after a field edit via this path. No PII.
 		await ctx.runMutation(internal.orgWebhooks.queueEvent, {
@@ -732,6 +904,23 @@ export const remove = mutation({
 		if (!campaign || campaign.orgId !== org._id) {
 			throw new Error('Campaign not found');
 		}
+		const [queuedDelivery, sendingDelivery] = await Promise.all([
+			ctx.db
+				.query('campaignDeliveries')
+				.withIndex('by_campaignId_status', (q) =>
+					q.eq('campaignId', args.campaignId).eq('status', 'queued')
+				)
+				.first(),
+			ctx.db
+				.query('campaignDeliveries')
+				.withIndex('by_campaignId_status', (q) =>
+					q.eq('campaignId', args.campaignId).eq('status', 'sending')
+				)
+				.first()
+		]);
+		if (queuedDelivery || sendingDelivery) {
+			throw new Error('CAMPAIGN_HAS_INFLIGHT_REPORT_DELIVERIES');
+		}
 
 		// Enumerate-to-delete over campaignActions/campaignDeliveries — both grow
 		// with supporter activity and can exceed BOTH the per-query doc-read cap
@@ -746,6 +935,13 @@ export const remove = mutation({
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
 			.take(CAMPAIGN_PURGE_BATCH);
 		for (const action of actions) {
+			await applyCoalitionActionTransition(ctx, action, null);
+			if (
+				action.audienceActionProjectionVersion === 1 ||
+				action.audienceActionProjectionVersion === SUPPORTER_AUDIENCE_ACTION_VERSION
+			) {
+				await applySupporterAudienceActionTransition(ctx, action, null);
+			}
 			await ctx.db.delete(action._id);
 		}
 
@@ -756,19 +952,30 @@ export const remove = mutation({
 		for (const delivery of deliveries) {
 			await ctx.db.delete(delivery._id);
 		}
+		const dimensions = await ctx.db
+			.query('campaignReadModelDimensions')
+			.withIndex('by_campaignId_kind', (q) => q.eq('campaignId', args.campaignId))
+			.take(CAMPAIGN_PURGE_BATCH);
+		for (const dimension of dimensions) await ctx.db.delete(dimension._id);
+		const readModel = await ctx.db
+			.query('campaignReadModels')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
+			.unique();
+		if (readModel) await ctx.db.delete(readModel._id);
+
+		await recordCampaignRemoved(ctx, campaign);
 
 		// Delete the campaign
 		await ctx.db.delete(args.campaignId);
 
-		// Decrement org's campaignCount
-		const newCount = Math.max(0, (org.campaignCount ?? 1) - 1);
-		await ctx.db.patch(org._id, {
-			campaignCount: newCount,
-			updatedAt: Date.now()
-		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		// Drain any remaining child rows out-of-band if either batch saturated.
-		if (actions.length >= CAMPAIGN_PURGE_BATCH || deliveries.length >= CAMPAIGN_PURGE_BATCH) {
+		if (
+			actions.length >= CAMPAIGN_PURGE_BATCH ||
+			deliveries.length >= CAMPAIGN_PURGE_BATCH ||
+			dimensions.length >= CAMPAIGN_PURGE_BATCH
+		) {
 			await ctx.scheduler.runAfter(0, internal.campaigns.purgeCampaignData, {
 				campaignId: args.campaignId
 			});
@@ -779,7 +986,7 @@ export const remove = mutation({
 });
 
 /** Per-mutation cap on campaign child-row deletes. Under the ~4096 write-op budget. */
-const CAMPAIGN_PURGE_BATCH = 2_000;
+const CAMPAIGN_PURGE_BATCH = 24;
 
 /**
  * Drain remaining campaignActions + campaignDeliveries for a deleted campaign
@@ -794,6 +1001,13 @@ export const purgeCampaignData = internalMutation({
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
 			.take(CAMPAIGN_PURGE_BATCH);
 		for (const action of actions) {
+			await applyCoalitionActionTransition(ctx, action, null);
+			if (
+				action.audienceActionProjectionVersion === 1 ||
+				action.audienceActionProjectionVersion === SUPPORTER_AUDIENCE_ACTION_VERSION
+			) {
+				await applySupporterAudienceActionTransition(ctx, action, null);
+			}
 			await ctx.db.delete(action._id);
 		}
 		const deliveries = await ctx.db
@@ -803,12 +1017,25 @@ export const purgeCampaignData = internalMutation({
 		for (const delivery of deliveries) {
 			await ctx.db.delete(delivery._id);
 		}
-		if (actions.length >= CAMPAIGN_PURGE_BATCH || deliveries.length >= CAMPAIGN_PURGE_BATCH) {
+		const dimensions = await ctx.db
+			.query('campaignReadModelDimensions')
+			.withIndex('by_campaignId_kind', (q) => q.eq('campaignId', args.campaignId))
+			.take(CAMPAIGN_PURGE_BATCH);
+		for (const dimension of dimensions) await ctx.db.delete(dimension._id);
+		if (
+			actions.length >= CAMPAIGN_PURGE_BATCH ||
+			deliveries.length >= CAMPAIGN_PURGE_BATCH ||
+			dimensions.length >= CAMPAIGN_PURGE_BATCH
+		) {
 			await ctx.scheduler.runAfter(0, internal.campaigns.purgeCampaignData, {
 				campaignId: args.campaignId
 			});
 		}
-		return { actionsRemoved: actions.length, deliveriesRemoved: deliveries.length };
+		return {
+			actionsRemoved: actions.length,
+			deliveriesRemoved: deliveries.length,
+			dimensionsRemoved: dimensions.length
+		};
 	}
 });
 
@@ -820,7 +1047,7 @@ export const recordResponse = mutation({
 	args: {
 		slug: v.string(),
 		campaignId: v.id('campaigns'),
-		deliveryId: v.string(),
+		deliveryId: v.id('campaignDeliveries'),
 		type: v.union(
 			v.literal('replied'),
 			v.literal('meeting_requested'),
@@ -844,13 +1071,8 @@ export const recordResponse = mutation({
 		}
 
 		// Find the delivery
-		const deliveries = await ctx.db
-			.query('campaignDeliveries')
-			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
-			.collect();
-
-		const matchedDelivery = deliveries.find((d) => d._id === args.deliveryId);
-		if (!matchedDelivery) {
+		const matchedDelivery = await ctx.db.get(args.deliveryId);
+		if (!matchedDelivery || matchedDelivery.campaignId !== args.campaignId) {
 			throw new Error('Delivery not found for this campaign');
 		}
 
@@ -868,15 +1090,22 @@ export const recordResponse = mutation({
 			.first();
 
 		if (receipt) {
-			// Append to responses array
 			const responses = receipt.responses ?? [];
-			responses.push(response);
-
-			await ctx.db.patch(receipt._id, { responses, updatedAt: Date.now() });
+			if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+				throw new Error('ACCOUNTABILITY_RESPONSE_LIMIT_EXCEEDED');
+			}
+			await ctx.db.patch(receipt._id, {
+				responses: [...responses, response],
+				updatedAt: Date.now()
+			});
+			await syncAccountabilityReceiptProjection(ctx, receipt._id);
 			return { receiptId: receipt._id };
 		}
 
 		const responses = matchedDelivery.responses ?? [];
+		if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+			throw new Error('ACCOUNTABILITY_RESPONSE_LIMIT_EXCEEDED');
+		}
 		await ctx.db.patch(matchedDelivery._id, {
 			responses: [...responses, response]
 		});
@@ -925,10 +1154,12 @@ export const updateStatus = mutation({
 			throw new Error(`Cannot transition from ${campaign.status} to ${args.status}`);
 		}
 
+		await recordCampaignStatusTransition(ctx, campaign, args.status);
 		await ctx.db.patch(args.campaignId, {
 			status: args.status,
 			updatedAt: Date.now()
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		// Emit campaign.updated (A4) on a status transition — co-equal with the
 		// field-edit path so the event is not half-dead. No PII.
@@ -1072,20 +1303,17 @@ export const getActiveCampaign = internalQuery({
 });
 
 /**
- * Internal query: Resolve a user's trustTier and engagement data by email.
- * Returns trustTier (0-5) and engagementTier (0-4) if the email belongs to a registered user.
+ * Resolve campaign-submission authority from a server-authenticated user ID.
+ * The action separately requires this row's normalized email to match the
+ * submitted address. Looking up authority by caller-supplied email would let
+ * an anonymous submitter impersonate a registered user's trust and receipts.
  */
-export const getUserTrustTier = internalQuery({
-	args: { email: v.string() },
-	handler: async (ctx, { email }) => {
-		const normalized = email.toLowerCase().trim();
+export const getAuthenticatedCampaignSubmitter = internalQuery({
+	args: { userId: v.id('users') },
+	handler: async (ctx, { userId }) => {
+		const user = await ctx.db.get(userId);
 
-		const user = await ctx.db
-			.query('users')
-			.withIndex('by_email', (idx) => idx.eq('email', normalized))
-			.first();
-
-		if (!user) return null;
+		if (!user?.email) return null;
 
 		// Derive engagement tier from user's reputation data
 		// reputationTier is a string: 'new' | 'active' | 'established' | 'veteran' | 'pillar'
@@ -1100,6 +1328,8 @@ export const getUserTrustTier = internalQuery({
 
 		return {
 			userId: user._id,
+			normalizedEmail: user.email.trim().toLowerCase(),
+			identityCommitment: user.identityCommitment,
 			trustTier: user.trustTier,
 			engagementTier
 		};
@@ -1125,9 +1355,18 @@ export const findOrCreateSupporter = internalMutation({
 		// gap where only NEW writes would otherwise populate globals.
 		globalEmailHash: v.optional(v.string()),
 		globalPhoneHash: v.optional(v.string()),
+		identityCommitment: v.optional(v.string()),
 		source: v.string()
 	},
 	handler: async (ctx, args) => {
+		assertSupporterInputBudget(args, 'CAMPAIGN_SUPPORTER_INPUT');
+		if (args.identityCommitment !== undefined && args.identityCommitment.length > 256) {
+			throw new Error('IDENTITY_COMMITMENT_TOO_LARGE');
+		}
+		const identityCommitment = args.identityCommitment?.trim();
+		if (args.identityCommitment !== undefined && !identityCommitment) {
+			throw new Error('IDENTITY_COMMITMENT_BLANK');
+		}
 		// Check for existing supporter by email hash
 		const existing = await ctx.db
 			.query('supporters')
@@ -1139,6 +1378,8 @@ export const findOrCreateSupporter = internalMutation({
 		if (existing) {
 			// Update fields if not already set
 			const patch: Record<string, unknown> = {};
+			const existingIdentityCommitment = existing.identityCommitment?.trim() || undefined;
+			const newlyBoundIdentity = !!identityCommitment && !existingIdentityCommitment;
 			if (args.encryptedName && !existing.encryptedName) patch.encryptedName = args.encryptedName;
 			if (args.postalCode && !existing.postalCode) patch.postalCode = args.postalCode;
 			if (args.encryptedPhone && !existing.encryptedPhone)
@@ -1152,8 +1393,19 @@ export const findOrCreateSupporter = internalMutation({
 				patch.globalEmailHash = args.globalEmailHash;
 			if (args.globalPhoneHash && !existing.globalPhoneHash)
 				patch.globalPhoneHash = args.globalPhoneHash;
+			if (
+				identityCommitment &&
+				existingIdentityCommitment &&
+				existingIdentityCommitment !== identityCommitment
+			) {
+				throw new Error('SUPPORTER_IDENTITY_CONFLICT');
+			}
+			if (identityCommitment && existing.identityCommitment !== identityCommitment) {
+				patch.identityCommitment = identityCommitment;
+			}
 			if (Object.keys(patch).length > 0) {
 				patch.updatedAt = Date.now();
+				assertSupporterInputBudget({ ...existing, ...patch }, 'CAMPAIGN_SUPPORTER_UPDATE');
 				await ctx.db.patch(existing._id, patch);
 				// postalCode / phone fill-ins are counted breakdown fields —
 				// apply a transition delta so postalResolved / phonePresent stay
@@ -1162,6 +1414,9 @@ export const findOrCreateSupporter = internalMutation({
 					...(existing as CountableSupporter),
 					...(patch as Partial<CountableSupporter>)
 				});
+			}
+			if (newlyBoundIdentity) {
+				await syncSupporterIdentityReceiptProjections(ctx, existing._id, args.orgId);
 			}
 			return { supporterId: existing._id, isNew: false };
 		}
@@ -1179,7 +1434,11 @@ export const findOrCreateSupporter = internalMutation({
 			encryptedPhone: args.encryptedPhone,
 			phoneHash: args.phoneHash,
 			globalPhoneHash: args.globalPhoneHash,
+			identityCommitment,
 			source: args.source,
+			browseSource: normalizeSupporterBrowseSource(args.source),
+			browseTagIds: [],
+			supporterBrowseVersion: SUPPORTER_BROWSE_VERSION,
 			verified: false,
 			emailStatus: 'subscribed',
 			smsStatus: 'none',
@@ -1203,6 +1462,7 @@ export const findOrCreateSupporter = internalMutation({
 				onboardingState: { ...onboarding, hasSupporters: true },
 				updatedAt: now
 			});
+			await syncPublicOrganizationDirectory(ctx, args.orgId);
 		}
 
 		// Maintain the breakdown counters for the new row. Created subscribed/none
@@ -1246,12 +1506,7 @@ export const createCampaignAction = internalMutation({
 		// Defaults to undefined (unattributed) when omitted, preserving existing
 		// email/form writers that don't set it yet.
 		channel: v.optional(
-			v.union(
-				v.literal('congressional'),
-				v.literal('email'),
-				v.literal('sms'),
-				v.literal('web')
-			)
+			v.union(v.literal('congressional'), v.literal('email'), v.literal('sms'), v.literal('web'))
 		),
 		// Congressional dedup key — the submission whose delivery produced this
 		// action. Used in place of supporterId when the channel has no supporter.
@@ -1337,8 +1592,14 @@ export const createCampaignAction = internalMutation({
 			congressionalSubmissionId: args.congressionalSubmissionId,
 			deliveryStatus: args.deliveryStatus,
 			delegated: false,
+			audienceActionProjectionVersion: SUPPORTER_AUDIENCE_ACTION_VERSION,
 			sentAt: Date.now()
 		});
+		await applyCampaignActionReadModel(ctx, actionId);
+		const projectedAction = await ctx.db.get(actionId);
+		if (!projectedAction) throw new Error('CAMPAIGN_ACTION_INSERT_FAILED');
+		await applyCoalitionActionTransition(ctx, null, projectedAction);
+		await applySupporterAudienceActionTransition(ctx, null, projectedAction);
 
 		// Update campaign counters (reuse campaign from orgId lookup above).
 		// Tier-3+ counter incremented when the action is BOTH verified AND
@@ -1508,7 +1769,11 @@ export const submitAction = action({
 		// NEW-E-2: atlas snapshot at action-time. Callers that resolved districts
 		// via the shadow-atlas client know the manifest's cellMapRoot; pass it
 		// here so packets can surface driftCount when the atlas rotates.
-		atlasVersion: v.optional(v.string())
+		atlasVersion: v.optional(v.string()),
+		// Set only by the trusted SvelteKit boundary from locals.user. The
+		// action verifies the canonical user row and exact normalized email
+		// before deriving identity, trust, or reputation from it.
+		authenticatedUserId: v.optional(v.id('users'))
 	},
 	handler: async (ctx, args): Promise<SubmitActionResult> => {
 		requireInternalSecret(args._secret);
@@ -1547,6 +1812,14 @@ export const submitAction = action({
 		}
 
 		const normalizedEmail = args.email.trim().toLowerCase();
+		const userData = args.authenticatedUserId
+			? await ctx.runQuery(getAuthenticatedCampaignSubmitterRef, {
+					userId: args.authenticatedUserId
+				})
+			: null;
+		if (args.authenticatedUserId && (!userData || userData.normalizedEmail !== normalizedEmail)) {
+			throw new Error('AUTHENTICATED_SUBMITTER_MISMATCH');
+		}
 
 		// Get campaign first — needed for orgId
 		const campaign = await ctx.runQuery(getActiveCampaignRef, {
@@ -1618,6 +1891,7 @@ export const submitAction = action({
 			emailHash,
 			globalEmailHash,
 			globalPhoneHash,
+			identityCommitment: userData?.identityCommitment,
 			encryptedEmail: JSON.stringify(encEmail),
 			encryptedName: encName ? JSON.stringify(encName) : undefined,
 			encryptedPhone: encPhone ? JSON.stringify(encPhone) : undefined,
@@ -1661,8 +1935,8 @@ export const submitAction = action({
 			messageHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
 		}
 
-		// Resolve trust tier + engagement tier from registered user, fall back to verification heuristics
-		const userData = await ctx.runQuery(getUserTrustTierRef, { email: normalizedEmail });
+		// Anonymous submissions use only submission-local verification heuristics;
+		// they can never inherit authority by typing a registered user's email.
 		const trustTier = userData?.trustTier ?? (districtVerified ? 2 : args.postalCode ? 1 : 0);
 		const engagementTier = userData?.engagementTier ?? 0;
 
@@ -1722,8 +1996,9 @@ export const submitAction = action({
  * Get campaign debateId (for SSE stream polling).
  */
 export const getDebateId = query({
-	args: { campaignId: v.id('campaigns') },
+	args: { _secret: v.string(), campaignId: v.id('campaigns') },
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		const campaign = await ctx.db.get(args.campaignId);
 		if (!campaign) return null;
 		return { debateId: campaign.debateId ?? null };
@@ -1735,49 +2010,89 @@ export const getDebateId = query({
  * Auth: org member.
  */
 export const getForOrgPage = query({
-	args: { slug: v.string(), campaignId: v.id('campaigns') },
-	handler: async (ctx, { slug, campaignId }) => {
+	args: {
+		slug: v.string(),
+		campaignId: v.id('campaigns'),
+		templatePaginationOpts: v.optional(templateListPaginationValidator)
+	},
+	handler: async (ctx, { slug, campaignId, templatePaginationOpts }) => {
 		const { org, membership } = await requireOrgRole(ctx, slug, 'member');
 
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign || campaign.orgId !== org._id) return null;
 
-		// Get org templates
-		const templates = await ctx.db
-			.query('templates')
-			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
-			.collect();
-
-		const sortedTemplates = templates
-			.map((t) => ({ _id: t._id, title: t.title }))
-			.sort((a, b) => a.title.localeCompare(b.title));
-
-		// Resolve current template title
-		let templateTitle: string | null = null;
-		if (campaign.templateId) {
-			const tmpl = sortedTemplates.find((t) => t._id === campaign.templateId);
-			templateTitle = tmpl?.title ?? null;
+		const requestedPagination = templatePaginationOpts ?? {
+			numItems: TEMPLATE_LIST_MAX_PAGE_SIZE,
+			cursor: null
+		};
+		// Keep the selected option visible without ever returning a 51st row.
+		// Reserving one slot preserves every range row and its continuation cursor.
+		const pagination = {
+			...requestedPagination,
+			numItems: Math.min(
+				requestedPagination.numItems,
+				TEMPLATE_LIST_MAX_PAGE_SIZE - (campaign.templateId ? 1 : 0)
+			)
+		};
+		const templatePage = await readTemplateListPageByOrg(
+			ctx,
+			org._id,
+			pagination,
+			'INVALID_ORG_TEMPLATE_PAGE_SIZE'
+		);
+		if (!templatePaginationOpts && !templatePage.isDone) {
+			throw new ConvexError({
+				code: 'ORG_TEMPLATE_PAGINATION_REQUIRED',
+				maxPageSize: TEMPLATE_LIST_MAX_PAGE_SIZE
+			});
 		}
+
+		const selectedTemplate = campaign.templateId
+			? (templatePage.page.find((template) => template.templateId === campaign.templateId) ??
+				(await ctx.db
+					.query('templateListProjections')
+					.withIndex('by_templateId', (q) => q.eq('templateId', campaign.templateId!))
+					.unique()))
+			: null;
+		const selectedOrgTemplate =
+			selectedTemplate?.orgId === org._id
+				? { _id: selectedTemplate.templateId, title: selectedTemplate.title }
+				: null;
+		const sortedTemplates = templatePage.page
+			.map(toOrgTemplateListItem)
+			.concat(
+				selectedOrgTemplate &&
+					!templatePage.page.some((template) => template.templateId === selectedOrgTemplate._id)
+					? [selectedOrgTemplate]
+					: []
+			)
+			.sort((a, b) => a.title.localeCompare(b.title));
+		const templateTitle = selectedOrgTemplate?.title ?? null;
 
 		// Load debate data if campaign has a linked debate
 		let debate = null;
 		if (campaign.debateId) {
 			const dbDebate = await ctx.db.get(campaign.debateId);
 			if (dbDebate) {
-				const args = await ctx.db
-					.query('debateArguments')
-					.withIndex('by_debateId', (idx) => idx.eq('debateId', dbDebate._id))
-					.collect();
-
 				const winningArg =
 					dbDebate.winningArgumentIndex != null
-						? args.find((a) => a.argumentIndex === dbDebate.winningArgumentIndex)
+						? await ctx.db
+								.query('debateArguments')
+								.withIndex('by_debateId_argumentIndex', (idx) =>
+									idx
+										.eq('debateId', dbDebate._id)
+										.eq('argumentIndex', dbDebate.winningArgumentIndex!)
+								)
+								.unique()
 						: null;
 
 				// Get template slug for debate
 				let debateTemplateSlug = '';
 				if (dbDebate.templateId) {
-					const t = await ctx.db.get(dbDebate.templateId);
+					const t = await ctx.db
+						.query('templateListProjections')
+						.withIndex('by_templateId', (q) => q.eq('templateId', dbDebate.templateId!))
+						.unique();
 					if (t) debateTemplateSlug = t.slug ?? '';
 				}
 
@@ -1829,6 +2144,11 @@ export const getForOrgPage = query({
 				updatedAt: campaign.updatedAt
 			},
 			templates: sortedTemplates,
+			templatePagination: {
+				isDone: templatePage.isDone,
+				continueCursor: templatePage.continueCursor,
+				pageStatus: templatePage.pageStatus ?? null
+			},
 			debate,
 			actionCount,
 			memberRole: membership.role
@@ -1840,8 +2160,9 @@ export const getForOrgPage = query({
  * Public campaign lookup — used for verify-district (no auth).
  */
 export const getPublicActive = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: { _secret: v.string(), campaignId: v.id('campaigns') },
+	handler: async (ctx, { _secret, campaignId }) => {
+		requireInternalSecret(_secret);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign || campaign.status !== 'ACTIVE') return null;
 		return { _id: campaign._id };
@@ -1849,7 +2170,8 @@ export const getPublicActive = query({
 });
 
 /**
- * Public campaign stats — K-floor at 5 (sub-K suppressed, exact above).
+ * Public campaign stats — constant-read projection, K-floor at 5 (sub-K
+ * suppressed, exact above).
  *
  * Threat model: we defend against unique-identification at sub-K cohort
  * sizes — a count of 1-4 would name a specific submitter. Above K, counts
@@ -1860,12 +2182,16 @@ export const getPublicActive = query({
  * signals on a specific target) should use pseudonymous submission modes;
  * we do not attempt to mask above-K +1 polling deltas.
  *
- * uniqueDistricts uses a lower floor (3) because rural campaigns often
- * have low district counts and the marginal anonymity gain past 3 is small.
+ * uniqueDistricts uses a lower floor (3) because rural campaigns often have
+ * low district counts and the marginal anonymity gain past 3 is small. The
+ * write-maintained campaign read model owns district cardinality; this public,
+ * polled query must never scan the campaign action ledger. Tier-3 district
+ * cardinality is suppressed until the projection tracks that subset exactly.
  */
 export const getStats = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: { _secret: v.string(), campaignId: v.id('campaigns') },
+	handler: async (ctx, { _secret, campaignId }) => {
+		requireInternalSecret(_secret);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) {
 			return {
@@ -1877,20 +2203,25 @@ export const getStats = query({
 			};
 		}
 
-		// Pure sums (sub-class B) — read the denormalized campaign counters
-		// maintained at createCampaignAction. Counting these in memory required a
-		// `.collect()` over every campaignAction, which throws past the per-query
-		// doc cap once a campaign passes ~16K actions.
-		const verifiedCount = campaign.verifiedActionCount ?? 0;
-		const totalCount = campaign.actionCount ?? 0;
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready') throw new Error('CAMPAIGN_READ_MODEL_NOT_READY');
+		const model = await ctx.db
+			.query('campaignReadModels')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
+			.unique();
+		if (model && model.state.version !== CAMPAIGN_READ_MODEL_VERSION) {
+			throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+		}
+		if (!model && (campaign.actionCount ?? 0) > 0) {
+			throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+		}
+		const state = model?.state ?? emptyCampaignReadModel(campaign.updatedAt);
+		const verifiedCount = state.verifiedActionCount;
+		const totalCount = state.actionCount;
 		const tier3Count = campaign.tier3VerifiedActionCount ?? 0;
-
-		// Set cardinality (sub-class C) — distinct verified districts / distinct
-		// tier-3 verified districts. A scalar counter would DRIFT (a supporter
-		// active in two districts double-counts), so this is a BOUNDED scan over
-		// verified actions, capped, with a truncated floor on saturation.
-		const { verifiedDistricts, tier3VerifiedDistricts } =
-			await computeCampaignDistrictSets(ctx, campaignId);
 
 		const kFloor5 = (n: number): number | null => (n < 5 ? null : n);
 		const kFloor3 = (n: number): number | null => (n < 3 ? null : n);
@@ -1898,10 +2229,221 @@ export const getStats = query({
 		return {
 			verifiedActions: kFloor5(verifiedCount),
 			totalActions: kFloor5(totalCount),
-			uniqueDistricts: kFloor3(verifiedDistricts),
+			uniqueDistricts: kFloor3(state.districtCount),
 			tier3VerifiedActions: kFloor5(tier3Count),
-			tier3UniqueDistricts: kFloor3(tier3VerifiedDistricts)
+			tier3UniqueDistricts: null
 		};
+	}
+});
+
+/**
+ * Constant-read campaign proof/analytics source for trusted SSR. The caller
+ * must establish org authorization before using this service credential.
+ */
+export const getReadModelBundle = query({
+	args: {
+		_secret: v.string(),
+		campaignId: v.id('campaigns'),
+		orgId: v.id('organizations')
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const campaign = await ctx.db.get(args.campaignId);
+		if (!campaign || campaign.orgId !== args.orgId) throw new Error('CAMPAIGN_NOT_FOUND');
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready') {
+			throw new Error(migration?.failureCode ?? 'CAMPAIGN_READ_MODEL_NOT_READY');
+		}
+		const model = await ctx.db
+			.query('campaignReadModels')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
+			.unique();
+		if (model && model.state.version !== CAMPAIGN_READ_MODEL_VERSION) {
+			throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+		}
+		if (!model && (campaign.actionCount ?? 0) > 0) throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+
+		let debate = null;
+		if (campaign.debateId) {
+			await requireDebateReadModelReady(ctx);
+			const [debateDoc, debateModel] = await Promise.all([
+				ctx.db.get(campaign.debateId),
+				ctx.db
+					.query('debateReadModels')
+					.withIndex('by_debateId', (q) => q.eq('debateId', campaign.debateId!))
+					.unique()
+			]);
+			if (!debateDoc || !debateModel) throw new Error('DEBATE_READ_MODEL_MISSING');
+			const participantCount = debateModel.uniqueParticipants;
+			debate = {
+				marketPosition:
+					typeof debateDoc.aiResolution === 'string' ? debateDoc.aiResolution : 'pending',
+				totalStake: String(debateModel.totalStake),
+				topArgumentScore: String(debateModel.topArgument?.weightedScore ?? 0),
+				aiPanelConsensus: debateDoc.aiPanelConsensus ?? null,
+				participantCount: participantCount >= 5 ? participantCount : null,
+				resolutionHash:
+					debateDoc.resolvedFromChain && typeof debateDoc.aiResolution === 'string'
+						? debateDoc.aiResolution
+						: null
+			};
+		}
+		return { state: model?.state ?? emptyCampaignReadModel(campaign.updatedAt), debate };
+	}
+});
+
+const CAMPAIGN_ACTION_MIGRATION_PAGE = 8;
+const CAMPAIGN_DELIVERY_MIGRATION_PAGE = 32;
+
+/** Self-paging legacy adoption; readers remain closed until explicit activation. */
+export const migrateCampaignReadModels = internalMutation({
+	args: { cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { cursor }) => {
+		const now = Date.now();
+		let migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (!migration) {
+			const id = await ctx.db.insert('campaignReadModelMigrations', {
+				key: CAMPAIGN_READ_MODEL_MIGRATION_KEY,
+				status: 'running',
+				phase: 'actions',
+				actionsScanned: 0,
+				actionsAdopted: 0,
+				deliveriesScanned: 0,
+				deliveriesAdopted: 0,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(id);
+		}
+		if (!migration) throw new Error('CAMPAIGN_READ_MODEL_MIGRATION_STATE_MISSING');
+		if (migration.status === 'ready' || migration.status === 'migrated') return migration;
+		if (migration.status === 'blocked') {
+			throw new Error(migration.failureCode ?? 'CAMPAIGN_READ_MODEL_MIGRATION_BLOCKED');
+		}
+		const expectedCursor = migration.cursor ?? null;
+		if ((cursor ?? null) !== expectedCursor) {
+			throw new Error('CAMPAIGN_READ_MODEL_MIGRATION_CURSOR_MISMATCH');
+		}
+
+		try {
+			if (migration.phase === 'actions') {
+				const page = await ctx.db.query('campaignActions').paginate({
+					cursor: expectedCursor,
+					numItems: CAMPAIGN_ACTION_MIGRATION_PAGE,
+					maximumRowsRead: CAMPAIGN_ACTION_MIGRATION_PAGE + 1,
+					maximumBytesRead: 2 * 1024 * 1024
+				});
+				let adopted = 0;
+				for (const action of page.page) {
+					if (action.readModelVersion !== CAMPAIGN_READ_MODEL_VERSION) {
+						await applyCampaignActionReadModel(ctx, action._id, now);
+						adopted += 1;
+					}
+				}
+				const patch = {
+					phase: page.isDone ? ('deliveries' as const) : ('actions' as const),
+					cursor: page.isDone ? undefined : page.continueCursor,
+					actionsScanned: migration.actionsScanned + page.page.length,
+					actionsAdopted: migration.actionsAdopted + adopted,
+					updatedAt: now
+				};
+				await ctx.db.patch(migration._id, patch);
+				await ctx.scheduler.runAfter(0, internal.campaigns.migrateCampaignReadModels, {
+					cursor: page.isDone ? null : page.continueCursor
+				});
+				return { ...migration, ...patch };
+			}
+
+			const page = await ctx.db.query('campaignDeliveries').paginate({
+				cursor: expectedCursor,
+				numItems: CAMPAIGN_DELIVERY_MIGRATION_PAGE,
+				maximumRowsRead: CAMPAIGN_DELIVERY_MIGRATION_PAGE + 1,
+				maximumBytesRead: 2 * 1024 * 1024
+			});
+			let adopted = 0;
+			for (const delivery of page.page) {
+				if (delivery.readModelVersion !== CAMPAIGN_READ_MODEL_VERSION) {
+					await applyCampaignDeliveryBaselineReadModel(ctx, delivery._id, now);
+					adopted += 1;
+				}
+			}
+			const patch = {
+				status: page.isDone ? ('migrated' as const) : ('running' as const),
+				cursor: page.isDone ? undefined : page.continueCursor,
+				deliveriesScanned: migration.deliveriesScanned + page.page.length,
+				deliveriesAdopted: migration.deliveriesAdopted + adopted,
+				updatedAt: now
+			};
+			await ctx.db.patch(migration._id, patch);
+			if (!page.isDone) {
+				await ctx.scheduler.runAfter(0, internal.campaigns.migrateCampaignReadModels, {
+					cursor: page.continueCursor
+				});
+			}
+			return { ...migration, ...patch };
+		} catch (error) {
+			const failureCode =
+				error instanceof Error
+					? error.message.slice(0, 200)
+					: 'CAMPAIGN_READ_MODEL_MIGRATION_FAILED';
+			await ctx.db.patch(migration._id, { status: 'blocked', failureCode, updatedAt: now });
+			return { ...migration, status: 'blocked' as const, failureCode };
+		}
+	}
+});
+
+export const activateCampaignReadModels = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status === 'ready') return migration;
+		if (!migration || migration.status !== 'migrated') {
+			throw new Error('CAMPAIGN_READ_MODEL_MIGRATION_INCOMPLETE');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { ...migration, status: 'ready' as const };
+	}
+});
+
+export const getCampaignReadModelReadiness = query({
+	args: { _secret: v.string() },
+	handler: async (ctx, { _secret }) => {
+		requireInternalSecret(_secret);
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		return migration
+			? {
+					status: migration.status,
+					ready: migration.status === 'ready',
+					phase: migration.phase,
+					actionsScanned: migration.actionsScanned,
+					actionsAdopted: migration.actionsAdopted,
+					deliveriesScanned: migration.deliveriesScanned,
+					deliveriesAdopted: migration.deliveriesAdopted,
+					failureCode: migration.failureCode ?? null,
+					updatedAt: migration.updatedAt
+				}
+			: {
+					status: 'missing',
+					ready: false,
+					phase: null,
+					actionsScanned: 0,
+					actionsAdopted: 0,
+					deliveriesScanned: 0,
+					deliveriesAdopted: 0,
+					failureCode: null,
+					updatedAt: null
+				};
 	}
 });
 
@@ -1962,30 +2504,8 @@ export const getActionsForPacket = query({
  */
 export const getDebateSnapshotForCampaign = query({
 	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
-		const campaign = await ctx.db.get(campaignId);
-		if (!campaign?.debateId) return null;
-		const debate = await ctx.db.get(campaign.debateId);
-		if (!debate) return null;
-		const args = await ctx.db
-			.query('debateArguments')
-			.withIndex('by_debateId', (idx) => idx.eq('debateId', debate._id))
-			.collect();
-		let topScore = 0n;
-		for (const a of args) {
-			const ws = BigInt(a.weightedScore ?? 0);
-			if (ws > topScore) topScore = ws;
-		}
-		const participantCount = debate.uniqueParticipants ?? 0;
-		// K-anon floor: surface null below K=5 (same K as packet cells)
-		return {
-			marketPosition: debate.aiResolution ?? 'pending',
-			totalStake: String(debate.totalStake ?? 0),
-			topArgumentScore: topScore.toString(),
-			aiPanelConsensus: debate.aiPanelConsensus ?? null,
-			participantCount: participantCount >= 5 ? participantCount : null,
-			resolutionHash: debate.resolvedFromChain ? (debate.aiResolution ?? null) : null
-		};
+	handler: async () => {
+		throw new Error('CAMPAIGN_DEBATE_SNAPSHOT_PUBLIC_QUERY_RETIRED');
 	}
 });
 
@@ -2000,26 +2520,22 @@ export const getDebateSnapshotForCampaign = query({
  * surfaces get the full packet with exact breakdowns.
  */
 export const getCampaignPacketSummary = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: { _secret: v.string(), campaignId: v.id('campaigns') },
+	handler: async (ctx, { _secret, campaignId }) => {
+		requireInternalSecret(_secret);
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) return null;
-
-		// Anonymous public surface. The aggregates here (qualitative phrases +
-		// K-floored counts + top districts) need the actual rows, but a single
-		// unbounded `.collect()` throws past the per-query doc cap once the
-		// campaign passes ~16K actions. Sub-class (A) bounded scan: operate over a
-		// capped, most-recent sample. The output is already aggregate/qualitative
-		// and K-floored, so a bounded sample is a sound floor for this surface
-		// (the org-authed packet path enumerates fully via getActionsForPacket).
-		const actions = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.order('desc')
-			.take(PACKET_SUMMARY_SCAN_CAP + 1)
-			.then((rows) => rows.slice(0, PACKET_SUMMARY_SCAN_CAP));
-
-		if (actions.length === 0) {
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready') throw new Error('CAMPAIGN_READ_MODEL_NOT_READY');
+		const model = await ctx.db
+			.query('campaignReadModels')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
+			.unique();
+		const state = model?.state ?? emptyCampaignReadModel(campaign.updatedAt);
+		if (state.actionCount === 0) {
 			return {
 				dateRange: null,
 				verified: 0,
@@ -2031,14 +2547,8 @@ export const getCampaignPacketSummary = query({
 				attestationHash: null
 			};
 		}
-
-		// Iterative min/max — spread hits the V8 argument-count ceiling on popular campaigns.
-		let earliest = actions[0].sentAt;
-		let latest = earliest;
-		for (const a of actions) {
-			if (a.sentAt < earliest) earliest = a.sentAt;
-			if (a.sentAt > latest) latest = a.sentAt;
-		}
+		const earliest = state.firstSentAt ?? campaign.updatedAt;
+		const latest = state.lastSentAt ?? earliest;
 		const dateRange = {
 			earliest: new Date(earliest).toISOString().split('T')[0],
 			latest: new Date(latest).toISOString().split('T')[0],
@@ -2047,22 +2557,15 @@ export const getCampaignPacketSummary = query({
 
 		// T8-2 — staffer-legible aggregates, all K-floored.
 		const K = 5;
-		const verifiedActions = actions.filter((a) => a.verified);
-		const total = actions.length;
-		const verified = verifiedActions.length;
+		const total = state.actionCount;
+		const verified = state.verifiedActionCount;
 
 		// Identity breakdown — qualitative prose, not raw counts
 		let identityPhrase: string | null = null;
 		if (verified >= K) {
-			let govId = 0;
-			let address = 0;
-			let email = 0;
-			for (const a of verifiedActions) {
-				const t = a.trustTier ?? 0;
-				if (t >= 3) govId++;
-				else if (t === 2) address++;
-				else email++;
-			}
+			const govId = state.trustTierCounts.slice(3).reduce((sum, count) => sum + count, 0);
+			const address = state.trustTierCounts[2] ?? 0;
+			const email = (state.trustTierCounts[0] ?? 0) + (state.trustTierCounts[1] ?? 0);
 			const parts: string[] = [];
 			if (govId >= K) parts.push('identity-document verified');
 			if (address >= K) parts.push('address verified');
@@ -2073,16 +2576,9 @@ export const getCampaignPacketSummary = query({
 		// Authorship — qualitative
 		let authorshipPhrase: string | null = null;
 		if (verified >= K) {
-			const messageHashes = new Set<string>();
-			let withHash = 0;
-			for (const a of verifiedActions) {
-				if (a.messageHash) {
-					messageHashes.add(a.messageHash);
-					withHash++;
-				}
-			}
+			const withHash = state.messageHashActionCount;
 			if (withHash >= K) {
-				const ratio = messageHashes.size / withHash;
+				const ratio = state.uniqueMessageHashCount / withHash;
 				if (ratio >= 0.7) authorshipPhrase = 'messages mostly individually composed';
 				else if (ratio >= 0.3) authorshipPhrase = 'messages mixed between individual and shared';
 				else authorshipPhrase = 'messages mostly shared template';
@@ -2093,37 +2589,21 @@ export const getCampaignPacketSummary = query({
 		// component renders, computed from action distribution.
 		let integrityPhrase: string | null = null;
 		if (verified >= K) {
-			const districtCounts = new Map<string, number>();
-			const hourlyBins = new Map<number, number>();
-			for (const a of verifiedActions) {
-				if (a.districtHash) {
-					districtCounts.set(a.districtHash, (districtCounts.get(a.districtHash) ?? 0) + 1);
-				}
-				const h = Math.floor(a.sentAt / (3600 * 1000));
-				hourlyBins.set(h, (hourlyBins.get(h) ?? 0) + 1);
-			}
-			let hhi = 0;
-			for (const c of districtCounts.values()) {
-				const share = c / verified;
-				hhi += share * share;
-			}
-			const gds = districtCounts.size > 0 ? 1 - hhi : null;
+			const gds =
+				state.districtActionCount > 0
+					? 1 - state.districtCountSquares / state.districtActionCount ** 2
+					: null;
 			const parts: string[] = [];
 			if (gds !== null && gds >= 0.7) parts.push('spread across multiple areas');
 			else if (gds !== null) parts.push('concentrated in a few areas');
-			if (hourlyBins.size >= 5) parts.push('submitted over time');
+			if (state.hourBucketCount >= 5) parts.push('submitted over time');
 			integrityPhrase = parts.length > 0 ? parts.join(', ') : null;
 		}
 
 		// Top districts — K-floored. Sort by count desc, then hash for determinism.
-		const districtCounts = new Map<string, number>();
-		for (const a of verifiedActions) {
-			if (!a.districtHash) continue;
-			districtCounts.set(a.districtHash, (districtCounts.get(a.districtHash) ?? 0) + 1);
-		}
-		const topDistricts = Array.from(districtCounts.entries())
-			.filter(([, count]) => count >= K)
-			.map(([hash, count]) => ({ hash, count }))
+		const topDistricts = state.topDistricts
+			.filter(({ count }) => count >= K)
+			.map(({ key: hash, count }) => ({ hash, count }))
 			.sort((a, b) => (b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash)))
 			.slice(0, 10);
 
@@ -2167,13 +2647,15 @@ export const getReportPreview = query({
 
 		const targets = (campaign.targets as CampaignTarget[]) ?? [];
 
-		// Lightweight packet summary for the preview. Pure sums (verified/total)
-		// from the denormalized campaign counters (sub-class B); distinct-district
-		// cardinality from a BOUNDED verified-action scan (sub-class C — a scalar
-		// counter would double-count a supporter active in two districts). The
-		// prior `.collect()` of every campaignAction threw past the per-query doc
-		// cap once the campaign passed ~16K actions.
-		const { verifiedDistricts } = await computeCampaignDistrictSets(ctx, campaignId);
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready') throw new Error('CAMPAIGN_READ_MODEL_NOT_READY');
+		const model = await ctx.db
+			.query('campaignReadModels')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
+			.unique();
 
 		return {
 			campaign: {
@@ -2192,7 +2674,7 @@ export const getReportPreview = query({
 			packet: {
 				verified: campaign.verifiedActionCount ?? 0,
 				total: campaign.actionCount ?? 0,
-				districtCount: verifiedDistricts
+				districtCount: model?.state.districtCount ?? 0
 			},
 			// HTML rendering happens server-side via report-template.ts
 			renderedHtml: null
@@ -2225,8 +2707,17 @@ export const sendReport = mutation({
 			})
 		)
 	},
-	handler: async (ctx, args) => {
+	handler: async (ctx, args): Promise<{ error: string | null; deliveryCount: number }> => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertCampaignReportPacketInput(args);
+		if (args.targetEmails.length > CAMPAIGN_REPORT_TARGET_LIMIT) {
+			throw new Error('CAMPAIGN_REPORT_TARGET_LIMIT_EXCEEDED');
+		}
+		for (const email of args.targetEmails) {
+			if (email.length < 1 || email.length > 254) {
+				throw new Error('CAMPAIGN_REPORT_TARGET_EMAIL_INVALID');
+			}
+		}
 		const campaign = await ctx.db.get(args.campaignId);
 		if (!campaign || campaign.orgId !== org._id) {
 			return { error: 'Campaign not found', deliveryCount: 0 };
@@ -2244,7 +2735,7 @@ export const sendReport = mutation({
 		}
 
 		const targets = (campaign.targets as CampaignTarget[]) ?? [];
-		let deliveryCount = 0;
+		const plannedTargets: CampaignTarget[] = [];
 		const seen = new Set<string>();
 
 		for (const email of args.targetEmails) {
@@ -2253,22 +2744,51 @@ export const sendReport = mutation({
 			const target = targets.find((t) => t.email === email);
 			if (!target) continue;
 
-			// Dedup: skip if already delivered to this target for this campaign
-			const existing = await ctx.db
+			// Exact indexed dedup. More than one canonical row means legacy state
+			// has already diverged; fail closed instead of choosing one silently.
+			const existingRows = await ctx.db
 				.query('campaignDeliveries')
-				.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
-				.filter((q) => q.eq(q.field('targetEmail'), email))
-				.first();
-
-			if (
-				existing &&
-				(existing.status === 'sent' ||
-					existing.status === 'delivered' ||
-					existing.status === 'opened')
-			) {
-				continue; // Already delivered
+				.withIndex('by_campaignId_targetEmail', (q) =>
+					q.eq('campaignId', args.campaignId).eq('targetEmail', email)
+				)
+				.take(2);
+			if (existingRows.length > 1) {
+				throw new Error('CAMPAIGN_DELIVERY_DEDUP_STATE_DIVERGED');
 			}
+			const existing = existingRows[0];
 
+			if (existing) continue; // One canonical target row; retries are idempotent.
+
+			plannedTargets.push(target);
+		}
+
+		// Authoritative in-Convex gate: the Svelte route is only presentation.
+		// This query executes in the same serializable mutation transaction, so a
+		// direct client cannot bypass migration readiness, cancellation, rollover,
+		// or the current exact projected quota.
+		const limits = await ctx.runQuery(checkPlanLimitsByOrgIdRef, {
+			orgId: org._id
+		});
+		if (!limits?.usageReady) {
+			if (limits?.usageRepairRequired) {
+				await ctx.runMutation(enqueuePlanUsageRepairRef, { orgId: org._id });
+			}
+			return {
+				error: limits?.usageFailureCode ?? 'PLAN_USAGE_NOT_READY',
+				deliveryCount: 0
+			};
+		}
+		const emailQuotaRemaining = Math.max(
+			0,
+			limits.limits.maxEmails - limits.current.emailsSent - limits.current.emailsReserved
+		);
+		if (plannedTargets.length > emailQuotaRemaining) {
+			return { error: 'EMAIL_QUOTA_EXCEEDED', deliveryCount: 0 };
+		}
+
+		let deliveryCount = 0;
+		for (const target of plannedTargets) {
+			const email = target.email;
 			const resolvedDecisionMaker = await resolveDecisionMakerForTarget(ctx, target);
 			const readiness = receiptReadinessFor(campaign.billId, resolvedDecisionMaker?._id);
 			const packetSnapshot =
@@ -2279,8 +2799,9 @@ export const sendReport = mutation({
 						}
 					: undefined;
 
-			await ctx.db.insert('campaignDeliveries', {
+			const deliveryId = await ctx.db.insert('campaignDeliveries', {
 				campaignId: args.campaignId,
+				orgId: org._id,
 				decisionMakerId: resolvedDecisionMaker?._id,
 				billId: campaign.billId,
 				targetEmail: email,
@@ -2296,6 +2817,20 @@ export const sendReport = mutation({
 					readiness.receiptBlockers.length > 0 ? readiness.receiptBlockers : undefined,
 				createdAt: Date.now()
 			});
+			const reservation = await reserveEmailUsage(ctx, {
+				orgId: org._id,
+				sourceType: 'campaignDelivery',
+				sourceId: String(deliveryId),
+				requestedCount: 1,
+				admission: {
+					periodStart: limits.periodStart,
+					currentEmailsSent: limits.current.emailsSent,
+					maxEmails: limits.limits.maxEmails
+				},
+				leaseExpiresAt: Date.now() + EMAIL_RESERVATION_LEASE_MS
+			});
+			await ctx.db.patch(deliveryId, { planUsageReservationId: reservation._id });
+			await applyCampaignDeliveryBaselineReadModel(ctx, deliveryId);
 			deliveryCount++;
 		}
 
@@ -2310,6 +2845,80 @@ export const sendReport = mutation({
 	}
 });
 
+/** Last serializable boundary before SES. The reservation was created with the
+ * delivery, but cancellation/rollover can occur while its scheduled action is
+ * waiting. Only a current-period active reservation may transition queued →
+ * sending; retries see `sending` and cannot issue a second carrier request. */
+export const claimReportDeliveryForDispatch = internalMutation({
+	args: { deliveryId: v.id('campaignDeliveries') },
+	handler: async (
+		ctx,
+		args
+	): Promise<{ ok: boolean; reason: string | null; retryable: boolean }> => {
+		const delivery = await ctx.db.get(args.deliveryId);
+		if (!delivery || delivery.status !== 'queued') {
+			return { ok: false as const, reason: null, retryable: false };
+		}
+		if (!delivery.orgId || !delivery.planUsageReservationId) {
+			throw new Error('CAMPAIGN_DELIVERY_RESERVATION_MISSING');
+		}
+		const reservation = await ctx.db.get(delivery.planUsageReservationId);
+		if (!reservation || reservation.sourceId !== String(delivery._id)) {
+			throw new Error('CAMPAIGN_DELIVERY_RESERVATION_MISMATCH');
+		}
+		const limits = await ctx.runQuery(checkPlanLimitsByOrgIdRef, {
+			orgId: delivery.orgId
+		});
+		if (!limits?.usageReady) {
+			if (limits?.usageRepairRequired) {
+				await ctx.runMutation(enqueuePlanUsageRepairRef, { orgId: delivery.orgId });
+			}
+			return {
+				ok: false as const,
+				reason: limits?.usageFailureCode ?? 'PLAN_USAGE_NOT_READY',
+				retryable:
+					limits?.usageRepairRequired === true &&
+					limits.usageRepairStatus !== 'blocked' &&
+					!limits.usageFailureCode?.includes('RESERVATION_BLOCKED')
+			};
+		}
+		if (limits.limits.maxEmails <= 0 || reservation.periodStart !== limits.periodStart) {
+			await applyCampaignDeliveryTransitionReadModel(ctx, delivery._id, delivery.status, 'failed');
+			await reconcileEmailReservation(ctx, {
+				reservationId: reservation._id,
+				absoluteSentCount: 0,
+				terminal: true,
+				terminalReason:
+					limits.limits.maxEmails <= 0
+						? 'PLAN_INACTIVE_BEFORE_DISPATCH'
+						: 'RESERVATION_PERIOD_ROLLED_OVER_BEFORE_DISPATCH'
+			});
+			await ctx.db.patch(delivery._id, { status: 'failed' });
+			return {
+				ok: false as const,
+				reason: limits.limits.maxEmails <= 0 ? 'EMAIL_QUOTA_INACTIVE' : 'RESERVATION_PERIOD_STALE',
+				retryable: false
+			};
+		}
+		await renewEmailReservationLease(ctx, reservation._id, Date.now() + EMAIL_RESERVATION_LEASE_MS);
+		await applyCampaignDeliveryTransitionReadModel(ctx, delivery._id, delivery.status, 'sending');
+		await ctx.db.patch(delivery._id, { status: 'sending' });
+		return { ok: true as const, reason: null, retryable: false };
+	}
+});
+
+/** A transport exception after SES authority was exercised is not evidence of
+ * failure. Hold the reservation and block new admissions until an operator
+ * reconciles against SES evidence. */
+export const blockReportDeliveryAfterAmbiguousCarrierError = internalMutation({
+	args: { deliveryId: v.id('campaignDeliveries'), failureCode: v.string() },
+	handler: async (ctx, args) => {
+		const delivery = await ctx.db.get(args.deliveryId);
+		if (!delivery || delivery.status !== 'sending' || !delivery.planUsageReservationId) return;
+		await blockEmailReservation(ctx, delivery.planUsageReservationId, args.failureCode);
+	}
+});
+
 /**
  * Internal action: Dispatch queued report emails via SES.
  * Finds all "queued" deliveries for a campaign, sends each via SES,
@@ -2317,7 +2926,8 @@ export const sendReport = mutation({
  */
 export const dispatchReportEmails = internalAction({
 	args: {
-		campaignId: v.id('campaigns')
+		campaignId: v.id('campaigns'),
+		retryAttempt: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
 		const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
@@ -2359,6 +2969,34 @@ export const dispatchReportEmails = internalAction({
 		const fallbackHtml = buildReportEmailHtml(campaign);
 
 		for (const delivery of deliveries) {
+			const claim: { ok: boolean; reason: string | null; retryable: boolean } =
+				await ctx.runMutation(internal.campaigns.claimReportDeliveryForDispatch, {
+					deliveryId: delivery._id
+				});
+			if (!claim.ok) {
+				if (claim.retryable && (args.retryAttempt ?? 0) < 3) {
+					const retryAttempt = (args.retryAttempt ?? 0) + 1;
+					await ctx.scheduler.runAfter(
+						30_000 * 2 ** (retryAttempt - 1),
+						internal.campaigns.dispatchReportEmails,
+						{
+							campaignId: args.campaignId,
+							retryAttempt
+						}
+					);
+					return;
+				}
+				if (claim.reason?.startsWith('PLAN_USAGE_')) {
+					// Blocked/inconsistent evidence requires operator reconciliation;
+					// never turn it into a recurring scheduler/function-call bomb.
+					console.error('[dispatchReportEmails] plan usage claim blocked', {
+						campaignId: args.campaignId,
+						reason: claim.reason
+					});
+					return;
+				}
+				continue;
+			}
 			const htmlBody = (delivery as Record<string, any>).packetHtml ?? fallbackHtml;
 
 			try {
@@ -2373,6 +3011,13 @@ export const dispatchReportEmails = internalAction({
 					awsRegion
 				);
 
+				if (!sesResult.ok && sesResult.ambiguous) {
+					await ctx.runMutation(internal.campaigns.blockReportDeliveryAfterAmbiguousCarrierError, {
+						deliveryId: delivery._id,
+						failureCode: 'SES_OUTCOME_AMBIGUOUS'
+					});
+					continue;
+				}
 				await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
 					deliveryId: delivery._id,
 					status: sesResult.ok ? 'sent' : 'failed',
@@ -2384,9 +3029,9 @@ export const dispatchReportEmails = internalAction({
 					`[dispatchReportEmails] Failed for ${delivery.targetEmail}:`,
 					err instanceof Error ? err.message : err
 				);
-				await ctx.runMutation(internal.campaigns.updateDeliveryStatus, {
+				await ctx.runMutation(internal.campaigns.blockReportDeliveryAfterAmbiguousCarrierError, {
 					deliveryId: delivery._id,
-					status: 'failed'
+					failureCode: 'SES_OUTCOME_AMBIGUOUS'
 				});
 			}
 		}
@@ -2425,9 +3070,11 @@ export const getQueuedDeliveries = internalQuery({
 	handler: async (ctx, { campaignId }) => {
 		const deliveries = await ctx.db
 			.query('campaignDeliveries')
-			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
-			.filter((q) => q.eq(q.field('status'), 'queued'))
-			.collect();
+			.withIndex('by_campaignId_status', (q) =>
+				q.eq('campaignId', campaignId).eq('status', 'queued')
+			)
+			.take(51);
+		if (deliveries.length > 50) throw new Error('CAMPAIGN_QUEUED_DELIVERY_LIMIT_EXCEEDED');
 		return deliveries.map((d) => ({
 			_id: d._id,
 			targetEmail: d.targetEmail,
@@ -2442,7 +3089,7 @@ export const getQueuedDeliveries = internalQuery({
 });
 
 async function maybeCreateAccountabilityReceiptForDelivery(
-	ctx: { db: any },
+	ctx: MutationCtx,
 	deliveryId: Id<'campaignDeliveries'>,
 	proofDeliveredAt?: number
 ): Promise<Id<'accountabilityReceipts'> | null> {
@@ -2462,7 +3109,10 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 		.query('accountabilityReceipts')
 		.withIndex('by_deliveryId', (q: any) => q.eq('deliveryId', deliveryId))
 		.first();
-	if (existing) return existing._id;
+	if (existing) {
+		await syncAccountabilityReceiptProjection(ctx, existing._id);
+		return existing._id;
+	}
 
 	const campaign = await ctx.db.get(delivery.campaignId);
 	if (!campaign) return null;
@@ -2480,7 +3130,7 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 		delivery.proofWeight
 	);
 
-	return ctx.db.insert('accountabilityReceipts', {
+	const receiptId = await ctx.db.insert('accountabilityReceipts', {
 		decisionMakerId: delivery.decisionMakerId,
 		dmName: decisionMaker.name,
 		billId: delivery.billId,
@@ -2502,6 +3152,11 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 		status: 'pending_response',
 		updatedAt: now
 	});
+	const receipt = await ctx.db.get(receiptId);
+	if (!receipt) throw new Error('ACCOUNTABILITY_RECEIPT_INSERT_FAILED');
+	await applyCoalitionReceiptProjection(ctx, receipt, bill.title);
+	await syncAccountabilityReceiptProjection(ctx, receiptId);
+	return receiptId;
 }
 
 /** Internal mutation: update a delivery's status */
@@ -2518,8 +3173,49 @@ export const updateDeliveryStatus = internalMutation({
 		sesMessageId: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		const patch: Record<string, unknown> = { status: args.status };
-		if (args.sentAt) patch.sentAt = args.sentAt;
+		const delivery = await ctx.db.get(args.deliveryId);
+		if (!delivery) throw new Error('CAMPAIGN_DELIVERY_NOT_FOUND');
+		const campaign = delivery.orgId ? null : await ctx.db.get(delivery.campaignId);
+		const orgId = delivery.orgId ?? campaign?.orgId;
+		if (!orgId) throw new Error('CAMPAIGN_DELIVERY_ORGANIZATION_MISSING');
+		const firstConfirmedSend = args.status === 'sent' && delivery.sentAt === undefined;
+		if (firstConfirmedSend && args.sentAt === undefined) {
+			throw new Error('CAMPAIGN_DELIVERY_SENT_AT_REQUIRED');
+		}
+		if (firstConfirmedSend) {
+			if (!delivery.planUsageReservationId) {
+				throw new Error('CAMPAIGN_DELIVERY_RESERVATION_MISSING');
+			}
+			await reconcileEmailReservation(ctx, {
+				reservationId: delivery.planUsageReservationId,
+				absoluteSentCount: 1,
+				terminal: true,
+				terminalReason: 'SES_ACCEPTED'
+			});
+		} else if (
+			args.status === 'failed' &&
+			delivery.sentAt === undefined &&
+			(delivery.status === 'queued' || delivery.status === 'sending')
+		) {
+			if (!delivery.planUsageReservationId) {
+				throw new Error('CAMPAIGN_DELIVERY_RESERVATION_MISSING');
+			}
+			await reconcileEmailReservation(ctx, {
+				reservationId: delivery.planUsageReservationId,
+				absoluteSentCount: 0,
+				terminal: true,
+				terminalReason: 'SES_REJECTED_BEFORE_ACCEPTANCE'
+			});
+		}
+		await applyCampaignDeliveryTransitionReadModel(
+			ctx,
+			args.deliveryId,
+			delivery.status,
+			args.status
+		);
+		const patch: Record<string, unknown> = { status: args.status, orgId };
+		// sentAt is immutable proof of the first carrier-accepted transition.
+		if (args.sentAt !== undefined && delivery.sentAt === undefined) patch.sentAt = args.sentAt;
 		if (args.sesMessageId) {
 			// Convex has no native unique indexes; the webhook reads via
 			// `.first()` and would silently update only one row if the
@@ -2597,29 +3293,21 @@ export const getDeliveryMetrics = query({
 		}
 		await requireOrgMembership(ctx, campaign.orgId, userId);
 
-		const deliveries = await ctx.db
-			.query('campaignDeliveries')
+		const migration = await ctx.db
+			.query('campaignReadModelMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
+			.unique();
+		if (migration?.status !== 'ready') throw new Error('CAMPAIGN_READ_MODEL_NOT_READY');
+		const model = await ctx.db
+			.query('campaignReadModels')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
-			.collect();
-
-		const sent = deliveries.filter((d) => d.status !== 'queued').length;
-		const delivered = deliveries.filter(
-			(d) => d.status === 'delivered' || d.status === 'opened'
-		).length;
-		const opened = deliveries.filter((d) => d.status === 'opened').length;
-		const bounced = deliveries.filter((d) => d.status === 'bounced').length;
-		let clicked = 0;
-
-		for (const delivery of deliveries) {
-			const receipt = await ctx.db
-				.query('accountabilityReceipts')
-				.withIndex('by_deliveryId', (q) => q.eq('deliveryId', delivery._id))
-				.first();
-			const responses = receipt?.responses ?? delivery.responses ?? [];
-			if (responses.some((response) => response.type === 'clicked_verify')) {
-				clicked += 1;
-			}
-		}
+			.unique();
+		const state = model?.state ?? emptyCampaignReadModel(campaign.updatedAt);
+		const sent = state.deliverySentCount;
+		const delivered = state.deliveryDeliveredCount;
+		const opened = state.deliveryOpenedCount;
+		const bounced = state.deliveryBouncedCount;
+		const clicked = state.deliveryVerifyClickedCount;
 
 		return {
 			sent,
@@ -2699,7 +3387,9 @@ async function sendReportViaSes(
 	accessKeyId: string,
 	secretAccessKey: string,
 	region: string
-): Promise<{ ok: false } | { ok: true; messageId: string | null }> {
+): Promise<
+	{ ok: false; ambiguous: boolean } | { ok: true; messageId: string | null; ambiguous?: never }
+> {
 	const endpoint = `https://email.${region}.amazonaws.com/v2/email/outbound-emails`;
 	const safeFromName = fromName.replace(/[\r\n\x00-\x1f\x7f]/g, '');
 	const safeSubject = subject.replace(/[\r\n\x00-\x1f\x7f]/g, '');
@@ -2770,7 +3460,7 @@ async function sendReportViaSes(
 			},
 			body
 		});
-		if (!res.ok) return { ok: false };
+		if (!res.ok) return { ok: false, ambiguous: res.status >= 500 };
 		// Parse the SES v2 response for the MessageId so the caller can
 		// persist it on the campaignDelivery row. Without this, the SES
 		// bounce/delivery webhook (`webhooks.handleDeliveryEvent`) has no
@@ -2797,7 +3487,7 @@ async function sendReportViaSes(
 		}
 		return { ok: true, messageId };
 	} catch {
-		return { ok: false };
+		return { ok: false, ambiguous: true };
 	}
 }
 
@@ -2808,21 +3498,31 @@ async function sendReportViaSes(
 export const getPastDeliveries = query({
 	args: {
 		campaignId: v.id('campaigns'),
-		orgSlug: v.string()
+		orgSlug: v.string(),
+		cursor: v.optional(v.union(v.string(), v.null())),
+		limit: v.optional(v.number())
 	},
-	handler: async (ctx, { campaignId, orgSlug }) => {
+	handler: async (ctx, { campaignId, orgSlug, cursor, limit }) => {
 		const { org } = await requireOrgRole(ctx, orgSlug, 'member');
 
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign || campaign.orgId !== org._id) return null;
 
-		const deliveries = await ctx.db
+		if (cursor && cursor.length > 2_048) throw new Error('DELIVERY_CURSOR_INVALID');
+		const pageSize = Math.min(Math.max(Math.trunc(limit ?? 25), 1), 25);
+		const page = await ctx.db
 			.query('campaignDeliveries')
 			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
-			.collect();
+			.order('desc')
+			.paginate({
+				cursor: cursor ?? null,
+				numItems: pageSize,
+				maximumRowsRead: pageSize + 1,
+				maximumBytesRead: 2 * 1024 * 1024
+			});
 
 		const result = [];
-		for (const d of deliveries) {
+		for (const d of page.page) {
 			const receipt = await ctx.db
 				.query('accountabilityReceipts')
 				.withIndex('by_deliveryId', (q) => q.eq('deliveryId', d._id))
@@ -2866,7 +3566,11 @@ export const getPastDeliveries = query({
 			});
 		}
 
-		return result;
+		return {
+			data: result,
+			cursor: page.isDone ? null : page.continueCursor,
+			hasMore: !page.isDone
+		};
 	}
 });
 
@@ -2887,17 +3591,18 @@ export const getCampaignByDebateId = query({
 		if (!campaign) return null;
 		const membership = await ctx.db
 			.query('orgMemberships')
-			.withIndex('by_userId_orgId', (q) =>
-				q.eq('userId', userId).eq('orgId', campaign.orgId),
-			)
+			.withIndex('by_userId_orgId', (q) => q.eq('userId', userId).eq('orgId', campaign.orgId))
 			.first();
 		if (!membership) return null;
+		const settlementRole =
+			membership.role === 'owner' || membership.role === 'editor' ? membership.role : null;
 		return {
 			_id: campaign._id,
 			orgId: campaign.orgId,
 			title: campaign.title,
 			status: campaign.status,
-			templateId: campaign.templateId ?? null
+			templateId: campaign.templateId ?? null,
+			settlementRole
 		};
 	}
 });
@@ -2905,17 +3610,34 @@ export const getCampaignByDebateId = query({
 /**
  * Operator-driven reconciliation for the denormalized counters on
  * `campaigns`. `actionCount`/`verifiedActionCount`/`tier3VerifiedActionCount`
- * are maintained by `createCampaignAction` on every insert; the contract
- * is APPEND-ONLY (no current code path deletes campaignActions). That
- * contract lives in a comment, not a constraint — if a future writer
- * (or a manual data fix) ever deleted an action row, the counter would
- * silently desync.
+ * are maintained by `createCampaignAction` on insert and the bounded purge
+ * path on campaign deletion. A manual data fix or incomplete purge could still
+ * desynchronize them, so the invariant needs a forensic verifier.
  *
  * This action recomputes the canonical counts from the source table
  * and reports drift. Operators run on demand (or via cron) and can
  * inspect divergence; not auto-corrected because a drift indicates
  * something is wrong upstream and silent repair would mask the cause.
  */
+type CampaignCounterPage = {
+	storedActionCount: number;
+	storedVerifiedActionCount: number;
+	storedTier3VerifiedActionCount: number;
+	actualActionCount: number;
+	actualVerifiedActionCount: number;
+	actualTier3VerifiedActionCount: number;
+	cursor: string | null;
+};
+
+const recomputeCampaignCountersRef = makeFunctionReference<'query'>(
+	'campaigns:recomputeCampaignCounters'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ campaignId: Id<'campaigns'>; cursor?: string | null },
+	CampaignCounterPage
+>;
+
 export const reconcileCampaignCounters = internalAction({
 	args: { campaignId: v.id('campaigns') },
 	handler: async (
@@ -2930,7 +3652,38 @@ export const reconcileCampaignCounters = internalAction({
 		actualTier3VerifiedActionCount: number;
 		drift: boolean;
 	}> => {
-		const result = await ctx.runQuery(internal.campaigns.recomputeCampaignCounters, { campaignId });
+		let cursor: string | null = null;
+		let storedActionCount = 0;
+		let storedVerifiedActionCount = 0;
+		let storedTier3VerifiedActionCount = 0;
+		let actualActionCount = 0;
+		let actualVerifiedActionCount = 0;
+		let actualTier3VerifiedActionCount = 0;
+		do {
+			const page: CampaignCounterPage = await ctx.runQuery(recomputeCampaignCountersRef, {
+				campaignId,
+				cursor
+			});
+			storedActionCount = page.storedActionCount;
+			storedVerifiedActionCount = page.storedVerifiedActionCount;
+			storedTier3VerifiedActionCount = page.storedTier3VerifiedActionCount;
+			actualActionCount += page.actualActionCount;
+			actualVerifiedActionCount += page.actualVerifiedActionCount;
+			actualTier3VerifiedActionCount += page.actualTier3VerifiedActionCount;
+			cursor = page.cursor;
+		} while (cursor !== null);
+		const result = {
+			storedActionCount,
+			storedVerifiedActionCount,
+			storedTier3VerifiedActionCount,
+			actualActionCount,
+			actualVerifiedActionCount,
+			actualTier3VerifiedActionCount,
+			drift:
+				storedActionCount !== actualActionCount ||
+				storedVerifiedActionCount !== actualVerifiedActionCount ||
+				storedTier3VerifiedActionCount !== actualTier3VerifiedActionCount
+		};
 		if (result.drift) {
 			console.error(
 				`[reconcileCampaignCounters] DRIFT detected for campaign ${campaignId}: ` +
@@ -2942,24 +3695,31 @@ export const reconcileCampaignCounters = internalAction({
 	}
 });
 
-/** Internal query: recompute campaign counters from source rows.
- *  Uses `for await` over the by_campaignId index — bounded memory
- *  per iteration (one doc at a time) so this still works on large
- *  campaigns where a `.collect()` would hit Convex's row-scan cap
- *  exactly when operators need forensic data the most. */
+/** One bounded source page for the action-level forensic reconciler. */
 export const recomputeCampaignCounters = internalQuery({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
+	args: {
+		campaignId: v.id('campaigns'),
+		cursor: v.optional(v.union(v.string(), v.null()))
+	},
+	handler: async (ctx, { campaignId, cursor }) => {
 		const campaign = await ctx.db.get(campaignId);
 		if (!campaign) {
 			throw new Error('CAMPAIGN_NOT_FOUND');
 		}
+		if (cursor && cursor.length > 2_048) throw new Error('CAMPAIGN_RECONCILE_CURSOR_INVALID');
+		const page = await ctx.db
+			.query('campaignActions')
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
+			.paginate({
+				cursor: cursor ?? null,
+				numItems: 512,
+				maximumRowsRead: 513,
+				maximumBytesRead: 2 * 1024 * 1024
+			});
 		let actualActionCount = 0;
 		let actualVerifiedActionCount = 0;
 		let actualTier3VerifiedActionCount = 0;
-		for await (const action of ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))) {
+		for (const action of page.page) {
 			actualActionCount++;
 			if (action.verified) {
 				actualVerifiedActionCount++;
@@ -2971,10 +3731,6 @@ export const recomputeCampaignCounters = internalQuery({
 		const storedActionCount = campaign.actionCount ?? 0;
 		const storedVerifiedActionCount = campaign.verifiedActionCount ?? 0;
 		const storedTier3VerifiedActionCount = campaign.tier3VerifiedActionCount ?? 0;
-		const drift =
-			storedActionCount !== actualActionCount ||
-			storedVerifiedActionCount !== actualVerifiedActionCount ||
-			storedTier3VerifiedActionCount !== actualTier3VerifiedActionCount;
 		return {
 			storedActionCount,
 			storedVerifiedActionCount,
@@ -2982,7 +3738,7 @@ export const recomputeCampaignCounters = internalQuery({
 			actualActionCount,
 			actualVerifiedActionCount,
 			actualTier3VerifiedActionCount,
-			drift
+			cursor: page.isDone ? null : page.continueCursor
 		};
 	}
 });

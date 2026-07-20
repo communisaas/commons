@@ -5,26 +5,34 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
 
-const UpdateNetworkSchema = z.object({
-	name: z.string().min(3, 'Name must be at least 3 characters').max(100, 'Name must be at most 100 characters').optional(),
-	description: z.string().max(500).optional()
-}).refine((d) => d.name !== undefined || d.description !== undefined, {
-	message: 'At least one field (name or description) is required'
-});
+const UpdateNetworkSchema = z
+	.object({
+		name: z
+			.string()
+			.min(3, 'Name must be at least 3 characters')
+			.max(100, 'Name must be at most 100 characters')
+			.optional(),
+		description: z.string().max(500).optional()
+	})
+	.refine((d) => d.name !== undefined || d.description !== undefined, {
+		message: 'At least one field (name or description) is required'
+	});
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, locals, url }) => {
 	if (!FEATURES.NETWORKS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const result = await serverQuery(api.networks.get, {
 		orgSlug: params.slug,
-		networkId: params.networkId as Id<'orgNetworks'>
+		networkId: params.networkId as Id<'orgNetworks'>,
+		memberCursor: url.searchParams.get('memberCursor') || undefined,
+		memberLimit: 50
 	});
 	return json({ data: result });
 };

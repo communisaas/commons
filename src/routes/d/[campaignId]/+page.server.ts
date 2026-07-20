@@ -1,14 +1,16 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const load: PageServerLoad = async ({ params }) => {
 	if (!FEATURES.FUNDRAISING) throw error(404, 'Not found');
 
 	const campaign = await serverQuery(api.campaigns.getPublic, {
+		_secret: getInternalSecret(),
 		campaignId: params.campaignId as Id<'campaigns'>
 	});
 

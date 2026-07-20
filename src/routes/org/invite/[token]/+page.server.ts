@@ -1,10 +1,14 @@
 import { redirect, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad, Actions } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
-	const invite = await serverQuery(api.invites.getByToken, { token: params.token });
+	const invite = await serverQuery(api.invites.getByToken, {
+		_secret: getInternalSecret(),
+		token: params.token
+	});
 
 	if (!invite) {
 		throw error(404, 'Invite not found');
@@ -39,7 +43,10 @@ export const actions: Actions = {
 			throw redirect(302, `/auth/google?returnTo=/org/invite/${params.token}`);
 		}
 
-		const invite = await serverQuery(api.invites.getByToken, { token: params.token });
+		const invite = await serverQuery(api.invites.getByToken, {
+			_secret: getInternalSecret(),
+			token: params.token
+		});
 
 		if (!invite || invite.accepted || invite.expiresAt < Date.now()) {
 			throw error(400, 'This invite is no longer valid');

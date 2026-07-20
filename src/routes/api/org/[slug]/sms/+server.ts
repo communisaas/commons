@@ -6,19 +6,22 @@
 
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { SMS_MAX_LENGTH } from '$lib/server/sms/types';
+import { countSmsAudience } from '$lib/server/sms/audience';
 import type { RequestHandler } from './$types';
 
 // Per-entry caps on tag/segment ids (Convex doc ids are 32 chars).
-const RecipientFilterSchema = z.object({
-	tags: z.array(z.string().max(64)).max(20).optional(),
-	segments: z.array(z.string().max(64)).max(10).optional(),
-	excludeTags: z.array(z.string().max(64)).max(20).optional()
-}).strict();
+const RecipientFilterSchema = z
+	.object({
+		tags: z.array(z.string().max(64)).max(20).optional(),
+		segments: z.array(z.string().max(64)).max(10).optional(),
+		excludeTags: z.array(z.string().max(64)).max(20).optional()
+	})
+	.strict();
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
@@ -40,7 +43,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		try {
 			parsedFilter = RecipientFilterSchema.parse(recipientFilter);
 		} catch (e) {
-			if (e instanceof z.ZodError) throw error(400, `Invalid recipient filter: ${e.errors[0]?.message ?? 'validation failed'}`);
+			if (e instanceof z.ZodError)
+				throw error(
+					400,
+					`Invalid recipient filter: ${e.errors[0]?.message ?? 'validation failed'}`
+				);
 			throw e;
 		}
 	}
@@ -66,16 +73,25 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		if (!campaign) throw error(400, 'Campaign not found in this organization');
 	}
 
-	const audience = (await serverQuery(api.sms.countEligibleRecipientsForFilter, {
-		slug: params.slug,
-		recipientFilter: parsedFilter
-			? {
-					tags: parsedFilter.tags as Id<'tags'>[] | undefined,
-					segments: parsedFilter.segments as Id<'segments'>[] | undefined,
-					excludeTags: parsedFilter.excludeTags as Id<'tags'>[] | undefined
-				}
-			: undefined
-	})) as { eligibleCount: number };
+	let audience: Awaited<ReturnType<typeof countSmsAudience>>;
+	try {
+		audience = await countSmsAudience(
+			params.slug,
+			parsedFilter
+				? {
+						tags: parsedFilter.tags as Id<'tags'>[] | undefined,
+						segments: parsedFilter.segments as Id<'segments'>[] | undefined,
+						excludeTags: parsedFilter.excludeTags as Id<'tags'>[] | undefined
+					}
+				: undefined
+		);
+	} catch (cause) {
+		const code = cause instanceof Error ? cause.message : 'SMS_AUDIENCE_COUNT_FAILED';
+		if (code.includes('SMS_AUDIENCE_COHORT_TOO_LARGE')) {
+			throw error(422, 'Text audiences are limited to 10,000 eligible recipients.');
+		}
+		throw cause;
+	}
 
 	const blast = await serverMutation(api.sms.createBlast, {
 		slug: params.slug,
@@ -113,7 +129,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1),
+		100
+	);
 
 	const blasts = await serverQuery(api.sms.listBlasts, {
 		slug: params.slug,

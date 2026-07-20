@@ -17,7 +17,9 @@ vi.mock('convex/browser', () => ({
 
 import {
 	DEFAULT_MAX_SNAPSHOT_AGE_MS,
+	REQUIRED_LAUNCH_PROJECTION_PLANES,
 	readinessOptionsFromEnv,
+	validatePublicDiscoveryManifestAuthorityStatus,
 	validatePublicDiscoveryReadiness,
 	verifyPublicDiscoveryReadiness
 } from '../../../scripts/verify-public-discovery-readiness.mjs';
@@ -26,6 +28,13 @@ const NOW = Date.UTC(2026, 6, 16, 14);
 const LIST_UPDATED_AT = NOW - 60 * 60 * 1000;
 const RELATIONS_UPDATED_AT = NOW - 30 * 60 * 1000;
 const INTERNAL_SECRET = 'release-readiness-secret-32-byte-padding';
+const MANIFEST_AUTHORITY_STATUS = {
+	ready: true,
+	matches: true,
+	bytes: 365,
+	maxBytes: 4 * 1024,
+	projectionVersion: 1
+};
 
 type ReadinessState = {
 	ready: boolean;
@@ -65,6 +74,17 @@ type ReadinessFixture = {
 		ok: boolean;
 		storageReadable: boolean;
 		discoveryManifestPresent: boolean;
+		discoverySourcePlaneReady: boolean;
+		discoveryEndorsementCountsReady: boolean;
+		templateListProjectionReady: boolean;
+		templateListProjectionStatus: string;
+		recipientMetricsReady: boolean;
+		recipientMetricsStatus: string;
+		launchProjectionPlanes: Record<
+			string,
+			{ status: string; ready: boolean; failureCode: string | null }
+		>;
+		launchProjectionsReady: boolean;
 		discoveryProducerHealthy: boolean;
 		discoveryProducerOverdueAt: number | null;
 	};
@@ -84,6 +104,19 @@ function readyFixture(): ReadinessFixture {
 			ok: true,
 			storageReadable: true,
 			discoveryManifestPresent: true,
+			discoverySourcePlaneReady: true,
+			discoveryEndorsementCountsReady: true,
+			templateListProjectionReady: true,
+			templateListProjectionStatus: 'ready',
+			recipientMetricsReady: true,
+			recipientMetricsStatus: 'ready',
+			launchProjectionPlanes: Object.fromEntries(
+				REQUIRED_LAUNCH_PROJECTION_PLANES.map((name) => [
+					name,
+					{ status: 'ready', ready: true, failureCode: null }
+				])
+			),
+			launchProjectionsReady: true,
 			discoveryProducerHealthy: true,
 			discoveryProducerOverdueAt: null
 		},
@@ -149,6 +182,25 @@ describe('public discovery producer readiness', () => {
 		});
 	});
 
+	it('requires an exact ready, matching, byte-bounded manifest authority proof', () => {
+		expect(validatePublicDiscoveryManifestAuthorityStatus(MANIFEST_AUTHORITY_STATUS)).toEqual({
+			manifestAuthorityBytes: 365,
+			manifestAuthorityMaxBytes: 4 * 1024,
+			manifestAuthorityProjectionVersion: 1
+		});
+		for (const invalid of [
+			{ ...MANIFEST_AUTHORITY_STATUS, ready: false },
+			{ ...MANIFEST_AUTHORITY_STATUS, matches: false },
+			{ ...MANIFEST_AUTHORITY_STATUS, bytes: 4 * 1024 + 1 },
+			{ ...MANIFEST_AUTHORITY_STATUS, maxBytes: 8 * 1024 },
+			{ ...MANIFEST_AUTHORITY_STATUS, projectionVersion: 2 }
+		]) {
+			expect(() => validatePublicDiscoveryManifestAuthorityStatus(invalid)).toThrow(
+				'PUBLIC_DISCOVERY_NOT_READY'
+			);
+		}
+	});
+
 	it('rejects a cold manifest', () => {
 		const fixture = readyFixture();
 		fixture.manifest.list = { ready: false, revision: 0, updatedAt: null };
@@ -163,6 +215,78 @@ describe('public discovery producer readiness', () => {
 
 		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
 			/producerStatus\.discoveryProducerHealthy is not true/
+		);
+	});
+
+	it('rejects a ready legacy snapshot before the compact source cutover', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.discoverySourcePlaneReady = false;
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/producerStatus\.discoverySourcePlaneReady is not true/
+		);
+	});
+
+	it('rejects snapshots before exact endorsement counters are reconciled', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.discoveryEndorsementCountsReady = false;
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/producerStatus\.discoveryEndorsementCountsReady is not true/
+		);
+	});
+
+	it('rejects authenticated-list projections before their explicit cutover', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.templateListProjectionReady = false;
+		fixture.producerStatus.templateListProjectionStatus = 'migrated';
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/templateListProjectionReady is not true[\s\S]*templateListProjectionStatus is not ready/
+		);
+	});
+
+	it('rejects recipient metrics before their explicit cutover', () => {
+		const fixture = readyFixture();
+		fixture.producerStatus.recipientMetricsReady = false;
+		fixture.producerStatus.recipientMetricsStatus = 'migrated';
+
+		expect(() => validatePublicDiscoveryReadiness(fixture, { now: NOW })).toThrow(
+			/recipientMetricsReady is not true[\s\S]*recipientMetricsStatus is not ready/
+		);
+	});
+
+	it('requires the exact launch projection set and every plane to be ready', () => {
+		const aggregateFalse = readyFixture();
+		aggregateFalse.producerStatus.launchProjectionsReady = false;
+		expect(() => validatePublicDiscoveryReadiness(aggregateFalse, { now: NOW })).toThrow(
+			/producerStatus\.launchProjectionsReady is not true/
+		);
+
+		const missing = readyFixture();
+		delete missing.producerStatus.launchProjectionPlanes.supporterBrowse;
+		expect(() => validatePublicDiscoveryReadiness(missing, { now: NOW })).toThrow(
+			/launchProjectionPlanes\.supporterBrowse is missing/
+		);
+
+		const blocked = readyFixture();
+		blocked.producerStatus.launchProjectionPlanes.accountabilityReadModel = {
+			status: 'blocked',
+			ready: false,
+			failureCode: 'ACCOUNTABILITY_MIGRATION_BLOCKED'
+		};
+		expect(() => validatePublicDiscoveryReadiness(blocked, { now: NOW })).toThrow(
+			/accountabilityReadModel\.ready is not true[\s\S]*accountabilityReadModel\.failureCode is not null/
+		);
+
+		const unexpected = readyFixture();
+		unexpected.producerStatus.launchProjectionPlanes.unreleasedPlane = {
+			status: 'ready',
+			ready: true,
+			failureCode: null
+		};
+		expect(() => validatePublicDiscoveryReadiness(unexpected, { now: NOW })).toThrow(
+			/launchProjectionPlanes\.unreleasedPlane is unexpected/
 		);
 	});
 
@@ -456,6 +580,7 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(fixture.allRelations)
 			.mockResolvedValueOnce(fixture.excludeCwcRelations)
 			.mockResolvedValueOnce(fixture.manifest)
+			.mockResolvedValueOnce(MANIFEST_AUTHORITY_STATUS)
 			.mockResolvedValueOnce(fixture.producerStatus);
 
 		await expect(
@@ -471,14 +596,15 @@ describe('public discovery producer readiness', () => {
 			allTwinEdgeCount: 1,
 			excludeCwcTwinEdgeCount: 0
 		});
-		expect(mockConvexQuery).toHaveBeenCalledTimes(7);
+		expect(mockConvexQuery).toHaveBeenCalledTimes(8);
 		expect(mockConvexQuery.mock.calls.map(([, args]) => args)).toEqual([
-			{},
-			{ excludeCwc: false },
-			{ excludeCwc: true },
-			{ excludeCwc: false },
-			{ excludeCwc: true },
-			{},
+			{ _secret: INTERNAL_SECRET },
+			{ _secret: INTERNAL_SECRET, excludeCwc: false },
+			{ _secret: INTERNAL_SECRET, excludeCwc: true },
+			{ _secret: INTERNAL_SECRET, excludeCwc: false },
+			{ _secret: INTERNAL_SECRET, excludeCwc: true },
+			{ _secret: INTERNAL_SECRET },
+			{ _secret: INTERNAL_SECRET },
 			{ _secret: INTERNAL_SECRET }
 		]);
 		expect(mockConvexQuery.mock.calls.map(([reference]) => getFunctionName(reference))).toEqual([
@@ -488,6 +614,7 @@ describe('public discovery producer readiness', () => {
 			'templates:publicDiscoveryRelations',
 			'templates:publicDiscoveryRelations',
 			'templates:publicDiscoveryManifest',
+			'templates:publicDiscoveryManifestAuthorityStatus',
 			'observability:discoveryProducerStatus'
 		]);
 	});
@@ -515,6 +642,7 @@ describe('public discovery producer readiness', () => {
 			.mockResolvedValueOnce(nextFixture.allRelations)
 			.mockResolvedValueOnce(nextFixture.excludeCwcRelations)
 			.mockResolvedValueOnce(nextFixture.manifest)
+			.mockResolvedValueOnce(MANIFEST_AUTHORITY_STATUS)
 			.mockResolvedValueOnce(nextFixture.producerStatus);
 
 		await expect(
@@ -523,7 +651,7 @@ describe('public discovery producer readiness', () => {
 				internalSecret: INTERNAL_SECRET
 			})
 		).resolves.toMatchObject({ listRevision: 5, relationsRevision: 8 });
-		expect(mockConvexQuery).toHaveBeenCalledTimes(13);
+		expect(mockConvexQuery).toHaveBeenCalledTimes(14);
 	});
 
 	it('fails closed after three continuously changing publication generations', async () => {

@@ -1,13 +1,17 @@
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api, internal } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { proposeDebate, deriveDomain } from '$lib/core/blockchain/debate-market-client';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { getRateLimiter } from '$lib/core/security/rate-limiter';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const DEBATE_CREATE_REQUEST_MAX_BYTES = 32 * 1024;
 // Convex equivalent: debates.spawnDebate (off-chain fallback only). Blockchain path must stay here.
 
 /**
@@ -22,7 +26,7 @@ import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
  * If blockchain is not configured, production fails closed unless explicitly
  * opted into off-chain-only operation; local development can proceed off-chain.
  */
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async ({ request, locals, getClientAddress }) => {
 	if (!FEATURES.DEBATE) {
 		throw error(404, 'Not found');
 	}
@@ -36,8 +40,17 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (!user || (user.trust_tier ?? 0) < 3) {
 		throw error(403, 'Tier 3+ verification required to create debates');
 	}
+	const rate = await getRateLimiter().check(`ratelimit:debate-create:${getClientAddress()}`, {
+		maxRequests: 5,
+		windowMs: 60 * 60_000
+	});
+	if (!rate.allowed) return json({ error: 'Too many requests' }, { status: 429 });
 
-	const body = await request.json();
+	const parsed = await readBoundedJson(request, DEBATE_CREATE_REQUEST_MAX_BYTES);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw error(400, 'Invalid debate request');
+	}
+	const body = parsed as Record<string, any>;
 	const { templateId, propositionText, bondAmount, duration } = body;
 
 	if (!templateId || typeof templateId !== 'string') {
@@ -52,6 +65,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// Check for existing active debate on this template
 	const existingDebate = await serverQuery(api.debates.getByTemplateId, {
+		_secret: getInternalSecret(),
 		templateId: templateId as Id<'templates'>
 	});
 	if (existingDebate) {

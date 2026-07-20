@@ -2,11 +2,12 @@ import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { LayoutServerLoad } from './$types';
 
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { isValidPublicTemplateSlug } from '$lib/server/public-template-detail-path';
+import { getCachedPublicTemplatePageArtifact } from '$lib/server/public-template-queries';
 
-export const load: LayoutServerLoad = async ({ params, request, setHeaders }) => {
+export const load: LayoutServerLoad = async ({ params, request, setHeaders, url, platform }) => {
 	const { slug } = params;
+	if (!isValidPublicTemplateSlug(slug)) throw error(404, 'Template not found');
 
 	// This is an explicit detail/send response, not anonymous discovery data.
 	// It contains the recipient roster needed by the power landscape and mailto
@@ -21,11 +22,12 @@ export const load: LayoutServerLoad = async ({ params, request, setHeaders }) =>
 		headers.get('x-country') ||
 		'US';
 
-	const convexTemplate = await serverQuery(api.templates.getBySlugPublic, { slug });
+	const artifact = await getCachedPublicTemplatePageArtifact({ url, platform }, slug);
 
-	if (!convexTemplate) {
+	if (!artifact) {
 		throw error(404, 'Template not found');
 	}
+	const convexTemplate = artifact.detail;
 
 	// Congressional delivery is implemented but not launched while the flag is false.
 	if (!FEATURES.CONGRESSIONAL && convexTemplate.deliveryMethod === 'cwc') {
@@ -34,6 +36,7 @@ export const load: LayoutServerLoad = async ({ params, request, setHeaders }) =>
 
 	return {
 		template: convexTemplate,
+		publicPageAggregate: artifact.aggregate,
 		channel: { country: detectedCountry, locale: 'en-US' }
 	};
 };

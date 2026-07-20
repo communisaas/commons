@@ -26,9 +26,10 @@ import {
 	type Metric
 } from '$lib/types/analytics';
 import { createHash } from 'crypto';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { FEATURES } from '$lib/config/features';
 
 // ============================================================================
 // In-Memory Rate Limiting
@@ -52,12 +53,7 @@ function hashIP(ip: string): string {
  * Extract client IP from request
  */
 function getClientIP(request: Request): string {
-	const headers = [
-		'cf-connecting-ip',
-		'true-client-ip',
-		'x-forwarded-for',
-		'x-real-ip'
-	];
+	const headers = ['cf-connecting-ip', 'true-client-ip', 'x-forwarded-for', 'x-real-ip'];
 
 	for (const header of headers) {
 		const value = request.headers.get(header);
@@ -109,8 +105,8 @@ async function persistBatch(
 				jurisdiction: inc.dimensions?.jurisdiction as string | undefined,
 				deliveryMethod: inc.dimensions?.delivery_method as string | undefined,
 				utmSource: inc.dimensions?.utm_source as string | undefined,
-				errorType: inc.dimensions?.error_type as string | undefined,
-			})),
+				errorType: inc.dimensions?.error_type as string | undefined
+			}))
 		});
 		return result;
 	} catch (error) {
@@ -125,6 +121,12 @@ async function persistBatch(
 // ============================================================================
 
 export const POST: RequestHandler = async ({ request }) => {
+	// Stop before parsing attacker-controlled input or calling Convex. The raw
+	// writer is intentionally tombstoned until durable contribution authority is
+	// the same atomic boundary as aggregate persistence.
+	if (!FEATURES.ANALYTICS_INGESTION) {
+		return json({ success: true, processed: 0, dropped: 0 } satisfies IncrementResponse);
+	}
 	try {
 		const body = await request.json();
 		const increments: unknown[] = body?.increments ?? [];

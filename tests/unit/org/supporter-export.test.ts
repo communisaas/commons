@@ -88,13 +88,13 @@ describe('fetchAllSupporters', () => {
 	});
 
 	it('stops when the endpoint repeats a cursor instead of looping forever', async () => {
+		let call = 0;
 		const fetchPage = vi.fn(async () => ({
-			supporters: [{ id: 'x' }],
+			supporters: [{ id: call++ === 0 ? 'x' : 'y' }],
 			nextCursor: 'same',
 			hasMore: true
 		}));
-		const all = await fetchAllSupporters(fetchPage);
-		expect(all).toHaveLength(2);
+		await expect(fetchAllSupporters(fetchPage)).rejects.toThrow('SUPPORTER_CURSOR_REPEATED');
 		expect(fetchPage).toHaveBeenCalledTimes(2);
 	});
 
@@ -302,11 +302,12 @@ describe('buildSupporterCsv', () => {
 });
 
 describe('exportSummary', () => {
-	it('states exactly how many of how many rows exported when the scan cap truncates', () => {
+	it('reports a live-list mismatch without claiming a fixed scan cap', () => {
 		const summary = exportSummary(10_000, 12_345);
 		expect(summary.truncated).toBe(true);
-		expect(summary.message).toContain('10,000 of 12,345');
-		expect(summary.message).toContain('2,345');
+		expect(summary.message).toContain('10,000 of the current 12,345');
+		expect(summary.message).toContain('list changed');
+		expect(summary.message).not.toContain('scan limit');
 	});
 
 	it('reports a complete export without a truncation clause', () => {

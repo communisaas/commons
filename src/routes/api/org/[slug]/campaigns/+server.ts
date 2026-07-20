@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -21,10 +21,18 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// bound caller-supplied strings + numeric ranges.
-	if (campaignBody !== undefined && campaignBody !== null && (typeof campaignBody !== 'string' || campaignBody.length > 10_000)) {
+	if (
+		campaignBody !== undefined &&
+		campaignBody !== null &&
+		(typeof campaignBody !== 'string' || campaignBody.length > 10_000)
+	) {
 		throw error(400, 'body must be ≤10,000 characters');
 	}
-	if (templateId !== undefined && templateId !== null && (typeof templateId !== 'string' || templateId.length > 64)) {
+	if (
+		templateId !== undefined &&
+		templateId !== null &&
+		(typeof templateId !== 'string' || templateId.length > 64)
+	) {
 		throw error(400, 'templateId must be a Convex doc id (≤64 chars)');
 	}
 	if (

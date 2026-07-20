@@ -18,6 +18,7 @@
 	} from '$lib/core/org/supporter-search';
 	import type { DecryptedSupporterRow } from '$lib/core/org/supporter-export';
 	import { Datum } from '$lib/design';
+	import type { Id } from '$convex/_generated/dataModel';
 	import type { PageData } from './$types';
 
 	type TagView = { id: string; name: string; supporterCount?: number };
@@ -42,6 +43,14 @@
 
 	let { data }: { data: PageData } = $props();
 	const tags = $derived((data.tags ?? []) as TagView[]);
+	const tagNameById = $derived(new Map(tags.map((tag) => [tag.id, tag.name])));
+
+	function resolveListTags(tagIds: readonly string[] | undefined): Array<{ name: string }> {
+		return (tagIds ?? []).flatMap((tagId) => {
+			const name = tagNameById.get(tagId);
+			return name ? [{ name }] : [];
+		});
+	}
 
 	// ── Client-side PII decryption ──
 	let decryptedPii = $state<Record<string, { email: string; name: string; phone: string }>>({});
@@ -213,7 +222,11 @@
 						paginationOpts: { cursor, numItems: 100 }
 					});
 					return {
-						supporters: result.supporters.map((s) => ({ ...s, id: s._id as string })),
+						supporters: result.supporters.map((s) => ({
+							...s,
+							id: s._id as string,
+							tags: resolveListTags(s.tagIds as string[] | undefined)
+						})),
 						nextCursor: result.nextCursor,
 						hasMore: result.hasMore
 					};
@@ -319,18 +332,11 @@
 		if (!nextCursor || loadingMore) return;
 		loadingMore = true;
 		try {
-			const url = new URL($page.url);
-			url.searchParams.set('cursor', nextCursor);
-			const response = await fetch(url.toString(), {
-				headers: { accept: 'application/json' }
-			});
-			// SvelteKit provides page data when fetching with the same URL
-			// We need to use goto and accumulate instead
-			// Actually, let's use the __data.json endpoint
 			const dataUrl = new URL($page.url);
 			dataUrl.searchParams.set('cursor', nextCursor);
-			// Navigate but capture the data
-			goto(dataUrl.toString(), { replaceState: true, keepFocus: true, noScroll: true });
+			// One navigation, one Convex continuation. The previous prefetch issued
+			// the same cursor twice and paid for a page that was discarded.
+			await goto(dataUrl.toString(), { replaceState: true, keepFocus: true, noScroll: true });
 		} catch {
 			// ignore
 		} finally {
@@ -353,9 +359,7 @@
 	let scanRows = $state<SearchRow[]>([]);
 	let searchLocked = $state(false);
 	let searchError = $state('');
-	let emailLookup = $state<{ email: string; row: SearchRow | null; pending: boolean } | null>(
-		null
-	);
+	let emailLookup = $state<{ email: string; row: SearchRow | null; pending: boolean } | null>(null);
 
 	const parsedQuery = $derived(parseSearchQuery(activeQuery));
 	const searchActive = $derived(parsedQuery.kind !== 'empty');
@@ -433,9 +437,16 @@
 			await fetchAllSupporters(async (cursor) => {
 				const result = await convex.query(api.supporters.list, {
 					orgSlug: data.org.slug,
-					paginationOpts: { cursor, numItems: 100 }
+					paginationOpts: { cursor, numItems: 100 },
+					// Structural predicates are resolved by indexes (or one bounded
+					// tag-link slice) before ciphertext reaches this browser.
+					filters: activeSupporterFilters()
 				});
-				const records = result.supporters.map((s) => ({ ...s, id: s._id as string }));
+				const records = result.supporters.map((s) => ({
+					...s,
+					id: s._id as string,
+					tags: resolveListTags(s.tagIds as string[] | undefined)
+				}));
 				const decrypted = await decryptSupporterRows(records, orgKey);
 				collected.push(
 					...decrypted.map((row, i) => ({
@@ -451,6 +462,21 @@
 			scanState = 'error';
 			searchError = err instanceof Error ? err.message : 'Search failed.';
 		}
+	}
+
+	function activeSupporterFilters() {
+		const filters: {
+			emailStatus?: string;
+			verified?: boolean;
+			source?: string;
+			tagId?: Id<'tags'>;
+		} = {};
+		if (data.filters.status) filters.emailStatus = data.filters.status;
+		if (data.filters.verified === 'true') filters.verified = true;
+		else if (data.filters.verified === 'false') filters.verified = false;
+		if (data.filters.source) filters.source = data.filters.source;
+		if (data.filters.tagId) filters.tagId = data.filters.tagId as Id<'tags'>;
+		return Object.keys(filters).length > 0 ? filters : undefined;
 	}
 
 	/**
@@ -658,12 +684,6 @@
 	const emailStatuses = ['subscribed', 'unsubscribed', 'bounced', 'complained'] as const;
 
 	const sourceOptions = $derived(buildSourceFilterOptions(data.sourceCounts));
-
-	// The list query scans at most `scanLimit` rows per org. When the org has
-	// more, only the most recent window comes back — say so plainly instead of
-	// presenting a truncated list as the whole roster.
-	const scanCapped = $derived(Boolean(data.scanCapped));
-	const scanLimit = $derived(data.scanLimit ?? 10000);
 </script>
 
 <div class="space-y-5">
@@ -704,13 +724,6 @@
 		</div>
 	</div>
 
-	<!-- Scan-cap notice: the list reflects only the most recent window -->
-	{#if scanCapped}
-		<p class="text-text-tertiary text-sm" role="status">
-			Showing the {fmt(scanLimit)} most recent supporters — older ones aren't listed here.
-		</p>
-	{/if}
-
 	<!-- Export outcome -->
 	{#if exportNotice}
 		<p class="text-text-tertiary text-sm" role="status">
@@ -733,8 +746,8 @@
 							Your passphrase decrypts people data in this browser for the download. It is never
 							sent to our servers.
 						{:else}
-							Your passphrase decrypts people data in this browser so you can search it. It is
-							never sent to our servers.
+							Your passphrase decrypts people data in this browser so you can search it. It is never
+							sent to our servers.
 						{/if}
 					</p>
 				</div>
@@ -1436,7 +1449,8 @@
 							     uppercase word carries the same status as TEXT (and complained also
 							     strikes the email), so color is redundant, not the sole signal. -->
 							{#if supporter.emailStatus === 'unsubscribed'}
-								<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500"></span>
+								<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-amber-500"
+								></span>
 							{:else if supporter.emailStatus === 'bounced' || supporter.emailStatus === 'complained'}
 								<span class="inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-red-500"></span>
 							{/if}
@@ -1446,11 +1460,14 @@
 									: ''}">{supporter.email}</span
 							>
 							{#if supporter.emailStatus === 'unsubscribed'}
-								<span class="shrink-0 font-mono text-[10px] uppercase text-amber-400">unsubscribed</span>
+								<span class="shrink-0 font-mono text-[10px] text-amber-400 uppercase"
+									>unsubscribed</span
+								>
 							{:else if supporter.emailStatus === 'bounced'}
-								<span class="shrink-0 font-mono text-[10px] uppercase text-red-400">bounced</span>
+								<span class="shrink-0 font-mono text-[10px] text-red-400 uppercase">bounced</span>
 							{:else if supporter.emailStatus === 'complained'}
-								<span class="shrink-0 font-mono text-[10px] uppercase text-red-400">complained</span>
+								<span class="shrink-0 font-mono text-[10px] text-red-400 uppercase">complained</span
+								>
 							{/if}
 						</span>
 					</div>

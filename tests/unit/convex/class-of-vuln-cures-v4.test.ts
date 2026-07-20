@@ -35,14 +35,20 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(svelte).toMatch(/\.index\('by_globalPhoneHash',\s*\['globalPhoneHash'\]\)/);
 	});
 
-	it('webhook STOP/START uses by_globalPhoneHash withIndex, not .filter()', () => {
+	it('webhook STOP/START uses bounded indexed durable fanout, not .filter()', () => {
 		const svelte = source('convex/webhooks.ts');
+		const authority = source('convex/lib/contactAuthority.ts');
 		// .filter(q.eq(q.field("phoneHash"), …)) → gone (either quote style).
 		expect(svelte).not.toMatch(/\.filter\(\s*\(q\)\s*=>\s*q\.eq\(q\.field\(['"]phoneHash['"]\)/);
-		// withIndex on by_globalPhoneHash present at both keyword sites.
+		// Fanout reads the global hash index one bounded page at a time. Keyword
+		// ingress only writes compact durable jobs and never scans supporters.
 		const matches = svelte.match(/withIndex\(['"]by_globalPhoneHash['"]/g);
 		expect(matches).not.toBeNull();
-		expect(matches!.length).toBeGreaterThanOrEqual(2);
+		expect(matches!.length).toBeGreaterThanOrEqual(1);
+		expect(svelte).toContain('enqueueContactFanoutJob(ctx');
+		expect(svelte).toContain('.paginate(pagination)');
+		expect(authority).toContain('CONTACT_FANOUT_PAGE_SIZE = 32');
+		expect(authority).toContain('CONTACT_FANOUT_PAGE_MAX_BYTES = 256 * 1024');
 	});
 
 	it('shared computeGlobalEmailHash / computeGlobalPhoneHash exported from _orgHash', () => {
@@ -113,8 +119,12 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('sendReportViaSes returns the SES MessageId so dispatch can persist it', () => {
 		const svelte = source('convex/campaigns.ts');
-		// Return type now carries messageId on success.
-		expect(svelte).toContain('{ ok: false } | { ok: true; messageId: string | null }');
+		// Return type carries MessageId on success and preserves post-POST
+		// transport ambiguity instead of misclassifying it as a definite failure.
+		expect(svelte).toMatch(
+			/\{ ok: false; ambiguous: boolean \}\s*\|\s*\{ ok: true; messageId: string \| null; ambiguous\?: never \}/
+		);
+		expect(svelte).toContain('if (!sesResult.ok && sesResult.ambiguous)');
 		// Caller plumbs the MessageId to updateDeliveryStatus.
 		expect(svelte).toContain('sesMessageId: sesResult.ok ? (sesResult.messageId ?? undefined) : undefined');
 	});
@@ -230,11 +240,14 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// Reuses sweepCheckpoints primitive via supporters module.
 		expect(svelte).toContain('internal.supporters.loadSweepCheckpoint');
 		expect(svelte).toContain('internal.supporters.saveSweepCheckpoint');
+		expect(svelte).toContain('strandedPlaceholderSweepActivation');
+		expect(svelte).toContain('expectedRevision: checkpoint.cursorRevision');
+		expect(svelte).toContain('runToken: checkpoint.runToken');
 		// Cron entry registered.
 		const cronsSrc = source('convex/crons.ts');
 		expect(cronsSrc).toContain('sweep-stranded-donations');
 		expect(cronsSrc).toContain('internal.donations.sweepStrandedDonations');
-		expect(cronsSrc).toContain('"23,53 * * * *"');
+		expect(cronsSrc).toMatch(/['"]23,53 \* \* \* \*['"]/);
 	});
 
 	it('orgTwilioNumbers registry + STOP-stays-cross-org + START-scopes-to-owner-org', () => {
@@ -247,16 +260,23 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// START branch resolves scopedOrgId via orgTwilioNumbers registry.
 		expect(webhooks).toContain('scopedOrgId');
 		expect(webhooks).toContain('orgTwilioNumbers');
-		// STOP branch DOES NOT scope (cross-org by TCPA design).
-		const stopBranch = webhooks.slice(
-			webhooks.indexOf('if (STOP_KEYWORDS.has(body))'),
-			webhooks.indexOf('} else if (START_KEYWORDS'),
+		// Only non-STOP traffic enters destination routing. The fanout worker
+		// narrows by org only for START; STOP uses the global phone-hash index.
+		const inbound = webhooks.slice(
+			webhooks.indexOf('export const handleInboundSms = internalMutation'),
+			webhooks.indexOf('// DURABLE GLOBAL CONTACT AUTHORITY + FANOUT')
 		);
-		expect(stopBranch).not.toContain('scopedOrgId');
+		expect(inbound).toContain("if (kind !== 'sms_stop')");
+		expect(inbound).toContain("kind === 'sms_start' ? 'SMS_START' : 'SMS_REPLY'");
+		expect(inbound).toContain("!result.failed && kind !== 'sms_reply'");
+		const worker = webhooks.slice(webhooks.indexOf('export const processContactFanoutPage'));
+		expect(worker).toContain("job.kind === 'sms_start' && job.scopeOrgId");
+		expect(worker).toContain(".withIndex('by_globalPhoneHash'");
 		// HTTP route captures the `To` field.
 		const httpSrc = source('convex/http.ts');
 		expect(httpSrc).toContain('const to = params.To;');
-		expect(httpSrc).toMatch(/to:\s*typeof to === "string"/);
+		expect(httpSrc).toMatch(/to:\s*typeof to === ['"]string['"]/);
+		expect(httpSrc).toContain('messageSid,');
 	});
 
 	it('owner-only Twilio number registration in organizations.ts', () => {
@@ -294,10 +314,11 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 
 	it('findOrCreateSupporter backfills global hashes on EXISTING rows', () => {
 		const svelte = source('convex/campaigns.ts');
-		const mutation = svelte.slice(
-			svelte.indexOf('export const findOrCreateSupporter'),
-			svelte.indexOf('export const findOrCreateSupporter') + 3500,
-		);
+		const start = svelte.indexOf('export const findOrCreateSupporter');
+		const next = svelte.indexOf('\nexport const ', start + 1);
+		expect(start).toBeGreaterThan(-1);
+		expect(next).toBeGreaterThan(start);
+		const mutation = svelte.slice(start, next);
 		// Args accept the global pair.
 		expect(mutation).toMatch(/globalEmailHash:\s*v\.optional\(v\.string\(\)\)/);
 		expect(mutation).toMatch(/globalPhoneHash:\s*v\.optional\(v\.string\(\)\)/);
@@ -410,7 +431,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(cronsSrc).toContain('sweep-stranded-placeholders');
 		expect(cronsSrc).toContain('internal.supporters.sweepStrandedPlaceholders');
 		// Staggered to :17/:47 to avoid the :00 storm.
-		expect(cronsSrc).toContain('"17,47 * * * *"');
+		expect(cronsSrc).toMatch(/['"]17,47 \* \* \* \*['"]/);
 	});
 
 	it('PII triple invariant has 3-state machine + scoped placeholder admission', () => {
@@ -497,24 +518,41 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(v1create).not.toContain('allowPlaceholder');
 	});
 
-	it('sweepStrandedPlaceholders paginates the supporters table (not just oldest 500)', () => {
+	it('sweepStrandedPlaceholders is dormant until activated and advances one CAS page', () => {
 		const svelte = source('convex/supporters.ts');
 		const fn = svelte.slice(
 			svelte.indexOf('export const getStrandedPlaceholderSupporters'),
 			svelte.indexOf('export const getStrandedPlaceholderSupporters') + 2500,
 		);
 		// Switched from .order("asc").take(N) to .paginate cursor-based.
-		expect(fn).toContain('paginate({ numItems');
+		expect(fn).toMatch(/\.paginate\(\{\s*numItems/);
 		expect(fn).toContain('paginationCursor');
 		expect(fn).not.toContain('.order("asc")');
 		expect(fn).toContain('continueCursor');
-		// Sweep action iterates pages until isDone (with a page cap).
+		// One explicit page per tick; the durable cursor advances by CAS and the
+		// first full wrap permanently tombstones this one-shot migration.
 		const sweep = svelte.slice(
 			svelte.indexOf('export const sweepStrandedPlaceholders'),
-			svelte.indexOf('export const sweepStrandedPlaceholders') + 3500,
+			svelte.indexOf('export const sweepStrandedPlaceholders') + 5000,
 		);
-		expect(sweep).toContain('while (!isDone');
-		expect(sweep).toContain('pagesScanned');
+		expect(sweep).toContain('strandedPlaceholderSweepActivation');
+		expect(sweep).toContain('if (!activation.active)');
+		expect(sweep).not.toContain('while (!isDone');
+		expect(sweep).toContain('pagesScanned: 1');
+		expect(sweep).toContain('expectedRevision: checkpoint.cursorRevision');
+		expect(sweep).toContain('runToken: checkpoint.runToken');
+
+		const save = svelte.slice(
+			svelte.indexOf('export const saveSweepCheckpoint'),
+			svelte.indexOf('export const sweepStrandedPlaceholders'),
+		);
+		expect(save).toContain('matchesStrandedPlaceholderSweepCas(current');
+		expect(save).toContain("status: 'stale' as const");
+		expect(save).toContain('completedVersion: STRANDED_PLACEHOLDER_SWEEP_VERSION');
+		const cas = source('convex/lib/strandedPlaceholderSweep.ts');
+		expect(cas).toContain('current.cursorRevision === expected.expectedRevision');
+		expect(cas).toContain('current.cursor === expected.expectedCursor');
+		expect(cas).toContain('current.activeRunToken === expected.runToken');
 	});
 
 	it('sweep PRESERVES placeholder rows with bounced/complained emailStatus', () => {
@@ -571,7 +609,7 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// New OCC-guarded mutation declared.
 		expect(svelte).toContain('export const patchSupporterIfNotMoved');
 		expect(svelte).toContain('expectedUpdatedAt');
-		expect(svelte).toContain("reason: \"moved\"");
+		expect(svelte).toMatch(/reason:\s*['"]moved['"]/);
 		// Query exposes updatedAt for snapshot.
 		expect(svelte).toContain('updatedAt: s.updatedAt');
 		// Action uses the guarded patch.
@@ -645,11 +683,14 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		// Strip comments before checking — comments may reference the
 		// historical bad pattern for traceability.
 		const stripped = svelte.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
-		const query = stripped.slice(
-			stripped.indexOf('getSupportersNeedingGlobalHash'),
-			stripped.indexOf('getSupportersNeedingGlobalHash') + 1500,
-		);
-		expect(query).toContain('numItems: limit,');
+		const start = stripped.indexOf('export const getSupportersNeedingGlobalHash');
+		const next = stripped.indexOf('\nexport const ', start + 1);
+		expect(start).toBeGreaterThan(-1);
+		expect(next).toBeGreaterThan(start);
+		const query = stripped.slice(start, next);
+		expect(query).toMatch(/numItems:\s*(?:pageSize|limit),/);
+		expect(query).toContain('maximumRowsRead: pageSize + 1');
+		expect(query).toContain('maximumBytesRead: BACKFILL_PAGE_MAX_BYTES');
 		expect(query).not.toContain('numItems: limit * 5');
 		expect(query).not.toContain('.slice(0, limit)');
 	});

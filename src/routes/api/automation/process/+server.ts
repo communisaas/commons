@@ -9,7 +9,7 @@
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { timingSafeEqual } from 'crypto';
-import { serverAction } from 'convex-sveltekit';
+import { serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';

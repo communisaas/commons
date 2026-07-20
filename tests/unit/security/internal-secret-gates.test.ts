@@ -177,6 +177,18 @@ describe('convex/agentTraces.ts — record + listByTrace + recentByEndpoint + fi
 		assertFirstGuard(src, 'findStuck');
 	});
 
+	it('cursor-pages operator trace reads within 500 rows and 512 KiB', () => {
+		expect(src).toContain('const TRACE_EVENT_PAGE_SIZE = 500');
+		expect(src).toContain('const TRACE_EVENT_PAGE_MAX_BYTES = 512 * 1024');
+		const recent = src.slice(src.indexOf('export const recentByEndpoint'), src.indexOf('export const findStuck'));
+		const stuck = src.slice(src.indexOf('export const findStuck'));
+		for (const block of [recent, stuck]) {
+			expect(block).toContain('.paginate({');
+			expect(block).toContain('maximumRowsRead: TRACE_EVENT_PAGE_SIZE');
+			expect(block).toContain('maximumBytesRead: TRACE_EVENT_PAGE_MAX_BYTES');
+		}
+	});
+
 	it('expire is an internalMutation (no _secret needed)', () => {
 		expect(src).toContain('export const expire = internalMutation');
 		// Internal mutations are not reachable from the public API; no gate needed.

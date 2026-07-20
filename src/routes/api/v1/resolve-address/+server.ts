@@ -15,7 +15,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { resolveAddress, AtlasInfraError } from '$lib/core/shadow-atlas/client';
 import { DISTRICT_COVERAGE } from '$lib/core/shadow-atlas/coverage';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { resolveAllowanceForPlan } from '$lib/server/billing/plans';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
@@ -227,7 +227,11 @@ export const POST: RequestHandler = async ({ request }) => {
 				billingPeriodStart: period
 			});
 		} catch {
-			return apiError('METERING_WRITE_FAILED', 'Resolution succeeded but usage metering failed', 502);
+			return apiError(
+				'METERING_WRITE_FAILED',
+				'Resolution succeeded but usage metering failed',
+				502
+			);
 		}
 
 		return apiOk(data, { requestId });

@@ -58,10 +58,27 @@ function toProcessedDecisionMaker(
 		title: dm.title,
 		organization: dm.organization,
 		email: dm.email,
-		provenance: 'Resolved by the org Studio authoring loop.',
-		reasoning: 'Selected from the Studio decision-maker resolution stream.',
-		isAiResolved: true,
-		confidence: dm.email ? 0.85 : 0.55,
+		provenance: dm.provenance || 'Resolved by the org Studio authoring loop.',
+		reasoning: dm.reasoning || 'Selected from the Studio decision-maker resolution stream.',
+		isAiResolved: dm.isAiResolved,
+		confidence: dm.confidence ?? (dm.email ? 0.85 : 0.55),
+		source: dm.source,
+		source_url: dm.source_url,
+		recencyCheck: dm.recencyCheck,
+		positionSourceDate: dm.positionSourceDate,
+		emailGrounded: dm.emailGrounded,
+		emailSource: dm.emailSource,
+		emailSourceTitle: dm.emailSourceTitle,
+		contactNotes: dm.contactNotes,
+		discovered: dm.discovered,
+		accountabilityOpener: dm.accountabilityOpener,
+		roleCategory: dm.roleCategory,
+		relevanceRank: dm.relevanceRank,
+		publicActions: dm.publicActions ? [...dm.publicActions] : undefined,
+		personalPrompt: dm.personalPrompt,
+		publicRecipientProvenance: dm.publicRecipientProvenance
+			? { ...dm.publicRecipientProvenance }
+			: undefined,
 		emailVerified: dm.email ? 'risky' : undefined
 	};
 }

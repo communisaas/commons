@@ -45,6 +45,32 @@ const COMMIT_SHA: string = (() => {
 	}
 })();
 
+// Exact artifact identity for authenticated release readiness. Unlike Pages
+// runtime vars, this value is compiled into the Worker bundle and therefore
+// cannot be rewritten on an older deployment after upload.
+const RELEASE_SHA: string = (() => {
+	const fromEnv =
+		process.env.VITE_RELEASE_SHA ||
+		process.env.DEPLOY_SHA ||
+		process.env.GITHUB_SHA ||
+		process.env.CF_PAGES_COMMIT_SHA;
+	if (fromEnv && /^[a-f0-9]{40}$/.test(fromEnv)) return fromEnv;
+	try {
+		const fromGit = execSync('git rev-parse HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+			.toString()
+			.trim();
+		return /^[a-f0-9]{40}$/.test(fromGit) ? fromGit : '';
+	} catch {
+		return '';
+	}
+})();
+
+// Containment is a distinct, immutable artifact mode. Only the exact
+// `maintenance` value activates it; missing, misspelled, or attacker-supplied
+// values compile to the normal application path.
+const RUNTIME_CONTAINMENT_MODE =
+	process.env.VITE_RUNTIME_CONTAINMENT_MODE === 'maintenance' ? 'maintenance' : 'disabled';
+
 // Resolve paths for alias configuration
 const bufferShimPath = fileURLToPath(
 	new URL('./src/lib/core/proof/buffer-shim.ts', import.meta.url)
@@ -181,9 +207,7 @@ export default defineConfig({
 			wasm()
 		],
 		rollupOptions: {
-			external: [
-				'@voter-protocol/noir-prover'
-			],
+			external: ['@voter-protocol/noir-prover'],
 			output: {
 				inlineDynamicImports: false
 			}
@@ -255,6 +279,8 @@ export default defineConfig({
 		// Inline the 12-char short commit SHA at build time so server and
 		// client code can reference an immutable revision without a runtime
 		// `node:child_process` call (unavailable on Cloudflare Workers).
-		'import.meta.env.VITE_COMMIT_SHA': JSON.stringify(COMMIT_SHA)
+		'import.meta.env.VITE_COMMIT_SHA': JSON.stringify(COMMIT_SHA),
+		'import.meta.env.VITE_RELEASE_SHA': JSON.stringify(RELEASE_SHA),
+		'import.meta.env.VITE_RUNTIME_CONTAINMENT_MODE': JSON.stringify(RUNTIME_CONTAINMENT_MODE)
 	}
 });

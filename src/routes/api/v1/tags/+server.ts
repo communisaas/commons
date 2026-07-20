@@ -6,13 +6,13 @@
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
-import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ request }) => {
+export const GET: RequestHandler = async ({ request, url }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
@@ -21,10 +21,19 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
+	const { cursor, limit } = parsePagination(url);
 	const tags = await serverQuery(api.v1api.listTags, {
- _secret: getInternalSecret(), orgId: auth.orgId});
+		_secret: getInternalSecret(),
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined
+	});
 
-	return apiOk(tags);
+	return apiOk(tags.items, {
+		cursor: tags.cursor,
+		hasMore: tags.hasMore,
+		total: tags.total
+	});
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -54,7 +63,8 @@ export const POST: RequestHandler = async ({ request }) => {
 	const result = await serverMutation(api.v1api.createTag, {
 		_secret: getInternalSecret(),
 		orgId: auth.orgId,
-		name: name.trim()});
+		name: name.trim()
+	});
 	if (result.duplicate) return apiError('CONFLICT', 'A tag with this name already exists', 409);
 	if (!result.tag) return apiError('SERVER_ERROR', 'Tag could not be created', 500);
 

@@ -6,11 +6,15 @@ import { FEATURES } from '$lib/config/features';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad, Actions } from './$types';
 
-import { serverQuery, serverAction } from 'convex-sveltekit';
+import { serverQuery, serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
 
 export const load: PageServerLoad = async ({ params }) => {
-	const campaign = await serverQuery(api.campaigns.getPublicAny, { campaignId: params.slug });
+	const campaign = await serverQuery(api.campaigns.getPublicAny, {
+		_secret: getInternalSecret(),
+		campaignId: params.slug
+	});
 	if (!campaign || campaign.status !== 'ACTIVE') {
 		throw error(404, 'Campaign not found or inactive');
 	}
@@ -33,7 +37,7 @@ export const load: PageServerLoad = async ({ params }) => {
 };
 
 export const actions: Actions = {
-	default: async ({ request, params, getClientAddress }) => {
+	default: async ({ request, params, getClientAddress, locals }) => {
 		// Rate limit: 10 submissions per minute per IP per campaign
 		const ip = getClientAddress();
 		const rlKey = `ratelimit:campaign:${params.slug}:${ip}`;
@@ -90,7 +94,10 @@ export const actions: Actions = {
 		let compositionMode: 'individual' | 'shared' | 'edited' | undefined;
 		if (message) {
 			try {
-				const campaign = await serverQuery(api.campaigns.getPublicAny, { campaignId: params.slug });
+				const campaign = await serverQuery(api.campaigns.getPublicAny, {
+					_secret: getInternalSecret(),
+					campaignId: params.slug
+				});
 				if (campaign?.body) {
 					// Normalize whitespace for comparison (trim + collapse internal whitespace)
 					const normalizeWs = (s: string) => s.trim().replace(/\s+/g, ' ');
@@ -115,9 +122,13 @@ export const actions: Actions = {
 				name,
 				postalCode: postalCode ?? undefined,
 				message: message ?? undefined,
-				districtCode: rawDistrictCode && FEATURES.ADDRESS_SPECIFICITY === 'district' ? rawDistrictCode : undefined,
+				districtCode:
+					rawDistrictCode && FEATURES.ADDRESS_SPECIFICITY === 'district'
+						? rawDistrictCode
+						: undefined,
 				h3Cell: h3Cell ?? undefined,
 				atlasVersion: atlasVersion ?? undefined,
+				authenticatedUserId: locals.user?.id as Id<'users'> | undefined,
 				source: 'campaign',
 				compositionMode
 			});

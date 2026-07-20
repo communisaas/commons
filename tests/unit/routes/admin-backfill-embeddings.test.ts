@@ -1,3 +1,4 @@
+import { ConvexError } from 'convex/values';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { api, mockGenerateBatchEmbeddings, mockServerMutation, mockServerQuery } = vi.hoisted(
@@ -41,6 +42,9 @@ vi.mock('$lib/core/search/gemini-embeddings', () => ({
 }));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: vi.fn(() => 'route-backfill-secret')
+}));
+vi.mock('$lib/utils/domain-hue-projection', () => ({
+	projectToHue: vi.fn(() => 137)
 }));
 
 import { POST } from '../../../src/routes/api/admin/backfill-embeddings/+server';
@@ -111,6 +115,7 @@ describe('POST /api/admin/backfill-embeddings', () => {
 		expect(updates).toHaveLength(20);
 		expect(updates[0][1]).toMatchObject({
 			templateId: 'template-0',
+			domainHue: 137,
 			leaseToken: expect.any(String)
 		});
 		expect(updates[19][1]).toMatchObject({
@@ -136,6 +141,36 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			)?.[1].leaseToken
 		).toBe(claim.token);
 		expect(release).toEqual(claim);
+	});
+
+	it('stops later writes on a structured lease-loss code even when the message is redacted', async () => {
+		mockServerQuery.mockResolvedValue([missingTemplate(0), missingTemplate(1)]);
+		mockGenerateBatchEmbeddings.mockResolvedValue([[1], [2], [3], [4]]);
+		mockServerMutation.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.claimEmbeddingBackfillLease) {
+				return { acquired: true, expiresAt: Date.now() + 900_000 };
+			}
+			if (ref === api.templates.updateMissingEmbeddingsForBackfill) {
+				throw new ConvexError({ code: 'EMBEDDING_BACKFILL_LEASE_EXPIRED' });
+			}
+			if (ref === api.templates.releaseEmbeddingBackfillLease) return { released: true };
+			throw new Error(`Unexpected mutation: ${ref}`);
+		});
+
+		const response = await POST(event);
+		await expect(response.json()).resolves.toMatchObject({
+			processed: 0,
+			total_missing: 2,
+			errors: [{ stage: 'embedding_write', id: 'template-0' }]
+		});
+		const updates = mockServerMutation.mock.calls.filter(
+			([ref]) => ref === api.templates.updateMissingEmbeddingsForBackfill
+		);
+		expect(updates).toHaveLength(1);
+		expect(mockServerMutation).not.toHaveBeenCalledWith(
+			api.templates.rebuildHomepageSnapshotsAfterBackfill,
+			expect.anything()
+		);
 	});
 
 	it('rejects a competing isolate before reading candidates or spending Gemini I/O', async () => {

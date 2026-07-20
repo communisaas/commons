@@ -3,7 +3,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -55,8 +55,13 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 				const parsed = new URL(logoUrl);
 				if (parsed.protocol === 'data:') {
 					// F-R22-02: Block SVG data URLs (can contain <script>, onload handlers)
-					const SAFE_DATA_PREFIXES = ['data:image/png', 'data:image/jpeg', 'data:image/gif', 'data:image/webp'];
-					if (!SAFE_DATA_PREFIXES.some(p => logoUrl.startsWith(p))) {
+					const SAFE_DATA_PREFIXES = [
+						'data:image/png',
+						'data:image/jpeg',
+						'data:image/gif',
+						'data:image/webp'
+					];
+					if (!SAFE_DATA_PREFIXES.some((p) => logoUrl.startsWith(p))) {
 						throw error(400, 'Data URLs must be PNG, JPEG, GIF, or WebP images');
 					}
 				} else if (parsed.protocol !== 'https:') {
@@ -84,5 +89,12 @@ export const PATCH: RequestHandler = async ({ params, locals, request }) => {
 		websiteUrl: typeof websiteUrl === 'string' ? websiteUrl : undefined,
 		logoUrl: typeof logoUrl === 'string' ? logoUrl : undefined
 	});
-	return json({ data: { mission: data.mission, websiteUrl: data.websiteUrl, logoUrl: data.logoUrl, isPublic: data.isPublic } });
+	return json({
+		data: {
+			mission: data.mission,
+			websiteUrl: data.websiteUrl,
+			logoUrl: data.logoUrl,
+			isPublic: data.isPublic
+		}
+	});
 };

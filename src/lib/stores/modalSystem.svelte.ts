@@ -345,9 +345,6 @@ function createModalSystem() {
 		get modalState() {
 			return legacyModalState.state;
 		},
-		get isModalOpen() {
-			return legacyModalState.showModal;
-		},
 		get currentTemplate() {
 			return legacyModalState.template;
 		},
@@ -396,7 +393,7 @@ export const modalActions = modalSystem;
 
 // For backwards compatibility, export getter functions that maintain reactivity
 export function isModalOpen() {
-	return modalSystem.isModalOpen;
+	return modalSystem.modalContext.showModal;
 }
 
 export function currentTemplate() {

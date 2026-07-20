@@ -7,58 +7,68 @@
  *   - Server never sees plaintext email — only emailHash + encryptedEmail
  */
 
-import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
-import { makeFunctionReference } from "convex/server";
-import type { FunctionReference } from "convex/server";
-import { v } from "convex/values";
-import { requireOrgRole, requireAuth } from "./_authHelpers";
-import { hashInviteToken } from "./_orgHash";
+import { query, mutation, action, internalMutation, internalQuery } from './_generated/server';
+import { makeFunctionReference } from 'convex/server';
+import type { FunctionReference } from 'convex/server';
+import { v } from 'convex/values';
+import { requireOrgRole, requireAuth } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
+import { hashInviteToken } from './_orgHash';
+import { syncPublicOrganizationDirectory } from './lib/publicOrganizationDirectory';
+import {
+	boundedOrgSeatLimit,
+	MAX_INVITE_RECORDS_PER_ORG,
+	MAX_ORG_SEATS
+} from './lib/orgConfigurationLimits';
+
+export { MAX_INVITE_RECORDS_PER_ORG, MAX_ORG_SEATS } from './lib/orgConfigurationLimits';
 
 type PreparedInviteForInsert = {
-  emailHash: string;
-  encryptedEmail: string;
-  role: string;
-  tokenHash: string;
+	emailHash: string;
+	encryptedEmail: string;
+	role: string;
+	tokenHash: string;
 };
 
 type InsertInvitesResult = {
-  sent: number;
-  results: Array<{ emailHash: string; status: "sent" | "skipped" }>;
+	sent: number;
+	results: Array<{ emailHash: string; status: 'sent' | 'skipped' }>;
 };
 
 type CreateInvitesResult = InsertInvitesResult & {
-  tokens: Array<{ emailHash: string; token: string }>;
+	tokens: Array<{ emailHash: string; token: string }>;
 };
 
 type ResendInviteMutationResult = {
-  _id: string;
-  encryptedEmail: string;
-  role: string;
-  expiresAt: number;
+	_id: string;
+	encryptedEmail: string;
+	role: string;
+	expiresAt: number;
 };
 
 type ResendInviteResult = {
-  invite: ResendInviteMutationResult & { token: string };
+	invite: ResendInviteMutationResult & { token: string };
 };
 
-const insertInvitesRef = makeFunctionReference<"mutation">("invites:insertInvites") as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  { slug: string; invites: PreparedInviteForInsert[] },
-  InsertInvitesResult
+const insertInvitesRef = makeFunctionReference<'mutation'>(
+	'invites:insertInvites'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ slug: string; invites: PreparedInviteForInsert[] },
+	InsertInvitesResult
 >;
 
-const requireCreateInvitesAuthRef = makeFunctionReference<"query">("invites:requireCreateInvitesAuth") as unknown as FunctionReference<
-  "query",
-  "internal",
-  { slug: string },
-  { ok: true }
->;
-const resendInviteRef = makeFunctionReference<"mutation">("invites:resendInvite") as unknown as FunctionReference<
-  "mutation",
-  "internal",
-  { slug: string; inviteId: string; tokenHash: string; expiresAt: number },
-  ResendInviteMutationResult
+const requireCreateInvitesAuthRef = makeFunctionReference<'query'>(
+	'invites:requireCreateInvitesAuth'
+) as unknown as FunctionReference<'query', 'internal', { slug: string }, { ok: true }>;
+const resendInviteRef = makeFunctionReference<'mutation'>(
+	'invites:resendInvite'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ slug: string; inviteId: string; tokenHash: string; expiresAt: number },
+	ResendInviteMutationResult
 >;
 
 // =============================================================================
@@ -71,33 +81,41 @@ const resendInviteRef = makeFunctionReference<"mutation">("invites:resendInvite"
  * Requires editor+ role.
  */
 export const list = query({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }) => {
-    const { org } = await requireOrgRole(ctx, slug, "editor");
+	args: { _secret: v.string(), slug: v.string(), nowBucket: v.number() },
+	handler: async (ctx, { _secret, slug, nowBucket }) => {
+		requireInternalSecret(_secret);
+		if (!Number.isSafeInteger(nowBucket) || nowBucket < 0 || nowBucket % 60_000 !== 0) {
+			throw new Error('INVITE_NOW_BUCKET_INVALID');
+		}
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
 
-    const now = Date.now();
-    const allInvites = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
+		const allInvites = await ctx.db
+			.query('orgInvites')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_INVITE_RECORDS_PER_ORG + 1);
 
-    const activeInvites = allInvites.filter(
-      (i) => !i.accepted && i.expiresAt > now,
-    );
+		if (allInvites.length > MAX_INVITE_RECORDS_PER_ORG) {
+			throw new Error('ORG_INVITE_CARDINALITY_REPAIR_REQUIRED');
+		}
 
-    // Sort by expiresAt descending (newest first)
-    activeInvites.sort((a, b) => b.expiresAt - a.expiresAt);
+		const activeInvites = allInvites.filter((i) => !i.accepted && i.expiresAt > nowBucket);
+		if (activeInvites.length > boundedOrgSeatLimit(org.maxSeats)) {
+			throw new Error('ORG_INVITE_SEAT_INVARIANT_VIOLATION');
+		}
 
-    return {
-      invites: activeInvites.map((inv) => ({
-        _id: inv._id,
-        encryptedEmail: inv.encryptedEmail,
-        emailHash: inv.emailHash,
-        role: inv.role,
-        expiresAt: inv.expiresAt,
-      })),
-    };
-  },
+		// Sort by expiresAt descending (newest first)
+		activeInvites.sort((a, b) => b.expiresAt - a.expiresAt);
+
+		return {
+			invites: activeInvites.map((inv) => ({
+				_id: inv._id,
+				encryptedEmail: inv.encryptedEmail,
+				emailHash: inv.emailHash,
+				role: inv.role,
+				expiresAt: inv.expiresAt
+			}))
+		};
+	}
 });
 
 /**
@@ -106,32 +124,33 @@ export const list = query({
  * Returns encrypted email blob — client decrypts if they have the key.
  */
 export const getByToken = query({
-  args: { token: v.string() },
-  handler: async (ctx, { token }) => {
-    const tokenH = await hashInviteToken(token);
-    const invite = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenH))
-      .first();
+	args: { _secret: v.string(), token: v.string() },
+	handler: async (ctx, { _secret, token }) => {
+		requireInternalSecret(_secret);
+		const tokenH = await hashInviteToken(token);
+		const invite = await ctx.db
+			.query('orgInvites')
+			.withIndex('by_tokenHash', (q) => q.eq('tokenHash', tokenH))
+			.first();
 
-    if (!invite) return null;
+		if (!invite) return null;
 
-    const org = await ctx.db.get(invite.orgId);
-    if (!org) return null;
+		const org = await ctx.db.get(invite.orgId);
+		if (!org) return null;
 
-    return {
-      _id: invite._id,
-      accepted: invite.accepted,
-      expiresAt: invite.expiresAt,
-      role: invite.role,
-      emailHash: invite.emailHash,
-      encryptedEmail: invite.encryptedEmail,
-      orgName: org.name,
-      orgSlug: org.slug,
-      orgAvatar: org.avatar ?? null,
-      orgId: org._id,
-    };
-  },
+		return {
+			_id: invite._id,
+			accepted: invite.accepted,
+			expiresAt: invite.expiresAt,
+			role: invite.role,
+			emailHash: invite.emailHash,
+			encryptedEmail: invite.encryptedEmail,
+			orgName: org.name,
+			orgSlug: org.slug,
+			orgAvatar: org.avatar ?? null,
+			orgId: org._id
+		};
+	}
 });
 
 // =============================================================================
@@ -139,9 +158,9 @@ export const getByToken = query({
 // =============================================================================
 
 function generateToken(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+	const bytes = new Uint8Array(32);
+	crypto.getRandomValues(bytes);
+	return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -151,105 +170,112 @@ function generateToken(): string {
  * email reaches the server. emailHash is org-scoped SHA-256 for dedup.
  */
 export const create = action({
-  args: {
-    slug: v.string(),
-    invites: v.array(
-      v.object({
-        emailHash: v.string(),
-        encryptedEmail: v.string(),
-        role: v.optional(v.string()),
-      }),
-    ),
-  },
-  handler: async (ctx, args): Promise<CreateInvitesResult> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+	args: {
+		slug: v.string(),
+		invites: v.array(
+			v.object({
+				emailHash: v.string(),
+				encryptedEmail: v.string(),
+				role: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, args): Promise<CreateInvitesResult> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
 
-    if (!args.invites || args.invites.length === 0) {
-      throw new Error("invites array is required");
-    }
-    if (args.invites.length > 20) {
-      throw new Error("Maximum 20 invites at once");
-    }
+		if (args.slug.length === 0 || args.slug.length > 64) {
+			throw new Error('SLUG_TOO_LARGE');
+		}
 
-    // Explicit editor-role gate at the action's top, BEFORE the 20×
-    // token generation + hash work. The inner `insertInvites` mutation
-    // also does `requireOrgRole(slug, "editor")` — defense in depth.
-    // Mirrors the same explicit-gate pattern on the segments and
-    // supporters action surfaces. If a 4th site adopts this pattern,
-    // extract a shared per-module helper.
-    await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
+		if (!args.invites || args.invites.length === 0) {
+			throw new Error('invites array is required');
+		}
+		if (args.invites.length > 20) {
+			throw new Error('Maximum 20 invites at once');
+		}
 
-    // action-boundary length caps. encryptedEmail is base64+IV+
-    // ciphertext for a ≤254-byte email — 512 covers it. emailHash is SHA-256 hex (64).
-    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
-    for (const inv of args.invites) {
-      if (inv.emailHash.length > 128) throw new Error("EMAIL_HASH_TOO_LARGE");
-      if (inv.encryptedEmail.length > 512) throw new Error("ENCRYPTED_EMAIL_TOO_LARGE");
-      if (inv.role !== undefined && inv.role.length > 32) {
-        throw new Error("ROLE_TOO_LARGE");
-      }
-    }
+		// Explicit editor-role gate at the action's top, BEFORE the 20×
+		// token generation + hash work. The inner `insertInvites` mutation
+		// also does `requireOrgRole(slug, "editor")` — defense in depth.
+		// Mirrors the same explicit-gate pattern on the segments and
+		// supporters action surfaces. If a 4th site adopts this pattern,
+		// extract a shared per-module helper.
+		await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
 
-    const validRoles = ["editor", "member"];
-    const cleaned = args.invites
-      .map((inv) => ({
-        emailHash: inv.emailHash,
-        encryptedEmail: inv.encryptedEmail,
-        role: validRoles.includes(inv.role ?? "") ? inv.role! : "member",
-      }))
-      .filter((inv) => inv.emailHash && inv.encryptedEmail);
+		// action-boundary length caps. encryptedEmail is base64+IV+
+		// ciphertext for a ≤254-byte email — 512 covers it. emailHash is SHA-256 hex (64).
+		for (const inv of args.invites) {
+			if (inv.emailHash.length === 0 || inv.emailHash.length > 128) {
+				throw new Error('EMAIL_HASH_TOO_LARGE');
+			}
+			if (inv.encryptedEmail.length === 0 || inv.encryptedEmail.length > 512) {
+				throw new Error('ENCRYPTED_EMAIL_TOO_LARGE');
+			}
+			if (inv.role !== undefined && inv.role.length > 32) {
+				throw new Error('ROLE_TOO_LARGE');
+			}
+		}
 
-    if (cleaned.length === 0) {
-      throw new Error("No valid invites provided");
-    }
+		const validRoles = ['editor', 'member'];
+		const cleaned = args.invites
+			.map((inv) => ({
+				emailHash: inv.emailHash,
+				encryptedEmail: inv.encryptedEmail,
+				role: validRoles.includes(inv.role ?? '') ? inv.role! : 'member'
+			}))
+			.filter((inv) => inv.emailHash && inv.encryptedEmail);
 
-    // Generate tokens, hash for at-rest storage
-    const prepared: Array<{
-      emailHash: string;
-      encryptedEmail: string;
-      role: string;
-      tokenHash: string;
-      rawToken: string;
-    }> = [];
+		if (cleaned.length === 0) {
+			throw new Error('No valid invites provided');
+		}
 
-    for (const inv of cleaned) {
-      const token = generateToken();
-      const tokenH = await hashInviteToken(token);
+		// Generate tokens, hash for at-rest storage
+		const prepared: Array<{
+			emailHash: string;
+			encryptedEmail: string;
+			role: string;
+			tokenHash: string;
+			rawToken: string;
+		}> = [];
 
-      prepared.push({
-        emailHash: inv.emailHash,
-        encryptedEmail: inv.encryptedEmail,
-        role: inv.role,
-        tokenHash: tokenH,
-        rawToken: token,
-      });
-    }
+		for (const inv of cleaned) {
+			const token = generateToken();
+			const tokenH = await hashInviteToken(token);
 
-    // Delegate to internal mutation for the actual inserts
-    const results = await ctx.runMutation(insertInvitesRef, {
-      slug: args.slug,
-      invites: prepared.map((inv) => ({
-        emailHash: inv.emailHash,
-        encryptedEmail: inv.encryptedEmail,
-        role: inv.role,
-        tokenHash: inv.tokenHash,
-      })),
-    });
+			prepared.push({
+				emailHash: inv.emailHash,
+				encryptedEmail: inv.encryptedEmail,
+				role: inv.role,
+				tokenHash: tokenH,
+				rawToken: token
+			});
+		}
 
-    // Return raw tokens to the admin for invite URLs
-    return {
-      ...results,
-      tokens: prepared
-        .filter((inv) =>
-          results.results.some(
-            (r: { emailHash: string; status: string }) =>
-              r.emailHash === inv.emailHash && r.status === "sent",
-          ),
-        )
-        .map((inv) => ({ emailHash: inv.emailHash, token: inv.rawToken })),
-    };
-  },
+		// Delegate to internal mutation for the actual inserts
+		const results = await ctx.runMutation(insertInvitesRef, {
+			slug: args.slug,
+			invites: prepared.map((inv) => ({
+				emailHash: inv.emailHash,
+				encryptedEmail: inv.encryptedEmail,
+				role: inv.role,
+				tokenHash: inv.tokenHash
+			}))
+		});
+
+		// Return raw tokens to the admin for invite URLs
+		return {
+			...results,
+			tokens: prepared
+				.filter((inv) =>
+					results.results.some(
+						(r: { emailHash: string; status: string }) =>
+							r.emailHash === inv.emailHash && r.status === 'sent'
+					)
+				)
+				.map((inv) => ({ emailHash: inv.emailHash, token: inv.rawToken }))
+		};
+	}
 });
 
 /**
@@ -257,46 +283,46 @@ export const create = action({
  * token generation is non-deterministic.
  */
 export const resend = action({
-  args: {
-    slug: v.string(),
-    inviteId: v.string(),
-  },
-  handler: async (ctx, args): Promise<ResendInviteResult> => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
+	args: {
+		slug: v.string(),
+		inviteId: v.string()
+	},
+	handler: async (ctx, args): Promise<ResendInviteResult> => {
+		const identity = await ctx.auth.getUserIdentity();
+		if (!identity) throw new Error('Not authenticated');
 
-    // action-boundary length caps.
-    if (args.slug.length > 64) throw new Error("SLUG_TOO_LARGE");
-    if (args.inviteId.length > 64) throw new Error("INVITE_ID_TOO_LARGE");
+		// action-boundary length caps.
+		if (args.slug.length > 64) throw new Error('SLUG_TOO_LARGE');
+		if (args.inviteId.length > 64) throw new Error('INVITE_ID_TOO_LARGE');
 
-    // Explicit editor-role gate at the action's top, BEFORE the token
-    // generation + hash work. Same fragility shape as `invites.create`
-    // — the inner `resendInvite` mutation also enforces the role, but
-    // only after the action has done CPU work. Reuses
-    // `requireCreateInvitesAuth` — same semantics (editor role on slug).
-    await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
+		// Explicit editor-role gate at the action's top, BEFORE the token
+		// generation + hash work. Same fragility shape as `invites.create`
+		// — the inner `resendInvite` mutation also enforces the role, but
+		// only after the action has done CPU work. Reuses
+		// `requireCreateInvitesAuth` — same semantics (editor role on slug).
+		await ctx.runQuery(requireCreateInvitesAuthRef, { slug: args.slug });
 
-    const token = generateToken();
-    const tokenH = await hashInviteToken(token);
-    const expiresAt = Date.now() + 72 * 3_600_000; // 72 hours
+		const token = generateToken();
+		const tokenH = await hashInviteToken(token);
+		const expiresAt = Date.now() + 72 * 3_600_000; // 72 hours
 
-    const invite = await ctx.runMutation(resendInviteRef, {
-      slug: args.slug,
-      inviteId: args.inviteId,
-      tokenHash: tokenH,
-      expiresAt,
-    });
+		const invite = await ctx.runMutation(resendInviteRef, {
+			slug: args.slug,
+			inviteId: args.inviteId,
+			tokenHash: tokenH,
+			expiresAt
+		});
 
-    return {
-      invite: {
-        _id: invite._id,
-        encryptedEmail: invite.encryptedEmail,
-        role: invite.role,
-        expiresAt: invite.expiresAt,
-        token, // raw token for the new invite URL
-      },
-    };
-  },
+		return {
+			invite: {
+				_id: invite._id,
+				encryptedEmail: invite.encryptedEmail,
+				role: invite.role,
+				expiresAt: invite.expiresAt,
+				token // raw token for the new invite URL
+			}
+		};
+	}
 });
 
 // =============================================================================
@@ -307,30 +333,23 @@ export const resend = action({
  * Delete (revoke) a pending invite. Requires editor+ role.
  */
 export const remove = mutation({
-  args: {
-    slug: v.string(),
-    inviteId: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		inviteId: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 
-    // Find all invites for this org to locate the one with matching ID
-    const allInvites = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
+		const inviteId = ctx.db.normalizeId('orgInvites', args.inviteId);
+		const invite = inviteId ? await ctx.db.get(inviteId) : null;
 
-    const invite = allInvites.find(
-      (i) => i._id === args.inviteId || String(i._id) === args.inviteId,
-    );
+		if (!invite || invite.orgId !== org._id) {
+			throw new Error('Invite not found');
+		}
 
-    if (!invite) {
-      throw new Error("Invite not found");
-    }
-
-    await ctx.db.delete(invite._id);
-    return { ok: true };
-  },
+		await ctx.db.delete(invite._id);
+		return { ok: true };
+	}
 });
 
 /**
@@ -338,110 +357,113 @@ export const remove = mutation({
  * Hard-deletes the invite row — the hashed token becomes unlookupable.
  */
 export const revoke = mutation({
-  args: { inviteId: v.id("orgInvites") },
-  handler: async (ctx, args) => {
-    await requireAuth(ctx);
+	args: { inviteId: v.id('orgInvites') },
+	handler: async (ctx, args) => {
+		await requireAuth(ctx);
 
-    const invite = await ctx.db.get(args.inviteId);
-    if (!invite) throw new Error("Invite not found");
+		const invite = await ctx.db.get(args.inviteId);
+		if (!invite) throw new Error('Invite not found');
 
-    // Verify caller has editor+ role on the invite's org
-    const org = await ctx.db.get(invite.orgId);
-    if (!org) throw new Error("Organization not found");
-    await requireOrgRole(ctx, org.slug, "editor");
+		// Verify caller has editor+ role on the invite's org
+		const org = await ctx.db.get(invite.orgId);
+		if (!org) throw new Error('Organization not found');
+		await requireOrgRole(ctx, org.slug, 'editor');
 
-    if (invite.accepted) {
-      throw new Error("Cannot revoke an already-accepted invite");
-    }
+		if (invite.accepted) {
+			throw new Error('Cannot revoke an already-accepted invite');
+		}
 
-    await ctx.db.delete(invite._id);
-    return { ok: true };
-  },
+		await ctx.db.delete(invite._id);
+		return { ok: true };
+	}
 });
 
 /**
  * Accept an invite. Creates orgMembership, marks invite accepted.
  */
 export const accept = mutation({
-  args: {
-    token: v.string(),
-  },
-  handler: async (ctx, { token }) => {
-    const { userId } = await requireAuth(ctx);
+	args: {
+		token: v.string()
+	},
+	handler: async (ctx, { token }) => {
+		const { userId } = await requireAuth(ctx);
 
-    const tokenH = await hashInviteToken(token);
-    const invite = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenH))
-      .first();
+		const tokenH = await hashInviteToken(token);
+		const invite = await ctx.db
+			.query('orgInvites')
+			.withIndex('by_tokenHash', (q) => q.eq('tokenHash', tokenH))
+			.first();
 
-    if (!invite) throw new Error("Invite not found");
-    if (invite.accepted) throw new Error("Invite already accepted");
-    if (invite.expiresAt < Date.now()) throw new Error("Invite has expired");
+		if (!invite) throw new Error('Invite not found');
+		if (invite.accepted) throw new Error('Invite already accepted');
+		if (invite.expiresAt < Date.now()) throw new Error('Invite has expired');
 
-    // Check if user is already a member
-    const existingMembership = await ctx.db
-      .query("orgMemberships")
-      .withIndex("by_userId_orgId", (q) =>
-        q.eq("userId", userId).eq("orgId", invite.orgId),
-      )
-      .first();
+		// Check if user is already a member
+		const existingMembership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) => q.eq('userId', userId).eq('orgId', invite.orgId))
+			.first();
 
-    if (existingMembership) {
-      throw new Error("You are already a member of this organization");
-    }
+		if (existingMembership) {
+			throw new Error('You are already a member of this organization');
+		}
 
-    // Mark invite as accepted
-    await ctx.db.patch(invite._id, { accepted: true });
+		const org = await ctx.db.get(invite.orgId);
+		if (!org) throw new Error('Organization not found');
+		const seatLimit = boundedOrgSeatLimit(org.maxSeats);
+		const orgMembers = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_orgId', (q) => q.eq('orgId', invite.orgId))
+			.take(MAX_ORG_SEATS + 1);
+		if (orgMembers.length >= seatLimit) {
+			throw new Error(`Seat limit reached (${seatLimit})`);
+		}
 
-    // Create membership
-    const now = Date.now();
-    await ctx.db.insert("orgMemberships", {
-      userId,
-      orgId: invite.orgId,
-      role: invite.role,
-      joinedAt: now,
-      invitedBy: invite.invitedBy,
-    });
+		// Mark invite as accepted
+		await ctx.db.patch(invite._id, { accepted: true });
 
-    // Increment org memberCount
-    const org = await ctx.db.get(invite.orgId);
-    if (org) {
-      const newCount = (org.memberCount ?? 0) + 1;
-      const onboarding = org.onboardingState ?? {
-        hasDescription: false,
-        hasIssueDomains: false,
-        hasSupporters: false,
-        hasCampaigns: false,
-        hasTeam: false,
-        hasSentEmail: false,
-      };
-      await ctx.db.patch(invite.orgId, {
-        memberCount: newCount,
-        onboardingState: { ...onboarding, hasTeam: newCount > 1 },
-        updatedAt: now,
-      });
-    }
+		// Create membership
+		const now = Date.now();
+		await ctx.db.insert('orgMemberships', {
+			userId,
+			orgId: invite.orgId,
+			role: invite.role,
+			joinedAt: now,
+			invitedBy: invite.invitedBy
+		});
 
-    // Notify org owners of new member
-    const orgMembers = await ctx.db
-      .query("orgMemberships")
-      .withIndex("by_orgId", (q) => q.eq("orgId", invite.orgId))
-      .collect();
-    const owners = orgMembers.filter((m) => m.role === "owner");
-    for (const owner of owners) {
-      await ctx.db.insert("notifications", {
-        userId: owner.userId,
-        type: "invite_accepted",
-        orgId: invite.orgId,
-        message: "A new member joined your organization",
-        read: false,
-        createdAt: now,
-      });
-    }
+		// Increment org memberCount
+		const newCount = (org.memberCount ?? 0) + 1;
+		const onboarding = org.onboardingState ?? {
+			hasDescription: false,
+			hasIssueDomains: false,
+			hasSupporters: false,
+			hasCampaigns: false,
+			hasTeam: false,
+			hasSentEmail: false
+		};
+		await ctx.db.patch(invite.orgId, {
+			memberCount: newCount,
+			onboardingState: { ...onboarding, hasTeam: newCount > 1 },
+			updatedAt: now
+		});
+		await syncPublicOrganizationDirectory(ctx, invite.orgId);
 
-    return { ok: true };
-  },
+		// Notify org owners of new member
+		const owners = orgMembers.filter((m) => m.role === 'owner');
+		for (const owner of owners) {
+			await ctx.db.insert('notifications', {
+				userId: owner.userId,
+				type: 'invite_accepted',
+				orgId: invite.orgId,
+				message: 'A new member joined your organization',
+				read: false,
+				createdAt: now
+			});
+		}
+
+		return { ok: true };
+	}
 });
 
 // =============================================================================
@@ -463,130 +485,127 @@ export const accept = mutation({
  * enforces the same gate — belt-and-suspenders.
  */
 export const requireCreateInvitesAuth = internalQuery({
-  args: { slug: v.string() },
-  handler: async (ctx, { slug }): Promise<{ ok: true }> => {
-    await requireOrgRole(ctx, slug, "editor");
-    return { ok: true };
-  },
+	args: { slug: v.string() },
+	handler: async (ctx, { slug }): Promise<{ ok: true }> => {
+		await requireOrgRole(ctx, slug, 'editor');
+		return { ok: true };
+	}
 });
 
 export const insertInvites = internalMutation({
-  args: {
-    slug: v.string(),
-    invites: v.array(
-      v.object({
-        emailHash: v.string(),
-        encryptedEmail: v.string(),
-        role: v.string(),
-        tokenHash: v.string(),
-      }),
-    ),
-  },
-  handler: async (ctx, args) => {
-    const { org, userId } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		invites: v.array(
+			v.object({
+				emailHash: v.string(),
+				encryptedEmail: v.string(),
+				role: v.string(),
+				tokenHash: v.string()
+			})
+		)
+	},
+	handler: async (ctx, args) => {
+		const { org, userId } = await requireOrgRole(ctx, args.slug, 'editor');
+		const seatLimit = boundedOrgSeatLimit(org.maxSeats);
 
-    // Check seat limit
-    const memberships = await ctx.db
-      .query("orgMemberships")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
+		// Check seat limit
+		const memberships = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_ORG_SEATS + 1);
+		if (memberships.length > seatLimit) {
+			throw new Error('ORG_MEMBERSHIP_CARDINALITY_REPAIR_REQUIRED');
+		}
 
-    const now = Date.now();
-    const allInvites = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
-    const pendingInvites = allInvites.filter(
-      (i) => !i.accepted && i.expiresAt > now,
-    );
+		const now = Date.now();
+		const allInvites = await ctx.db
+			.query('orgInvites')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.take(MAX_INVITE_RECORDS_PER_ORG + 1);
+		if (allInvites.length > MAX_INVITE_RECORDS_PER_ORG) {
+			throw new Error('ORG_INVITE_CARDINALITY_REPAIR_REQUIRED');
+		}
+		const pendingInvites = allInvites.filter((i) => !i.accepted && i.expiresAt > now);
 
-    if (
-      memberships.length + pendingInvites.length + args.invites.length >
-      org.maxSeats
-    ) {
-      throw new Error(
-        `Seat limit reached (${org.maxSeats}). Upgrade your plan for more seats.`,
-      );
-    }
+		// Accepted and expired rows are not an audit ledger. Remove the bounded
+		// archive on the next create so repeated invite cycles cannot grow reads.
+		for (const terminalInvite of allInvites) {
+			if (terminalInvite.accepted || terminalInvite.expiresAt <= now) {
+				await ctx.db.delete(terminalInvite._id);
+			}
+		}
 
-    // Dedup against existing pending invites by org-scoped emailHash
-    const invitedEmailHashes = new Set(
-      pendingInvites.map((i) => i.emailHash),
-    );
+		if (memberships.length + pendingInvites.length + args.invites.length > seatLimit) {
+			throw new Error(`Seat limit reached (${seatLimit}). Upgrade your plan for more seats.`);
+		}
 
-    // Also dedup within the current batch
-    const batchSeen = new Set<string>();
+		// Dedup against existing pending invites by org-scoped emailHash
+		const invitedEmailHashes = new Set(pendingInvites.map((i) => i.emailHash));
 
-    const expiresAt = now + 72 * 3_600_000; // 72 hours
+		// Also dedup within the current batch
+		const batchSeen = new Set<string>();
 
-    const results: Array<{ emailHash: string; status: "sent" | "skipped" }> = [];
+		const expiresAt = now + 72 * 3_600_000; // 72 hours
 
-    for (const inv of args.invites) {
-      if (
-        invitedEmailHashes.has(inv.emailHash) ||
-        batchSeen.has(inv.emailHash)
-      ) {
-        results.push({ emailHash: inv.emailHash, status: "skipped" });
-        continue;
-      }
+		const results: Array<{ emailHash: string; status: 'sent' | 'skipped' }> = [];
 
-      batchSeen.add(inv.emailHash);
+		for (const inv of args.invites) {
+			if (invitedEmailHashes.has(inv.emailHash) || batchSeen.has(inv.emailHash)) {
+				results.push({ emailHash: inv.emailHash, status: 'skipped' });
+				continue;
+			}
 
-      await ctx.db.insert("orgInvites", {
-        orgId: org._id,
-        encryptedEmail: inv.encryptedEmail,
-        emailHash: inv.emailHash,
-        role: inv.role,
-        tokenHash: inv.tokenHash,
-        expiresAt,
-        accepted: false,
-        invitedBy: String(userId),
-      });
+			batchSeen.add(inv.emailHash);
 
-      results.push({ emailHash: inv.emailHash, status: "sent" });
-    }
+			await ctx.db.insert('orgInvites', {
+				orgId: org._id,
+				encryptedEmail: inv.encryptedEmail,
+				emailHash: inv.emailHash,
+				role: inv.role,
+				tokenHash: inv.tokenHash,
+				expiresAt,
+				accepted: false,
+				invitedBy: String(userId)
+			});
 
-    const sent = results.filter((r) => r.status === "sent").length;
-    return { sent, results };
-  },
+			results.push({ emailHash: inv.emailHash, status: 'sent' });
+		}
+
+		const sent = results.filter((r) => r.status === 'sent').length;
+		return { sent, results };
+	}
 });
 
 /**
  * Update invite token and expiry for resend.
  */
 export const resendInvite = internalMutation({
-  args: {
-    slug: v.string(),
-    inviteId: v.string(),
-    tokenHash: v.string(),
-    expiresAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.slug, "editor");
+	args: {
+		slug: v.string(),
+		inviteId: v.string(),
+		tokenHash: v.string(),
+		expiresAt: v.number()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
 
-    const allInvites = await ctx.db
-      .query("orgInvites")
-      .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
-      .collect();
+		const inviteId = ctx.db.normalizeId('orgInvites', args.inviteId);
+		const invite = inviteId ? await ctx.db.get(inviteId) : null;
 
-    const invite = allInvites.find(
-      (i) =>
-        !i.accepted &&
-        (i._id === args.inviteId || String(i._id) === args.inviteId),
-    );
+		if (!invite || invite.orgId !== org._id || invite.accepted) {
+			throw new Error('Invite not found');
+		}
 
-    if (!invite) throw new Error("Invite not found");
+		await ctx.db.patch(invite._id, {
+			tokenHash: args.tokenHash,
+			expiresAt: args.expiresAt
+		});
 
-    await ctx.db.patch(invite._id, {
-      tokenHash: args.tokenHash,
-      expiresAt: args.expiresAt,
-    });
-
-    return {
-      _id: String(invite._id),
-      encryptedEmail: invite.encryptedEmail,
-      role: invite.role,
-      expiresAt: args.expiresAt,
-    };
-  },
+		return {
+			_id: String(invite._id),
+			encryptedEmail: invite.encryptedEmail,
+			role: invite.role,
+			expiresAt: args.expiresAt
+		};
+	}
 });

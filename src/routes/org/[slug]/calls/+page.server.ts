@@ -4,7 +4,7 @@ import { env as privateEnv } from '$env/dynamic/private';
 import { getCallInitiationReadiness } from '$lib/server/calls/call-initiation-readiness';
 import type { PageServerLoad } from './$types';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 
 function asString(value: unknown, fallback = ''): string {

@@ -1,7 +1,8 @@
 import { json, error } from '@sveltejs/kit';
+import { ConvexError } from 'convex/values';
 // CONVEX: Keep SvelteKit — Gemini embeddings external API
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import {
 	EMBEDDING_CONFIG,
@@ -10,6 +11,7 @@ import {
 } from '$lib/core/search/gemini-embeddings';
 import { env } from '$env/dynamic/private';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { projectToHue } from '$lib/utils/domain-hue-projection';
 
 const BATCH_SIZE = 20;
 const FALLBACK_CONCURRENCY = 4;
@@ -28,6 +30,21 @@ type BackfillError =
 
 function embeddingFailureMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function embeddingFailureCode(error: unknown): string | undefined {
+	const data =
+		error instanceof ConvexError
+			? error.data
+			: error !== null && typeof error === 'object' && 'data' in error
+				? (error as { data?: unknown }).data
+				: undefined;
+	if (typeof data === 'string') return data;
+	if (data !== null && typeof data === 'object' && !Array.isArray(data)) {
+		const code = (data as { code?: unknown }).code;
+		return typeof code === 'string' ? code : undefined;
+	}
+	return undefined;
 }
 
 /**
@@ -124,6 +141,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 					templateId,
 					locationEmbedding: embeddings[0],
 					topicEmbedding: embeddings[1],
+					domainHue: projectToHue(embeddings[1]),
 					_secret: internalSecret,
 					leaseToken
 				});
@@ -138,7 +156,7 @@ export const POST: RequestHandler = async ({ locals }) => {
 				});
 				// Once this worker loses or outlives its lease, every later write
 				// would fail the same authoritative Convex check.
-				return !message.includes('EMBEDDING_BACKFILL_LEASE_');
+				return !embeddingFailureCode(writeErr)?.startsWith('EMBEDDING_BACKFILL_LEASE_');
 			}
 		};
 

@@ -13,9 +13,10 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const GET: RequestHandler = async ({ params, url }) => {
 	if (!FEATURES.STANCE_POSITIONS) throw error(404, 'Not found');
@@ -29,6 +30,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 
 		const userDistrict = url.searchParams.get('userDistrict') ?? undefined;
 		const engagement = await serverQuery(api.positions.getFullEngagementByDistrict, {
+			_secret: getInternalSecret(),
 			templateId: templateId as Id<'templates'>,
 			userDistrictCode: userDistrict
 		});
@@ -59,8 +61,7 @@ export const GET: RequestHandler = async ({ params, url }) => {
 			throw err;
 		}
 
-		const message =
-			err instanceof Error ? err.message : 'Failed to get engagement by district';
+		const message = err instanceof Error ? err.message : 'Failed to get engagement by district';
 		throw error(500, message);
 	}
 };
