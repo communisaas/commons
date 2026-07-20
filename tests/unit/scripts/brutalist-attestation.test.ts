@@ -1021,6 +1021,14 @@ describe('Brutalist launch review attestation v3', () => {
 			'SOURCE_SHA: ' + expression('github.event.pull_request.head.sha')
 		);
 		expect(workflow).toContain(
+			'BASE_SHA: ' + expression('github.event.pull_request.base.sha')
+		);
+		expect(workflow).toContain('"+$BASE_SHA:refs/brutalist/fetched-base"');
+		expect(workflow).toContain(
+			"rev-parse --verify 'refs/brutalist/fetched-base^{commit}'"
+		);
+		expect(workflow).toContain('test "$resolved_base_sha" = "$BASE_SHA"');
+		expect(workflow).toContain(
 			'attestation_ref="refs/heads/brutalist-attestations/$SOURCE_SHA"'
 		);
 		expect(workflow).toContain('"+$attestation_ref:refs/brutalist/fetched-proof"');

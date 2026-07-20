@@ -38,17 +38,23 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
           SERVER_URL: ${{ github.server_url }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           git init --bare "$CANDIDATE_GIT_DIR"
           git --git-dir="$CANDIDATE_GIT_DIR" remote add origin "$SERVER_URL/$REPOSITORY.git"
           git --git-dir="$CANDIDATE_GIT_DIR" fetch --no-tags --filter=blob:none origin \
-            "+refs/pull/$PR_NUMBER/head:refs/heads/review-head"
+            "+refs/pull/$PR_NUMBER/head:refs/heads/review-head" \
+            "+$BASE_SHA:refs/brutalist/fetched-base"
+          resolved_base_sha="$(git --git-dir="$CANDIDATE_GIT_DIR" \
+            rev-parse --verify 'refs/brutalist/fetched-base^{commit}')"
           resolved_source_sha="$(git --git-dir="$CANDIDATE_GIT_DIR" \
             rev-parse --verify 'refs/heads/review-head^{commit}')"
+          test "$resolved_base_sha" = "$BASE_SHA"
           test "$resolved_source_sha" = "$SOURCE_SHA"
 
           attestation_ref="refs/heads/brutalist-attestations/$SOURCE_SHA"
