@@ -502,34 +502,46 @@ export async function verifyPublicDiscoveryReadiness(
 	const client = new ConvexHttpClient(parsedUrl.origin);
 	for (let attempt = 1; attempt <= MAX_COHERENT_READ_ATTEMPTS; attempt += 1) {
 		const manifestBefore = await withTimeout(
-			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			client.query(anyApi.templates.publicDiscoveryManifest, { _secret: internalSecret }),
 			'templates:publicDiscoveryManifest(before)',
 			timeoutMs
 		);
 		const [allList, excludeCwcList, allRelations, excludeCwcRelations] = await Promise.all([
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: false }),
+				client.query(anyApi.templates.publicDiscoveryList, {
+					_secret: internalSecret,
+					excludeCwc: false
+				}),
 				'templates:publicDiscoveryList(all)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryList, { excludeCwc: true }),
+				client.query(anyApi.templates.publicDiscoveryList, {
+					_secret: internalSecret,
+					excludeCwc: true
+				}),
 				'templates:publicDiscoveryList(excludeCwc)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: false }),
+				client.query(anyApi.templates.publicDiscoveryRelations, {
+					_secret: internalSecret,
+					excludeCwc: false
+				}),
 				'templates:publicDiscoveryRelations(all)',
 				timeoutMs
 			),
 			withTimeout(
-				client.query(anyApi.templates.publicDiscoveryRelations, { excludeCwc: true }),
+				client.query(anyApi.templates.publicDiscoveryRelations, {
+					_secret: internalSecret,
+					excludeCwc: true
+				}),
 				'templates:publicDiscoveryRelations(excludeCwc)',
 				timeoutMs
 			)
 		]);
 		const manifestAfter = await withTimeout(
-			client.query(anyApi.templates.publicDiscoveryManifest, {}),
+			client.query(anyApi.templates.publicDiscoveryManifest, { _secret: internalSecret }),
 			'templates:publicDiscoveryManifest(after)',
 			timeoutMs
 		);

@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest } from 'convex-test';
 
 import { api, internal } from './_generated/api';
@@ -8,6 +8,16 @@ import { PUBLIC_DISCOVERY_COORDINATED_REBUILD_LOCK_TTL_MS } from './lib/publicDi
 import schema from './schema';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
+const SECRET = 'seed-public-discovery-read-secret-32-bytes';
+
+beforeEach(() => {
+	vi.stubEnv('INTERNAL_API_SECRET', SECRET);
+	vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
 
 describe('seed maintenance public-discovery safety', () => {
 	it('clearing a source corpus table invalidates and rebuilds discovery without wiping state', async () => {
@@ -250,8 +260,11 @@ describe('seed maintenance public-discovery safety', () => {
 		});
 		await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
 
-		const oldManifest = await t.query(api.templates.publicDiscoveryManifest, {});
-		const oldList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: false });
+		const oldManifest = await t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET });
+		const oldList = await t.query(api.templates.publicDiscoveryList, {
+			_secret: SECRET,
+			excludeCwc: false
+		});
 		expect(oldManifest.list).toMatchObject({ ready: true, revision: 1 });
 		expect(oldManifest.relations).toMatchObject({ ready: true, revision: 1 });
 		expect(oldList.templates).toHaveLength(1);
@@ -277,11 +290,11 @@ describe('seed maintenance public-discovery safety', () => {
 
 		const [manifest, allList, excludeCwcList, allRelations, excludeCwcRelations] =
 			await Promise.all([
-				t.query(api.templates.publicDiscoveryManifest, {}),
-				t.query(api.templates.publicDiscoveryList, { excludeCwc: false }),
-				t.query(api.templates.publicDiscoveryList, { excludeCwc: true }),
-				t.query(api.templates.publicDiscoveryRelations, { excludeCwc: false }),
-				t.query(api.templates.publicDiscoveryRelations, { excludeCwc: true })
+				t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET }),
+				t.query(api.templates.publicDiscoveryList, { _secret: SECRET, excludeCwc: false }),
+				t.query(api.templates.publicDiscoveryList, { _secret: SECRET, excludeCwc: true }),
+				t.query(api.templates.publicDiscoveryRelations, { _secret: SECRET, excludeCwc: false }),
+				t.query(api.templates.publicDiscoveryRelations, { _secret: SECRET, excludeCwc: true })
 			]);
 		expect(manifest.list).toMatchObject({ ready: true, revision: 2 });
 		expect(manifest.relations).toMatchObject({ ready: true, revision: 2 });
@@ -457,7 +470,7 @@ describe('seed maintenance public-discovery safety', () => {
 		// A coordinated rebuild freezes the public generation; legacy readers keep
 		// serving the preserved last-good rows, never the in-progress corpus.
 		const [publicManifestWhileLocked, lastGoodList] = await Promise.all([
-			t.query(api.templates.publicDiscoveryManifest, {}),
+			t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET }),
 			t.query(api.templates.listPublic, { excludeCwc: false })
 		]);
 		expect(publicManifestWhileLocked).toEqual({

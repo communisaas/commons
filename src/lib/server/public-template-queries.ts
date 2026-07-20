@@ -1,6 +1,7 @@
 import { serverQuery } from 'convex-sveltekit';
 import type { FunctionReturnType } from 'convex/server';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
 	PUBLIC_DISCOVERY_MANIFEST_FRESH_MS,
 	PUBLIC_DISCOVERY_PAYLOAD_FRESH_MS,
@@ -436,7 +437,10 @@ export function getCachedPublicDiscoveryManifest(
 			refreshMode: 'blocking',
 			projectCachedValue: projectPublicDiscoveryManifestContract
 		},
-		() => serverQuery(api.templates.publicDiscoveryManifest, {})
+		() =>
+			serverQuery(api.templates.publicDiscoveryManifest, {
+				_secret: getInternalSecret()
+			})
 	);
 }
 
@@ -515,6 +519,7 @@ export async function getCachedPublicTemplates(context: PublicQueryContext, excl
 			async () =>
 				(prefetched ??
 					(await serverQuery(api.templates.publicDiscoveryList, {
+						_secret: getInternalSecret(),
 						excludeCwc
 					}))) as PublicTemplateSnapshot,
 			(snapshot) => projectPublicTemplateSnapshotContract(snapshot, excludeCwc),
@@ -569,6 +574,7 @@ export async function getCachedPublicRelations(context: PublicQueryContext, excl
 			async () =>
 				(prefetched ??
 					(await serverQuery(api.templates.publicDiscoveryRelations, {
+						_secret: getInternalSecret(),
 						excludeCwc
 					}))) as PublicRelationsSnapshot,
 			(snapshot) => projectPublicRelationsSnapshotContract(snapshot),

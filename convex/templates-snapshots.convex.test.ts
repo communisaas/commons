@@ -148,17 +148,23 @@ describe('templates materialized public snapshots', () => {
 	it('publishes explicit ready revisions atomically and distinguishes a valid empty corpus from cold start', async () => {
 		const t = newHarness();
 
-		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual({
+		expect(
+			await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+		).toEqual({
 			list: { ready: false, revision: 0, updatedAt: null },
 			relations: { ready: false, revision: 0, updatedAt: null }
 		});
-		expect(await t.query(api.templates.publicDiscoveryList, {})).toEqual({
+		expect(
+			await t.query(api.templates.publicDiscoveryList, { _secret: PUBLIC_CREATE_SECRET })
+		).toEqual({
 			projectionVersion: 0,
 			revision: 0,
 			updatedAt: null,
 			templates: []
 		});
-		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toEqual({
+		expect(
+			await t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+		).toEqual({
 			revision: 0,
 			updatedAt: null,
 			twinEdges: [],
@@ -169,19 +175,27 @@ describe('templates materialized public snapshots', () => {
 		);
 
 		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
-		const afterList = await t.query(api.templates.publicDiscoveryManifest, {});
+		const afterList = await t.query(api.templates.publicDiscoveryManifest, {
+			_secret: PUBLIC_CREATE_SECRET
+		});
 		expect(afterList.list).toMatchObject({ ready: true, revision: 1 });
 		expect(afterList.relations).toEqual({ ready: false, revision: 0, updatedAt: null });
-		expect(await t.query(api.templates.publicDiscoveryList, {})).toMatchObject({
+		expect(
+			await t.query(api.templates.publicDiscoveryList, { _secret: PUBLIC_CREATE_SECRET })
+		).toMatchObject({
 			projectionVersion: 4,
 			revision: 1,
 			templates: []
 		});
 
 		await t.mutation(internal.templates.rebuildRelationSnapshot, {});
-		const afterRelations = await t.query(api.templates.publicDiscoveryManifest, {});
+		const afterRelations = await t.query(api.templates.publicDiscoveryManifest, {
+			_secret: PUBLIC_CREATE_SECRET
+		});
 		expect(afterRelations.relations).toMatchObject({ ready: true, revision: 1 });
-		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toMatchObject({
+		expect(
+			await t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+		).toMatchObject({
 			revision: 1,
 			twinEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
@@ -200,7 +214,9 @@ describe('templates materialized public snapshots', () => {
 		await expect(t.mutation(internal.templates.rebuildHomepageSnapshots, {})).rejects.toThrow(
 			/PUBLIC_TEMPLATE_SNAPSHOT_NO_VALID_CARDS:/
 		);
-		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual(afterRelations);
+		expect(
+			await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+		).toEqual(afterRelations);
 		expect(await t.query(api.templates.listPublic, {})).toEqual([]);
 
 		// Even if a legacy/manual row edit creates a mismatch, the payload exposes
@@ -213,7 +229,9 @@ describe('templates materialized public snapshots', () => {
 			if (!row) throw new Error('missing list snapshot');
 			await ctx.db.patch(row._id, { revision: 999 });
 		});
-		expect(await t.query(api.templates.publicDiscoveryList, {})).toMatchObject({
+		expect(
+			await t.query(api.templates.publicDiscoveryList, { _secret: PUBLIC_CREATE_SECRET })
+		).toMatchObject({
 			revision: 999,
 			templates: []
 		});
@@ -226,7 +244,9 @@ describe('templates materialized public snapshots', () => {
 			if (!row) throw new Error('missing relation snapshot');
 			await ctx.db.patch(row._id, { revision: 999 });
 		});
-		expect(await t.query(api.templates.publicDiscoveryRelations, {})).toMatchObject({
+		expect(
+			await t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+		).toMatchObject({
 			revision: 999,
 			twinEdges: [],
 			conceptRelations: { edges: [], conceptMap: {} }
@@ -269,11 +289,17 @@ describe('templates materialized public snapshots', () => {
 		});
 
 		await expect(t.query(api.templates.listPublic, {})).rejects.toThrow();
-		await expect(t.query(api.templates.publicDiscoveryList, {})).rejects.toThrow();
+		await expect(
+			t.query(api.templates.publicDiscoveryList, { _secret: PUBLIC_CREATE_SECRET })
+		).rejects.toThrow();
 		await expect(t.query(api.templates.relatednessEdges, {})).rejects.toThrow();
 		await expect(t.query(api.templates.conceptRelations, {})).rejects.toThrow();
-		await expect(t.query(api.templates.publicDiscoveryRelations, {})).rejects.toThrow();
-		await expect(t.query(api.templates.publicDiscoveryManifest, {})).rejects.toThrow();
+		await expect(
+			t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+		).rejects.toThrow();
+		await expect(
+			t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+		).rejects.toThrow();
 		await expect(t.query(internal.templates.publicDiscoveryFailureStatus, {})).rejects.toThrow();
 		await expect(
 			t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {})
@@ -373,7 +399,9 @@ describe('templates materialized public snapshots', () => {
 		const storedProjectionError = vi.spyOn(console, 'error').mockImplementation(() => {});
 		const publicList = await t.query(api.templates.listPublic, {});
 		expect(publicList).toEqual([newer]);
-		await expect(t.query(api.templates.publicDiscoveryList, {})).resolves.toEqual({
+		await expect(
+			t.query(api.templates.publicDiscoveryList, { _secret: PUBLIC_CREATE_SECRET })
+		).resolves.toEqual({
 			projectionVersion: 0,
 			revision: 1,
 			updatedAt: 1,
@@ -391,7 +419,9 @@ describe('templates materialized public snapshots', () => {
 			'[public-discovery] PUBLIC_TEMPLATE_SNAPSHOT_STORED_INVALID:key=all:revision=1:dropped=3:stored=4'
 		);
 		storedProjectionError.mockRestore();
-		await expect(t.query(api.templates.publicDiscoveryRelations, {})).resolves.toMatchObject({
+		await expect(
+			t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+		).resolves.toMatchObject({
 			revision: 1,
 			updatedAt: 1,
 			twinEdges: [newerTwin]
@@ -624,10 +654,15 @@ describe('templates materialized public snapshots', () => {
 			expect(coalescedRow?.listDirtyAt).toBe(firstDirtyAt);
 
 			vi.advanceTimersByTime(58_999);
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list.revision).toBe(0);
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.list.revision
+			).toBe(0);
 			vi.advanceTimersByTime(1);
 			await t.finishInProgressScheduledFunctions();
-			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {});
+			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(firstPublish.list).toMatchObject({ ready: true, revision: 1 });
 
 			const next = await t.mutation(internal.templates.requestPublicTemplateSnapshotRefresh, {});
@@ -640,10 +675,16 @@ describe('templates materialized public snapshots', () => {
 			expect(next.scheduledAt).toBe(firstPublish.list.updatedAt! + 6 * 60 * 60 * 1000);
 
 			vi.advanceTimersByTime(6 * 60 * 60 * 1000 - 1);
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list.revision).toBe(1);
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.list.revision
+			).toBe(1);
 			vi.advanceTimersByTime(1);
 			await t.finishInProgressScheduledFunctions();
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).list).toMatchObject({
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.list
+			).toMatchObject({
 				ready: true,
 				revision: 2
 			});
@@ -777,11 +818,16 @@ describe('templates materialized public snapshots', () => {
 			expect(coalescedRow?.relationsRefreshScheduledAt).toBe(first.scheduledAt);
 
 			vi.advanceTimersByTime(58_999);
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations.revision).toBe(0);
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.relations.revision
+			).toBe(0);
 			vi.advanceTimersByTime(1);
 			await t.finishInProgressScheduledFunctions();
 
-			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {});
+			const firstPublish = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(firstPublish.relations).toMatchObject({ ready: true, revision: 1 });
 			const cleanRow = await t.run(async (ctx) =>
 				ctx.db
@@ -805,10 +851,16 @@ describe('templates materialized public snapshots', () => {
 			expect(next.scheduledAt).toBe(firstPublish.relations.updatedAt! + 6 * 60 * 60 * 1000);
 
 			vi.advanceTimersByTime(6 * 60 * 60 * 1000 - 1);
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations.revision).toBe(1);
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.relations.revision
+			).toBe(1);
 			vi.advanceTimersByTime(1);
 			await t.finishInProgressScheduledFunctions();
-			expect((await t.query(api.templates.publicDiscoveryManifest, {})).relations).toMatchObject({
+			expect(
+				(await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET }))
+					.relations
+			).toMatchObject({
 				ready: true,
 				revision: 2
 			});
@@ -833,7 +885,9 @@ describe('templates materialized public snapshots', () => {
 				);
 			});
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const before = await t.query(api.templates.publicDiscoveryManifest, {});
+			const before = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 
 			const newcomer = await t.run((ctx) =>
 				ctx.db.insert('templates', templateValue(7_102, { topicEmbedding: embedding([10, -1, 0]) }))
@@ -857,7 +911,9 @@ describe('templates materialized public snapshots', () => {
 				status: 'deferred-for-list',
 				scheduledAt: expect.any(Number)
 			});
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual(before);
+			expect(
+				await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+			).toEqual(before);
 			expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).not.toContain(
 				newcomer
 			);
@@ -877,12 +933,16 @@ describe('templates materialized public snapshots', () => {
 				(await t.query(api.templates.listPublic, {})).map(({ id }) => String(id))
 			);
 			expect(listIds.has(String(newcomer))).toBe(true);
-			const relations = await t.query(api.templates.publicDiscoveryRelations, {});
+			const relations = await t.query(api.templates.publicDiscoveryRelations, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			for (const edge of [...relations.twinEdges, ...relations.conceptRelations.edges]) {
 				expect(listIds.has(String(edge.a))).toBe(true);
 				expect(listIds.has(String(edge.b))).toBe(true);
 			}
-			const after = await t.query(api.templates.publicDiscoveryManifest, {});
+			const after = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(after.list.revision).toBe(before.list.revision + 1);
 			expect(after.relations.revision).toBe(before.relations.revision + 1);
 			const manifest = await t.run((ctx) =>
@@ -907,11 +967,15 @@ describe('templates materialized public snapshots', () => {
 			const t = newHarness();
 			await t.run((ctx) => ctx.db.insert('templates', templateValue(7_125)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const initial = await t.query(api.templates.publicDiscoveryManifest, {});
+			const initial = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 
 			vi.advanceTimersByTime(6 * 60 * 60 * 1000);
 			await t.mutation(internal.templates.rebuildRelationSnapshot, {});
-			const relationFresh = await t.query(api.templates.publicDiscoveryManifest, {});
+			const relationFresh = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(relationFresh.list).toEqual(initial.list);
 			expect(relationFresh.relations.revision).toBe(initial.relations.revision + 1);
 
@@ -938,13 +1002,17 @@ describe('templates materialized public snapshots', () => {
 				relationsScheduledAt: relationRequest.scheduledAt
 			});
 			if (deferred.status !== 'deferred') throw new Error('expected deferred composite');
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toEqual(relationFresh);
+			expect(
+				await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+			).toEqual(relationFresh);
 
 			vi.advanceTimersByTime(deferred.scheduledAt - listRequest.scheduledAt);
 			// Exercise the real same-token race between the deferred list owner and
 			// the relation job that was queued before ownership was aligned.
 			await t.finishInProgressScheduledFunctions();
-			const published = await t.query(api.templates.publicDiscoveryManifest, {});
+			const published = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(published.list.revision).toBe(initial.list.revision + 1);
 			expect(published.relations.revision).toBe(relationFresh.relations.revision + 1);
 			expect(published.relations.updatedAt).toBeGreaterThanOrEqual(
@@ -971,7 +1039,9 @@ describe('templates materialized public snapshots', () => {
 			const t = newHarness();
 			const templateId = await t.run((ctx) => ctx.db.insert('templates', templateValue(7_150)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const lastGood = await t.query(api.templates.publicDiscoveryManifest, {});
+			const lastGood = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 
 			await t.run((ctx) => ctx.db.patch(templateId, { messageBody: 'x'.repeat(22_000) }));
 			const listRequest = await t.mutation(
@@ -1039,7 +1109,9 @@ describe('templates materialized public snapshots', () => {
 			const t = newHarness();
 			const templateId = await t.run((ctx) => ctx.db.insert('templates', templateValue(7_160)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const lastGood = await t.query(api.templates.publicDiscoveryManifest, {});
+			const lastGood = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 
 			await t.run((ctx) => ctx.db.patch(templateId, { messageBody: 'x'.repeat(22_000) }));
 			const listRequest = await t.mutation(
@@ -1081,7 +1153,9 @@ describe('templates materialized public snapshots', () => {
 			).resolves.toEqual({ status: 'superseded' });
 
 			await t.finishInProgressScheduledFunctions();
-			const afterQueuedNoOps = await t.query(api.templates.publicDiscoveryManifest, {});
+			const afterQueuedNoOps = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			expect(afterQueuedNoOps).toEqual(lastGood);
 		} finally {
 			consoleError.mockRestore();
@@ -1097,7 +1171,9 @@ describe('templates materialized public snapshots', () => {
 			const t = newHarness();
 			await t.run((ctx) => ctx.db.insert('templates', templateValue(7_175)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const before = await t.query(api.templates.publicDiscoveryManifest, {});
+			const before = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			const duplicateId = await t.run(async (ctx) => {
 				const row = await ctx.db
 					.query('templateRelationSnapshots')
@@ -1299,7 +1375,9 @@ describe('templates materialized public snapshots', () => {
 			excludeCwc: { sourceTemplateCount: 2 }
 		});
 		expect(publishedIds.has(String(liveEntrant))).toBe(false);
-		const relations = await t.query(api.templates.publicDiscoveryRelations, {});
+		const relations = await t.query(api.templates.publicDiscoveryRelations, {
+			_secret: PUBLIC_CREATE_SECRET
+		});
 		for (const edge of [...relations.twinEdges, ...relations.conceptRelations.edges]) {
 			expect(publishedIds.has(String(edge.a))).toBe(true);
 			expect(publishedIds.has(String(edge.b))).toBe(true);
@@ -1557,7 +1635,9 @@ describe('templates materialized public snapshots', () => {
 		});
 
 		await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
-		const before = await t.query(api.templates.publicDiscoveryManifest, {});
+		const before = await t.query(api.templates.publicDiscoveryManifest, {
+			_secret: PUBLIC_CREATE_SECRET
+		});
 		const lastGood = await t.query(api.templates.listPublic, {});
 		expect(lastGood.map(({ id }) => id)).toEqual([validTemplateId, invalidTemplateId]);
 
@@ -1585,7 +1665,9 @@ describe('templates materialized public snapshots', () => {
 				excludeCwcCount: 1
 			})
 		});
-		expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+		expect(
+			await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+		).toMatchObject({
 			list: { ready: true, revision: before.list.revision + 1 }
 		});
 		expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).toEqual([
@@ -1662,7 +1744,9 @@ describe('templates materialized public snapshots', () => {
 		expect(listIds).toEqual([...validIds].reverse());
 		expect(listIds).not.toContain(invalidId);
 		expect(listIds).not.toContain(oversizedId);
-		const relations = await t.query(api.templates.publicDiscoveryRelations, {});
+		const relations = await t.query(api.templates.publicDiscoveryRelations, {
+			_secret: PUBLIC_CREATE_SECRET
+		});
 		for (const edge of [...relations.twinEdges, ...relations.conceptRelations.edges]) {
 			expect(listIds).toContain(edge.a);
 			expect(listIds).toContain(edge.b);
@@ -1747,7 +1831,9 @@ describe('templates materialized public snapshots', () => {
 			const healthyId = await t.run((ctx) => ctx.db.insert('templates', templateValue(4_000)));
 			await t.mutation(internal.templates.rebuildPublicTemplateSnapshots, {});
 			await t.mutation(internal.templates.rebuildRelationSnapshot, {});
-			const lastGoodManifest = await t.query(api.templates.publicDiscoveryManifest, {});
+			const lastGoodManifest = await t.query(api.templates.publicDiscoveryManifest, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			const lastGoodIds = (await t.query(api.templates.listPublic, {})).map(({ id }) => id);
 			await t.run(async (ctx) => {
 				await ctx.db.patch(healthyId, { messageBody: 'x'.repeat(22_000) });
@@ -1764,7 +1850,9 @@ describe('templates materialized public snapshots', () => {
 			expect((await t.query(api.templates.listPublic, {})).map(({ id }) => id)).toEqual(
 				lastGoodIds
 			);
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			expect(
+				await t.query(api.templates.publicDiscoveryManifest, { _secret: PUBLIC_CREATE_SECRET })
+			).toMatchObject({
 				list: {
 					ready: true,
 					revision: lastGoodManifest.list.revision,
@@ -2002,7 +2090,9 @@ describe('templates materialized public snapshots', () => {
 			const t = newHarness();
 			await t.run((ctx) => ctx.db.insert('templates', templateValue(6_900)));
 			await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-			const lastGood = await t.query(api.templates.publicDiscoveryRelations, {});
+			const lastGood = await t.query(api.templates.publicDiscoveryRelations, {
+				_secret: PUBLIC_CREATE_SECRET
+			});
 			await t.run(async (ctx) => {
 				const row = await ctx.db
 					.query('publicTemplateSnapshots')
@@ -2022,7 +2112,9 @@ describe('templates materialized public snapshots', () => {
 					scheduledAt: requested.scheduledAt
 				})
 			).resolves.toEqual({ status: 'invalid' });
-			expect(await t.query(api.templates.publicDiscoveryRelations, {})).toEqual(lastGood);
+			expect(
+				await t.query(api.templates.publicDiscoveryRelations, { _secret: PUBLIC_CREATE_SECRET })
+			).toEqual(lastGood);
 			await expect(
 				t.query(internal.templates.publicDiscoveryFailureStatus, {})
 			).resolves.toMatchObject({
@@ -2098,12 +2190,20 @@ describe('templates materialized public snapshots', () => {
 		});
 
 		await t.mutation(internal.templates.rebuildHomepageSnapshots, {});
-		const allList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: false });
-		const emailList = await t.query(api.templates.publicDiscoveryList, { excludeCwc: true });
+		const allList = await t.query(api.templates.publicDiscoveryList, {
+			_secret: PUBLIC_CREATE_SECRET,
+			excludeCwc: false
+		});
+		const emailList = await t.query(api.templates.publicDiscoveryList, {
+			_secret: PUBLIC_CREATE_SECRET,
+			excludeCwc: true
+		});
 		const allRelations = await t.query(api.templates.publicDiscoveryRelations, {
+			_secret: PUBLIC_CREATE_SECRET,
 			excludeCwc: false
 		});
 		const emailRelations = await t.query(api.templates.publicDiscoveryRelations, {
+			_secret: PUBLIC_CREATE_SECRET,
 			excludeCwc: true
 		});
 		expect(await t.query(api.templates.relatednessEdges, {})).toEqual(allRelations.twinEdges);

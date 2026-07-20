@@ -473,12 +473,12 @@ describe('public discovery producer readiness', () => {
 		});
 		expect(mockConvexQuery).toHaveBeenCalledTimes(7);
 		expect(mockConvexQuery.mock.calls.map(([, args]) => args)).toEqual([
-			{},
-			{ excludeCwc: false },
-			{ excludeCwc: true },
-			{ excludeCwc: false },
-			{ excludeCwc: true },
-			{},
+			{ _secret: INTERNAL_SECRET },
+			{ _secret: INTERNAL_SECRET, excludeCwc: false },
+			{ _secret: INTERNAL_SECRET, excludeCwc: true },
+			{ _secret: INTERNAL_SECRET, excludeCwc: false },
+			{ _secret: INTERNAL_SECRET, excludeCwc: true },
+			{ _secret: INTERNAL_SECRET },
 			{ _secret: INTERNAL_SECRET }
 		]);
 		expect(mockConvexQuery.mock.calls.map(([reference]) => getFunctionName(reference))).toEqual([

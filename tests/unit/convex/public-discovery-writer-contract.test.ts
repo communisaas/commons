@@ -777,6 +777,62 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 };
 
 describe('public-discovery source writer contract', () => {
+	it('requires server authorization before every versioned discovery snapshot database read', () => {
+		const templatesSource = source('templates.ts');
+		for (const exportName of [
+			'publicDiscoveryManifest',
+			'publicDiscoveryList',
+			'publicDiscoveryRelations'
+		]) {
+			const start = templatesSource.indexOf(`export const ${exportName} = query({`);
+			expect(start, `${exportName} must remain a public server-gated query`).toBeGreaterThanOrEqual(0);
+			const nextExport = templatesSource.indexOf('\nexport const ', start + 1);
+			const boundary = templatesSource.slice(
+				start,
+				nextExport === -1 ? templatesSource.length : nextExport
+			);
+			expect(boundary, `${exportName} must require a non-optional server secret`).toMatch(
+				/_secret:\s*v\.string\(\)/
+			);
+			const authorizationAt = boundary.indexOf('requireInternalSecret(args._secret)');
+			const databaseReadAt = boundary.indexOf('ctx.db');
+			expect(authorizationAt, `${exportName} lost its server-secret gate`).toBeGreaterThanOrEqual(0);
+			expect(databaseReadAt, `${exportName} must retain its bounded database read`).toBeGreaterThanOrEqual(
+				0
+			);
+			expect(
+				authorizationAt,
+				`${exportName} must reject an unauthorized caller before database access`
+			).toBeLessThan(databaseReadAt);
+		}
+	});
+
+	it('keeps legacy rollback aliases on compact snapshot rows without source-corpus scans', () => {
+		const templatesSource = source('templates.ts');
+		for (const [exportName, snapshotTable] of [
+			['listPublic', 'publicTemplateSnapshots'],
+			['relatednessEdges', 'templateRelationSnapshots'],
+			['conceptRelations', 'templateRelationSnapshots']
+		] as const) {
+			const start = templatesSource.indexOf(`export const ${exportName} = query({`);
+			expect(start, `${exportName} must remain available to the rollback artifact`).toBeGreaterThanOrEqual(
+				0
+			);
+			const nextExport = templatesSource.indexOf('\nexport const ', start + 1);
+			const boundary = templatesSource.slice(
+				start,
+				nextExport === -1 ? templatesSource.length : nextExport
+			);
+			expect(boundary, `${exportName} must retain its legacy argument shape`).not.toMatch(/_secret/);
+			expect(boundary, `${exportName} must read only ${snapshotTable}`).toContain(
+				`.query("${snapshotTable}")`
+			);
+			expect(boundary, `${exportName} must never scan source templates`).not.toContain(
+				'.query("templates")'
+			);
+		}
+	});
+
 	const allBoundaries = listConvexSources().flatMap(({ file, src }) => boundaries(file, src));
 	const boundaryByKey = new Map(allBoundaries.map((boundary) => [`${boundary.file}:${boundary.name}`, boundary]));
 

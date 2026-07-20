@@ -140,11 +140,18 @@ npx convex deploy --env-file .env.production --typecheck enable
 
 # 2. Materialize public discovery before the frontend consumer receives traffic.
 npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
-npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
+# Run with PUBLIC_CONVEX_URL and INTERNAL_API_SECRET loaded into the process
+# environment. Never place the discovery secret in CLI JSON or shell history.
+npm run verify:public-discovery-readiness
 
 # 3. Push the exact frontend SHA only after the hardened workflow is on main.
 git push origin "$RELEASE_SHA":refs/heads/production
 ```
+
+On the first cutover, keep the snapshot-only legacy query aliases for at least
+48 hours and through two successful daily producer cycles. After both
+conditions pass, make this frontend SHA the rollback floor and retire the
+aliases before database access in a follow-up backend deploy.
 
 For the first cutover that introduces `topicEmbeddingsUpdatedAt` only, run the
 bounded legacy marker migration after the Convex deploy and before any paid

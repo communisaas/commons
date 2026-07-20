@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { convexTest, type TestConvex } from 'convex-test';
 import type { TransactionMetrics } from 'convex/server';
 
@@ -13,7 +13,17 @@ const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 
 type Harness = TestConvex<typeof schema>;
 
+const SECRET = 'public-discovery-read-budget-secret-32-bytes';
 const VECTOR = Array.from({ length: 768 }, (_, index) => index / 768);
+
+beforeEach(() => {
+	vi.stubEnv('INTERNAL_API_SECRET', SECRET);
+	vi.stubEnv('INTERNAL_API_SECRET_PREVIOUS', '');
+});
+
+afterEach(() => {
+	vi.unstubAllEnvs();
+});
 
 function newHarness(): Harness {
 	return convexTest({
@@ -186,6 +196,7 @@ describe('public template query read budgets', () => {
 
 		const observed = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				_secret: SECRET,
 				excludeCwc: false
 			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
@@ -245,6 +256,7 @@ describe('public template query read budgets', () => {
 
 		const versioned = await t.query(async (ctx) => {
 			const result = await ctx.runQuery(api.templates.publicDiscoveryList, {
+				_secret: SECRET,
 				excludeCwc: false
 			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
@@ -276,7 +288,7 @@ describe('public template query read budgets', () => {
 		});
 
 		const observed = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.publicDiscoveryManifest, {});
+			const result = await ctx.runQuery(api.templates.publicDiscoveryManifest, { _secret: SECRET });
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 
@@ -352,7 +364,9 @@ describe('public template query read budgets', () => {
 		expect(concepts.metrics.bytesRead.used).toBeLessThan(2_000);
 
 		const combined = await t.query(async (ctx) => {
-			const result = await ctx.runQuery(api.templates.publicDiscoveryRelations, {});
+			const result = await ctx.runQuery(api.templates.publicDiscoveryRelations, {
+				_secret: SECRET
+			});
 			return { result, metrics: await getTransactionMetrics(ctx) };
 		});
 		expect(combined.result).toEqual({

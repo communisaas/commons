@@ -48,8 +48,11 @@ logically bad rebuild succeeds.
 
 ```sh
 npx convex run --env-file .env.production templates:rebuildHomepageSnapshots '{}'
-npx convex run --env-file .env.production templates:publicDiscoveryManifest '{}'
+npm run verify:public-discovery-readiness
 ```
+
+Run the verifier with `PUBLIC_CONVEX_URL` and `INTERNAL_API_SECRET` loaded into
+its process environment. Never put `_secret` in CLI JSON or shell history.
 
 The rebuild is a go only when:
 
@@ -66,23 +69,14 @@ A thrown rebuild is atomic and preserves the prior committed snapshots. A first
 deployment must therefore finish this step before the frontend can expose its
 honest-but-empty cold state.
 
-Call the public manifest/list/relation functions directly and inspect Convex
-logs before frontend upload. Public requests must read only
+Use the readiness verifier above and inspect its Convex calls in the logs before
+frontend upload. Do not call the versioned discovery queries through
+`npx convex run`; they require a server secret that must not appear in process
+arguments. Discovery requests must read only
 `publicDiscoveryManifest`, `publicTemplateSnapshots`, or
 `templateRelationSnapshots`; they must not collect the embedding-bearing
 `templates` corpus. Each one-read payload's `revision` must equal its
-corresponding ready manifest revision:
-
-```sh
-npx convex run templates:publicDiscoveryList \
-  '{"excludeCwc":false}' --env-file .env.production
-npx convex run templates:publicDiscoveryList \
-  '{"excludeCwc":true}' --env-file .env.production
-npx convex run templates:publicDiscoveryRelations \
-  '{"excludeCwc":false}' --env-file .env.production
-npx convex run templates:publicDiscoveryRelations \
-  '{"excludeCwc":true}' --env-file .env.production
-```
+corresponding ready manifest revision.
 
 ## 3. Deploy the same frontend SHA
 
@@ -116,6 +110,14 @@ production cache purge, and gates on its `/api/health` result.
 Confirm the Pages API reports `production_deployments_enabled: false` and
 `preview_deployment_setting: "none"` with the verification command in
 `docs/development/deployment.md`.
+
+For the first cutover, keep `listPublic`, `relatednessEdges`, and
+`conceptRelations` as compact rollback aliases for at least 48 hours and through
+two successful daily producer cycles. They read only indexed snapshot rows;
+they never scan source templates. Once both conditions pass, record this
+frontend SHA as the rollback floor and retire the three aliases before database
+access in a follow-up backend deploy. Until then, a Pages rollback may use only
+the snapshot-safe backend from this release or newer.
 
 ## 4. Warm, smoke, and observe
 
@@ -151,8 +153,11 @@ health requests.
 
 ## Rollback
 
-Roll back the Pages deployment first and keep the snapshot-safe Convex producer
-in place. If snapshot content is wrong, repair the source/code, rerun the atomic
+During the 48-hour/two-cycle bridge, roll back the Pages deployment first and
+keep the snapshot-safe Convex producer in place. After the bridge aliases are
+retired, the gated consumer SHA is the rollback floor; an older Pages rollback
+must first restore a snapshot-safe compatibility backend. If snapshot content
+is wrong, repair the source/code, rerun the atomic
 rebuild, and warm the new revision. An urgent explicit namespace cutover may
 also bump `CACHE_SCHEMA_VERSION` before redeploying Pages.
 

@@ -381,8 +381,10 @@ function slugify(s: string): string {
  * then, deliveries stand on their own and do not fabricate stances from
  * civic actions.
  *
- * Idempotent: if a delivery exists for this (pseudonymousId, templateId,
- * recipientKey) tuple, no duplicate is created.
+ * Launch containment: the authoritative backend boundary is fail-closed while
+ * durable bounded admission is being hardened. Keeping the validator and
+ * server-secret check preserves an explicit contract for older Pages builds,
+ * but no caller can reach recipient reads or writes.
  */
 export const recordDirectDeliveries = mutation({
   args: {
@@ -400,41 +402,9 @@ export const recordDirectDeliveries = mutation({
       encryptedRecipientName: v.optional(v.string()),
     })),
   },
-  handler: async (ctx, { _secret, pseudonymousId, templateId, districtCode, recipients }) => {
+  handler: async (_ctx, { _secret }) => {
     requireInternalSecret(_secret);
-    const now = Date.now();
-    // Pre-fetch the user's existing deliveries for this template to deduplicate
-    const existing = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_templateId_pseudonymousId", (idx) =>
-        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
-      )
-      .collect();
-    const existingKeys = new Set(existing.map((d) => d.recipientKey).filter(Boolean));
-
-    let created = 0;
-    for (const r of recipients) {
-      const recipientKey = slugify(r.name);
-      if (existingKeys.has(recipientKey)) continue;
-
-      await ctx.db.insert("positionDeliveries", {
-        pseudonymousId,
-        templateId,
-        recipientKey,
-        recipientName: r.name,
-        deliveryMethod: r.deliveryMethod,
-        deliveryStatus: "pending",
-        deliveredAt: now,
-        ...(districtCode ? { districtCode } : {}),
-        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
-        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
-        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
-      });
-      existingKeys.add(recipientKey);
-      created++;
-    }
-
-    return { created };
+    throw new Error("DIRECT_DELIVERY_RECORDING_DISABLED");
   },
 });
 

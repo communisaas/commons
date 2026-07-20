@@ -1238,15 +1238,16 @@ function projectStoredPublicTemplates(
 }
 
 /**
- * Tiny public control plane for edge versioning and honest cold starts.
+ * Server-only control plane for edge versioning and honest cold starts.
  *
  * No manifest row means neither snapshot family has ever published. That is
  * intentionally distinct from a successful rebuild over an empty corpus,
  * which returns `ready:true` with revision 1 and an empty payload.
  */
 export const publicDiscoveryManifest = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { _secret: v.string() },
+  handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const manifest = await ctx.db
       .query("publicDiscoveryManifest")
       .withIndex("by_key", (q) => q.eq("key", "public"))
@@ -1277,12 +1278,15 @@ export const publicDiscoveryFailureStatus = internalQuery({
 });
 
 /**
- * Public: List public templates with enriched data for the homepage.
+ * Compact rollback-compatibility alias for enriched homepage templates.
  *
  * Signature and successful payload are unchanged, but the request path reads
  * one compact singleton selected by `excludeCwc`. A missing snapshot is an
  * explicit not-ready error; only a published empty snapshot returns `[]`.
  * There is deliberately no live-scan fallback.
+ * Its legacy argument shape remains unchanged only while the pre-cutover Pages
+ * artifact is a supported rollback target. New consumers use the secret-gated,
+ * versioned query below.
  */
 export const listPublic = query({
   args: {
@@ -1311,8 +1315,9 @@ export const listPublic = query({
  * empty-corpus snapshot without adding a redundant manifest read here.
  */
 export const publicDiscoveryList = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
+  args: { _secret: v.string(), excludeCwc: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const key: PublicTemplateSnapshotKey = args.excludeCwc ? "excludeCwc" : "all";
     const snapshot = await ctx.db
       .query("publicTemplateSnapshots")
@@ -1783,7 +1788,7 @@ function relationSnapshotKey(excludeCwc: boolean | undefined): RelationSnapshotK
 const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
 
 /**
- * Public: measured-twin relatedness edges over the public template set.
+ * Compact rollback-compatibility alias for measured-twin relatedness edges.
  *
  * Request-path invariant: this query reads exactly one compact materialized row
  * and never hydrates `templates` or the calibration centroid. The nightly
@@ -1792,6 +1797,8 @@ const MAX_RELATION_SNAPSHOT_BYTES = 900_000;
  * A missing snapshot is the honest cold-start state: return no edges. There is
  * deliberately no live-scan fallback, because a fallback would reintroduce the
  * database-I/O failure mode this materialization exists to remove.
+ * Its legacy argument shape remains unchanged only for the pre-cutover Pages
+ * rollback artifact. New consumers use the secret-gated combined query below.
  */
 export const relatednessEdges = query({
   args: { excludeCwc: v.optional(v.boolean()) },
@@ -1868,7 +1875,7 @@ export const recomputeRelatednessCalibration = internalMutation({
 });
 
 /**
- * Public: tag-concept relations over the public template set.
+ * Compact rollback-compatibility alias for tag-concept relations.
  *
  * Raw tag strings barely overlap and read as register noise, so they carry no
  * relation on their own. The nightly snapshot rebuild pools and clusters the
@@ -1888,6 +1895,8 @@ export const recomputeRelatednessCalibration = internalMutation({
  * `edges` array is empty. A missing snapshot also returns that same honest empty
  * shape, with no live-scan fallback. Vectors are consumed only by the rebuild and
  * NEVER leave; only labels and `{a,b,concept,kind}` tuples cross the boundary.
+ * Its legacy argument shape remains unchanged only for the pre-cutover Pages
+ * rollback artifact. New consumers use the secret-gated combined query below.
  */
 export const conceptRelations = query({
   args: { excludeCwc: v.optional(v.boolean()) },
@@ -1917,8 +1926,9 @@ export const conceptRelations = query({
  * concept data can never come from different cache generations.
  */
 export const publicDiscoveryRelations = query({
-  args: { excludeCwc: v.optional(v.boolean()) },
+  args: { _secret: v.string(), excludeCwc: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
+    requireInternalSecret(args._secret);
     const key = relationSnapshotKey(args.excludeCwc);
     const snapshot = await ctx.db
       .query("templateRelationSnapshots")

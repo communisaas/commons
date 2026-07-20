@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockServerQuery, api } = vi.hoisted(() => ({
+const { mockServerQuery, api, internalSecret } = vi.hoisted(() => ({
 	mockServerQuery: vi.fn(),
+	internalSecret: 'public-discovery-server-test-secret',
 	api: {
 		templates: {
 			publicDiscoveryManifest: 'templates.publicDiscoveryManifest',
@@ -13,6 +14,9 @@ const { mockServerQuery, api } = vi.hoisted(() => ({
 
 vi.mock('convex-sveltekit', () => ({ serverQuery: mockServerQuery }));
 vi.mock('$lib/convex', () => ({ api }));
+vi.mock('$lib/server/internal/secret-auth', () => ({
+	getInternalSecret: () => internalSecret
+}));
 vi.mock('$lib/config/features', () => ({
 	FEATURES: { CONGRESSIONAL: false }
 }));
@@ -116,8 +120,11 @@ describe('home page load', () => {
 			const result = (await load(loadEvent(href))) as Awaited<ReturnType<typeof load>>;
 
 			expect(mockServerQuery).toHaveBeenCalledTimes(2);
-			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {
+				_secret: internalSecret
+			});
 			expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryList, {
+				_secret: internalSecret,
 				excludeCwc: true
 			});
 			expect(result).toMatchObject({
@@ -137,6 +144,7 @@ describe('home page load', () => {
 		const result = (await pending) as Awaited<ReturnType<typeof load>>;
 
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {
+			_secret: internalSecret,
 			excludeCwc: true
 		});
 		expect(result).toMatchObject({
@@ -222,7 +230,9 @@ describe('home page load', () => {
 		expect(first).toMatchObject({ templates: [], templatesLoadFailed: true });
 		expect(second).toMatchObject({ templates: [], templatesLoadFailed: true });
 		expect(mockServerQuery).toHaveBeenCalledTimes(1);
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {
+			_secret: internalSecret
+		});
 		expect(mockServerQuery).not.toHaveBeenCalledWith(
 			api.templates.publicDiscoveryList,
 			expect.anything()

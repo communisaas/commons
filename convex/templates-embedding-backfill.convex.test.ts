@@ -634,14 +634,14 @@ describe('bounded embedding backfill discovery', () => {
 			// remains behind the same 60-second coalescing window as creation.
 			vi.advanceTimersByTime(0);
 			await t.finishInProgressScheduledFunctions();
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			expect(await t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET })).toMatchObject({
 				list: { revision: 0 },
 				relations: { revision: 0 }
 			});
 
 			vi.advanceTimersByTime(60_000);
 			await t.finishInProgressScheduledFunctions();
-			expect(await t.query(api.templates.publicDiscoveryManifest, {})).toMatchObject({
+			expect(await t.query(api.templates.publicDiscoveryManifest, { _secret: SECRET })).toMatchObject({
 				list: { ready: true, revision: 1 },
 				relations: { ready: true, revision: 1 }
 			});

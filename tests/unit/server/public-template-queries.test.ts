@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockServerQuery, api } = vi.hoisted(() => ({
+const { mockServerQuery, api, internalSecret } = vi.hoisted(() => ({
 	mockServerQuery: vi.fn(),
+	internalSecret: 'public-discovery-server-test-secret',
 	api: {
 		templates: {
 			publicDiscoveryManifest: 'templates.publicDiscoveryManifest',
@@ -13,6 +14,9 @@ const { mockServerQuery, api } = vi.hoisted(() => ({
 
 vi.mock('convex-sveltekit', () => ({ serverQuery: mockServerQuery }));
 vi.mock('$lib/convex', () => ({ api }));
+vi.mock('$lib/server/internal/secret-auth', () => ({
+	getInternalSecret: () => internalSecret
+}));
 
 import {
 	PublicDiscoverySnapshotContractError,
@@ -144,7 +148,9 @@ describe('public template snapshot queries', () => {
 			publicCard('known-good')
 		]);
 		expect(mockServerQuery).toHaveBeenCalledTimes(2);
-		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {});
+		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryManifest, {
+			_secret: internalSecret
+		});
 		expect(warn).toHaveBeenCalledWith(
 			'[public-template-queries] manifest unavailable; serving templates:exclude-cwc=1 last-known-good:',
 			'manifest unavailable'
@@ -443,6 +449,7 @@ describe('public template snapshot queries', () => {
 			mockServerQuery.mock.calls.filter(([ref]) => ref === api.templates.publicDiscoveryRelations)
 		).toHaveLength(1);
 		expect(mockServerQuery).toHaveBeenCalledWith(api.templates.publicDiscoveryRelations, {
+			_secret: internalSecret,
 			excludeCwc: true
 		});
 	});

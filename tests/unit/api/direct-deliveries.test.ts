@@ -1,29 +1,17 @@
 /**
- * Unit Tests: Direct Delivery Recording
+ * Launch containment for direct delivery persistence.
  *
- * Tests the stance-agnostic delivery recording path:
- * - POST /api/deliveries/record — SvelteKit endpoint
- * - recordDirectDeliveries — Convex mutation (via mock)
- * - getUserDeliveries — Convex query (via mock)
- *
- * Delivery persistence is keyed on pseudonymousId (HMAC-SHA256 of user.id),
- * available at tier 1+. No stance registration required.
+ * The route remains mounted for old clients, but it must reject before reading
+ * recipient data or touching Convex until durable bounded admission is ready.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { describe, expect, it, vi } from 'vitest';
 
-// =============================================================================
-// MOCKS
-// =============================================================================
-
-const {
-	mockServerQuery,
-	mockServerMutation,
-	mockComputePseudonymousId
-} = vi.hoisted(() => ({
+const { mockServerQuery, mockServerMutation } = vi.hoisted(() => ({
 	mockServerQuery: vi.fn(),
-	mockServerMutation: vi.fn(),
-	mockComputePseudonymousId: vi.fn()
+	mockServerMutation: vi.fn()
 }));
 
 vi.mock('convex-sveltekit', () => ({
@@ -31,234 +19,71 @@ vi.mock('convex-sveltekit', () => ({
 	serverMutation: mockServerMutation
 }));
 
-vi.mock('$lib/convex', () => ({
-	api: {
-		users: {
-			getById: 'users.getById',
-			getShadowAtlasRegistration: 'users.getShadowAtlasRegistration'
-		},
-		positions: {
-			recordDirectDeliveries: 'positions.recordDirectDeliveries',
-			getUserDeliveries: 'positions.getUserDeliveries'
-		}
-	}
-}));
-
-vi.mock('$lib/core/privacy/pseudonymous-id', () => ({
-	computePseudonymousId: mockComputePseudonymousId
-}));
-
-// Import handler AFTER mocks
 import { POST as recordDelivery } from '../../../src/routes/api/deliveries/record/+server';
 
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-function buildJsonRequest(body: Record<string, unknown>, url = 'http://localhost/api/deliveries/record'): Request {
-	return new Request(url, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body)
-	});
-}
-
-function buildEventArgs(overrides: Record<string, unknown> = {}) {
+function buildEventArgs(
+	session: { userId?: string } | null,
+	request: unknown = { json: vi.fn() }
+) {
 	return {
-		request: buildJsonRequest(overrides.body as Record<string, unknown> ?? {}),
-		locals: overrides.locals ?? { session: { userId: 'user-1' } },
-		params: overrides.params ?? {},
-		url: overrides.url ?? new URL('http://localhost/api/deliveries/record'),
-		...overrides
+		request,
+		locals: { session },
+		params: {},
+		url: new URL('http://localhost/api/deliveries/record')
 	} as any;
 }
 
-const validRecipients = [
-	{ name: 'Sen. Jane Smith', email: 'jane@senate.gov', deliveryMethod: 'email' }
-];
-
-// =============================================================================
-// TESTS
-// =============================================================================
-
-describe('POST /api/deliveries/record', () => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		mockComputePseudonymousId.mockReturnValue('pseudo-abc123');
-		// Default: Shadow Atlas lookup returns null (tier 1 user, no district)
-		mockServerQuery.mockResolvedValue(null);
-		mockServerMutation.mockResolvedValue({ created: 1 });
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
-	// =========================================================================
-	// Auth gate
-	// =========================================================================
-
-	it('returns 401 without authentication', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			locals: { session: null },
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-		expect(response.status).toBe(401);
-		const data = await response.json();
-		expect(data.error).toBe('Authentication required');
-	});
-
-	it('returns 401 without session userId', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			locals: { session: {} },
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-		expect(response.status).toBe(401);
-	});
-
-	// =========================================================================
-	// Input validation
-	// =========================================================================
-
-	it('returns 400 for missing templateId', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			body: { recipients: validRecipients }
-		}));
-		expect(response.status).toBe(400);
-		const data = await response.json();
-		expect(data.error).toContain('templateId');
-	});
-
-	it('returns 400 for empty recipients array', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: [] }
-		}));
-		expect(response.status).toBe(400);
-	});
-
-	it('returns 400 for recipient without name', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: [{ deliveryMethod: 'email' }] }
-		}));
-		expect(response.status).toBe(400);
-		const data = await response.json();
-		expect(data.error).toContain('name');
-	});
-
-	it('returns 400 for invalid deliveryMethod', async () => {
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: [{ name: 'Rep', deliveryMethod: 'pigeon' }] }
-		}));
-		expect(response.status).toBe(400);
-		const data = await response.json();
-		expect(data.error).toContain('deliveryMethod');
-	});
-
-	// =========================================================================
-	// Salt failure
-	// =========================================================================
-
-	it('returns generic 500 on missing salt (no env var name leak)', async () => {
-		mockComputePseudonymousId.mockImplementation(() => {
-			throw new Error('SUBMISSION_ANONYMIZATION_SALT must be configured');
+describe('POST /api/deliveries/record — launch containment', () => {
+	it('preserves the authentication boundary before inspecting the request', async () => {
+		const parseBody = vi.fn(() => {
+			throw new Error('request body must not be read');
 		});
 
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-		expect(response.status).toBe(500);
-		const data = await response.json();
-		expect(data.error).toBe('Service configuration error');
-		// Must NOT leak the env var name
-		expect(data.error).not.toContain('SUBMISSION_ANONYMIZATION_SALT');
+		const response = await recordDelivery(buildEventArgs(null, { json: parseBody }));
+
+		expect(response.status).toBe(401);
+		expect(response.headers.get('cache-control')).toBe('private, no-store');
+		expect(await response.json()).toEqual({ error: 'Authentication required' });
+		expect(parseBody).not.toHaveBeenCalled();
 	});
 
-	// =========================================================================
-	// Successful delivery recording
-	// =========================================================================
-
-	it('records delivery and returns created count', async () => {
-		mockServerMutation.mockResolvedValueOnce({ created: 2 });
-
-		const response = await recordDelivery(buildEventArgs({
-			body: {
-				templateId: 'tmpl-1',
-				recipients: [
-					{ name: 'Sen. Smith', email: 's@gov', deliveryMethod: 'email' },
-					{ name: 'Rep. Jones', email: 'j@gov', deliveryMethod: 'email' }
-				]
-			}
+	it('returns a clear non-cacheable 503 to authenticated callers without parsing PII', async () => {
+		const parseBody = vi.fn(() => ({
+			templateId: 'template-secret',
+			recipients: [{ name: 'Private Recipient', email: 'private@example.test' }]
 		}));
 
-		expect(response.status).toBe(200);
-		const data = await response.json();
-		expect(data.created).toBe(2);
-
-		// Verify pseudonymousId was passed to mutation
-		expect(mockServerMutation).toHaveBeenCalledWith(
-			'positions.recordDirectDeliveries',
-			expect.objectContaining({
-				pseudonymousId: 'pseudo-abc123',
-				templateId: 'tmpl-1',
-				recipients: expect.arrayContaining([
-					expect.objectContaining({ name: 'Sen. Smith', deliveryMethod: 'email' })
-				])
-			})
+		const response = await recordDelivery(
+			buildEventArgs({ userId: 'user-1' }, { json: parseBody })
 		);
+		const payload = await response.json();
+
+		expect(response.status).toBe(503);
+		expect(response.headers.get('cache-control')).toBe('private, no-store');
+		expect(payload).toEqual({ error: 'Delivery recording is temporarily unavailable' });
+		expect(JSON.stringify(payload)).not.toContain('Private Recipient');
+		expect(JSON.stringify(payload)).not.toContain('private@example.test');
+		expect(parseBody).not.toHaveBeenCalled();
 	});
 
-	it('computes pseudonymousId from session userId', async () => {
-		await recordDelivery(buildEventArgs({
-			locals: { session: { userId: 'user-42' } },
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
+	it('does not issue Convex reads or mutations', async () => {
+		await recordDelivery(buildEventArgs({ userId: 'user-1' }));
 
-		expect(mockComputePseudonymousId).toHaveBeenCalledWith('user-42');
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
-	// =========================================================================
-	// Shadow Atlas district backfill
-	// =========================================================================
+	it('fails closed at the authoritative Convex boundary before database access', () => {
+		const source = readFileSync(resolve(process.cwd(), 'convex/positions.ts'), 'utf8');
+		const start = source.indexOf('export const recordDirectDeliveries = mutation({');
+		const end = source.indexOf('\nexport const ', start + 1);
+		const boundary = source.slice(start, end === -1 ? source.length : end);
 
-	it('backfills districtCode from Shadow Atlas when available', async () => {
-		mockServerQuery
-			.mockResolvedValueOnce({ congressionalDistrict: 'CA-12' }); // getShadowAtlasRegistration
-
-		await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-
-		expect(mockServerMutation).toHaveBeenCalledWith(
-			'positions.recordDirectDeliveries',
-			expect.objectContaining({ districtCode: 'CA-12' })
+		expect(start).toBeGreaterThanOrEqual(0);
+		expect(boundary.indexOf('requireInternalSecret(_secret)')).toBeGreaterThanOrEqual(0);
+		expect(boundary.indexOf('throw new Error("DIRECT_DELIVERY_RECORDING_DISABLED")')).toBeGreaterThan(
+			boundary.indexOf('requireInternalSecret(_secret)')
 		);
-	});
-
-	it('records delivery without district when Shadow Atlas fails', async () => {
-		mockServerQuery.mockRejectedValueOnce(new Error('Atlas down'));
-
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-
-		expect(response.status).toBe(200);
-		expect(mockServerMutation).toHaveBeenCalledWith(
-			'positions.recordDirectDeliveries',
-			expect.objectContaining({ districtCode: undefined })
-		);
-	});
-
-	it('records delivery without district when user has no registration', async () => {
-		mockServerQuery.mockResolvedValueOnce(null);
-
-		const response = await recordDelivery(buildEventArgs({
-			body: { templateId: 'tmpl-1', recipients: validRecipients }
-		}));
-
-		expect(response.status).toBe(200);
-		expect(mockServerMutation).toHaveBeenCalledWith(
-			'positions.recordDirectDeliveries',
-			expect.objectContaining({ districtCode: undefined })
-		);
+		expect(boundary).not.toContain('ctx.db');
 	});
 });
