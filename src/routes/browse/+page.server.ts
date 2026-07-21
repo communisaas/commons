@@ -1,12 +1,21 @@
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { getCachedPublicTemplates } from '$lib/server/public-template-queries';
 
-export const load: PageServerLoad = async () => {
-	const templates = await serverQuery(api.templates.listPublic, {
+export const load: PageServerLoad = async ({ url, platform }) => {
+	const templates = await getCachedPublicTemplates(
+		{ url, platform },
 		// Keep CWC templates out of public discovery until congressional launch.
-		excludeCwc: !FEATURES.CONGRESSIONAL
+		!FEATURES.CONGRESSIONAL
+	).catch((error) => {
+		// Match the landing page's outage posture: browsing can render an honest
+		// empty state while /api/health remains the authoritative availability
+		// signal. Once a last-known-good generation exists, the cache serves it.
+		console.error(
+			'[Browse] templates.publicDiscoveryList failed:',
+			error instanceof Error ? error.message : String(error)
+		);
+		return [];
 	});
 
 	return { templates };

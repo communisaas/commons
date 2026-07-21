@@ -27,13 +27,134 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy:
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+  source-verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    permissions:
+      contents: read
     env:
       DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
-      DEPLOY_REF: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.branch) || github.event.workflow_run.head_sha }}
+      DEPLOY_EVENT: ${{ github.event_name }}
+    outputs:
+      verified_sha: ${{ steps.resolve-sha.outputs.sha }}
+    steps:
+      # This job has no secrets and executes no code from the requested tree.
+      # It establishes repository identity and branch ancestry before npm ci can
+      # run lifecycle scripts in either downstream job.
+      - name: Checkout requested ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || inputs.branch) || github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve and validate requested SHA
+        id: resolve-sha
+        run: |
+          verified_sha=$(git rev-parse HEAD)
+          git fetch --no-tags origin "${DEPLOY_BRANCH}"
+          if ! git merge-base --is-ancestor "${verified_sha}" "origin/${DEPLOY_BRANCH}"; then
+            echo "::error::Requested ref ${verified_sha} is not contained in origin/${DEPLOY_BRANCH}."
+            exit 1
+          fi
+          # A slower CI run for push A must not deploy after newer push B. Manual
+          # dispatch intentionally retains ancestor semantics for audited rollback.
+          if [ "${DEPLOY_EVENT}" = "workflow_run" ]; then
+            branch_head=$(git rev-parse "origin/${DEPLOY_BRANCH}")
+            if [ "${verified_sha}" != "${branch_head}" ]; then
+              echo "::error::Skipping stale CI result ${verified_sha}; current ${DEPLOY_BRANCH} head is ${branch_head}."
+              exit 1
+            fi
+          fi
+          echo "sha=${verified_sha}" >> "$GITHUB_OUTPUT"
+
+  manual-verify:
+    needs: source-verify
+    if: github.event_name == 'workflow_dispatch' && needs.source-verify.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      NODE_ENV: test
+      CI: true
+      PUBLIC_CONVEX_URL: https://placeholder.convex.cloud
+      OAUTH_REDIRECT_BASE_URL: http://localhost:5173
+      GOOGLE_CLIENT_ID: test-google-client-id
+      GOOGLE_CLIENT_SECRET: test-google-client-secret
+      FACEBOOK_CLIENT_ID: test-facebook-client-id
+      FACEBOOK_CLIENT_SECRET: test-facebook-client-secret
+      DISCORD_CLIENT_ID: test-discord-client-id
+      DISCORD_CLIENT_SECRET: test-discord-client-secret
+      LINKEDIN_CLIENT_ID: test-linkedin-client-id
+      LINKEDIN_CLIENT_SECRET: test-linkedin-client-secret
+      TWITTER_CLIENT_ID: test-twitter-client-id
+      TWITTER_CLIENT_SECRET: test-twitter-client-secret
+      INTERNAL_API_SECRET: ci-test-internal-api-secret-padding-32b
+      INTERNAL_API_SECRET_PREVIOUS: ci-test-internal-api-secret-previous-32b
+      UNSUBSCRIBE_SECRET: ci-test-unsubscribe-secret-padding-32-bytes
+      ADDRESS_RESOLUTION_TOKEN_SECRET: ci-test-address-resolution-token-32b-pad
+      SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
+      BLAST_DISPATCH_SECRET: ci-test-blast-dispatch-secret-32b-padding-x
+      BLAST_RECEIPTS_SECRET: ci-test-blast-receipts-secret-32b-padding-x
+    steps:
+      - name: Checkout source-verified SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source-verify.outputs.verified_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: '.node-version'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Enforce Convex query-efficiency guardrail
+        run: npm run check:convex-queries
+
+      - name: Run public-discovery focused verification
+        run: node scripts/run-public-discovery-focused-tests.mjs
+
+      - name: Run full test suite
+        run: npm run test:run
+        timeout-minutes: 10
+
+      - name: Run application type checks
+        run: npm run check
+
+      - name: Run Convex type checks
+        run: npx tsc --noEmit -p convex/tsconfig.json
+
+  deploy:
+    # workflow_run already passed the equivalent CI suite; workflow_dispatch
+    # uses manual-verify. source-verify gates repository identity and ancestry
+    # for both paths before this secret-bearing job executes requested code.
+    needs: [source-verify, manual-verify]
+    if: >-
+      always() &&
+      needs.source-verify.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && needs.manual-verify.result == 'success') ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      # Production is isolated; main and staging intentionally share the same
+      # non-production Convex deployment and fixed GitHub Environment.
+      name: ${{ (github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch) == 'production' && 'Production' || 'Staging' }}
+    env:
+      DEPLOY_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.branch || github.event.workflow_run.head_branch }}
+      DEPLOY_REF: ${{ needs.source-verify.outputs.verified_sha }}
     permissions:
       contents: read
       deployments: write
@@ -51,6 +172,53 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Verify public-discovery KV namespace
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          PUBLIC_DISCOVERY_KV_ID: '4517015752384e0f8628b85142c69221'
+        run: |
+          if ! configured_id=$(python3 <<'PYTHON'
+          import sys
+          import tomllib
+
+          with open("wrangler.toml", "rb") as config_file:
+              config = tomllib.load(config_file)
+
+          namespaces = config.get("kv_namespaces", [])
+          if not isinstance(namespaces, list):
+              sys.exit("wrangler.toml kv_namespaces must be an array")
+
+          matches = [
+              namespace
+              for namespace in namespaces
+              if isinstance(namespace, dict)
+              and namespace.get("binding") == "PUBLIC_DISCOVERY_KV"
+          ]
+          if len(matches) != 1 or not isinstance(matches[0].get("id"), str) or not matches[0]["id"]:
+              sys.exit(
+                  "wrangler.toml must contain exactly one PUBLIC_DISCOVERY_KV "
+                  f"binding with a non-empty id; found {len(matches)}"
+              )
+
+          print(matches[0]["id"], end="")
+          PYTHON
+          ); then
+            echo "::error::Unable to resolve the committed PUBLIC_DISCOVERY_KV binding from wrangler.toml."
+            exit 1
+          fi
+          if [ "$configured_id" != "$PUBLIC_DISCOVERY_KV_ID" ]; then
+            echo "::error::wrangler.toml binds PUBLIC_DISCOVERY_KV to ${configured_id}, expected approved namespace ${PUBLIC_DISCOVERY_KV_ID}."
+            exit 1
+          fi
+
+          namespaces=$(npx wrangler kv namespace list)
+          if ! printf '%s' "$namespaces" | jq -e --arg id "$configured_id" \
+            'map(select(.id == $id and .title == "PUBLIC_DISCOVERY_KV")) | length == 1' >/dev/null; then
+            echo "::error::The committed PUBLIC_DISCOVERY_KV binding is not a live namespace in this Cloudflare account."
+            exit 1
+          fi
 
       - name: Load Shadow Atlas build vars
         env:
@@ -75,6 +243,12 @@ jobs:
           if [ -z "$vite_atlas_url" ]; then
             vite_atlas_url="$atlas_url"
           fi
+          if ! printf '%s' "$response" | jq -e \
+            '.result.source.config.production_deployments_enabled == false and
+             .result.source.config.preview_deployment_setting == "none"' >/dev/null; then
+            echo "::error::Native Cloudflare Pages production and preview deployments must remain disabled; use this gated Wrangler workflow."
+            exit 1
+          fi
           if [ "$DEPLOY_BRANCH" = "production" ]; then
             if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
               echo "::error::Production ATLAS_BASE_URL must be versioned, got: $atlas_url"
@@ -94,10 +268,12 @@ jobs:
             echo "::warning::Cell map root/depth are not pinned for ${DEPLOY_BRANCH}; non-production health may warn."
           fi
 
-          echo "ATLAS_BASE_URL=$atlas_url" >> "$GITHUB_ENV"
-          echo "VITE_ATLAS_BASE_URL=$vite_atlas_url" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth" >> "$GITHUB_ENV"
+          {
+            echo "ATLAS_BASE_URL=$atlas_url"
+            echo "VITE_ATLAS_BASE_URL=$vite_atlas_url"
+            echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root"
+            echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth"
+          } >> "$GITHUB_ENV"
           echo "Using ATLAS_BASE_URL=$atlas_url"
           echo "Using VITE_ATLAS_BASE_URL=$vite_atlas_url"
 
@@ -107,18 +283,46 @@ jobs:
           # staging and preview (main/*) share the non-prod deployment.
           case "${DEPLOY_BRANCH}" in
             production)
-              echo "VITE_ENVIRONMENT=production" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://quirky-chinchilla-352.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=production"
+                echo "PUBLIC_CONVEX_URL=https://quirky-chinchilla-352.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
             staging)
-              echo "VITE_ENVIRONMENT=staging" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=staging"
+                echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
             *)
-              echo "VITE_ENVIRONMENT=development" >> "$GITHUB_ENV"
-              echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud" >> "$GITHUB_ENV"
+              {
+                echo "VITE_ENVIRONMENT=development"
+                echo "PUBLIC_CONVEX_URL=https://outstanding-firefly-831.convex.cloud"
+              } >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Require deployed public-discovery v4 producer
+        # This Pages workflow does not mutate Convex. A successful gate proves
+        # the target backend already has the new functions/schema and a v4
+        # rematerialization before any branch can upload an edge consumer.
+        env:
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+        run: |
+          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
+            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub Environment secret."
+            exit 1
+          fi
+          if [ "${DEPLOY_BRANCH}" = "production" ]; then
+            PUBLIC_DISCOVERY_MAX_AGE_HOURS=26 \
+              PUBLIC_DISCOVERY_REQUIRE_CONTENT=true \
+              PUBLIC_DISCOVERY_CONTRACT_ONLY=false \
+              npm run verify:public-discovery-readiness
+          else
+            PUBLIC_DISCOVERY_REQUIRE_CONTENT=false \
+              PUBLIC_DISCOVERY_CONTRACT_ONLY=true \
+              npm run verify:public-discovery-readiness
+          fi
 
       - name: Sync Shadow Atlas vars into Wrangler config
         run: |
@@ -260,10 +464,11 @@ jobs:
                 echo "$body"
 
                 if [ "$strict_atlas" = "true" ]; then
-                  if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
+                  if [ "$http_status" = "200" ] && echo "$body" | jq -e \
+                    '.status == "ok" and .publicDiscoveryCache.kvBound == true' >/dev/null; then
                     exit 0
                   fi
-                elif echo "$body" | jq -e '.convex == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
+                elif echo "$body" | jq -e '.convex == true and .publicDiscoveryCache.kvBound == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
                   if ! echo "$body" | jq -e '.atlas.rootPinned == true and .atlas.depthPinned == true' >/dev/null; then
                     echo "::warning::Non-production deploy health has atlas content reachable but root/depth are not pinned yet."
                   fi
@@ -332,6 +537,68 @@ jobs:
 
             sleep 10
           done
+
+      - name: Verify public discovery cache contract
+        if: env.DEPLOY_BRANCH == 'production'
+        run: |
+          first_headers=$(mktemp)
+          second_headers=$(mktemp)
+          response_body=$(mktemp)
+
+          first_status=$(curl -sS --max-time 20 \
+            -D "$first_headers" \
+            -o "$response_body" \
+            -w "%{http_code}" \
+            "$DEPLOY_PUBLIC_URL/api/templates") || {
+              echo "::warning::Could not probe the production public-discovery cache contract from the GitHub runner."
+              exit 0
+            }
+
+          if [ "$first_status" = "403" ] && grep -Eiq 'Just a moment|cf_chl|challenge-platform' "$response_body"; then
+            echo "::warning::Cloudflare challenged the public-discovery cache probe; complete the two-request cache-policy smoke externally."
+            exit 0
+          fi
+          if [ "$first_status" != "200" ] || ! jq -e '.success == true' "$response_body" >/dev/null 2>&1; then
+            echo "::error::Public discovery returned HTTP ${first_status} or a non-success payload."
+            head -c 4000 "$response_body"
+            exit 1
+          fi
+
+          cache_control=$(awk 'tolower($0) ~ /^cache-control:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$first_headers")
+          normalized_cache_control=$(printf '%s' "$cache_control" \
+            | awk -F, '{ for (i = 1; i <= NF; i++) { value = tolower($i); gsub(/^[[:space:]]+|[[:space:]]+$/, "", value); print value } }' \
+            | sort \
+            | paste -sd, -)
+          if [ "$normalized_cache_control" != "max-age=60,must-revalidate,public" ]; then
+            echo "::error::Unexpected browser Cache-Control on /api/templates: ${cache_control:-missing}"
+            exit 1
+          fi
+
+          sleep 1
+          second_status=$(curl -sS --max-time 20 \
+            -D "$second_headers" \
+            -o "$response_body" \
+            -w "%{http_code}" \
+            "$DEPLOY_PUBLIC_URL/api/templates") || {
+              echo "::warning::Second public-discovery cache probe failed; complete it externally."
+              exit 0
+            }
+          if [ "$second_status" != "200" ]; then
+            echo "::error::Second public-discovery cache probe returned HTTP ${second_status}."
+            exit 1
+          fi
+
+          cf_cache_status=$(awk 'tolower($0) ~ /^cf-cache-status:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=toupper($0) } END { print value }' "$second_headers")
+          age=$(awk 'tolower($0) ~ /^age:/ { sub(/^[^:]+:[[:space:]]*/, ""); gsub(/\r/, ""); value=$0 } END { print value }' "$second_headers")
+          if [ "$cf_cache_status" = "HIT" ]; then
+            if ! [[ "$age" =~ ^[0-9]+$ ]]; then
+              echo "::error::Front-of-Worker cache reported HIT without a valid non-negative Age header."
+              exit 1
+            fi
+            echo "Verified optional front-of-Worker cache: CF-Cache-Status=HIT Age=${age}."
+          else
+            echo "::notice::No verified front-of-Worker HIT (CF-Cache-Status=${cf_cache_status:-absent}); explicit Cache API + KV remains the deployed cost boundary."
+          fi
 
       - name: Probe production browser-mediated mDL route
         if: env.DEPLOY_BRANCH == 'production'

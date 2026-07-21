@@ -31,6 +31,7 @@ export interface EmailFlowTemplate {
 	subject?: string | null;
 	recipient_config?: unknown;
 	recipientEmails?: string[];
+	recipient_count?: number;
 }
 
 /** Lightweight debate summary for card-level rendering (browse page) */
@@ -60,12 +61,15 @@ export interface Template {
 	delivery_config: unknown; // Json field in database
 	cwc_config?: unknown | null; // Json? field in database - was missing
 	recipient_config: unknown; // Json field in database
+	recipient_count?: number; // Anonymous-safe target cardinality; no addresses or raw config
 
 	// === ORG ENDORSEMENT (Perceptual Bridge) ===
 	// When present, the template has organizational backing — institutional provenance
 	endorsingOrg?: { name: string; slug: string; avatar: string | null } | null;
 	// Coalition endorsements — multiple orgs can endorse the same template
 	endorsingOrgs?: Array<{ name: string; slug: string; avatar: string | null }>;
+	// Authoritative total; endorsingOrgs is only a bounded newest-first sample.
+	endorsementCount?: number;
 
 	// === PERCEPTUAL ENCODING PROPERTIES ===
 	// Visual weight encoding (0-1 scale for card size transformation)
@@ -115,7 +119,9 @@ export interface Template {
 	// Entity name (for corporate/institutional targets)
 	target_entity?: string | null;
 	preview: string;
-	recipientEmails?: string[]; // Computed field - use extractRecipientEmails(recipient_config) instead
+	// Anonymous discovery projections return an empty compatibility array;
+	// explicit, uncached detail/send projections may populate it.
+	recipientEmails?: string[];
 
 	// === MERGED VERIFICATION FIELDS (Phase 4 consolidation) ===
 	// Verification status & process
@@ -408,35 +414,35 @@ export interface PowerLevelTarget {
  */
 export type TargetPresentation =
 	| {
-		/** Single power level */
-		type: 'district-based' | 'location-specific' | 'universal';
-		/** Primary text: "Your 3 representatives" or "Mayor Breed, SFMTA Board" */
-		primary: string;
-		/** Secondary text: "+2 more" (if truncated) */
-		secondary?: string | null;
-		/** Icon name for peripheral category hint */
-		icon: 'Capitol' | 'Building' | 'Users' | 'Mail';
-		/** Visual emphasis for color coding */
-		emphasis: 'federal' | 'state' | 'local' | 'neutral';
-		/** Coordination context: "CA-11" or "San Francisco" */
-		coordinationContext?: string;
-	}
+			/** Single power level */
+			type: 'district-based' | 'location-specific' | 'universal';
+			/** Primary text: "Your 3 representatives" or "Mayor Breed, SFMTA Board" */
+			primary: string;
+			/** Secondary text: "+2 more" (if truncated) */
+			secondary?: string | null;
+			/** Icon name for peripheral category hint */
+			icon: 'Capitol' | 'Building' | 'Users' | 'Mail';
+			/** Visual emphasis for color coding */
+			emphasis: 'federal' | 'state' | 'local' | 'neutral';
+			/** Coordination context: "CA-11" or "San Francisco" */
+			coordinationContext?: string;
+	  }
 	| {
-		/** Multi-stakeholder coordination across power levels */
-		type: 'multi-level';
-		/** Array of power levels (federal, state, local, etc.) */
-		targets: PowerLevelTarget[];
-		/** Coordination context: "CA-11" or "San Francisco" */
-		coordinationContext?: string;
-		/** Primary text for first target (for compatibility) */
-		primary?: string;
-		/** Secondary text (for compatibility) */
-		secondary?: string | null;
-		/** Icon for first target (for compatibility) */
-		icon?: 'Capitol' | 'Building' | 'Users' | 'Mail';
-		/** Emphasis for first target (for compatibility) */
-		emphasis?: 'federal' | 'state' | 'local' | 'neutral';
-	};
+			/** Multi-stakeholder coordination across power levels */
+			type: 'multi-level';
+			/** Array of power levels (federal, state, local, etc.) */
+			targets: PowerLevelTarget[];
+			/** Coordination context: "CA-11" or "San Francisco" */
+			coordinationContext?: string;
+			/** Primary text for first target (for compatibility) */
+			primary?: string;
+			/** Secondary text (for compatibility) */
+			secondary?: string | null;
+			/** Icon for first target (for compatibility) */
+			icon?: 'Capitol' | 'Building' | 'Users' | 'Mail';
+			/** Emphasis for first target (for compatibility) */
+			emphasis?: 'federal' | 'state' | 'local' | 'neutral';
+	  };
 
 // ============================================================================
 // Progressive Template Sections (2025-01-12)

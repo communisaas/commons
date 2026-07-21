@@ -10,11 +10,12 @@
 
 ```bash
 # Backend (Convex)
-npx convex deploy --env-file .env.production
+npx convex deploy --env-file .env.production --dry-run --typecheck enable
+npx convex deploy --env-file .env.production --typecheck enable
 
 # Frontend (SvelteKit on Cloudflare Pages)
 git push origin main:staging       # staging deploy after CI passes
-git push origin main:production    # production deploy after CI passes
+git push origin main:production    # production deploy after CI + live producer gate
 ```
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
@@ -26,7 +27,10 @@ Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env
 - **Runtime**: Cloudflare Workers (Pages Functions)
 - **Adapter**: `@sveltejs/adapter-cloudflare`
 - **Backend**: Convex (cloud-managed, code-driven schema)
-- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV, REGISTRATION_RETRY_KV
+- **KV namespaces**: DC_SESSION_KV, REJECTION_MONITOR_KV, VICAL_KV,
+  REGISTRATION_RETRY_KV, and PUBLIC_DISCOVERY_KV. The first four hold ephemeral
+  workflow/session state; PUBLIC_DISCOVERY_KV is the eight-day recovery cache
+  for retained last-known-good anonymous discovery generations.
 - **Config**: `wrangler.toml` at repo root
 
 ```
@@ -87,9 +91,26 @@ npx wrangler kv namespace create DC_SESSION_KV
 npx wrangler kv namespace create REJECTION_MONITOR_KV
 npx wrangler kv namespace create VICAL_KV
 npx wrangler kv namespace create REGISTRATION_RETRY_KV
+npx wrangler kv namespace create PUBLIC_DISCOVERY_KV
 ```
 
 Update `wrangler.toml` with the returned namespace IDs.
+
+Before deploying, list the account namespaces and confirm every committed ID,
+especially `PUBLIC_DISCOVERY_KV`, matches the ID returned by Cloudflare:
+
+```bash
+npx wrangler kv namespace list
+```
+
+Do not commit a placeholder or unverified namespace ID. This repository has no
+branch-specific Wrangler environments, so the configured bindings are shared by
+the Pages project across branch deployments; `PUBLIC_DISCOVERY_KV` isolates
+payload keys by origin and Convex backend, but Workers KV operation and storage
+quotas are account-wide across namespaces. Creating a second namespace in the
+same account improves operational separation; it does not add Free-plan
+capacity. An independent capacity boundary requires an account/plan decision
+outside this repository.
 
 ---
 
@@ -112,32 +133,172 @@ Convex is declarative and code-driven: there are no migration files. Schema diff
 ### Standard Deploy
 
 ```bash
-# 1. Deploy Convex backend
-npx convex deploy --env-file .env.production
+# 1. Pin the release and deploy the backend producer from this clean SHA.
+RELEASE_SHA=$(git rev-parse HEAD)
+npx convex deploy --env-file .env.production --dry-run --typecheck enable
+npx convex deploy --env-file .env.production --typecheck enable
 
-# 2. Push the frontend branch. GitHub Actions runs CI, then deploys if CI passes.
-git push origin main:production
+# 2. Materialize public discovery before the frontend consumer receives traffic.
+npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
+# Run with PUBLIC_CONVEX_URL and INTERNAL_API_SECRET loaded into the process
+# environment. Never place the discovery secret in CLI JSON or shell history.
+npm run verify:public-discovery-readiness
+
+# 3. Push the exact frontend SHA only after the hardened workflow is on main.
+git push origin "$RELEASE_SHA":refs/heads/production
 ```
 
-Direct `wrangler pages deploy` is an emergency/manual operation, not the standard path.
-The normal deploy path is the GitHub Actions workflow so CI, immutable Pages health, and
-deployment health gates are recorded together.
+On the first cutover, keep the snapshot-only legacy query aliases for at least
+48 hours and through two successful daily producer cycles. After both
+conditions pass, make this frontend SHA the rollback floor and retire the
+aliases before database access in a follow-up backend deploy.
 
-### Preview Deploy (non-production branch)
+For the first cutover that introduces `topicEmbeddingsUpdatedAt` only, run the
+bounded legacy marker migration after the Convex deploy and before any paid
+embedding repair. Do not put this one-time scan in routine deploys. It is
+idempotent after completion and self-pages in 100-row transactions; the first
+command returning does not prove later scheduled pages have finished. Poll the
+durable singleton status until it reports `"status":"complete"`:
 
 ```bash
-npx wrangler pages deploy .svelte-kit/cloudflare \
-  --project-name communique-site --branch feature-name
+npx convex run templates:migrateTopicEmbeddingMarkers '{}' --env-file .env.production
+npx convex run templates:topicEmbeddingMarkerMigrationStatus '{}' --env-file .env.production
 ```
+
+Use `{"restart":true}` only to recover a deliberately diagnosed stalled
+cutover. Never begin Gemini repair while the status is `running` or
+`not-started`.
+
+The authenticated `/api/admin/backfill-embeddings` repair handles one 20-row
+Gemini batch per request. It claims a 15-minute lease in Convex before any
+provider call; another Pages isolate receives 429, and an evicted worker cannot
+block repair beyond lease expiry. Repeat the request to drain a larger backlog.
+Every successful row update transactionally schedules the bounded relation
+refresh, so eviction before the route's immediate composite rebuild cannot
+strand a stale generation. Lease release is token-checked so a late old worker
+cannot clear a reclaimed lease.
+
+Every Pages branch enforces the producer gate mechanically with
+`scripts/verify-public-discovery-readiness.mjs` before upload. This is a proof
+gate, not a backend deployment step: deploy the Convex schema/functions and run
+`templates:rebuildHomepageSnapshots` from the same release SHA first. Both list
+payloads must then report `projectionVersion:4`, exact recipient redaction, and
+the manifest-matched revision. After reading every payload, the verifier reads
+the `_secret`-gated `observability:discoveryProducerStatus` query and requires
+the discovery producer to be healthy, storage-readable, manifest-present, and
+not past its reported overdue time. The anonymous `observability:servicePing`
+response contains only generic liveness and storage-readability booleans.
+Production also requires the known corpus to be non-empty and both
+materialization timestamps to be no more than 26 hours old; non-production uses
+contract-only mode, which permits stale or empty fixture data but does not waive
+producer health or permit cold, revision-skewed, legacy, or recipient-bearing
+payloads. The 26-hour production bound allows two hours of scheduling tolerance
+beyond the daily `essential` cron cadence.
+`PUBLIC_DISCOVERY_MAX_AGE_HOURS` is the verifier's deliberate override; the
+production workflow pins it to `26`.
+
+Direct `wrangler pages deploy` is prohibited for this shared Pages project,
+including emergency and preview uploads. Use the `deploy.yml` workflow-dispatch
+path for a manual release; it applies the same exact-SHA, CI, producer-health,
+snapshot-contract, namespace, build, and immutable-deployment health gates as
+an automatic release. Cloudflare's native Git production and preview
+deployments must remain disabled; the gated GitHub Actions job is the sole
+uploader for every branch.
+No GitHub Environment reviewer gate is currently configured, so treat backend
+readiness as mandatory: do not push or dispatch the frontend release until the
+backend manifest and persisted snapshots are ready.
+
+The workflow maps deployment branches to fixed GitHub Environments instead of
+deriving environment names from branch text: `production` uses `Production`,
+while `main` and `staging` use `Staging` because they share the non-production
+Convex deployment. A read-only environment audit on 2026-07-17 found only those
+two environments and both had empty `protection_rules` with administrator
+bypass enabled. Adding required reviewers, branch policies, or disabling admin
+bypass is an external repository-administration action; this workflow does not
+claim those protections already exist.
+
+Verify that native Git uploads are disabled for both production and preview
+branches:
+
+```bash
+curl -fsS \
+  -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+  "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/communique-site" \
+  | jq -e '.success == true and
+      .result.source.config.production_deployments_enabled == false and
+      .result.source.config.preview_deployment_setting == "none"'
+```
+
+Every deploy job repeats both source-setting assertions against this same
+project response and stops before upload if either setting drifts.
+
+Bootstrap caveat: GitHub evaluates `workflow_run` using the workflow file on the
+default branch. For the first release of this gate, merge the hardened workflow
+to `main` before pushing or dispatching `production`, then verify that the run
+checked out the intended workflow and SHA. Never rely on the old default-branch
+deploy definition for this cutover.
+
+Automatic deploys accept only the current remote head of their selected branch.
+If a slower CI run for an older push finishes after a newer push, its source
+verification fails instead of rolling the environment backward. Manual dispatch
+retains the explicit ancestor rule so an operator can intentionally redeploy a
+prior contained SHA.
+
+For a manual redeploy, the requested ref must already be contained in the selected branch:
+
+```bash
+gh workflow run deploy.yml --ref production \
+  -f branch=production \
+  -f ref="$RELEASE_SHA"
+```
+
+The manual path resolves an exact SHA and cannot bypass the static Convex query-efficiency
+guardrail, focused public-discovery checks, full test suite, application checks, Convex
+type checks, or the live producer-readiness gate.
+The backend remains an explicit operator step because the Pages workflow has no established
+Convex deploy credential. See
+`docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md` and the scoped
+`docs/strategy/public-discovery-release-hypergraph/` for the go/no-go evidence.
+
+There is deliberately no dispatch-time readiness bypass. If stale discovery state blocks
+an unrelated emergency security or availability hotfix, repair the producer first. Any
+exceptional temporary relaxation must be an explicit reviewed change to
+`.github/workflows/deploy.yml`, then be reverted after the incident; a single dispatcher
+cannot defeat the gate with a workflow input.
+
+### Staging/manual preview deploy
+
+```bash
+set -euo pipefail
+git fetch --no-tags origin staging
+RELEASE_SHA=$(git rev-parse HEAD)
+if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/staging; then
+  echo "Refusing deploy: $RELEASE_SHA is not contained in origin/staging." >&2
+  exit 1
+fi
+gh workflow run deploy.yml --ref main \
+  -f branch=staging \
+  -f ref="$RELEASE_SHA"
+```
+
+Only `main` and `staging` are supported non-production workflow targets. The
+requested SHA must already be contained in the selected branch. Do not use
+the Wrangler CLI as a shortcut: contract-only previews relax only content and
+age requirements; they still require a deployed, healthy producer and coherent
+v4 materializations before upload.
 
 ### Staging Smoke
 
 `staging.commons.email` is the Cloudflare Pages branch deployment for `staging` in the
-`communique-site` project. Today it is not a fully isolated environment: the repo-visible
-configuration points branch builds at the same Convex URL and KV bindings as production.
-Until separate staging Convex and KV resources are provisioned, treat real-device credential
-smoke on staging as controlled production-backed smoke with test accounts and no live
-congressional delivery paths.
+`communique-site` project. It is only partially isolated: the deploy workflow points staging
+and preview builds at the non-production Convex deployment
+`outstanding-firefly-831`, while production uses `quirky-chinchilla-352`. The repo-visible
+Wrangler configuration still shares KV namespace bindings (and the same Pages project) across
+branches. Until branch-specific staging KV resources and runtime secrets are provisioned,
+treat real-device credential smoke on staging as controlled smoke with test accounts and no
+live congressional delivery paths; do not describe it as production-Convex backed. A distinct
+namespace in the same Cloudflare account would isolate operational state, but preview and
+production traffic would still contend for the same account-wide KV allowance.
 
 The deploy workflow hard-checks the immutable Pages deployment URL for every branch after
 `wrangler pages deploy`. Custom domains are validated during release smoke because
@@ -205,7 +366,17 @@ Real-device browser-mediated credential smoke should cover:
 
 ### Rollback
 
-Use the Cloudflare Pages dashboard to roll back to a previous deployment. Each deploy is immutable and instantly revertible. For Convex, `npx convex deploy` supports rollback to previous deployment versions via the dashboard.
+Use the Cloudflare Pages dashboard to roll back to a previous immutable deployment first.
+For public discovery, leave the snapshot-safe Convex producer in place: the prior frontend
+query shapes remain compatible with it. If snapshot content is wrong, repair and rerun the
+atomic composite rebuild so the manifest advances to a corrected revision. Failed rebuilds
+preserve the last committed singleton rows; a logically bad successful rebuild may require a
+restore from the recorded pre-rebuild backup/export before republishing.
+
+Never restore a Convex version where public homepage queries collect the embedding-bearing
+published-template corpus. If backend code recovery is necessary, forward-deploy a known
+snapshot-safe commit and rebuild. This bounded-read invariant takes precedence over matching
+an old frontend/backend pair exactly.
 
 For the browser-mediated mDL lane, the kill switch is currently a code flag, not a
 runtime env var. To disable it, set `MDL_ANDROID_OID4VP` to `false` in

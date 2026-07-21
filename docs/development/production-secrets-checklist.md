@@ -450,12 +450,22 @@ wrangler pages secret put VOTER_API_KEY
 After setting all secrets, verify deployment:
 
 ```bash
+set -euo pipefail
 # Check that secrets are set (values are hidden)
 wrangler pages secret list
 
-# Trigger a test deployment
-wrangler pages deploy
+# Trigger the gated staging deployment for a SHA already on staging
+git fetch --no-tags origin staging
+RELEASE_SHA=$(git rev-parse HEAD)
+if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/staging; then
+  echo "Refusing deploy: $RELEASE_SHA is not contained in origin/staging." >&2
+  exit 1
+fi
+gh workflow run deploy.yml --ref main -f branch=staging -f ref="$RELEASE_SHA"
 ```
+
+Never validate production secrets with a direct `wrangler pages deploy`; it
+bypasses the repository's producer-readiness and exact-SHA release gates.
 
 ---
 

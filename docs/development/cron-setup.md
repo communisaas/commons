@@ -90,12 +90,13 @@ emits a `console.warn`.
   donations), boundary-cell rate alarm, alert-pipe heartbeat, contact-cache
   cleanup, intelligence cleanup, and the two event-driven backstops
   (`workflow-scheduler`, `process-scheduled-blasts` — primary firing is native
-  `scheduler.runAfter`/`runAt`; a wide 15-min sweep recovers orphans). 16 crons.
+  `scheduler.runAfter`/`runAt`; a wide 15-min sweep recovers orphans), plus the
+  two bounded public-discovery snapshot backstops. 18 crons.
 - **OPERATIONAL** — only meaningful with live traffic: bounce probes, anchor
   retries, A/B winner, analytics snapshot (`deleteAggregatesForDate`), alert
-  digest, debate resolution, webhook retry, reputation recompute, relatedness
-  calibration, tag-embedding backfill, `drain-usage` (reports metered
-  `usageRecords` to the billing provider). 11 crons. Note: `drain-usage` will
+  digest, debate resolution, webhook retry, reputation recompute,
+  tag-embedding backfill, `drain-usage` (reports metered `usageRecords` to the
+  billing provider). 10 crons. Note: `drain-usage` will
   not register until `CRON_PROFILE` flips to `full`/`operational` at launch +
   redeploy (both backends are pinned `essential` pre-launch).
 - **SPECULATIVE** — no consumer yet / post-launch: `legislation-sync` (primary

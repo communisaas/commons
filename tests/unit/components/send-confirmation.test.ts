@@ -19,7 +19,7 @@ describe('SendConfirmation — honest peak', () => {
 		expect(sc).not.toMatch(/\b(delivered|received by|reached their inbox)\b/i);
 	});
 
-	it('guards against double-submit — onConfirmSent (now the delivery-record POST) fires once', () => {
+	it('guards against double-submit — onConfirmSent fires once', () => {
 		// a rapid double-click before `stage` flips must not double-fire onConfirmSent
 		expect(sc).toContain('hasConfirmed');
 		expect(sc).toMatch(/if \(hasConfirmed\) return/);
@@ -68,6 +68,12 @@ describe('SendConfirmation wiring — /s/[slug] honesty + lifecycle', () => {
 		expect(slug).toMatch(
 			/departingRecipients = new Set\(\[\.\.\.departingRecipients, member\.id\]\)[\s\S]{0,700}sendConfirmation = \{/
 		);
+	});
+
+	it('keeps mailto sending while the paused recording endpoint receives no recipient PII', () => {
+		expect(slug).toContain('window.location.href = result.url');
+		expect(slug).toContain('window.location.href = url');
+		expect(slug).not.toContain("fetch('/api/deliveries/record'");
 	});
 
 	it('guards a concurrent send while a peak is pending', () => {

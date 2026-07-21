@@ -281,6 +281,10 @@ export default defineSchema({
 		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
+		// Topic-vector completion is tracked independently from tag-vector writes.
+		// A shared timestamp let a tag-only backfill hide a still-missing topic
+		// vector from the indexed repair queue.
+		topicEmbeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
 
 		// Status & tracking
@@ -364,6 +368,19 @@ export default defineSchema({
 		.index('by_countryCode', ['countryCode'])
 		.index('by_userId_contentHash', ['userId', 'contentHash'])
 		.index('by_status', ['status'])
+		// Exact public-corpus selector used by the off-request relation snapshot
+		// rebuild. Keeping both predicates in the index avoids hydrating drafts or
+		// private templates (including their embedding-heavy fields) during the
+		// nightly materialization pass.
+		.index('by_status_isPublic', ['status', 'isPublic'])
+		// Bounded embedding-repair batches select only public documents that have
+		// never completed an embedding write. This keeps the admin/backfill path
+		// off the full embedding-bearing public corpus.
+		.index('by_status_isPublic_topicEmbeddingsUpdatedAt', [
+			'status',
+			'isPublic',
+			'topicEmbeddingsUpdatedAt'
+		])
 		.searchIndex('search_templates', {
 			searchField: 'title',
 			filterFields: ['domain', 'status', 'countryCode']
@@ -3129,5 +3146,116 @@ export default defineSchema({
 		count: v.number(), // usable (embedded) templates the centroid was fit over
 		dim: v.number(), // embedding dimensionality
 		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Materialized public relation results. Homepage reads must never hydrate the
+	// embedding-heavy templates table: each list variant reads its matching compact
+	// relation row and returns honest empty shapes until the first rebuild publishes
+	// it. Both `all` and `excludeCwc` rows publish under one manifest revision.
+	// `public` is retained only so the first deploy accepts the legacy singleton;
+	// no current query or rebuild writes that key. `conceptEntries` is an array
+	// instead of an object keyed by raw author tags so arbitrary tag strings never
+	// become stored Convex field names.
+	templateRelationSnapshots: defineTable({
+		key: v.union(v.literal('public'), v.literal('all'), v.literal('excludeCwc')),
+		// Publication revision shared with `publicDiscoveryManifest`. Optional so
+		// the first deploy can migrate existing snapshot rows in place; every new
+		// rebuild writes it before marking relations ready.
+		revision: v.optional(v.number()),
+		twinEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				score: v.float64(),
+				kind: v.literal('twin')
+			})
+		),
+		conceptEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				concept: v.string(),
+				kind: v.literal('concept')
+			})
+		),
+		conceptEntries: v.array(
+			v.object({
+				tag: v.string(),
+				concept: v.string()
+			})
+		),
+		sourceCap: v.number(),
+		sourceTemplateCount: v.number(),
+		embeddedTemplateCount: v.number(),
+		tagVectorCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Materialized `templates.listPublic` payloads. One row retains the normal
+	// public top-50 and one retains the feature-gated non-CWC top-50. Payloads are
+	// already projected/enriched, so request-path reads never hydrate source
+	// templates (and therefore never pay to read their server-only embeddings).
+	publicTemplateSnapshots: defineTable({
+		key: v.union(v.literal('all'), v.literal('excludeCwc')),
+		// Optional only for the live v3→v4 migration. Every v4 rebuild writes 4,
+		// and the pre-Pages readiness gate rejects legacy/missing versions.
+		projectionVersion: v.optional(v.number()),
+		// Both list variants receive the same revision in one transaction. Keep
+		// optional during the live-row migration; every rebuild supplies it.
+		revision: v.optional(v.number()),
+		templates: v.any(),
+		sourceCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Small control-plane singleton for public discovery. Payloads remain in the
+	// two bounded snapshot tables above; this row only states whether each family
+	// has ever published successfully, which monotonically increasing revision is
+	// current, and the independent coalescing state for bounded list and relation
+	// refreshes.
+	//
+	// No row is the explicit cold-start state (`ready:false`, revision 0). A
+	// successful rebuild over a legitimately empty corpus creates/updates this row
+	// with `ready:true`, so consumers never have to infer readiness from `[]`.
+	publicDiscoveryManifest: defineTable({
+		key: v.literal('public'),
+		listReady: v.boolean(),
+		relationsReady: v.boolean(),
+		listRevision: v.number(),
+		relationsRevision: v.number(),
+		listUpdatedAt: v.optional(v.number()),
+		relationsUpdatedAt: v.optional(v.number()),
+		listDirtyAt: v.optional(v.number()),
+		listRefreshScheduledAt: v.optional(v.number()),
+		relationsDirtyAt: v.optional(v.number()),
+		relationsRefreshScheduledAt: v.optional(v.number()),
+		// Multi-mutation clear/reseed lease. While present, source writers roll
+		// back and every rebuild path rejects unless it carries this exact token.
+		// The matching composite final publication clears both fields atomically.
+		coordinatedRebuildToken: v.optional(v.string()),
+		coordinatedRebuildStartedAt: v.optional(v.number()),
+		// Durable producer-failure evidence. Scheduled rebuilds retain last-good
+		// payloads, stamp the first-class failure state, and enqueue an alert action;
+		// a later successful publication clears the corresponding pair.
+		listFailureAt: v.optional(v.number()),
+		listFailureCode: v.optional(v.string()),
+		relationsFailureAt: v.optional(v.number()),
+		relationsFailureCode: v.optional(v.string()),
+		// One-time cutover progress for stamping valid legacy topic vectors with
+		// the dedicated repair marker. Keeping this on the existing singleton
+		// makes self-paging completion observable without another table or scan.
+		topicEmbeddingMarkerMigrationStartedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationCompletedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationScanned: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationMarked: v.optional(v.number())
+	}).index('by_key', ['key']),
+
+	// Distributed lease for the Cloudflare admin embedding repair route. Pages
+	// isolates do not share module memory, so the route claims this tiny row before
+	// spending Gemini calls. An expiry makes an evicted worker self-recovering.
+	embeddingBackfillLeases: defineTable({
+		key: v.literal('topic'),
+		token: v.string(),
+		expiresAt: v.number()
 	}).index('by_key', ['key'])
 });

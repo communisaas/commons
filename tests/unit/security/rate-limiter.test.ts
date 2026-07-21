@@ -492,6 +492,11 @@ describe('findRateLimitConfig', () => {
 		expect(config).toBeUndefined();
 	});
 
+	it('should return undefined for exempt path: liveness', () => {
+		const config = findRateLimitConfig('/api/live');
+		expect(config).toBeUndefined();
+	});
+
 	it('should return undefined for exempt path: cron', () => {
 		const config = findRateLimitConfig('/api/cron/cleanup');
 		expect(config).toBeUndefined();
@@ -702,6 +707,7 @@ describe('RATE_LIMIT_EXEMPT_PATHS', () => {
 
 	it('should exempt health checks', () => {
 		expect(RATE_LIMIT_EXEMPT_PATHS).toContain('/api/health');
+		expect(RATE_LIMIT_EXEMPT_PATHS).toContain('/api/live');
 	});
 
 	it('should exempt cron jobs', () => {
@@ -709,7 +715,7 @@ describe('RATE_LIMIT_EXEMPT_PATHS', () => {
 	});
 
 	it('should only include current explicit exemptions', () => {
-		expect(RATE_LIMIT_EXEMPT_PATHS).toEqual(['/api/health', '/api/cron/']);
+		expect(RATE_LIMIT_EXEMPT_PATHS).toEqual(['/api/health', '/api/live', '/api/cron/']);
 	});
 });
 

@@ -1,0 +1,13 @@
+{
+  "type": "requires",
+  "edges": [
+    {"source": "PD-00", "target": "PD-20", "evidence": "Active Convex team and database-I/O headroom."},
+    {"source": "PD-10", "target": "PD-20", "evidence": "Verified release SHA and green focused/full checks."},
+    {"source": "PD-20", "target": "PD-30", "evidence": "Successful production backend deployment record."},
+    {"source": "PD-30", "target": "PD-50", "evidence": "Ready list and relations manifest revisions plus bounded rebuild result."},
+    {"source": "PD-40", "target": "PD-50", "evidence": "Direct-query payload and read-path log evidence."},
+    {"source": "PD-50", "target": "PD-60", "evidence": "Healthy immutable Pages deployment URL for the verified SHA."},
+    {"source": "PD-60", "target": "PD-70", "evidence": "Successful list, graph, and API warm responses."},
+    {"source": "PD-50", "target": "PD-70", "evidence": "Observation is tied to the healthy immutable deployment URL and exact SHA."}
+  ]
+}

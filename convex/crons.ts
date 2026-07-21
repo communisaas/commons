@@ -523,29 +523,11 @@ if (enabled("operational")) {
 }
 
 // ---------------------------------------------------------------------------
-// 27. Relatedness calibration recompute — nightly refit of the public-corpus
-//     centroid + threshold the template relatedness query normalizes against,
-//     so the measured-twin edges track the corpus as it grows rather than
-//     freezing today's common-mode. Pure Convex compute, no external cost.
-//     03:23 UTC to stagger off reputation-recompute (03:11) and the other
-//     UTC-day-boundary crons clustered near midnight.
-//     OPERATIONAL: corpus refit needs a corpus.
-// ---------------------------------------------------------------------------
-if (enabled("operational")) {
-  crons.daily(
-    "relatedness-calibration-recompute",
-    { hourUTC: 3, minuteUTC: 23 },
-    internal.templates.recomputeRelatednessCalibration,
-    {},
-  );
-}
-
-// ---------------------------------------------------------------------------
 // 28. Tag-concept embedding backfill — embed any newly authored / edited tags
 //     so the tag-concept clustering (which folds synonyms and grounds the
 //     concept edges) tracks the corpus as it grows. Embeds only the tags that
 //     lack a vector, so the Gemini cost is a trivial one-time-per-tag charge.
-//     03:41 UTC to stagger off the calibration recompute and the midnight crons.
+//     03:41 UTC to stagger off the midnight crons.
 //     OPERATIONAL: embeds new tags (Gemini cost — needs authored tags).
 // ---------------------------------------------------------------------------
 if (enabled("operational")) {
@@ -553,6 +535,24 @@ if (enabled("operational")) {
     "tag-concept-embedding-backfill",
     { hourUTC: 3, minuteUTC: 41 },
     internal.templates.backfillTagEmbeddings,
+    {},
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 28a. Public homepage snapshots — refresh list and relation variants from one
+//      bounded source plan and publish them atomically. Consolidating the former
+//      list and relation jobs avoids paying twice for corpus selection and makes
+//      their daily generations inseparable. 04:17 UTC leaves the optional tag
+//      backfill 36 minutes to finish while avoiding UTC-hour boundaries.
+//      ESSENTIAL: durable freshness backstop for projection-affecting writes and
+//      any missed write-driven token; request paths still read compact rows only.
+// ---------------------------------------------------------------------------
+if (enabled("essential")) {
+  crons.daily(
+    "public-homepage-snapshot-rebuild",
+    { hourUTC: 4, minuteUTC: 17 },
+    internal.templates.rebuildHomepageSnapshotsForCron,
     {},
   );
 }

@@ -19,31 +19,26 @@
 	const hasEngagement = $derived(verifiedSends > 0 || uniqueDistricts > 0);
 
 	// Calculate recipient count for direct email templates
-	const recipientCount = $derived(
-		// Use pre-computed recipientEmails from API if available
-		template.recipientEmails && Array.isArray(template.recipientEmails)
-			? template.recipientEmails.length
-			: // Fallback to parsing recipient_config with validation
-				(() => {
-					const RecipientConfigSchema = z.unknown();
-					let recipientConfig = null;
+	const recipientCount = $derived.by(() => {
+		if (typeof template.recipient_count === 'number') return template.recipient_count;
+		if (Array.isArray(template.recipientEmails)) return template.recipientEmails.length;
 
-					if (typeof template.recipient_config === 'string') {
-						try {
-							const parsed = JSON.parse(template.recipient_config);
-							const result = RecipientConfigSchema.safeParse(parsed);
-							recipientConfig = result.success ? result.data : null;
-						} catch (error) {
-							console.warn('[MessageMetrics] Failed to parse recipient_config:', error);
-						}
-					} else {
-						const result = RecipientConfigSchema.safeParse(template.recipient_config);
-						recipientConfig = result.success ? result.data : null;
-					}
-
-					return extractRecipientEmails(recipientConfig).length;
-				})()
-	);
+		const RecipientConfigSchema = z.unknown();
+		let recipientConfig = null;
+		if (typeof template.recipient_config === 'string') {
+			try {
+				const parsed = JSON.parse(template.recipient_config);
+				const result = RecipientConfigSchema.safeParse(parsed);
+				recipientConfig = result.success ? result.data : null;
+			} catch (error) {
+				console.warn('[MessageMetrics] Failed to parse recipient_config:', error);
+			}
+		} else {
+			const result = RecipientConfigSchema.safeParse(template.recipient_config);
+			recipientConfig = result.success ? result.data : null;
+		}
+		return extractRecipientEmails(recipientConfig).length;
+	});
 
 	// Format numbers with commas, handle undefined/null values
 	function formatNumber(num: number | undefined | null): string {
@@ -97,7 +92,7 @@
 
 <!-- Pre-launch: Only show metrics when there's real engagement -->
 {#if hasEngagement}
-	<div class="min-w-0 max-w-full space-y-2 text-sm">
+	<div class="max-w-full min-w-0 space-y-2 text-sm">
 		<div class="flex max-w-fit items-center gap-2 text-slate-500">
 			<Send class="h-4 w-4 shrink-0" />
 			<span class="min-w-0 flex-1">

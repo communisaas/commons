@@ -21,6 +21,7 @@ import { capOrThrow, parseHttpUrlOrThrow } from './_validators';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
 import { emptySupporterStats, computeSupporterStats } from './_supporterStats';
 import { computeDistrictVerified, computeGrowthWindow } from './_dashboardStats';
+import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
 import type { Doc, Id } from './_generated/dataModel';
 // Billing email: returned as encrypted blob, client decrypts with org key
 
@@ -638,6 +639,7 @@ export const update = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.slug, 'editor');
+		const avatarChanged = args.avatar !== undefined && args.avatar !== org.avatar;
 
 		const updates: Partial<Doc<'organizations'>> = {
 			updatedAt: Date.now()
@@ -711,6 +713,15 @@ export const update = mutation({
 		}
 
 		await ctx.db.patch(org._id, updates);
+		// Public template cards read exactly organization `{ name, slug, avatar }`.
+		// This mutation cannot rename an organization or change its slug, so avatar
+		// is its only projection-affecting input. Invalidate the one list singleton
+		// directly; discovering referencing templates here would turn a profile edit
+		// into an unbounded reverse scan. The writer-contract test couples this field
+		// inventory to the materializer so adding another public org field fails CI.
+		if (avatarChanged) {
+			await markPublicDiscoveryListDirty(ctx);
+		}
 		return org._id;
 	}
 });

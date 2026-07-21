@@ -1,9 +1,15 @@
 // CONVEX: Fully migrated — moderation (Groq) + embeddings (Gemini) stay in SvelteKit,
 // all DB operations go through Convex serverQuery/serverMutation.
 import { json } from '@sveltejs/kit';
+import { ConvexError } from 'convex/values';
 import type { RequestHandler } from './$types';
 import { serverQuery, serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import {
+	getCachedPublicTemplates,
+	PublicDiscoverySnapshotNotReadyError
+} from '$lib/server/public-template-queries';
+import { FEATURES } from '$lib/config/features';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import {
@@ -18,6 +24,14 @@ import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { projectToHue } from '$lib/utils/domain-hue-projection';
 import { createHash } from 'crypto';
 import type { GeoScope } from '$lib/core/agents/types';
+import {
+	MAX_GEOGRAPHIC_SCOPE_BYTES,
+	MAX_PUBLIC_TEMPLATE_INPUT_BYTES,
+	MAX_TEMPLATE_AUTHORING_INPUT_BYTES,
+	MAX_TEMPLATE_CONFIG_BYTES,
+	validateTemplateInputBudgets,
+	type TemplateInputBudgetResult
+} from '$convex/lib/templateInputBudget';
 
 /** Content-addressable fingerprint: same title + body = same template */
 function contentHash(title: string, body: string): string {
@@ -35,6 +49,44 @@ function sanitizeSlug(slug: string | undefined): string | undefined {
 			.replace(/^-|-$/g, '')
 			.slice(0, 100) || undefined
 	);
+}
+
+/** Resolve the exact slug that will be sent to Convex before enforcing byte budgets. */
+function resolveTemplateSlug(title: string, requestedSlug: string | undefined): string {
+	const sanitized = sanitizeSlug(requestedSlug);
+	if (sanitized) return sanitized;
+
+	return title
+		.toLowerCase()
+		.replace(/[^a-z0-9\s-]/g, '')
+		.replace(/\s+/g, '-')
+		.substring(0, 100);
+}
+
+const TEMPLATE_SLUG_TAKEN = 'TEMPLATE_SLUG_TAKEN';
+
+function isTemplateSlugTakenError(error: unknown): boolean {
+	if (!(error instanceof ConvexError)) return false;
+	const data = error.data;
+	return (
+		data === TEMPLATE_SLUG_TAKEN ||
+		(data !== null &&
+			typeof data === 'object' &&
+			!Array.isArray(data) &&
+			(data as { code?: unknown }).code === TEMPLATE_SLUG_TAKEN)
+	);
+}
+
+function duplicateSlugResponse(): Response {
+	const response: StructuredApiResponse = {
+		success: false,
+		error: createValidationError(
+			'slug',
+			'VALIDATION_DUPLICATE',
+			'This link is already taken. Please choose a different one or customize your link.'
+		)
+	};
+	return json(response, { status: 400 });
 }
 
 /** Validate and sanitize topics at the API boundary. */
@@ -68,6 +120,74 @@ interface CreateTemplateRequest {
 }
 
 type ValidationError = ApiError;
+
+const SOURCE_TITLE_MAX_LENGTH = 500;
+const SOURCE_URL_MAX_LENGTH = 2_048;
+const SOURCE_TYPE_MAX_LENGTH = 64;
+const RESEARCH_LOG_ENTRY_MAX_LENGTH = 1_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isPublicHttpUrl(value: string): boolean {
+	try {
+		const parsed = new URL(value);
+		return (
+			(parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+			!parsed.username &&
+			!parsed.password
+		);
+	} catch {
+		return false;
+	}
+}
+
+/** Fail closed when a persisted trust score is missing, malformed, or non-finite. */
+function hasTemplateCreationTrust(user: { is_verified?: unknown; trust_score?: unknown }): boolean {
+	return (
+		user.is_verified === true ||
+		(typeof user.trust_score === 'number' &&
+			Number.isFinite(user.trust_score) &&
+			user.trust_score >= 100)
+	);
+}
+
+function inputBudgetError(
+	failure: Exclude<TemplateInputBudgetResult, { ok: true }>
+): ValidationError {
+	const excessive = new Set(['max_depth', 'max_nodes', 'max_container_entries', 'max_bytes']).has(
+		failure.reason
+	);
+	const code = excessive ? 'VALIDATION_TOO_LONG' : 'VALIDATION_INVALID_FORMAT';
+
+	switch (failure.scope) {
+		case 'configs':
+			return createValidationError(
+				'recipient_config',
+				code,
+				`Combined template configuration must be structurally bounded and ≤${MAX_TEMPLATE_CONFIG_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'geographic_scope':
+			return createValidationError(
+				'geographic_scope',
+				code,
+				`geographic_scope must match the supported GeoScope shape and be ≤${MAX_GEOGRAPHIC_SCOPE_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'authoring_input':
+			return createValidationError(
+				'body',
+				code,
+				`Combined template content must be structurally bounded and ≤${MAX_TEMPLATE_AUTHORING_INPUT_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+		case 'public_input':
+			return createValidationError(
+				'body',
+				code,
+				`Public template content must be structurally bounded and ≤${MAX_PUBLIC_TEMPLATE_INPUT_BYTES.toLocaleString()} UTF-8 bytes`
+			);
+	}
+}
 
 function validateTemplateData(data: unknown): {
 	isValid: boolean;
@@ -143,36 +263,210 @@ function validateTemplateData(data: unknown): {
 		);
 	}
 
+	for (const field of ['slug', 'description', 'domain'] as const) {
+		if (templateData[field] !== undefined && typeof templateData[field] !== 'string') {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be a string`)
+			);
+		}
+	}
+
+	for (const field of ['delivery_config', 'cwc_config', 'recipient_config'] as const) {
+		if (templateData[field] !== undefined && !isRecord(templateData[field])) {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be an object`)
+			);
+		}
+	}
+
+	for (const field of ['scopes', 'jurisdictions'] as const) {
+		if (templateData[field] !== undefined && !Array.isArray(templateData[field])) {
+			errors.push(
+				createValidationError(field, 'VALIDATION_INVALID_FORMAT', `${field} must be an array`)
+			);
+		}
+	}
+
 	// bound remaining caller-supplied strings + arrays before
 	// they hit Gemini moderation + Convex insert. type/deliveryMethod are
 	// enum-like (downstream Convex validates the actual values); cap length
 	// here for defense-in-depth.
 	if (typeof templateData.type === 'string' && templateData.type.length > 64) {
-		errors.push(createValidationError('type', 'VALIDATION_TOO_LONG', 'type must be ≤64 characters'));
+		errors.push(
+			createValidationError('type', 'VALIDATION_TOO_LONG', 'type must be ≤64 characters')
+		);
 	}
 	if (typeof templateData.deliveryMethod === 'string' && templateData.deliveryMethod.length > 64) {
-		errors.push(createValidationError('deliveryMethod', 'VALIDATION_TOO_LONG', 'deliveryMethod must be ≤64 characters'));
+		errors.push(
+			createValidationError(
+				'deliveryMethod',
+				'VALIDATION_TOO_LONG',
+				'deliveryMethod must be ≤64 characters'
+			)
+		);
 	}
 	if (typeof templateData.description === 'string' && templateData.description.length > 1000) {
-		errors.push(createValidationError('description', 'VALIDATION_TOO_LONG', 'description must be ≤1,000 characters'));
+		errors.push(
+			createValidationError(
+				'description',
+				'VALIDATION_TOO_LONG',
+				'description must be ≤1,000 characters'
+			)
+		);
 	}
 	if (typeof templateData.domain === 'string' && templateData.domain.length > 200) {
-		errors.push(createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters'));
+		errors.push(
+			createValidationError('domain', 'VALIDATION_TOO_LONG', 'domain must be ≤200 characters')
+		);
 	}
-	if (Array.isArray(templateData.sources) && templateData.sources.length > 50) {
-		errors.push(createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries'));
+	if (templateData.sources !== undefined && !Array.isArray(templateData.sources)) {
+		errors.push(
+			createValidationError('sources', 'VALIDATION_INVALID_FORMAT', 'sources must be an array')
+		);
+	} else if (Array.isArray(templateData.sources)) {
+		if (templateData.sources.length > 50) {
+			errors.push(
+				createValidationError('sources', 'VALIDATION_TOO_LONG', 'sources must have ≤50 entries')
+			);
+		}
+
+		for (const [index, source] of templateData.sources.entries()) {
+			if (
+				!isRecord(source) ||
+				typeof source.num !== 'number' ||
+				!Number.isFinite(source.num) ||
+				typeof source.title !== 'string' ||
+				typeof source.url !== 'string' ||
+				typeof source.type !== 'string'
+			) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_INVALID_FORMAT',
+						`sources[${index}] must contain a finite num and string title, url, and type`
+					)
+				);
+				continue;
+			}
+
+			if (
+				source.title.length > SOURCE_TITLE_MAX_LENGTH ||
+				source.url.length > SOURCE_URL_MAX_LENGTH ||
+				source.type.length > SOURCE_TYPE_MAX_LENGTH
+			) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_TOO_LONG',
+						`sources[${index}] exceeds the title, URL, or type length limit`
+					)
+				);
+			}
+
+			if (!isPublicHttpUrl(source.url)) {
+				errors.push(
+					createValidationError(
+						'sources',
+						'VALIDATION_INVALID_FORMAT',
+						`sources[${index}].url must be an absolute http(s) URL without credentials`
+					)
+				);
+			}
+		}
 	}
-	if (Array.isArray(templateData.research_log) && templateData.research_log.length > 200) {
-		errors.push(createValidationError('research_log', 'VALIDATION_TOO_LONG', 'research_log must have ≤200 entries'));
+	if (templateData.research_log !== undefined && !Array.isArray(templateData.research_log)) {
+		errors.push(
+			createValidationError(
+				'research_log',
+				'VALIDATION_INVALID_FORMAT',
+				'research_log must be an array'
+			)
+		);
+	} else if (Array.isArray(templateData.research_log)) {
+		if (templateData.research_log.length > 200) {
+			errors.push(
+				createValidationError(
+					'research_log',
+					'VALIDATION_TOO_LONG',
+					'research_log must have ≤200 entries'
+				)
+			);
+		}
+		for (const [index, entry] of templateData.research_log.entries()) {
+			if (typeof entry !== 'string') {
+				errors.push(
+					createValidationError(
+						'research_log',
+						'VALIDATION_INVALID_FORMAT',
+						`research_log[${index}] must be a string`
+					)
+				);
+			} else if (entry.length > RESEARCH_LOG_ENTRY_MAX_LENGTH) {
+				errors.push(
+					createValidationError(
+						'research_log',
+						'VALIDATION_TOO_LONG',
+						`research_log[${index}] must be ≤${RESEARCH_LOG_ENTRY_MAX_LENGTH.toLocaleString()} characters`
+					)
+				);
+			}
+		}
 	}
 
 	if (errors.length > 0) {
 		return { isValid: false, errors };
 	}
 
+	const prospectiveSlug = resolveTemplateSlug(
+		templateData.title as string,
+		templateData.slug as string | undefined
+	);
+	if (!prospectiveSlug || !/[a-z0-9]/.test(prospectiveSlug)) {
+		return {
+			isValid: false,
+			errors: [
+				createValidationError(
+					'slug',
+					'VALIDATION_INVALID_FORMAT',
+					'Title or custom link must contain at least one letter or number'
+				)
+			]
+		};
+	}
+
+	const budgetResult = validateTemplateInputBudgets({
+		title: templateData.title,
+		slug: prospectiveSlug,
+		description:
+			(templateData.description as string) ||
+			(templateData.preview as string).substring(0, 160) ||
+			'',
+		messageBody: templateData.message_body,
+		preview: templateData.preview,
+		type: templateData.type,
+		deliveryMethod: templateData.deliveryMethod,
+		domain: (templateData.domain as string) || '',
+		topics: sanitizeTopics(templateData.topics),
+		sources: templateData.sources || [],
+		researchLog: templateData.research_log || [],
+		deliveryConfig: templateData.delivery_config || {},
+		cwcConfig: templateData.cwc_config || {},
+		recipientConfig: templateData.recipient_config || {},
+		geographicScope: templateData.geographic_scope,
+		contentHash: contentHash(templateData.title as string, templateData.message_body as string),
+		// Moderation may promote this request to published/public. Budget the
+		// largest canonical mutation now so an exact-boundary request cannot pass
+		// HTTP preflight and fail three bytes later at Convex.
+		status: 'published',
+		isPublic: true
+	});
+	if (!budgetResult.ok) {
+		return { isValid: false, errors: [inputBudgetError(budgetResult)] };
+	}
+
 	const validData: CreateTemplateRequest = {
 		title: templateData.title as string,
-		slug: sanitizeSlug(templateData.slug as string) || undefined,
+		slug: prospectiveSlug,
 		message_body: templateData.message_body as string,
 		sources:
 			(templateData.sources as Array<{ num: number; title: string; url: string; type: string }>) ||
@@ -199,14 +493,83 @@ function validateTemplateData(data: unknown): {
 }
 
 // GET fully migrated to Convex
-export const GET: RequestHandler = async () => {
-	const templates = await serverQuery(api.templates.listPublic, {});
-	const response: StructuredApiResponse = { success: true, data: templates };
-	return json(response);
+export const GET: RequestHandler = async ({ url, platform }) => {
+	const successHeaders = {
+		// Browsers revalidate after one minute. If a route-scoped Cloudflare Worker
+		// cache is enabled later, the more specific header preserves edge-only stale
+		// resilience without forwarding that allowance to browsers. The current
+		// Convex cost shield is the explicit Cache API/KV state machine, not this
+		// advisory front-of-Worker policy.
+		'Cache-Control': 'public, max-age=60, must-revalidate',
+		'Cloudflare-CDN-Cache-Control':
+			'public, max-age=60, stale-while-revalidate=30, stale-if-error=3600'
+	};
+	const coldHeaders = {
+		// A cold empty collection is compatible, but it is not a last-known-good
+		// payload worth serving stale through a producer outage.
+		'Cache-Control': 'public, max-age=60, must-revalidate'
+	};
+
+	try {
+		const templates = await getCachedPublicTemplates({ url, platform }, !FEATURES.CONGRESSIONAL);
+		const response: StructuredApiResponse = { success: true, data: templates };
+		return json(response, { headers: successHeaders });
+	} catch (error) {
+		// Preserve the API's historical cold-start contract: before the first
+		// snapshot publication, public discovery is an honest empty collection.
+		if (error instanceof PublicDiscoverySnapshotNotReadyError) {
+			const response: StructuredApiResponse = { success: true, data: [] };
+			return json(response, { headers: coldHeaders });
+		}
+
+		console.error('[api/templates] Public discovery read failed:', error);
+		const response: StructuredApiResponse = {
+			success: false,
+			error: createApiError(
+				'server',
+				'SERVER_DATABASE',
+				'Public templates are temporarily unavailable'
+			)
+		};
+		return json(response, {
+			status: 503,
+			headers: { 'Cache-Control': 'no-store' }
+		});
+	}
 };
 
 export const POST: RequestHandler = async ({ request, locals, platform }) => {
 	try {
+		// Reject before parsing or invoking the two-provider moderation pipeline.
+		// The global hook already caps this mutating route at 10 requests/day;
+		// this early account/trust gate prevents distributed anonymous traffic from
+		// turning even those rejected requests into external AI work.
+		const requestUser = locals.user;
+		if (!requestUser) {
+			const response: StructuredApiResponse = {
+				success: false,
+				error: createApiError(
+					'auth',
+					'AUTH_REQUIRED',
+					'Authentication required to create templates'
+				)
+			};
+			return json(response, { status: 401 });
+		}
+		// `handleAuth` calls authOps.validateSession for every request and hydrates
+		// these fields from the current Convex user document, not from JWT claims.
+		if (!hasTemplateCreationTrust(requestUser)) {
+			const response: StructuredApiResponse = {
+				success: false,
+				error: createApiError(
+					'auth',
+					'INSUFFICIENT_TRUST',
+					'Template creation requires account verification. Please complete identity verification to create templates.'
+				)
+			};
+			return json(response, { status: 403 });
+		}
+
 		// Parse request body
 		let requestData: unknown;
 		try {
@@ -326,9 +689,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		const user = locals.user;
 
 		if (user) {
-			const isVerified = user.is_verified === true;
-			const hasSufficientReputation = (user.trust_score ?? 0) >= 100;
-			if (!isVerified && !hasSufficientReputation) {
+			if (!hasTemplateCreationTrust(user)) {
 				const response: StructuredApiResponse = {
 					success: false,
 					error: createApiError(
@@ -417,34 +778,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					return json(response);
 				}
 
-				const slug = validData.slug?.trim()
-					? validData.slug.trim()
-					: validData.title
-							.toLowerCase()
-							.replace(/[^a-z0-9\s-]/g, '')
-							.replace(/\s+/g, '-')
-							.substring(0, 100);
+				const slug = resolveTemplateSlug(validData.title, validData.slug);
 
-				// Slug uniqueness check via Convex
-				const existingTemplate = await serverQuery(api.templates.findBySlug, {
-					slug,
-					_secret: getInternalSecret()
-				});
-
-				if (existingTemplate) {
-					const response: StructuredApiResponse = {
-						success: false,
-						error: createValidationError(
-							'slug',
-							'VALIDATION_DUPLICATE',
-							'This link is already taken. Please choose a different one or customize your link.'
-						)
-					};
-					return json(response, { status: 400 });
-				}
-
-				// Create template via Convex (includes quota check + geographic scope)
+				// The create mutation owns slug uniqueness atomically along with quota
+				// enforcement; avoid a redundant check-then-create query here.
 				const newTemplate = await serverMutation(api.templates.createTemplate, {
+					_secret: getInternalSecret(),
 					userId: user.id as Id<'users'>,
 					title: validData.title,
 					slug,
@@ -508,11 +847,13 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 								const domainHue = projectToHue(embeddings[1]);
 
-								await serverMutation(api.templates.updateEmbeddings, {
+								await serverMutation(api.templates.completePublicTemplateEmbeddings, {
 									templateId: templateId as Id<'templates'>,
+									expectedUserId: user.id as Id<'users'>,
 									locationEmbedding: embeddings[0],
 									topicEmbedding: embeddings[1],
-									domainHue
+									domainHue,
+									_secret: getInternalSecret()
 								});
 
 								console.log(
@@ -575,6 +916,12 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 
 				return json(response);
 			} catch (error) {
+				// Slug uniqueness belongs to the create transaction; translate its
+				// stable conflict code without reintroducing a check-then-create race.
+				if (isTemplateSlugTakenError(error)) {
+					return duplicateSlugResponse();
+				}
+
 				if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
 					const response: StructuredApiResponse = {
 						success: false,

@@ -136,6 +136,27 @@ describe("tagConceptMap — display normalization", () => {
     expect(map["rural-access"]).toBeUndefined();
     expect(map["ceo-pay-ratio"]).toBeUndefined();
   });
+
+  it("treats prototype-like raw tags as ordinary concept keys", () => {
+    const concepts = [
+      { concept: "__proto__", tags: ["__proto__", "constructor"] },
+    ];
+    const map = tagConceptMap(concepts);
+
+    expect(Object.prototype.hasOwnProperty.call(map, "__proto__")).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(map, "constructor")).toBe(true);
+    expect(map["__proto__"]).toBe("__proto__");
+    expect(map["constructor"]).toBe("__proto__");
+    expect(
+      conceptEdges(
+        [
+          { id: "t1", tags: ["__proto__"] },
+          { id: "t2", tags: ["constructor"] },
+        ],
+        concepts,
+      ),
+    ).toEqual([{ a: "t1", b: "t2", concept: "__proto__", kind: "concept" }]);
+  });
 });
 
 describe("conceptEdges — honest edge gate", () => {

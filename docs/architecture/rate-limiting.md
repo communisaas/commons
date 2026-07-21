@@ -44,7 +44,8 @@ Sliding window log algorithm applied per route. Executes in the `handleRateLimit
 | `/api/wallet/near/sponsor` | 10/min | 60s | User | Meta-transaction relay |
 | `/api/wallet/balance` | 30/min | 60s | IP | Balance endpoint |
 
-**Exempt paths** (separately authenticated): `/api/health`, `/api/cron/`
+**Exempt paths** (operational or separately authenticated): `/api/health`,
+`/api/live`, `/api/cron/`
 
 ### 429 Response
 

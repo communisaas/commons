@@ -33,6 +33,9 @@
 	const uniqueDistricts = $derived(template.unique_districts || 0);
 	const hasEngagement = $derived(verifiedSends > 0 || uniqueDistricts > 0);
 	const isHighActivity = $derived(verifiedSends > 100);
+	const endorsementCount = $derived(
+		template.endorsementCount ?? template.endorsingOrgs?.length ?? 0
+	);
 
 	// === PERCEPTUAL ENCODING: Visual weight based on coordination magnitude ===
 	// Subtle scale transformation: 1.0 (baseline) to 1.15 (high coordination)
@@ -134,19 +137,19 @@
 							<span class="org-provenance-initial org-provenance-initial--endorser">{endorser.name.charAt(0).toUpperCase()}</span>
 						{/if}
 					{/each}
-					{#if template.endorsingOrgs.length > 3}
-						<span class="org-provenance-overflow">+{template.endorsingOrgs.length - 3}</span>
+					{#if endorsementCount > 3}
+						<span class="org-provenance-overflow">+{endorsementCount - 3}</span>
 					{/if}
 				{/if}
 				<span class="org-provenance-name">
 					{#if template.endorsingOrg && template.endorsingOrgs && template.endorsingOrgs.length > 0}
-						{template.endorsingOrg.name} + {template.endorsingOrgs.length}
+						{template.endorsingOrg.name} + {endorsementCount}
 					{:else if template.endorsingOrg}
 						{template.endorsingOrg.name}
-					{:else if template.endorsingOrgs && template.endorsingOrgs.length === 1}
+					{:else if template.endorsingOrgs && endorsementCount === 1}
 						{template.endorsingOrgs[0].name}
 					{:else if template.endorsingOrgs}
-						{template.endorsingOrgs.length} orgs
+						{endorsementCount} orgs
 					{/if}
 				</span>
 			</div>

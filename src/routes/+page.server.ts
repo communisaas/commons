@@ -1,20 +1,29 @@
 import type { PageServerLoad } from './$types';
 import { FEATURES } from '$lib/config/features';
 
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { selectLandingSurface } from '$lib/core/topic/landing-surface';
+import {
+	getCachedPublicRelations,
+	getCachedPublicTemplates
+} from '$lib/server/public-template-queries';
 
-export const load: PageServerLoad = async ({ depends }) => {
+export const load: PageServerLoad = async ({ depends, url, platform }) => {
 	// Cache across client-side navigations — only re-fetch when invalidated
 	depends('data:templates');
+	const showGraph = selectLandingSurface(url) === 'graph';
+	const excludeCwc = !FEATURES.CONGRESSIONAL;
 
 	// Degrade gracefully: a transient SSR→Convex failure (e.g. an intermittent
 	// connect-timeout) should render an empty homepage, not a hard 500. Mirrors
 	// the guarded Convex calls in +layout.server.ts.
-	const templates = await serverQuery(api.templates.listPublic, {
+	const cacheContext = { url, platform };
+	let templatesLoadFailed = false;
+	const templatesPromise = getCachedPublicTemplates(
+		cacheContext,
 		// Keep CWC templates out of public discovery until congressional launch.
-		excludeCwc: !FEATURES.CONGRESSIONAL
-	}).catch((err) => {
+		excludeCwc
+	).catch((err) => {
+		templatesLoadFailed = true;
 		console.error(
 			'[Page] templates.listPublic failed (transient):',
 			err instanceof Error ? err.message : String(err)
@@ -22,21 +31,8 @@ export const load: PageServerLoad = async ({ depends }) => {
 		return [];
 	});
 
-	// The measured-twin relatedness edges over the public set. The server-only
-	// embeddings stay server-only — this returns ONLY {a, b, score, kind} tuples
-	// keyed by template id, never a vector. Guarded the same way as the templates
-	// load so a transient Convex timeout degrades to a no-edge map (every template
-	// honestly alone), never a hard 500.
-	const relationEdges = await serverQuery(api.templates.relatednessEdges, {}).catch((err) => {
-		console.error(
-			'[Page] templates.relatednessEdges failed (transient):',
-			err instanceof Error ? err.message : String(err)
-		);
-		return [];
-	});
-
-	// The shared-concept relations over the same public set: tags that cluster
-	// tightly in mean-centered space fold into one concept, and templates sharing
+	// One materialized relation read over the public set: measured twins plus tags
+	// that cluster tightly in mean-centered space fold into one concept, and templates sharing
 	// a tight concept get a subordinate `kind:'concept'` edge. The server-only tag
 	// vectors are consumed there and never cross — only `{a,b,concept,kind}` tuples
 	// and a tag→concept label map do. Guarded the same way as the edges above so a
@@ -45,13 +41,30 @@ export const load: PageServerLoad = async ({ depends }) => {
 	// cross-template concept — the honest state at the seed, before tag embeddings
 	// are backfilled — `edges` is simply empty, and the graph's concept legend item
 	// stays hidden. That empty result is expected, not a failure.
-	const conceptRelations = await serverQuery(api.templates.conceptRelations, {}).catch((err) => {
-		console.error(
-			'[Page] templates.conceptRelations failed (transient):',
-			err instanceof Error ? err.message : String(err)
-		);
-		return { edges: [], conceptMap: {} };
-	});
+	const relationsPromise = showGraph
+		? getCachedPublicRelations(cacheContext, excludeCwc).catch((err) => {
+				console.error(
+					'[Page] templates.publicDiscoveryRelations failed (transient):',
+					err instanceof Error ? err.message : String(err)
+				);
+				return {
+					twinEdges: [],
+					conceptRelations: { edges: [], conceptMap: {} }
+				};
+			})
+		: Promise.resolve({
+				twinEdges: [],
+				conceptRelations: { edges: [], conceptMap: {} }
+			});
 
-	return { templates, relationEdges, conceptRelations };
+	// The list and combined-relation reads share one latency window. List and
+	// spectrum surfaces skip the relation read entirely.
+	const [templates, relations] = await Promise.all([templatesPromise, relationsPromise]);
+
+	return {
+		templates,
+		templatesLoadFailed,
+		relationEdges: relations.twinEdges,
+		conceptRelations: relations.conceptRelations
+	};
 };

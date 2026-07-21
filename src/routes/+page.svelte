@@ -21,7 +21,7 @@
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import type {
 		Template,
 		TemplateCreationContext,
@@ -65,6 +65,28 @@
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
+	let attemptedTemplateFallback = $state(false);
+
+	// Page data is authoritative on every SvelteKit load rerun, not only the
+	// first mount. This keeps client-side navigation aligned with the current
+	// materialized generation while preserving the prior store during a
+	// transient SSR failure. The fallback is attempted once per mounted failure
+	// episode so an unavailable backend cannot create a client retry loop.
+	$effect(() => {
+		if (!data.templatesLoadFailed) {
+			attemptedTemplateFallback = false;
+			// Store selection/local CRUD must not become dependencies of this
+			// PageData-only reconciliation effect.
+			untrack(() => templateStore.hydrateFromSSR(data.templates ?? []));
+		} else if (
+			!attemptedTemplateFallback &&
+			!templateStore.initialized &&
+			!templateStore.loading
+		) {
+			attemptedTemplateFallback = true;
+			void templateStore.fetchTemplates();
+		}
+	});
 
 	const componentId = 'HomePage_' + Math.random().toString(36).substr(2, 9);
 
@@ -212,14 +234,6 @@
 					sessionStorage.removeItem('pending_template_save');
 				}
 			}
-		}
-
-		// Hydrate template store from SSR data (no client-side fetch needed)
-		if (data.templates && data.templates.length > 0) {
-			templateStore.hydrateFromSSR(data.templates);
-		} else {
-			// Fallback: SSR returned empty, try client-side fetch
-			templateStore.fetchTemplates();
 		}
 
 		// Restore location scope from localStorage
