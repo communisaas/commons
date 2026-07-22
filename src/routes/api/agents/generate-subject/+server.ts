@@ -6,13 +6,12 @@
  * Used for clarification follow-ups where streaming thoughts
  * aren't needed — the user already saw the thinking on turn 1.
  *
- * Rate Limiting: 5/hour for guests, 15/hour for authenticated, 30/hour for verified.
+ * Rate Limiting: 3/hour for guests, 5/hour for authenticated and verified.
  */
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { generateSubjectLine } from '$lib/core/agents/agents/subject-line';
-import type { ConversationContext } from '$lib/core/agents/types';
 import {
 	enforceLLMRateLimit,
 	rateLimitResponse,
@@ -21,15 +20,16 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-
-interface RequestBody {
-	message: string;
-	conversationContext?: ConversationContext;
-	interactionId?: string;
-	clarificationAnswers?: Record<string, string>;
-}
+import {
+	agentPromptGuardContent,
+	readBoundedAgentRequest
+} from '$lib/server/agent-request-envelope';
 
 export const POST: RequestHandler = async (event) => {
+	const requestEnvelope = await readBoundedAgentRequest(event, 'generate-subject');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
+	const body = requestEnvelope;
+
 	const rateLimitCheck = await enforceLLMRateLimit(event, 'subject-line');
 	if (!rateLimitCheck.allowed) {
 		return rateLimitResponse(rateLimitCheck);
@@ -37,25 +37,6 @@ export const POST: RequestHandler = async (event) => {
 	const userContext = getUserContext(event);
 	const startTime = Date.now();
 	const traceId = crypto.randomUUID();
-
-	let body: RequestBody;
-	try {
-		body = (await event.request.json()) as RequestBody;
-	} catch {
-		return json({ error: 'Invalid request body' }, { status: 400 });
-	}
-
-	if (!body.message?.trim()) {
-		return json({ error: 'Message is required' }, { status: 400 });
-	}
-	// parity: bound input length before Gemini billing path.
-	// LLM rate limiter caps daily-call-count; without per-call length cap, a
-	// single huge message can consume disproportionate cost. 16k chars is
-	// generous for civic message bodies; mirrors `/api/embeddings/generate`'s
-	// 8k cap doubled (subjects ingest message+context).
-	if (body.message.length > 16_000) {
-		return json({ error: 'Message too long (max 16,000 characters)' }, { status: 400 });
-	}
 
 	console.log('[generate-subject] trace:', {
 		traceId,
@@ -65,8 +46,10 @@ export const POST: RequestHandler = async (event) => {
 		turn: body.conversationContext ? 2 : 1
 	});
 
-	// Prompt injection detection
-	const injectionCheck = await moderatePromptOnly(body.message);
+	// Prompt injection detection over the full untrusted prompt surface
+	const injectionCheck = await moderatePromptOnly(
+		agentPromptGuardContent('generate-subject', body)
+	);
 	if (!injectionCheck.safe) {
 		return json(
 			{ error: 'Content flagged by safety filter', code: 'PROMPT_INJECTION_DETECTED' },
@@ -95,21 +78,31 @@ export const POST: RequestHandler = async (event) => {
 			durationMs
 		});
 
-		logLLMOperation('subject-line', userContext, {
-			durationMs,
-			success: true,
-			tokenUsage: result.tokenUsage
-		}, traceId);
+		logLLMOperation(
+			'subject-line',
+			userContext,
+			{
+				durationMs,
+				success: true,
+				tokenUsage: result.tokenUsage
+			},
+			traceId
+		);
 
 		return new Response(JSON.stringify(result.data), { headers });
 	} catch (error) {
 		const durationMs = Date.now() - startTime;
 		console.error('[generate-subject] Generation failed:', error);
 
-		logLLMOperation('subject-line', userContext, {
-			durationMs,
-			success: false
-		}, traceId);
+		logLLMOperation(
+			'subject-line',
+			userContext,
+			{
+				durationMs,
+				success: false
+			},
+			traceId
+		);
 
 		return json(
 			{ error: error instanceof Error ? error.message : 'Generation failed' },

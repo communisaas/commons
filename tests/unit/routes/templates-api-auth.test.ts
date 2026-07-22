@@ -140,6 +140,80 @@ describe('POST /api/templates authoring cost gate', () => {
 		mockProjectToHue.mockReset();
 	});
 
+	it('rejects an unknown top-level template field before moderation', async () => {
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, ballast: 'x' }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [expect.objectContaining({ field: 'body', code: 'VALIDATION_INVALID_FORMAT' })]
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('allows a legacy subject field to reach mocked moderation', async () => {
+		mockModerateTemplate.mockResolvedValue({
+			approved: false,
+			rejection_reason: 'test control',
+			summary: 'Rejected by the mocked moderation control',
+			latency_ms: 1
+		});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, subject: 'A subject line' }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code: 'CONTENT_FLAGGED' }
+		});
+		expect(mockModerateTemplate).toHaveBeenCalledOnce();
+	});
+
+	it('rejects an oversized template create request before moderation', async () => {
+		const response = await POST(
+			postEvent({ ...VALID_TEMPLATE, message_body: 'x'.repeat(40_000) })
+		);
+
+		expect(response.status).toBe(413);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code: 'VALIDATION_TOO_LONG' }
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('rejects a non-JSON request body before moderation', async () => {
+		const response = await POST({
+			request: new Request('https://commons.email/api/templates', {
+				method: 'POST',
+				body: 'not-json'
+			}),
+			locals: { user: { id: 'user_1', is_verified: false, trust_score: 100 } }
+		} as never);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code: 'VALIDATION_INVALID_FORMAT' }
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('rejects deeply nested template create JSON before moderation', async () => {
+		let nested: Record<string, unknown> = { v: 1 };
+		for (let i = 0; i < 12; i += 1) nested = { d: nested };
+
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, delivery_config: nested }));
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code: 'VALIDATION_INVALID_FORMAT' }
+		});
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
 	it('rejects an unauthenticated request before parsing or moderation', async () => {
 		const response = await POST({
 			request: new Request('https://commons.email/api/templates', {
