@@ -176,4 +176,25 @@ describe('templates source cache', () => {
 			sourceCacheInputHash
 		});
 	});
+	it('hides draft research from anonymous and non-author readers', async () => {
+		const t = newHarness();
+		const { author, other, templateId } = await seedTemplate(t, {
+			status: 'draft',
+			isPublic: false
+		});
+		const cachedSources = [evaluatedSource(1, 'Draft research')];
+		await author.mutation(api.templates.updateSourceCache, {
+			templateId,
+			cachedSources,
+			sourcesCachedAt: 1_800_000_120_000,
+			sourceCacheInputHash: 'a'.repeat(64)
+		});
+
+		await expect(t.query(api.templates.getSourceCache, { templateId })).resolves.toBeNull();
+		await expect(other.query(api.templates.getSourceCache, { templateId })).resolves.toBeNull();
+		await expect(
+			author.query(api.templates.getSourceCache, { templateId })
+		).resolves.toMatchObject({ cachedSources });
+	});
+
 });

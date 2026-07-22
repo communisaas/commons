@@ -1316,8 +1316,17 @@ export const createCampaignAction = internalMutation({
 		// coordinates before the immutable action and every derived attribution
 		// are constructed. The enclosing mutation makes the user patch, action
 		// insert, histogram, and events one OCC-serialized commit.
+		// actionCount is the single source of truth; reputationTier is always
+		// derived from it via reputationStateForActionCount — here on action,
+		// and in users.recomputeAllReputationTiers as repair/backfill.
 		let effectiveEngagementTier = args.engagementTier;
 		if (args.userId && args.verified) {
+			// The reputation increment is idempotent only through the dedup
+			// early-return above, which requires one of these keys. Fail loud
+			// rather than double-count if a future caller omits both.
+			if (!args.supporterId && !args.congressionalSubmissionId) {
+				throw new Error('CAMPAIGN_ACTION_MISSING_DEDUP_KEY');
+			}
 			const user = await ctx.db.get(args.userId);
 			if (!user) throw new Error('CAMPAIGN_ACTION_USER_NOT_FOUND');
 			const nextUserActionCount = (user.actionCount ?? 0) + 1;

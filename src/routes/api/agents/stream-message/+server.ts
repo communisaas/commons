@@ -332,6 +332,27 @@ export const POST: RequestHandler = async (event) => {
 		contentLength: contentToCheck.length
 	});
 
+	if (injectionCheck.score === -1) {
+		console.error('[stream-message] Moderation unavailable; failing closed');
+		traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+			phase: 'prompt-injection',
+			code: 'SAFETY_UNAVAILABLE'
+		});
+		traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
+			finalPhase: 'prompt-injection',
+			errorCode: 'SAFETY_UNAVAILABLE'
+		});
+		return new Response(
+			JSON.stringify({
+				error: 'Content safety screening is temporarily unavailable',
+				code: 'SAFETY_UNAVAILABLE'
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
 	if (!injectionCheck.safe) {
 		console.log('[stream-message] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),

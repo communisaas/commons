@@ -50,6 +50,13 @@ export const POST: RequestHandler = async (event) => {
 	const injectionCheck = await moderatePromptOnly(
 		agentPromptGuardContent('generate-subject', body)
 	);
+	if (injectionCheck.score === -1) {
+		console.error('[generate-subject] Moderation unavailable; failing closed');
+		return json(
+			{ error: 'Content safety screening is temporarily unavailable', code: 'SAFETY_UNAVAILABLE' },
+			{ status: 503 }
+		);
+	}
 	if (!injectionCheck.safe) {
 		return json(
 			{ error: 'Content flagged by safety filter', code: 'PROMPT_INJECTION_DETECTED' },

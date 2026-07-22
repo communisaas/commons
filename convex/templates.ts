@@ -3296,6 +3296,19 @@ export const getSourceCache = query({
   handler: async (ctx, args) => {
     const template = await ctx.db.get(args.templateId);
     if (!template) return null;
+    // Draft/private research is author-only; anyone else observes a cache
+    // miss (null), matching the route's degrade semantics.
+    if (template.status !== "published" && !template.isPublic) {
+      const identity = await ctx.auth.getUserIdentity();
+      if (!identity) return null;
+      const caller = await ctx.db
+        .query("users")
+        .withIndex("by_tokenIdentifier", (q) =>
+          q.eq("tokenIdentifier", identity.tokenIdentifier),
+        )
+        .unique();
+      if (!caller || caller._id !== template.userId) return null;
+    }
     return {
       cachedSources: template.cachedSources ?? null,
       sourcesCachedAt: template.sourcesCachedAt ?? null,

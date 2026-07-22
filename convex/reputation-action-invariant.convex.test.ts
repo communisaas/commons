@@ -148,4 +148,21 @@ describe('transactional reputation attribution', () => {
 			expect((await t.run((ctx) => ctx.db.get(ids.userId)))?.actionCount).toBe(threshold);
 		}
 	);
+	it('refuses a verified reputation-bearing action without a dedup key', async () => {
+		const t = convexTest({ schema, modules });
+		const ids = await seedCrossing(t, 1);
+
+		await expect(
+			t.mutation(internal.campaigns.createCampaignAction, {
+				campaignId: ids.campaignId,
+				verified: true,
+				engagementTier: 1,
+				trustTier: 3,
+				userId: ids.userId,
+				channel: 'web'
+			})
+		).rejects.toThrow(/CAMPAIGN_ACTION_MISSING_DEDUP_KEY/);
+		expect((await t.run((ctx) => ctx.db.get(ids.userId)))?.actionCount).toBe(0);
+	});
+
 });
