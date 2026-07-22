@@ -5,6 +5,7 @@ import { serverAction, serverQuery } from 'convex-sveltekit';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
+import { reputationStateForActionCount } from '$convex/lib/reputationTier';
 import {
 	isCredentialValidForAction,
 	formatValidationError,
@@ -256,23 +257,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Engagement-tier cross-check. The circuit emits the user's claimed
 		// engagement tier in publicInputs[30] (0-4). The server derives the
-		// same tier from users.actionCount via the same threshold table the
-		// nightly cron uses. A drift of more than 1 tier is the gap between
-		// "honest off-by-one because the cron hasn't run today" and "the
-		// circuit is lying about how active this user is." Reject with HTTP
-		// 422 on the latter; tolerate the former.
+		// same tier from users.actionCount via the shared canonical thresholds.
+		// A proof can be generated immediately before another OCC-serialized
+		// action crosses one adjacent threshold, so tolerate one tier of proof
+		// freshness drift and reject anything larger.
 		const claimedEngagementTier = Number(rawInputsArray[30] ?? 0);
 		const userActionCount = await serverQuery(api.users.getMyActionCount, {});
-		const serverEngagementTier =
-			userActionCount >= 500
-				? 4
-				: userActionCount >= 100
-					? 3
-					: userActionCount >= 25
-						? 2
-						: userActionCount >= 5
-							? 1
-							: 0;
+		const serverEngagementTier = reputationStateForActionCount(userActionCount).engagementTier;
 		if (Math.abs(claimedEngagementTier - serverEngagementTier) > 1) {
 			return json(
 				{

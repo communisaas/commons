@@ -17,6 +17,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { computeSourceCacheInputHash } from '$lib/server/source-cache-key';
 
 const {
 	mockModeratePromptOnly,
@@ -164,12 +165,27 @@ function baseBody(overrides: Record<string, unknown> = {}) {
 		voice_sample: 'My kid is asthmatic — the air matters here.',
 		raw_input: 'I want clean air and clean water for my family.',
 		geographic_scope: {
-			type: 'subnational',
+			type: 'subnational' as const,
 			country: 'US',
 			subdivision: 'IL',
 			locality: 'Springfield'
 		},
 		...overrides
+	};
+}
+
+function cachedSource(num: number, title: string) {
+	return {
+		num,
+		title,
+		url: `https://example.com/${title.toLowerCase().replaceAll(' ', '-')}`,
+		type: 'journalism',
+		snippet: `${title} snippet`,
+		relevance: `${title} relevance`,
+		excerpt: `${title} excerpt`,
+		credibility_rationale: `${title} credibility`,
+		incentive_position: 'neutral',
+		source_order: 'secondary'
 	};
 }
 
@@ -360,15 +376,24 @@ describe('agent-trace pipeline — prompt-injection short circuit', () => {
 
 describe('agent-trace pipeline — source-cache event', () => {
 	it('fires source-cache event with full source URLs/titles when cache hits', async () => {
+		const body = baseBody({ template_id: 'tmpl-1' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
 		mockServerQuery.mockResolvedValueOnce({
 			cachedSources: [
-				{ num: 1, title: 'cached A', url: 'https://example.com/a', type: 'journalism' },
-				{ num: 2, title: 'cached B', url: 'https://example.com/b', type: 'government' }
+				cachedSource(1, 'cached A'),
+				{ ...cachedSource(2, 'cached B'), type: 'government' }
 			],
-			sourcesCachedAt: Date.now()
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash
 		});
 
-		const event = createEvent(baseBody({ template_id: 'tmpl-1' }));
+		const event = createEvent(body);
 		await POST(event);
 		await event.waitUntilPromise;
 
@@ -382,8 +407,18 @@ describe('agent-trace pipeline — source-cache event', () => {
 		});
 		// Explicit URLs captured for cache-hit replay without parsing the prompt block
 		expect(payload.sources).toEqual([
-			{ num: 1, title: 'cached A', url: 'https://example.com/a', type: 'journalism' },
-			{ num: 2, title: 'cached B', url: 'https://example.com/b', type: 'government' }
+			{
+				num: 1,
+				title: 'cached A',
+				url: 'https://example.com/cached-a',
+				type: 'journalism'
+			},
+			{
+				num: 2,
+				title: 'cached B',
+				url: 'https://example.com/cached-b',
+				type: 'government'
+			}
 		]);
 
 		// On cache hit, source-discovery is bypassed. Emit explicit skip so
@@ -397,6 +432,164 @@ describe('agent-trace pipeline — source-cache event', () => {
 			templateId: 'tmpl-1',
 			sourceCount: 2
 		});
+	});
+
+	it('treats a fresh cache for different research inputs as a miss', async () => {
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources: [cachedSource(1, 'unrelated')],
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash: '0'.repeat(64)
+		});
+
+		const event = createEvent(baseBody({ template_id: 'tmpl-mismatch' }));
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockGenerateMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ verifiedSources: undefined })
+		);
+		const cacheEvent = mockTraceEvent.mock.calls.find(([, , evt]) => evt === 'source-cache');
+		expect(cacheEvent?.[3]).toMatchObject({ cacheHit: false, sourceCount: 0 });
+		expect(mockTraceEvent.mock.calls.some(([, , evt]) => evt === 'source-discovery-skipped')).toBe(
+			false
+		);
+	});
+
+	it('treats a matching cache timestamped in the future as a miss', async () => {
+		const body = baseBody({ template_id: 'tmpl-future' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		const cachedSources = [cachedSource(1, 'future')];
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources,
+			sourcesCachedAt: Date.now() + 60 * 60 * 1000,
+			sourceCacheInputHash
+		});
+
+		const event = createEvent(body);
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockGenerateMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ verifiedSources: undefined })
+		);
+		expect(
+			mockTraceEvent.mock.calls.find(([, , evt]) => evt === 'source-cache')?.[3]
+		).toMatchObject({ cacheHit: false, sourceCount: 0 });
+	});
+
+	it('serves a cache hit for evaluator output with empty prose fields', async () => {
+		const body = baseBody({ template_id: 'tmpl-1' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		// The evaluator defaults prose fields to '' when the model omits them —
+		// such entries must still round-trip as hits.
+		const degraded = {
+			...cachedSource(1, 'degraded A'),
+			snippet: '',
+			relevance: '',
+			excerpt: '',
+			credibility_rationale: ''
+		};
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources: [degraded],
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash
+		});
+
+		const event = createEvent(body);
+		await POST(event);
+		await event.waitUntilPromise;
+
+		const cacheCalls = mockTraceEvent.mock.calls.filter(([, , evt]) => evt === 'source-cache');
+		expect(cacheCalls.length).toBe(1);
+		expect(cacheCalls[0][3]).toMatchObject({ cacheHit: true, sourceCount: 1 });
+	});
+
+	it('treats malformed cached sources as a miss and refreshes from generation', async () => {
+		const body = baseBody({ template_id: 'tmpl-poisoned' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		const freshSources = [cachedSource(1, 'fresh source')];
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources: [{ num: 1, title: 'missing url' }],
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash
+		});
+		mockGenerateMessage.mockResolvedValueOnce({
+			message: 'Generated body',
+			sources: [],
+			evaluatedSources: freshSources,
+			research_log: []
+		});
+
+		const event = createEvent(body);
+		const response = await POST(event);
+		await event.waitUntilPromise;
+
+		expect(response.status).toBe(200);
+		expect(mockGenerateMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ verifiedSources: undefined })
+		);
+		expect(
+			mockTraceEvent.mock.calls.find(([, , evt]) => evt === 'source-cache')?.[3]
+		).toMatchObject({ cacheHit: false, sourceCount: 0 });
+		expect(mockTraceEvent.mock.calls.some(([, , evt]) => evt === 'source-discovery-skipped')).toBe(
+			false
+		);
+		expect(mockServerMutation).toHaveBeenCalledWith(
+			api.templates.updateSourceCache,
+			expect.objectContaining({
+				templateId: 'tmpl-poisoned',
+				cachedSources: freshSources,
+				sourceCacheInputHash
+			})
+		);
+	});
+
+	it('writes the same server-derived research-input hash beside fresh source ground', async () => {
+		const body = baseBody({ template_id: 'tmpl-write' });
+		const expectedHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		mockServerQuery.mockResolvedValueOnce(null);
+		mockGenerateMessage.mockResolvedValueOnce({
+			message: 'Generated body',
+			sources: [],
+			evaluatedSources: [cachedSource(1, 'Bound source')],
+			research_log: []
+		});
+
+		const event = createEvent(body);
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockServerMutation).toHaveBeenCalledWith(
+			api.templates.updateSourceCache,
+			expect.objectContaining({
+				templateId: 'tmpl-write',
+				sourceCacheInputHash: expectedHash
+			})
+		);
 	});
 
 	it('does not fire source-discovery-skipped on cache miss', async () => {

@@ -32,6 +32,7 @@ import {
 	validateTemplateInputBudgets,
 	type TemplateInputBudgetResult
 } from '$convex/lib/templateInputBudget';
+import { BoundedJsonRequestError, readBoundedJsonRequest } from '$lib/server/bounded-json-request';
 
 /** Content-addressable fingerprint: same title + body = same template */
 function contentHash(title: string, body: string): string {
@@ -125,6 +126,41 @@ const SOURCE_TITLE_MAX_LENGTH = 500;
 const SOURCE_URL_MAX_LENGTH = 2_048;
 const SOURCE_TYPE_MAX_LENGTH = 64;
 const RESEARCH_LOG_ENTRY_MAX_LENGTH = 1_000;
+const MAX_TEMPLATE_CREATE_REQUEST_BYTES = 32 * 1024;
+const TEMPLATE_CREATE_FIELDS = new Set([
+	'title',
+	'slug',
+	'message_body',
+	'sources',
+	'research_log',
+	'domain',
+	'topics',
+	'type',
+	'deliveryMethod',
+	'preview',
+	'description',
+	'status',
+	'is_public',
+	'delivery_config',
+	'cwc_config',
+	'recipient_config',
+	'geographic_scope',
+	'scopes',
+	'jurisdictions',
+	// Current TemplateCreator legacy response-model fields. They are ignored by
+	// the writer but explicitly named so arbitrary ballast is still rejected.
+	'subject',
+	'campaign_id',
+	'send_count',
+	'coordinationScale',
+	'isNew',
+	'createdAt',
+	'updatedAt',
+	'applicable_countries',
+	'jurisdiction_level',
+	'specific_locations',
+	'recipientEmails'
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -202,6 +238,18 @@ function validateTemplateData(data: unknown): {
 	}
 
 	const templateData = data as Record<string, unknown>;
+	const unknownField = Object.keys(templateData).find(
+		(field) => !TEMPLATE_CREATE_FIELDS.has(field)
+	);
+	if (unknownField) {
+		errors.push(
+			createValidationError(
+				'body',
+				'VALIDATION_INVALID_FORMAT',
+				`Unknown template field: ${unknownField}`
+			)
+		);
+	}
 
 	if (!templateData.title || typeof templateData.title !== 'string' || !templateData.title.trim()) {
 		errors.push(
@@ -573,17 +621,32 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		// Parse request body
 		let requestData: unknown;
 		try {
-			requestData = await request.json();
-		} catch {
+			requestData = await readBoundedJsonRequest(request, MAX_TEMPLATE_CREATE_REQUEST_BYTES, {
+				maxArrayItems: 200,
+				maxDepth: 8,
+				maxNodes: 1_024,
+				// Let the shared template/config validators produce their field-specific
+				// errors at 129 entries; this raw-shape ceiling only stops pathology.
+				maxObjectKeys: 200,
+				// 10,000-char fields at the UTF-8 worst case (4 bytes/char); the
+				// per-field character caps and aggregate byte budgets are enforced
+				// by validateTemplateData and validateTemplateInputBudgets below.
+				maxStringBytes: 40_000
+			});
+		} catch (error) {
+			const boundedError =
+				error instanceof BoundedJsonRequestError
+					? error
+					: new BoundedJsonRequestError('Invalid JSON in request body');
 			const response: StructuredApiResponse = {
 				success: false,
 				error: createApiError(
 					'validation',
-					'VALIDATION_INVALID_FORMAT',
-					'Invalid JSON in request body'
+					boundedError.status === 413 ? 'VALIDATION_TOO_LONG' : 'VALIDATION_INVALID_FORMAT',
+					boundedError.message
 				)
 			};
-			return json(response, { status: 400 });
+			return json(response, { status: boundedError.status });
 		}
 
 		// Validate template data

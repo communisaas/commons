@@ -22,6 +22,7 @@ import { validateReturnTo } from '$lib/core/auth/oauth';
 import { encryptOAuthToken } from '$lib/core/crypto/oauth-token-encryption';
 import { serverMutation } from 'convex-sveltekit';
 import { api } from '$lib/convex';
+import { sealSessionCookie } from '$lib/server/auth/session-cookie';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
@@ -332,8 +333,14 @@ export class OAuthCallbackHandler {
 			proof,
 		});
 
+		const sessionCookie = await sealSessionCookie(
+			session.sessionId,
+			expiresAt,
+			process.env.SESSION_COOKIE_SIGNING_SECRET
+		);
+
 		// Set session cookie
-		cookies.set('auth-session', session.sessionId, {
+		cookies.set('auth-session', sessionCookie, {
 			path: '/',
 			secure: !dev,
 			httpOnly: true,

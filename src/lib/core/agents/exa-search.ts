@@ -14,6 +14,8 @@
 import { getExaClient, getSearchRateLimiter, getContentsRateLimiter } from '$lib/server/exa';
 import { getFirecrawlClient, getFirecrawlRateLimiter } from '$lib/server/firecrawl';
 import { extractContactHints } from '$lib/core/agents/agents/decision-maker';
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
+import { parsePublicHttpUrl } from '$lib/core/security/public-external-url';
 import type { ProvenanceSignals } from '$lib/core/agents/types';
 
 // ============================================================================
@@ -137,8 +139,9 @@ export async function searchWeb(
 	);
 
 	if (!result.success) {
-		console.error(`[exa-search] searchWeb failed:`, result.error);
-		throw new Error(`Search failed: ${result.error}`);
+		const safeError = sanitizeProviderErrorMessage(result.error);
+		console.error(`[exa-search] searchWeb failed:`, safeError);
+		throw new Error(sanitizeProviderErrorMessage(`Search failed: ${safeError}`));
 	}
 
 	if (result.wasRateLimited) {
@@ -197,7 +200,7 @@ async function fetchViaExaFallback(url: string): Promise<ExaPageContent | null> 
 		);
 
 		if (!result.success) {
-			console.debug(`[page-fetch] Exa fallback failed for ${url}:`, result.error);
+			console.debug(`[page-fetch] Exa fallback failed for ${url}:`, sanitizeProviderErrorMessage(result.error));
 			return null;
 		}
 
@@ -240,7 +243,7 @@ async function fetchViaExaFallback(url: string): Promise<ExaPageContent | null> 
 		console.debug(`[page-fetch] Exa fallback: recovered ${enrichedText.length} chars from "${(first.title || '').slice(0, 60)}"`);
 		return content;
 	} catch (err) {
-		console.debug(`[page-fetch] Exa fallback threw for ${url}:`, err instanceof Error ? err.message : err);
+		console.debug(`[page-fetch] Exa fallback threw for ${url}:`, sanitizeProviderErrorMessage(err));
 		return null;
 	}
 }
@@ -249,6 +252,14 @@ export async function readPage(
 	url: string,
 	_options?: { maxCharacters?: number }
 ): Promise<ExaPageContent | null> {
+	// SSRF guard: callers pass URLs sourced from search results and LLM
+	// output. Reject anything whose literal host is not structurally public
+	// before it reaches Firecrawl or the Exa contents fallback.
+	if (!parsePublicHttpUrl(url)) {
+		console.warn(`[page-fetch] readPage: rejected non-public URL: ${String(url).slice(0, 120)}`);
+		return null;
+	}
+
 	const firecrawl = getFirecrawlClient();
 	const rateLimiter = getFirecrawlRateLimiter();
 
@@ -264,7 +275,7 @@ export async function readPage(
 	);
 
 	if (!result.success) {
-		console.warn(`[page-fetch] Firecrawl failed for ${url}: ${result.error} — trying Exa fallback`);
+		console.warn(`[page-fetch] Firecrawl failed for ${url}: ${sanitizeProviderErrorMessage(result.error)} — trying Exa fallback`);
 		return await fetchViaExaFallback(url);
 	}
 

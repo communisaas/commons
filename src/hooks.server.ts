@@ -7,7 +7,6 @@ import {
 	createRateLimitHeaders,
 	SlidingWindowRateLimiter
 } from '$lib/core/security/rate-limiter';
-import { deriveTrustTier } from '$lib/core/identity/authority-level';
 import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { configure } from '$lib/core/shadow-atlas/ipfs-store';
 import { initCloudflareSentryHandle, sentryHandle, handleErrorWithSentry } from '@sentry/sveltekit';
@@ -16,6 +15,12 @@ import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	resolveSessionCookieSecrets,
+	resolveSessionFromCookie,
+	sealSessionCookie
+} from '$lib/server/auth/session-cookie';
+import { buildLocalsUser } from '$lib/server/auth/session-user';
 import { api } from '$lib/convex';
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
@@ -86,14 +91,33 @@ const SESSION_COOKIE = 'auth-session';
 
 const handleAuth: Handle = async ({ event, resolve }) => {
 	try {
-		const sessionId = event.cookies.get(SESSION_COOKIE);
-		if (!sessionId) {
+		const cookieValue = event.cookies.get(SESSION_COOKIE);
+		if (!cookieValue) {
 			event.locals.user = null;
 			event.locals.session = null;
 			return resolve(event);
 		}
 
-		const result = await serverQuery(api.authOps.validateSession, { _secret: getInternalSecret(), sessionId });
+		const { activeSecret, previousSecret } = resolveSessionCookieSecrets({
+			activeSecret: process.env.SESSION_COOKIE_SIGNING_SECRET,
+			previousSecret: process.env.SESSION_COOKIE_SIGNING_SECRET_PREVIOUS || undefined
+		});
+		const resolvedCookie = await resolveSessionFromCookie({
+			cookieValue,
+			activeSecret,
+			previousSecret,
+			now: Date.now(),
+			queryAuthority: (sessionId) =>
+				serverQuery(api.authOps.validateSession, { _secret: getInternalSecret(), sessionId })
+		});
+		if (resolvedCookie.status === 'missing' || resolvedCookie.status === 'invalid') {
+			event.locals.user = null;
+			event.locals.session = null;
+			return resolve(event);
+		}
+
+		const result = resolvedCookie.authority;
+		const sessionId = resolvedCookie.sessionId;
 
 		if (!result) {
 			event.cookies.delete(SESSION_COOKIE, { path: '/' });
@@ -117,15 +141,22 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			return resolve(event);
 		}
 
-		if (renewed) {
-			// Extend cookie expiry to match renewed session
-			event.cookies.set(SESSION_COOKIE, session.id, {
+		if (renewed || resolvedCookie.needsReseal) {
+			const sessionCookie = await sealSessionCookie(
+				session.id as string,
+				session.expiresAt,
+				activeSecret
+			);
+			event.cookies.set(SESSION_COOKIE, sessionCookie, {
 				path: '/',
 				sameSite: 'lax',
 				httpOnly: true,
 				expires: new Date(session.expiresAt),
 				secure: !dev
 			});
+		}
+
+		if (renewed) {
 			// Log Convex renewal failures rather than swallowing silently.
 			// The cookie expiry has been extended on the response, but if the
 			// Convex renewal fails (transient outage, schema drift, race
@@ -144,54 +175,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			});
 		}
 
-		event.locals.user = {
-			id: user._id as string,
-			email: userEmail,
-			name: user.name ?? null,
-			avatar: user.avatar ?? null,
-			// PII custody
-			email_hash: user.emailHash ?? null,
-			// Verification status
-			is_verified: user.isVerified,
-			verification_method: user.verificationMethod ?? null,
-			verified_at: user.verifiedAt ? new Date(user.verifiedAt) : null,
-			// Graduated trust
-			trust_tier: deriveTrustTier({
-				passkey_credential_id: user.passkeyCredentialId ?? null,
-				district_verified: user.districtVerified ?? false,
-				address_verified_at: user.addressVerifiedAt ? new Date(user.addressVerifiedAt) : null,
-				identity_commitment: user.identityCommitment ?? null,
-				document_type: user.documentType ?? null,
-				trust_score: user.trustScore ?? 0
-			}),
-			// Passkey
-			passkey_credential_id: user.passkeyCredentialId ?? null,
-			did_key: user.didKey ?? null,
-			// ZK identity
-			identity_commitment: user.identityCommitment ?? null,
-			// District
-			district_hash: user.districtHash ?? null,
-			district_verified: user.districtVerified ?? false,
-			address_verified_at: user.addressVerifiedAt ? new Date(user.addressVerifiedAt) : null,
-			// Profile
-			role: user.role ?? null,
-			organization: user.organization ?? null,
-			location: user.location ?? null,
-			connection: user.connection ?? null,
-			profile_completed_at: user.profileCompletedAt ? new Date(user.profileCompletedAt) : null,
-			profile_visibility: user.profileVisibility ?? 'private',
-			// Reputation
-			trust_score: user.trustScore ?? 0,
-			reputation_tier: user.reputationTier ?? 'novice',
-			// Wallet
-			wallet_address: user.walletAddress ?? null,
-			wallet_type: user.walletType ?? null,
-			near_account_id: user.nearAccountId ?? null,
-			near_derived_scroll_address: user.nearDerivedScrollAddress ?? null,
-			// Timestamps
-			createdAt: new Date(user._creationTime),
-			updatedAt: new Date(user.updatedAt)
-		};
+		event.locals.user = buildLocalsUser(user, userEmail);
 		event.locals.session = {
 			id: session.id as string,
 			userId: session.userId,

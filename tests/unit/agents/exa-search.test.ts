@@ -135,11 +135,55 @@ describe('searchWeb', () => {
 
 		await expect(searchWeb('test')).rejects.toThrow('Search failed');
 	});
+
+	it('scrubs provider credentials from search failure errors', async () => {
+		const bearer = `Bearer ${'b'.repeat(48)}`;
+		mockSearch.mockRejectedValue(new Error(`401 unauthorized: ${bearer}`));
+
+		const rejection = await searchWeb('test').catch((error: unknown) => error);
+
+		expect(rejection).toBeInstanceOf(Error);
+		const message = (rejection as Error).message;
+		expect(message).toContain('Search failed');
+		expect(message).toContain('[redacted-credential]');
+		expect(message).not.toContain(bearer);
+	});
 });
 
 describe('readPage', () => {
 	beforeEach(() => {
 		mockScrape.mockReset();
+	});
+
+	it('rejects non-public URLs without calling any provider', async () => {
+		for (const url of [
+			'http://127.0.0.1/admin',
+			'http://169.254.169.254/latest/meta-data',
+			'http://10.0.0.1/internal',
+			'http://[::1]/admin',
+			'http://[::ffff:127.0.0.1]/admin',
+			'http://service.internal/admin',
+			'http://localhost/admin',
+			'file:///etc/passwd',
+			'https://user:password@example.com/private'
+		]) {
+			expect(await readPage(url)).toBeNull();
+		}
+		expect(mockScrape).not.toHaveBeenCalled();
+	});
+
+	it('still scrapes structurally public URLs', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Contact the clerk\nEmail: clerk@denvergov.org',
+			links: [],
+			metadata: { title: 'City Clerk', statusCode: 200 }
+		});
+
+		const result = await readPage('https://denvergov.org/clerk');
+
+		expect(mockScrape).toHaveBeenCalledTimes(1);
+		expect(result).not.toBeNull();
 	});
 
 	it('calls firecrawl.scrapeUrl with markdown+links+rawHtml format', async () => {

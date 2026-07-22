@@ -14,6 +14,11 @@ import { v } from 'convex/values';
 import { recipientFilterValidator } from './_validators';
 import { requireOrgRole, requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
+import {
+	assertAbMetadataInput,
+	assertEmailDraftInput,
+	assertEmailDraftPatch
+} from './lib/emailInputBudget';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
 import { computeOrgScopedEmailHash } from './_orgHash';
@@ -793,6 +798,7 @@ export const createBlast = mutation({
 		abParentId: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		assertEmailDraftInput(args);
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 
 		const id = await ctx.db.insert('emailBlasts', {
@@ -850,6 +856,19 @@ export const createAbTestDrafts = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertEmailDraftInput({
+			subject: args.subjectA,
+			bodyHtml: args.bodyHtmlA,
+			fromName: args.fromName,
+			fromEmail: args.fromEmail
+		});
+		assertEmailDraftInput({
+			subject: args.subjectB,
+			bodyHtml: args.bodyHtmlB,
+			fromName: args.fromName,
+			fromEmail: args.fromEmail
+		});
+		assertAbMetadataInput(args.abParentId, args.abTestConfig);
 		const baseFilter = readSafeRecipientFilter(args.recipientFilter);
 		const variantAEmailHashes =
 			cleanStringArray(args.variantAEmailHashes, (hash) => EMAIL_HASH_RE.test(hash)) ?? [];
@@ -961,6 +980,7 @@ export const updateBlast = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertEmailDraftPatch(args);
 
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) {

@@ -14,7 +14,7 @@ import { getInternalSecret } from '$lib/server/internal/secret-auth';
 const BATCH_SIZE = 20;
 const FALLBACK_CONCURRENCY = 4;
 const EMBEDDING_TASK = { taskType: 'RETRIEVAL_DOCUMENT' as const };
-const FALLBACK_EMBEDDING_TASK = { ...EMBEDDING_TASK, maxRetries: 1 };
+const FALLBACK_EMBEDDING_TASK = { ...EMBEDDING_TASK, maxRetries: 1 as const };
 const TEMPLATE_SPECIFIC_BATCH_FAILURE_PATTERNS = [
 	/\binvalid (?:input|argument)\b/i,
 	/\btext too long\b/i,

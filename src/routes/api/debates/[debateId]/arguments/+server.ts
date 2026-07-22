@@ -7,6 +7,16 @@ import type { Id } from '$convex/_generated/dataModel';
 import { solidityPackedKeccak256 } from 'ethers';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { readBoundedJson } from '$lib/server/bounded-json';
+
+const DEBATE_ARGUMENT_REQUEST_MAX_BYTES = 128 * 1024;
+const DEBATE_ARGUMENT_BODY_MAX = 8_000;
+const DEBATE_AMENDMENT_BODY_MAX = 4_000;
+const DEBATE_PROOF_MAX_BYTES = 64 * 1024;
+/** Must match uint256[31] in DebateMarket submitArgument (debate-market-client.ts). */
+const DEBATE_PUBLIC_INPUT_COUNT = 31;
+const DEBATE_NULLIFIER_MAX_LENGTH = 256;
+const MAX_ARGUMENT_LIST_OFFSET = 10_000;
 
 function verifyTransactionAsync(_txHash: string, _context: Record<string, unknown>): void {
 	// Transaction verification worker is not wired in this API boundary yet.
@@ -29,8 +39,16 @@ export const GET: RequestHandler = async ({ params, url }) => {
 	const { debateId } = params;
 
 	const stance = url.searchParams.get('stance');
-	const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50'), 100);
-	const offset = parseInt(url.searchParams.get('offset') ?? '0');
+	if (stance !== null && !['SUPPORT', 'OPPOSE', 'AMEND'].includes(stance)) {
+		throw error(400, 'Invalid stance');
+	}
+	const rawLimit = Number(url.searchParams.get('limit') ?? '50');
+	if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) throw error(400, 'Invalid limit');
+	const limit = Math.min(rawLimit, 100);
+	const offset = Number(url.searchParams.get('offset') ?? '0');
+	if (!Number.isSafeInteger(offset) || offset < 0 || offset > MAX_ARGUMENT_LIST_OFFSET) {
+		throw error(400, 'Invalid offset');
+	}
 
 	const result = await serverQuery(api.debates.listArguments, {
 		debateId: debateId as Id<'debates'>,
@@ -74,8 +92,21 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		throw error(400, 'Debate deadline has passed');
 	}
 
-	const body = await request.json();
-	const { stance, body: argumentBody, amendmentText, stakeAmount, proofHex, publicInputs, nullifierHex, walletAddress } = body;
+	const parsed = await readBoundedJson(request, DEBATE_ARGUMENT_REQUEST_MAX_BYTES);
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		throw error(400, 'Invalid argument request');
+	}
+	const body = parsed as Record<string, any>;
+	const {
+		stance,
+		body: argumentBody,
+		amendmentText,
+		stakeAmount,
+		proofHex,
+		publicInputs,
+		nullifierHex,
+		walletAddress
+	} = body;
 
 	const stakeNum = Number(stakeAmount);
 	if (!stakeAmount || isNaN(stakeNum) || stakeNum <= 0 || stakeNum > 100_000_000_000) {
@@ -88,10 +119,27 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!argumentBody || typeof argumentBody !== 'string' || argumentBody.length < 20) {
 		throw error(400, 'Argument body must be at least 20 characters');
 	}
+	if (argumentBody.length > DEBATE_ARGUMENT_BODY_MAX) {
+		throw error(400, `Argument body must be ${DEBATE_ARGUMENT_BODY_MAX} characters or fewer`);
+	}
+	if (
+		amendmentText !== undefined &&
+		(typeof amendmentText !== 'string' || amendmentText.length > DEBATE_AMENDMENT_BODY_MAX)
+	) {
+		throw error(400, `Amendment text must be ${DEBATE_AMENDMENT_BODY_MAX} characters or fewer`);
+	}
 	if (stance === 'AMEND' && (!amendmentText || amendmentText.length < 5)) {
 		throw error(400, 'Amendment text is required for AMEND stance');
 	}
-	if (!proofHex || !publicInputs || !nullifierHex) {
+	if (
+		typeof proofHex !== 'string' ||
+		proofHex.length > DEBATE_PROOF_MAX_BYTES ||
+		!Array.isArray(publicInputs) ||
+		publicInputs.length !== DEBATE_PUBLIC_INPUT_COUNT ||
+		typeof nullifierHex !== 'string' ||
+		nullifierHex.length === 0 ||
+		nullifierHex.length > DEBATE_NULLIFIER_MAX_LENGTH
+	) {
 		throw error(400, 'ZK proof data is required');
 	}
 

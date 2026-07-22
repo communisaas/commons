@@ -57,7 +57,7 @@ function isSupporterWriter(src: string): boolean {
 
 function listConvexSources(): Array<{ file: string; src: string }> {
 	return readdirSync(CONVEX_DIR)
-		.filter((f) => f.endsWith('.ts'))
+		.filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
 		.map((file) => ({ file, src: readFileSync(path.join(CONVEX_DIR, file), 'utf8') }));
 }
 

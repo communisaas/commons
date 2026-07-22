@@ -11,6 +11,22 @@ export const MAX_TEMPLATE_CONFIG_BYTES = 8_192;
 export const MAX_GEOGRAPHIC_SCOPE_BYTES = 1_024;
 export const MAX_PUBLIC_TEMPLATE_SCOPES = 100;
 export const MAX_PUBLIC_TEMPLATE_JURISDICTIONS = 100;
+export const MAX_TEMPLATE_DOMAIN_BYTES = 200;
+// The slug is copied verbatim into route-bearing list projections. Keep this
+// aligned with the HTTP route's 100-code-point sanitizer at the UTF-8 maximum.
+export const MAX_TEMPLATE_SLUG_BYTES = 400;
+// These field limits are also the exact public-detail projection envelope.
+// Keeping them here makes every accepted public authoring input projectable;
+// aggregate JSON limits alone cannot prevent one field from consuming an
+// incompatible share of the detail document.
+export const MAX_TEMPLATE_TITLE_BYTES = 4_000;
+export const MAX_TEMPLATE_DESCRIPTION_BYTES = 4_000;
+export const MAX_TEMPLATE_MESSAGE_BODY_BYTES = 40_000;
+export const MAX_TEMPLATE_PREVIEW_BYTES = 2_000;
+export const MAX_TEMPLATE_TYPE_BYTES = 256;
+export const MAX_TEMPLATE_DELIVERY_METHOD_BYTES = 256;
+export const MAX_TEMPLATE_TOPICS = 5;
+export const MAX_TEMPLATE_TOPIC_BYTES = 100;
 
 export const TEMPLATE_AUTHORING_STRUCTURE_BUDGET = {
 	maxBytes: MAX_TEMPLATE_AUTHORING_INPUT_BYTES,
@@ -143,8 +159,10 @@ export function validateBoundedJson(value: unknown, budget: JsonStructureBudget)
 
 export interface TemplateAuthoringBudgetInput {
 	title: unknown;
-	slug?: unknown;
-	description?: unknown;
+	/** Canonical route slug; every persisted template writer must budget it. */
+	slug: unknown;
+	/** Canonical public description; writers normalize absence to an empty string. */
+	description: unknown;
 	messageBody: unknown;
 	preview: unknown;
 	type: unknown;
@@ -251,11 +269,97 @@ export function validateGeographicScope(value: unknown): TemplateInputBudgetResu
 	return { ok: false, scope: 'geographic_scope', reason: 'invalid_geographic_scope' };
 }
 
+/**
+ * Validate only metadata fields a metadata-only writer is authorized to change.
+ * Unchanged legacy configs are deliberately outside this boundary: rechecking
+ * the full historical document would strand otherwise safe domain/topic edits.
+ */
+export function validateTemplateMetadataBudgets(input: {
+	domain?: unknown;
+	topics?: unknown;
+}): TemplateInputBudgetResult {
+	if (
+		input.domain !== undefined &&
+		(typeof input.domain !== 'string' || encodedLength(input.domain) > MAX_TEMPLATE_DOMAIN_BYTES)
+	) {
+		return {
+			ok: false,
+			scope: 'public_input',
+			reason: 'max_bytes',
+			actual: typeof input.domain === 'string' ? encodedLength(input.domain) : undefined,
+			limit: MAX_TEMPLATE_DOMAIN_BYTES
+		};
+	}
+	if (input.topics !== undefined) {
+		if (!Array.isArray(input.topics)) {
+			return { ok: false, scope: 'public_input', reason: 'invalid_json_value' };
+		}
+		if (input.topics.length > MAX_TEMPLATE_TOPICS) {
+			return {
+				ok: false,
+				scope: 'public_input',
+				reason: 'max_container_entries',
+				actual: input.topics.length,
+				limit: MAX_TEMPLATE_TOPICS
+			};
+		}
+		for (const topic of input.topics) {
+			if (typeof topic !== 'string') {
+				return { ok: false, scope: 'public_input', reason: 'invalid_json_value' };
+			}
+			const bytes = encodedLength(topic);
+			if (bytes > MAX_TEMPLATE_TOPIC_BYTES) {
+				return {
+					ok: false,
+					scope: 'public_input',
+					reason: 'max_bytes',
+					actual: bytes,
+					limit: MAX_TEMPLATE_TOPIC_BYTES
+				};
+			}
+		}
+	}
+	return { ok: true };
+}
+
 /** Enforce aggregate config, full-document, and public-projection input budgets. */
 export function validateTemplateInputBudgets(
 	input: TemplateAuthoringBudgetInput,
 	options: { includePublicInput?: boolean } = {}
 ): TemplateInputBudgetResult {
+	if (typeof input.slug !== 'string' || encodedLength(input.slug) > MAX_TEMPLATE_SLUG_BYTES) {
+		return {
+			ok: false,
+			scope: 'authoring_input',
+			reason: 'max_bytes',
+			actual: typeof input.slug === 'string' ? encodedLength(input.slug) : undefined,
+			limit: MAX_TEMPLATE_SLUG_BYTES
+		};
+	}
+	for (const [value, limit] of [
+		[input.title, MAX_TEMPLATE_TITLE_BYTES],
+		[input.description, MAX_TEMPLATE_DESCRIPTION_BYTES],
+		[input.messageBody, MAX_TEMPLATE_MESSAGE_BODY_BYTES],
+		[input.preview, MAX_TEMPLATE_PREVIEW_BYTES],
+		[input.type, MAX_TEMPLATE_TYPE_BYTES],
+		[input.deliveryMethod, MAX_TEMPLATE_DELIVERY_METHOD_BYTES]
+	] as const) {
+		if (typeof value !== 'string' || encodedLength(value) > limit) {
+			return {
+				ok: false,
+				scope: 'public_input',
+				reason: 'max_bytes',
+				actual: typeof value === 'string' ? encodedLength(value) : undefined,
+				limit
+			};
+		}
+	}
+	const metadataBudget = validateTemplateMetadataBudgets({
+		domain: input.domain,
+		topics: input.topics
+	});
+	if (!metadataBudget.ok) return metadataBudget;
+
 	const configs = {
 		deliveryConfig: input.deliveryConfig ?? {},
 		cwcConfig: input.cwcConfig ?? {},

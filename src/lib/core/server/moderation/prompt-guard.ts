@@ -16,9 +16,10 @@
  * @see https://console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m
  */
 
-import { env } from '$env/dynamic/private';
+import { boundPromptGuardInput } from './prompt-guard-budget';
+import { GroqTransportError, requestGroqChatCompletion } from './groq-transport';
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL = 'meta-llama/llama-prompt-guard-2-86m';
 
 /**
@@ -47,14 +48,16 @@ export interface PromptGuardResult {
 }
 
 /**
- * Fail-open result returned when the guard service is unreachable.
+ * Fail-closed sentinel returned when the guard service is unreachable.
  * score = -1 is a sentinel: real scores are [0, 1]. Callers and traces
  * can distinguish "guard unavailable" from "guard said safe" (score ~0).
  */
 function unavailableResult(threshold: number, reason: string): PromptGuardResult {
-	console.error(`[prompt-guard] Guard unavailable — failing open: ${reason}`);
+	console.error(
+		`[prompt-guard] Guard unavailable — holding content: ${sanitizeProviderErrorMessage(reason)}`
+	);
 	return {
-		safe: true,
+		safe: false,
 		score: -1,
 		threshold,
 		timestamp: new Date().toISOString(),
@@ -65,65 +68,57 @@ function unavailableResult(threshold: number, reason: string): PromptGuardResult
 /**
  * Detect prompt injection attacks using Llama Prompt Guard 2
  *
- * Fail-open design: if GROQ is down, rate-limited, or returns garbage,
- * the function returns safe=true with score=-1 (sentinel). A third-party
- * outage must never become a denial-of-service against our own users.
- * The guard protects agents from manipulation — it is not a user-blocking gate.
+ * Fail-closed design: if GROQ is down, rate-limited, or returns garbage,
+ * the function returns safe=false with score=-1 (sentinel). Pipeline wrappers
+ * convert that sentinel into an availability error, so unavailable moderation
+ * can never be mistaken for a safe decision.
  *
  * @param content - User input to check for injection attempts
  * @param threshold - Score threshold (default 0.5, higher = more permissive)
- * @returns PromptGuardResult with score and classification (never throws)
+ * @returns PromptGuardResult with score and classification
+ * Inputs longer than the model's reviewed window are truncated before classification.
  */
 export async function detectPromptInjection(
 	content: string,
-	threshold: number = DEFAULT_THRESHOLD
+	threshold: number = DEFAULT_THRESHOLD,
+	options: { signal?: AbortSignal } = {}
 ): Promise<PromptGuardResult> {
-	const apiKey = env.GROQ_API_KEY;
-
-	if (!apiKey) {
-		console.warn('[prompt-guard] GROQ_API_KEY not configured, allowing by default');
-		return unavailableResult(threshold, 'GROQ_API_KEY not configured');
+	const guarded = boundPromptGuardInput(content);
+	if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+		throw new RangeError('Prompt-guard threshold must be between 0 and 1');
 	}
 
 	const startTime = Date.now();
 
-	// Prompt Guard 2 has 512 token context limit
-	// Truncate long inputs to avoid context overflow
-	const truncatedContent = content.slice(0, 2000);
-
-	let response: Response;
+	let data: Record<string, unknown>;
 	try {
-		response = await fetch(GROQ_API_URL, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Authorization: `Bearer ${apiKey}`
-			},
-			body: JSON.stringify({
+		data = await requestGroqChatCompletion<Record<string, unknown>>(
+			{
 				model: MODEL,
-				messages: [{ role: 'user', content: truncatedContent }],
-				temperature: 0
-			})
-		});
+				messages: [{ role: 'user', content: guarded }],
+				temperature: 0,
+				max_tokens: 16
+			},
+			{
+				signal: options.signal
+			}
+		);
 	} catch (err) {
-		return unavailableResult(threshold, `fetch failed: ${err instanceof Error ? err.message : err}`);
-	}
-
-	if (!response.ok) {
-		const errorText = await response.text().catch(() => '(unreadable)');
+		if (
+			err !== null &&
+			typeof err === 'object' &&
+			'name' in err &&
+			(err as { name?: unknown }).name === 'AbortError'
+		) {
+			throw err;
+		}
 		// 403 on Groq for prompt-guard models is almost always a model-permission
 		// block at the org or project level (see
 		// https://console.groq.com/docs/model-permissions). Surface the specific
 		// code so an operator can flip the right toggle instead of chasing a
 		// generic "GROQ 403". Other 4xx/5xx fall through to a plain log.
-		if (response.status === 403) {
-			let code: string | undefined;
-			try {
-				const parsed = JSON.parse(errorText) as { error?: { code?: string } };
-				code = parsed?.error?.code;
-			} catch {
-				/* errorText is not JSON; leave code undefined */
-			}
+		if (err instanceof GroqTransportError && err.status === 403) {
+			const code = err.code ? sanitizeProviderErrorMessage(err.code) : undefined;
 			const remediation =
 				code === 'model_permission_blocked_org'
 					? 'org admin must enable meta-llama/llama-prompt-guard-2-86m at console.groq.com/settings'
@@ -134,26 +129,19 @@ export async function detectPromptInjection(
 				`[prompt-guard] LAYER 1 MODERATION DISABLED — Groq 403${code ? ` (${code})` : ''}: ${remediation}`
 			);
 		}
-		return unavailableResult(threshold, `GROQ ${response.status}: ${errorText.slice(0, 200)}`);
+		return unavailableResult(threshold, sanitizeProviderErrorMessage(err));
 	}
 
-	let data: Record<string, unknown>;
-	try {
-		data = await response.json();
-	} catch {
-		return unavailableResult(threshold, 'GROQ returned unparseable JSON');
-	}
+	const scoreValue = (data.choices as Array<{ message?: { content?: unknown } }>)?.[0]?.message
+		?.content;
+	const scoreString = typeof scoreValue === 'string' ? scoreValue.trim() : '';
+	const exactDecimal = /^(?:0|[1-9]\d*)(?:\.\d+)?(?:e[+-]?\d+)?$/iu;
+	const score = exactDecimal.test(scoreString) ? Number(scoreString) : Number.NaN;
 
-	const scoreString = (data.choices as Array<{ message?: { content?: string } }>)?.[0]?.message?.content || '0';
-	const score = parseFloat(scoreString);
-
-	if (Number.isNaN(score)) {
-		// Cap echoed Groq response to 200 chars to bound log volume on
-		// adversarial / pathological API output (matches the sibling
-		// errorText path at line 114). (cure shipped).
+	if (!Number.isFinite(score) || score < 0 || score > 1) {
 		return unavailableResult(
 			threshold,
-			`GROQ returned non-numeric score: "${scoreString.slice(0, 200)}"`,
+			sanitizeProviderErrorMessage(`GROQ returned invalid score: "${scoreString}"`)
 		);
 	}
 
@@ -181,7 +169,10 @@ export async function detectPromptInjection(
  * @param content - User input to check
  * @returns true if injection detected
  */
-export async function isPromptInjection(content: string): Promise<boolean> {
-	const result = await detectPromptInjection(content);
+export async function isPromptInjection(
+	content: string,
+	options: { signal?: AbortSignal } = {}
+): Promise<boolean> {
+	const result = await detectPromptInjection(content, DEFAULT_THRESHOLD, options);
 	return !result.safe;
 }

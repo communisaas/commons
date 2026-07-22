@@ -20,7 +20,6 @@ import type {
 	ConversationContext,
 	TokenUsage
 } from '../types';
-import { sumTokenUsage } from '../types';
 
 // ============================================================================
 // Zod Schema for Runtime Validation
@@ -214,6 +213,7 @@ ${options.description}`;
 	);
 
 	const response = await interact(prompt, {
+		stage: 'subject-line',
 		systemInstruction: systemPrompt,
 		responseSchema: SUBJECT_LINE_SCHEMA,
 		temperature: 0.7, // Creative latitude for sharp, resonant lines
@@ -221,7 +221,7 @@ ${options.description}`;
 		previousInteractionId: options.previousInteractionId
 	});
 
-	let pipelineTokenUsage: TokenUsage | undefined = response.tokenUsage;
+	const pipelineTokenUsage: TokenUsage | undefined = response.tokenUsage;
 
 	// Parse and validate the response
 	const parsed = JSON.parse(response.outputs);
@@ -234,8 +234,7 @@ ${options.description}`;
 		);
 	}
 
-	let data = validationResult.data as SubjectLineResponseWithClarification;
-	let currentInteractionId = response.id;
+	const data = validationResult.data as SubjectLineResponseWithClarification;
 
 	// Validate: if needs_clarification is true but no questions provided, override to false
 	// This handles cases where the agent hedges (says it needs clarification but doesn't ask)
@@ -249,44 +248,11 @@ ${options.description}`;
 		data.needs_clarification = false;
 	}
 
-	// If agent returned neither clarification questions nor a subject line, retry with explicit instruction
+	// A schema-valid but semantically empty response is a model-quality failure;
+	// retrying doubled paid provider work for the same input. The caller may
+	// submit a new request instead.
 	if (!data.needs_clarification && !data.subject_line) {
-		console.debug(
-			'[subject-line] Agent returned empty response - retrying with explicit instruction'
-		);
-
-		const retryResponse = await interact(
-			`You must generate a subject line now. The user said: "${options.description}"
-
-Generate the output with subject_line, core_message, topics, url_slug, and voice_sample. Do not ask for clarification.`,
-			{
-				systemInstruction: systemPrompt,
-				responseSchema: SUBJECT_LINE_SCHEMA,
-				temperature: 0.8, // Higher on retry for creative range
-				thinkingLevel: 'low',
-				previousInteractionId: currentInteractionId
-			}
-		);
-
-		// Parse and validate retry response
-		const retryParsed = JSON.parse(retryResponse.outputs);
-		const retryValidation = SubjectLineResponseSchema.safeParse(retryParsed);
-
-		if (!retryValidation.success) {
-			console.error('[subject-line] Invalid retry response:', retryValidation.error.flatten());
-			throw new Error(
-				`Invalid retry response: ${retryValidation.error.errors[0]?.message || 'Unknown validation error'}`
-			);
-		}
-
-		data = retryValidation.data as SubjectLineResponseWithClarification;
-		currentInteractionId = retryResponse.id;
-		pipelineTokenUsage = sumTokenUsage(pipelineTokenUsage, retryResponse.tokenUsage);
-		data.needs_clarification = false; // Force no clarification on retry
-
-		console.debug('[subject-line] Retry result:', {
-			has_subject_line: !!data.subject_line
-		});
+		throw new Error('Subject-line provider returned no usable subject line');
 	}
 
 	console.debug('[subject-line] Result:', {
@@ -297,7 +263,7 @@ Generate the output with subject_line, core_message, topics, url_slug, and voice
 
 	return {
 		data,
-		interactionId: currentInteractionId,
+		interactionId: response.id,
 		tokenUsage: pipelineTokenUsage
 	};
 }

@@ -123,6 +123,8 @@ declare global {
 				PUBLIC_SENTRY_DSN?: string;
 				PUBLIC_SENTRY_ENVIRONMENT?: string;
 				ENVIRONMENT?: string;
+				SESSION_COOKIE_SIGNING_SECRET?: string; // Pages-only HMAC key for auth-session cookie envelopes
+				SESSION_COOKIE_SIGNING_SECRET_PREVIOUS?: string; // Optional previous cookie key for rotation
 				MDL_OPENID4VP_REQUEST_PRIVATE_KEY?: string;
 				MDL_OPENID4VP_REQUEST_X5C?: string;
 				MDL_OPENID4VP_REQUEST_ALG?: string;
@@ -178,6 +180,8 @@ declare global {
 			CONVEX_JWT_PRIVATE_KEY?: string; // RSA private key (PKCS#8 PEM) for minting Convex auth JWTs
 			CONVEX_AUTH_ISSUER?: string; // JWT issuer URL (defaults to https://commons.email)
 			SESSION_CREATION_SECRET?: string; // HMAC proof key for SvelteKit-created Convex sessions
+			SESSION_COOKIE_SIGNING_SECRET?: string; // Pages-only HMAC key for auth-session cookie envelopes
+			SESSION_COOKIE_SIGNING_SECRET_PREVIOUS?: string; // Optional previous cookie key for rotation
 			DEV_LOGIN_TOKEN?: string; // Non-production Playwright/dev login bearer token
 			PLAYWRIGHT_DEV_LOGIN_TOKEN?: string; // Test runner token forwarded to DEV_LOGIN_TOKEN
 

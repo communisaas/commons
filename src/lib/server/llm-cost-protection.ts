@@ -77,6 +77,13 @@ const QUOTAS: Record<string, Record<LLMTrustTier, [number, number]>> = {
 		verified: [20, 3600000] // 20 per hour
 	},
 
+	// Delegation policy parsing: 1-2 Gemini calls (~$0.01-0.02)
+	'delegation-policy': {
+		guest: [0, 3600000], // BLOCKED (route requires auth)
+		authenticated: [0, 3600000], // BLOCKED (route requires Trust Tier 3+, which maps to verified)
+		verified: [3, 3600000] // 3 per hour
+	},
+
 	// Global daily limit across all operations (circuit breaker)
 	'daily-global': {
 		guest: [3, 86400000], // 3 per day total

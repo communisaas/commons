@@ -332,11 +332,14 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const result = await generateWithThoughts<MessageResponse>(
 		prompt,
 		{
+			stage: 'message-write',
 			systemInstruction: systemPrompt,
 			temperature: 0.8,
 			thinkingLevel: 'high',
 			enableGrounding: false, // Disabled — using bounded source ground
-			maxOutputTokens: 65536
+			// Civic messages do not need a 65K-token tail. This cap still leaves ample
+			// room for high-level thinking plus the bounded response schema.
+			maxOutputTokens: 8192
 		},
 		onThought ? (thought) => onThought(thought, 'message') : undefined
 	);

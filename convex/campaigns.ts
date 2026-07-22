@@ -24,6 +24,7 @@ import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 import { computeCampaignDistrictSets } from './_campaignStats';
+import { engagementTierForReputationTier, reputationStateForActionCount } from './lib/reputationTier';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -1087,16 +1088,7 @@ export const getUserTrustTier = internalQuery({
 
 		if (!user) return null;
 
-		// Derive engagement tier from user's reputation data
-		// reputationTier is a string: 'new' | 'active' | 'established' | 'veteran' | 'pillar'
-		const tierMap: Record<string, number> = {
-			new: 0,
-			active: 1,
-			established: 2,
-			veteran: 3,
-			pillar: 4
-		};
-		const engagementTier = tierMap[user.reputationTier?.toLowerCase() ?? 'new'] ?? 0;
+		const engagementTier = engagementTierForReputationTier(user.reputationTier);
 
 		return {
 			userId: user._id,
@@ -1320,12 +1312,39 @@ export const createCampaignAction = internalMutation({
 				? normalizedDistrictCode
 				: undefined;
 
+		// A registered user's verified action advances both durable reputation
+		// coordinates before the immutable action and every derived attribution
+		// are constructed. The enclosing mutation makes the user patch, action
+		// insert, histogram, and events one OCC-serialized commit.
+		// actionCount is the single source of truth; reputationTier is always
+		// derived from it via reputationStateForActionCount — here on action,
+		// and in users.recomputeAllReputationTiers as repair/backfill.
+		let effectiveEngagementTier = args.engagementTier;
+		if (args.userId && args.verified) {
+			// The reputation increment is idempotent only through the dedup
+			// early-return above, which requires one of these keys. Fail loud
+			// rather than double-count if a future caller omits both.
+			if (!args.supporterId && !args.congressionalSubmissionId) {
+				throw new Error('CAMPAIGN_ACTION_MISSING_DEDUP_KEY');
+			}
+			const user = await ctx.db.get(args.userId);
+			if (!user) throw new Error('CAMPAIGN_ACTION_USER_NOT_FOUND');
+			const nextUserActionCount = (user.actionCount ?? 0) + 1;
+			const nextUserReputation = reputationStateForActionCount(nextUserActionCount);
+			await ctx.db.patch(args.userId, {
+				actionCount: nextUserActionCount,
+				reputationTier: nextUserReputation.reputationTier,
+				updatedAt: Date.now()
+			});
+			effectiveEngagementTier = nextUserReputation.engagementTier;
+		}
+
 		const actionId = await ctx.db.insert('campaignActions', {
 			campaignId: args.campaignId,
 			orgId,
 			supporterId: args.supporterId,
 			verified: args.verified,
-			engagementTier: args.engagementTier,
+			engagementTier: effectiveEngagementTier,
 			districtHash: args.districtHash,
 			districtCode,
 			h3Cell,
@@ -1386,7 +1405,7 @@ export const createCampaignAction = internalMutation({
 				if (args.verified && metersOrgQuota) {
 					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
 				}
-				const tier = args.engagementTier;
+				const tier = effectiveEngagementTier;
 				if (typeof tier === 'number' && tier >= 0 && tier <= 4) {
 					const counts = [...(org.actionTierCounts ?? [0, 0, 0, 0, 0])];
 					// Defensive: pad/truncate to exactly 5 slots in case a legacy doc
@@ -1398,20 +1417,6 @@ export const createCampaignAction = internalMutation({
 				if (Object.keys(patch).length > 0) {
 					await ctx.db.patch(orgId, patch);
 				}
-			}
-		}
-
-		// Reputation-tier on-action increment (T10-1 hybrid model). Only ZK
-		// paths supply userId — non-ZK actions rely on the nightly cron to
-		// recompute. Only verified actions count toward reputation; unverified
-		// imports + bot submissions don't promote anyone.
-		if (args.userId && args.verified) {
-			const user = await ctx.db.get(args.userId);
-			if (user) {
-				await ctx.db.patch(args.userId, {
-					actionCount: (user.actionCount ?? 0) + 1,
-					updatedAt: Date.now()
-				});
 			}
 		}
 
@@ -1451,7 +1456,7 @@ export const createCampaignAction = internalMutation({
 					campaignId: args.campaignId,
 					actionId,
 					verified: args.verified,
-					engagementTier: args.engagementTier,
+					engagementTier: effectiveEngagementTier,
 					trustTier: args.trustTier ?? null,
 					districtHash: args.districtHash ?? null,
 					timestamp
@@ -1467,7 +1472,7 @@ export const createCampaignAction = internalMutation({
 					campaignId: args.campaignId,
 					actionId,
 					verified: args.verified,
-					engagementTier: args.engagementTier,
+					engagementTier: effectiveEngagementTier,
 					trustTier: args.trustTier ?? null,
 					districtHash: args.districtHash ?? null,
 					h3Cell: h3Cell ?? null,
@@ -1680,9 +1685,9 @@ export const submitAction = action({
 			messageHash,
 			trustTier,
 			compositionMode: args.compositionMode,
-			// NEW-E-1: thread userId so reputation cron (T10-1) has real data
-			// to promote on. Only set when the submitter is a registered user
-			// — anonymous-email submissions stay null.
+			// NEW-E-1: thread userId so a verified action can advance actionCount,
+			// reputationTier, and immutable engagement attribution atomically. Only
+			// registered users carry it; anonymous-email submissions stay null.
 			userId: userData?.userId,
 			// NEW-E-2: atlas snapshot at action-time. driftCount in the packet
 			// (verification-packet.ts) compares against the modal value across

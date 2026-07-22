@@ -8,6 +8,29 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireInternalSecret } from "./_internalAuth";
 
+const POSITION_IDENTITY_MAX_CHARS = 512;
+const POSITION_STANCE_MAX_CHARS = 32;
+const POSITION_DISTRICT_MAX_CHARS = 32;
+const POSITION_TEMPLATE_TITLE_MAX_CHARS = 200;
+const POSITION_DELIVERY_RECIPIENT_MAX = 20;
+const POSITION_DELIVERY_INPUT_MAX_BYTES = 64 * 1024;
+const POSITION_DELIVERY_NAME_MAX_CHARS = 200;
+const POSITION_DELIVERY_METHOD_MAX_CHARS = 32;
+const POSITION_DELIVERY_EMAIL_MAX_CHARS = 254;
+const POSITION_DELIVERY_ENVELOPE_MAX_CHARS = 2_048;
+
+function assertPositionIdentity(identityCommitment: string): void {
+  if (identityCommitment.length === 0 || identityCommitment.length > POSITION_IDENTITY_MAX_CHARS) {
+    throw new Error("POSITION_IDENTITY_INVALID");
+  }
+}
+
+function assertBoundedOptional(value: string | undefined, maxChars: number, error: string): void {
+  if (value !== undefined && (value.length === 0 || value.length > maxChars)) {
+    throw new Error(error);
+  }
+}
+
 /**
  * Get aggregate position counts for a template. K-floor at 5 on stance counts,
  * 3 on district count: sub-K cohort sizes would name specific submitters. Above
@@ -236,6 +259,9 @@ export const register = mutation({
   },
   handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
     requireInternalSecret(_secret);
+    assertPositionIdentity(identityCommitment);
+    if (stance.length === 0 || stance.length > POSITION_STANCE_MAX_CHARS) throw new Error("POSITION_STANCE_INVALID");
+    assertBoundedOptional(districtCode, POSITION_DISTRICT_MAX_CHARS, "POSITION_DISTRICT_INVALID");
     // Check template exists
     const template = await ctx.db.get(templateId);
     if (!template) throw new Error("Template not found");
@@ -277,6 +303,9 @@ export const confirmMailtoSend = mutation({
   },
   handler: async (ctx, { _secret, templateId, identityCommitment, districtCode, templateTitle }) => {
     requireInternalSecret(_secret);
+    assertPositionIdentity(identityCommitment);
+    assertBoundedOptional(districtCode, POSITION_DISTRICT_MAX_CHARS, "POSITION_DISTRICT_INVALID");
+    assertBoundedOptional(templateTitle, POSITION_TEMPLATE_TITLE_MAX_CHARS, "POSITION_TEMPLATE_TITLE_INVALID");
     // Upsert position (support implied by sending)
     const existing = await ctx.db
       .query("positionRegistrations")
@@ -333,6 +362,25 @@ export const batchRegisterDeliveries = mutation({
   },
   handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
     requireInternalSecret(_secret);
+    assertPositionIdentity(identityCommitment);
+    if (recipients.length < 1 || recipients.length > POSITION_DELIVERY_RECIPIENT_MAX) {
+      throw new Error("POSITION_DELIVERY_RECIPIENT_LIMIT_EXCEEDED");
+    }
+    if (new TextEncoder().encode(JSON.stringify(recipients)).byteLength > POSITION_DELIVERY_INPUT_MAX_BYTES) {
+      throw new Error("POSITION_DELIVERY_INPUT_TOO_LARGE");
+    }
+    for (const r of recipients) {
+      if (!r.name.trim() || r.name.length > POSITION_DELIVERY_NAME_MAX_CHARS) {
+        throw new Error("POSITION_DELIVERY_RECIPIENT_NAME_INVALID");
+      }
+      if (r.deliveryMethod.length === 0 || r.deliveryMethod.length > POSITION_DELIVERY_METHOD_MAX_CHARS) {
+        throw new Error("POSITION_DELIVERY_METHOD_INVALID");
+      }
+      assertBoundedOptional(r.email, POSITION_DELIVERY_EMAIL_MAX_CHARS, "POSITION_DELIVERY_RECIPIENT_EMAIL_INVALID");
+      assertBoundedOptional(r.encryptedRecipientEmail, POSITION_DELIVERY_ENVELOPE_MAX_CHARS, "POSITION_DELIVERY_ENVELOPE_TOO_LARGE");
+      assertBoundedOptional(r.recipientEmailHash, POSITION_DELIVERY_ENVELOPE_MAX_CHARS, "POSITION_DELIVERY_ENVELOPE_TOO_LARGE");
+      assertBoundedOptional(r.encryptedRecipientName, POSITION_DELIVERY_ENVELOPE_MAX_CHARS, "POSITION_DELIVERY_ENVELOPE_TOO_LARGE");
+    }
     // Verify registration exists and belongs to caller
     const reg = await ctx.db.get(registrationId);
     if (!reg || reg.identityCommitment !== identityCommitment) {

@@ -131,6 +131,19 @@ export const POST: RequestHandler = async (event) => {
 	const contentToCheck = `${subject_line}\n${core_message}\n${topics.join(' ')}${audience_guidance ? `\n${audience_guidance}` : ''}`;
 	const injectionCheck = await moderatePromptOnly(contentToCheck, 0.8);
 
+	if (injectionCheck.score === -1) {
+		console.error('[stream-decision-makers] Moderation unavailable; failing closed');
+		return new Response(
+			JSON.stringify({
+				error: 'Content safety screening is temporarily unavailable',
+				code: 'SAFETY_UNAVAILABLE'
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
 	if (!injectionCheck.safe) {
 		console.log('[stream-decision-makers] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),

@@ -241,9 +241,11 @@ describe('POST /api/agents/stream-subject', () => {
 			expect(mockGenerateStream).toHaveBeenCalledWith(
 				`Analyze this issue and generate a subject line:\n\n${testMessage}`,
 				{
+					stage: 'subject-line',
 					systemInstruction: expect.stringContaining('test prompt'),
 					temperature: 0.4,
-					thinkingLevel: 'medium'
+					thinkingLevel: 'medium',
+					signal: undefined
 				}
 			);
 		});

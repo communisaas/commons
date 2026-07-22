@@ -13,6 +13,7 @@ import { requireInternalSecret } from './_internalAuth';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { applyDowngradeGuard } from './_downgradeGuard';
 import { upsertExternalId } from './_externalIds';
+import { reputationStateForActionCount } from './lib/reputationTier';
 import type { Id } from './_generated/dataModel';
 
 // =============================================================================
@@ -1979,28 +1980,6 @@ export const getMyReputationPortable = query({
 // REPUTATION TIER RECOMPUTE (T10-1)
 // =============================================================================
 
-// Threshold table — actionCount → tier label. Order matters; pick the highest
-// matching label. Tier labels mirror the engagement-tier vocabulary (New /
-// Active / Established / Veteran / Pillar) because the UI already labels the
-// reputationTier field with those words. Tune thresholds as real distribution
-// emerges; these starting values keep early users 'new' until they've done
-// real work (≥5 verified actions = active) and reserve 'pillar' for users
-// who've sustained engagement across many campaigns.
-const REPUTATION_THRESHOLDS: ReadonlyArray<{ min: number; tier: string }> = [
-	{ min: 500, tier: 'pillar' },
-	{ min: 100, tier: 'veteran' },
-	{ min: 25, tier: 'established' },
-	{ min: 5, tier: 'active' },
-	{ min: 0, tier: 'new' }
-];
-
-function reputationTierFor(actionCount: number): string {
-	for (const { min, tier } of REPUTATION_THRESHOLDS) {
-		if (actionCount >= min) return tier;
-	}
-	return 'new';
-}
-
 /**
  * Return the calling user's actionCount (0 if absent). Used by the
  * /api/submissions/create boundary for T10-2 cross-check — no PII exposure.
@@ -2028,7 +2007,7 @@ export const recomputeAllReputationTiers = internalMutation({
 		const users = await ctx.db.query('users').take(BATCH);
 		let updated = 0;
 		for (const u of users) {
-			const next = reputationTierFor(u.actionCount ?? 0);
+			const next = reputationStateForActionCount(u.actionCount ?? 0).reputationTier;
 			if (u.reputationTier !== next) {
 				await ctx.db.patch(u._id, { reputationTier: next, updatedAt: Date.now() });
 				updated++;

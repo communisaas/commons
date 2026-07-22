@@ -168,6 +168,8 @@ export interface ConversationState {
 // ============================================================================
 
 export interface GenerateOptions {
+	/** Reviewed provider stage; selects immutable request ceilings. */
+	stage: import('./provider-call-envelope').GeminiProviderStage;
 	temperature?: number;
 	maxOutputTokens?: number;
 	thinkingLevel?: 'low' | 'medium' | 'high';
@@ -175,6 +177,8 @@ export interface GenerateOptions {
 	responseSchema?: object;
 	systemInstruction?: string;
 	previousInteractionId?: string;
+	/** Propagated to the Gemini SDK so request cancellation stops local work. */
+	signal?: AbortSignal;
 	/**
 	 * When true, streams thinking summaries from Gemini.
 	 * IMPORTANT: This disables responseMimeType (incompatible with thoughts).

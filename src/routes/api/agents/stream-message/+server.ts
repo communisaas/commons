@@ -43,6 +43,7 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
+import { computeSourceCacheInputHash } from '$lib/server/source-cache-key';
 import { traceStart, traceEnd, traceEvent } from '$lib/server/agent-trace';
 
 const TRACE_ENDPOINT = 'message-generation';
@@ -59,6 +60,64 @@ function truncatedStack(err: unknown): string | undefined {
 
 /** 72-hour cache TTL for template source cache */
 const SOURCE_CACHE_TTL_MS = 72 * 60 * 60 * 1000;
+const SOURCE_CACHE_MAX_ENTRIES = 32;
+const SOURCE_CACHE_MAX_STRING_LENGTH = 8_192;
+
+function isFreshSourceCacheTimestamp(value: unknown, now: number): value is number {
+	return (
+		typeof value === 'number' &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		value <= now &&
+		now - value < SOURCE_CACHE_TTL_MS
+	);
+}
+
+function isNonArrayObject(value: unknown): value is Record<string, unknown> {
+	return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isBoundedString(value: unknown): value is string {
+	return (
+		typeof value === 'string' &&
+		value.length > 0 &&
+		value.length <= SOURCE_CACHE_MAX_STRING_LENGTH
+	);
+}
+
+// Evaluated sources may legitimately carry empty prose fields (the evaluator
+// defaults them to '' when the model omits them), so prose only needs the
+// length ceiling; url/title stay required non-empty.
+function isBoundedProse(value: unknown): value is string {
+	return typeof value === 'string' && value.length <= SOURCE_CACHE_MAX_STRING_LENGTH;
+}
+
+function isCachedEvaluatedSource(value: unknown): value is EvaluatedSource {
+	if (!isNonArrayObject(value)) return false;
+	return (
+		Number.isSafeInteger(value.num) &&
+		isBoundedString(value.title) &&
+		isBoundedString(value.url) &&
+		isBoundedProse(value.type) &&
+		isBoundedProse(value.snippet) &&
+		isBoundedProse(value.relevance) &&
+		isBoundedProse(value.excerpt) &&
+		isBoundedProse(value.credibility_rationale) &&
+		isBoundedProse(value.incentive_position) &&
+		isBoundedProse(value.source_order) &&
+		(value.date === undefined || isBoundedString(value.date)) &&
+		(value.publisher === undefined || isBoundedString(value.publisher))
+	);
+}
+
+function cachedEvaluatedSources(value: unknown): EvaluatedSource[] | undefined {
+	if (!Array.isArray(value) || value.length === 0 || value.length > SOURCE_CACHE_MAX_ENTRIES) {
+		return undefined;
+	}
+	if (!value.every(isCachedEvaluatedSource)) return undefined;
+	return value;
+}
+
 /** Short recovery window: enough for tab hibernation, not a long-lived draft archive. */
 const MESSAGE_JOB_TTL_MS = 2 * 60 * 60 * 1000;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
@@ -273,6 +332,27 @@ export const POST: RequestHandler = async (event) => {
 		contentLength: contentToCheck.length
 	});
 
+	if (injectionCheck.score === -1) {
+		console.error('[stream-message] Moderation unavailable; failing closed');
+		traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+			phase: 'prompt-injection',
+			code: 'SAFETY_UNAVAILABLE'
+		});
+		traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
+			finalPhase: 'prompt-injection',
+			errorCode: 'SAFETY_UNAVAILABLE'
+		});
+		return new Response(
+			JSON.stringify({
+				error: 'Content safety screening is temporarily unavailable',
+				code: 'SAFETY_UNAVAILABLE'
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
 	if (!injectionCheck.safe) {
 		console.log('[stream-message] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),
@@ -395,24 +475,42 @@ export const POST: RequestHandler = async (event) => {
 			// ================================================================
 			let cacheHit = false;
 			let verifiedSources: EvaluatedSource[] | undefined;
+			let sourceCacheInputHash: string | null = null;
 
 			if (body.template_id) {
+				try {
+					sourceCacheInputHash = await computeSourceCacheInputHash({
+						subjectLine: body.subject_line,
+						coreMessage: body.core_message,
+						topics: body.topics || [],
+						geographicScope: body.geographic_scope,
+						decisionMakers: body.decision_makers || []
+					});
+				} catch (cacheKeyError) {
+					// A cache-key failure must lose the optimization, never the message.
+					console.warn('[stream-message] Source cache key failed:', cacheKeyError);
+				}
+
 				try {
 					const template = await serverQuery(api.templates.getSourceCache, {
 						templateId: body.template_id as Id<'templates'>
 					});
 
+					const cacheCheckedAt = Date.now();
+					const cachedSources = cachedEvaluatedSources(template?.cachedSources);
 					if (
-						template?.cachedSources &&
-						template.sourcesCachedAt &&
-						Date.now() - template.sourcesCachedAt < SOURCE_CACHE_TTL_MS
+						sourceCacheInputHash &&
+						template &&
+						cachedSources &&
+						isFreshSourceCacheTimestamp(template.sourcesCachedAt, cacheCheckedAt) &&
+						template.sourceCacheInputHash === sourceCacheInputHash
 					) {
 						cacheHit = true;
-						verifiedSources = template.cachedSources as unknown as EvaluatedSource[];
+						verifiedSources = cachedSources;
 						console.log('[stream-message] Source cache hit:', {
 							templateId: body.template_id,
 							sourceCount: verifiedSources.length,
-							cachedAge: Math.round((Date.now() - template.sourcesCachedAt) / 60000) + 'min'
+							cachedAge: Math.round((cacheCheckedAt - template.sourcesCachedAt) / 60000) + 'min'
 						});
 					}
 				} catch (cacheErr) {
@@ -531,12 +629,14 @@ export const POST: RequestHandler = async (event) => {
 				body.template_id &&
 				!cacheHit &&
 				result.evaluatedSources &&
-				result.evaluatedSources.length > 0
+				result.evaluatedSources.length > 0 &&
+				sourceCacheInputHash
 			) {
 				serverMutation(api.templates.updateSourceCache, {
 					templateId: body.template_id as Id<'templates'>,
 					cachedSources: result.evaluatedSources,
-					sourcesCachedAt: Date.now()
+					sourcesCachedAt: Date.now(),
+					sourceCacheInputHash
 				}).catch((err: unknown) => {
 					console.warn('[stream-message] Source cache write failed:', err);
 				});

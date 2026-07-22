@@ -86,6 +86,19 @@ export const POST: RequestHandler = async (event) => {
 
 	// Prompt injection detection
 	const injectionCheck = await moderatePromptOnly(body.message);
+	if (injectionCheck.score === -1) {
+		console.error('[stream-subject] Moderation unavailable; failing closed');
+		return new Response(
+			JSON.stringify({
+				error: 'Content safety screening is temporarily unavailable',
+				code: 'SAFETY_UNAVAILABLE'
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
 	if (!injectionCheck.safe) {
 		console.log('[stream-subject] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),
@@ -128,9 +141,11 @@ export const POST: RequestHandler = async (event) => {
 
 		try {
 			const generator = generateStreamWithThoughts<SubjectLineStreamResponse>(prompt, {
+				stage: 'subject-line',
 				systemInstruction: systemPrompt,
 				temperature: 0.4,
-				thinkingLevel: 'medium'
+				thinkingLevel: 'medium',
+				signal: event.request.signal
 			});
 
 			let iterResult = await generator.next();

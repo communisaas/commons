@@ -18,6 +18,8 @@
  * @module exa/rate-limiter
  */
 
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -157,7 +159,7 @@ export class ExaRateLimiter {
 				// Non-rate-limit error: record failure and don't retry
 				this.onFailure();
 
-				const message = error instanceof Error ? error.message : String(error);
+				const message = sanitizeProviderErrorMessage(error);
 				console.error(`[exa-rate-limit] Non-retryable error on ${context}: ${message}`);
 
 				return {
