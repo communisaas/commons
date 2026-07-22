@@ -11,6 +11,7 @@ import { serverMutation, serverQuery } from 'convex-sveltekit';
 import { api } from '$convex/_generated/api';
 import { base64urlDecode } from '$lib/core/encoding/base64url';
 import { getPasskeyRPConfig } from '$lib/core/identity/passkey-rp-config';
+import { sealSessionCookie } from '$lib/server/auth/session-cookie';
 import { createServerProof, createSessionCreationProof } from '$lib/server/auth/session-proof';
 
 const CEREMONY_TTL_MS = 5 * 60 * 1000;
@@ -159,7 +160,13 @@ export const POST: RequestHandler = async ({ request, cookies }) => {
 			proof: sessionProof
 		});
 
-		cookies.set('auth-session', session.sessionId, {
+		const sessionCookie = await sealSessionCookie(
+			session.sessionId,
+			expiresAt,
+			process.env.SESSION_COOKIE_SIGNING_SECRET
+		);
+
+		cookies.set('auth-session', sessionCookie, {
 			path: '/',
 			secure: !dev,
 			httpOnly: true,

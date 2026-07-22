@@ -15,6 +15,7 @@ import { requireAuth } from "./_authHelpers";
 import { requireInternalSecret } from "./_internalAuth";
 import { toArrayBuffer } from "./_bufferSource";
 import type { Doc, Id } from "./_generated/dataModel";
+import { projectSessionUser, type SessionUser } from "./lib/sessionUser";
 
 // Issuer prefix for `tokenIdentifier` (Convex's `<issuer>|<sub>` convention
 // for custom JWT providers). MUST match the SvelteKit JWT minter
@@ -42,7 +43,7 @@ type ValidateSessionResult = {
     userId: string;
     expiresAt: number;
   };
-  user: Doc<"users">;
+  user: SessionUser;
   renewed: boolean;
 } | null;
 
@@ -516,7 +517,7 @@ export const validateSession = query({
         userId: session.userId as string,
         expiresAt: renewed ? now + DAY_MS * 30 : session.expiresAt,
       },
-      user,
+      user: projectSessionUser(user),
       renewed,
     };
   },

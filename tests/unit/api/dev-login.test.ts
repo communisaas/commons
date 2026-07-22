@@ -114,7 +114,7 @@ describe('POST /api/internal/dev-login', () => {
 		);
 		expect(event.cookies.set).toHaveBeenCalledWith(
 			'auth-session',
-			'session_dev_login',
+			expect.stringMatching(/^v1\.session_dev_login\.\d+\.[A-Za-z0-9_-]+$/),
 			expect.objectContaining({
 				httpOnly: true,
 				sameSite: 'lax'
