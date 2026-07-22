@@ -170,6 +170,42 @@ describe('POST /api/templates authoring cost gate', () => {
 		expect(mockModerateTemplate).toHaveBeenCalledOnce();
 	});
 
+	it('accepts a multibyte message body inside the shipped character allowance', async () => {
+		const messageBody = '\u5b89'.repeat(2_500);
+		mockModerateTemplate.mockResolvedValue({
+			approved: true,
+			summary: 'Approved by test control',
+			latency_ms: 1
+		});
+		mockServerQuery.mockResolvedValue(null);
+		mockServerMutation.mockResolvedValueOnce({
+			_id: 'template_1',
+			slug: 'protect-the-public-library',
+			title: VALID_TEMPLATE.title,
+			description: '',
+			domain: '',
+			topics: [],
+			type: VALID_TEMPLATE.type,
+			deliveryMethod: VALID_TEMPLATE.deliveryMethod,
+			messageBody,
+			sources: [],
+			researchLog: [],
+			preview: VALID_TEMPLATE.preview,
+			deliveryConfig: {},
+			cwcConfig: {},
+			recipientConfig: {},
+			status: 'published',
+			isPublic: true,
+			_creationTime: 100,
+			updatedAt: 100
+		});
+
+		const response = await POST(postEvent({ ...VALID_TEMPLATE, message_body: messageBody }));
+
+		expect(response.status).toBe(200);
+		expect(mockModerateTemplate).toHaveBeenCalledOnce();
+	});
+
 	it('rejects an oversized template create request before moderation', async () => {
 		const response = await POST(
 			postEvent({ ...VALID_TEMPLATE, message_body: 'x'.repeat(40_000) })

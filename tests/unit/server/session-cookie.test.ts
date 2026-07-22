@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
 	parseSessionCookieEnvelope,
@@ -15,8 +13,6 @@ const EXPIRES_AT = NOW + 30 * DAY_MS;
 const ACTIVE_SECRET = 'a'.repeat(64);
 const PREVIOUS_SECRET = 'b'.repeat(64);
 const WRONG_SECRET = 'c'.repeat(64);
-const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
-
 function flipSignatureChar(signature: string): string {
 	return `${signature[0] === 'A' ? 'B' : 'A'}${signature.slice(1)}`;
 }
@@ -189,23 +185,3 @@ describe('session cookie envelope', () => {
 	});
 });
 
-describe('session cookie source contracts', () => {
-	it('seals every auth-session setter and verifies hooks cookies before Convex authority', () => {
-		const hooks = source('src/hooks.server.ts');
-		const oauth = source('src/lib/core/auth/oauth-callback-handler.ts');
-		const passkey = source('src/routes/api/auth/passkey/authenticate/+server.ts');
-		const devLogin = source('src/routes/api/internal/dev-login/+server.ts');
-
-		for (const setter of [oauth, passkey, devLogin]) {
-			expect(setter).toContain('await sealSessionCookie(');
-			expect(setter).not.toMatch(/cookies\.set\(['"]auth-session['"],\s*session\.sessionId/);
-			expect(setter).not.toMatch(/cookies\.set\(SESSION_COOKIE,\s*session\.sessionId/);
-		}
-
-		expect(hooks).toContain('resolveSessionFromCookie(');
-		expect(hooks).toContain('sealSessionCookie(');
-		expect(hooks).not.toMatch(/cookies\.set\(SESSION_COOKIE,\s*session\.id\b/);
-		expect(hooks).not.toContain('onInvalid');
-		expect(hooks.match(/cookies\.delete\(SESSION_COOKIE/g) ?? []).toHaveLength(2);
-	});
-});

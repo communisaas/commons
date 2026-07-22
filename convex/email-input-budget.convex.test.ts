@@ -150,6 +150,14 @@ describe('email draft input budgets', () => {
 			})
 		).rejects.toThrow(/EMAIL_SUBJECT_INVALID/);
 
+		await expect(
+			authenticated.mutation(api.email.updateBlast, {
+				orgSlug: 'budget-org',
+				blastId: created.id,
+				fromName: 'Org\r\nBcc: attacker@example.com'
+			})
+		).rejects.toThrow(/EMAIL_FROM_NAME_INVALID/);
+
 		await t.run(async (ctx) => {
 			const row = await ctx.db.get(created.id);
 			expect(row).toMatchObject({

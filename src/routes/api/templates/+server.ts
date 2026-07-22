@@ -628,7 +628,10 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				// Let the shared template/config validators produce their field-specific
 				// errors at 129 entries; this raw-shape ceiling only stops pathology.
 				maxObjectKeys: 200,
-				maxStringBytes: 12_000
+				// 10,000-char fields at the UTF-8 worst case (4 bytes/char); the
+				// per-field character caps and aggregate byte budgets are enforced
+				// by validateTemplateData and validateTemplateInputBudgets below.
+				maxStringBytes: 40_000
 			});
 		} catch (error) {
 			const boundedError =

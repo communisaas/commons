@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Doc } from '../../../convex/_generated/dataModel';
-import { SESSION_USER_FIELDS, projectSessionUser } from '../../../convex/lib/sessionUser';
+import { projectSessionUser } from '../../../convex/lib/sessionUser';
 import { buildLocalsUser } from '$lib/server/auth/session-user';
 
 const CREATED_AT = 1_700_000_000_000;
@@ -76,7 +76,40 @@ describe('session user authority projection', () => {
 
 		const projected = projectSessionUser(user);
 
-		expect(Object.keys(projected).sort()).toEqual([...SESSION_USER_FIELDS].sort());
+		// Literal list kept independent of SESSION_USER_FIELDS so widening the
+		// implementation allowlist to include a sensitive field fails this test.
+		expect(Object.keys(projected).sort()).toEqual([
+			'_creationTime',
+			'_id',
+			'addressVerifiedAt',
+			'avatar',
+			'connection',
+			'didKey',
+			'districtHash',
+			'districtVerified',
+			'documentType',
+			'email',
+			'emailHash',
+			'identityCommitment',
+			'isVerified',
+			'location',
+			'name',
+			'nearAccountId',
+			'nearDerivedScrollAddress',
+			'organization',
+			'passkeyCredentialId',
+			'profileCompletedAt',
+			'profileVisibility',
+			'reputationTier',
+			'role',
+			'tokenIdentifier',
+			'trustScore',
+			'updatedAt',
+			'verificationMethod',
+			'verifiedAt',
+			'walletAddress',
+			'walletType'
+		]);
 		expect(projected).not.toHaveProperty('encryptedEntropy');
 		expect(projected).not.toHaveProperty('encryptedNearPrivateKey');
 		expect(projected).not.toHaveProperty('stripeCustomerId');

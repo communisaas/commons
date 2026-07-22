@@ -60,6 +60,9 @@ export function assertEmailDraftPatch(input: {
 	}
 	if (input.fromName !== undefined) {
 		assertStringBudget(input.fromName, 'EMAIL_FROM_NAME', MAX_EMAIL_FROM_NAME_BYTES);
+		if (/[\r\n\0]/.test(input.fromName)) {
+			throw new Error('EMAIL_FROM_NAME_INVALID');
+		}
 	}
 	if (input.fromEmail !== undefined) {
 		assertEmailDraftInput({

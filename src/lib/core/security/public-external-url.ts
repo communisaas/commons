@@ -184,6 +184,12 @@ function normalizedPublicHostname(parsed: URL): string | null {
 }
 
 /** Parse an HTTP(S) URL only when its literal host is structurally public. */
+/**
+ * Structural (literal-host) validation only: no DNS resolution or
+ * connection-time IP pinning, so it is not a complete standalone SSRF
+ * boundary. Callers here egress via third-party scrape APIs; revisit with
+ * resolved-IP pinning before any first-party fetch uses this as its guard.
+ */
 export function parsePublicHttpUrl(value: unknown, maxBytes = 2_048): URL | null {
 	if (typeof value !== 'string' || value.length === 0 || utf8Bytes(value) > maxBytes) return null;
 	const source = value.trim();

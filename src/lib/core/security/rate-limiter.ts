@@ -80,7 +80,9 @@ interface RateLimitReservation {
 
 interface RateLimitStore {
 	/**
-	 * Atomically prune the window and reserve a slot when capacity remains.
+	 * Prune the window and reserve a slot when capacity remains. The in-memory
+	 * store performs this atomically within an isolate; the Redis store is
+	 * best-effort across round-trips (see the note on RedisStore.reserve).
 	 */
 	reserve(key: string, timestamp: number, config: RateLimitConfig): Promise<RateLimitReservation>;
 
@@ -244,6 +246,11 @@ class RedisStore implements RateLimitStore {
 		}
 	}
 
+	// Best-effort admission: prune/count/add are separate round-trips, so
+	// concurrent requests can briefly overshoot maxRequests. Redis is an
+	// unconfigured escape hatch (production posture is the in-memory store
+	// via RATE_LIMITER_ALLOW_MEMORY=1); an atomic Lua reservation belongs
+	// with any future decision to actually operate Redis.
 	async reserve(
 		key: string,
 		timestamp: number,

@@ -383,7 +383,8 @@ export async function generate(
 		} catch (error) {
 			const attempts = attempt + 1;
 			const isLastAttempt = attempts >= envelope.maxAttempts;
-			if (isLastAttempt || !isRetryableGeminiError(error) || options.signal?.aborted) {
+			if (options.signal?.aborted) throw abortReason(options.signal);
+			if (isLastAttempt || !isRetryableGeminiError(error)) {
 				throw terminalProviderError(error, attempts);
 			}
 

@@ -48,10 +48,10 @@ describe('POST /api/delegation/parse-policy provider boundary', () => {
 		const candidate = event('Only environmental actions', 2) as unknown as {
 			request: Request;
 		};
-		const textSpy = vi.spyOn(candidate.request, 'text');
+		const readerSpy = vi.spyOn(candidate.request.body!, 'getReader');
 
 		await expect(POST(candidate as never)).rejects.toMatchObject({ status: 403 });
-		expect(textSpy).not.toHaveBeenCalled();
+		expect(readerSpy).not.toHaveBeenCalled();
 		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
 	});
 

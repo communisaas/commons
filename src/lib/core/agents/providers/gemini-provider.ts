@@ -913,6 +913,13 @@ Rules:
 				p.attributedTo.length === 0 ||
 				p.attributedTo.some(idx => chunkGlobalIndices.includes(idx))
 			)
+			// Chunk-attributed pages win cap slots over shared/unattributed ones
+			// so the cap never starves a chunk of its own contact pages.
+			.sort((a, b) => {
+				const aOwn = a.attributedTo.some(idx => chunkGlobalIndices.includes(idx)) ? 0 : 1;
+				const bOwn = b.attributedTo.some(idx => chunkGlobalIndices.includes(idx)) ? 0 : 1;
+				return aOwn - bOwn;
+			})
 			.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxPagesPerSynthesisChunk)
 			.map(p => ({
 				...p,

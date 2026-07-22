@@ -127,7 +127,7 @@ describe('SlidingWindowRateLimiter', () => {
 			expect(r3.remaining).toBe(2);
 		});
 
-		it('should atomically admit only the configured maximum under concurrency', async () => {
+		it('admits exactly the configured maximum across interleaved in-memory callers', async () => {
 			const results = await Promise.all(
 				Array.from({ length: 20 }, () =>
 					limiter.check('user:concurrent', { maxRequests: 2, windowMs: 60000 })

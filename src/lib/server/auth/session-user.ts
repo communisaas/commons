@@ -1,4 +1,4 @@
-import { deriveTrustTier } from '$lib/core/identity/authority-level';
+import { deriveTrustTier } from '../../core/identity/authority-level';
 import type { SessionUser } from '$convex/lib/sessionUser';
 
 export function buildLocalsUser(
