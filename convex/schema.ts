@@ -224,6 +224,7 @@ export default defineSchema({
 		researchLog: v.optional(v.any()),
 		cachedSources: v.optional(v.any()),
 		sourcesCachedAt: v.optional(v.number()),
+		sourceCacheInputHash: v.optional(v.string()),
 		deliveryConfig: v.any(),
 		cwcConfig: v.optional(v.any()),
 		recipientConfig: v.any(),

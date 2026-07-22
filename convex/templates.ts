@@ -18,6 +18,7 @@ import { captureToSentry } from "./_sentry";
 import {
   MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
   MAX_PUBLIC_TEMPLATE_SCOPES,
+  validateTemplateMetadataBudgets,
   validateTemplateInputBudgets,
 } from "./lib/templateInputBudget";
 import {
@@ -3268,6 +3269,28 @@ export const removeEndorsement = mutation({
 /**
  * Get cached sources for a template (72h TTL checked by caller).
  */
+const SOURCE_CACHE_INPUT_HASH_RE = /^[a-f0-9]{64}$/;
+const SOURCE_CACHE_MAX_ENTRIES = 32;
+const SOURCE_CACHE_MAX_BYTES = 256_000;
+const sourceCacheEncoder = new TextEncoder();
+
+function assertValidSourceCacheWrite(value: unknown): void {
+  if (!Array.isArray(value)) {
+    throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_INVALID" });
+  }
+  if (value.length > SOURCE_CACHE_MAX_ENTRIES) {
+    throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_TOO_LARGE" });
+  }
+  const encoded = JSON.stringify(value);
+  if (encoded === undefined) {
+    throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_INVALID" });
+  }
+  const bytes = sourceCacheEncoder.encode(encoded).byteLength;
+  if (bytes > SOURCE_CACHE_MAX_BYTES) {
+    throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_TOO_LARGE" });
+  }
+}
+
 export const getSourceCache = query({
   args: { templateId: v.id("templates") },
   handler: async (ctx, args) => {
@@ -3276,6 +3299,7 @@ export const getSourceCache = query({
     return {
       cachedSources: template.cachedSources ?? null,
       sourcesCachedAt: template.sourcesCachedAt ?? null,
+      sourceCacheInputHash: template.sourceCacheInputHash ?? null,
     };
   },
 });
@@ -3288,12 +3312,23 @@ export const updateSourceCache = mutation({
     templateId: v.id("templates"),
     cachedSources: v.any(),
     sourcesCachedAt: v.number(),
+    sourceCacheInputHash: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireAuth(ctx);
+    const { userId } = await requireAuth(ctx);
+    if (!SOURCE_CACHE_INPUT_HASH_RE.test(args.sourceCacheInputHash)) {
+      throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_INPUT_HASH_INVALID" });
+    }
+    const template = await ctx.db.get(args.templateId);
+    if (!template) throw new Error("Template not found");
+    if (template.userId !== userId) {
+      throw new ConvexError({ code: "TEMPLATE_SOURCE_CACHE_FORBIDDEN" });
+    }
+    assertValidSourceCacheWrite(args.cachedSources);
     await ctx.db.patch(args.templateId, {
       cachedSources: args.cachedSources,
       sourcesCachedAt: args.sourcesCachedAt,
+      sourceCacheInputHash: args.sourceCacheInputHash,
     });
   },
 });
@@ -4012,33 +4047,14 @@ export const patchMetadata = mutation({
     if (!template) throw new Error("Template not found");
     if (template.userId !== userId) throw new Error("Unauthorized");
 
-    // Metadata is part of the materialized public card. Re-evaluate the full
-    // resulting authoring/public projection so this secondary writer cannot
-    // bypass the create boundary's snapshot-availability budget.
-    const inputBudget = validateTemplateInputBudgets(
-      {
-        title: template.title,
-        slug: template.slug,
-        description: template.description,
-        messageBody: template.messageBody,
-        preview: template.preview,
-        type: template.type,
-        deliveryMethod: template.deliveryMethod,
-        domain: args.domain ?? resolveDomain(template),
-        topics: args.topics ?? template.topics ?? [],
-        sources: template.sources,
-        researchLog: template.researchLog,
-        deliveryConfig: template.deliveryConfig,
-        cwcConfig: template.cwcConfig,
-        recipientConfig: template.recipientConfig,
-        scopes: template.scopes,
-        jurisdictions: template.jurisdictions,
-        contentHash: template.contentHash,
-        status: template.status,
-        isPublic: template.isPublic,
-      },
-      { includePublicInput: template.status === "published" && template.isPublic },
-    );
+    // Validate exactly the fields this mutation can change. Rows may carry
+    // config documents that predate today's budgets; unchanged legacy config
+    // stays grandfathered instead of blocking an otherwise bounded metadata
+    // repair.
+    const inputBudget = validateTemplateMetadataBudgets({
+      domain: args.domain,
+      topics: args.topics,
+    });
     if (!inputBudget.ok) {
       throw new Error(
         `TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`,

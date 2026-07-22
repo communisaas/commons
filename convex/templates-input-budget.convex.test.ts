@@ -184,6 +184,43 @@ describe('templates.createTemplate input budgets', () => {
 		});
 	});
 
+	it('accepts a valid 3,800-byte title and persists it exactly', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+		const title = '🧱'.repeat(950);
+		expect(new TextEncoder().encode(title)).toHaveLength(3_800);
+
+		const created = await authenticated.mutation(api.templates.createTemplate, {
+			...baseCreateArgs(userId),
+			title,
+			slug: 'valid-long-title',
+			contentHash: 'valid-long-title'
+		});
+
+		await t.run(async (ctx) => {
+			const row = await ctx.db.get(created!._id);
+			expect(row?.title).toBe(title);
+		});
+	});
+
+	it('rejects an individually oversized public-detail field before writing a template row', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+
+		await expect(
+			authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(userId),
+				title: 'x'.repeat(4_001),
+				slug: 'oversized-detail-title',
+				contentHash: 'oversized-detail-title'
+			})
+		).rejects.toThrow('TEMPLATE_INPUT_BUDGET_EXCEEDED:public_input:max_bytes');
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('templates').take(1)).toEqual([]);
+		});
+	});
+
 	it('enforces slug uniqueness inside the authoritative create mutation', async () => {
 		const t = newHarness();
 		const { authenticated, userId } = await createAuthenticatedUser(t);
@@ -233,5 +270,62 @@ describe('templates.createTemplate input budgets', () => {
 			domain: 'civic',
 			topics: ['availability']
 		});
+	});
+
+	it('grandfathers unchanged oversized legacy config during bounded metadata patches', async () => {
+		const t = newHarness();
+		const { authenticated, userId } = await createAuthenticatedUser(t);
+		const deliveryConfig = { legacy: 'x'.repeat(20_000) };
+		const templateId = await t.run((ctx) =>
+			ctx.db.insert('templates', {
+				userId,
+				slug: 'legacy-oversized-config',
+				title: 'Legacy oversized config',
+				description: 'Predates the current authoring boundary.',
+				topics: ['legacy'],
+				type: 'email',
+				deliveryMethod: 'email',
+				preview: 'Preview',
+				messageBody: 'Body',
+				deliveryConfig,
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				verifiedSends: 0,
+				uniqueDistricts: 0,
+				embeddingVersion: 'legacy',
+				flaggedByModeration: false,
+				consensusApproved: true,
+				reputationDelta: 0,
+				reputationApplied: false,
+				updatedAt: 1
+			})
+		);
+
+		await expect(
+			authenticated.mutation(api.templates.patchMetadata, {
+				templateId,
+				domain: 'water',
+				topics: ['clean water']
+			})
+		).resolves.toBeNull();
+		await expect(t.run((ctx) => ctx.db.get(templateId))).resolves.toMatchObject({
+			domain: 'water',
+			topics: ['clean water'],
+			deliveryConfig
+		});
+
+		await expect(
+			authenticated.mutation(api.templates.patchMetadata, {
+				templateId,
+				topics: Array.from({ length: 6 }, (_, i) => `t${i}`)
+			})
+		).rejects.toThrow('TEMPLATE_INPUT_BUDGET_EXCEEDED:public_input:max_container_entries');
+		await expect(
+			authenticated.mutation(api.templates.patchMetadata, {
+				templateId,
+				domain: 'x'.repeat(201)
+			})
+		).rejects.toThrow('TEMPLATE_INPUT_BUDGET_EXCEEDED:public_input:max_bytes');
 	});
 });

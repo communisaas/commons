@@ -56,6 +56,8 @@ describe('bounded template authoring JSON', () => {
 	it('caps all three configuration objects as one budget', () => {
 		const result = validateTemplateInputBudgets({
 			title: 'Title',
+			slug: 'title',
+			description: 'Description',
 			messageBody: 'Body',
 			preview: 'Preview',
 			type: 'direct',
@@ -70,6 +72,8 @@ describe('bounded template authoring JSON', () => {
 	it('separates full-document and public-projection byte ceilings', () => {
 		const full = validateTemplateInputBudgets({
 			title: 'Title',
+			slug: 'title',
+			description: 'Description',
 			messageBody: 'Body',
 			preview: 'Preview',
 			type: 'direct',
@@ -84,6 +88,8 @@ describe('bounded template authoring JSON', () => {
 
 		const publicProjection = validateTemplateInputBudgets({
 			title: 'Title',
+			slug: 'title',
+			description: 'Description',
 			messageBody: 'x'.repeat(13_000),
 			preview: 'Preview',
 			type: 'direct',
@@ -125,6 +131,8 @@ describe('bounded template authoring JSON', () => {
 	it('budgets flattened public scopes and jurisdictions instead of ignoring seed-only fields', () => {
 		const base = {
 			title: 'Title',
+			slug: 'title',
+			description: 'Description',
 			messageBody: 'Body',
 			preview: 'Preview',
 			type: 'direct',
