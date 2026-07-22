@@ -127,6 +127,21 @@ describe('SlidingWindowRateLimiter', () => {
 			expect(r3.remaining).toBe(2);
 		});
 
+		it('should atomically admit only the configured maximum under concurrency', async () => {
+			const results = await Promise.all(
+				Array.from({ length: 20 }, () =>
+					limiter.check('user:concurrent', { maxRequests: 2, windowMs: 60000 })
+				)
+			);
+
+			expect(results.filter((result) => result.allowed)).toHaveLength(2);
+			expect(results.filter((result) => !result.allowed)).toHaveLength(18);
+			expect(results.filter((result) => result.allowed).map((result) => result.remaining)).toEqual([
+				1,
+				0
+			]);
+		});
+
 		it('should include reset timestamp', async () => {
 			const config: RateLimitConfig = { maxRequests: 5, windowMs: 60000 };
 			const result = await limiter.check('user:7', config);
@@ -551,6 +566,46 @@ describe('findRateLimitConfig', () => {
 		expect(config!.pattern).toBe('/api/location/');
 	});
 
+	it('should find config for position batch registration endpoint', () => {
+		const config = findRateLimitConfig('/api/positions/batch-register');
+		expect(config).toMatchObject({
+			pattern: '/api/positions/batch-register',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should find config for position confirmation endpoint', () => {
+		const config = findRateLimitConfig('/api/positions/confirm-send');
+		expect(config).toMatchObject({
+			pattern: '/api/positions/confirm-send',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should find config for delivery recording endpoint', () => {
+		const config = findRateLimitConfig('/api/deliveries/record');
+		expect(config).toMatchObject({
+			pattern: '/api/deliveries/record',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should find config for Shadow Atlas engagement endpoint', () => {
+		const config = findRateLimitConfig('/api/shadow-atlas/engagement');
+		expect(config).toEqual({
+			pattern: '/api/shadow-atlas/engagement',
+			maxRequests: 10,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
 	it('should match /api/email/ pattern for /api/email/confirm sub-route (first match wins)', () => {
 		// The /api/email/ rule comes before /api/email/confirm/ in the config array,
 		// so findRateLimitConfig returns the first match (order matters for specificity)
@@ -685,6 +740,36 @@ describe('ROUTE_RATE_LIMITS', () => {
 		expect(rule).toBeDefined();
 		expect(rule!.maxRequests).toBe(3);
 		expect(rule!.windowMs).toBe(60 * 60 * 1000);
+	});
+
+	it('should include the position batch registration rule with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/positions/batch-register');
+		expect(rule).toEqual({
+			pattern: '/api/positions/batch-register',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should include the position confirmation rule with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/positions/confirm-send');
+		expect(rule).toEqual({
+			pattern: '/api/positions/confirm-send',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should include the delivery recording rule with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/deliveries/record');
+		expect(rule).toEqual({
+			pattern: '/api/deliveries/record',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
 	});
 
 	it('should include anti-astroturf template farming prevention', () => {

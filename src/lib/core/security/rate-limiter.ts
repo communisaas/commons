@@ -69,16 +69,20 @@ export interface RouteRateLimitConfig extends RateLimitConfig {
 /**
  * Storage backend interface for rate limit data
  */
+interface RateLimitReservation {
+	/** Whether this reservation consumed one request slot. */
+	allowed: boolean;
+	/** Post-reservation count, or the current count when denied. */
+	count: number;
+	/** Oldest admitted request still inside the window. */
+	oldestTimestamp: number;
+}
+
 interface RateLimitStore {
 	/**
-	 * Get timestamps for a key, filtered to only those within windowMs of now
+	 * Atomically prune the window and reserve a slot when capacity remains.
 	 */
-	getTimestamps(key: string, windowMs: number): Promise<number[]>;
-
-	/**
-	 * Add a timestamp and clean up old entries
-	 */
-	addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void>;
+	reserve(key: string, timestamp: number, config: RateLimitConfig): Promise<RateLimitReservation>;
 
 	/**
 	 * Get statistics about the store
@@ -109,27 +113,42 @@ class InMemoryStore implements RateLimitStore {
 		}
 	}
 
-	async getTimestamps(key: string, windowMs: number): Promise<number[]> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
-		const timestamps = this.store.get(key) || [];
-		return timestamps.filter((ts) => ts > cutoff);
-	}
-
-	async addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
+	async reserve(
+		key: string,
+		timestamp: number,
+		config: RateLimitConfig
+	): Promise<RateLimitReservation> {
+		const cutoff = timestamp - config.windowMs;
 		const existing = this.store.get(key) || [];
-		// Filter old timestamps and add new one
 		const filtered = existing.filter((ts) => ts > cutoff);
+		const oldestTimestamp =
+			filtered.length > 0
+				? filtered.reduce((oldest, candidate) => Math.min(oldest, candidate), Infinity)
+				: timestamp;
+
+		if (filtered.length >= config.maxRequests) {
+			this.store.set(key, filtered);
+			return {
+				allowed: false,
+				count: filtered.length,
+				oldestTimestamp
+			};
+		}
+
 		filtered.push(timestamp);
 		this.store.set(key, filtered);
+
+		return {
+			allowed: true,
+			count: filtered.length,
+			oldestTimestamp: Math.min(oldestTimestamp, timestamp)
+		};
 	}
 
 	private cleanup(): void {
 		const now = Date.now();
 		// Use a conservative 1 hour window for cleanup
-		// Actual filtering happens in getTimestamps
+		// Actual filtering happens in reserve
 		const maxAge = 60 * 60 * 1000;
 		let removedKeys = 0;
 
@@ -171,10 +190,10 @@ class InMemoryStore implements RateLimitStore {
  * - Member = unique request ID (timestamp + random suffix)
  *
  * Commands used:
- * - ZREMRANGEBYSCORE: Remove old entries
- * - ZCARD: Count entries in window
- * - ZADD: Add new timestamp
- * - EXPIRE: Auto-cleanup
+ * - ZREMRANGEBYSCORE: Prune old entries
+ * - ZRANGE: Count remaining entries in window
+ * - ZADD: Conditionally reserve one request slot
+ * - EXPIRE: Auto-cleanup after conditional add
  */
 class RedisStore implements RateLimitStore {
 	private client: RedisClient | null = null;
@@ -225,30 +244,38 @@ class RedisStore implements RateLimitStore {
 		}
 	}
 
-	async getTimestamps(key: string, windowMs: number): Promise<number[]> {
+	async reserve(
+		key: string,
+		timestamp: number,
+		config: RateLimitConfig
+	): Promise<RateLimitReservation> {
 		const client = await this.getClient();
-		const now = Date.now();
-		const cutoff = now - windowMs;
+		const cutoff = timestamp - config.windowMs;
 
 		// Remove old entries first
 		await client.zRemRangeByScore(key, '-inf', cutoff.toString());
 
 		// Get all remaining entries (they're all within window)
 		const members = await client.zRange(key, 0, -1);
+		const timestamps = members.map((m) => parseInt(m.split(':')[0], 10));
+		const oldestTimestamp = timestamps.length > 0 ? Math.min(...timestamps) : timestamp;
 
-		// Extract timestamps from members (format: "timestamp:random")
-		return members.map((m) => parseInt(m.split(':')[0], 10));
-	}
-
-	async addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void> {
-		const client = await this.getClient();
+		if (timestamps.length >= config.maxRequests) {
+			return { allowed: false, count: timestamps.length, oldestTimestamp };
+		}
 
 		// Add new timestamp with unique member
 		const member = `${timestamp}:${Math.random().toString(36).slice(2, 10)}`;
 		await client.zAdd(key, { score: timestamp, value: member });
 
 		// Set expiry to clean up abandoned keys (2x window to be safe)
-		await client.expire(key, Math.ceil((windowMs * 2) / 1000));
+		await client.expire(key, Math.ceil((config.windowMs * 2) / 1000));
+
+		return {
+			allowed: true,
+			count: timestamps.length + 1,
+			oldestTimestamp: Math.min(oldestTimestamp, timestamp)
+		};
 	}
 
 	getStats(): { implementation: string } {
@@ -335,17 +362,13 @@ export class SlidingWindowRateLimiter {
 	async check(key: string, config: RateLimitConfig): Promise<RateLimitResult> {
 		const { maxRequests, windowMs } = config;
 		const now = Date.now();
-
-		// Get current timestamps in window
-		const timestamps = await this.store.getTimestamps(key, windowMs);
-		const count = timestamps.length;
+		const reservation = await this.store.reserve(key, now, config);
 
 		// Calculate reset time (oldest timestamp + window, or now + window if empty)
-		const oldestTimestamp = timestamps.length > 0 ? Math.min(...timestamps) : now;
-		const resetMs = oldestTimestamp + windowMs;
+		const resetMs = reservation.oldestTimestamp + windowMs;
 		const resetSeconds = Math.ceil(resetMs / 1000);
 
-		if (count >= maxRequests) {
+		if (!reservation.allowed) {
 			// Rate limit exceeded
 			const retryAfter = Math.ceil((resetMs - now) / 1000);
 			return {
@@ -357,12 +380,9 @@ export class SlidingWindowRateLimiter {
 			};
 		}
 
-		// Add this request
-		await this.store.addTimestamp(key, now, windowMs);
-
 		return {
 			allowed: true,
-			remaining: maxRequests - count - 1,
+			remaining: Math.max(0, maxRequests - reservation.count),
 			limit: maxRequests,
 			reset: resetSeconds
 		};
@@ -425,9 +445,35 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip'
 	},
 	{
+		pattern: '/api/shadow-atlas/engagement',
+		maxRequests: 10,
+		windowMs: 60 * 1000, // 10 req/min per user — engagement claim traffic
+		keyStrategy: 'user'
+	},
+	{
 		pattern: '/api/shadow-atlas/register',
 		maxRequests: 5,
 		windowMs: 60 * 1000, // 1 minute
+		keyStrategy: 'user'
+	},
+	{
+		pattern: '/api/deliveries/record',
+		maxRequests: 5,
+		windowMs: 60 * 1000, // 5 req/min per user — delivery recording throttle
+		keyStrategy: 'user'
+	},
+	// Request-layer caps on position writes: reject replay before request
+	// parsing or Convex work is attempted.
+	{
+		pattern: '/api/positions/batch-register',
+		maxRequests: 5,
+		windowMs: 60 * 1000,
+		keyStrategy: 'user'
+	},
+	{
+		pattern: '/api/positions/confirm-send',
+		maxRequests: 5,
+		windowMs: 60 * 1000,
 		keyStrategy: 'user'
 	},
 	{
@@ -533,7 +579,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip',
 		includeGet: true
 	},
-	// ── Org onboarding rate limits (Phase 0) ──
+	// ── Org onboarding rate limits ──
 	{
 		pattern: '/api/org/check-slug',
 		maxRequests: 20,
@@ -547,7 +593,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 10 req/min per user — org mutations (create, update, invites)
 		keyStrategy: 'user'
 	},
-	// ── Billing rate limits (Phase 0) ──
+	// ── Billing rate limits ──
 	{
 		pattern: '/api/billing/checkout',
 		maxRequests: 5,
@@ -560,7 +606,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 10 req/min per user — Stripe portal redirects
 		keyStrategy: 'user'
 	},
-	// ── Public REST API v1 (Phase 1) ──
+	// ── Public REST API v1 ──
 	{
 		pattern: '/api/v1/',
 		maxRequests: 100,
@@ -611,7 +657,7 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 20 req/min per user — scope inference for template creator
 		keyStrategy: 'user'
 	},
-	// ── Public campaign page rate limits (Phase 0) ──
+	// ── Public campaign page rate limits ──
 	{
 		pattern: '/api/c/',
 		maxRequests: 30,
