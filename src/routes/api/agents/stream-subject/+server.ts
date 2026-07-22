@@ -128,9 +128,11 @@ export const POST: RequestHandler = async (event) => {
 
 		try {
 			const generator = generateStreamWithThoughts<SubjectLineStreamResponse>(prompt, {
+				stage: 'subject-line',
 				systemInstruction: systemPrompt,
 				temperature: 0.4,
-				thinkingLevel: 'medium'
+				thinkingLevel: 'medium',
+				signal: event.request.signal
 			});
 
 			let iterResult = await generator.next();

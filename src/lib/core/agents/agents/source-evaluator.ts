@@ -231,10 +231,11 @@ export async function evaluateSources(
 	const prompt = buildEvaluatorPrompt(candidates, context);
 
 	const response = await generate(prompt, {
+		stage: 'message-source-evaluation',
 		temperature: 0.3,
 		enableGrounding: false,
 		responseSchema: SOURCE_EVALUATION_SCHEMA,
-		maxOutputTokens: 65536,
+		maxOutputTokens: 4096,
 		systemInstruction: 'You are a source credibility evaluator for civic messaging. Evaluate sources based on incentive alignment, not prestige. Output structured JSON.'
 	});
 

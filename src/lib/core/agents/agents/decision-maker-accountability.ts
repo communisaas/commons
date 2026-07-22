@@ -124,10 +124,10 @@ export async function generateAccountabilityOpeners(
 	const result = await generateWithThoughts<AccountabilityLLMResponse>(
 		userPrompt,
 		{
+			stage: 'decision-accountability',
 			systemInstruction: systemPrompt,
 			temperature: 0.2,
-			thinkingLevel: 'medium',
-			maxOutputTokens: 16384
+			thinkingLevel: 'medium'
 		},
 		(thought) => {
 			const cleaned = cleanThoughtForDisplay(thought);

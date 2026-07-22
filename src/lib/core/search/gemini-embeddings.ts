@@ -5,7 +5,8 @@
  *
  * Benefits:
  * - Better performance: 66.3% vs 64.6% MTEB benchmark
- * - FREE tier: Unlimited in Google AI Studio
+ * - Free-tier availability is account/model dependent; launch requires a
+ *   Free-plan key with billing and pay-as-you-go disabled
  * - Multilingual: 100+ languages
  * - Flexible dimensions: 768, 1536, or 3072 (lossless truncation via MRL)
  *
@@ -16,6 +17,7 @@
  */
 
 import { GoogleGenAI } from '@google/genai';
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
 
 /**
  * Embedding configuration
@@ -27,39 +29,6 @@ export const EMBEDDING_CONFIG = {
 	batchSize: 100, // Max texts per batch request
 	timeout: 30000 // 30 second timeout for API calls
 } as const;
-
-/**
- * Execute fetch-like operation with timeout for Gemini SDK
- * This wraps the Gemini SDK call with a timeout controller
- */
-async function withTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-	operationName: string
-): Promise<T> {
-	let timeoutId: NodeJS.Timeout | undefined;
-
-	const timeoutPromise = new Promise<never>((_, reject) => {
-		timeoutId = setTimeout(() => {
-			const error = new Error(`Gemini API timeout after ${timeoutMs}ms: ${operationName}`);
-			console.error('[Gemini Embeddings] Timeout:', error.message);
-			reject(error);
-		}, timeoutMs);
-	});
-
-	try {
-		const result = await Promise.race([promise, timeoutPromise]);
-		if (timeoutId !== undefined) {
-			clearTimeout(timeoutId);
-		}
-		return result;
-	} catch (error) {
-		if (timeoutId !== undefined) {
-			clearTimeout(timeoutId);
-		}
-		throw error;
-	}
-}
 
 /**
  * Task types for Gemini embeddings
@@ -80,10 +49,62 @@ export interface EmbeddingOptions {
 	taskType?: EmbeddingTaskType;
 	/** Output dimensions (default: 768) */
 	dimensions?: number;
-	/** Max retry attempts (default: 3) */
-	maxRetries?: number;
-	/** Initial retry delay in ms (default: 1000) */
-	retryDelay?: number;
+	/** Compatibility field; the reviewed embedding envelope permits exactly one attempt. */
+	maxRetries?: 1;
+	/** Abort the local SDK request. The provider may still bill already-started work. */
+	signal?: AbortSignal;
+}
+
+function embeddingError(error: unknown, batch: boolean): Error {
+	const prefix = batch ? 'batch embeddings' : 'embedding';
+	const safeDetail = sanitizeProviderErrorMessage(error);
+	if (error !== null && typeof error === 'object' && 'code' in error) {
+		const code = (error as { code?: unknown }).code;
+		if (code === 'INVALID_ARGUMENT') {
+			return new Error(sanitizeProviderErrorMessage(`Invalid input: ${safeDetail}`));
+		}
+		if (code === 'UNAUTHENTICATED') {
+			return new Error('Invalid GEMINI_API_KEY. Get key from: https://aistudio.google.com/apikey');
+		}
+	}
+	return new Error(
+		sanitizeProviderErrorMessage(`Failed to generate ${prefix} after 1 attempt: ${safeDetail}`)
+	);
+}
+
+function embeddingRequestConfig(
+	options: EmbeddingOptions,
+	taskType: EmbeddingTaskType,
+	dimensions: number
+) {
+	if (options.maxRetries !== undefined && options.maxRetries !== 1) {
+		throw new RangeError('Embedding provider envelope permits exactly one attempt');
+	}
+	if (dimensions !== EMBEDDING_CONFIG.dimensions) {
+		throw new RangeError(
+			`Embedding provider envelope requires exactly ${EMBEDDING_CONFIG.dimensions} dimensions`
+		);
+	}
+	return {
+		outputDimensionality: dimensions,
+		taskType,
+		httpOptions: {
+			timeout: EMBEDDING_CONFIG.timeout,
+			retryOptions: { attempts: 1 }
+		},
+		...(options.signal ? { abortSignal: options.signal } : {})
+	};
+}
+
+export function validateEmbeddingVector(values: unknown, index?: number): number[] {
+	const label = index === undefined ? 'Embedding' : `Embedding ${index}`;
+	if (!Array.isArray(values) || values.length !== EMBEDDING_CONFIG.dimensions) {
+		throw new Error(`${label} must contain exactly ${EMBEDDING_CONFIG.dimensions} numeric values`);
+	}
+	if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) {
+		throw new Error(`${label} contains a non-finite numeric value`);
+	}
+	return values;
 }
 
 /**
@@ -118,12 +139,7 @@ export async function generateEmbedding(
 	text: string,
 	options: EmbeddingOptions = {}
 ): Promise<number[]> {
-	const {
-		taskType = 'RETRIEVAL_DOCUMENT',
-		dimensions = EMBEDDING_CONFIG.dimensions,
-		maxRetries = 3,
-		retryDelay = 1000
-	} = options;
+	const { taskType = 'RETRIEVAL_DOCUMENT', dimensions = EMBEDDING_CONFIG.dimensions } = options;
 
 	const ai = getGeminiClient();
 
@@ -135,76 +151,21 @@ export async function generateEmbedding(
 		);
 	}
 
-	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		try {
-			const result = await withTimeout(
-				ai.models.embedContent({
-					model: EMBEDDING_CONFIG.model,
-					contents: [text],
-					config: {
-						outputDimensionality: dimensions,
-						taskType: taskType
-					}
-				}),
-				EMBEDDING_CONFIG.timeout,
-				'embedContent'
-			);
+	try {
+		const result = await ai.models.embedContent({
+			model: EMBEDDING_CONFIG.model,
+			contents: [text],
+			config: embeddingRequestConfig(options, taskType, dimensions)
+		});
 
-			if (!result.embeddings || result.embeddings.length === 0) {
-				throw new Error('No embeddings returned from Gemini API');
-			}
-
-			const values = result.embeddings[0].values;
-			if (!values) {
-				throw new Error('Embedding values are undefined');
-			}
-
-			return values;
-		} catch (error) {
-			const isLastAttempt = attempt === maxRetries - 1;
-
-			// Check for specific error types
-			if (error && typeof error === 'object' && 'code' in error) {
-				const errorCode = (error as { code: string }).code;
-
-				if (errorCode === 'RESOURCE_EXHAUSTED') {
-					// Rate limit exceeded - retry with exponential backoff
-					if (!isLastAttempt) {
-						const delay = retryDelay * Math.pow(2, attempt);
-						console.warn(
-							`Rate limit exceeded, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
-						);
-						await new Promise((resolve) => setTimeout(resolve, delay));
-						continue;
-					}
-				} else if (errorCode === 'INVALID_ARGUMENT') {
-					// Invalid input - don't retry
-					throw new Error(
-						`Invalid input: ${error instanceof Error ? error.message : String(error)}`
-					);
-				} else if (errorCode === 'UNAUTHENTICATED') {
-					// Invalid API key - don't retry
-					throw new Error(
-						'Invalid GEMINI_API_KEY. Get key from: https://aistudio.google.com/apikey'
-					);
-				}
-			}
-
-			// Unknown error or last attempt - throw
-			if (isLastAttempt) {
-				throw new Error(
-					`Failed to generate embedding after ${maxRetries} attempts: ${error instanceof Error ? error.message : String(error)}`
-				);
-			}
-
-			// Retry with exponential backoff
-			const delay = retryDelay * Math.pow(2, attempt);
-			console.warn(`Embedding generation failed, retrying in ${delay}ms...`);
-			await new Promise((resolve) => setTimeout(resolve, delay));
+		if (!result.embeddings || result.embeddings.length === 0) {
+			throw new Error('No embeddings returned from Gemini API');
 		}
-	}
 
-	throw new Error('Max retries exceeded (should not reach here)');
+		return validateEmbeddingVector(result.embeddings[0].values);
+	} catch (error) {
+		throw embeddingError(error, false);
+	}
 }
 
 /**
@@ -242,12 +203,7 @@ export async function generateBatchEmbeddings(
 		);
 	}
 
-	const {
-		taskType = 'RETRIEVAL_DOCUMENT',
-		dimensions = EMBEDDING_CONFIG.dimensions,
-		maxRetries = 3,
-		retryDelay = 1000
-	} = options;
+	const { taskType = 'RETRIEVAL_DOCUMENT', dimensions = EMBEDDING_CONFIG.dimensions } = options;
 
 	const ai = getGeminiClient();
 
@@ -261,78 +217,23 @@ export async function generateBatchEmbeddings(
 		}
 	}
 
-	for (let attempt = 0; attempt < maxRetries; attempt++) {
-		try {
-			const result = await withTimeout(
-				ai.models.embedContent({
-					model: EMBEDDING_CONFIG.model,
-					contents: texts,
-					config: {
-						outputDimensionality: dimensions,
-						taskType: taskType
-					}
-				}),
-				EMBEDDING_CONFIG.timeout,
-				'embedContent (batch)'
-			);
+	try {
+		const result = await ai.models.embedContent({
+			model: EMBEDDING_CONFIG.model,
+			contents: texts,
+			config: embeddingRequestConfig(options, taskType, dimensions)
+		});
 
-			if (!result.embeddings || result.embeddings.length !== texts.length) {
-				throw new Error(
-					`Expected ${texts.length} embeddings, got ${result.embeddings?.length || 0}`
-				);
-			}
-
-			return result.embeddings.map((e) => {
-				if (!e.values) {
-					throw new Error('Embedding values are undefined');
-				}
-				return e.values;
-			});
-		} catch (error) {
-			const isLastAttempt = attempt === maxRetries - 1;
-
-			// Check for specific error types
-			if (error && typeof error === 'object' && 'code' in error) {
-				const errorCode = (error as { code: string }).code;
-
-				if (errorCode === 'RESOURCE_EXHAUSTED') {
-					// Rate limit exceeded - retry with exponential backoff
-					if (!isLastAttempt) {
-						const delay = retryDelay * Math.pow(2, attempt);
-						console.warn(
-							`Rate limit exceeded, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
-						);
-						await new Promise((resolve) => setTimeout(resolve, delay));
-						continue;
-					}
-				} else if (errorCode === 'INVALID_ARGUMENT') {
-					// Invalid input - don't retry
-					throw new Error(
-						`Invalid input: ${error instanceof Error ? error.message : String(error)}`
-					);
-				} else if (errorCode === 'UNAUTHENTICATED') {
-					// Invalid API key - don't retry
-					throw new Error(
-						'Invalid GEMINI_API_KEY. Get key from: https://aistudio.google.com/apikey'
-					);
-				}
-			}
-
-			// Unknown error or last attempt - throw
-			if (isLastAttempt) {
-				throw new Error(
-					`Failed to generate batch embeddings after ${maxRetries} attempts: ${error instanceof Error ? error.message : String(error)}`
-				);
-			}
-
-			// Retry with exponential backoff
-			const delay = retryDelay * Math.pow(2, attempt);
-			console.warn(`Batch embedding generation failed, retrying in ${delay}ms...`);
-			await new Promise((resolve) => setTimeout(resolve, delay));
+		if (!result.embeddings || result.embeddings.length !== texts.length) {
+			throw new Error(`Expected ${texts.length} embeddings, got ${result.embeddings?.length || 0}`);
 		}
-	}
 
-	throw new Error('Max retries exceeded (should not reach here)');
+		return result.embeddings.map((embedding, index) =>
+			validateEmbeddingVector(embedding.values, index)
+		);
+	} catch (error) {
+		throw embeddingError(error, true);
+	}
 }
 
 /**

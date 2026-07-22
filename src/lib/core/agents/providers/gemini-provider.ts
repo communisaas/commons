@@ -10,7 +10,7 @@
  * - Stage 4: Chunked Contact Synthesis (N Gemini calls, 3 identities per chunk)
  *
  * Stage 4 uses generate() with responseSchema for guaranteed JSON structure.
- * Each chunk retries via generate()'s built-in 3x retry, then falls back to
+ * Each chunk has one explicitly classified transient retry, then falls back to
  * pre-extracted page email hints on failure. Partial success is preserved.
  *
  * Includes a ResolvedContact cache (14-day TTL) to skip repeat lookups.
@@ -35,6 +35,7 @@ import {
 } from '../prompts/decision-maker';
 import { getCachedContacts, upsertResolvedContacts, normalizeOrgKey } from '../utils/contact-cache';
 import { capFanout, MAX_DECISION_MAKER_FANOUT } from '../cogs-fanout';
+import { DECISION_MAKER_PROVIDER_LIMITS } from '../provider-call-envelope';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
 import { searchWeb, readPage, prunePageContent, type ExaPageContent } from '../exa-search';
 import {
@@ -65,6 +66,20 @@ interface DiscoveredRole {
 
 interface RoleDiscoveryResponse {
 	roles: DiscoveredRole[];
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+	const encoder = new TextEncoder();
+	if (encoder.encode(value).byteLength <= maxBytes) return value;
+	let result = '';
+	let bytes = 0;
+	for (const character of value) {
+		const characterBytes = encoder.encode(character).byteLength;
+		if (bytes + characterBytes > maxBytes) break;
+		result += character;
+		bytes += characterBytes;
+	}
+	return result;
 }
 
 /** A candidate from Phase 2 (person + contact info) */
@@ -285,10 +300,11 @@ async function resolveIdentitiesFromSearch(
 	const extractionResult = await generateWithThoughts<IdentityResolutionResponse>(
 		extractionPrompt,
 		{
+			stage: 'decision-identity-extraction',
 			systemInstruction: systemPrompt,
 			temperature: 0.1,
 			thinkingLevel: 'low',
-			maxOutputTokens: 16384
+			signal
 		},
 		streaming?.onThought ? (thought) => streaming.onThought!(thought, 'identity') : undefined
 	);
@@ -438,7 +454,7 @@ async function huntContactsFanOutSynthesize(
 	identities: ResolvedIdentity[],
 	cachedContacts: CachedContactInfo[],
 	roles: DiscoveredRole[],
-	issueContext?: { subjectLine: string; coreMessage: string; topics: string[] },
+	issueContext: { subjectLine: string; coreMessage: string; topics: string[] },
 	streaming?: StreamingCallbacks,
 	signal?: AbortSignal,
 	/** Called per-identity as each candidate is resolved (for progressive UI streaming) */
@@ -581,10 +597,12 @@ Rules:
 	const planByIndex = new Map<number, QueryPlan>();
 	try {
 		const planResponse = await generate(planningUser, {
+			stage: 'decision-query-planning',
 			systemInstruction: planningSystem,
 			temperature: 0.3,
-			maxOutputTokens: 4096,
-			responseSchema: QUERY_PLAN_SCHEMA
+			thinkingLevel: 'low',
+			responseSchema: QUERY_PLAN_SCHEMA,
+			signal
 		});
 		tokenUsages.push(extractTokenUsage(planResponse));
 
@@ -686,22 +704,26 @@ Rules:
 		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
 	}
 
-	const MAX_PAGES_TOTAL = Math.min(uncached.length * 3, 20);
+	const MAX_PAGES_TOTAL = Math.min(
+		uncached.length * 2,
+		DECISION_MAKER_PROVIDER_LIMITS.maxPagesTotal
+	);
 
 	const pageSelectionSystem = PAGE_SELECTION_PROMPT
 		.replace(/{CURRENT_DATE}/g, currentDate)
 		.replace(/{MAX_PAGES_TOTAL}/g, String(MAX_PAGES_TOTAL));
 	const pageSelectionUser = buildPageSelectionPrompt(identitySearchResults);
 
-	console.debug(`[gemini-provider] Stage 2: Page selection call (budget: ${MAX_PAGES_TOTAL} pages)`);
+	console.debug(`[gemini-provider] Stage 2: Page selection call (ceiling: ${MAX_PAGES_TOTAL} pages)`);
 
 	const selectionResult = await generateWithThoughts<PageSelectionResponse>(
 		pageSelectionUser,
 		{
+			stage: 'decision-page-selection',
 			systemInstruction: pageSelectionSystem,
 			temperature: 0.1,
 			thinkingLevel: 'low',
-			maxOutputTokens: 8192
+			signal
 		},
 		onThought
 	);
@@ -759,7 +781,7 @@ Rules:
 		selectedUrlToIdentities.set(url, urlToIdentities.get(url)!);
 	}
 
-	console.debug(`[gemini-provider] Stage 2 final: ${selectedUrls.length} URLs to fetch (budget: ${MAX_PAGES_TOTAL})`);
+	console.debug(`[gemini-provider] Stage 2 final: ${selectedUrls.length} URLs to fetch (ceiling: ${MAX_PAGES_TOTAL})`);
 
 	// ================================================================
 	// Stage 3: Parallel Page Reads (~5-8s)
@@ -865,7 +887,7 @@ Rules:
 		return { candidates: cachedCandidates, fetchedPages, tokenUsage: sumTokenUsage(...tokenUsages), externalCounts: extCounts };
 	}
 
-	const SYNTHESIS_CHUNK_SIZE = 3;
+	const SYNTHESIS_CHUNK_SIZE = DECISION_MAKER_PROVIDER_LIMITS.synthesisChunkSize;
 	const domainContext = generateDomainContext(detectOrgTypes(uncached.map(u => u.identity.organization)));
 	const synthesisSystem = CONTACT_SYNTHESIS_PROMPT
 		.replace(/{CURRENT_DATE}/g, currentDate)
@@ -891,17 +913,51 @@ Rules:
 				p.attributedTo.length === 0 ||
 				p.attributedTo.some(idx => chunkGlobalIndices.includes(idx))
 			)
+			.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxPagesPerSynthesisChunk)
 			.map(p => ({
 				...p,
+				url: truncateUtf8(p.url, 512),
+				title: truncateUtf8(p.title, 240),
+				text: truncateUtf8(p.text, DECISION_MAKER_PROVIDER_LIMITS.maxPageBytesPerSynthesisChunk),
+				contactHints: {
+					emails: p.contactHints.emails
+						.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxContactHintEmailsPerPage)
+						.map((value) => truncateUtf8(value, DECISION_MAKER_PROVIDER_LIMITS.maxEmailBytes)),
+					phones: p.contactHints.phones
+						.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxContactHintPhonesPerPage)
+						.map((value) => truncateUtf8(value, DECISION_MAKER_PROVIDER_LIMITS.maxPhoneBytes)),
+					socialUrls: p.contactHints.socialUrls
+						.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxContactHintSocialUrlsPerPage)
+						.map((value) => truncateUtf8(value, DECISION_MAKER_PROVIDER_LIMITS.maxSocialUrlBytes))
+				},
 				attributedTo: p.attributedTo
 					.filter(idx => chunkGlobalIndices.includes(idx))
 					.map(idx => idx - globalStartIdx)
 			}));
 
 		const synthesisUser = buildContactSynthesisPrompt(
-			chunk.map(u => ({ identity: u.identity, reasoning: u.reasoning })),
+			chunk.map(u => ({
+				identity: {
+					...u.identity,
+					name: truncateUtf8(u.identity.name, 256),
+					title: truncateUtf8(u.identity.title, 512),
+					organization: truncateUtf8(u.identity.organization, 512),
+					search_evidence: truncateUtf8(u.identity.search_evidence, 1_024)
+				},
+				reasoning: truncateUtf8(u.reasoning, 1_024)
+			})),
 			chunkPages,
-			issueContext
+			{
+				...issueContext,
+				subjectLine: truncateUtf8(issueContext.subjectLine, 800),
+				coreMessage: truncateUtf8(
+					issueContext.coreMessage,
+					DECISION_MAKER_PROVIDER_LIMITS.maxIssueCoreMessageBytes
+				),
+				topics: issueContext.topics
+					.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxIssueTopics)
+					.map((topic) => truncateUtf8(topic, 256))
+			}
 		);
 
 		return { chunk, chunkIdx, globalStartIdx, chunkPages, synthesisUser };
@@ -921,14 +977,15 @@ Rules:
 
 			let candidates: Candidate[];
 
-			try {
-				const response = await generate(synthesisUser, {
-					systemInstruction: synthesisSystem,
-					temperature: 0.2,
-					maxOutputTokens: 32768,
-					thinkingLevel: 'low',
-					responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA
-				});
+	try {
+		const response = await generate(synthesisUser, {
+			stage: 'decision-contact-synthesis',
+			systemInstruction: synthesisSystem,
+			temperature: 0.2,
+			thinkingLevel: 'low',
+			responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA,
+			signal
+		});
 				tokenUsages.push(extractTokenUsage(response));
 
 				const responseText = response.text || '{}';
@@ -1042,17 +1099,18 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			console.debug('[gemini-provider] Phase 1: Discovering roles with thoughts...');
 
-			const roleResult = await generateWithThoughts<RoleDiscoveryResponse>(
-				rolePrompt,
-				{
-					systemInstruction: ROLE_DISCOVERY_PROMPT,
-					// 0.7: Role discovery is creative-analytical — finding non-obvious power brokers
-					// requires exploring the model's full understanding of institutional structure.
-					// Factual grounding comes from Phase 2 search, not token suppression here.
-					temperature: 0.7,
-					thinkingLevel: 'medium',
-					maxOutputTokens: 65536
-				},
+	const roleResult = await generateWithThoughts<RoleDiscoveryResponse>(
+		rolePrompt,
+		{
+			stage: 'decision-role-discovery',
+			systemInstruction: ROLE_DISCOVERY_PROMPT,
+			// 0.7: Role discovery is creative-analytical — finding non-obvious power brokers
+			// requires exploring the model's full understanding of institutional structure.
+			// Factual grounding comes from Phase 2 search, not token suppression here.
+			temperature: 0.7,
+			thinkingLevel: 'medium',
+			signal: context.signal
+		},
 				streaming?.onThought ? (thought) => streaming.onThought!(thought, 'discover') : undefined
 			);
 			tokenUsages.push(roleResult.tokenUsage);
@@ -1074,8 +1132,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const discoveredRoles: DiscoveredRole[] = extraction.data?.roles || [];
 
 			// COGS-fanout guard: cap the role count before the Exa/Firecrawl/Gemini
-			// fanout so per-message COGS can't exceed the budgeted ~$0.22 ceiling.
-			// Phase 1 is an unbounded enumeration; the entire downstream cost scales
+				// fanout so per-message COGS stays inside the reviewed ~$0.22 ceiling.
+				// Role discovery is an unbounded enumeration; the entire downstream cost scales
 			// with this count, so bounding it here bounds the whole resolution.
 			const roles = capFanout(discoveredRoles, MAX_DECISION_MAKER_FANOUT);
 			if (roles.length < discoveredRoles.length) {

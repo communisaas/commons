@@ -80,16 +80,48 @@ vi.mock('$lib/core/agents/prompts/decision-maker', () => ({
 
 import {
 	getGeminiClient,
-	generate,
-	generateStream,
-	generateStreamWithThoughts,
-	generateWithThoughts,
-	interact,
+	generate as generateRaw,
+	generateStream as generateStreamRaw,
+	generateStreamWithThoughts as generateStreamWithThoughtsRaw,
+	generateWithThoughts as generateWithThoughtsRaw,
+	interact as interactRaw,
 	extractTokenUsage,
-	GEMINI_CONFIG
+	GEMINI_CONFIG,
+	isRetryableGeminiError
 } from '$lib/core/agents/gemini-client';
 import { GeminiDecisionMakerProvider, isSentinelName } from '$lib/core/agents/providers/gemini-provider';
 import type { ResolveContext } from '$lib/core/agents/providers/types';
+import type { GenerateOptions } from '$lib/core/agents/types';
+
+type TestGenerateOptions = Omit<GenerateOptions, 'stage'>;
+
+function testOptions(options: TestGenerateOptions = {}): GenerateOptions {
+	return { stage: 'delegation-policy', ...options };
+}
+
+function generate(prompt: string, options: TestGenerateOptions = {}) {
+	return generateRaw(prompt, testOptions(options));
+}
+
+function generateStream(prompt: string, options: TestGenerateOptions = {}) {
+	return generateStreamRaw(prompt, testOptions(options));
+}
+
+function generateStreamWithThoughts<T>(prompt: string, options: TestGenerateOptions = {}) {
+	return generateStreamWithThoughtsRaw<T>(prompt, testOptions(options));
+}
+
+function generateWithThoughts<T>(
+	prompt: string,
+	options: TestGenerateOptions = {},
+	onThought?: (thought: string) => void
+) {
+	return generateWithThoughtsRaw<T>(prompt, testOptions(options), onThought);
+}
+
+function interact(input: string, options: TestGenerateOptions = {}) {
+	return interactRaw(input, testOptions(options));
+}
 
 // ============================================================================
 // Helpers
@@ -156,7 +188,7 @@ describe('Gemini Client — Singleton & Configuration', () => {
 
 	it('GEMINI_CONFIG has sensible defaults', () => {
 		expect(GEMINI_CONFIG.defaults.temperature).toBe(0.3);
-		expect(GEMINI_CONFIG.defaults.maxOutputTokens).toBe(65536);
+		expect(GEMINI_CONFIG.defaults.maxOutputTokens).toBe(4096);
 		expect(GEMINI_CONFIG.defaults.thinkingLevel).toBe('low');
 	});
 
@@ -252,14 +284,14 @@ describe('generate — happy path', () => {
 		}));
 	});
 
-	it('uses GEMINI_CONFIG defaults when options are omitted', async () => {
+	it('uses the reviewed stage output ceiling when options are omitted', async () => {
 		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
 		await generate('test');
 
 		expect(mockGenerateContent).toHaveBeenCalledWith(expect.objectContaining({
 			config: expect.objectContaining({
 				temperature: 0.3,
-				maxOutputTokens: 65536
+				maxOutputTokens: 2048
 			})
 		}));
 	});
@@ -283,6 +315,22 @@ describe('generate — happy path', () => {
 			contents: 'my test prompt',
 			model: GEMINI_CONFIG.model
 		}));
+	});
+
+	it('enforces prompt/output ceilings before any SDK call', async () => {
+		await expect(generate('x'.repeat(16 * 1024 + 1))).rejects.toThrow(/prompt exceeds/u);
+		await expect(generate('test', { maxOutputTokens: 2_049 })).rejects.toThrow(/output exceeds/u);
+		expect(mockGenerateContent).not.toHaveBeenCalled();
+	});
+
+	it('disables SDK retries and forwards timeout plus cancellation', async () => {
+		const controller = new AbortController();
+		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
+		await generate('test', { signal: controller.signal });
+
+		const config = mockGenerateContent.mock.calls[0][0].config;
+		expect(config.httpOptions).toEqual({ timeout: 30_000, retryOptions: { attempts: 1 } });
+		expect(config.abortSignal).toBe(controller.signal);
 	});
 });
 
@@ -348,28 +396,24 @@ describe('generate — retry logic', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('retries on RESOURCE_EXHAUSTED and succeeds on third attempt', async () => {
+	it('retries a classified transient response at most once', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
 		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
 			.mockRejectedValueOnce(rateLimitError)
 			.mockResolvedValueOnce(makeResponse('finally'));
 
 		const result = await generate('test');
 
 		expect(result.text).toBe('finally');
-		expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 	});
 
-	it('throws after max retries (3) on persistent rate limiting', async () => {
+	it('throws after the two-attempt stage ceiling on persistent rate limiting', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
-		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
-			.mockRejectedValueOnce(rateLimitError)
-			.mockRejectedValueOnce(rateLimitError);
+		mockGenerateContent.mockRejectedValueOnce(rateLimitError).mockRejectedValueOnce(rateLimitError);
 
-		await expect(generate('test')).rejects.toThrow(/Failed to generate content after 3 attempts/);
-		expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+		await expect(generate('test')).rejects.toThrow(/Failed to generate content after 2 attempts/);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 	});
 
 	it('does not retry on INVALID_ARGUMENT (immediate failure)', async () => {
@@ -388,31 +432,76 @@ describe('generate — retry logic', () => {
 		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 
-	it('retries on unknown errors and recovers', async () => {
+	it('does not retry an ambiguous unknown error', async () => {
 		mockGenerateContent
 			.mockRejectedValueOnce(new Error('Network error'))
 			.mockResolvedValueOnce(makeResponse('recovered'));
 
-		const result = await generate('test');
-
-		expect(result.text).toBe('recovered');
-		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+		await expect(generate('test')).rejects.toThrow(/Network error/);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 
-	it('calls setTimeout with exponential backoff delays (1s, 2s)', async () => {
+	it('bounds and sanitizes provider-controlled terminal errors', async () => {
+		const googleKey = `AIza${'a'.repeat(35)}`;
+		mockGenerateContent.mockRejectedValueOnce(
+			new Error(`provider\r\nkey=${googleKey}\u0000 ${'\ud83d\udea8'.repeat(10_000)}`)
+		);
+
+		let failure: Error | undefined;
+		try {
+			await generate('test');
+		} catch (error) {
+			if (error instanceof Error) failure = error;
+		}
+
+		expect(failure).toBeInstanceOf(Error);
+		const message = failure?.message ?? '';
+		expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(512);
+		expect(message).not.toContain(googleKey);
+		expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+	});
+
+	it('classifies only explicit provider transients and never aborts or local errors', () => {
+		expect(isRetryableGeminiError(Object.assign(new Error('busy'), { status: 503 }))).toBe(true);
+		expect(
+			isRetryableGeminiError(Object.assign(new Error('quota'), { code: 'RESOURCE_EXHAUSTED' }))
+		).toBe(true);
+		expect(isRetryableGeminiError(new DOMException('cancelled', 'AbortError'))).toBe(false);
+		expect(isRetryableGeminiError(new SyntaxError('bad json'))).toBe(false);
+		expect(isRetryableGeminiError(new Error('Network error'))).toBe(false);
+	});
+
+	it('uses one bounded backoff before the sole transient retry', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
 		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
 			.mockRejectedValueOnce(rateLimitError)
 			.mockResolvedValueOnce(makeResponse('ok'));
 
 		await generate('test');
 
 		const setTimeoutCalls = (globalThis.setTimeout as unknown as Mock).mock.calls;
-		// First retry: 1000 * 2^0 = 1000
-		expect(setTimeoutCalls[0][1]).toBe(1000);
-		// Second retry: 1000 * 2^1 = 2000
-		expect(setTimeoutCalls[1][1]).toBe(2000);
+		expect(setTimeoutCalls).toHaveLength(1);
+		expect(setTimeoutCalls[0][1]).toBe(500);
+	});
+
+	it('does not start a retry when the request is aborted during backoff', async () => {
+		const controller = new AbortController();
+		const rateLimitError = Object.assign(new Error('Rate limited'), {
+			code: 'RESOURCE_EXHAUSTED'
+		});
+		mockGenerateContent
+			.mockRejectedValueOnce(rateLimitError)
+			.mockResolvedValueOnce(makeResponse('must not run'));
+		(globalThis.setTimeout as unknown as Mock).mockImplementationOnce(() => {
+			controller.abort(new DOMException('request closed', 'AbortError'));
+			return 0 as unknown as ReturnType<typeof setTimeout>;
+		});
+
+		await expect(generate('test', { signal: controller.signal })).rejects.toMatchObject({
+			name: 'AbortError'
+		});
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -544,30 +633,30 @@ describe('generateStream', () => {
 		expect(chunks[0].content).toContain('Stream crashed');
 	});
 
-	it('configures thinking budget based on thinkingLevel', async () => {
+	it('caps high thinking at the reviewed stage ceiling', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
 
 		// Consume the generator
 		for await (const _ of generateStream('test', { thinkingLevel: 'high' })) {}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(8192);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 
-	it('uses low thinking budget for thinkingLevel=low', async () => {
+	it('uses low thinking tokens for thinkingLevel=low', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
 		for await (const _ of generateStream('test', { thinkingLevel: 'low' })) {}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(1024);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 
-	it('uses medium thinking budget by default', async () => {
+	it('uses the bounded low thinking ceiling by default', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
 		for await (const _ of generateStream('test')) {}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(4096);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 });
 
@@ -915,7 +1004,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'mayor@city.gov',
 				email_source: 'https://city.gov/staff',
 				recency_check: 'Current'
@@ -933,7 +1022,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'fabricated@nowhere.com',
 				recency_check: 'Current'
 			};
@@ -947,7 +1036,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'mayor@city.gov',
 				email_source: 'https://news.com/article', // wrong source
 				recency_check: 'Current'
@@ -964,7 +1053,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'NO_EMAIL_FOUND',
 				recency_check: 'Current'
 			};
@@ -979,7 +1068,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'no_email_found',
 				recency_check: 'Current'
 			};
@@ -993,7 +1082,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'not-an-email',
 				recency_check: 'Current'
 			};
@@ -1007,7 +1096,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: '',
 				recency_check: 'Current'
 			};
@@ -1021,7 +1110,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'cached@elsewhere.com',
 				email_source: 'https://old.gov/page',
 				recency_check: 'Cached',
@@ -1039,7 +1128,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: 'MAYOR@CITY.GOV', // uppercase
 				recency_check: 'Current'
 			};
@@ -1053,14 +1142,14 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Controls municipal budget',
+				reasoning: 'Controls municipal finance',
 				email: 'mayor@city.gov',
 				email_source: 'https://city.gov/staff',
 				recency_check: 'Confirmed in office as of 2026'
 			};
 
 			const result = processOneCandidate(candidate, pages);
-			expect(result.provenance).toContain('Controls municipal budget');
+			expect(result.provenance).toContain('Controls municipal finance');
 			expect(result.provenance).toContain('Person verified via');
 			expect(result.provenance).toContain('Email VERIFIED');
 		});
@@ -1070,7 +1159,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: '',
 				source_url: 'https://news.com/article',
 				recency_check: 'Current'
@@ -1085,7 +1174,7 @@ describe('GeminiDecisionMakerProvider', () => {
 				name: 'Jane Doe',
 				title: 'Mayor',
 				organization: 'City of Example',
-				reasoning: 'Has authority',
+				reasoning: 'Has oversight',
 				email: '',
 				recency_check: ''
 			};
@@ -1132,7 +1221,7 @@ describe('GeminiDecisionMakerProvider', () => {
 					name: 'Jane Doe',
 					title: 'CEO',
 					organization: 'Corp',
-					reasoning: 'Controls budget',
+					reasoning: 'Controls finance',
 					email: '',
 					recency_check: 'Current'
 				}
