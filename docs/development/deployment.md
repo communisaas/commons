@@ -136,11 +136,18 @@ quota-disabled. Repository source alone does not authorize a normal deploy.
 
 ### Secrets
 
-Set via Cloudflare dashboard or CLI:
+Set ordinary runtime secrets via the Cloudflare dashboard or CLI:
 
 ```bash
 npx wrangler pages secret put <KEY> --project-name communique-site
 ```
+
+Do not use that command for `EXA_API_KEY`, `FIRECRAWL_API_KEY`,
+`GEMINI_API_KEY`, or `GROQ_API_KEY`. Those four exact values are protected
+production-workflow inputs. The trusted release transaction stages them only
+at the immutable Pages upload seam, proves the deployment snapshot, and clears
+both production and preview project defaults. Follow
+`docs/ops/PAID-PROVIDER-POSTURE.md`.
 
 Required secrets:
 
@@ -148,8 +155,6 @@ Required secrets:
 | ---------------------- | ------------------------------------------------- |
 | `PUBLIC_CONVEX_URL`    | Convex deployment URL (public, exposed to client) |
 | `CONVEX_DEPLOY_KEY`    | For CI/CD Convex deploys                          |
-| `GEMINI_API_KEY`       | Gemini API for agents + embeddings                |
-| `GROQ_API_KEY`         | Llama Guard moderation pipeline                   |
 | `IDENTITY_SIGNING_KEY` | Ed25519 signing for district credentials          |
 | `JWT_SECRET`           | Session token signing                             |
 | `IDENTITY_HASH_SALT`   | Sybil-resistant identity hashing                  |
@@ -393,6 +398,52 @@ npx convex deploy --env-file .env.production
 ```
 
 Convex is declarative and code-driven: there are no migration files. Schema diffs are applied when you run `dev`/`deploy`.
+
+### Narrowing a column: audit the stored values first
+
+Convex validates **every existing document** against the declared schema on push.
+Narrowing a column to a `v.union(...)` therefore means a single stored row holding
+any other value fails the WHOLE deploy — schema, functions, everything — and the
+push reports the violation without naming the rows. Audit before you push:
+
+```bash
+export CONVEX_URL=https://<deployment>.convex.cloud
+export CONVEX_ADMIN_KEY=<ops key>
+
+# Run once per deployment — dev first, then production.
+node scripts/audit-template-delivery-method.mjs
+
+# Offline proof of the classifier; no deployment, no credentials.
+node scripts/audit-template-delivery-method.mjs --self-check
+```
+
+The audit is read-only: its only backend call is a system table read, the same one
+`npx convex data` uses. Exit codes: `0` every row conforms and the push is safe;
+`2` offending rows found — the report lists id, slug and the stored value, and the
+deploy stops until they are corrected; `1` operational failure or an inconclusive
+read (missing credentials, stalled pagination). An incomplete scan never reports
+clean.
+
+Use this rather than `npm run ops:audit-enums` for pre-push checks. That one calls
+a deployed internal query, so getting it onto the deployment requires the very push
+it would be guarding. A system read needs no push and can run first.
+
+### Deploy Convex before Cloudflare Pages
+
+For any release that narrows or changes a delivery-relevant column, push Convex
+first. The ordering is not stylistic — the two orders fail in opposite directions:
+
+- **Convex first is fail-closed.** A stray row fails the push, the deploy stops,
+  and Pages never ships.
+- **Pages first is fail-open.** `isCongressionalDelivery` in
+  `convex/lib/templateDeliveryMethod.ts` is an equality test against the
+  congressional value, so the edge treats any unrecognized value as
+  non-congressional. A template whose stored method is stale or malformed is then
+  silently downgraded to direct email at the send routing in
+  `src/lib/components/template/TemplateModal.svelte` and
+  `src/lib/utils/templateResolver.ts` — dropping constituent proof and the
+  Communicating With Congress transport — while the backend still refuses the same
+  value. Live traffic sees the downgrade before the failed backend push reveals it.
 
 ---
 
@@ -890,10 +941,12 @@ work but still count as trusted Worker requests against the shared 100,000/day
 allowance.
 
 Publication advances the R2 manifest without changing the landing
-release/policy key. A busy location revalidates after 60 seconds; a cached
-low-traffic location can show pre-publication HTML for at most 360 seconds. This
-is the chosen zero-secret, zero-Cloudflare-API-call contract: normal publication
-has no purge hook or credential. `Cache-Tag: public-discovery` remains for a
+release/policy key. The inner manifest cache observes publication in less than
+60 seconds. An outer fill immediately before that observation can remain
+eligible for less than 360 seconds, making the strict
+manifest-publication-to-last-old-HTML bound less than 420 seconds. This is the
+chosen zero-secret, zero-Cloudflare-API-call contract: normal publication has no
+purge hook or credential. `Cache-Tag: public-discovery` remains for a
 future optional operator optimization. The Free five-purge-per-minute limit is
 not launch, freshness, or rollback authority.
 
@@ -1045,8 +1098,10 @@ compatible with it. If snapshot content is wrong, repair and rerun the atomic
 composite rebuild so the manifest advances to a corrected revision. Failed
 rebuilds preserve the last committed singleton rows; a logically bad successful
 rebuild may require a restore from the recorded pre-rebuild backup/export before
-republishing. A normal content correction converges through the bounded
-60/300/360 landing contract without a purge credential or API call.
+republishing. After a normal content correction publishes its manifest, old
+landing HTML becomes ineligible in less than 420 seconds through the inner
+less-than-60-second observation interval and outer 60/300/360 entry contract,
+without a purge credential or API call.
 
 Never restore a Convex version where public homepage queries collect the embedding-bearing
 published-template corpus. If backend code recovery is necessary, forward-deploy a known

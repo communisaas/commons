@@ -131,6 +131,14 @@ export default defineConfig({
 			// REQUIRED_CONGRESSIONAL_PROOF_TIER). Components-lane only; the structural
 			// single-source lock runs in CI via congressional-delivery-tier.test.ts.
 			'tests/unit/components/congressional-delivery-gate.behavior.test.ts',
+			// Renders the preview footer to prove it equals the outgoing mailto body.
+			// Components-lane only; the builder semantics run in CI via
+			// tests/unit/identity/attestation-parity.test.ts.
+			'tests/unit/components/attestation-parity.test.ts',
+			// Mounts TemplatePreview across the sign-in round trip to prove a note the
+			// lane cannot carry is discarded, cleared and announced. Components-lane
+			// only; the lane decision itself runs in CI via tests/unit/send-lane.test.ts.
+			'tests/unit/components/template-preview-sender-text.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

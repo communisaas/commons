@@ -925,7 +925,7 @@ function validateFoundationalContracts(manifest, scan, errors) {
 			!cronState.text.includes("query('publicDiscoveryManifest')") ||
 			!cronState.text.includes('listDirtyAt') ||
 			!cronState.text.includes('relationsFailureCode') ||
-			!temporal.text.includes('template._creationTime + 7 * DAILY_ARRIVALS_DAY_MS') ||
+			!temporal.text.includes('template._creationTime + 7 * DAILY_ARRIVAL_BUCKET_MS') ||
 			!temporal.text.includes('Math.floor(newUntil) + 1') ||
 			!temporal.text.includes('arrivals.some')
 		) {
