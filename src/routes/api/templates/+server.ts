@@ -19,7 +19,7 @@ import {
 	type ApiError
 } from '$lib/types/errors';
 import type { UnknownRecord } from '$lib/types/any-replacements';
-import { moderateTemplate } from '$lib/core/server/moderation';
+import { buildTemplateModerationContent, moderateTemplate } from '$lib/core/server/moderation';
 import { generateBatchEmbeddings } from '$lib/core/search/gemini-embeddings';
 import { projectToHue } from '$lib/utils/domain-hue-projection';
 import { createHash } from 'crypto';
@@ -29,53 +29,49 @@ import {
 	MAX_PUBLIC_TEMPLATE_INPUT_BYTES,
 	MAX_TEMPLATE_AUTHORING_INPUT_BYTES,
 	MAX_TEMPLATE_CONFIG_BYTES,
+	MAX_TEMPLATE_SLUG_CODE_POINTS,
+	canonicalizeTemplateSlug,
 	validateTemplateInputBudgets,
 	type TemplateInputBudgetResult
 } from '$convex/lib/templateInputBudget';
+import {
+	TEMPLATE_DELIVERY_METHODS,
+	isTemplateDeliveryMethod
+} from '$convex/lib/templateDeliveryMethod';
 import { invalidatePublicTemplateCaches } from '$lib/server/public-template-detail-cache';
+import { buildTemplateCreateResponse } from '$lib/server/templates/authoring-response';
+import { enforceLLMRateLimit, rateLimitResponse } from '$lib/server/llm-cost-protection';
+import { PROMPT_GUARD_MAX_CHARACTERS } from '$lib/core/server/moderation/prompt-guard-budget';
+import { BoundedJsonRequestError, readBoundedJsonRequest } from '$lib/server/bounded-json-request';
 
 /** Content-addressable fingerprint: same title + body = same template */
 function contentHash(title: string, body: string): string {
 	return createHash('sha256').update(`${title}\0${body}`).digest('hex').slice(0, 40);
 }
 
-/** Sanitize slug: lowercase, alphanumeric + hyphens only, max 100 chars */
-function sanitizeSlug(slug: string | undefined): string | undefined {
-	if (!slug) return undefined;
-	return (
-		slug
-			.toLowerCase()
-			.replace(/[^a-z0-9-]/g, '-')
-			.replace(/-+/g, '-')
-			.replace(/^-|-$/g, '')
-			.slice(0, 100) || undefined
-	);
-}
-
 /** Resolve the exact slug that will be sent to Convex before enforcing byte budgets. */
 function resolveTemplateSlug(title: string, requestedSlug: string | undefined): string {
-	const sanitized = sanitizeSlug(requestedSlug);
-	if (sanitized) return sanitized;
-
-	return title
-		.toLowerCase()
-		.replace(/[^a-z0-9\s-]/g, '')
-		.replace(/\s+/g, '-')
-		.substring(0, 100);
+	const requested = canonicalizeTemplateSlug(requestedSlug ?? '');
+	return requested || canonicalizeTemplateSlug(title);
 }
 
 const TEMPLATE_SLUG_TAKEN = 'TEMPLATE_SLUG_TAKEN';
+const TEMPLATE_AUTHORING_SLUG_INVALID = 'TEMPLATE_AUTHORING_SLUG_INVALID';
 
-function isTemplateSlugTakenError(error: unknown): boolean {
+function isConvexErrorWithCode(error: unknown, code: string): boolean {
 	if (!(error instanceof ConvexError)) return false;
 	const data = error.data;
 	return (
-		data === TEMPLATE_SLUG_TAKEN ||
+		data === code ||
 		(data !== null &&
 			typeof data === 'object' &&
 			!Array.isArray(data) &&
-			(data as { code?: unknown }).code === TEMPLATE_SLUG_TAKEN)
+			(data as { code?: unknown }).code === code)
 	);
+}
+
+function isTemplateSlugTakenError(error: unknown): boolean {
+	return isConvexErrorWithCode(error, TEMPLATE_SLUG_TAKEN);
 }
 
 function duplicateSlugResponse(): Response {
@@ -111,7 +107,7 @@ interface CreateTemplateRequest {
 	type: string;
 	deliveryMethod: string;
 	preview: string;
-	description?: string;
+	description: string;
 	status?: string;
 	is_public?: boolean;
 	delivery_config?: UnknownRecord;
@@ -126,6 +122,41 @@ const SOURCE_TITLE_MAX_LENGTH = 500;
 const SOURCE_URL_MAX_LENGTH = 2_048;
 const SOURCE_TYPE_MAX_LENGTH = 64;
 const RESEARCH_LOG_ENTRY_MAX_LENGTH = 1_000;
+const MAX_TEMPLATE_CREATE_REQUEST_BYTES = 32 * 1024;
+const TEMPLATE_CREATE_FIELDS = new Set([
+	'title',
+	'slug',
+	'message_body',
+	'sources',
+	'research_log',
+	'domain',
+	'topics',
+	'type',
+	'deliveryMethod',
+	'preview',
+	'description',
+	'status',
+	'is_public',
+	'delivery_config',
+	'cwc_config',
+	'recipient_config',
+	'geographic_scope',
+	'scopes',
+	'jurisdictions',
+	// Current TemplateCreator legacy response-model fields. They are ignored by
+	// the writer but explicitly named so arbitrary ballast is still rejected.
+	'subject',
+	'campaign_id',
+	'send_count',
+	'coordinationScale',
+	'isNew',
+	'createdAt',
+	'updatedAt',
+	'applicable_countries',
+	'jurisdiction_level',
+	'specific_locations',
+	'recipientEmails'
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -203,6 +234,26 @@ function validateTemplateData(data: unknown): {
 	}
 
 	const templateData = data as Record<string, unknown>;
+	// The description default is resolved once: the moderation preflight, the
+	// storage budget, the persisted row and the classified content must all read
+	// the identical string.
+	const rawPreview = typeof templateData.preview === 'string' ? templateData.preview : '';
+	const resolvedDescription =
+		(typeof templateData.description === 'string' ? templateData.description : '') ||
+		rawPreview.substring(0, 160) ||
+		'';
+	const unknownField = Object.keys(templateData).find(
+		(field) => !TEMPLATE_CREATE_FIELDS.has(field)
+	);
+	if (unknownField) {
+		errors.push(
+			createValidationError(
+				'body',
+				'VALIDATION_INVALID_FORMAT',
+				`Unknown template field: ${unknownField}`
+			)
+		);
+	}
 
 	if (!templateData.title || typeof templateData.title !== 'string' || !templateData.title.trim()) {
 		errors.push(
@@ -237,6 +288,25 @@ function validateTemplateData(data: unknown): {
 	}
 
 	if (
+		typeof templateData.title === 'string' &&
+		typeof templateData.message_body === 'string' &&
+		buildTemplateModerationContent({
+			title: templateData.title,
+			message_body: templateData.message_body,
+			description: resolvedDescription,
+			preview: rawPreview
+		}).length > PROMPT_GUARD_MAX_CHARACTERS
+	) {
+		errors.push(
+			createValidationError(
+				'message_body',
+				'VALIDATION_TOO_LONG',
+				`Combined title, description, preview, and message must be ≤${PROMPT_GUARD_MAX_CHARACTERS.toLocaleString()} characters for complete safety review`
+			)
+		);
+	}
+
+	if (
 		!templateData.preview ||
 		typeof templateData.preview !== 'string' ||
 		!templateData.preview.trim()
@@ -261,6 +331,14 @@ function validateTemplateData(data: unknown): {
 	if (!templateData.deliveryMethod || typeof templateData.deliveryMethod !== 'string') {
 		errors.push(
 			createValidationError('deliveryMethod', 'VALIDATION_REQUIRED', 'Delivery method is required')
+		);
+	} else if (!isTemplateDeliveryMethod(templateData.deliveryMethod)) {
+		errors.push(
+			createValidationError(
+				'deliveryMethod',
+				'VALIDATION_INVALID_FORMAT',
+				`deliveryMethod must be one of: ${TEMPLATE_DELIVERY_METHODS.join(', ')}`
+			)
 		);
 	}
 
@@ -422,7 +500,7 @@ function validateTemplateData(data: unknown): {
 		templateData.title as string,
 		templateData.slug as string | undefined
 	);
-	if (!prospectiveSlug || !/[a-z0-9]/.test(prospectiveSlug)) {
+	if (!prospectiveSlug) {
 		return {
 			isValid: false,
 			errors: [
@@ -438,10 +516,7 @@ function validateTemplateData(data: unknown): {
 	const budgetResult = validateTemplateInputBudgets({
 		title: templateData.title,
 		slug: prospectiveSlug,
-		description:
-			(templateData.description as string) ||
-			(templateData.preview as string).substring(0, 160) ||
-			'',
+		description: resolvedDescription,
 		messageBody: templateData.message_body,
 		preview: templateData.preview,
 		type: templateData.type,
@@ -478,10 +553,7 @@ function validateTemplateData(data: unknown): {
 		deliveryMethod: templateData.deliveryMethod as string,
 		domain: (templateData.domain as string) || '',
 		topics: sanitizeTopics(templateData.topics),
-		description:
-			(templateData.description as string) ||
-			(templateData.preview as string)?.substring(0, 160) ||
-			'',
+		description: resolvedDescription,
 		status: (templateData.status as string) || 'draft',
 		is_public: Boolean(templateData.is_public) || false,
 		delivery_config: (templateData.delivery_config as UnknownRecord) || {},
@@ -539,7 +611,8 @@ export const GET: RequestHandler = async ({ url, platform }) => {
 	}
 };
 
-export const POST: RequestHandler = async ({ request, locals, platform }) => {
+export const POST: RequestHandler = async (event) => {
+	const { request, locals, platform } = event;
 	try {
 		const requestUrl = new URL(request.url);
 		const invalidateDetailCaches = async (slug: string): Promise<void> => {
@@ -582,17 +655,29 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 		// Parse request body
 		let requestData: unknown;
 		try {
-			requestData = await request.json();
-		} catch {
+			requestData = await readBoundedJsonRequest(request, MAX_TEMPLATE_CREATE_REQUEST_BYTES, {
+				maxArrayItems: 200,
+				maxDepth: 8,
+				maxNodes: 1_024,
+				// Let the shared template/config validators produce their field-specific
+				// errors at 129 entries; this raw-shape ceiling only stops pathology.
+				maxObjectKeys: 200,
+				maxStringBytes: 12_000
+			});
+		} catch (error) {
+			const boundedError =
+				error instanceof BoundedJsonRequestError
+					? error
+					: new BoundedJsonRequestError('Invalid JSON in request body');
 			const response: StructuredApiResponse = {
 				success: false,
 				error: createApiError(
 					'validation',
-					'VALIDATION_INVALID_FORMAT',
-					'Invalid JSON in request body'
+					boundedError.status === 413 ? 'VALIDATION_TOO_LONG' : 'VALIDATION_INVALID_FORMAT',
+					boundedError.message
 				)
 			};
-			return json(response, { status: 400 });
+			return json(response, { status: boundedError.status });
 		}
 
 		// Validate template data
@@ -617,15 +702,176 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 			return json(response, { status: 400 });
 		}
 		const validData = validation.validData;
+		const user = requestUser;
+		const hash = contentHash(validData.title, validData.message_body);
+		const slug = resolveTemplateSlug(validData.title, validData.slug);
+		const internalSecret = getInternalSecret();
+		const authoringLeaseToken = crypto.randomUUID();
+		let authoringLeaseOwned = false;
+		const releaseAuthoringLease = async (): Promise<void> => {
+			if (!authoringLeaseOwned) return;
+			authoringLeaseOwned = false;
+			await serverMutation(api.templates.releaseTemplateAuthoringLease, {
+				_secret: internalSecret,
+				userId: user.id as Id<'users'>,
+				contentHash: hash,
+				token: authoringLeaseToken
+			}).catch((error: unknown) => {
+				console.warn('[api/templates] Template authoring lease release failed:', error);
+			});
+		};
+
+		// One OCC mutation combines duplicate/slug/quota preflight with the
+		// provider-work lease. This avoids both check-then-spend races and a second
+		// maximum-class Convex read on every successful authoring request.
+		try {
+			const preflight = await serverMutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: internalSecret,
+				userId: user.id as Id<'users'>,
+				contentHash: hash,
+				slug,
+				token: authoringLeaseToken
+			});
+
+			if (preflight.outcome === 'slug_taken') return duplicateSlugResponse();
+			if (preflight.outcome === 'in_progress') {
+				const retryAfter = Math.max(1, Math.ceil((preflight.retryAt - Date.now()) / 1_000));
+				return json(
+					{
+						success: false,
+						error: createApiError(
+							'validation',
+							'AUTHORING_IN_PROGRESS',
+							'An identical template or link is already being checked.'
+						)
+					},
+					{
+						status: 409,
+						headers: { 'Cache-Control': 'no-store', 'Retry-After': String(retryAfter) }
+					}
+				);
+			}
+
+			if (preflight.outcome === 'quota_exceeded') {
+				if (preflight.code === 'TEMPLATE_QUOTA_EXCEEDED') {
+					const response: StructuredApiResponse = {
+						success: false,
+						error: createApiError(
+							'authorization',
+							'TEMPLATE_QUOTA_EXCEEDED',
+							'Monthly template quota exceeded'
+						)
+					};
+					return json(response, { status: 403 });
+				}
+
+				const apiError = createApiError(
+					'authorization',
+					'AUTHORING_QUOTA_EXCEEDED',
+					preflight.message ?? 'Monthly authoring quota exceeded'
+				);
+				const response: StructuredApiResponse = {
+					success: false,
+					error: apiError,
+					errors: [apiError]
+				};
+				return json(response, { status: 403 });
+			}
+
+			if (preflight.outcome === 'duplicate') {
+				const existingByContent = preflight.template;
+				// Preserve the existing idempotent retry behavior: a duplicate may
+				// enrich missing discovery metadata without re-running any provider.
+				const incomingDomain = validData.domain || '';
+				const incomingTopics = validData.topics || [];
+				const existingDomain = existingByContent.domain || '';
+				const existingTopics = (existingByContent.topics as string[]) || [];
+				const needsMetadataPatch =
+					(incomingDomain && incomingDomain !== existingDomain) ||
+					(incomingTopics.length > 0 && existingTopics.length === 0);
+
+				if (needsMetadataPatch) {
+					await serverMutation(api.templates.patchMetadata, {
+						templateId: existingByContent._id,
+						...(incomingDomain ? { domain: incomingDomain } : {}),
+						...(incomingTopics.length > 0 ? { topics: incomingTopics } : {})
+					});
+				}
+
+				const response: StructuredApiResponse = {
+					success: true,
+					data: {
+						template: buildTemplateCreateResponse(existingByContent, {
+							domain: incomingDomain,
+							topics: incomingTopics
+						})
+					}
+				};
+
+				await invalidateDetailCaches(existingByContent.slug);
+				return json(response);
+			}
+			authoringLeaseOwned = true;
+		} catch (error) {
+			if (isConvexErrorWithCode(error, TEMPLATE_AUTHORING_SLUG_INVALID)) {
+				const response: StructuredApiResponse = {
+					success: false,
+					error: createValidationError(
+						'slug',
+						'VALIDATION_INVALID_FORMAT',
+						`This link must use lowercase letters and numbers separated by single hyphens (${MAX_TEMPLATE_SLUG_CODE_POINTS} characters max)`
+					)
+				};
+				return json(response, { status: 400 });
+			}
+			console.error('Template authoring lease claim failed:', error);
+			const response: StructuredApiResponse = {
+				success: false,
+				error: createApiError(
+					'server',
+					'SERVER_DATABASE',
+					'Unable to coordinate template authoring'
+				)
+			};
+			return json(response, { status: 503 });
+		}
+
+		let rateLimitCheck;
+		try {
+			rateLimitCheck = await enforceLLMRateLimit(event, 'template-authoring');
+		} catch (error) {
+			console.error('Template authoring admission failed:', error);
+			await releaseAuthoringLease();
+			return json(
+				{
+					success: false,
+					error: createApiError(
+						'server',
+						'SERVER_DATABASE',
+						'Template authoring capacity is temporarily unavailable'
+					)
+				},
+				{ status: 503 }
+			);
+		}
+		if (!rateLimitCheck.allowed) {
+			await releaseAuthoringLease();
+			return rateLimitResponse(rateLimitCheck);
+		}
 
 		// === 2-LAYER CONTENT MODERATION (Llama Guard 4 + Gemini) ===
 		let consensusResult;
 
 		try {
-			const moderationResult = await moderateTemplate({
-				title: validData.title,
-				message_body: validData.message_body
-			});
+			const moderationResult = await moderateTemplate(
+				{
+					title: validData.title,
+					message_body: validData.message_body,
+					description: validData.description,
+					preview: validData.preview
+				},
+				{ signal: event.request.signal }
+			);
 
 			if (!moderationResult.approved) {
 				console.log('Moderation REJECTED template:', {
@@ -639,6 +885,7 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					success: false,
 					error: createValidationError('message_body', 'CONTENT_FLAGGED', moderationResult.summary)
 				};
+				await releaseAuthoringLease();
 				return json(response, { status: 400 });
 			}
 
@@ -692,299 +939,167 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 					`Unable to verify content: ${errorMessage}. Please try again.`
 				)
 			};
+			await releaseAuthoringLease();
 			return json(response, { status: 503 });
 		}
 
-		const user = locals.user;
+		try {
+			// The create mutation owns slug uniqueness atomically along with quota
+			// enforcement; avoid a redundant check-then-create query here.
+			const newTemplate = await serverMutation(api.templates.createTemplate, {
+				_secret: internalSecret,
+				userId: user.id as Id<'users'>,
+				title: validData.title,
+				slug,
+				description: validData.description,
+				messageBody: validData.message_body,
+				preview: validData.preview,
+				type: validData.type,
+				deliveryMethod: validData.deliveryMethod,
+				domain: validData.domain || '',
+				topics: validData.topics || [],
+				sources: validData.sources || [],
+				researchLog: validData.research_log || [],
+				contentHash: hash,
+				authoringLeaseToken,
+				status: consensusResult?.approved ? 'published' : 'draft',
+				isPublic: consensusResult?.approved ?? false,
+				deliveryConfig: validData.delivery_config || {},
+				cwcConfig: validData.cwc_config || {},
+				recipientConfig: validData.recipient_config || {},
+				consensusApproved: consensusResult?.approved ?? false,
+				geographicScope: validData.geographic_scope
+			});
 
-		if (user) {
-			if (!hasTemplateCreationTrust(user)) {
+			if (!newTemplate) {
+				const response: StructuredApiResponse = {
+					success: false,
+					error: createApiError('server', 'SERVER_DATABASE', 'Template could not be created')
+				};
+				await releaseAuthoringLease();
+				return json(response, { status: 500 });
+			}
+			authoringLeaseOwned = false;
+
+			const templateId = newTemplate._id;
+			const isNew = !newTemplate.deduplicated;
+			const isPublic = isNew && newTemplate.isPublic;
+			const isCwc = isNew && validData.deliveryMethod === 'cwc';
+
+			// Deferred work: CWC verification + embedding generation
+			if (isCwc || isPublic) {
+				const deferredWork = (async () => {
+					if (isCwc) {
+						try {
+							await serverMutation(api.templates.setCwcVerification, {
+								_secret: getInternalSecret(),
+								expectedUserId: user.id as Id<'users'>,
+								templateId: templateId as Id<'templates'>,
+								verificationStatus: 'pending',
+								countryCode: 'US',
+								reputationApplied: false
+							});
+							console.log(`[deferred] CWC verification set for template ${templateId}`);
+						} catch (error) {
+							console.error('[deferred] CWC verification failed:', error);
+						}
+					}
+
+					// Embedding generation via Gemini, then write to Convex
+					if (isPublic) {
+						try {
+							const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.domain}`;
+							const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.messageBody}`;
+
+							const embeddings = await generateBatchEmbeddings([locationText, topicText], {
+								taskType: 'RETRIEVAL_DOCUMENT'
+							});
+
+							const domainHue = projectToHue(embeddings[1]);
+
+							await serverMutation(api.templates.completePublicTemplateEmbeddings, {
+								templateId: templateId as Id<'templates'>,
+								expectedUserId: user.id as Id<'users'>,
+								locationEmbedding: embeddings[0],
+								topicEmbedding: embeddings[1],
+								domainHue,
+								_secret: getInternalSecret()
+							});
+
+							console.log(
+								`[deferred] Embeddings generated for template ${templateId} (domainHue=${domainHue.toFixed(1)})`
+							);
+						} catch (embeddingError) {
+							console.error('[deferred] Embedding generation failed:', embeddingError);
+						}
+					}
+				})();
+
+				if (platform?.context?.waitUntil) {
+					platform.context.waitUntil(deferredWork);
+				} else {
+					deferredWork.catch((err) => {
+						console.error('[deferred] Background work failed:', err);
+					});
+				}
+			}
+
+			const response: StructuredApiResponse = {
+				success: true,
+				data: {
+					template: buildTemplateCreateResponse(newTemplate)
+				}
+			};
+
+			await invalidateDetailCaches(newTemplate.slug);
+			return json(response);
+		} catch (error) {
+			await releaseAuthoringLease();
+			// Slug uniqueness belongs to the create transaction; translate its
+			// stable conflict code without reintroducing a check-then-create race.
+			if (isTemplateSlugTakenError(error)) {
+				return duplicateSlugResponse();
+			}
+
+			if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
 				const response: StructuredApiResponse = {
 					success: false,
 					error: createApiError(
-						'auth',
-						'INSUFFICIENT_TRUST',
-						'Template creation requires account verification. Please complete identity verification to create templates.'
+						'authorization',
+						'TEMPLATE_QUOTA_EXCEEDED',
+						'Monthly template quota exceeded'
 					)
 				};
 				return json(response, { status: 403 });
 			}
 
-			try {
-				const hash = contentHash(validData.title, validData.message_body);
-
-				// Content hash dedup via Convex
-				const existingByContent = await serverQuery(api.templates.findByContentHash, {
-					userId: user.id,
-					contentHash: hash
-				});
-
-				if (existingByContent) {
-					// Patch stale metadata if the new submission has richer domain/topics
-					const incomingDomain = validData.domain || '';
-					const incomingTopics = validData.topics || [];
-					const existingDomain = existingByContent.domain || '';
-					const existingTopics = (existingByContent.topics as string[]) || [];
-					const needsMetadataPatch =
-						(incomingDomain && incomingDomain !== existingDomain) ||
-						(incomingTopics.length > 0 && existingTopics.length === 0);
-
-					if (needsMetadataPatch) {
-						await serverMutation(api.templates.patchMetadata, {
-							templateId: existingByContent._id,
-							...(incomingDomain ? { domain: incomingDomain } : {}),
-							...(incomingTopics.length > 0 ? { topics: incomingTopics } : {})
-						});
-					}
-
-					const finalDomain =
-						incomingDomain ||
-						existingDomain ||
-						(existingByContent.category !== 'General' ? existingByContent.category : '') ||
-						'';
-					const finalTopics = incomingTopics.length > 0 ? incomingTopics : existingTopics;
-
-					const response: StructuredApiResponse = {
-						success: true,
-						data: {
-							template: {
-								id: existingByContent._id,
-								slug: existingByContent.slug,
-								title: existingByContent.title,
-								description: existingByContent.description,
-								domain: finalDomain,
-								topics: finalTopics,
-								type: existingByContent.type,
-								deliveryMethod: existingByContent.deliveryMethod,
-								subject: existingByContent.title,
-								message_body: existingByContent.messageBody,
-								sources: existingByContent.sources ?? [],
-								research_log: existingByContent.researchLog ?? [],
-								preview: existingByContent.preview,
-								coordinationScale: 0,
-								isNew: false,
-								verified_sends: existingByContent.verifiedSends ?? 0,
-								unique_districts: existingByContent.uniqueDistricts ?? 0,
-								send_count: existingByContent.verifiedSends ?? 0,
-								delivery_config: existingByContent.deliveryConfig,
-								cwc_config: existingByContent.cwcConfig,
-								recipient_config: existingByContent.recipientConfig,
-								campaign_id: existingByContent.campaignId ?? null,
-								status: existingByContent.status,
-								is_public: existingByContent.isPublic,
-								jurisdiction_level: null,
-								applicable_countries: null,
-								specific_locations: null,
-								jurisdictions: [],
-								scope: null,
-								scopes: [],
-								createdAt: existingByContent._creationTime,
-								updatedAt: existingByContent.updatedAt
-							}
-						}
-					};
-
-					await invalidateDetailCaches(existingByContent.slug);
-					return json(response);
-				}
-
-				const slug = resolveTemplateSlug(validData.title, validData.slug);
-
-				// The create mutation owns slug uniqueness atomically along with quota
-				// enforcement; avoid a redundant check-then-create query here.
-				const newTemplate = await serverMutation(api.templates.createTemplate, {
-					_secret: getInternalSecret(),
-					userId: user.id as Id<'users'>,
-					title: validData.title,
-					slug,
-					description: validData.description || '',
-					messageBody: validData.message_body,
-					preview: validData.preview,
-					type: validData.type,
-					deliveryMethod: validData.deliveryMethod,
-					domain: validData.domain || '',
-					topics: validData.topics || [],
-					sources: validData.sources || [],
-					researchLog: validData.research_log || [],
-					contentHash: hash,
-					status: consensusResult?.approved ? 'published' : 'draft',
-					isPublic: consensusResult?.approved ?? false,
-					deliveryConfig: validData.delivery_config || {},
-					cwcConfig: validData.cwc_config || {},
-					recipientConfig: validData.recipient_config || {},
-					consensusApproved: consensusResult?.approved ?? false,
-					geographicScope: validData.geographic_scope
-				});
-
-				if (!newTemplate) {
-					const response: StructuredApiResponse = {
-						success: false,
-						error: createApiError('server', 'SERVER_DATABASE', 'Template could not be created')
-					};
-					return json(response, { status: 500 });
-				}
-
-				const templateId = newTemplate._id;
-				const isPublic = newTemplate.isPublic;
-				const isCwc = validData.deliveryMethod === 'cwc';
-
-				// Deferred work: CWC verification + embedding generation
-				if (isCwc || isPublic) {
-					const deferredWork = (async () => {
-						if (isCwc) {
-							try {
-								await serverMutation(api.templates.setCwcVerification, {
-									_secret: getInternalSecret(),
-									expectedUserId: user.id as Id<'users'>,
-									templateId: templateId as Id<'templates'>,
-									verificationStatus: 'pending',
-									countryCode: 'US',
-									reputationApplied: false
-								});
-								console.log(`[deferred] CWC verification set for template ${templateId}`);
-							} catch (error) {
-								console.error('[deferred] CWC verification failed:', error);
-							}
-						}
-
-						// Embedding generation via Gemini, then write to Convex
-						if (isPublic) {
-							try {
-								const locationText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.domain}`;
-								const topicText = `${newTemplate.title} ${newTemplate.description || ''} ${newTemplate.messageBody}`;
-
-								const embeddings = await generateBatchEmbeddings([locationText, topicText], {
-									taskType: 'RETRIEVAL_DOCUMENT'
-								});
-
-								const domainHue = projectToHue(embeddings[1]);
-
-								await serverMutation(api.templates.completePublicTemplateEmbeddings, {
-									templateId: templateId as Id<'templates'>,
-									expectedUserId: user.id as Id<'users'>,
-									locationEmbedding: embeddings[0],
-									topicEmbedding: embeddings[1],
-									domainHue,
-									_secret: getInternalSecret()
-								});
-
-								console.log(
-									`[deferred] Embeddings generated for template ${templateId} (domainHue=${domainHue.toFixed(1)})`
-								);
-							} catch (embeddingError) {
-								console.error('[deferred] Embedding generation failed:', embeddingError);
-							}
-						}
-					})();
-
-					if (platform?.context?.waitUntil) {
-						platform.context.waitUntil(deferredWork);
-					} else {
-						deferredWork.catch((err) => {
-							console.error('[deferred] Background work failed:', err);
-						});
-					}
-				}
-
-				const response: StructuredApiResponse = {
-					success: true,
-					data: {
-						template: {
-							id: newTemplate._id,
-							slug: newTemplate.slug,
-							title: newTemplate.title,
-							description: newTemplate.description,
-							domain: newTemplate.domain,
-							topics: (newTemplate.topics as string[]) || [],
-							type: newTemplate.type,
-							deliveryMethod: newTemplate.deliveryMethod,
-							subject: newTemplate.title,
-							message_body: newTemplate.messageBody,
-							sources: newTemplate.sources ?? [],
-							research_log: newTemplate.researchLog ?? [],
-							preview: newTemplate.preview,
-							coordinationScale: 0,
-							isNew: true,
-							verified_sends: 0,
-							unique_districts: 0,
-							send_count: 0,
-							delivery_config: newTemplate.deliveryConfig,
-							cwc_config: newTemplate.cwcConfig,
-							recipient_config: newTemplate.recipientConfig,
-							campaign_id: newTemplate.campaignId ?? null,
-							status: newTemplate.status,
-							is_public: newTemplate.isPublic,
-							jurisdiction_level: null,
-							applicable_countries: null,
-							specific_locations: null,
-							jurisdictions: [],
-							scope: null,
-							scopes: [],
-							createdAt: newTemplate._creationTime,
-							updatedAt: newTemplate.updatedAt
-						}
-					}
-				};
-
-				await invalidateDetailCaches(newTemplate.slug);
-				return json(response);
-			} catch (error) {
-				// Slug uniqueness belongs to the create transaction; translate its
-				// stable conflict code without reintroducing a check-then-create race.
-				if (isTemplateSlugTakenError(error)) {
-					return duplicateSlugResponse();
-				}
-
-				if (error instanceof Error && error.message === 'TEMPLATE_QUOTA_EXCEEDED') {
-					const response: StructuredApiResponse = {
-						success: false,
-						error: createApiError(
-							'authorization',
-							'TEMPLATE_QUOTA_EXCEEDED',
-							'Monthly template quota exceeded'
-						)
-					};
-					return json(response, { status: 403 });
-				}
-
-				// Individual AI-authoring cap. The coded prefix lets the client
-				// distinguish this from the org quota and surface the at-cap upgrade
-				// card (Voice/Advocate). The human message after the colon is the
-				// plan-aware copy from decideIndividualAuthoring.
-				if (error instanceof Error && error.message.startsWith('AUTHORING_QUOTA_EXCEEDED:')) {
-					const message = error.message.slice('AUTHORING_QUOTA_EXCEEDED:'.length);
-					const apiError = createApiError('authorization', 'AUTHORING_QUOTA_EXCEEDED', message);
-					// Surface the code in BOTH `error` and `errors[]` so the api client
-					// (which forwards `errors` onto ApiClientError) preserves the
-					// AUTHORING_QUOTA_EXCEEDED code for the at-cap upgrade card; the
-					// `error` message is the plan-aware copy shown inline.
-					const response: StructuredApiResponse = {
-						success: false,
-						error: apiError,
-						errors: [apiError]
-					};
-					return json(response, { status: 403 });
-				}
-
-				console.error('Database error creating template:', error);
-
+			// Individual AI-authoring cap. The coded prefix lets the client
+			// distinguish this from the org quota and surface the at-cap upgrade
+			// card (Voice/Advocate). The human message after the colon is the
+			// plan-aware copy from decideIndividualAuthoring.
+			if (error instanceof Error && error.message.startsWith('AUTHORING_QUOTA_EXCEEDED:')) {
+				const message = error.message.slice('AUTHORING_QUOTA_EXCEEDED:'.length);
+				const apiError = createApiError('authorization', 'AUTHORING_QUOTA_EXCEEDED', message);
+				// Surface the code in BOTH `error` and `errors[]` so the api client
+				// (which forwards `errors` onto ApiClientError) preserves the
+				// AUTHORING_QUOTA_EXCEEDED code for the at-cap upgrade card; the
+				// `error` message is the plan-aware copy shown inline.
 				const response: StructuredApiResponse = {
 					success: false,
-					error: createApiError('server', 'SERVER_DATABASE', 'Failed to save template to database')
+					error: apiError,
+					errors: [apiError]
 				};
-
-				return json(response, { status: 500 });
+				return json(response, { status: 403 });
 			}
-		} else {
+
+			console.error('Database error creating template:', error);
+
 			const response: StructuredApiResponse = {
 				success: false,
-				error: createApiError(
-					'auth',
-					'AUTH_REQUIRED',
-					'Authentication required to create templates'
-				)
+				error: createApiError('server', 'SERVER_DATABASE', 'Failed to save template to database')
 			};
-			return json(response, { status: 401 });
+
+			return json(response, { status: 500 });
 		}
 	} catch (error) {
 		console.error('Template POST error:', error);

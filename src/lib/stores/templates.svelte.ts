@@ -23,28 +23,6 @@ const templatesApi = {
 			return { success: true, data: templateData, status: res.status };
 		}
 		return res as ApiResponse<T>;
-	},
-
-	async update<T = unknown>(
-		id: string,
-		template: Record<string, unknown>
-	): Promise<ApiResponse<T>> {
-		const res = await api.put(`/templates/${id}`, template);
-		if (
-			res.success &&
-			res.data &&
-			typeof res.data === 'object' &&
-			res.data !== null &&
-			'template' in res.data
-		) {
-			const templateData = (res.data as { template: T }).template;
-			return { success: true, data: templateData, status: res.status };
-		}
-		return res as ApiResponse<T>;
-	},
-
-	async delete<T = unknown>(id: string): Promise<ApiResponse<T>> {
-		return api.delete(`/templates/${id}`);
 	}
 };
 
@@ -361,54 +339,6 @@ function createTemplateStore() {
 				const message = error instanceof Error ? error.message : 'Template could not be added.';
 				state.error = message;
 				throw error instanceof Error ? error : new Error(message);
-			}
-		},
-
-		async updateTemplate(id: string, updates: Partial<Template>): Promise<Template> {
-			try {
-				const result = await templatesApi.update(id, updates);
-
-				if (!result.success) {
-					throw new Error(result.error || 'Failed to update template');
-				}
-
-				const updatedTemplate = result.data as Template;
-
-				// Type guard validation
-				if (!isTemplate(updatedTemplate)) {
-					throw new Error('Invalid template data received from API');
-				}
-
-				// Update state directly
-				state.templates = state.templates.map((t) => (t.id === id ? updatedTemplate : t));
-				settleAuthoritativeListWrite();
-
-				return updatedTemplate;
-			} catch (error) {
-				state.error = 'Failed to update template';
-				throw new Error('Failed to update template');
-			}
-		},
-
-		async deleteTemplate(id: string): Promise<void> {
-			try {
-				const result = await templatesApi.delete(id);
-
-				if (!result.success) {
-					throw new Error(result.error || 'Failed to delete template');
-				}
-
-				// Update state directly
-				const newTemplates = state.templates.filter((t) => t.id !== id);
-				const newSelectedId =
-					state.selectedId === id ? newTemplates[0]?.id || null : state.selectedId;
-
-				state.templates = newTemplates;
-				state.selectedId = newSelectedId;
-				settleAuthoritativeListWrite();
-			} catch (error) {
-				state.error = 'Failed to delete template';
-				throw new Error('Failed to delete template');
 			}
 		},
 

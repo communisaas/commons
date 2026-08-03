@@ -1,9 +1,11 @@
 import { generateDraftId, templateDraftStore } from '$lib/stores/templateDraft';
-import { saveOrgEmailComposeDraft } from '$lib/stores/orgEmailComposeDraft';
-import { saveOrgCampaignDraft } from '$lib/stores/orgCampaignDraft';
+import { canonicalizeTemplateSlug } from '$convex/lib/templateInputBudget';
+import { deriveTopicsFromSubject } from '$lib/utils/authoring-inputs';
+import { orgCampaignDrafts, orgEmailComposeDrafts } from '$lib/stores/orgDraftStore';
 import type { GeoScope } from '$lib/core/agents/types';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
+import { createEmptyTemplateFormData } from '$lib/types/template';
 import type {
 	ProcessedDecisionMaker,
 	Source,
@@ -12,32 +14,6 @@ import type {
 } from '$lib/types/template';
 
 const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
-
-function topicsFromIntent(proc: OrgProcess): string[] {
-	return proc.intent.subjectLine
-		.toLowerCase()
-		.split(/[^a-z0-9]+/)
-		.filter((part) => part.length > 3)
-		.slice(0, 5);
-}
-
-function slugFromTitle(title: string): string {
-	const slug = title
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 72);
-	return slug || `studio-action-${Date.now().toString(36)}`;
-}
-
-function toTemplateSource(source: Source): Source {
-	return {
-		num: source.num,
-		title: source.title,
-		url: source.url,
-		type: source.type
-	};
-}
 
 function isEvaluatedSource(source: Source): boolean {
 	return (
@@ -61,7 +37,9 @@ function toProcessedDecisionMaker(
 		provenance: dm.provenance || 'Resolved by the org Studio authoring loop.',
 		reasoning: dm.reasoning || 'Selected from the Studio decision-maker resolution stream.',
 		isAiResolved: dm.isAiResolved,
-		confidence: dm.confidence ?? (dm.email ? 0.85 : 0.55),
+		// Confidence is a measurement the resolution agent computes; the bridge
+		// carries it verbatim and never derives one from email presence.
+		confidence: dm.confidence,
 		source: dm.source,
 		source_url: dm.source_url,
 		recencyCheck: dm.recencyCheck,
@@ -79,7 +57,9 @@ function toProcessedDecisionMaker(
 		publicRecipientProvenance: dm.publicRecipientProvenance
 			? { ...dm.publicRecipientProvenance }
 			: undefined,
-		emailVerified: dm.email ? 'risky' : undefined
+		// A deliverability verdict comes only from the real email-verification step; the
+		// bridge carries what that step produced and never derives one from email presence.
+		emailVerified: dm.emailVerified
 	};
 }
 
@@ -96,7 +76,7 @@ function cloneActiveMessageJob(proc: OrgProcess): ActiveMessageJob | null {
 }
 
 function buildTemplateDraftOrigin(proc: OrgProcess): TemplateDraftOrigin {
-	return {
+	const origin: TemplateDraftOrigin = {
 		source: 'studio',
 		handoff: 'public-action-template',
 		label: 'Public action draft from Studio',
@@ -107,6 +87,11 @@ function buildTemplateDraftOrigin(proc: OrgProcess): TemplateDraftOrigin {
 			'Studio supplied the objective, resolved targets, sources, scope, authored artifact, recovery handle, and trace id; the public creator owns edits and publish confirmation.',
 		sourceRef: 'saveStudioProcessAsTemplateDraft'
 	};
+	// Scope provenance is carried only when the process resolved it — an empty
+	// label or basis stays absent rather than becoming an empty string.
+	if (proc.geographicScopeLabel) origin.scopeLabel = proc.geographicScopeLabel;
+	if (proc.geographicScopeBasis) origin.scopeBasis = proc.geographicScopeBasis;
+	return origin;
 }
 
 function escapeHtml(value: string): string {
@@ -160,47 +145,94 @@ export function saveStudioProcessAsTemplateDraft(proc: OrgProcess): string {
 		.map((dm) => dm.email)
 		.filter((email): email is string => !!email);
 
+	// Everything the process does not supply inherits from the shared blank
+	// form, so "unset" here provably means the same values as a fresh citizen draft.
+	const base = createEmptyTemplateFormData(proc.intent.coreMessage);
 	const formData: TemplateFormData = {
 		objective: {
-			rawInput: proc.intent.coreMessage,
+			...base.objective,
 			title: proc.intent.subjectLine,
 			description: proc.intent.coreMessage,
-			domain: '',
-			slug: slugFromTitle(proc.intent.subjectLine),
-			topics: topicsFromIntent(proc),
+			// '' when nothing survives — publish rejects an empty slug legibly.
+			slug: canonicalizeTemplateSlug(proc.intent.subjectLine),
+			topics: deriveTopicsFromSubject(proc.intent.subjectLine),
 			voiceSample: proc.intent.coreMessage,
 			audienceGuidance: proc.intent.audienceGuidance,
 			aiGenerated: false
 		},
 		audience: {
+			...base.audience,
 			decisionMakers,
 			recipientEmails,
-			includesCongress: false,
-			customRecipients: [],
 			resolvedForSubject: proc.intent.subjectLine
 		},
 		content: {
+			...base.content,
 			preview: proc.composedMessage,
-			variables: [],
-			sources: proc.sources.map(toTemplateSource),
+			sources: proc.sources,
 			researchLog: proc.entries.map((entry) =>
 				entry.kind === 'thought'
 					? `[${entry.stage}] ${entry.content}`
 					: `[${entry.stage}] ${entry.action}: ${entry.title}`
 			),
-			geographicScope: proc.geographicScope ?? { type: 'nationwide', country: 'US' },
+			geographicScope: proc.geographicScope,
 			aiGenerated: true,
 			edited: false,
 			generatedForSubject: proc.intent.subjectLine,
 			activeMessageJob: cloneActiveMessageJob(proc),
 			draftOrigin: buildTemplateDraftOrigin(proc)
 		},
-		review: {}
+		review: base.review
 	};
 
 	templateDraftStore.saveDraft(draftId, formData, 'content');
 	return draftId;
 }
+
+/**
+ * What the Studio → public-template handoff does with a process field:
+ * `carried` lands in the draft (directly or via draftOrigin), `derived` is
+ * recomputable downstream from carried data, `process-local` belongs to the
+ * loop's own lifecycle or telemetry and deliberately stays behind.
+ */
+export type StudioHandoffDisposition = 'carried' | 'derived' | 'process-local';
+
+// Typed over every OrgProcess key, so adding a process field fails the build
+// until its disposition is declared here.
+export const STUDIO_TEMPLATE_HANDOFF: Record<keyof OrgProcess, StudioHandoffDisposition> = {
+	id: 'carried', // draftOrigin.processId keeps the link back to the source process.
+	title: 'carried', // draftOrigin.processTitle names the source process for the author.
+	intent: 'carried', // Subject line, core message, and audience guidance fill the objective step.
+	status: 'process-local', // Loop lifecycle; the draft is only ever written from a finished run.
+	activeStage: 'process-local', // Live-pulse pointer for a running loop, meaningless at rest.
+	stageLabel: 'process-local', // Display label for the running stage, meaningless at rest.
+	entries: 'carried', // Flattened into content.researchLog as readable trace lines.
+	decisionMakers: 'carried', // Mapped one-to-one into audience.decisionMakers, order preserved.
+	droppedEmailless: 'process-local', // Resolution telemetry about contacts that never reached the draft.
+	resolutionStopReason: 'process-local', // Why resolution stopped; the draft holds the outcome, not the stop.
+	resolutionStopDetail: 'process-local', // Prose detail for the resolution stop above.
+	geographicScope: 'carried', // content.geographicScope, null-preserving — no scope is invented.
+	geographicScopeLabel: 'derived', // displayGeoScope reproduces it from the scope; also on draftOrigin.scopeLabel for display.
+	geographicScopeBasis: 'carried', // draftOrigin.scopeBasis shows the author why this scope was chosen.
+	geographicScopeSource: 'process-local', // Resolution-path enum; the basis prose from the same producer already carries the distinction.
+	sourceEvidenceObserved: 'process-local', // Whether stream telemetry arrived — a property of the run, not the sources.
+	sourceEvidenceCount: 'derived', // Recomputable as content.sources.length.
+	sourceEvidenceEvaluatedCount: 'derived', // The creator recomputes evaluated sources from content.sources.
+	sourceEvidenceSearchOnlyCount: 'derived', // The creator recomputes search-only sources from content.sources.
+	sourceEvidenceMode: 'process-local', // Discovery-vs-preverified telemetry about how the run gathered sources.
+	sourceEvidenceEvaluationFallback: 'process-local', // Run-level flag; per-source fallback is visible in each credibility_rationale.
+	sourceEvidenceCandidateCount: 'process-local', // Funnel telemetry for candidates that never became sources.
+	sourceEvidenceFailedCount: 'process-local', // Funnel telemetry for fetches that failed during the run.
+	sourceEvidenceSearchQueryCount: 'process-local', // Funnel telemetry for search volume during the run.
+	sources: 'carried', // content.sources, lossless — every evaluation field survives.
+	composedMessage: 'carried', // content.preview is the authored artifact itself.
+	activeMessageJob: 'carried', // content.activeMessageJob keeps the recovery handle and trace id.
+	restoredFromDevice: 'process-local', // Device-ledger restoration marker for the Studio registry, not the draft.
+	errorMessage: 'process-local', // A failed run never reaches the handoff.
+	startedAt: 'process-local', // Loop timing; the draft stamps its own createdAt on the origin.
+	endedAt: 'process-local', // Loop timing; see startedAt.
+	abort: 'process-local' // Live AbortController owned by the running loop; not serializable.
+};
 
 // Map the authoring scope to the campaign's coarse target fields. international
 // → cleared (no country); nationwide → country; subnational → country + the
@@ -223,27 +255,36 @@ function geoScopeToTargets(scope: GeoScope | null | undefined): {
  * the PLAIN composed message (NOT the email-HTML serializer), type, and derived
  * targets — plus carried-count metadata for the "Draft from Studio" banner.
  */
-export function saveStudioProcessAsCampaignDraft(proc: OrgProcess): string {
+export async function saveStudioProcessAsCampaignDraft(
+	proc: OrgProcess,
+	ownerId: string
+): Promise<string | null> {
 	const targets = geoScopeToTargets(proc.geographicScope);
-	return saveOrgCampaignDraft({
-		source: 'studio',
-		title: proc.intent.subjectLine,
-		body: proc.composedMessage,
-		type: 'CONGRESSIONAL',
-		targetCountry: targets.targetCountry,
-		targetJurisdiction: targets.targetJurisdiction,
-		createdAt: Date.now(),
-		metadata: {
-			processId: proc.id,
-			title: proc.title,
-			decisionMakerCount: proc.decisionMakers.length,
-			sourceCount: proc.sources.length,
-			geographicScopeLabel: proc.geographicScopeLabel
-		}
-	});
+	return await orgCampaignDrafts.save(
+		{
+			source: 'studio',
+			title: proc.intent.subjectLine,
+			body: proc.composedMessage,
+			type: 'CONGRESSIONAL',
+			targetCountry: targets.targetCountry,
+			targetJurisdiction: targets.targetJurisdiction,
+			createdAt: Date.now(),
+			metadata: {
+				processId: proc.id,
+				title: proc.title,
+				decisionMakerCount: proc.decisionMakers.length,
+				sourceCount: proc.sources.length,
+				geographicScopeLabel: proc.geographicScopeLabel
+			}
+		},
+		ownerId
+	);
 }
 
-export function saveStudioProcessAsOrgEmailDraft(proc: OrgProcess): string {
+export async function saveStudioProcessAsOrgEmailDraft(
+	proc: OrgProcess,
+	ownerId: string
+): Promise<string | null> {
 	const evaluatedSources = Math.max(
 		0,
 		proc.sourceEvidenceObserved
@@ -257,25 +298,28 @@ export function saveStudioProcessAsOrgEmailDraft(proc: OrgProcess): string {
 			: proc.sources.length - evaluatedSources
 	);
 
-	return saveOrgEmailComposeDraft({
-		source: 'studio',
-		subject: proc.intent.subjectLine,
-		bodyHtml: messageToEmailHtml(proc),
-		createdAt: Date.now(),
-		metadata: {
-			processId: proc.id,
-			title: proc.title,
-			decisionMakerCount: proc.decisionMakers.length,
-			sourceCount: proc.sources.length,
-			evaluatedSourceCount: evaluatedSources,
-			searchOnlySourceCount: searchOnlySources,
-			messageJobId: proc.activeMessageJob?.jobId,
-			messageInputHash: proc.activeMessageJob?.inputHash,
-			messageJobStatus: proc.activeMessageJob?.status,
-			messageTraceId: proc.activeMessageJob?.traceId,
-			geographicScopeLabel: proc.geographicScopeLabel,
-			geographicScopeSource: proc.geographicScopeSource,
-			geographicScopeBasis: proc.geographicScopeBasis
-		}
-	});
+	return await orgEmailComposeDrafts.save(
+		{
+			source: 'studio',
+			subject: proc.intent.subjectLine,
+			bodyHtml: messageToEmailHtml(proc),
+			createdAt: Date.now(),
+			metadata: {
+				processId: proc.id,
+				title: proc.title,
+				decisionMakerCount: proc.decisionMakers.length,
+				sourceCount: proc.sources.length,
+				evaluatedSourceCount: evaluatedSources,
+				searchOnlySourceCount: searchOnlySources,
+				messageJobId: proc.activeMessageJob?.jobId,
+				messageInputHash: proc.activeMessageJob?.inputHash,
+				messageJobStatus: proc.activeMessageJob?.status,
+				messageTraceId: proc.activeMessageJob?.traceId,
+				geographicScopeLabel: proc.geographicScopeLabel,
+				geographicScopeSource: proc.geographicScopeSource,
+				geographicScopeBasis: proc.geographicScopeBasis
+			}
+		},
+		ownerId
+	);
 }

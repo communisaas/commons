@@ -91,7 +91,7 @@
 		<h1 class="mb-4 text-2xl font-bold text-slate-900">{data.template.title}</h1>
 		<p class="mb-6 text-slate-600">Loading your campaign action...</p>
 		<a
-			href="/{data.template.slug}"
+			href="/s/{data.template.slug}"
 			class="inline-flex items-center rounded-lg bg-participation-primary-600 px-4 py-2 text-white transition-colors hover:bg-participation-primary-700"
 		>
 			View full campaign

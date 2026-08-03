@@ -16,17 +16,17 @@
 -->
 <script lang="ts">
 	import { Datum } from '$lib/design';
-	import type { StudioSource } from './types';
+	import type { Source } from '$lib/core/agents/types';
 
 	let {
 		sources
 	}: {
 		/** Attached source ground from the live message stream. */
-		sources: StudioSource[];
+		sources: Source[];
 	} = $props();
 
 	// Incentive ranking weight. Adversarial ranks HIGHEST — intentional.
-	const INCENTIVE_RANK: Record<NonNullable<StudioSource['incentive_position']>, number> = {
+	const INCENTIVE_RANK: Record<NonNullable<Source['incentive_position']>, number> = {
 		adversarial: 0,
 		neutral: 1,
 		aligned: 2
@@ -67,7 +67,7 @@
 	const fallbackCount = $derived(sources.filter(isFallback).length);
 	const evaluatedCount = $derived(sources.length - fallbackCount);
 
-	function isFallback(s: StudioSource): boolean {
+	function isFallback(s: Source): boolean {
 		return !s.incentive_position || (s.credibility_rationale ?? '').startsWith(FALLBACK_MARKER);
 	}
 

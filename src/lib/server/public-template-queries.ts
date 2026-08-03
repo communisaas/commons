@@ -1,4 +1,8 @@
 import { serverQuery } from '$lib/server/convex-work-budget';
+import {
+	isCongressionalDelivery,
+	isTemplateDeliveryMethod
+} from '$convex/lib/templateDeliveryMethod';
 import type { FunctionReturnType } from 'convex/server';
 import type { Id } from '$convex/_generated/dataModel';
 import { api } from '$lib/convex';
@@ -17,6 +21,7 @@ import {
 	type PublicTemplatePageBackfillProgressState
 } from './public-discovery-cache';
 import {
+	PublicDiscoveryManifestShieldError,
 	getGloballyShieldedPublicDiscoveryManifest,
 	publicDiscoveryGraphGeneration,
 	refreshGloballyShieldedPublicDiscoveryManifest,
@@ -402,7 +407,15 @@ function projectPublicTemplateCardsContract(
 	}
 	return value.map((template, index) => {
 		const projected = projectPublicTemplateCard(template, index);
-		if (excludeCwc && projected.deliveryMethod === 'cwc') {
+		// This projector distrusts its producer for every other field, and the payload
+		// arrives as `unknown` from R2 — so an equality test is the wrong shape here.
+		// An unrecognized delivery method is not "not cwc"; it is a value this build
+		// cannot reason about, and letting it through is the one failure the congressional
+		// containment gate exists to prevent. Refuse on non-membership, then on cwc.
+		if (excludeCwc && !isTemplateDeliveryMethod(projected.deliveryMethod)) {
+			throw new PublicDiscoverySnapshotContractError(`unknown-delivery-method:${index}`);
+		}
+		if (excludeCwc && isCongressionalDelivery(projected.deliveryMethod)) {
 			throw new PublicDiscoverySnapshotContractError(`cwc-leak:${index}`);
 		}
 		return projected;
@@ -1540,9 +1553,41 @@ async function cacheExpectedSnapshot<TSnapshot extends SnapshotCoordinates, TVal
 }
 
 /** Cached public template cards, separated by the congressional visibility gate. */
+/**
+ * The R2 publication shield is writable only by the deployed refresh gate, an
+ * external Durable Object that has no counterpart outside Cloudflare. A local
+ * backend therefore never has a manifest to read, which would leave every public
+ * discovery surface empty against a fully seeded database. Fall back to the same
+ * Convex producer the publication pipeline itself reads from, projected through
+ * the identical contract so the shape callers receive does not change.
+ *
+ * Deployed builds never reach this: `import.meta.env.DEV` is a build-time
+ * constant that is false there, so the shield error propagates and the surface
+ * still fails closed.
+ */
+async function directPublicTemplatesWhenUnshielded(error: unknown, excludeCwc: boolean) {
+	// Test mode is excluded deliberately: the suite asserts that a manifest
+	// outage never authorizes a Convex read, which is the shield's whole purpose.
+	// Only an interactive local server takes this path.
+	if (!import.meta.env.DEV || import.meta.env.MODE === 'test') return null;
+	if (!(error instanceof PublicDiscoveryManifestShieldError)) return null;
+	const snapshot = (await serverQuery(api.templates.publicDiscoveryList, {
+		_secret: getInternalSecret(),
+		excludeCwc
+	})) as PublicTemplateSnapshot;
+	return projectPublicTemplateSnapshotContract(snapshot, excludeCwc);
+}
+
 export async function getCachedPublicTemplates(context: PublicQueryContext, excludeCwc: boolean) {
 	const logicalKey = `templates:exclude-cwc=${excludeCwc ? '1' : '0'}`;
-	const manifestAuthority = await getCachedPublicDiscoveryManifestAuthority(context);
+	let manifestAuthority: PublicDiscoveryManifestAuthority;
+	try {
+		manifestAuthority = await getCachedPublicDiscoveryManifestAuthority(context);
+	} catch (error) {
+		const direct = await directPublicTemplatesWhenUnshielded(error, excludeCwc);
+		if (direct) return direct;
+		throw error;
+	}
 	const { manifest } = manifestAuthority;
 	if (!manifest.list.ready) throw new PublicDiscoverySnapshotNotReadyError('list');
 

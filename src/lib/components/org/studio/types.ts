@@ -18,13 +18,3 @@ export interface ActionEntry {
 }
 
 export type ReasoningEntry = ThoughtEntry | ActionEntry;
-
-export interface StudioSource {
-	num: number;
-	title: string;
-	url: string;
-	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
-	credibility_rationale?: string;
-	incentive_position?: 'adversarial' | 'neutral' | 'aligned';
-	source_order?: 'primary' | 'secondary' | 'opinion';
-}

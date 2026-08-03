@@ -28,6 +28,7 @@
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { Artifact, Datum } from '$lib/design';
 	import { SPRINGS, TIMING, EASING } from '$lib/design/motion';
 	import { getOrgOS, isRunning } from './orgOS.svelte';
@@ -72,6 +73,13 @@
 
 	const os = getOrgOS();
 	const composeHref = '/?create=true';
+	// Scoping identity for the org delivery handoffs: the active session's
+	// (already public) user id. The parked drafts are keyed to this operator;
+	// with no id resolved the handoffs bail rather than write an ownerless
+	// draft another account on the same browser could read.
+	const operatorId = $derived(
+		(($page.data.user as Record<string, unknown> | null)?.id as string | undefined) ?? ''
+	);
 	// SSR-safe reduced-motion read (mirrors Datum.svelte) — gates the fly entrances
 	// so motion-sensitive users get the content without the 8px slide.
 	const prefersReducedMotion =
@@ -217,22 +225,26 @@
 		window.location.href = `${composeHref}&resumeDraft=${encodeURIComponent(draftId)}`;
 	}
 
-	function takeToOrgEmail() {
+	async function takeToOrgEmail() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
-		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
+		if (!operatorId) return;
+		const draftId = await saveStudioProcessAsOrgEmailDraft(proc, operatorId);
+		if (!draftId) return;
 		// Same-origin org route — goto() keeps the OS kernel/process registry alive.
 		goto(`${orgEmailHref}?studioDraft=${encodeURIComponent(draftId)}`);
 	}
 
-	function takeToCongressional() {
+	async function takeToCongressional() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
+		if (!operatorId) return;
 		// Carry the authored artifact (title + composed message + derived targets +
 		// carried counts) into the new-campaign surface instead of dropping it on a
 		// blank form. `type` stays for graceful degradation if the draft expired.
 		// That surface owns target chambers, the tiered floor explainer, and the
 		// confirm step before any CWC send. Same-origin org route — goto() keeps
 		// the kernel alive.
-		const draftId = saveStudioProcessAsCampaignDraft(proc);
+		const draftId = await saveStudioProcessAsCampaignDraft(proc, operatorId);
+		if (!draftId) return;
 		goto(`${os.base}/campaigns/new?type=CONGRESSIONAL&studioDraft=${encodeURIComponent(draftId)}`);
 	}
 </script>

@@ -17,7 +17,7 @@
 	import SimpleModal from '$lib/components/modals/SimpleModal.svelte';
 	import TemplateSuccessModal from '$lib/components/modals/TemplateSuccessModal.svelte';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
-	import { isMobile, navigateTo } from '$lib/utils/browserUtils';
+	import { isMobile } from '$lib/utils/browserUtils';
 	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import { goto, preloadData, onNavigate } from '$app/navigation';
@@ -43,8 +43,8 @@
 	import { CreationSpark, CoordinationExplainer } from '$lib/components/activation';
 	import LocationScopeBar from '$lib/components/template-browser/LocationScopeBar.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
-	import { z } from 'zod';
 	import { FEATURES } from '$lib/config/features';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 	import type { GeoScope } from '$lib/core/agents/types';
 	import {
 		scoreTemplatesByRelevance,
@@ -63,6 +63,7 @@
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
+	import { claimGuestDraftForUser } from '$lib/stores/templateDraft';
 
 	let { data }: { data: PageData } = $props();
 	let attemptedTemplateFallback = $state(false);
@@ -78,11 +79,7 @@
 			// Store selection/local CRUD must not become dependencies of this
 			// PageData-only reconciliation effect.
 			untrack(() => templateStore.hydrateFromSSR(data.templates ?? []));
-		} else if (
-			!attemptedTemplateFallback &&
-			!templateStore.initialized &&
-			!templateStore.loading
-		) {
+		} else if (!attemptedTemplateFallback && !templateStore.initialized && !templateStore.loading) {
 			attemptedTemplateFallback = true;
 			void templateStore.fetchTemplates();
 		}
@@ -100,13 +97,24 @@
 	let showMobilePreview = $state(false);
 	let showTemplateCreator = $state(false);
 	let personalConnectionValue = $state('');
-	let showTemplateAuthModal = $state(false);
+	// A note is written about one specific message, so it does not follow the reader
+	// to the next one. The preview instance is reused across selections rather than
+	// remounted, so without this a note typed here reappears against an unrelated
+	// template — and on a lane that cannot carry it, the send is refused while the
+	// note itself has already been erased from view, leaving no way to clear it.
+	let lastPersonalConnectionTemplateId = $state<string | null>(null);
+	$effect(() => {
+		const id = selectedTemplate?.id ?? null;
+		if (id !== lastPersonalConnectionTemplateId) {
+			lastPersonalConnectionTemplateId = id;
+			personalConnectionValue = '';
+		}
+	});
 	let showTemplateSuccess = $state(false);
 	let modalComponent = $state<ModalComponent>();
 	let creationContext: TemplateCreationContext | null = $state(null);
 	let creationInitialText = $state<string>('');
 	let resumeDraftId = $state<string>('');
-	let pendingTemplateToSave: Record<string, unknown> | null = $state(null);
 	let savedTemplate = $state<Template | null>(null);
 	let templateSaveError = $state<string | null>(null);
 	let isSubmitting = $state(false);
@@ -189,53 +197,6 @@
 		// otherwise; onMount runs once per mount.
 		trackFrontDoorIntent(landingIntent);
 
-		if (browser && $page.url.searchParams.get('template_saved') === 'pending') {
-			const pendingData = sessionStorage.getItem('pending_template_save');
-			if (pendingData) {
-				try {
-					// Validate stored template data
-					const PendingTemplateSchema = z.object({
-						templateData: z.unknown(),
-						creatorInfo: z.object({ name: z.string(), email: z.string() }).optional(),
-						timestamp: z.number()
-					});
-
-					const parsed = JSON.parse(pendingData);
-					const result = PendingTemplateSchema.safeParse(parsed);
-
-					if (result.success) {
-						// Zod-validated from sessionStorage — runtime shape matches Template
-						const { templateData } = result.data;
-						templateStore
-							.addTemplate(templateData as Omit<Template, 'id'>)
-							.then(() => {
-								sessionStorage.removeItem('pending_template_save');
-							})
-							.catch((error) => {
-								// Post-auth resume: if the user is at their individual
-								// authoring cap, surface the Voice/Advocate upgrade card
-								// rather than silently dropping the publish.
-								if (
-									error instanceof AppError &&
-									error.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
-								) {
-									sessionStorage.removeItem('pending_template_save');
-									authoringCapMessage = error.apiError.message;
-									showAuthoringUpgrade = true;
-								}
-								// Other failures: user can retry later.
-							});
-					} else {
-						console.warn('[HomePage] Invalid pending template data:', result.error.flatten());
-						sessionStorage.removeItem('pending_template_save');
-					}
-				} catch (error) {
-					console.warn('[HomePage] Failed to parse pending template data:', error);
-					sessionStorage.removeItem('pending_template_save');
-				}
-			}
-		}
-
 		// Restore location scope from localStorage
 		let restoredFromStorage = false;
 		try {
@@ -278,25 +239,41 @@
 		const resumeDraftParam = $page.url.searchParams.get('resumeDraft');
 
 		if (createTemplate === 'true') {
-			// Extract draft ID for seamless auth return flow
-			if (resumeDraftParam) {
-				resumeDraftId = decodeURIComponent(resumeDraftParam);
-			}
+			void (async () => {
+				// OAuth returns with one exact guest draft capability. Adopt that
+				// ownerless entry before TemplateCreator performs its synchronous,
+				// owner-filtered read. Existing ownership is never reassigned.
+				if (resumeDraftParam) {
+					resumeDraftId = resumeDraftParam;
+					const userId = (data.user as Record<string, unknown> | null)?.id;
+					if (typeof userId === 'string' && userId) {
+						try {
+							const claimed = await claimGuestDraftForUser(resumeDraftId, userId);
+							if (!claimed) resumeDraftId = '';
+						} catch (error) {
+							// Never bypass account scoping on a failed adoption. Open a
+							// fresh creator and leave the ownerless draft untouched.
+							console.warn('[HomePage] Failed to claim the resumed draft:', error);
+							resumeDraftId = '';
+						}
+					}
+				}
 
-			coordinated.setTimeout(
-				() => {
-					creationContext = {
-						channelId: 'direct',
-						channelTitle: 'Direct Outreach',
-						isCongressional: false
-					};
-					showTemplateCreator = true;
-					window.history.replaceState({}, '', '/');
-				},
-				100,
-				'open-creator',
-				componentId
-			);
+				coordinated.setTimeout(
+					() => {
+						creationContext = {
+							channelId: 'direct',
+							channelTitle: 'Direct Outreach',
+							isCongressional: false
+						};
+						showTemplateCreator = true;
+						window.history.replaceState({}, '', '/');
+					},
+					100,
+					'open-creator',
+					componentId
+				);
+			})();
 		}
 	});
 
@@ -363,11 +340,6 @@
 		showTemplateCreator = true;
 	}
 
-	interface AuthEventDetail {
-		name: string;
-		email: string;
-	}
-
 	async function handlePublishRetry() {
 		if (!pendingPublishData) return;
 		templatePublishing = true;
@@ -377,10 +349,7 @@
 			savedTemplate = newTemplate;
 		} catch (err) {
 			// At-cap individual authoring quota → upgrade card, not a dead-end.
-			if (
-				err instanceof AppError &&
-				err.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED
-			) {
+			if (err instanceof AppError && err.apiError.code === ERROR_CODES.AUTHORING_QUOTA_EXCEEDED) {
 				showTemplateSuccess = false;
 				savedTemplate = null;
 				authoringCapMessage = err.apiError.message;
@@ -393,36 +362,10 @@
 		}
 	}
 
-	function handleTemplateCreatorAuth(_event: CustomEvent<AuthEventDetail>) {
-		const { name, email } = _event.detail;
-
-		if (typeof window !== 'undefined') {
-			sessionStorage.setItem(
-				'pending_template_save',
-				JSON.stringify({
-					templateData: pendingTemplateToSave,
-					creatorInfo: { name, email },
-					timestamp: Date.now()
-				})
-			);
-		}
-
-		fetch('/auth/prepare', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ returnTo: '/?template_saved=pending' })
-		}).finally(() => {
-			navigateTo(`/auth/google`);
-		});
-	}
-
 	// Show templates filtered by feature flags
 	const allTemplates = $derived(
-		templateStore.templates.filter(
-			(t) =>
-				(FEATURES.CONGRESSIONAL && t.deliveryMethod === 'cwc') ||
-				t.deliveryMethod === 'email' ||
-				t.deliveryMethod === 'direct'
+		templateStore.templates.filter((t) =>
+			isCongressionalDelivery(t.deliveryMethod) ? FEATURES.CONGRESSIONAL : true
 		)
 	);
 
@@ -720,9 +663,7 @@
 					if (data.user) {
 						try {
 							// H1 — trust-context spread shared across both branches below.
-							const { readH1TrustContext } = await import(
-								'$lib/core/identity/session-credentials'
-							);
+							const { readH1TrustContext } = await import('$lib/core/identity/session-credentials');
 							const h1TrustContext = await readH1TrustContext(data.user.id);
 							if (detail.districtCommitment) {
 								const verifyRes = await fetch('/api/identity/verify-address', {
@@ -861,12 +802,7 @@
 							class="contact-link contact-link--source"
 							aria-label="View the commons source code on GitHub"
 						>
-							<svg
-								class="source-mark"
-								viewBox="0 0 16 16"
-								aria-hidden="true"
-								focusable="false"
-							>
+							<svg class="source-mark" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
 								<path
 									fill="currentColor"
 									d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.65-.89-3.65-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"
@@ -914,19 +850,15 @@
 					     layer never says "campaigns" (voice.md). -->
 					<div class="no-match-notice">
 						<p class="no-match-head">No templates in {locationResult.placeLabel} yet.</p>
-						<button
-							type="button"
-							class="no-match-clear"
-							onclick={() => handleScopeChange(null)}
-						>
+						<button type="button" class="no-match-clear" onclick={() => handleScopeChange(null)}>
 							Clear location
 						</button>
 					</div>
 				{:else}
-				<!-- Template List -->
-				<div class="template-list-column">
-					{#if showGraph}
-						<!-- Relatedness graph: each template a hue-coloured node, linked by
+					<!-- Template List -->
+					<div class="template-list-column">
+						{#if showGraph}
+							<!-- Relatedness graph: each template a hue-coloured node, linked by
 						     measured semantic twins (solid) and civic-family kinship (dashed),
 						     with the topically-isolated falling honestly to the periphery.
 						     An explicit opt-in at `?view=graph`; the list-and-preview surface
@@ -934,38 +866,38 @@
 						     through the SAME descent the spectrum uses — the field goes inert
 						     beneath the risen Artifact (the shared DescentDive below), never a
 						     second modal. -->
-						<div class="graph-field" class:graph-field--inert={graphDiving}>
-							<RelationGraph
-								templates={filteredTemplates}
-								edges={relationEdges}
-								selectedId={templateStore.selectedId}
-								onSelect={handleTemplateSelect}
-							/>
-						</div>
-					{:else if showSpectrum}
-						<!-- Topical field: templates grouped into hue-ordered domain bands,
+							<div class="graph-field" class:graph-field--inert={graphDiving}>
+								<RelationGraph
+									templates={filteredTemplates}
+									edges={relationEdges}
+									selectedId={templateStore.selectedId}
+									onSelect={handleTemplateSelect}
+								/>
+							</div>
+						{:else if showSpectrum}
+							<!-- Topical field: templates grouped into hue-ordered domain bands,
 						     with a lens toggle to re-organise the same templates by place
 						     (the existing geographic precision grouping). Selecting a tile
 						     dives into it — the field recedes and the template rises as an
 						     Artifact wrapping the same preview below. An explicit opt-in at
 						     `?view=spectrum`; the list-and-preview surface is the default. -->
-						<SpectrumLandscape
-							templates={filteredTemplates}
-							placeGroups={filteredGroups}
-							selectedId={templateStore.selectedId}
-							onSelect={handleTemplateSelect}
-							dive={diveOpen ? templateDive : undefined}
-							onClose={closeDive}
-						/>
-					{:else}
-						<TemplateList
-							groups={filteredGroups}
-							selectedId={templateStore.selectedId}
-							onSelect={handleTemplateSelect}
-							loading={isLoading}
-						/>
-					{/if}
-				</div>
+							<SpectrumLandscape
+								templates={filteredTemplates}
+								placeGroups={filteredGroups}
+								selectedId={templateStore.selectedId}
+								onSelect={handleTemplateSelect}
+								dive={diveOpen ? templateDive : undefined}
+								onClose={closeDive}
+							/>
+						{:else}
+							<TemplateList
+								groups={filteredGroups}
+								selectedId={templateStore.selectedId}
+								onSelect={handleTemplateSelect}
+								loading={isLoading}
+							/>
+						{/if}
+					</div>
 				{/if}
 
 				<!-- Template Preview. In the list (the default) it lives in its own column
@@ -980,14 +912,14 @@
 								<p class="font-brand text-base font-semibold text-slate-800">
 									Templates aren't loading right now.
 								</p>
-								<p class="mt-2 font-brand text-sm text-slate-500">
+								<p class="font-brand mt-2 text-sm text-slate-500">
 									The list will return when the server responds.
 								</p>
 								<button
 									type="button"
 									onclick={() => templateStore.fetchTemplates()}
 									data-testid="retry-templates-button"
-									class="mt-4 rounded-lg border border-teal-500 px-4 py-2 font-brand text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
+									class="font-brand mt-4 rounded-lg border border-teal-500 px-4 py-2 text-sm font-medium text-teal-600 transition-colors hover:bg-teal-50"
 								>
 									Try again
 								</button>
@@ -998,12 +930,8 @@
 							{@render templateDive()}
 						{:else}
 							<div class="px-6 py-12 text-center">
-								<p class="font-brand text-base font-semibold text-slate-800">
-									No templates yet.
-								</p>
-								<p class="mt-2 font-brand text-sm text-slate-500">
-									You can write the first one.
-								</p>
+								<p class="font-brand text-base font-semibold text-slate-800">No templates yet.</p>
+								<p class="font-brand mt-2 text-sm text-slate-500">You can write the first one.</p>
 							</div>
 						{/if}
 					</div>
@@ -1247,8 +1175,10 @@
 						isSubmitting = false;
 					}
 				} else {
-					pendingTemplateToSave = templateData;
-					showTemplateAuthModal = true;
+					// The creator gates guests before dispatch, so this only fires when a
+					// session expires mid-authoring. Surfacing the error resets the draft
+					// cleanup mode back to 'save', keeping the work recoverable.
+					templateSaveError = 'Sign in to publish — your draft is saved.';
 				}
 			}}
 		/>
