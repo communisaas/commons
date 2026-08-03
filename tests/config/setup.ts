@@ -39,6 +39,11 @@ beforeEach(() => {
 	// Keep real CONGRESS_API_KEY for smoke tests, fallback to test key for mocked tests
 	process.env.CONGRESS_API_KEY = process.env.CONGRESS_API_KEY || 'test-congress-api-key';
 	process.env.CWC_API_KEY = process.env.CWC_API_KEY || process.env.TEST_CWC_API_KEY || 'test-api-key';
+	// District/postal anonymization is keyed and fail-closed — hashing throws
+	// without this. Both the SvelteKit lane and the Convex lane read it.
+	process.env.DISTRICT_HASH_KEY =
+		process.env.DISTRICT_HASH_KEY ||
+		'4f3c1a9e7b25d08c6a1f4e93b7d20c58e6a3f19b4c7d802e5f1a6b3c9d47e082';
 
 	// Mock browser APIs that may be accessed during tests
 	if (typeof window !== 'undefined') {

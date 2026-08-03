@@ -13,8 +13,20 @@ import {
 	saveStudioProcessAsTemplateDraft
 } from '$lib/components/org/studio/studio-draft-bridge';
 import { templateDraftStore } from '$lib/stores/templateDraft';
-import { getOrgEmailComposeDraft } from '$lib/stores/orgEmailComposeDraft';
+import { orgEmailComposeDrafts, type OrgEmailComposeDraft } from '$lib/stores/orgDraftStore';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
+
+const OPERATOR = 'operator-test';
+
+// Owner-scoped round trip: the store's only read is consume(id, ownerId),
+// so write and read back as the SAME operator.
+async function saveAndConsume(proc: OrgProcess): Promise<OrgEmailComposeDraft> {
+	const draftId = await saveStudioProcessAsOrgEmailDraft(proc, OPERATOR);
+	expect(draftId).not.toBeNull();
+	const draft = await orgEmailComposeDrafts.consume(draftId!, OPERATOR);
+	expect(draft).not.toBeNull();
+	return draft!;
+}
 
 function makeProcess(overrides: Partial<OrgProcess> = {}): OrgProcess {
 	return {
@@ -176,15 +188,16 @@ describe('public template draft handoff', () => {
 		expect(draft?.data.content?.activeMessageJob?.traceId).toBe('trace-1');
 	});
 
-	it('carries sources as plain citations without evaluation internals', () => {
+	it('carries each source evaluation through the handoff and invents none', () => {
 		const draftId = saveStudioProcessAsTemplateDraft(makeProcess());
 		const draft = templateDraftStore.getDraft(draftId);
 		const sources = draft?.data.content?.sources ?? [];
 
 		expect(sources).toHaveLength(2);
-		for (const source of sources) {
-			expect(Object.keys(source).sort()).toEqual(['num', 'title', 'type', 'url']);
-		}
+		expect(sources[0].credibility_rationale).toBe('Primary agency data.');
+		expect(sources[0].incentive_position).toBe('neutral');
+		expect(sources[1].credibility_rationale).toBe('Evaluation unavailable for this source.');
+		expect('incentive_position' in sources[1]).toBe(false);
 	});
 
 	it('keeps the message authored by the stream, never fabricating one', () => {
@@ -196,10 +209,9 @@ describe('public template draft handoff', () => {
 });
 
 describe('org email composer draft handoff', () => {
-	it('writes subject, body paragraphs, and source list into the composer draft', () => {
+	it('writes subject, body paragraphs, and source list into the composer draft', async () => {
 		const proc = makeProcess();
-		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
-		const draft = getOrgEmailComposeDraft(draftId);
+		const draft = await saveAndConsume(proc);
 
 		expect(draft).not.toBeNull();
 		expect(draft?.source).toBe('studio');
@@ -209,21 +221,19 @@ describe('org email composer draft handoff', () => {
 		expect(draft?.bodyHtml).toContain('https://example.org/report');
 	});
 
-	it('escapes message content on the way into HTML', () => {
+	it('escapes message content on the way into HTML', async () => {
 		const proc = makeProcess({
 			composedMessage: 'Beware <script>alert(1)</script> & "quotes".'
 		});
-		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
-		const draft = getOrgEmailComposeDraft(draftId);
+		const draft = await saveAndConsume(proc);
 
 		expect(draft?.bodyHtml).not.toContain('<script>');
 		expect(draft?.bodyHtml).toContain('&lt;script&gt;');
 		expect(draft?.bodyHtml).toContain('&amp;');
 	});
 
-	it('reports the stream-observed source evidence counts in metadata', () => {
-		const draftId = saveStudioProcessAsOrgEmailDraft(makeProcess());
-		const draft = getOrgEmailComposeDraft(draftId);
+	it('reports the stream-observed source evidence counts in metadata', async () => {
+		const draft = await saveAndConsume(makeProcess());
 
 		expect(draft?.metadata.decisionMakerCount).toBe(2);
 		expect(draft?.metadata.sourceCount).toBe(2);
@@ -234,15 +244,14 @@ describe('org email composer draft handoff', () => {
 		expect(draft?.metadata.geographicScopeLabel).toBe('California, United States');
 	});
 
-	it('counts evaluation-fallback sources as search-only when no stream evidence arrived', () => {
+	it('counts evaluation-fallback sources as search-only when no stream evidence arrived', async () => {
 		const proc = makeProcess({
 			sourceEvidenceObserved: false,
 			sourceEvidenceCount: 0,
 			sourceEvidenceEvaluatedCount: 0,
 			sourceEvidenceSearchOnlyCount: 0
 		});
-		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
-		const draft = getOrgEmailComposeDraft(draftId);
+		const draft = await saveAndConsume(proc);
 
 		expect(draft?.metadata.evaluatedSourceCount).toBe(1);
 		expect(draft?.metadata.searchOnlySourceCount).toBe(1);
