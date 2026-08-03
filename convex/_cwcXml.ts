@@ -9,6 +9,7 @@
  * action and Convex functions cannot import from SvelteKit's src/.
  */
 
+import { DELIVERABLE_PLACEHOLDER_DENYLIST } from './lib/messagePlaceholders';
 
 declare const process: { env: Record<string, string | undefined> };
 interface CwcTemplate {
@@ -289,6 +290,16 @@ ${prefixLine}        <FirstName>${this.escapeXML(firstName)}</FirstName>
 		for (const el of ['Address1', 'City', 'StateAbbreviation', 'Zip']) {
 			if (new RegExp(`<${el}>\\s*</${el}>`).test(xml)) {
 				errors.push(`Empty constituent address field: ${el}`);
+			}
+		}
+
+		// An unresolved authoring placeholder is a letter that was never finished.
+		// It fails here rather than arriving at a congressional office as literal
+		// bracket text. Matching is literal-string only: real letters cite footnote
+		// markers like [1] and [2], which a generic bracket matcher would condemn.
+		for (const placeholder of DELIVERABLE_PLACEHOLDER_DENYLIST) {
+			if (xml.includes(placeholder)) {
+				errors.push(`Unresolved message placeholder: ${placeholder}`);
 			}
 		}
 

@@ -8,7 +8,22 @@
 import type { Template, EmailFlowTemplate } from '$lib/types/template';
 import type { HeaderTemplate } from '$lib/types/any-replacements';
 import type { EmailServiceUser } from '$lib/types/user';
-import { extractRecipientEmails } from '$lib/types/templateConfig';
+import { recipientEmailsFromConfig } from '$lib/types/template';
+// The sender-fill placeholder decision lives under convex/lib so the CWC send
+// path and these mailto lanes resolve from one table rather than two.
+import {
+	manualFillReplacements,
+	resolvePlaceholders,
+	type TemplateReplacements
+} from '$convex/lib/messagePlaceholders';
+// One vocabulary for the stored delivery method, so "is this congressional?"
+// cannot be answered differently here than at the send or the schema boundary.
+import {
+	isCongressionalDelivery,
+	isTemplateDeliveryMethod
+} from '$convex/lib/templateDeliveryMethod';
+
+export type { TemplateReplacements };
 
 // Enhanced interface with better type safety
 export interface ResolvedTemplate {
@@ -18,9 +33,6 @@ export interface ResolvedTemplate {
 	isCongressional: boolean;
 	routingEmail?: string;
 }
-
-// Type for template variable replacements
-export type TemplateReplacements = Record<string, string | null>;
 
 // Type guard for template replacements
 export function isValidReplacements(obj: unknown): obj is TemplateReplacements {
@@ -36,8 +48,7 @@ export function isValidTemplate(template: unknown): template is EmailFlowTemplat
 	return (
 		typeof t.id === 'string' &&
 		typeof t.title === 'string' &&
-		typeof t.deliveryMethod === 'string' &&
-		['email', 'email_attested', 'certified', 'direct', 'cwc'].includes(t.deliveryMethod as string) &&
+		isTemplateDeliveryMethod(t.deliveryMethod) &&
 		(typeof t.message_body === 'string' || typeof t.preview === 'string')
 	);
 }
@@ -119,7 +130,7 @@ function isValidRepresentativesArray(reps: unknown): reps is Representative[] {
 export function resolveTemplate(
 	template: EmailFlowTemplate | HeaderTemplate,
 	user: EmailServiceUser | null,
-	options: { preserveVariables?: boolean } = {}
+	options: { preserveVariables?: boolean; personalConnection?: string } = {}
 ): ResolvedTemplate {
 	// Input validation
 	if (!isValidTemplate(template)) {
@@ -232,72 +243,39 @@ export function resolveTemplate(
 
 		// Handle manual-fill placeholders based on preserveVariables option
 		// In preview mode, keep them as placeholders for interactive buttons
-		// In send mode, remove them completely
+		// In send mode, they carry the sender's words or they go
 		if (options.preserveVariables) {
 			// Keep placeholders for preview - don't add them to replacements
 			// This way they won't be removed or replaced
 		} else {
-			// Remove all manual-fill placeholders - everything auto-resolves or gets removed
-			replacements['[Personal Connection]'] = null;
-			replacements['[Phone]'] = null;
-			replacements['[Phone Number]'] = null;
-			replacements['[Your Phone]'] = null;
-			replacements['[Your Story]'] = null;
-			replacements['[Your Experience]'] = null;
-			replacements['[Personal Story]'] = null;
+			Object.assign(replacements, manualFillReplacements(options.personalConnection));
 		}
 
 		// Apply all replacements to subject and body
-		Object.entries(replacements).forEach(([placeholder, value]) => {
-			if (value !== null) {
-				// Replace with actual value
-				resolvedSubject = resolvedSubject.replace(new RegExp(escapeRegex(placeholder), 'g'), value);
-				resolvedBody = resolvedBody.replace(new RegExp(escapeRegex(placeholder), 'g'), value);
-			} else {
-				// Remove lines containing only this placeholder (with optional whitespace)
-				const linePattern = new RegExp(`^[ \\t]*${escapeRegex(placeholder)}[ \\t]*$`, 'gm');
-				resolvedSubject = resolvedSubject.replace(linePattern, '');
-				resolvedBody = resolvedBody.replace(linePattern, '');
-
-				// Remove inline occurrences with surrounding context
-				// Handle patterns like "from [Address ]" or "at [Address ]"
-				const contextPattern = new RegExp(`(from|at|in|of)\\s+${escapeRegex(placeholder)}`, 'gi');
-				resolvedSubject = resolvedSubject.replace(contextPattern, '');
-				resolvedBody = resolvedBody.replace(contextPattern, '');
-
-				// Remove any remaining standalone occurrences
-				resolvedSubject = resolvedSubject.replace(new RegExp(escapeRegex(placeholder), 'g'), '');
-				resolvedBody = resolvedBody.replace(new RegExp(escapeRegex(placeholder), 'g'), '');
-			}
-		});
-
-		// Clean up any multiple consecutive newlines left after removing placeholders
-		resolvedBody = resolvedBody.replace(/\n{3,}/g, '\n\n').trim();
-		resolvedSubject = resolvedSubject.trim();
+		resolvedSubject = resolvePlaceholders(resolvedSubject, replacements);
+		resolvedBody = resolvePlaceholders(resolvedBody, replacements);
 	} else {
 		// Non-authenticated user - preserve placeholders but make them instructional
 		resolvedBody = resolvedBody
 			.replace(/\[Name\]/g, '[Your Name]')
 			.replace(/\[Address\]/g, '[Your Address]')
 			.replace(/\[Representative Name\]/g, "[Your Representative's Name]");
-	}
 
-	// Determine delivery method and routing
-	const isCongressional =
-		template.deliveryMethod === 'certified' || template.deliveryMethod === 'cwc';
-
-	// Extract recipient emails from recipient_config (JSON object or string)
-	let recipientConfig: unknown = template.recipient_config;
-	if (typeof recipientConfig === 'string') {
-		try {
-			recipientConfig = JSON.parse(recipientConfig);
-		} catch {
-			recipientConfig = null;
+		// The manual-fill family is NOT instructional copy — it is the author's slot
+		// for the sender's own words. On the send path a guest gets the same handling
+		// an authenticated sender gets, or a real official receives bracket text.
+		if (!options.preserveVariables) {
+			const manualFill = manualFillReplacements(options.personalConnection);
+			resolvedSubject = resolvePlaceholders(resolvedSubject, manualFill);
+			resolvedBody = resolvePlaceholders(resolvedBody, manualFill);
 		}
 	}
 
-	const recipients = extractRecipientEmails(recipientConfig)
-		.filter(e => e !== '__CONGRESSIONAL__');
+	// Determine delivery method and routing
+	const isCongressional = isCongressionalDelivery(template.deliveryMethod);
+
+	// Extract recipient emails from recipient_config (JSON object or string)
+	const recipients = recipientEmailsFromConfig(template.recipient_config);
 
 	let routingEmail: string | undefined;
 	if (isCongressional) {
@@ -338,16 +316,5 @@ function buildUserAddress(user: EmailServiceUser): string {
 		return `${user.street.trim()}, ${user.city.trim()}, ${user.state.trim()} ${user.zip.trim()}`;
 	}
 	return ''; // Return empty if incomplete - will be removed from template
-}
-
-/**
- * Escape string for use in regex with error handling
- */
-function escapeRegex(string: string): string {
-	if (typeof string !== 'string') {
-		console.warn('escapeRegex received non-string input:', typeof string);
-		return String(string).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	}
-	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 

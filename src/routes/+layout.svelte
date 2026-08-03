@@ -20,6 +20,7 @@
 	import CredentialExpiryNudge from '$lib/components/identity/CredentialExpiryNudge.svelte';
 	import ErrorBoundary from '$lib/components/error/ErrorBoundary.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
+	import { toast } from '$lib/stores/toast.svelte';
 	import ModalRegistry from '$lib/components/modals/ModalRegistry.svelte';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { walletState } from '$lib/stores/walletState.svelte';
@@ -166,6 +167,10 @@
 				// Direct mailto launch for guests
 				launchEmail(flow.mailtoUrl);
 			}
+		} else {
+			// No URL to hand over. Without this the button is simply inert and the
+			// reader is told nothing at all.
+			toast.error(flow.error?.message ?? 'This message could not be prepared for your email app.');
 		}
 	}
 </script>

@@ -40,6 +40,8 @@
 		isModalOpen as _isModalOpen
 	} from '$lib/stores/modalSystem.svelte';
 	import { analyzeEmailFlow, launchEmail } from '$lib/services/emailService';
+	import { resolveSendLane, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 	// import TemplatePreview from '$lib/components/landing/template/TemplatePreview.svelte';
 	import SubmissionStatus from '$lib/components/submission/SubmissionStatus.svelte';
 
@@ -67,12 +69,15 @@
 	let {
 		template,
 		user = null,
+		personalConnection = undefined,
 		initialState = undefined,
 		onclose,
 		onused
 	}: {
 		template: ComponentTemplate;
 		user?: { id: string; name: string; trust_tier?: number } | null;
+		/** The sender's own words, moderated by the surface that opened this modal. */
+		personalConnection?: string;
 		initialState?: string;
 		onclose?: () => void;
 		onused?: (data: { templateId: string; action: 'mailto_opened' }) => void;
@@ -83,9 +88,9 @@
 
 	// Modal States - access from modalActions (not a store, just a getter)
 	const currentState = $derived(modalActions.modalState);
-	const isAuthenticatedCongressional = $derived(
-		template.deliveryMethod === 'cwc' && Boolean(user)
-	);
+	// The affordance and the routing read ONE decision, so they cannot desync.
+	const sendLane = $derived(resolveSendLane(template, user));
+	const isAuthenticatedCongressional = $derived(sendLane === 'cwc_zkp');
 
 	const jurisdictionLabels = getJurisdictionLabels();
 
@@ -176,9 +181,7 @@
 
 	function deliveryMethodLabel(method: string | undefined): string {
 		if (method === 'cwc') return `Through the ${jurisdictionLabels.legislativeAdjective} message system (CWC)`;
-		if (method === 'certified') return 'Through certified delivery';
 		if (method === 'email') return 'Direct email to the recipient';
-		if (method === 'auth') return 'Through the authenticated message channel';
 		return 'Through the configured delivery channel';
 	}
 
@@ -328,12 +331,18 @@
 			return;
 		}
 
-		// Congressional templates: guests get mailto relay, authenticated get ZKP/CWC
-		if (template.deliveryMethod === 'cwc') {
-			if (!user) {
-				console.log('[TemplateModal] Guest on congressional template — mailto relay');
-				handleUnifiedEmailFlow();
-			} else if ((user.trust_tier ?? 0) >= 2) {
+		// Congressional templates: guests get mailto relay, authenticated get ZKP/CWC.
+		// Same lane decision the preview affordance reads, so the two cannot drift.
+		const lane = resolveSendLane(template, user);
+
+		if (lane === 'mailto_congressional_relay') {
+			console.log('[TemplateModal] Guest on congressional template — mailto relay');
+			handleUnifiedEmailFlow();
+			return;
+		}
+
+		if (lane === 'cwc_zkp') {
+			if ((user?.trust_tier ?? 0) >= 2) {
 				// Tier 2+ means district proof exists. Delivery still needs the address
 				// locally available, PRF-unlockable, or re-entered for the government POST.
 				await hydrateGroundForDelivery();
@@ -341,7 +350,7 @@
 			} else {
 				// Tier 1 (OAuth-only): needs address verification before ZKP
 				console.log(
-					`[TemplateModal] Tier ${user.trust_tier ?? 1} user on congressional — showing trust upgrade`
+					`[TemplateModal] Tier ${user?.trust_tier ?? 1} user on congressional — showing trust upgrade`
 				);
 				trustUpgradePhase = 'choice';
 				modalActions.setState('trust-upgrade');
@@ -408,9 +417,24 @@
 			}
 		}
 
+		// Opt this lane into the attestation footer. The surface a sender reaches this
+		// modal from — the template page — renders that footer, so a send from here
+		// must carry it or the recipient receives less than the sender was shown. The
+		// district rides as a suffix when the account carries one; without it the
+		// method label still states honestly what was verified.
 		const flow = analyzeEmailFlow(template, enrichedUser, {
-			trustTier: enrichedUser?.trust_tier ?? 0
+			trustTier: enrichedUser?.trust_tier ?? 0,
+			personalConnection,
+			attestation: { districtCode: enrichedUser?.district_code ?? null }
 		});
+
+		// A message that cannot be assembled is said out loud. Without this the modal
+		// sits in its loading state forever and the sender learns nothing.
+		if (flow.error) {
+			submissionError = flow.error.message;
+			modalActions.setState('error');
+			return;
+		}
 
 		// Store mailto URL for later use
 		if (flow.mailtoUrl) {
@@ -602,7 +626,7 @@
 		};
 
 		// For authenticated users on CWC templates: attest address, then require proof.
-		if (user?.id && template.deliveryMethod === 'cwc') {
+		if (user?.id && isCongressionalDelivery(template.deliveryMethod)) {
 			if (
 				typeof data.districtCommitment !== 'string' ||
 				!data.districtCommitment ||
@@ -849,6 +873,16 @@
 			return;
 		}
 
+		// This route carries a proof, not a body: nothing the sender typed travels
+		// with it. If any surface ever forgets to suppress the field, refuse the send
+		// with a reason rather than stripping the words on the way out.
+		if (personalConnection?.trim()) {
+			proofSubmissionBlocked = SENDER_TEXT_NOT_CARRIED_REASON;
+			submissionError = proofSubmissionBlocked;
+			modalActions.setState('error');
+			return;
+		}
+
 		if (!requireCongressionalDeliveryAddress()) {
 			return;
 		}
@@ -980,7 +1014,7 @@
 	async function handleSendConfirmation(sent: boolean) {
 		if (sent) {
 			// Check if Congressional message (Phase 1: only these are verified)
-			const isCongressional = template.deliveryMethod === 'cwc';
+			const isCongressional = isCongressionalDelivery(template.deliveryMethod);
 
 			// DEMO MODE: For guest users on non-Congressional (mailto) templates,
 			// skip onboarding and go straight to celebration for viral QR code flow
@@ -1265,7 +1299,8 @@
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
 				{#if isAuthenticatedCongressional}
 					{jurisdictionLabels.legislativeBody} requires your name, email, and address for official delivery. We decrypt
-					the address only for this send.
+					the address only for this send. This route sends the campaign letter as written — it
+					carries no note of your own.
 				{:else}
 					Confirm to track this action.
 				{/if}
@@ -1407,12 +1442,12 @@
 				{#if !user}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
-							{template.deliveryMethod === 'cwc'
+							{isCongressionalDelivery(template.deliveryMethod)
 								? 'Verified-constituent delivery requires an account.'
 								: 'Track delivery and review past sends with an account.'}
 						</p>
 						<p class="mb-3 text-xs text-slate-700">
-							{template.deliveryMethod === 'cwc'
+							{isCongressionalDelivery(template.deliveryMethod)
 								? `Verified messages route through CWC with constituent-status confirmation. Account creation is free.`
 								: 'An account lets you track delivery and review past sends. Account creation is free.'}
 						</p>
@@ -1450,7 +1485,7 @@
 							Verify address
 						</button>
 					</div>
-				{:else if user && (user.trust_tier ?? 0) === 2 && template.deliveryMethod === 'cwc'}
+				{:else if user && (user.trust_tier ?? 0) === 2 && isCongressionalDelivery(template.deliveryMethod)}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
 							Identity verification enables cryptographic delivery.
@@ -1478,7 +1513,7 @@
 							Verify identity
 						</button>
 					</div>
-				{:else if user && (user.trust_tier ?? 0) === 3 && template.deliveryMethod === 'cwc'}
+				{:else if user && (user.trust_tier ?? 0) === 3 && isCongressionalDelivery(template.deliveryMethod)}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
 							Identity verified. Proof delivery is available on the next send.
@@ -2031,7 +2066,7 @@
 		templateSlug={template.slug}
 		cellId={verifiedCellId}
 		minimumTier={REQUIRED_CONGRESSIONAL_PROOF_TIER}
-		electedTarget={template.deliveryMethod === 'cwc'}
+		electedTarget={isCongressionalDelivery(template.deliveryMethod)}
 		userTrustTier={user.trust_tier ?? 1}
 		bind:showModal={showVerificationGate}
 		onverified={(data) => handleVerificationComplete(data)}
