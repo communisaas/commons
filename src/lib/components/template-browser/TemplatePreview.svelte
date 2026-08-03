@@ -7,6 +7,7 @@
 	import { isMobile } from '$lib/utils/browserUtils';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
 	import { topicHue } from '$lib/utils/topic-hue';
+	import { laneCarriesSenderText, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
 	import { PreviewContent, ActionBar } from './parts';
 
 	const componentId = 'TemplatePreview_' + Math.random().toString(36).substr(2, 9);
@@ -34,7 +35,7 @@
 		template: Template;
 		inModal?: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user?: { id: string; name: string | null; trust_tier?: number; district_code?: string; credentialHash?: string | null } | null;
+		user?: { id: string; name: string | null; trust_tier?: number; district_code?: string; verification_method?: string | null; credentialHash?: string | null } | null;
 		onScroll?: (isAtBottom: boolean, scrollProgress?: number) => void;
 		onOpenModal?: (() => void) | null;
 		onSendMessage?: (() => void) | null;
@@ -62,9 +63,21 @@
 		}
 	});
 
-	// Persist and restore personalization data across OAuth flow
+	// Does the lane this send will take deliver the words the sender types?
+	const carriesSenderText = $derived(laneCarriesSenderText(template ?? {}, user));
+
+	// Set when a note stored under a carrying lane is dropped because the lane the
+	// sender is now on cannot deliver it. Signing in on a congressional template is
+	// exactly that transition: the guest was on the mailto relay, the authenticated
+	// sender is on the proof path.
+	let discardedSenderText = $state(false);
+
+	// The one writer of the personalization blob. The OAuth round trip destroys the
+	// component, so the sender's words survive it here — but only on a lane that
+	// would actually deliver them. Writing on a non-carrying lane would re-seed a
+	// note past every guard downstream.
 	$effect(() => {
-		if (browser && personalConnectionValue) {
+		if (browser && carriesSenderText && personalConnectionValue) {
 			// Save to session storage whenever it changes
 			sessionStorage.setItem(
 				`template_${template.id}_personalization`,
@@ -120,15 +133,27 @@
 	onMount(() => {
 		// Restore personalization data if returning from OAuth
 		if (browser) {
-			const savedData = sessionStorage.getItem(`template_${template.id}_personalization`);
+			const storageKey = `template_${template.id}_personalization`;
+			const savedData = sessionStorage.getItem(storageKey);
 			if (savedData) {
 				try {
 					const parsed = JSON.parse(savedData);
-					// Only restore if data is less than 30 minutes old
-					if (parsed.timestamp && Date.now() - parsed.timestamp < 30 * 60 * 1000) {
-						personalConnectionValue = parsed.personalConnection || '';
+					const stored =
+						typeof parsed?.personalConnection === 'string' ? parsed.personalConnection : '';
+					const isFresh =
+						!!parsed?.timestamp && Date.now() - parsed.timestamp < 30 * 60 * 1000;
+
+					if (!carriesSenderText) {
+						// The lane moved under the sender. Discard the note and clear the
+						// blob so a later mount cannot resurface it — then say so, because
+						// words that vanish without a word are worse than a refusal.
+						sessionStorage.removeItem(storageKey);
+						if (stored.trim()) discardedSenderText = true;
+					} else if (isFresh) {
+						// Only restore if data is less than 30 minutes old
+						personalConnectionValue = stored;
 					} else {
-						sessionStorage.removeItem(`template_${template.id}_personalization`);
+						sessionStorage.removeItem(storageKey);
 					}
 				} catch (error) {
 					console.error('[TemplatePreview] Failed to restore personalization:', error instanceof Error ? error.message : String(error));
@@ -232,6 +257,16 @@
 				{onVerifyAddress}
 				{onVerifyIdentity}
 			/>
+
+			<!-- A note dropped because the lane changed says so; it never vanishes quietly -->
+			{#if discardedSenderText}
+				<p
+					role="alert"
+					class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+				>
+					{SENDER_TEXT_NOT_CARRIED_REASON}
+				</p>
+			{/if}
 
 			<!-- Only show ActionBar in list/modal contexts, not on page -->
 			{#if context !== 'page'}

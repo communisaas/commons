@@ -1,22 +1,19 @@
 /**
- * H6 — Single source of truth for tier-display copy.
+ * Single source of truth for tier-display copy.
  *
- * Three surfaces today render verification-tier copy:
- *   - AttestationFooter.svelte (in-app, shown above message body)
- *   - emailService.ts (mailto footer)
- *   - /v/[hash] verification page (public, staffer-facing)
+ * Every surface that names a verification class reads this module:
+ *   - the attestation carried by outgoing mail (mailto footers, both the
+ *     congressional relay lane and the direct lanes)
+ *   - the send preview the sender reads before the mail leaves
+ *   - the /v/[hash] verification page (public, staffer-facing)
  *
- * Pre-H6 each had its own phrasing:
- *   - AttestationFooter: "Verified resident, {district}"
- *   - email: tier ≥ 3 → "Verified sender · Gov ID"; ≥ 2 → "Verified resident"
- *   - /v/[hash]: method-conditional ("Address-Resolved" / "Self-Reported")
+ * Inconsistency between surfaces is itself a trust signal. A staffer who sees
+ * one class in the email and a weaker one on /v/[hash] is justifiably
+ * suspicious; a sender shown a stronger class than the one that actually left
+ * has been lied to. One module composes the copy so honesty holds in both
+ * directions.
  *
- * Inconsistency between surfaces is itself a trust signal — a staffer who
- * sees "Verified resident" in the email and "Self-Reported Constituent" on
- * the /v/[hash] page is justifiably suspicious. This helper unifies the copy
- * so honesty is consistent.
- *
- * Honesty principles (post-G5/G5r/H6):
+ * Honesty principles:
  *   - mDL/digital-credentials-api → "Address-Resolved Constituent" (postal+
  *     city+state attested by wallet, geocoded to district)
  *   - civic_api → "Self-Reported Constituent" (user-typed address, Census
@@ -26,7 +23,7 @@
  *     same epistemic class as mDL: client computed cellId from coordinates)
  *   - unknown / undefined → "Verified Constituent" (legacy fallback)
  *
- * "Unknown" is a first-class state for legacy rows that predate H1's
+ * "Unknown" is a first-class state for legacy rows that predate the
  * trust-context fields. Callers MUST distinguish unknown (display "—" or
  * omit) from "false/clean" (assert positively that the property is absent).
  */
@@ -182,4 +179,65 @@ export function formatTierEmailFooter(input: TierDisplayInput): string {
 	if (display.confidenceClass === 'postal')
 		return 'Postal-verified constituent';
 	return 'Verified constituent';
+}
+
+export interface AttestationInput {
+	/** Trust tier at send time. Null/undefined is read as tier 0. */
+	trustTier: number | null | undefined;
+	/** Verification method captured on the credential — decides the label class. */
+	method: VerificationMethod;
+	/** District code, when the surface has one loaded. Optional suffix only. */
+	districtCode?: string | null;
+	/** Active district credential hash — the record /v/[hash] resolves. */
+	credentialHash?: string | null;
+}
+
+export interface Attestation {
+	/** The one phrase the sender and the recipient both read. */
+	line: string | null;
+	/** The sender offering verifiability of themselves, never an instruction. */
+	verifyLine: string | null;
+	/** `line` + `verifyLine`, newline-joined — the whole attestation zone. */
+	block: string | null;
+}
+
+/**
+ * Compose the sender's attestation. This is the ONLY composer: the preview, the
+ * direct mailto, the batch mailto and the congressional relay footer all read
+ * its result, so what a sender is shown is byte-identical to what the recipient
+ * receives. A surface that re-derives the copy can drift into overclaiming.
+ *
+ * Line 1 stays a third-person NOUN PHRASE — it is consumed mid-sentence
+ * elsewhere ("Your message carried <line>."), where a first-person clause would
+ * read as a person mismatch.
+ *
+ * The district code is an OPTIONAL SUFFIX, never a gate: a tier-2 sender whose
+ * district code has not loaded still reads the method label — never downgraded
+ * to "Verified sender", and never upgraded past what the method proves.
+ */
+export function buildAttestation(input: AttestationInput): Attestation {
+	const tier = input.trustTier ?? 0;
+
+	let line: string | null = null;
+	let verifyLine: string | null = null;
+
+	if (tier >= 2) {
+		line = formatTierEmailFooter({ method: input.method, trustTier: tier });
+		if (typeof input.districtCode === 'string' && input.districtCode.trim() !== '') {
+			line = `${line} · ${input.districtCode}`;
+		}
+		// The verify URL is gated identically to the constituent label it backs:
+		// "Confirm I'm a real constituent" is itself a constituent claim. Emitted
+		// only when the hash resolves — the active credential hash is the record
+		// /v/[hash] looks up, and a truncated user id 404s.
+		verifyLine = input.credentialHash
+			? `Confirm I'm a real constituent: https://commons.email/v/${input.credentialHash}`
+			: null;
+	} else if (tier >= 1) {
+		line = 'Verified sender';
+	}
+
+	const block = line === null ? null : [line, verifyLine].filter(Boolean).join('\n');
+
+	return { line, verifyLine, block };
 }

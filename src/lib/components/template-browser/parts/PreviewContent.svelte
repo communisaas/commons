@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Template } from '$lib/types/template';
+	import type { Template, RecipientConfigDecisionMaker } from '$lib/types/template';
 	import {
 		ClipboardCopy,
 		ClipboardCheck,
@@ -13,44 +13,14 @@
 	import TemplateTips from '../TemplateTips.svelte';
 	import MessagePreview from '../MessagePreview.svelte';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
-	import { extractRecipientEmails } from '$lib/types/templateConfig';
-	import {
-		deriveTargetPresentation,
-		parseRecipientConfig
-	} from '$lib/utils/deriveTargetPresentation';
+	import { parseRecipientConfig, recipientEmailsFromConfig } from '$lib/types/template';
+	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { fade, slide } from 'svelte/transition';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import SourceCard from '$lib/components/template/creator/SourceCard.svelte';
 	import ResearchLog from '$lib/components/template/creator/ResearchLog.svelte';
 	import { hasCitations } from '$lib/utils/message-processing';
-
-	type PreviewDecisionMaker = {
-		name: string;
-		/** The human-readable position/title — what the reader recognises as the person's
-		 *  power ("Secretary of Transportation", "Mayor", "City Council Member"). The seed
-		 *  carries this as `role`; older data may use `title`. */
-		role?: string;
-		title?: string;
-		organization?: string;
-		/** Internal power-type taxonomy (votes / executes / shapes / funds / oversees).
-		 *  NOT shown to visitors — it reads as jargon; the human `role` is shown instead. */
-		roleCategory?: string;
-		// === "Why we reach them" — populated by the agent decision-maker-resolution
-		// pipeline, EMPTY in hand-authored seeds. Authenticated/private template
-		// data may carry them; anonymous discovery projections redact the config. ===
-		/** Specific votes / decisions / statements — the receipts (the reveal body). */
-		publicActions?: string[];
-		/** Verification provenance. */
-		provenance?: string;
-		source?: string;
-		source_url?: string;
-		recencyCheck?: string;
-		positionSourceDate?: string;
-		isAiResolved?: boolean;
-		emailVerified?: 'deliverable' | 'risky';
-		emailGrounded?: boolean;
-		emailSource?: string;
-	};
+	import { buildAttestation } from '$lib/core/identity/tier-display';
 
 	let {
 		template,
@@ -75,6 +45,7 @@
 			name: string | null;
 			trust_tier?: number;
 			district_code?: string;
+			verification_method?: string | null;
 			credentialHash?: string | null;
 		} | null;
 		onScroll: (isAtBottom: boolean, scrollProgress?: number) => void;
@@ -88,15 +59,25 @@
 		onVerifyIdentity?: () => void;
 	} = $props();
 
-	// Proof footer: what verification the message carries
+	// Proof footer: what verification the message carries. The sender reads the
+	// SAME string the recipient will receive — one composer owns it, so the
+	// preview can never name a class wider than the method proves.
 	const trustTier = $derived(user?.trust_tier ?? 0);
-	const proofLocation = $derived(trustTier >= 2 && user?.district_code ? user.district_code : null);
-	const proofLabel = $derived.by(() => {
-		if (trustTier >= 2) return 'Verified resident';
-		if (trustTier >= 1) return 'Verified sender';
-		return null;
-	});
-	const hasGovId = $derived(trustTier >= 3);
+	const attestation = $derived(
+		buildAttestation({
+			trustTier: user?.trust_tier,
+			method: user?.verification_method ?? null,
+			districtCode: user?.district_code ?? null,
+			credentialHash: user?.credentialHash ?? null
+		})
+	);
+	// The message body renderer declares a non-nullable verification_method, while
+	// the field arrives nullable from the server. Normalize at that boundary
+	// instead of widening a component this concern does not own.
+	const previewUser = $derived(
+		user ? { ...user, verification_method: user.verification_method ?? undefined } : user
+	);
+
 	// The verify URL must point at a resolvable record. Only the user's active
 	// district credentialHash resolves at /v/[hash]; a truncated user id 404s.
 	// Null when unverified → no link is rendered (see {#if proofHash}).
@@ -108,12 +89,16 @@
 	const showProofFooter = $derived(
 		context === 'page' &&
 			!!user &&
-			(!!proofLabel || !!proofHash || (trustTier >= 2 && trustTier < 3 && !!onVerifyIdentity))
+			(!!attestation.line ||
+				!!proofHash ||
+				(trustTier >= 2 && trustTier < 3 && !!onVerifyIdentity))
 	);
 
-	const recipients = $derived(extractRecipientEmails(template?.recipient_config));
+	const recipients = $derived(recipientEmailsFromConfig(template?.recipient_config));
 	const recipientConfig = $derived(parseRecipientConfig(template?.recipient_config));
-	const decisionMakers = $derived<PreviewDecisionMaker[]>(recipientConfig?.decisionMakers ?? []);
+	const decisionMakers = $derived<RecipientConfigDecisionMaker[]>(
+		recipientConfig?.decisionMakers ?? []
+	);
 
 	// When all DMs share the same org, hoist it to the header instead of repeating per-row
 	const sharedOrg = $derived.by(() => {
@@ -144,8 +129,8 @@
 	// becomes a toggle when it has a WHY body (the honest-absent gate); seed rows, which
 	// carry no why-fields, stay byte-identical to a plain identity row.
 	let expandedWhyKey = $state<string | null>(null);
-	const dmKey = (dm: PreviewDecisionMaker) => dm.name + (dm.role ?? dm.title ?? '');
-	const dmHasWhy = (dm: PreviewDecisionMaker) => !!dm.publicActions?.length;
+	const dmKey = (dm: RecipientConfigDecisionMaker) => dm.name + (dm.role ?? dm.title ?? '');
+	const dmHasWhy = (dm: RecipientConfigDecisionMaker) => !!dm.publicActions?.length;
 	function toggleWhy(key: string, headerEl?: HTMLElement) {
 		const opening = expandedWhyKey !== key;
 		expandedWhyKey = opening ? key : null;
@@ -434,7 +419,7 @@
 	<MessagePreview
 		preview={template.message_body}
 		{template}
-		{user}
+		user={previewUser}
 		{context}
 		{onScroll}
 		onscrollStateChange={onScrollStateChange}
@@ -480,16 +465,12 @@
 		<div class="proof-footer mt-8">
 			<div class="mb-4 h-px bg-slate-300/50"></div>
 			<div class="flex items-baseline gap-1.5 text-[13px]">
-				{#if proofLabel}
-					<span class="font-medium text-emerald-700">{proofLabel}</span>
-					{#if proofLocation}
-						<span class="text-slate-300">·</span>
-						<span class="text-slate-600">{proofLocation}</span>
-					{/if}
-					{#if hasGovId}
-						<span class="text-slate-300">·</span>
-						<span class="text-slate-500">Gov ID</span>
-					{/if}
+				<!-- One line, one composer: the district and the government-credential
+				     fact are already inside the label the recipient receives. -->
+				{#if attestation.line}
+					<span class="font-medium text-emerald-700" data-testid="attestation-line"
+						>{attestation.line}</span
+					>
 				{/if}
 			</div>
 			{#if proofHash}

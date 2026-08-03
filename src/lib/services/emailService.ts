@@ -16,9 +16,11 @@
 import type { EmailFlowTemplate } from '$lib/types/template';
 import type { HeaderTemplate } from '$lib/types/any-replacements';
 import type { EmailServiceUser } from '$lib/types/user';
-import { extractRecipientEmails as _extractRecipientEmails } from '$lib/types/templateConfig';
 import { resolveTemplate } from '$lib/utils/templateResolver';
-import { formatTierEmailFooter } from '$lib/core/identity/tier-display';
+// The stored template vocabulary. Distinct from `EmailFlowResult.deliveryMethod`
+// below, which records how one send actually left the machine.
+import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
+import { buildAttestation } from '$lib/core/identity/tier-display';
 // Confirmation token generation is server-only (HMAC + JWT_SECRET).
 // Handled via server endpoint, not client-side mailto generation.
 
@@ -40,6 +42,12 @@ export interface EmailFlowResult {
 
 	/** Generated mailto URL if ready to send */
 	mailtoUrl?: string;
+
+	/**
+	 * Sender-visible copy of the same message `mailtoUrl` carries, produced by
+	 * the same assembly — never rebuilt by a surface.
+	 */
+	messageText?: string;
 
 	/** Next required action in the flow */
 	nextAction: 'auth' | 'address' | 'email';
@@ -128,7 +136,12 @@ export interface EmailLaunchResult {
 export function analyzeEmailFlow(
 	template: EmailFlowTemplate | HeaderTemplate,
 	user: EmailServiceUser | null,
-	options?: { trustTier?: number }
+	options?: {
+		trustTier?: number;
+		personalConnection?: string;
+		/** Forwarded verbatim — see `generateMailtoUrl`, which owns the semantics. */
+		attestation?: { districtCode?: string | null };
+	}
 ): EmailFlowResult {
 	try {
 		// Generate analytics metadata
@@ -154,7 +167,7 @@ export function analyzeEmailFlow(
 		}
 
 		// Guests can access ALL templates — congressional goes through mailto relay
-		const isCongressional = template.deliveryMethod === 'cwc';
+		const isCongressional = isCongressionalDelivery(template.deliveryMethod);
 		if (!user) {
 			// Guests proceed to mailto generation for all templates.
 			// Congressional templates use congress@commons.email relay.
@@ -180,7 +193,11 @@ export function analyzeEmailFlow(
 		}
 
 		// Ready to send email
-		const mailtoResult = generateMailtoUrl(template, user, { trustTier });
+		const mailtoResult = generateMailtoUrl(template, user, {
+			trustTier,
+			personalConnection: options?.personalConnection,
+			attestation: options?.attestation
+		});
 		if (mailtoResult.error) {
 			return {
 				requiresAuth: false,
@@ -214,6 +231,7 @@ export function analyzeEmailFlow(
 			requiresAuth: false,
 			requiresAddress: false,
 			mailtoUrl: mailtoResult.url,
+			messageText: mailtoResult.messageText,
 			nextAction: 'email',
 			verified: isDistrictVerified,
 			deliveryMethod,
@@ -237,11 +255,20 @@ export function analyzeEmailFlow(
  */
 interface MailtoUrlResult {
 	url?: string;
+	/** Sender-visible copy of the same message the URL carries. */
+	messageText?: string;
 	error?: {
 		code: string;
 		message: string;
 		details?: unknown;
 	};
+}
+
+/** Project the shared assembly result onto this function's legacy result shape. */
+function toMailtoUrlResult(assembly: MailtoAssembly): MailtoUrlResult {
+	return assembly.ok
+		? { url: assembly.url, messageText: assembly.messageText }
+		: { error: { code: assembly.code, message: assembly.message } };
 }
 
 /**
@@ -262,6 +289,119 @@ export function encodeMailboxForMailto(mailbox: string): string {
 }
 
 /**
+ * The practical ceiling on a `mailto:` handoff. One limit for every lane — a
+ * per-lane copy is a per-lane behavior the moment one of them drifts.
+ */
+export const MAILTO_URL_MAX_LENGTH = 8000;
+
+/**
+ * Ordered content zones of an outgoing message.
+ *
+ * Order is the contract: opener → body → rule → (metadata, attestation). Which
+ * lane fills which zone is the caller's decision; how the zones become a message
+ * is this module's.
+ *
+ * There is deliberately no zone for the sender's personal connection: that text
+ * belongs at the author's placeholder inside the body, which the resolver owns.
+ * A zone here would be a second, positionally-wrong carriage for the same input.
+ */
+export interface MailtoZones {
+	opener?: string;
+	body: string;
+	/** Routing lines the inbound mail relay parses, e.g. `[Template: …]` / `[From: …]`. */
+	metadata?: string;
+	/** Verification text produced by the shared attestation builder — never composed here. */
+	attestation?: string;
+}
+
+export interface MailtoAssemblyInput {
+	recipients: string[];
+	subject: string;
+	zones: MailtoZones;
+}
+
+/**
+ * A discriminated result, so an unhandled failure is a compile error at every
+ * call site rather than a silent dead click.
+ */
+export type MailtoAssembly =
+	| { ok: true; url: string; messageText: string }
+	| {
+			ok: false;
+			code: 'NO_RECIPIENTS' | 'EMPTY_MESSAGE' | 'URL_TOO_LONG';
+			message: string;
+			messageText: string;
+	  };
+
+/**
+ * Assemble one outgoing message.
+ *
+ * The URL the recipient receives and the text the sender is shown come from a
+ * single construction here. Rebuilding either one anywhere else re-opens the
+ * drift this function exists to close.
+ */
+export function assembleMailto(input: MailtoAssemblyInput): MailtoAssembly {
+	const blocks: string[] = [];
+	for (const zone of [input.zones.opener, input.zones.body]) {
+		const trimmed = zone?.trim();
+		if (trimmed) blocks.push(trimmed);
+	}
+
+	const footerLines: string[] = [];
+	for (const line of [input.zones.metadata, input.zones.attestation]) {
+		const trimmed = line?.trim();
+		if (trimmed) footerLines.push(trimmed);
+	}
+	if (footerLines.length > 0) {
+		blocks.push('---');
+		blocks.push(footerLines.join('\n'));
+	}
+
+	const bodyText = blocks.join('\n\n');
+	const subject = input.subject.trim();
+
+	// The sender-visible string, built once. Every failure below still carries it:
+	// a blocked send must still be able to show what it would have sent.
+	const messageText = subject ? `Subject: ${subject}\n\n${bodyText}` : bodyText;
+
+	const recipients = input.recipients.filter((recipient) => recipient && recipient.trim());
+	if (recipients.length === 0) {
+		return {
+			ok: false,
+			code: 'NO_RECIPIENTS',
+			message: 'No recipient address available for this message.',
+			messageText
+		};
+	}
+
+	if (bodyText === '' && subject === '') {
+		return {
+			ok: false,
+			code: 'EMPTY_MESSAGE',
+			message: 'This message has no subject and no body.',
+			messageText
+		};
+	}
+
+	// Each mailbox is encoded independently while the comma separator stays
+	// literal, so stored address data can never inject `?bcc=`, `&body=`, or a
+	// fragment into the URI's header section.
+	const url = `mailto:${recipients.map(encodeMailboxForMailto).join(',')}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyText)}`;
+
+	if (url.length > MAILTO_URL_MAX_LENGTH) {
+		return {
+			ok: false,
+			code: 'URL_TOO_LONG',
+			message:
+				'This message is too long to hand off to an email app. Shorten it, or copy it and paste it into your mail client.',
+			messageText
+		};
+	}
+
+	return { ok: true, url, messageText };
+}
+
+/**
  * Generate Mailto URL for Template
  *
  * Creates a properly formatted mailto URL with resolved template content.
@@ -269,6 +409,8 @@ export function encodeMailboxForMailto(mailbox: string): string {
  *
  * @param template - The email template to generate URL for
  * @param user - User context for template personalization
+ * @param options - Lane inputs: sender tier, the sender's own words, and whether
+ *   this lane attests (see `options.attestation`)
  * @returns MailtoUrlResult with URL or error details
  *
  * @example
@@ -284,11 +426,32 @@ export function encodeMailboxForMailto(mailbox: string): string {
 export function generateMailtoUrl(
 	template: EmailFlowTemplate | HeaderTemplate,
 	user: EmailServiceUser | null,
-	options?: { trustTier?: number }
+	options?: {
+		trustTier?: number;
+		personalConnection?: string;
+		/**
+		 * Whether this lane attests, and with what canonical district.
+		 *
+		 * Passing this object is the CALLER stating that its surface showed the
+		 * sender the proof footer; what the footer then says is the shared
+		 * composer's decision, never the caller's. Omitting it keeps the direct
+		 * lane silent, so a surface that renders no footer never emits a
+		 * verification claim the sender was not shown.
+		 *
+		 * `districtCode` must be a canonical district code the caller already
+		 * holds. `EmailServiceUser` declares none, and the ephemeral delivery
+		 * address is a different value in a different format — a district is
+		 * claimed only when it is passed, never synthesized here.
+		 */
+		attestation?: { districtCode?: string | null };
+	}
 ): MailtoUrlResult {
 	try {
-		// Resolve template with user context
-		const resolved = resolveTemplate(template, user);
+		// Resolve template with user context. The sender's own words are handed to
+		// the resolver, which is the only place that knows where the author put them.
+		const resolved = resolveTemplate(template, user, {
+			personalConnection: options?.personalConnection
+		});
 
 		// Validate resolved content
 		if (!resolved.subject && !resolved.body) {
@@ -301,91 +464,56 @@ export function generateMailtoUrl(
 			};
 		}
 
-		// URL encode components safely
-		const subject = encodeURIComponent(resolved.subject || '');
-		const body = encodeURIComponent(resolved.body || '');
+		const trustTier = options?.trustTier ?? 0;
+
+		// Proof footer — what the recipient sees, composed ONCE for every lane. The
+		// shared composer owns every tier phrase, so this line is byte-identical to
+		// the one the sender read in the preview and to the class /v/[hash] shows.
+		// `verification_method` is read off the field `EmailServiceUser` actually
+		// declares: reading it un-cast makes a future rename a typecheck error
+		// instead of a silent collapse to the generic label. The district code is
+		// whatever the caller passed and nothing else — a lane holding no canonical
+		// code claims none rather than inventing a second source.
+		const attestation = buildAttestation({
+			trustTier,
+			method: user?.verification_method ?? null,
+			districtCode: options?.attestation?.districtCode ?? null,
+			credentialHash: user?.credentialHash ?? null
+		});
 
 		// Congressional routing takes precedence
 		if (resolved.isCongressional && resolved.routingEmail) {
-			const enhancedSubject = resolved.subject || template.title || '';
-
-			const encodedSubject = encodeURIComponent(enhancedSubject);
-
-			// Add metadata footer to help mail server identify template
-			const trustTier = options?.trustTier ?? 0;
-			let footer =
-				`[Template: ${template.slug || template.id}]\n` +
-				`[From: ${user?.email || 'Guest'}]`;
-
-			// Proof footer — what the recipient sees.
-			// H6 — use the tier-display helper so the email-body proof line is
-			// consistent with /v/[hash] and AttestationFooter. The helper takes
-			// `method` when available and produces an honest tier-class label;
-			// pre-H6 the email said "Verified sender · Gov ID" or "Verified
-			// resident" without distinguishing mDL vs civic_api, which over-
-			// claimed for self-reported users.
-			if (trustTier >= 2) {
-				const proofLine = formatTierEmailFooter({
-					method: (user as { verificationMethod?: string })?.verificationMethod,
-					trustTier,
-				});
-				footer += `\n${proofLine}`;
-				// Only emit the verify URL when it resolves: the active credential
-				// hash is the record /v/[hash] looks up. A truncated user id 404s.
-				if (user?.credentialHash) {
-					footer += `\ncommons.email/v/${user.credentialHash}`;
-				}
-			} else if (trustTier >= 1) {
-				footer += '\nVerified sender';
-			}
-
-			const enhancedBody =
-				resolved.body +
-				'\n\n---\n' +
-				footer;
-
-			const encodedBody = encodeURIComponent(enhancedBody);
-
-			// Use congress@commons.email for certified delivery
-			const recipientEmail = 'congress@commons.email';
-			const url = `mailto:${recipientEmail}?subject=${encodedSubject}&body=${encodedBody}`;
-
-			// Validate URL length (mailto URLs have practical limits)
-			if (url.length > 8000) {
-				return {
-					error: {
-						code: 'URL_TOO_LONG',
-						message: 'Generated mailto URL exceeds maximum length',
-						details: { urlLength: url.length }
+			return toMailtoUrlResult(
+				assembleMailto({
+					// congress@commons.email is the certified-delivery relay.
+					recipients: ['congress@commons.email'],
+					subject: resolved.subject || template.title || '',
+					zones: {
+						body: resolved.body,
+						// Routing lines the inbound relay parses — each on its own line.
+						metadata:
+							`[Template: ${template.slug || template.id}]\n` +
+							`[From: ${user?.email || 'Guest'}]`,
+						attestation: attestation.block ?? undefined
 					}
-				};
-			}
-
-			return { url };
+				})
+			);
 		}
 
-		// Direct recipient delivery
-		// Encode each mailbox independently while retaining the comma separator.
-		// A stored address must never be able to inject `?bcc=`, `&body=`, or a
-		// fragment into the mailto URI's header section.
-		const recipients = resolved.recipients.map(encodeMailboxForMailto).join(',');
-
-		const bodyEncoded = encodeURIComponent(resolved.body || '');
-
-		const url = `mailto:${recipients}?subject=${subject}&body=${bodyEncoded}`;
-
-		// Validate URL length
-		if (url.length > 8000) {
-			return {
-				error: {
-					code: 'URL_TOO_LONG',
-					message: 'Generated mailto URL exceeds maximum length',
-					details: { urlLength: url.length }
+		// Direct recipient delivery. The footer rides the same rule separator the
+		// relay lane uses and carries the same composer block — but only for a lane
+		// that opted in, because a surface showing the sender no footer must not put
+		// a verification claim about them in front of a recipient.
+		return toMailtoUrlResult(
+			assembleMailto({
+				recipients: resolved.recipients,
+				subject: resolved.subject,
+				zones: {
+					body: resolved.body,
+					attestation: options?.attestation ? (attestation.block ?? undefined) : undefined
 				}
-			};
-		}
-
-		return { url };
+			})
+		);
 	} catch (error) {
 		return {
 			error: {
@@ -395,59 +523,6 @@ export function generateMailtoUrl(
 			}
 		};
 	}
-}
-
-/**
- * Generate a personalized mailto URL for the Power Landscape compose pane.
- * Concatenates non-empty zones into a single email body.
- *
- * Zone assembly: opener + personal input + template body + attestation
- * Empty zones are skipped — no blank lines in the final email.
- */
-export function generatePersonalizedMailto(params: {
-	recipient: { name: string; email: string; title?: string; organization?: string };
-	subject: string;
-	opener: string;
-	personalInput?: string;
-	templateBody: string;
-	attestation?: string;
-}): { url: string } | { error: { code: string; message: string } } {
-	const bodyParts: string[] = [];
-
-	// Zone 1: Accountability opener
-	if (params.opener.trim()) {
-		bodyParts.push(params.opener.trim());
-	}
-
-	// Zone 2: Personal input (only if non-empty)
-	if (params.personalInput?.trim()) {
-		bodyParts.push(params.personalInput.trim());
-	}
-
-	// Zone 3: Template body
-	if (params.templateBody.trim()) {
-		bodyParts.push(params.templateBody.trim());
-	}
-
-	// Zone 4: Attestation (separated by rule)
-	if (params.attestation?.trim()) {
-		bodyParts.push('---');
-		bodyParts.push(params.attestation.trim());
-	}
-
-	const body = bodyParts.join('\n\n');
-	const url = `mailto:${encodeMailboxForMailto(params.recipient.email)}?subject=${encodeURIComponent(params.subject)}&body=${encodeURIComponent(body)}`;
-
-	if (url.length > 8000) {
-		return {
-			error: {
-				code: 'URL_TOO_LONG',
-				message: 'Email content too long for mailto URL. Try shortening your message.'
-			}
-		};
-	}
-
-	return { url };
 }
 
 // =============================================================================
@@ -483,7 +558,7 @@ export function validateEmailFlow(
 	}
 
 	// User validation for congressional templates
-	if (template.deliveryMethod === 'cwc' && user) {
+	if (isCongressionalDelivery(template.deliveryMethod) && user) {
 		if (!user.street)
 			errors.push({
 				code: 'MISSING_STREET',
@@ -537,7 +612,7 @@ export function getEmailFlowAnalytics(
 		flowStage = 'guest_send';
 		// Guests are valid mailto senders — no blocker
 	} else if (
-		template.deliveryMethod === 'cwc' &&
+		isCongressionalDelivery(template.deliveryMethod) &&
 		!(user.street && user.city && user.state && user.zip)
 	) {
 		flowStage = 'address_collection_required';

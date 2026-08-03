@@ -51,12 +51,15 @@
 	let cardEl = $state<HTMLElement>();
 
 	const count = $derived(recipientNames.length);
+	// These are named people, and the count counts people — several may share one
+	// staff inbox, so it is not a count of mailboxes. "Decision-makers" is what the
+	// number actually measures; "recipients" would promise an address apiece.
 	const who = $derived(
 		count === 0
-			? 'your recipient'
+			? 'your decision-maker'
 			: count <= 2
 				? recipientNames.join(' and ')
-				: `${count} recipients`
+				: `${count} decision-makers`
 	);
 
 	// Guard the double-click race: confirmSent() calls onConfirmSent() (which now also
