@@ -3,15 +3,12 @@ import type { RequestHandler } from './$types';
 import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	MAX_TEMPLATE_SLUG_CODE_POINTS,
+	isCanonicalTemplateSlug
+} from '$convex/lib/templateInputBudget';
 
-const MAX_TEMPLATE_SLUG_BYTES = 400;
 const MAX_SLUG_LOOKUPS = 6;
-const encoder = new TextEncoder();
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-function validSlug(value: string): boolean {
-	return SLUG_PATTERN.test(value) && encoder.encode(value).byteLength <= MAX_TEMPLATE_SLUG_BYTES;
-}
 
 /** Generate at most five bounded advisory alternatives; create remains the uniqueness authority. */
 function generateSuggestions(baseSlug: string): string[] {
@@ -30,16 +27,16 @@ function generateSuggestions(baseSlug: string): string[] {
 		candidates.push(`${baseSlug}-${suffix}`);
 	}
 
-	return [...new Set(candidates)].filter(validSlug).slice(0, MAX_SLUG_LOOKUPS - 1);
+	return [...new Set(candidates)].filter(isCanonicalTemplateSlug).slice(0, MAX_SLUG_LOOKUPS - 1);
 }
 
 export const GET: RequestHandler = async ({ url }) => {
 	const slug = url.searchParams.get('slug') ?? '';
-	if (!validSlug(slug)) {
+	if (!isCanonicalTemplateSlug(slug)) {
 		return json(
 			{
 				success: false,
-				error: `Slug must be lowercase letters, numbers, and hyphens (${MAX_TEMPLATE_SLUG_BYTES} UTF-8 bytes max)`
+				error: `Slug must be lowercase letters, numbers, and hyphens (${MAX_TEMPLATE_SLUG_CODE_POINTS} characters max)`
 			},
 			{ status: 400, headers: { 'Cache-Control': 'no-store' } }
 		);

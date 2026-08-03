@@ -31,8 +31,8 @@ import type {
 	AuthoringIntent,
 	ResolvedDecisionMaker
 } from '$lib/components/org/os/orgOS.svelte';
-import type { ReasoningStage, StudioSource } from '$lib/components/org/studio/types';
-import type { GeoScope } from '$lib/core/agents/types';
+import type { ReasoningStage } from '$lib/components/org/studio/types';
+import type { GeoScope, Source } from '$lib/core/agents/types';
 import type { SourceEvidenceUpdate } from '$lib/core/agents/agents/message-writer';
 import type { ResolutionStopReason } from '$lib/types/studio-process';
 import {
@@ -42,38 +42,20 @@ import {
 	type ActiveMessageJob,
 	type EncryptedMessageJobResult
 } from '$lib/core/agents/message-job-recovery';
-import { displayGeoScope } from '$lib/core/location/location-resolver';
-import { getStateName, US_STATES } from '$lib/core/location/state-codes';
+import { inferGeoScope } from '$lib/core/geo-scope-inference';
+import {
+	buildMessageGenerationPayload,
+	deriveTopicsFromSubject,
+	type MessageGenerationPayload
+} from '$lib/utils/authoring-inputs';
 import { processDecisionMakers } from '$lib/utils/decision-maker-processing';
 
 type ResolvedList = ResolvedDecisionMaker[];
 
-type ScopeEvidenceSource = 'resolved-targets' | 'audience-guidance' | 'fallback';
-
-type ScopeEvidence = {
-	scope: GeoScope;
-	label: string;
-	basis: string;
-	source: ScopeEvidenceSource;
-};
-
-type MessageGenerationPayload = {
-	subject_line: string;
-	core_message: string;
-	topics: string[];
-	decision_makers: Array<{
-		name: string;
-		title: string;
-		organization: string;
-	}>;
-	geographic_scope: GeoScope;
-	verbose: true;
-};
-
 type MessageGenerationResult = {
 	message?: string;
-	sources?: StudioSource[];
-	evaluatedSources?: StudioSource[];
+	sources?: Source[];
+	evaluatedSources?: Source[];
 };
 
 type RecoverableMessageJob = {
@@ -84,12 +66,6 @@ type RecoverableMessageJob = {
 	phase?: string | null;
 	encryptedResult?: unknown;
 	errorMessage?: string | null;
-};
-
-type LocalityHint = {
-	patterns: string[];
-	locality: string;
-	state: string;
 };
 
 type NormalizedSourceEvidence = {
@@ -107,171 +83,6 @@ type ResolutionStopBoundary = {
 	reason: ResolutionStopReason;
 	detail: string;
 };
-
-const STATE_CODES = new Set(Object.values(US_STATES));
-const US_LOCALITY_HINTS: LocalityHint[] = [
-	{ patterns: ['san francisco', 'sf'], locality: 'San Francisco', state: 'CA' },
-	{ patterns: ['new york city', 'nyc'], locality: 'New York', state: 'NY' },
-	{ patterns: ['los angeles', 'la'], locality: 'Los Angeles', state: 'CA' },
-	{ patterns: ['chicago'], locality: 'Chicago', state: 'IL' },
-	{ patterns: ['washington dc', 'washington, dc', 'dc'], locality: 'Washington DC', state: 'DC' },
-	{ patterns: ['seattle'], locality: 'Seattle', state: 'WA' },
-	{ patterns: ['portland'], locality: 'Portland', state: 'OR' },
-	{ patterns: ['boston'], locality: 'Boston', state: 'MA' },
-	{ patterns: ['philadelphia', 'philly'], locality: 'Philadelphia', state: 'PA' },
-	{ patterns: ['atlanta'], locality: 'Atlanta', state: 'GA' }
-];
-
-/** Derive search topics from the subject line (same heuristic STUDIO used). */
-function deriveTopics(subjectLine: string): string[] {
-	const topics = subjectLine
-		.toLowerCase()
-		.split(/[^a-z0-9]+/)
-		.filter((t) => t.length > 3)
-		.slice(0, 4);
-	return topics.length > 0 ? topics : [subjectLine.slice(0, 60)];
-}
-
-function phrasePattern(phrase: string): RegExp {
-	const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i');
-}
-
-function textContainsPhrase(text: string, phrase: string): boolean {
-	return phrasePattern(phrase).test(text);
-}
-
-function stateScope(state: string): GeoScope {
-	const display = getStateName(state);
-	return {
-		type: 'subnational',
-		country: 'US',
-		subdivision: `US-${state}`,
-		displayName: `${display}, United States`
-	};
-}
-
-function localityScope(locality: string, state?: string): GeoScope {
-	const stateName = state ? getStateName(state) : null;
-	return {
-		type: 'subnational',
-		country: 'US',
-		subdivision: state ? `US-${state}` : undefined,
-		locality,
-		displayName: stateName
-			? `${locality}, ${stateName}, United States`
-			: `${locality}, United States`
-	};
-}
-
-function extractState(text: string): string | null {
-	for (const [name, code] of Object.entries(US_STATES)) {
-		if (textContainsPhrase(text, name)) return code;
-	}
-	const uppercaseMatches = text.match(/\b[A-Z]{2}\b/g) ?? [];
-	for (const code of uppercaseMatches) {
-		if (STATE_CODES.has(code)) return code;
-	}
-	return null;
-}
-
-function extractLocality(text: string): { locality: string; state?: string } | null {
-	for (const hint of US_LOCALITY_HINTS) {
-		if (hint.patterns.some((pattern) => textContainsPhrase(text, pattern))) {
-			return { locality: hint.locality, state: hint.state };
-		}
-	}
-
-	const patterns = [
-		/City of ([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)/,
-		/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+(?:City Council|Board of Supervisors|Town Council|Village Board|Borough Council)/,
-		/([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)\s+County/
-	];
-	for (const pattern of patterns) {
-		const match = text.match(pattern);
-		if (match?.[1]) return { locality: match[1], state: extractState(text) ?? undefined };
-	}
-
-	return null;
-}
-
-function evidence(scope: GeoScope, basis: string, source: ScopeEvidenceSource): ScopeEvidence {
-	return {
-		scope,
-		label: displayGeoScope(scope),
-		basis,
-		source
-	};
-}
-
-/** Heuristic geographic scope. The UI marks this as partial, never as a hard jurisdiction resolver. */
-function inferScope(intent: AuthoringIntent, decisionMakers: ResolvedList): ScopeEvidence {
-	if (decisionMakers.length > 0) {
-		const orgs = decisionMakers.map((dm) => dm.organization || '').filter(Boolean);
-		const localities = orgs
-			.map(extractLocality)
-			.filter((l): l is { locality: string; state?: string } => l !== null);
-		if (localities.length === orgs.length) {
-			const localKeys = new Set(localities.map((l) => `${l.locality}:${l.state ?? ''}`));
-			if (localKeys.size === 1) {
-				const local = localities[0];
-				return evidence(
-					localityScope(local.locality, local.state),
-					'Inferred from the common locality across resolved decision-maker organizations.',
-					'resolved-targets'
-				);
-			}
-		}
-
-		const states = orgs.map(extractState).filter((state): state is string => state !== null);
-		if (states.length === orgs.length) {
-			const uniqueStates = [...new Set(states)];
-			if (uniqueStates.length === 1) {
-				return evidence(
-					stateScope(uniqueStates[0]),
-					'Inferred from the common state across resolved decision-maker organizations.',
-					'resolved-targets'
-				);
-			}
-		}
-
-		const federalPatterns =
-			/\b(U\.?S\.?|United States|Congress|Senate|House of Representatives|Federal)\b/i;
-		if (orgs.length > 0 && orgs.every((org) => federalPatterns.test(org))) {
-			return evidence(
-				{ type: 'nationwide', country: 'US', displayName: 'United States' },
-				'Inferred from federal/national decision-maker organizations.',
-				'resolved-targets'
-			);
-		}
-	}
-
-	if (intent.audienceGuidance.trim()) {
-		const guidance = intent.audienceGuidance.trim();
-		const guidedLocality = extractLocality(guidance);
-		if (guidedLocality) {
-			return evidence(
-				localityScope(guidedLocality.locality, guidedLocality.state),
-				'Inferred from operator audience guidance; resolved targets remain the stronger evidence.',
-				'audience-guidance'
-			);
-		}
-		const guidedState = extractState(guidance);
-		if (guidedState) {
-			return evidence(
-				stateScope(guidedState),
-				'Inferred from operator audience guidance; resolved targets remain the stronger evidence.',
-				'audience-guidance'
-			);
-		}
-	}
-
-	return evidence(
-		{ type: 'nationwide', country: 'US', displayName: 'United States' },
-		'No common local/state scope was inferable; source discovery used the explicit nationwide US fallback.',
-		'fallback'
-	);
-}
 
 function buildResolutionStopBoundary(droppedTargetCount: number): ResolutionStopBoundary {
 	if (droppedTargetCount > 0) {
@@ -303,7 +114,7 @@ async function runResolve(
 	os.setStage(id, 'resolve', 'Resolve');
 	os.setStatus(id, 'resolving');
 
-	const topics = deriveTopics(intent.subjectLine);
+	const topics = deriveTopicsFromSubject(intent.subjectLine);
 
 	const res = await fetch('/api/agents/stream-decision-makers', {
 		method: 'POST',
@@ -425,19 +236,18 @@ function buildMessagePayload(
 	decisionMakers: ResolvedList,
 	scope: GeoScope
 ): MessageGenerationPayload {
-	const topics = deriveTopics(intent.subjectLine);
-	return {
-		subject_line: intent.subjectLine,
-		core_message: intent.coreMessage,
-		topics,
-		decision_makers: decisionMakers.map((d) => ({
-			name: d.name,
-			title: d.title,
-			organization: d.organization
-		})),
-		geographic_scope: scope,
-		verbose: true
-	};
+	// STUDIO runs no voice-extraction step, so the voice sample stays empty —
+	// never fabricated — while the operator's hand-typed core message IS their
+	// raw input, grounding the writer's human-voice block in their own words.
+	return buildMessageGenerationPayload({
+		subjectLine: intent.subjectLine,
+		coreMessage: intent.coreMessage,
+		topics: deriveTopicsFromSubject(intent.subjectLine),
+		decisionMakers,
+		voiceSample: '',
+		rawInput: intent.coreMessage,
+		geographicScope: scope
+	});
 }
 
 function numberFromEvent(value: unknown): number | null {
@@ -599,7 +409,7 @@ async function runMessage(
 	os.setStage(id, 'ground', 'Ground');
 	os.setStatus(id, 'grounding');
 
-	const scope = inferScope(intent, decisionMakers);
+	const scope = inferGeoScope({ decisionMakers, audienceGuidance: intent.audienceGuidance });
 	const payload = buildMessagePayload(intent, decisionMakers, scope.scope);
 	const inputHash = await computeMessageInputHash(payload);
 	const jobId = crypto.randomUUID();
@@ -629,7 +439,10 @@ async function runMessage(
 			...payload,
 			job_id: jobId,
 			input_hash: inputHash,
-			recovery_public_key_jwk: recoveryPublicKeyJwk
+			recovery_public_key_jwk: recoveryPublicKeyJwk,
+			// Transport-only: selects verbose thought filtering for the stream and
+			// must never enter the hashed payload above.
+			verbose: true
 		})
 	});
 

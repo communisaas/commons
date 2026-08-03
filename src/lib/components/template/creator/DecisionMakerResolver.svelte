@@ -7,8 +7,9 @@
 
 	import {
 		processDecisionMakers,
-		extractRecipientEmails
+		collectRecipientEmails
 	} from '$lib/utils/decision-maker-processing';
+	import { buildTopics, buildVoiceSample } from '$lib/utils/authoring-inputs';
 	import { parseSSEStream } from '$lib/utils/sse-stream';
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
 	import DecisionMakerResults from './DecisionMakerResults.svelte';
@@ -49,36 +50,6 @@
 	};
 	let pendingIdentities = $state<PendingIdentity[]>([]);
 	let identitiesRevealed = $state(false);
-
-	/**
-	 * Build topics array with robust fallback chain
-	 * 1. Use topics array if populated with valid entries
-	 * 2. Fall back to domain (lowercased)
-	 * 3. Ultimate fallback - empty array (domain carries the signal now)
-	 */
-	function buildTopics(): string[] {
-		if (Array.isArray(formData.objective.topics) && formData.objective.topics.length > 0) {
-			const valid = formData.objective.topics.filter((t) => t && t.trim());
-			if (valid.length > 0) return valid;
-		}
-		if (formData.objective.domain && formData.objective.domain.trim()) {
-			return [formData.objective.domain.toLowerCase().trim()];
-		}
-		return [];
-	}
-
-	/**
-	 * Build voice sample with fallback chain
-	 * Prefer AI-extracted voiceSample, fall back to rawInput, then description
-	 */
-	function buildVoiceSample(): string {
-		return (
-			formData.objective.voiceSample ||
-			formData.objective.rawInput ||
-			formData.objective.description ||
-			''
-		);
-	}
 
 	/** Normalize a string for fuzzy matching (lowercase, strip leading "the", trim). */
 	function norm(s: string): string {
@@ -122,8 +93,8 @@
 				thoughts = [`Starting from: ${formData.objective.audienceGuidance}`];
 			}
 
-			const topics = buildTopics();
-			const voiceSample = buildVoiceSample();
+			const topics = buildTopics(formData.objective);
+			const voiceSample = buildVoiceSample(formData.objective);
 
 			const response = await fetch('/api/agents/stream-decision-makers', {
 				method: 'POST',
@@ -440,7 +411,7 @@
 		}
 
 		// Ensure recipientEmails is updated from decision-makers
-		formData.audience.recipientEmails = extractRecipientEmails(
+		formData.audience.recipientEmails = collectRecipientEmails(
 			formData.audience.decisionMakers,
 			formData.audience.customRecipients,
 			formData.audience.includesCongress

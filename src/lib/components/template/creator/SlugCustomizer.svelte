@@ -3,6 +3,10 @@
 	import { fade, fly } from 'svelte/transition';
 	import { page } from '$app/stores';
 	import type { TemplateCreationContext } from '$lib/types/template';
+	import {
+		canonicalizeTemplateSlug,
+		isCanonicalTemplateSlug
+	} from '$convex/lib/templateInputBudget';
 
 	interface Props {
 		title?: string;
@@ -27,64 +31,15 @@
 	let customSlug = $state('');
 	let showCustomInput = $state(false);
 
-	// Generate slug from title
-	function slugify(text: string): string {
-		return text
-			.toString()
-			.toLowerCase()
-			.replace(/\s+/g, '-')
-			.replace(/[^\w-]+/g, '')
-			.replace(/--+/g, '-')
-			.replace(/^-+/, '')
-			.replace(/-+$/, '');
-	}
-
-	// Generate creative variations
-	function generateSuggestions(baseSlug: string): string[] {
-		const variations = [];
-
-		// Action-oriented prefixes
-		const actionPrefixes = ['act', 'support', 'defend', 'protect', 'save', 'help'];
-		const randomPrefix = actionPrefixes[Math.floor(Math.random() * actionPrefixes.length)];
-		variations.push(`${randomPrefix}-${baseSlug}`);
-
-		// Year suffix for templates
-		const year = new Date().getFullYear();
-		variations.push(`${baseSlug}-${year}`);
-
-		// Shortened version
-		const words = baseSlug.split('-');
-		if (words.length > 3) {
-			variations.push(words.slice(0, 3).join('-'));
-		}
-
-		// Acronym version if multi-word
-		if (words.length > 1) {
-			const acronym = words.map((w) => w[0]).join('');
-			variations.push(`${acronym}-template`);
-		}
-
-		return variations.slice(0, 3);
-	}
-
 	// Check slug availability
 	async function checkAvailability(slugToCheck: string) {
 		__isChecking = true;
 		isAvailable = null;
 
 		try {
-			// Convert channelId to deliveryMethod for API
-			const deliveryMethod =
-				context?.channelId === 'certified'
-					? 'cwc'
-					: context?.channelId === 'cwc'
-						? 'cwc'
-						: 'direct';
-
 			const params = new URLSearchParams({
 				slug: slugToCheck,
-				...(title && { title }),
-				deliveryMethod
+				...(title && { title })
 			});
 
 			const { api } = await import('$lib/core/api/client');
@@ -111,7 +66,7 @@
 	let lastAutoSlug = $state('');
 	$effect(() => {
 		if (title && !aiGenerated) {
-			const newSlug = slugify(title);
+			const newSlug = canonicalizeTemplateSlug(title);
 			if (!slug || (slug === lastAutoSlug && newSlug !== slug)) {
 				slug = newSlug;
 				lastAutoSlug = newSlug;
@@ -123,7 +78,7 @@
 	let lastCheckedSlug = '';
 	$effect(() => {
 		const currentSlug = slug;
-		if (currentSlug && /^[a-z0-9-]+$/.test(currentSlug) && currentSlug !== lastCheckedSlug) {
+		if (isCanonicalTemplateSlug(currentSlug) && currentSlug !== lastCheckedSlug) {
 			lastCheckedSlug = currentSlug;
 			checkAvailability(currentSlug);
 		}
@@ -132,8 +87,8 @@
 	// Handle custom slug input
 	function handleCustomSlug() {
 		if (customSlug) {
-			slug = slugify(customSlug);
-			checkAvailability(slug);
+			slug = canonicalizeTemplateSlug(customSlug);
+			if (slug) checkAvailability(slug);
 			showCustomInput = false;
 			customSlug = '';
 		}
@@ -144,18 +99,9 @@
 		if (!title) return;
 
 		try {
-			// Convert channelId to deliveryMethod for API
-			const deliveryMethod =
-				context?.channelId === 'certified'
-					? 'cwc'
-					: context?.channelId === 'cwc'
-						? 'cwc'
-						: 'direct';
-
 			const params = new URLSearchParams({
 				slug: slug,
-				title: title,
-				deliveryMethod
+				title: title
 			});
 
 			const { api } = await import('$lib/core/api/client');
@@ -167,8 +113,9 @@
 				suggestions = data.suggestions || [];
 			}
 		} catch {
-			// Fallback to client-side generation if server fails
-			suggestions = generateSuggestions(slug);
+			// Only availability-checked suggestions are ever offered; on probe
+			// failure there are none.
+			suggestions = [];
 		}
 	}
 
@@ -181,7 +128,7 @@
 
 	// Full URL for preview using dynamic hostname
 	const _fullUrl = $derived(`${$page.url.origin}/${slug}`);
-	const isValidSlug = $derived(slug.length > 0 && /^[a-z0-9-]+$/.test(slug));
+	const isValidSlug = $derived(isCanonicalTemplateSlug(slug));
 
 	// Sync slugReady bindable: true = valid & available, false = invalid/taken, null = checking/unknown
 	$effect(() => {
