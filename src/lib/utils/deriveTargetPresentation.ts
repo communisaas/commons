@@ -7,7 +7,9 @@
  * Principle: Show power topology directly, don't force categorization
  */
 
-import type { Template, DisplayRecipientConfig, TargetPresentation } from '$lib/types/template';
+import type { Template, TargetPresentation } from '$lib/types/template';
+import { parseRecipientConfig } from '$lib/types/template';
+import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 interface UserContext {
 	district?: string;
@@ -35,7 +37,7 @@ export function deriveTargetPresentation(
 ): TargetPresentation {
 	const config = parseRecipientConfig(template.recipient_config);
 
-	const hasCongressional = template.deliveryMethod === 'cwc' || config?.cwcRouting;
+	const hasCongressional = isCongressionalDelivery(template.deliveryMethod) || config?.cwcRouting;
 	const hasLocalDecisionMakers = config?.decisionMakers && config.decisionMakers.length > 0;
 
 	// Multi-Level Coordination: Both congressional AND local decision-makers
@@ -134,43 +136,6 @@ export function deriveTargetPresentation(
 		icon: 'Mail',
 		coordinationContext: locationContext,
 		emphasis: 'neutral'
-	};
-}
-
-/**
- * Parse recipient_config from unknown JSON into the display-layer shape.
- */
-export function parseRecipientConfig(recipientConfig: unknown): DisplayRecipientConfig | null {
-	if (!recipientConfig || typeof recipientConfig !== 'object') {
-		return null;
-	}
-
-	const config = recipientConfig as Record<string, unknown>;
-
-	// Handle new perceptual format
-	if ('reach' in config || 'decisionMakers' in config) {
-		return config as unknown as DisplayRecipientConfig;
-	}
-
-	// Handle legacy format - try to extract what we can
-	const emails = Array.isArray(config.emails) ? (config.emails as string[]) : undefined;
-	const cwcRouting = typeof config.cwcRouting === 'boolean' ? config.cwcRouting : false;
-
-	// Check for target_type (old format)
-	const targetType = typeof config.target_type === 'string' ? config.target_type : undefined;
-
-	// Infer reach from legacy data
-	let reach: 'district-based' | 'location-specific' | 'universal' = 'universal';
-	if (cwcRouting || targetType === 'congressional') {
-		reach = 'district-based';
-	} else if (emails && emails.length > 0) {
-		reach = 'location-specific';
-	}
-
-	return {
-		reach,
-		emails,
-		cwcRouting
 	};
 }
 

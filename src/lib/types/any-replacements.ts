@@ -120,12 +120,6 @@ export interface GeolocationData {
 // TEMPLATE AND SUBMISSION TYPES
 // =============================================================================
 
-export interface RecipientConfig {
-	type: 'representatives' | 'senators' | 'house' | 'custom';
-	targets?: string[];
-	[key: string]: unknown;
-}
-
 export interface DeliveryConfig {
 	method: 'cwc' | 'email' | 'direct';
 	options?: Record<string, unknown>;

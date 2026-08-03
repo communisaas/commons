@@ -1,6 +1,11 @@
 import type { TemplateScope } from './jurisdiction';
-import type { GeoScope } from '$lib/core/agents/types';
+import type { GeoScope, Source } from '$lib/core/agents/types';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
+import type { TemplateDeliveryMethod } from '$convex/lib/templateDeliveryMethod';
+import {
+	parseRecipientConfigObject,
+	recipientRosterFromConfig
+} from '$convex/lib/recipientRoster';
 
 // ============================================================================
 // Power Landscape Types
@@ -14,13 +19,6 @@ export interface PublicRecipientProvenance {
 	version: 1;
 	expiresAt: number;
 	signature: string;
-}
-
-/** Group of decision-makers sharing the same functional role */
-export interface RoleGroup {
-	category: RoleCategory;
-	label: string; // "VOTE ON IT", "EXECUTE IT", etc.
-	memberIndices: number[]; // indices into decision_makers array
 }
 
 /**
@@ -60,7 +58,7 @@ export interface Template {
 	domainHue?: number; // LLM-assigned hue angle (0-360) for domain color encoding
 	topics?: string[]; // Topic tags — specific facets of the grievance (1-5 lowercase strings)
 	type: string;
-	deliveryMethod: 'email' | 'email_attested' | 'certified' | 'direct' | 'cwc';
+	deliveryMethod: TemplateDeliveryMethod;
 	subject?: string | null;
 	message_body: string;
 	sources?: Source[]; // Citation sources from message generation agent
@@ -167,7 +165,7 @@ export interface Template {
 }
 
 export interface TemplateCreationContext {
-	channelId: 'certified' | 'direct' | 'cwc' | 'email_attested';
+	channelId: 'direct' | 'certified' | 'cwc';
 	channelTitle: string;
 	isCongressional?: boolean;
 	features?: Array<{
@@ -185,6 +183,10 @@ export interface TemplateDraftOrigin {
 	createdAt: number;
 	effect: string;
 	sourceRef: string;
+	/** Human-readable geographic scope the handing-off process resolved. */
+	scopeLabel?: string;
+	/** The process's stated basis for that scope; absent when none was resolved. */
+	scopeBasis?: string;
 }
 
 export interface TemplateFormData {
@@ -229,6 +231,43 @@ export interface TemplateFormData {
 		draftOrigin?: TemplateDraftOrigin | null;
 	};
 	review: Record<string, never>; // For validation purposes, no data to store
+}
+
+/**
+ * The single source of blank-form defaults. Both the citizen creator's fresh
+ * draft and the Studio handoff build on this object, so "unset" provably means
+ * the same values on both surfaces. Returns a fresh object on every call.
+ */
+export function createEmptyTemplateFormData(rawInput = ''): TemplateFormData {
+	return {
+		objective: {
+			rawInput,
+			title: '',
+			description: '',
+			domain: '',
+			slug: '',
+			topics: [],
+			voiceSample: '',
+			aiGenerated: false
+		},
+		audience: {
+			decisionMakers: [],
+			recipientEmails: [],
+			includesCongress: false,
+			customRecipients: []
+		},
+		content: {
+			preview: '',
+			variables: [],
+			sources: [],
+			researchLog: [],
+			geographicScope: null,
+			aiGenerated: false,
+			edited: false,
+			draftOrigin: null
+		},
+		review: {}
+	};
 }
 
 /**
@@ -295,70 +334,9 @@ export interface CustomRecipient {
 	organization?: string;
 }
 
-/**
- * Source reference from message generation agent
- */
-export interface Source {
-	num: number; // Citation number [1], [2], etc.
-	title: string; // Source title
-	url: string; // Source URL
-	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other'; // Source type
-	credibility_rationale?: string; // Present when source evaluation produced rationale
-	incentive_position?: 'adversarial' | 'neutral' | 'aligned'; // Evaluation posture
-	source_order?: 'primary' | 'secondary' | 'opinion'; // Evaluation source-order class
-}
-
-// ============================================================================
-// RecipientConfig — Typed wrapper for Template.recipient_config JSON field
-// ============================================================================
-
-/** Typed representation of the `recipient_config` JSON blob on a Template. */
-export interface RecipientConfig {
-	decisionMakers?: ProcessedDecisionMaker[];
-	roleGroups?: RoleGroup[];
-	personalPrompt?: string;
-	recipientEmails?: string[];
-	includesCongress?: boolean;
-	customRecipients?: Array<{ name: string; email: string; title?: string; organization?: string }>;
-}
-
-/** Parse an unknown recipient_config value into a typed RecipientConfig (graceful fallback). */
-export function parseRecipientConfig(value: unknown): RecipientConfig {
-	if (value && typeof value === 'object' && !Array.isArray(value)) {
-		return value as RecipientConfig;
-	}
-	return {};
-}
-
-// ============================================================================
-// Multi-Target Delivery Types (Hackathon Implementation)
-// ============================================================================
-
-/**
- * Template recipient configuration for multi-target delivery
- * Templates can target Congress + external decision-makers in one action
- */
-export interface TemplateRecipientConfig {
-	type: 'multi-target';
-	recipients: TemplateRecipient[];
-}
-
-/**
- * Individual recipient in a multi-target template
- */
-export interface TemplateRecipient {
-	type: 'congressional' | 'email';
-
-	// Congressional recipients
-	chamber?: 'house' | 'senate'; // undefined = both
-	selection?: 'user_district' | 'all_congress' | 'specific_members';
-	specific_bioguide_ids?: string[]; // For targeting specific members
-
-	// Email recipients
-	email?: string;
-	name?: string; // Display name for UI
-	organization?: string; // For context
-}
+// Citation source from message generation — one definition, shared with the
+// agent layer, re-exported here for the template-facing import sites.
+export type { Source } from '$lib/core/agents/types';
 
 // For UI components that only need a minimal user shape
 export type MinimalUser = { id: string; name: string };
@@ -375,21 +353,6 @@ export type MinimalUser = { id: string; name: string };
 export type PowerReach = 'district-based' | 'location-specific' | 'universal';
 
 /**
- * Decision-maker identity (recognition > categorization)
- * Names are faster to recognize than roles or categories
- */
-export interface DecisionMaker {
-	/** Full name: "Mayor London Breed" */
-	name: string;
-	/** Short display name: "Mayor Breed" */
-	shortName?: string;
-	/** Role fallback: "Mayor" (if name unavailable) */
-	role?: string;
-	/** Organization context: "City of San Francisco" */
-	organization?: string;
-}
-
-/**
  * Geographic location for spatial grounding
  * Users think spatially, not taxonomically
  */
@@ -400,13 +363,49 @@ export interface RecipientLocation {
 	jurisdiction?: string;
 }
 
-/** Recipient config shape used by the display/card layer. */
-export interface DisplayRecipientConfig {
-	reach: PowerReach;
-	decisionMakers?: DecisionMaker[];
-	location?: RecipientLocation;
+/**
+ * A decision-maker as it appears inside a persisted `recipient_config`.
+ * Agent-resolved rows carry the full ProcessedDecisionMaker field set;
+ * hand-authored rows carry only identity plus a human role label.
+ * `name` is the only field guaranteed present.
+ */
+export type RecipientConfigDecisionMaker = Partial<ProcessedDecisionMaker> & {
+	name: string;
+	/** Human-readable position label used by hand-authored rows ("Mayor"). */
+	role?: string;
+	/** Short display name used by hand-authored rows ("Breed"). */
+	shortName?: string;
+};
+
+/** The `recipient_config` JSON blob persisted on a template. */
+export interface RecipientConfig {
+	reach?: PowerReach;
+	decisionMakers?: RecipientConfigDecisionMaker[];
 	emails?: string[];
 	cwcRouting?: boolean;
+	chambers?: Array<'house' | 'senate'>;
+	location?: RecipientLocation;
+}
+
+/**
+ * Parse an unknown `recipient_config` value — a stored object or a JSON string —
+ * into the typed blob. Anything unparseable yields an empty config.
+ */
+export function parseRecipientConfig(value: unknown): RecipientConfig {
+	return parseRecipientConfigObject(value) as RecipientConfig;
+}
+
+/**
+ * Addresses a persisted `recipient_config` reaches: the union across
+ * `recipients`, `decisionMakers`, `customRecipients`, `emails` and
+ * `recipientEmails` plus a top-level `email`, trimmed, empties dropped,
+ * deduplicated, in first-seen order.
+ *
+ * The same arithmetic that produces the recipient count a sender is shown, so
+ * the mailto `To:` line can never be narrower than the advertised number.
+ */
+export function recipientEmailsFromConfig(value: unknown): string[] {
+	return recipientRosterFromConfig(value);
 }
 
 /**

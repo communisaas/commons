@@ -96,7 +96,7 @@ export function extractSource(provenance: string | undefined): string | undefine
 /**
  * Convert decision-makers to recipient emails for template
  */
-export function extractRecipientEmails(
+export function collectRecipientEmails(
 	decisionMakers: ProcessedDecisionMaker[] | undefined,
 	customRecipients: CustomRecipient[] | undefined,
 	includesCongress: boolean

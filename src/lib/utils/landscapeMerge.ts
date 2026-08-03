@@ -12,7 +12,7 @@
  *   'recorded'   Position recorded but no direct delivery channel
  */
 
-import type { RoleCategory, ProcessedDecisionMaker } from '$lib/types/template';
+import type { RoleCategory, RecipientConfigDecisionMaker } from '$lib/types/template';
 
 // ============================================================================
 // Types
@@ -125,7 +125,7 @@ function resolveDeliveryRoute(member: {
 // ============================================================================
 
 export function mergeLandscape(
-  templateDMs: ProcessedDecisionMaker[],
+  templateDMs: RecipientConfigDecisionMaker[],
   districtOfficials: DistrictOfficialInput[] = [],
   // True only for the author or a viewer with a real verified/entered-address
   // district. Gates the possessive "YOUR REPRESENTATIVES" label so a guest or a
@@ -155,8 +155,8 @@ export function mergeLandscape(
     const member: LandscapeMember = {
       id: slugify(dm.name),
       name: dm.name,
-      title: dm.title || ((dm as unknown as Record<string, unknown>).role as string) || '',
-      organization: dm.organization,
+      title: dm.title || dm.role || '',
+      organization: dm.organization ?? '',
       email: dm.email || null,
       accountabilityOpener: dm.accountabilityOpener || null,
       roleCategory: category,

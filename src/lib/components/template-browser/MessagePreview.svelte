@@ -8,6 +8,7 @@
 	import { popover as popoverStore } from '$lib/stores/popover.svelte';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
+	import { laneCarriesSenderText, senderVisibleLetter } from '$lib/services/send-lane';
 	import { toEmailServiceUser } from '$lib/types/user';
 	import { getSourceTypeBadge } from '$lib/utils/message-processing';
 
@@ -283,9 +284,17 @@
 		new Map((template?.sources || []).map((s) => [s.num, s]))
 	);
 
+	// Does the lane this send will take carry the words the sender types?
+	const carriesSenderText = $derived(laneCarriesSenderText(template ?? {}, user));
+
 	// Parse segments from original template to ensure variables are detected
-	// Then render them with resolved content where appropriate
-	const templateSegments = $derived(parseTemplate(originalTemplateText()));
+	// Then render them with resolved content where appropriate.
+	// On a lane that cannot carry the sender's own words, the sender-fill slots are
+	// erased before parsing, so no segment survives to render as an editable card
+	// or as an inert chip naming a slot whose contents would never be delivered.
+	const templateSegments = $derived(
+		parseTemplate(senderVisibleLetter(template ?? {}, user, originalTemplateText()))
+	);
 
 	// Get resolved values for variables from the template resolver
 	const resolvedValues = $derived(
@@ -369,7 +378,11 @@
 	});
 
 	// Sync external initial values into editable variables (handles async restore from sessionStorage)
+	// A lane that cannot carry the sender's own words restores none: a value left
+	// over from another template must not reappear against a letter that would
+	// never deliver it.
 	$effect(() => {
+		if (!carriesSenderText) return;
 		for (const [name, value] of Object.entries(initialVariableValues)) {
 			if (value && userEditableVariables.has(name) && variableValues[name] !== value) {
 				variableValues[name] = value;
