@@ -6,15 +6,16 @@
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import VerificationBadge from '$lib/components/ui/VerificationBadge.svelte';
-	// import { extractRecipientEmails } from '$lib/types/templateConfig';
 	import { modalActions, modalSystem } from '$lib/stores/modalSystem.svelte';
 	import { guestState } from '$lib/stores/guestState.svelte';
 	import {
 		analyzeEmailFlow,
-		encodeMailboxForMailto,
-		generatePersonalizedMailto
+		assembleMailto,
+		type MailtoAssembly
 	} from '$lib/services/emailService';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
+	import { moderatePersonalConnection } from '$lib/utils/personal-connection';
+	import { laneCarriesSenderText, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
 	import {
 		trackTemplateView,
 		trackDeliveryAttempt,
@@ -22,7 +23,6 @@
 		trackBaseRateRelation
 	} from '$lib/core/analytics/client';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
-	import ActionBar from '$lib/components/template-browser/parts/ActionBar.svelte';
 	// Proof footer lives inline in message preview (PreviewContent.svelte)
 	import DebateSurface from '$lib/components/debate/DebateSurface.svelte';
 	import DebateSignal from '$lib/components/debate/DebateSignal.svelte';
@@ -39,7 +39,7 @@
 		type LandscapeMember,
 		type DistrictOfficialInput
 	} from '$lib/utils/landscapeMerge';
-	import type { ProcessedDecisionMaker } from '$lib/types/template';
+	import type { RecipientConfig } from '$lib/types/template';
 	import { generateShareMessage } from '$lib/utils/share-messages';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
@@ -55,7 +55,7 @@
 	import { topicHue } from '$lib/utils/topic-hue';
 	import { persistAddressCompletion } from '$lib/core/identity/address-completion-persistence';
 	import { persistGroundVaultForAddress } from '$lib/core/identity/ground-vault-persistence';
-	import { formatTierEmailFooter, type VerificationMethod } from '$lib/core/identity/tier-display';
+	import { buildAttestation, type VerificationMethod } from '$lib/core/identity/tier-display';
 	import type { ClientCellProofResult } from '$lib/core/shadow-atlas/browser-client';
 
 	let { data }: { data: PageData } = $props();
@@ -72,43 +72,6 @@
 	const template: TemplateType = $derived(data.template as unknown as TemplateType);
 	const hue = $derived(topicHue(template?.domain ?? '', template?.topics, template?.domainHue));
 
-	/**
-	 * Build the sender's own signature line(s) for the email footer.
-	 *
-	 * This is the SENDER attesting to their own standing — not a label aimed at
-	 * the recipient and not a request that the recipient verify anything. Line 1
-	 * stays a clean third-person NOUN PHRASE (consumed as `attestationLine` via
-	 * `split('\n')[0]`, and reused mid-sentence inside SendConfirmation's "Your
-	 * message carried <attestationLine>." frame — a first-person clause there
-	 * would read as a person/voice mismatch). The optional URL is the sender
-	 * offering verifiability of themselves, never an instruction to the addressee.
-	 */
-	function buildProofFooter(trustTier: number, districtCode?: string | null): string | undefined {
-		const parts: string[] = [];
-		if (trustTier >= 2 && districtCode) {
-			// SSOT label (matches /v/[hash]): method-specific so a self-reported
-			// (civic_api) sender reads "Self-reported constituent", never overclaimed
-			// as "Verified resident". The method label already encodes mDL/gov-ID.
-			const label = formatTierEmailFooter({
-				method: (data.user?.verification_method ?? null) as VerificationMethod,
-				trustTier
-			});
-			parts.push(`${label} · ${districtCode}`);
-			// The verify URL lives INSIDE the tier>=2 block, gated identically to the
-			// constituent label it backs: "Confirm I'm a real constituent" is itself a
-			// constituent claim, so a sub-tier-2 sender (who only ever gets "Verified
-			// sender" above) must never emit it — that would overclaim standing the
-			// system hasn't established. Emitted only when the hash resolves: the active
-			// credential hash is the record /v/[hash] looks up (a truncated id 404s).
-			// Framed as the sender offering proof of themselves, not an instruction to
-			// the recipient.
-			if (data.user?.credentialHash)
-				parts.push(`Confirm I'm a real constituent: https://commons.email/v/${data.user.credentialHash}`);
-		} else if (trustTier >= 1) {
-			parts.push('Verified sender');
-		}
-		return parts.length > 0 ? parts.join('\n') : undefined;
-	}
 	// ?via= is a coarse, non-identifying share-channel tag (allowlist only).
 	// Never carries PII; anything off-allowlist collapses to 'direct-link'.
 	const source = $derived.by((): 'social-link' | 'direct-link' | 'share' => {
@@ -352,14 +315,14 @@
 		// (address/ground restore first, Tier 4+ proof before delivery)
 		// Skip address gate — it shows the old NFC/Gov ID modal which is wrong here
 		if (FEATURES.CONGRESSIONAL && template.deliveryMethod === 'cwc' && data.user) {
-			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
+			void openTemplateModal(data.user);
 			return;
 		}
 
 		// Tier 2+ already verified — skip address gate entirely
 		// guestState address also counts (Cypherpunk: no PII on User model)
 		if (trustTier >= 2 || guestState.state?.address) {
-			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
+			void openTemplateModal(data.user);
 			return;
 		}
 
@@ -377,7 +340,7 @@
 			});
 		} else {
 			// Ready to send (or any other state) — open template modal
-			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
+			void openTemplateModal(data.user);
 		}
 	}
 
@@ -390,7 +353,7 @@
 	function handleFindYourReps() {
 		if (!data.user) {
 			// Route to login first (same entry the guest stance buttons use).
-			modalActions.openModal('template-modal', 'template_modal', { template, user: null });
+			void openTemplateModal(null);
 			return;
 		}
 		modalActions.openModal('address-modal', 'address', {
@@ -410,11 +373,7 @@
 		positionCounts?: { support: number; oppose: number; districts: number };
 		existingPosition?: { stance: string; registrationId: string } | null;
 		districtOfficials?: DistrictOfficialInput[];
-		recipientConfig?: {
-			decisionMakers?: ProcessedDecisionMaker[];
-			personalPrompt?: string;
-			cwcRouting?: boolean;
-		};
+		recipientConfig?: RecipientConfig;
 		engagementByDistrict?: EngagementData | null;
 		userDistrictCode?: string | null;
 		viewerIsConstituent?: boolean;
@@ -451,6 +410,55 @@
 		messageText: string;
 	} | null>(null);
 	let batchRegistrationState = $state<'idle' | 'registering' | 'complete'>('idle');
+
+	// A message the mail app cannot be handed says so out loud. Silence here is a
+	// dead click: the user presses send and nothing happens, on any lane. A send
+	// refused by moderation reports through this same surface.
+	let sendBlocked = $state<string | null>(null);
+
+	// Every send entry now awaits the moderation round trip, so each needs a
+	// re-entry guard: a second click mid-flight would otherwise send twice.
+	let sendModerating = $state(false);
+
+	// One failure path for both send lanes. On a block NOTHING else runs — no
+	// in-flight marker, no attempt metric, no send peak, no navigation.
+	function handleSendBlocked(assembly: Extract<MailtoAssembly, { ok: false }>) {
+		batchRegistrationState = 'idle';
+		sendBlocked = assembly.message;
+	}
+
+	/**
+	 * The one way this page opens the send modal. The sender's typed words are
+	 * gated here and then handed to the modal, so the modal lane cannot become the
+	 * one path that carries unmoderated text into a mailto.
+	 */
+	async function openTemplateModal(modalUser: typeof data.user | null) {
+		sendBlocked = null;
+
+		// The lane is keyed on the user the modal will actually see — several call
+		// sites hand it null deliberately, and a guest on a congressional template
+		// goes out through the mailto relay, which carries the note. Refuse here,
+		// with the reason, rather than handing the modal words its lane discards.
+		if (!laneCarriesSenderText(template, modalUser) && personalConnectionValue.trim()) {
+			sendBlocked = SENDER_TEXT_NOT_CARRIED_REASON;
+			return;
+		}
+
+		if (sendModerating) return;
+		sendModerating = true;
+		const moderation = await moderatePersonalConnection(personalConnectionValue);
+		sendModerating = false;
+		if (!moderation.approved) {
+			sendBlocked = moderation.reason;
+			return;
+		}
+
+		modalActions.openModal('template-modal', 'template_modal', {
+			template,
+			user: modalUser,
+			personalConnection: personalConnectionValue
+		});
+	}
 
 	// Bounce reporting state
 	let reportedBounces = $state(new Set<string>());
@@ -494,7 +502,13 @@
 		// contact is set — never on the mailto launch. A delivery is a confirmed
 		// COUNT, so a dismissed/un-sent peak must not record one (consistent with P2:
 		// contacted only on confirm). Fire-and-forget; stance-agnostic civic action.
-		const recipients = sendConfirmation.recipients;
+		// Delivery persistence needs only the canonical public name + method.
+		// Recipient email stays in the local mailto flow and never enters the
+		// tracking request or Convex delivery history.
+		const recipients = sendConfirmation.recipients.map(({ name, deliveryMethod }) => ({
+			name,
+			deliveryMethod
+		}));
 		if (data.user?.id && recipients.length > 0) {
 			fetch('/api/deliveries/record', {
 				method: 'POST',
@@ -581,93 +595,102 @@
 		}
 	}
 
-	function handleWriteTo(member: LandscapeMember) {
+	async function handleWriteTo(member: LandscapeMember) {
+		sendBlocked = null;
 		// Resolve any pending send confirmation first (defense-in-depth — the peak's
 		// modal backdrop + focus trap already block interaction with the cards behind).
 		if (sendConfirmation) return;
 		if (member.deliveryRoute === 'cwc') {
 			// Congressional officials: route through existing CWC modal infrastructure
 			// TemplateModal handles tier-based routing (mailto for T1-2, ZKP for T3+)
-			modalActions.openModal('template-modal', 'template_modal', {
-				template,
-				user: data.user
-			});
+			await openTemplateModal(data.user);
 		} else if (member.deliveryRoute === 'email' && member.email) {
+			// Nothing is assembled until the sender's own words clear moderation.
+			if (sendModerating) return;
+			sendModerating = true;
+			const moderation = await moderatePersonalConnection(personalConnectionValue);
+			sendModerating = false;
+			if (!moderation.approved) {
+				sendBlocked = moderation.reason;
+				return;
+			}
+
 			// Direct mailto — opener + resolved template body, no intermediate compose view
 			const districtName = data.userDistrictCode ?? '';
 			const subject = template.subject || template.title;
 
 			const trustTier = data.user?.trust_tier ?? 0;
-			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
+			const attestation =
+				buildAttestation({
+					trustTier,
+					method: (data.user?.verification_method ?? null) as VerificationMethod,
+					districtCode: districtName || data.userDistrictCode,
+					credentialHash: data.user?.credentialHash ?? null
+				}).block ?? undefined;
 
-			// Inject personal connection before resolveTemplate strips the placeholder
-			const pc = personalConnectionValue?.trim();
-			const templateWithPC = pc
-				? {
-						...template,
-						message_body: (template.message_body || '').replace(/\[Personal Connection\]/g, pc)
-					}
-				: template;
-			const resolved = resolveTemplate(templateWithPC, data.user ?? null);
+			// The resolver places the sender's words at the author's placeholder — this
+			// lane names the text and nothing more.
+			const resolved = resolveTemplate(template, data.user ?? null, {
+				personalConnection: personalConnectionValue
+			});
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName);
 
-			const result = generatePersonalizedMailto({
-				recipient: {
-					name: member.name,
-					email: member.email,
-					title: member.title,
-					organization: member.organization
-				},
-				subject,
-				opener: member.accountabilityOpener ?? '',
-				templateBody: resolvedBody,
-				attestation
+			const assembly = assembleMailto({
+				recipients: [member.email],
+				subject: subject ?? '',
+				zones: {
+					opener: member.accountabilityOpener ?? '',
+					body: resolvedBody,
+					attestation
+				}
 			});
 
-			if ('url' in result) {
-				// Mirror the actual mailto body (generatePersonalizedMailto): the same
-				// zone order — opener, body, then '---' before the attestation — so the
-				// copy a no-mail-client user pastes matches what the mailto would send.
-				// Subject is a clear leading indication (consistent with the batch path),
-				// not inlined into the body. Built first (pure, no state side effects) so
-				// the in-flight→peak handoff below stays a tight, auditable sequence.
-				const copyBodyParts: string[] = [];
-				if (member.accountabilityOpener?.trim())
-					copyBodyParts.push(member.accountabilityOpener.trim());
-				if (resolvedBody.trim()) copyBodyParts.push(resolvedBody.trim());
-				if (attestation?.trim()) {
-					copyBodyParts.push('---');
-					copyBodyParts.push(attestation.trim());
-				}
-
-				// Mail app OPENED, not confirmed sent — mark IN-FLIGHT only and confirm
-				// explicitly via the send peak (no optimistic "contacted"). The DELIVERY
-				// record (a delivery COUNT) is NOT posted here — it fires only on the
-				// explicit confirm inside confirmSendContacted(), so a dismissed/un-sent
-				// peak never inflates server counts (consistent with the P2 contract).
-				// trackDeliveryAttempt stays here: it is genuinely an attempt metric.
-				departingRecipients = new Set([...departingRecipients, member.id]);
-				trackDeliveryAttempt(template.id, 'email');
-
-				window.location.href = result.url;
-				sendConfirmation = {
-					memberIds: [member.id],
-					recipientNames: [member.name],
-					recipients: [{ name: member.name, email: member.email ?? undefined, deliveryMethod: 'email' }],
-					attestationLine: attestation?.split('\n')[0],
-					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${copyBodyParts.join('\n\n')}`
-				};
+			if (!assembly.ok) {
+				handleSendBlocked(assembly);
+				return;
 			}
+
+			// Mail app OPENED, not confirmed sent — mark IN-FLIGHT only and confirm
+			// explicitly via the send peak (no optimistic "contacted"). The DELIVERY
+			// record (a delivery COUNT) is NOT posted here — it fires only on the
+			// explicit confirm inside confirmSendContacted(), so a dismissed/un-sent
+			// peak never inflates server counts (consistent with the P2 contract).
+			// trackDeliveryAttempt stays here: it is genuinely an attempt metric.
+			departingRecipients = new Set([...departingRecipients, member.id]);
+			trackDeliveryAttempt(template.id, 'email');
+
+			window.location.href = assembly.url;
+			sendConfirmation = {
+				memberIds: [member.id],
+				recipientNames: [member.name],
+				recipients: [
+					{ name: member.name, email: member.email ?? undefined, deliveryMethod: 'email' }
+				],
+				attestationLine: attestation?.split('\n')[0],
+				// The copy a no-mail-client user pastes is read off the same assembly
+				// that produced the URL — never rebuilt, so the two cannot drift.
+				messageText: assembly.messageText
+			};
 		} else if (member.deliveryRoute === 'form' && member.contactFormUrl) {
 			// Web contact form: open in new tab
 			window.open(member.contactFormUrl, '_blank', 'noopener,noreferrer');
 		}
 	}
 
-	function handleBatchRegister(memberIds: string[]) {
+	async function handleBatchRegister(memberIds: string[]) {
+		sendBlocked = null;
 		if (sendConfirmation) return; // resolve the pending send peak first
 		if (batchRegistrationState === 'registering') return;
+		// The in-flight marker is claimed BEFORE the moderation round trip: a second
+		// click during the await would otherwise moderate twice and send twice.
 		batchRegistrationState = 'registering';
+
+		const moderation = await moderatePersonalConnection(personalConnectionValue);
+		if (!moderation.approved) {
+			sendBlocked = moderation.reason;
+			batchRegistrationState = 'idle';
+			return;
+		}
 
 		const allMembers = [
 			...landscape.roleGroups.flatMap((g) => g.members),
@@ -685,47 +708,55 @@
 			const subject = template.subject || template.title;
 
 			const trustTier = data.user?.trust_tier ?? 0;
-			const attestation = buildProofFooter(trustTier, districtName || data.userDistrictCode);
+			const attestation =
+				buildAttestation({
+					trustTier,
+					method: (data.user?.verification_method ?? null) as VerificationMethod,
+					districtCode: districtName || data.userDistrictCode,
+					credentialHash: data.user?.credentialHash ?? null
+				}).block ?? undefined;
 
-			const resolved = resolveTemplate(template, data.user ?? null);
+			const resolved = resolveTemplate(template, data.user ?? null, {
+				personalConnection: personalConnectionValue
+			});
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName).trim();
 
-			const bodyParts: string[] = [];
-			const pc = personalConnectionValue?.trim();
-			if (pc) bodyParts.push(pc);
-			if (resolvedBody) bodyParts.push(resolvedBody);
-			if (attestation?.trim()) {
-				bodyParts.push('---');
-				bodyParts.push(attestation.trim());
-			}
+			const assembly = assembleMailto({
+				recipients: emailMembers.map((m) => m.email!),
+				subject: subject ?? '',
+				zones: {
+					body: resolvedBody,
+					attestation
+				}
+			});
 
-			const emails = emailMembers.map((m) => encodeMailboxForMailto(m.email!)).join(',');
-			const url = `mailto:${emails}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(bodyParts.join('\n\n'))}`;
-
-			if (url.length <= 8000) {
-				// Set departing only — the send peak promotes to contacted on an explicit confirm
-				departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
-				trackDeliveryAttempt(template.id, 'email');
-
-				// The DELIVERY record (a delivery COUNT) is deferred to the explicit
-				// confirm in confirmSendContacted() — threaded via sendConfirmation.recipients
-				// below. Posting it here (on mailto launch) would inflate server counts for
-				// a dismissed/un-sent peak. trackDeliveryAttempt stays — it's an attempt metric.
-				window.location.href = url;
-				// In-flight until the user confirms in the send peak (not a return heuristic).
-				sendConfirmation = {
-					memberIds: emailMembers.map((m) => m.id),
-					recipientNames: emailMembers.map((m) => m.name),
-					recipients: emailMembers.map((m) => ({
-						name: m.name,
-						email: m.email ?? undefined,
-						deliveryMethod: 'email' as const
-					})),
-					attestationLine: attestation?.split('\n')[0],
-					messageText: `${subject ? `Subject: ${subject}\n\n` : ''}${bodyParts.join('\n\n')}`
-				};
+			if (!assembly.ok) {
+				handleSendBlocked(assembly);
 				return;
 			}
+
+			// Set departing only — the send peak promotes to contacted on an explicit confirm
+			departingRecipients = new Set([...departingRecipients, ...emailMembers.map((m) => m.id)]);
+			trackDeliveryAttempt(template.id, 'email');
+
+			// The DELIVERY record (a delivery COUNT) is deferred to the explicit
+			// confirm in confirmSendContacted() — threaded via sendConfirmation.recipients
+			// below. Posting it here (on mailto launch) would inflate server counts for
+			// a dismissed/un-sent peak. trackDeliveryAttempt stays — it's an attempt metric.
+			window.location.href = assembly.url;
+			// In-flight until the user confirms in the send peak (not a return heuristic).
+			sendConfirmation = {
+				memberIds: emailMembers.map((m) => m.id),
+				recipientNames: emailMembers.map((m) => m.name),
+				recipients: emailMembers.map((m) => ({
+					name: m.name,
+					email: m.email ?? undefined,
+					deliveryMethod: 'email' as const
+				})),
+				attestationLine: attestation?.split('\n')[0],
+				messageText: assembly.messageText
+			};
+			return;
 		}
 
 		batchRegistrationState = 'idle';
@@ -785,9 +816,7 @@
 			if (data.user) {
 				try {
 					// H1 — trust-context shared across both verify-address branches.
-					const { readH1TrustContext } = await import(
-						'$lib/core/identity/session-credentials'
-					);
+					const { readH1TrustContext } = await import('$lib/core/identity/session-credentials');
 					const h1TrustContext = await readH1TrustContext(data.user.id);
 					if (detail.districtCommitment) {
 						// ZKP path: commitment already computed client-side by AddressCollectionForm.
@@ -874,10 +903,7 @@
 
 			// Close address modal and proceed to template modal
 			modalActions.closeModal('address-modal');
-			modalActions.openModal('template-modal', 'template_modal', {
-				template,
-				user: data.user
-			});
+			await openTemplateModal(data.user);
 
 			// Refresh page data so trust tier updates everywhere
 			await invalidateAll();
@@ -889,7 +915,7 @@
 				return;
 			}
 			modalActions.closeModal('address-modal');
-			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
+			await openTemplateModal(data.user);
 		} finally {
 			_isUpdatingAddress = false;
 		}
@@ -1064,10 +1090,7 @@
 							class="bg-participation-primary-600 hover:bg-participation-primary-700 flex min-h-[44px] flex-1 items-center justify-center rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors sm:flex-none"
 							onclick={() => {
 								if (!data.user) {
-									modalActions.openModal('template-modal', 'template_modal', {
-										template,
-										user: null
-									});
+									void openTemplateModal(null);
 								} else {
 									handlePostAuthFlow();
 								}
@@ -1079,10 +1102,7 @@
 							class="flex min-h-[44px] flex-1 items-center justify-center rounded-lg border border-red-200 bg-red-50 px-5 py-2.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 sm:flex-none"
 							onclick={() => {
 								if (!data.user) {
-									modalActions.openModal('template-modal', 'template_modal', {
-										template,
-										user: null
-									});
+									void openTemplateModal(null);
 								} else {
 									handlePostAuthFlow();
 								}
@@ -1139,7 +1159,9 @@
 								id: data.user.id,
 								name: data.user.name,
 								trust_tier: data.user.trust_tier,
-								district_code: data.userDistrictCode ?? undefined
+								district_code: data.userDistrictCode ?? undefined,
+								verification_method: data.user.verification_method,
+								credentialHash: data.user.credentialHash
 							}
 						: null}
 					showEmailModal={false}
@@ -1226,6 +1248,16 @@
 					onReportBounce={handleReportBounce}
 				/>
 
+				<!-- A send the mail app cannot accept says so, instead of doing nothing -->
+				{#if sendBlocked}
+					<p
+						role="alert"
+						class="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+					>
+						{sendBlocked}
+					</p>
+				{/if}
+
 				<!-- Coordination weight — stance tallies are category-error theater without
 				     debate market truth-testing mechanics. When DEBATE flips on, support/
 				     oppose counts gain meaning (staked claims in an LMSR market). Until
@@ -1264,7 +1296,6 @@
 				     (DecisionMakerLandscapeCard / DistrictOfficialCard) as a
 				     hover-revealed "didn't arrive?" flag — recognition in context,
 				     not an aggregate wall of names. -->
-
 			</div>
 
 			<!-- Debate surface -->
@@ -1341,7 +1372,7 @@
 		shareUrl={browser
 			? `${window.location.origin}/s/${template.slug}?via=share`
 			: `/s/${template.slug}?via=share`}
-		shareMessage={shareMessage}
+		{shareMessage}
 		messageText={sendConfirmation.messageText}
 		onConfirmSent={confirmSendContacted}
 		onClose={closeSendConfirmation}

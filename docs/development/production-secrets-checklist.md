@@ -11,7 +11,7 @@ This document lists the environment variables required for the Commons productio
 | **CRITICAL** | AI Services | `GEMINI_API_KEY`, `GROQ_API_KEY` |
 | **CRITICAL** | Congressional API | `CWC_API_KEY` |
 | **CRITICAL** | Authentication | `JWT_SECRET`, `EMAIL_VERIFICATION_SECRET`, `SESSION_CREATION_SECRET`, `SESSION_COOKIE_SIGNING_SECRET` |
-| **HIGH** | Crypto Keys | `CAMPAIGN_PSEUDONYM_KEY`, `DISTRICT_HASH_KEY`, `OAUTH_ENCRYPTION_KEY`, `ORG_KEY_WRAPPING_KEY`, `INTERNAL_API_SECRET`, `DISCOVERY_MANIFEST_REFRESH_SECRET`, `RELEASE_CONTROL_SECRET`, `RELEASE_PROBE_SECRET`, `RELEASE_ORIGIN_PROOF_SECRET` |
+| **HIGH** | Crypto Keys | `CAMPAIGN_PSEUDONYM_KEY`, `DISTRICT_HASH_KEY` (mirror the identical value to Convex — both deployments), `OAUTH_ENCRYPTION_KEY`, `ORG_KEY_WRAPPING_KEY`, `INTERNAL_API_SECRET`, `DISCOVERY_MANIFEST_REFRESH_SECRET`, `RELEASE_CONTROL_SECRET`, `RELEASE_PROBE_SECRET`, `RELEASE_ORIGIN_PROOF_SECRET` |
 | **HIGH** | Hidden Pages origin | `PAGES_ORIGIN_ACCESS_TOKEN` (distinct protected production/preview values and token-id proofs) |
 | **HIGH** | Protected release evidence | `PROTECTED_PUBLIC_DISCOVERY_R2_READ_*`, `PROTECTED_CLOUDFLARE_QUEUE_FREE_BOOTSTRAP_PRODUCTION_*`, `PROTECTED_RELEASE_RECOVERY_R2_*` |
 | **HIGH** | OAuth | `GOOGLE_CLIENT_ID/SECRET`, other OAuth providers |
@@ -214,7 +214,10 @@ tokens in one policy or reuse the other realm's token.
 
 There is deliberately no landing-cache purge secret. Publication freshness is
 the trusted edge's 60-second fresh, 300-second stale-while-revalidate, and
-360-second absolute stale contract; `Cache-Tag: public-discovery` is metadata
+360-second absolute per-entry stale contract. The inner manifest cache observes
+a published coordinate in less than 60 seconds, so the strict
+manifest-publication-to-last-old-HTML bound is less than 420 seconds;
+`Cache-Tag: public-discovery` is metadata
 for a future optional operator optimization, not a launch credential or
 publication/rollback dependency.
 
@@ -544,8 +547,10 @@ wrangler secret put PAGES_ORIGIN_ACCESS_TOKEN \
 wrangler pages secret put CWC_API_KEY
 wrangler pages secret put CONGRESS_API_KEY
 
-# AI Moderation
-wrangler pages secret put GEMINI_API_KEY
+# AI Moderation. Paid-provider credentials (EXA_API_KEY, FIRECRAWL_API_KEY,
+# GEMINI_API_KEY, GROQ_API_KEY) are protected workflow inputs only. Normal
+# release ephemerally stages them at the immutable Pages upload seam, proves
+# the deployment snapshot, then clears project defaults; never put them here.
 wrangler pages secret put ANTHROPIC_API_KEY
 
 # Identity Verification - Didit.me (REMOVED in Cycle 15 - delete these if present)
@@ -594,6 +599,7 @@ wrangler pages secret put VOTER_API_KEY
 - [ ] `IP_HASH_SALT` - Generated with `openssl rand -hex 32`
 - [ ] `JWT_SECRET` - Generated with `openssl rand -base64 32`
 - [ ] `SESSION_CREATION_SECRET` - Generated with `openssl rand -hex 32` and mirrored to Convex
+- [ ] `DISTRICT_HASH_KEY` - Generated with `openssl rand -hex 32` and mirrored verbatim to Convex (production AND dev deployments). Both runtimes write the same `districtHash` column, so a mismatch splits every aggregate; hashing throws when unset, hard-failing campaign action submission, donations, and event RSVP. Never rotate after launch
 - [ ] `SESSION_COOKIE_SIGNING_SECRET` - Independently generated with `openssl rand -hex 32`, Pages only
 - [ ] `DISCOVERY_MANIFEST_REFRESH_SECRET` - Independent 32+ byte value mirrored only to Pages, Convex, GitHub Environment, and the dedicated cron Worker
 - [ ] `DISCOVERY_MANIFEST_REFRESH_SECRET_PREVIOUS` - Empty normally; old active value on Pages only during a bounded sender-rotation overlap
@@ -608,15 +614,14 @@ wrangler pages secret put VOTER_API_KEY
 - [ ] Queue observer token and Ed25519 private signing key remain operator-local; no private signer material or observer bearer is stored in GitHub
 - [ ] Workflow proof confirms the release-origin value differs from every capability present in its edge-deploy or retained-recovery step: Access JSON/id/client secret, Access service-token id, internal readiness, and Cloudflare API
 - [ ] Protected-environment operator attestation records independent generation from staging-probe, release-control, refresh, session, and all other provider capabilities without co-locating those raw values; the proof value remains stable across the retained rollback window
-- [ ] Pages secret inventory contains none of `PAGES_ORIGIN_ACCESS_TOKEN`, `RELEASE_CONTROL_SECRET`, `RELEASE_PROBE_SECRET`, `RELEASE_ORIGIN_PROOF_SECRET`, or provider credentials
+- [ ] Pages project-default inventory in both production and preview contains none of `PAGES_ORIGIN_ACCESS_TOKEN`, `RELEASE_CONTROL_SECRET`, `RELEASE_PROBE_SECRET`, `RELEASE_ORIGIN_PROOF_SECRET`, or provider credentials; the exact immutable production deployment alone retains the four provider bindings
 - [ ] Pages, Convex, and Worker secret inventories contain none of `PROTECTED_PUBLIC_DISCOVERY_R2_READ_*`, `PROTECTED_RELEASE_RECOVERY_R2_*`, or `PROTECTED_CLOUDFLARE_QUEUE_FREE_*`; these exist only in their protected workflow Environments
 - [ ] No publication or landing-cache purge credential exists in Pages, either trusted Worker, Convex, or protected Environments
 - [ ] The complete overlapping Access app/policy/token inventory equals the two expected Service-Auth-only apps; DNS, Pages domains/deployment aliases, Worker routes, and `pages.dev` closure contain no stale `staging.commons.email` Pages/branch alias
 - [ ] Both Access apps, exact Worker and finalized Pages runtime dates/ordered flags, the late transform, hidden-origin inventory, cross-token denial, and valid candidate proof pass the live trusted-edge verifier
 - [ ] After terminal C, exact uncached `/api/release-origin` requires the dedicated proof header, then proves the committed SHA/transaction, proof/Access tokens absent at origin, candidate Cache API unavailable, and external I/O zero; rollback proves the retained Pages/T pair in the same way
 - [ ] Production Convex is active under reviewed quota authority; the current quota-disabled team is still a launch blocker
-- [ ] `GEMINI_API_KEY` - For agents + embeddings
-- [ ] `GROQ_API_KEY` - For the 2-layer moderation pipeline
+- [ ] Protected provider posture bundle - exact Exa, Firecrawl, Gemini, and Groq credentials/account IDs plus a fresh independently signed Free-plan, billing-disabled, no-PAYG receipt; never persistent Pages project defaults
 - [ ] `CWC_API_KEY` - For Senate submissions
 
 ### High Priority

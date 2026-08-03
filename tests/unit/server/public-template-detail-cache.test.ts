@@ -12,6 +12,15 @@ import {
 } from '$lib/server/public-template-detail-path';
 import hooksSource from '../../../src/hooks.server.ts?raw';
 
+const mockGetArtifact = vi.hoisted(() => vi.fn());
+vi.mock('$lib/server/public-template-queries', () => ({
+	getCachedPublicTemplatePageArtifact: mockGetArtifact
+}));
+
+import { load as loadTemplateModalPage } from '../../../src/routes/template-modal/[slug]/+page.server';
+import templateModalPageSource from '../../../src/routes/template-modal/[slug]/+page.svelte?raw';
+import templateModalComponentSource from '../../../src/lib/components/template/TemplateModal.svelte?raw';
+
 function deferred<T>() {
 	let resolve!: (value: T | PromiseLike<T>) => void;
 	let reject!: (reason?: unknown) => void;
@@ -592,5 +601,63 @@ describe('public template detail cost shield', () => {
 		expect(cache.entries.size).toBe(2);
 		await invalidatePublicTemplateCaches({ slug: 'clean-water', url });
 		expect(cache.entries.size).toBe(0);
+	});
+});
+
+describe('template-modal route payload', () => {
+	type ModalLoadEvent = Parameters<typeof loadTemplateModalPage>[0];
+
+	function modalLoadEvent(): ModalLoadEvent {
+		return {
+			params: { slug: 'clean-water' },
+			locals: { user: null },
+			setHeaders: vi.fn(),
+			url: new URL('https://commons.example/template-modal/clean-water'),
+			platform: undefined
+		} as unknown as ModalLoadEvent;
+	}
+
+	async function loadModalPayload(): Promise<{ template: Record<string, unknown> }> {
+		const payload = await loadTemplateModalPage(modalLoadEvent());
+		return payload as { template: Record<string, unknown> };
+	}
+
+	function templateFieldsReadBy(source: string): Set<string> {
+		return new Set(
+			[...source.matchAll(/\btemplate\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((match) => match[1])
+		);
+	}
+
+	it('carries a published send count through to the modal payload', async () => {
+		const detail = { ...detailFixture(), send_count: 12 };
+		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
+
+		const result = await loadModalPayload();
+		expect(result.template.send_count).toBe(12);
+	});
+
+	it('preserves a suppressed send count as null rather than a false zero', async () => {
+		const detail = { ...detailFixture(), send_count: null };
+		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
+
+		const result = await loadModalPayload();
+		expect('send_count' in result.template).toBe(true);
+		expect(result.template.send_count).toBeNull();
+		expect(result.template.send_count).not.toBe(0);
+	});
+
+	it('supplies every template field the modal component reads', async () => {
+		const detail = { ...detailFixture(), send_count: 12 };
+		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
+
+		const result = await loadModalPayload();
+		const fields = templateFieldsReadBy(templateModalComponentSource);
+		const missing = [...fields].filter((field) => !(field in result.template));
+		expect(missing).toEqual([]);
+	});
+
+	it('links its fallback action at the canonical template detail path', () => {
+		expect(templateModalPageSource).toContain('href="/s/{data.template.slug}"');
+		expect(templateModalPageSource).not.toMatch(/href="\/\{[^}]*slug[^}]*\}"/);
 	});
 });
