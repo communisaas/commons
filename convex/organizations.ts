@@ -20,6 +20,7 @@ import { capOrThrow, parseHttpUrlOrThrow } from './_validators';
 import { sealOrgKey as sealOrgKeyHelper } from './_orgKeyUnseal';
 import { emptySupporterStats, computeSupporterStats, visibleSourceCounts } from './_supporterStats';
 import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
+import { ORG_PLAN_LIMITS } from './lib/planLimits';
 import type { Doc, Id } from './_generated/dataModel';
 import { requireInternalSecret } from './_internalAuth';
 import {
@@ -1332,12 +1333,11 @@ export const create = mutation({
 			slug: args.slug,
 			description: args.description ?? undefined,
 			// A new org has no subscription, so it starts on the gated `inactive`
-			// floor: owner-only seat + 2 templates (author a campaign or two to
-			// experience the product). Delivery + scale unlock on subscribe; the
-			// Stripe webhook syncs these to the paid tier's limits. Mirrors
-			// PLANS.inactive at src/lib/server/billing/plans.ts.
-			maxSeats: 1,
-			maxTemplatesMonth: 2,
+			// floor: owner-only seat, enough templates to author a campaign or two
+			// and experience the product. Delivery + scale unlock on subscribe; the
+			// Stripe webhook syncs these to the paid tier's limits.
+			maxSeats: ORG_PLAN_LIMITS.inactive.maxSeats,
+			maxTemplatesMonth: ORG_PLAN_LIMITS.inactive.maxTemplatesMonth,
 			dmCacheTtlDays: 7,
 			countryCode: 'US',
 			isPublic: false,

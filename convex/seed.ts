@@ -61,6 +61,11 @@ import {
 } from './lib/templateListProjection';
 import { boundedExactEndorsementCount } from './lib/templateEndorsementCount';
 import { validateTemplateInputBudgets } from './lib/templateInputBudget';
+import {
+	isTemplateDeliveryMethod,
+	type TemplateDeliveryMethod
+} from './lib/templateDeliveryMethod';
+import { ORG_PLAN_LIMITS } from './lib/planLimits';
 import { syncSessionAuthority } from './lib/sessionAuthority';
 import {
 	applyCoalitionActionTransition,
@@ -233,6 +238,21 @@ const backfillScopesRef = makeFunctionReference<'mutation'>(
 
 // Note: SEED_TEMPLATES is imported from ./seedData above.
 // To regenerate, run: npx tsx scripts/seed-with-agents.ts
+
+/**
+ * Seed rows come from a generated snapshot, so nothing type-checks their
+ * delivery method at the source. The templates column is closed to the shared
+ * vocabulary; a stale row would otherwise fail schema validation at deploy
+ * time instead of here, where the offending slug is named.
+ */
+function seedDeliveryMethod(template: SeedTemplate): TemplateDeliveryMethod {
+	if (!isTemplateDeliveryMethod(template.deliveryMethod)) {
+		throw new Error(
+			`Seed template ${template.slug} carries an unstorable deliveryMethod: ${template.deliveryMethod}`
+		);
+	}
+	return template.deliveryMethod;
+}
 
 function assertSeedTemplateInputBudget(template: SeedTemplate): void {
 	const budget = validateTemplateInputBudgets({
@@ -1146,8 +1166,10 @@ export const insertOrgs = internalMutation({
 				description: o.description,
 				mission: o.mission,
 				websiteUrl: o.websiteUrl,
-				maxSeats: 10,
-				maxTemplatesMonth: 50,
+				// Orgs land on the gated inactive floor here; insertSubscriptions
+				// patches each one up to its subscribed plan's limits.
+				maxSeats: ORG_PLAN_LIMITS.inactive.maxSeats,
+				maxTemplatesMonth: ORG_PLAN_LIMITS.inactive.maxTemplatesMonth,
 				dmCacheTtlDays: 30,
 				countryCode: 'US',
 				isPublic: true,
@@ -1342,7 +1364,7 @@ export const insertTemplates = internalMutation({
 				domain: t.domain,
 				topics: t.topics,
 				type: t.type,
-				deliveryMethod: t.deliveryMethod,
+				deliveryMethod: seedDeliveryMethod(t),
 				preview: t.preview,
 				messageBody: t.messageBody,
 				countryCode: t.countryCode,
@@ -1435,7 +1457,7 @@ export const insertTemplatesPublic = internalMutation({
 				domain: t.domain,
 				topics: t.topics,
 				type: t.type,
-				deliveryMethod: t.deliveryMethod,
+				deliveryMethod: seedDeliveryMethod(t),
 				preview: t.preview,
 				messageBody: t.messageBody,
 				countryCode: t.countryCode,
@@ -3416,7 +3438,7 @@ export const insertUserDmRelations = internalMutation({
 // org therefore gets an explicit active subscription so none lands on the
 // floor — Climate Action Now (8 supporters, $1.25K raised, sent blast) looking
 // gated would be incoherent with the rest of its activity. Plans canonical at
-// src/lib/server/billing/plans.ts.
+// ./lib/planLimits.
 
 export const insertSubscriptions = internalMutation({
 	args: {
@@ -3427,11 +3449,11 @@ export const insertSubscriptions = internalMutation({
 		// Realistic posture: a heavy-activity org pays Organization tier; a
 		// mid-activity org pays Starter; the third demos the top Coalition tier.
 		// Every seeded org gets a row — none falls to the gated inactive floor.
-		// priceCents mirror plans.ts exactly.
+		// Prices and limits are read from the shared plan table, never restated.
 		const subscriptionDefs = [
-			{ orgIdx: 0, plan: 'organization', priceCents: 7_500 }, // Climate Action Now
-			{ orgIdx: 1, plan: 'starter', priceCents: 1_000 }, // Voter Rights Coalition
-			{ orgIdx: 2, plan: 'coalition', priceCents: 20_000 } // Local First SF (top tier demo)
+			{ orgIdx: 0, plan: 'organization' }, // Climate Action Now
+			{ orgIdx: 1, plan: 'starter' }, // Voter Rights Coalition
+			{ orgIdx: 2, plan: 'coalition' } // Local First SF (top tier demo)
 		];
 
 		// 30-day billing cycle anchored so the seed represents an active
@@ -3441,7 +3463,7 @@ export const insertSubscriptions = internalMutation({
 			await ctx.db.insert('subscriptions', {
 				orgId: orgIds[s.orgIdx],
 				plan: s.plan as 'inactive' | 'starter' | 'organization' | 'coalition',
-				priceCents: s.priceCents,
+				priceCents: ORG_PLAN_LIMITS[s.plan].priceCents,
 				status: 'active',
 				currentPeriodStart: now - halfMonth,
 				currentPeriodEnd: now + halfMonth,
@@ -3452,10 +3474,10 @@ export const insertSubscriptions = internalMutation({
 			// Patch the org's stripeCustomerId so Stripe webhook handlers that
 			// match by customerId can resolve to this org. organizations table
 			// also carries plan-derived limits (maxSeats, maxTemplatesMonth);
-			// backfillOrgLimits at convex/subscriptions.ts:707-740 is the
-			// production sync path. Mirror it here so the seed's view of plan
-			// limits matches what backfill would set.
-			const planDef = PLANS_SEED[s.plan];
+			// `backfillOrgLimits` in ./subscriptions is the production sync path.
+			// Mirror it here so the seed's view of plan limits matches what
+			// backfill would set.
+			const planDef = ORG_PLAN_LIMITS[s.plan];
 			await ctx.db.patch(orgIds[s.orgIdx], {
 				stripeCustomerId: `cus_seed_${s.orgIdx}`,
 				maxSeats: planDef.maxSeats,
@@ -3465,17 +3487,6 @@ export const insertSubscriptions = internalMutation({
 		}
 	}
 });
-
-// Plan-limits mirror for the seed. Mirrors the canonical
-// src/lib/server/billing/plans.ts PLANS — Convex functions cannot import
-// from src/lib (different runtime root), so the seed duplicates the
-// minimum needed (maxSeats, maxTemplatesMonth) for the slugs it
-// references. If plans.ts shifts, update here too.
-const PLANS_SEED: Record<string, { maxSeats: number; maxTemplatesMonth: number }> = {
-	starter: { maxSeats: 5, maxTemplatesMonth: 100 },
-	organization: { maxSeats: 10, maxTemplatesMonth: 500 },
-	coalition: { maxSeats: 25, maxTemplatesMonth: 1_000 }
-};
 
 // =============================================================================
 // PHASE 17: ENCRYPT SEED PII — backfill donations, RSVPs, invites

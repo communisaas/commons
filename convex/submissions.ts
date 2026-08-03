@@ -14,9 +14,26 @@ import { requireInternalSecret } from './_internalAuth';
 import { CWCXmlGenerator } from './_cwcXml';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from './_policy';
+import {
+	DELIVERABLE_PLACEHOLDER_DENYLIST,
+	manualFillReplacements,
+	resolvePlaceholders,
+	type TemplateReplacements
+} from './lib/messagePlaceholders';
 import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
+import { isCongressionalDelivery } from './lib/templateDeliveryMethod';
 import { syncCompactPublicDiscoveryProjection } from './lib/publicTemplateDiscoverySource';
 import { syncTemplateListProjection } from './lib/templateListProjection';
+import {
+	DAILY_ARRIVAL_BUCKET_MS,
+	TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS,
+	TEMPLATE_DISTRICT_COUNT_CAP,
+	TRUST_TIER_BUCKET_COUNT,
+	emptyDailyArrivalWindow,
+	emptyTrustTierBuckets,
+	isDailyArrivalWindowShape,
+	isTrustTierBucketShape
+} from './lib/publicAggregatePrivacy';
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
@@ -172,7 +189,7 @@ export const getCongressionalDeliveryReadiness = query({
 
 function getTemplateDeliveryError(template: CongressionalDeliveryTemplate | null): string | null {
 	if (!template) return 'CWC_TEMPLATE_NOT_FOUND';
-	if (template.deliveryMethod !== 'cwc') return 'CWC_TEMPLATE_NOT_CWC';
+	if (!isCongressionalDelivery(template.deliveryMethod)) return 'CWC_TEMPLATE_NOT_CWC';
 	if (template.status !== 'published' || !template.isPublic) return 'CWC_TEMPLATE_NOT_PUBLISHED';
 	if (!template.messageBody.trim()) return 'CWC_TEMPLATE_EMPTY_MESSAGE';
 	return null;
@@ -253,10 +270,11 @@ function missingTransportForChambers(
  * Pipeline:
  *   1. Validate required fields
  *   2. Atomic insert via internalMutation (idempotency + nullifier check)
- *   3. Schedule background tasks: deliverToCongress, registerEngagement
+ *   3. Schedule background congressional delivery
  */
 export const create = action({
 	args: {
+		_secret: v.string(),
 		templateId: v.string(),
 		proof: v.string(),
 		publicInputs: v.any(),
@@ -268,6 +286,12 @@ export const create = action({
 		idempotencyKey: v.optional(v.string())
 	},
 	handler: async (ctx, args): Promise<CreateSubmissionResult> => {
+		// This action schedules real congressional delivery. Keep the public
+		// Convex transport only as a server-to-server bridge: browser clients
+		// cannot reproduce the canonical proof/domain checks performed by the
+		// budgeted SvelteKit authority.
+		requireInternalSecret(args._secret);
+
 		// Auth check
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
@@ -319,19 +343,16 @@ export const create = action({
 		}
 		// Defense-in-depth congressional-floor gate at the Convex action, mirroring
 		// the SvelteKit endpoint (`/api/submissions/create/+server.ts`). This public
-		// Convex action is reachable directly via the Convex client by any
-		// authenticated user, so it re-enforces the floor independently of the
-		// SvelteKit path. Tiered floor: tier 2 (address-verified — district confirmed)
+		// Convex action requires the server-held internal secret, and it re-enforces
+		// the floor independently of the SvelteKit path. Tiered floor: tier 2
+		// (address-verified — district confirmed)
 		// DELIVERS; gov-ID (tier 4) raises the assurance BADGE, it is not the bar. The
 		// active-credential / revocation / nullifier checks above are independent of
 		// this threshold and are unchanged. MUST stay in sync with
 		// REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
 		//
-		// NOTE: the canonical action-domain REBIND (recompute the domain from
-		// server-held inputs and reject mismatch) is performed by the SvelteKit
-		// resolver (`+server.ts`), NOT here — on the direct Convex path the domain
-		// in publicInputs is still self-referential. See follow-up note in the
-		// security review; closing it means moving the rebind into this action.
+		// The canonical action-domain rebind is performed by the only authorized
+		// external caller (`+server.ts`) before this secret-gated bridge is invoked.
 		//
 		// REQUIRED_CONGRESSIONAL_PROOF_TIER is imported from `convex/_policy` — the
 		// single source of truth shared with the SvelteKit handler + client gate.
@@ -393,10 +414,6 @@ export const create = action({
 		// Schedule background tasks (fire-and-forget via Convex scheduler)
 		await ctx.scheduler.runAfter(0, internal.submissions.deliverToCongress, {
 			submissionId: result.submissionId
-		});
-
-		await ctx.scheduler.runAfter(0, internal.submissions.registerEngagement, {
-			userSubject: identity.subject
 		});
 
 		// promoteTier removed: trust tier escalation must wait until
@@ -493,7 +510,6 @@ export const insertSubmission = internalMutation({
 			publicInputs: args.publicInputs,
 			nullifier: args.nullifier,
 			encryptedWitness: args.encryptedWitness,
-			encryptedMessage: undefined,
 			witnessNonce: args.witnessNonce,
 			ephemeralPublicKey: args.ephemeralPublicKey,
 			teeKeyId: args.teeKeyId,
@@ -1716,6 +1732,46 @@ export const deliverToCongress = internalAction({
 						status: 'processing'
 					});
 
+					// The authored letter carries bracket slots. Resolve them here, per
+					// official, because the addressee placeholders differ per official.
+					// This path holds no sender-typed text — the submission carries a proof,
+					// not a message body — so every manual-fill slot erases rather than
+					// travelling to a congressional office as literal bracket text.
+					const address = (resolved.constituent.address ?? {}) as Record<string, string>;
+					const wholeAddress =
+						address.street && address.city && address.state && address.zip
+							? `${address.street}, ${address.city}, ${address.state} ${address.zip}`
+							: null;
+					const officialName: string | null = official.name || null;
+					const honorific = official.chamber === 'senate' ? 'Sen.' : 'Rep.';
+					const replacements: TemplateReplacements = {
+						...manualFillReplacements(),
+						'[Name]': resolved.constituent.name || null,
+						'[Your Name]': resolved.constituent.name || null,
+						'[Address]': wholeAddress,
+						'[Your Address]': wholeAddress,
+						'[City]': address.city || null,
+						'[State]': address.state || null,
+						'[ZIP]': address.zip || null,
+						'[Zip Code]': address.zip || null,
+						'[Representative Name]': officialName,
+						'[Rep Name]': officialName,
+						'[Representative]': officialName ? `${honorific} ${officialName}` : null,
+						'[Senator Name]': official.chamber === 'senate' ? officialName : null,
+						'[Senator]':
+							official.chamber === 'senate' && officialName ? `Sen. ${officialName}` : null
+					};
+					// Anything else the validator would reject has no value here and must
+					// still leave. One array governs both sides, so a placeholder added to
+					// the denylist is resolved and validated without touching this code.
+					for (const placeholder of DELIVERABLE_PLACEHOLDER_DENYLIST) {
+						if (!(placeholder in replacements)) replacements[placeholder] = null;
+					}
+					const resolvedMessageBody = resolvePlaceholders(
+						template?.messageBody || template?.description || '',
+						replacements
+					);
+
 					const cwcXml = CWCXmlGenerator.generateUserAdvocacyXML({
 						template: {
 							id: String(submission.templateId),
@@ -1733,6 +1789,7 @@ export const deliverToCongress = internalAction({
 							representatives: { house: official, senate: [] }
 						},
 						_targetRep: official,
+						personalizedMessage: resolvedMessageBody,
 						proOrCon
 					});
 
@@ -1918,38 +1975,6 @@ export const deliverToCongress = internalAction({
 	}
 });
 
-/**
- * Internal action: Register engagement in Shadow Atlas (Tree 3).
- */
-export const registerEngagement = internalAction({
-	args: { userSubject: v.string() },
-	handler: async (ctx, args) => {
-		try {
-			// Look up user's wallet + identity commitment
-			// userSubject is the auth token subject — need to find user by email
-			// Default is the reference commons.email atlas; peer implementations
-			// override via SHADOW_ATLAS_URL set in the Convex dashboard.
-			// NOTE: distinct from PUBLIC_ATLAS_HOST (browser-side) — this var is
-			// read at Convex action runtime; both should point at the same atlas
-			// host for a coherent deployment. See docs/design/FEDERATION-DEPLOY.md.
-			const saUrl = process.env.SHADOW_ATLAS_URL || 'https://atlas.commons.email';
-
-			// This is fire-and-forget — failures are logged but don't block
-			const response = await fetch(`${saUrl}/api/engagement/register`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ userSubject: args.userSubject })
-			});
-
-			if (!response.ok) {
-				console.warn('[registerEngagement] Shadow Atlas returned:', response.status);
-			}
-		} catch (err) {
-			console.error('[registerEngagement] Failed:', err);
-		}
-	}
-});
-
 // promoteTier removed: it escalated trust tier unconditionally. Any
 // re-implementation must gate on verificationStatus === 'verified'.
 
@@ -1986,10 +2011,6 @@ export const incrementTemplateReach = internalMutation({
 		trustTier: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
-		const DAILY_WINDOW = 30;
-		const DISTRICT_CAP = 500;
-		const dayMs = 86400000;
-
 		// Resolve template by slug (same pattern as getTemplateForDelivery)
 		const template = await ctx.db
 			.query('templates')
@@ -2004,31 +2025,34 @@ export const incrementTemplateReach = internalMutation({
 		// Reach counter: union of districts that have ever delivered, plus a count.
 		const districts = template.deliveredDistricts ?? [];
 		const isNewDistrict = !districts.includes(args.districtCode);
-		const shouldTrackDistrict = isNewDistrict && districts.length < DISTRICT_CAP;
+		const shouldTrackDistrict = isNewDistrict && districts.length < TEMPLATE_DISTRICT_COUNT_CAP;
 		const newDistricts = shouldTrackDistrict ? [...districts, args.districtCode] : districts;
 
-		// Daily arrival rhythm: rolling 30-day window, oldest first. The last
-		// bucket is always the current day; older buckets shift left as days roll.
+		// Daily arrival rhythm: rolling window, oldest first. The last bucket is
+		// always the current day; older buckets shift left as days roll.
 		const verifiedAt = args.verifiedAt ?? Date.now();
-		const day = Math.floor(verifiedAt / dayMs) * dayMs;
-		let dailyArrivals = template.dailyArrivals ?? new Array(DAILY_WINDOW).fill(0);
-		if (dailyArrivals.length !== DAILY_WINDOW) {
-			dailyArrivals = new Array(DAILY_WINDOW).fill(0);
+		const day = Math.floor(verifiedAt / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+		let dailyArrivals = template.dailyArrivals ?? emptyDailyArrivalWindow();
+		if (!isDailyArrivalWindowShape(dailyArrivals)) {
+			dailyArrivals = emptyDailyArrivalWindow();
 		}
 		const lastDay = template.dailyArrivalsLastDay ?? day;
 		let newLastDay = lastDay;
 		if (day === lastDay) {
-			dailyArrivals[DAILY_WINDOW - 1]++;
+			dailyArrivals[TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1]++;
 		} else if (day > lastDay) {
-			const daysToShift = Math.min(DAILY_WINDOW, Math.floor((day - lastDay) / dayMs));
+			const daysToShift = Math.min(
+				TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS,
+				Math.floor((day - lastDay) / DAILY_ARRIVAL_BUCKET_MS)
+			);
 			dailyArrivals = [...dailyArrivals.slice(daysToShift), ...new Array(daysToShift).fill(0)];
-			dailyArrivals[DAILY_WINDOW - 1]++;
+			dailyArrivals[TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1]++;
 			newLastDay = day;
 		}
 		// else day < lastDay: out-of-order verifiedAt; drop the temporal update.
 
-		// Per-district counts: capped at DISTRICT_CAP. Read-time consumers
-		// (TemplateList per-row Ratio, hero Ratio) sort and truncate.
+		// Per-district counts: capped at TEMPLATE_DISTRICT_COUNT_CAP. Read-time
+		// consumers (TemplateList per-row Ratio, hero Ratio) sort and truncate.
 		let districtCounts = template.districtCounts ?? [];
 		const dcIdx = districtCounts.findIndex((d) => d.code === args.districtCode);
 		if (dcIdx >= 0) {
@@ -2038,16 +2062,20 @@ export const incrementTemplateReach = internalMutation({
 				updated,
 				...districtCounts.slice(dcIdx + 1)
 			];
-		} else if (districtCounts.length < DISTRICT_CAP) {
+		} else if (districtCounts.length < TEMPLATE_DISTRICT_COUNT_CAP) {
 			districtCounts = [...districtCounts, { code: args.districtCode, count: 1 }];
 		}
 
-		// Trust-tier breakdown: 6 buckets, index = tier 0-5.
-		let tierCounts = template.tierCounts ?? [0, 0, 0, 0, 0, 0];
-		if (tierCounts.length !== 6) {
-			tierCounts = [0, 0, 0, 0, 0, 0];
+		// Trust-tier breakdown: one bucket per tier, index = tier 0-5.
+		let tierCounts = template.tierCounts ?? emptyTrustTierBuckets();
+		if (!isTrustTierBucketShape(tierCounts)) {
+			tierCounts = emptyTrustTierBuckets();
 		}
-		if (args.trustTier !== undefined && args.trustTier >= 0 && args.trustTier <= 5) {
+		if (
+			args.trustTier !== undefined &&
+			args.trustTier >= 0 &&
+			args.trustTier <= TRUST_TIER_BUCKET_COUNT - 1
+		) {
 			tierCounts = [...tierCounts];
 			tierCounts[args.trustTier]++;
 		}
@@ -2458,8 +2486,6 @@ export const retryDelivery = action({
 const SUBMISSION_BACKFILL_PAGE_ROWS = 100;
 const SUBMISSION_BACKFILL_PAGE_BYTES = 512 * 1024;
 const SUBMISSION_BACKFILL_CURSOR_MAX_BYTES = 2_048;
-const TEMPLATE_AGGREGATE_DAILY_WINDOW = 30;
-const TEMPLATE_AGGREGATE_DISTRICT_CAP = 500;
 
 /**
  * Internal: paginated user list for trustTier backfill driver.
@@ -2713,9 +2739,9 @@ export const _backfillOneTemplate = internalMutation({
 			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_DAY_INVALID');
 		}
 		if (
-			args.dailyArrivals.length !== TEMPLATE_AGGREGATE_DAILY_WINDOW ||
-			args.tierCounts.length !== 6 ||
-			args.districtCounts.length > TEMPLATE_AGGREGATE_DISTRICT_CAP ||
+			!isDailyArrivalWindowShape(args.dailyArrivals) ||
+			!isTrustTierBucketShape(args.tierCounts) ||
+			args.districtCounts.length > TEMPLATE_DISTRICT_COUNT_CAP ||
 			[
 				...args.dailyArrivals,
 				...args.tierCounts,
@@ -2757,9 +2783,8 @@ export const backfillTemplateAggregates = internalAction({
 	args: { batchSize: v.optional(v.number()) },
 	handler: async (ctx, { batchSize }): Promise<{ processed: number; failed: number }> => {
 		const limit = Math.min(Math.max(Math.trunc(batchSize ?? 50), 1), SUBMISSION_BACKFILL_PAGE_ROWS);
-		const dayMs = 86_400_000;
-		const today = Math.floor(Date.now() / dayMs) * dayMs;
-		const oldestDay = today - (TEMPLATE_AGGREGATE_DAILY_WINDOW - 1) * dayMs;
+		const today = Math.floor(Date.now() / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+		const oldestDay = today - (TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1) * DAILY_ARRIVAL_BUCKET_MS;
 		let processed = 0;
 		let failed = 0;
 		let isDone = false;
@@ -2779,9 +2804,9 @@ export const backfillTemplateAggregates = internalAction({
 
 			for (const t of batch.items) {
 				try {
-					const dailyArrivals = new Array<number>(TEMPLATE_AGGREGATE_DAILY_WINDOW).fill(0);
+					const dailyArrivals = emptyDailyArrivalWindow();
 					const districtMap = new Map<string, number>();
-					const tierCounts = [0, 0, 0, 0, 0, 0];
+					const tierCounts = emptyTrustTierBuckets();
 					let sourceCursor: string | undefined;
 					let sourceDone = false;
 					while (!sourceDone) {
@@ -2801,10 +2826,12 @@ export const backfillTemplateAggregates = internalAction({
 						for (const submission of page.items) {
 							if (submission.verificationStatus !== 'verified') continue;
 							if (submission.verifiedAt !== undefined) {
-								const day = Math.floor(submission.verifiedAt / dayMs) * dayMs;
+								const day =
+									Math.floor(submission.verifiedAt / DAILY_ARRIVAL_BUCKET_MS) *
+									DAILY_ARRIVAL_BUCKET_MS;
 								if (day >= oldestDay && day <= today) {
-									const dayIndex = Math.round((day - oldestDay) / dayMs);
-									if (dayIndex >= 0 && dayIndex < TEMPLATE_AGGREGATE_DAILY_WINDOW) {
+									const dayIndex = Math.round((day - oldestDay) / DAILY_ARRIVAL_BUCKET_MS);
+									if (dayIndex >= 0 && dayIndex < TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS) {
 										dailyArrivals[dayIndex]++;
 									}
 								}
@@ -2812,7 +2839,7 @@ export const backfillTemplateAggregates = internalAction({
 							if (submission.resolvedDistrict) {
 								if (
 									!districtMap.has(submission.resolvedDistrict) &&
-									districtMap.size >= TEMPLATE_AGGREGATE_DISTRICT_CAP
+									districtMap.size >= TEMPLATE_DISTRICT_COUNT_CAP
 								) {
 									throw new Error('TEMPLATE_AGGREGATE_DISTRICT_CARDINALITY_EXCEEDED');
 								}
@@ -2824,7 +2851,7 @@ export const backfillTemplateAggregates = internalAction({
 							if (
 								submission.trustTier !== undefined &&
 								submission.trustTier >= 0 &&
-								submission.trustTier <= 5
+								submission.trustTier <= TRUST_TIER_BUCKET_COUNT - 1
 							) {
 								tierCounts[submission.trustTier]++;
 							}

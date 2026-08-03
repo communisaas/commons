@@ -22,12 +22,12 @@ import {
 	WORKFLOW_EXECUTION_COUNT_VERSION
 } from './lib/workflowExecutionCount';
 import {
-	PLANS,
 	durablePlanUsagePeriodStart,
 	durablyActive,
 	readProjectedPlanUsage,
 	uniqueSubscriptionForOrg
 } from './subscriptions';
+import { ORG_PLAN_LIMITS as PLANS } from './lib/planLimits';
 import { enqueuePlanUsageRepair } from './lib/planUsage';
 import {
 	blockEmailReservation,

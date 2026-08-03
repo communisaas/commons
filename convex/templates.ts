@@ -29,10 +29,21 @@ import {
 	MAX_PUBLIC_TEMPLATE_JURISDICTIONS,
 	MAX_PUBLIC_TEMPLATE_SCOPES,
 	MAX_TEMPLATE_SLUG_BYTES,
+	MAX_TEMPLATE_TOPICS,
+	MAX_TEMPLATE_TOPIC_BYTES,
+	isCanonicalTemplateSlug,
 	validateBoundedJson,
 	validateTemplateInputBudgets,
 	validateTemplateMetadataBudgets
 } from './lib/templateInputBudget';
+import { isTemplateDeliveryMethod } from './lib/templateDeliveryMethod';
+import {
+	DAILY_ARRIVAL_BUCKET_MS,
+	kFloorCounter,
+	kFloorDistrictCount,
+	partitionDistrictCountsByFloor,
+	zeroBelowCounterFloor
+} from './lib/publicAggregatePrivacy';
 import {
 	PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_MAX_BYTES,
 	PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_NOT_READY,
@@ -86,9 +97,11 @@ import {
 	publicRecipientMigrationIntegrityReady,
 	publicTemplateDetailProjectionBytes,
 	readPublicTemplateDetailProjection,
+	readPublicTemplateDiscoveryCandidate,
 	syncCompactPublicDiscoveryProjection,
 	syncCompactPublicDiscoverySource,
-	type CompactPublicTemplateSource
+	type CompactPublicTemplateSource,
+	type PublicTemplateDiscoveryCandidate
 } from './lib/publicTemplateDiscoverySource';
 import {
 	TEMPLATE_LIST_MAX_PAGE_SIZE,
@@ -148,9 +161,6 @@ const templateGeographicScopeValidator = v.union(
 const rateLimitCheckRef = makeFunctionReference<'mutation'>(
 	'_rateLimit:check'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
-const getByIdsRef = makeFunctionReference<'query'>(
-	'templates:getByIds'
-) as unknown as FunctionReference<'query', 'internal'>;
 const textSearchRef = makeFunctionReference<'query'>(
 	'templates:textSearch'
 ) as unknown as FunctionReference<'query', 'internal'>;
@@ -159,12 +169,6 @@ const publicDiscoverySearchReadinessRef = makeFunctionReference<'query'>(
 ) as unknown as FunctionReference<'query', 'internal', Record<string, never>, unknown>;
 const migrateTopicEmbeddingMarkersRef = makeFunctionReference<'mutation'>(
 	'templates:migrateTopicEmbeddingMarkers'
-) as unknown as FunctionReference<'mutation', 'internal'>;
-const listMissingTagEmbeddingsRef = makeFunctionReference<'query'>(
-	'templates:listMissingTagEmbeddings'
-) as unknown as FunctionReference<'query', 'internal'>;
-const patchTagEmbeddingsRef = makeFunctionReference<'mutation'>(
-	'templates:patchTagEmbeddings'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
 type MissingDomainHuePage = {
 	candidates: Array<{ _id: Id<'templates'>; topicEmbedding: number[] }>;
@@ -426,7 +430,7 @@ function resolveDomain(doc: any): string {
 /**
  * Normalize a template's `topics` (stored as untyped JSON) into clean tag
  * strings: non-empty trimmed strings only, de-duplicated, stably ordered. Used
- * by the tag-embedding backfill and the concept query so both see the same tag
+ * by the bounded tag-vector intake and the concept query so both see the same
  * vocabulary regardless of how the raw field was authored.
  */
 function normalizeTags(topics: unknown): string[] {
@@ -445,8 +449,8 @@ function toPublicTemplate(t: PublicTemplateEnrichmentSource, score?: number | nu
 		deliveryMethod: t.deliveryMethod,
 		status: t.status,
 		isPublic: t.isPublic,
-		verifiedSends: t.verifiedSends < 5 ? null : t.verifiedSends,
-		uniqueDistricts: t.uniqueDistricts < 3 ? null : t.uniqueDistricts,
+		verifiedSends: kFloorCounter(t.verifiedSends),
+		uniqueDistricts: kFloorDistrictCount(t.uniqueDistricts),
 		createdAt: new Date(t._creationTime).toISOString()
 	};
 	return score === undefined ? projected : { ...projected, _score: score };
@@ -551,7 +555,6 @@ const RELATION_SNAPSHOT_VARIANT_CAP = 50;
 // if a future schema expansion consumes that headroom.
 const MAX_PUBLIC_TEMPLATE_CARD_BYTES = 16_000;
 const MAX_PUBLIC_TEMPLATE_SNAPSHOT_BYTES = 900_000;
-const DAILY_ARRIVALS_DAY_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_DISCOVERY_SOURCE_MIGRATION_KEY = 'v1' as const;
 const PUBLIC_DISCOVERY_SOURCE_MIGRATION_PAGE_SIZE = 4;
 
@@ -1362,9 +1365,9 @@ function normalizeDailyArrivalsForSnapshot(
 	if (!arrivals || arrivals.length === 0) return [];
 	if (lastDay === undefined || !Number.isFinite(lastDay)) return [...arrivals];
 
-	const currentDay = Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
-	const anchoredDay = Math.floor(lastDay / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS;
-	const elapsedDays = Math.floor((currentDay - anchoredDay) / DAILY_ARRIVALS_DAY_MS);
+	const currentDay = Math.floor(materializedAt / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+	const anchoredDay = Math.floor(lastDay / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+	const elapsedDays = Math.floor((currentDay - anchoredDay) / DAILY_ARRIVAL_BUCKET_MS);
 	if (elapsedDays <= 0) return [...arrivals];
 	if (elapsedDays >= arrivals.length) return new Array<number>(arrivals.length).fill(0);
 
@@ -1389,7 +1392,7 @@ function nextPublicTemplateTemporalRebuildAt(
 		next = next === null ? candidate : Math.min(next, candidate);
 	};
 	for (const template of templates) {
-		const newUntil = template._creationTime + 7 * DAILY_ARRIVALS_DAY_MS;
+		const newUntil = template._creationTime + 7 * DAILY_ARRIVAL_BUCKET_MS;
 		if (materializedAt <= newUntil) consider(Math.floor(newUntil) + 1);
 
 		const arrivals = normalizeDailyArrivalsForSnapshot(
@@ -1399,8 +1402,8 @@ function nextPublicTemplateTemporalRebuildAt(
 		);
 		if (arrivals.some((count) => Number.isFinite(count) && count !== 0)) {
 			consider(
-				Math.floor(materializedAt / DAILY_ARRIVALS_DAY_MS) * DAILY_ARRIVALS_DAY_MS +
-					DAILY_ARRIVALS_DAY_MS
+				Math.floor(materializedAt / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS +
+					DAILY_ARRIVAL_BUCKET_MS
 			);
 		}
 	}
@@ -1510,9 +1513,8 @@ async function enrichPublicTemplates(
 			? {
 					status: debate.status,
 					winningStance: debate.winningStance ?? undefined,
-					uniqueParticipants:
-						(debate.uniqueParticipants ?? 0) < 5 ? null : (debate.uniqueParticipants ?? 0),
-					argumentCount: (debate.argumentCount ?? 0) < 5 ? null : (debate.argumentCount ?? 0),
+					uniqueParticipants: kFloorCounter(debate.uniqueParticipants ?? 0),
+					argumentCount: kFloorCounter(debate.argumentCount ?? 0),
 					deadline: debate.deadline ? new Date(debate.deadline).toISOString() : undefined
 				}
 			: undefined;
@@ -1529,12 +1531,8 @@ async function enrichPublicTemplates(
 			materializedAt
 		);
 		const retainedDistrictCounts = template.districtCounts ?? [];
-		const visibleDistrictCounts = retainedDistrictCounts.filter(
-			(district: { code: string; count: number }) => district.count >= 5
-		);
-		const privacySuppressedDistrictCounts = retainedDistrictCounts.filter(
-			(district: { code: string; count: number }) => district.count < 5
-		);
+		const { visible: visibleDistrictCounts, suppressed: privacySuppressedDistrictCounts } =
+			partitionDistrictCountsByFloor(retainedDistrictCounts);
 		const projectionSuppressedDistricts =
 			'districtCountsSuppressedDistricts' in template
 				? template.districtCountsSuppressedDistricts
@@ -1562,27 +1560,20 @@ async function enrichPublicTemplates(
 			isNew,
 			hasActiveDebate,
 			debateSummary,
-			// Public counters K-floor at 5 (3 for unique_districts): sub-K cohort
-			// sizes name specific submitters. Above the floor, counts are exact —
-			// template visibility is the product. daily_arrivals zeroes sub-K days
-			// so a singleton-day doesn't reveal the day's only sender.
-			verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
-			unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-			send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
-			daily_arrivals: dailyArrivals.map((c: number) => (c < 5 ? 0 : c)),
-			// K-anon at trust boundary: filter districts with count < 5 out of
-			// the public payload, zero tier counts below the same threshold.
-			// Consumers still see the visible-shape but not the thin-cohort
-			// contributions. earlier hero work applied this; the per-template path
-			// mirrors it so all consumers (org pages, share cards, public API,
-			// future surfaces) inherit the floor without re-implementing.
+			verified_sends: kFloorCounter(template.verifiedSends),
+			unique_districts: kFloorDistrictCount(template.uniqueDistricts),
+			send_count: kFloorCounter(template.verifiedSends),
+			daily_arrivals: dailyArrivals.map((c: number) => zeroBelowCounterFloor(c)),
+			// District rows, tier buckets and daily buckets below the shared
+			// counter floor are suppressed here; see
+			// convex/lib/publicAggregatePrivacy.ts for why.
 			district_counts: visibleDistrictCounts,
 			district_counts_suppressed_districts:
 				projectionSuppressedDistricts + privacySuppressedDistrictCounts.length,
 			district_counts_suppressed_count:
 				projectionSuppressedCount +
 				privacySuppressedDistrictCounts.reduce((total, district) => total + district.count, 0),
-			tier_counts: (template.tierCounts ?? []).map((c: number) => (c < 5 ? 0 : c)),
+			tier_counts: (template.tierCounts ?? []).map((c: number) => zeroBelowCounterFloor(c)),
 			// Discovery cards never execute delivery. Provider routing and CWC
 			// workflow configuration are not part of any anonymous public payload.
 			delivery_config: {},
@@ -1593,7 +1584,7 @@ async function enrichPublicTemplates(
 			recipient_count:
 				'recipientCount' in template
 					? template.recipientCount
-					: countRecipientsConvex(template.recipientConfig),
+					: publicRecipientIntentCount(template.recipientConfig),
 			campaign_id: template.campaignId ?? null,
 			status: template.status,
 			is_public: template.isPublic,
@@ -1873,7 +1864,10 @@ function projectStoredPublicTemplate(value: unknown): PublicTemplatePayload | nu
 			const legacyEmailCount = Array.isArray(stored.recipientEmails)
 				? stored.recipientEmails.filter((email) => typeof email === 'string').length
 				: 0;
-			projected[name] = Math.max(countRecipientsConvex(stored.recipient_config), legacyEmailCount);
+			projected[name] = Math.max(
+				publicRecipientIntentCount(stored.recipient_config),
+				legacyEmailCount
+			);
 			continue;
 		}
 		if (!Object.prototype.hasOwnProperty.call(stored, name) || stored[name] === undefined) {
@@ -2572,11 +2566,16 @@ type PublicTemplateRelationSelection = Pick<
  * Build and atomically upsert both `listPublic` materializations.
  *
  * The exact `(published, public)` index removes drafts/private rows before any
- * document hydration. The descending source scan is hard-capped at 250 rows.
- * Candidates are enriched and validated in newest-first batches before either
- * variant takes its 50-card limit, so an invalid/oversized card is backfilled by
- * the next valid candidate within the same explicit I/O budget. Shared cards
- * are enriched once per batch.
+ * document hydration. The descending source scan is hard-capped at 250 rows,
+ * plus at most one equally capped indexed read when that window holds too few
+ * congressional-free rows to fill the gated variant. Candidates are enriched and
+ * validated in newest-first batches before either variant takes its 50-card
+ * limit, so an invalid/oversized card is backfilled by the next valid candidate
+ * within the same explicit I/O budget. Shared cards are enriched once per batch.
+ *
+ * Which variant a candidate may fill is decided by its row's schema-constrained
+ * `isCwc` column, never by a delivery method read back out of the `v.any()`
+ * producer blob beside it.
  */
 async function preparePublicTemplateSnapshotPlan(
 	ctx: MutationCtx,
@@ -2596,13 +2595,58 @@ async function preparePublicTemplateSnapshotPlan(
 		)
 		.order('desc')
 		.take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
-	const candidates: PublicTemplateEnrichmentSource[] = candidateRows.map((row) => {
+	const readCandidate = (row: Doc<'publicTemplateDiscoverySources'>) => {
 		if (row.projectionVersion !== PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION) {
 			throw new Error(`PUBLIC_DISCOVERY_SOURCE_VERSION_MISMATCH:${row.projectionVersion}`);
 		}
-		assertCompactPublicTemplateSource(row.source);
-		return row.source;
-	});
+		return readPublicTemplateDiscoveryCandidate(row);
+	};
+	const candidates: PublicTemplateDiscoveryCandidate[] = candidateRows.map(readCandidate);
+
+	// The gated variant is not a guaranteed subset of the newest-250 window: a
+	// burst of congressional templates can crowd every congressional-free row out
+	// of it and starve the feed the homepage serves when congressional delivery is
+	// off. `by_generation_isCwc_templateCreatedAt_templateId` answers exactly that
+	// question — the newest congressional-free rows of this generation — so the
+	// top-up is one indexed range read. It is taken only when the mixed scan hit
+	// its cap without already carrying a full variant's worth, which is the only
+	// case where older rows exist for it to find. Every row it adds is older than
+	// the mixed scan's tail, so appending preserves newest-first order.
+	const scannedExcludeCwcCount = candidates.filter((candidate) => !candidate.isCwc).length;
+	if (
+		candidateRows.length >= PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP &&
+		scannedExcludeCwcCount < PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP
+	) {
+		const scannedIds = new Set(candidateRows.map((row) => String(row.templateId)));
+		const excludeCwcRows = await ctx.db
+			.query('publicTemplateDiscoverySources')
+			.withIndex('by_generation_isCwc_templateCreatedAt_templateId', (q) =>
+				q.eq('generation', migration.runToken).eq('isCwc', false)
+			)
+			.order('desc')
+			.take(PUBLIC_TEMPLATE_SNAPSHOT_SCAN_CAP);
+		for (const row of excludeCwcRows) {
+			if (scannedIds.has(String(row.templateId))) continue;
+			candidates.push(readCandidate(row));
+		}
+	}
+
+	const candidateSources: PublicTemplateEnrichmentSource[] = candidates.map(
+		(candidate) => candidate.source
+	);
+	// Congressional membership travels with the row, not with the card built from
+	// it. A projected card that lost its classification is a refused snapshot, not
+	// a card that defaults into the congressional-free variant.
+	const isCwcById = new Map(
+		candidates.map((candidate) => [candidate.source._id, candidate.isCwc] as const)
+	);
+	const requireIsCwc = (id: Id<'templates'>): boolean => {
+		const isCwc = isCwcById.get(id);
+		if (isCwc === undefined) {
+			throw new Error(`PUBLIC_TEMPLATE_SNAPSHOT_INVALID:${String(id)}:cwc-classification-missing`);
+		}
+		return isCwc;
+	};
 
 	const invalidTemplateIds: string[] = [];
 	const oversizedTemplateIds: string[] = [];
@@ -2615,7 +2659,7 @@ async function preparePublicTemplateSnapshotPlan(
 	const allTargetCount = Math.min(PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP, candidates.length);
 	const excludeCwcTargetCount = Math.min(
 		PUBLIC_TEMPLATE_SNAPSHOT_VARIANT_CAP,
-		candidates.filter((template) => template.deliveryMethod !== 'cwc').length
+		candidates.filter((candidate) => !candidate.isCwc).length
 	);
 	let validatedCandidateCount = 0;
 
@@ -2632,12 +2676,13 @@ async function preparePublicTemplateSnapshotPlan(
 		// candidates that cannot backfill the gated variant.
 		const batch = candidates
 			.slice(offset, offset + PUBLIC_TEMPLATE_SNAPSHOT_VALIDATION_BATCH)
-			.filter((template) => needsAll || template.deliveryMethod !== 'cwc');
+			.filter((candidate) => needsAll || !candidate.isCwc)
+			.map((candidate) => candidate.source);
 		const enrichedBatch = await enrichPublicTemplates(ctx, batch);
 		for (const template of enrichedBatch) {
 			const canFillAll = allTemplateIds.length < allTargetCount;
 			const canFillExcludeCwc =
-				template.deliveryMethod !== 'cwc' && excludeCwcTemplateIds.length < excludeCwcTargetCount;
+				!requireIsCwc(template.id) && excludeCwcTemplateIds.length < excludeCwcTargetCount;
 			if (!canFillAll && !canFillExcludeCwc) continue;
 			validatedCandidateCount += 1;
 
@@ -2749,7 +2794,7 @@ async function preparePublicTemplateSnapshotPlan(
 		throw noValidCardsError();
 	}
 
-	const candidatesById = new Map(candidates.map((template) => [template._id, template]));
+	const candidatesById = new Map(candidateSources.map((template) => [template._id, template]));
 	const projectSelectedSources = (ids: Array<Id<'templates'>>) =>
 		ids.flatMap((id) => {
 			if (!enrichedById.has(id)) return [];
@@ -2772,7 +2817,7 @@ async function preparePublicTemplateSnapshotPlan(
 			temporalSources,
 			publication.updatedAt
 		),
-		candidates,
+		candidates: candidateSources,
 		sources,
 		rows,
 		rowSizes,
@@ -3646,7 +3691,7 @@ async function preparePublishedPublicTemplateRelationSelection(
 					.withIndex('by_templateId', (q) => q.eq('templateId', id))
 					.unique();
 				if (!row || row.generation !== migration.runToken) return null;
-				assertCompactPublicTemplateSource(row.source);
+				assertCompactPublicTemplateSource(row.source, row.isCwc);
 				return row.source;
 			})
 		)
@@ -4252,55 +4297,6 @@ export const publicTemplatePageArtifactsByCoordinates = query({
 });
 
 /**
- * Extract recipient emails from recipient_config JSON.
- */
-function extractRecipientEmailsConvex(recipientConfig: unknown): string[] {
-	if (!recipientConfig || typeof recipientConfig !== 'object') return [];
-	const config = recipientConfig as Record<string, unknown>;
-	const emails: string[] = [];
-
-	// Handle various recipient config shapes
-	if (Array.isArray(config.recipients)) {
-		for (const r of config.recipients) {
-			if (typeof r === 'string') emails.push(r);
-			else if (r && typeof r === 'object') {
-				const email = (r as { email?: unknown }).email;
-				if (typeof email === 'string') emails.push(email);
-			}
-		}
-	}
-	if (Array.isArray(config.decisionMakers)) {
-		for (const decisionMaker of config.decisionMakers) {
-			if (decisionMaker && typeof decisionMaker === 'object') {
-				const email = (decisionMaker as { email?: unknown }).email;
-				if (typeof email === 'string') emails.push(email);
-			}
-		}
-	}
-	if (typeof config.email === 'string') emails.push(config.email);
-	if (Array.isArray(config.emails)) {
-		for (const e of config.emails) {
-			if (typeof e === 'string') emails.push(e);
-		}
-	}
-
-	// Authoring stores commonly carry the same target in both `emails` and
-	// `decisionMakers`. Keep the compatibility projection and recipient count
-	// stable instead of double-counting that denormalized representation.
-	return [...new Set(emails.map((email) => email.trim()).filter(Boolean))];
-}
-
-/** Return only the non-identifying cardinality needed by anonymous UI. */
-function countRecipientsConvex(recipientConfig: unknown): number {
-	if (!recipientConfig || typeof recipientConfig !== 'object') return 0;
-	const config = recipientConfig as Record<string, unknown>;
-	const decisionMakerCount = Array.isArray(config.decisionMakers)
-		? config.decisionMakers.length
-		: 0;
-	return Math.max(decisionMakerCount, extractRecipientEmailsConvex(recipientConfig).length);
-}
-
-/**
  * Internal: Batch lookup templates by IDs.
  * Used by search action to hydrate results after vector search.
  */
@@ -4325,7 +4321,7 @@ export const getByIds = internalQuery({
 					.withIndex('by_templateId', (q) => q.eq('templateId', id))
 					.unique();
 				if (!row || row.generation !== migration.runToken) return null;
-				assertCompactPublicTemplateSource(row.source);
+				assertCompactPublicTemplateSource(row.source, row.isCwc);
 				return row.source;
 			})
 		);
@@ -4334,54 +4330,14 @@ export const getByIds = internalQuery({
 });
 
 // =============================================================================
-// SEARCH — Action (needs external Gemini API call)
+// SEARCH — authenticated, provider-free compact text-index action
 // =============================================================================
 
-const GEMINI_EMBEDDING_MODEL = 'gemini-embedding-001';
-const EMBEDDING_DIMENSIONS = 768;
-
 /**
- * Generate a query embedding via Gemini API.
- * Raw fetch — no SDK dependency needed in Convex actions.
- */
-async function generateQueryEmbedding(query: string, apiKey: string): Promise<number[]> {
-	const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_EMBEDDING_MODEL}:embedContent?key=${apiKey}`;
-
-	const response = await fetch(url, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({
-			model: `models/${GEMINI_EMBEDDING_MODEL}`,
-			content: { parts: [{ text: query }] },
-			taskType: 'RETRIEVAL_QUERY',
-			outputDimensionality: EMBEDDING_DIMENSIONS
-		})
-	});
-
-	if (!response.ok) {
-		const text = await response.text();
-		console.error(`[templates.search] Gemini error ${response.status}: ${text}`);
-		throw new Error('Search service temporarily unavailable');
-	}
-
-	const data = await response.json();
-	const values = data?.embedding?.values;
-	if (!Array.isArray(values) || values.length === 0) {
-		throw new Error('No embedding values in Gemini response');
-	}
-	return values;
-}
-
-/**
- * Semantic template search.
- *
- * Pipeline:
- *   1. Generate query embedding via Gemini (RETRIEVAL_QUERY task type)
- *   2. Vector search on topicEmbedding index
- *   3. Apply quality boost + 0.40 similarity floor
- *   4. Hydrate full template docs
- *
- * Falls back to text search if embedding generation fails.
+ * Search the compact public source plane without provider or vector work.
+ * The server-secret boundary prevents direct public action calls, the stable
+ * actor bucket bounds repeated searches, and the internal query owns the exact
+ * indexed read limit.
  */
 export const search = action({
 	args: {
@@ -4393,9 +4349,9 @@ export const search = action({
 		countryCode: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		// This paid action is intentionally reachable only through the authenticated
-		// SvelteKit route. Reject direct public Convex calls before rate-limit I/O or
-		// Gemini work, then charge every query variation to one stable actor bucket.
+		// This action is intentionally reachable only through the authenticated
+		// SvelteKit route. Reject direct public Convex calls before rate-limit I/O,
+		// then charge every query variation to one stable actor bucket.
 		requireInternalSecret(args._secret);
 		if (args.actorKey.length === 0 || args.actorKey.length > 160) {
 			throw new Error('SEARCH_ACTOR_KEY_INVALID');
@@ -4420,22 +4376,9 @@ export const search = action({
 
 		const limit = Math.min(Math.max(args.limit ?? 10, 1), 20);
 
-		// Fail before rate-limit writes, Gemini I/O, or vector search while a
-		// coordinated clear/reseed owns the compact source plane.
+		// Fail before the rate-limit write while a coordinated clear/reseed owns the
+		// compact source plane.
 		await ctx.runQuery(publicDiscoverySearchReadinessRef, {});
-
-		const keywordFallback = async () => {
-			const textResults = (await ctx.runQuery(textSearchRef, {
-				query: queryText,
-				limit,
-				domain: args.domain,
-				countryCode: args.countryCode
-			})) as CompactPublicTemplateSource[];
-			return {
-				templates: textResults.map((t) => toPublicTemplate(t, null)),
-				method: 'keyword' as const
-			};
-		};
 
 		const burst = await ctx.runMutation(rateLimitCheckRef, {
 			key: `templates.search:burst:${args.actorKey}`,
@@ -4446,97 +4389,21 @@ export const search = action({
 			throw new ConvexError({ code: 'TEMPLATE_SEARCH_BURST_LIMITED' });
 		}
 
-		// Gemini is a paid/finite dependency. Daily actor and team ceilings degrade
-		// to the local keyword index instead of turning discovery into an outage.
-		const actorSemanticBudget = await ctx.runMutation(rateLimitCheckRef, {
-			key: `templates.search:semantic:daily:${args.actorKey}`,
-			windowMs: 24 * 60 * 60 * 1000,
-			maxRequests: 100
-		});
-		if (!actorSemanticBudget.allowed) return await keywordFallback();
-		const globalSemanticBudget = await ctx.runMutation(rateLimitCheckRef, {
-			key: 'templates.search:semantic:daily:global',
-			windowMs: 24 * 60 * 60 * 1000,
-			maxRequests: 1_000
-		});
-		if (!globalSemanticBudget.allowed) return await keywordFallback();
-
-		// Try semantic search first
-		try {
-			const apiKey = process.env.GEMINI_API_KEY;
-			if (!apiKey) {
-				throw new Error('GEMINI_API_KEY not set');
-			}
-
-			const embedding = await generateQueryEmbedding(queryText, apiKey);
-
-			// Build filter for vector search. Convex's VectorFilterBuilder only
-			// exposes `.eq` and `.or` — there is no `.and`, so multi-field
-			// conjunction must be handled via post-filter in JS. With one filter
-			// field the builder applies it natively; with two we apply one in
-			// the builder and post-filter the hydrated docs against the other.
-			const filterEntries: Array<['domain' | 'countryCode', string]> = [];
-			if (args.domain) filterEntries.push(['domain', args.domain]);
-			if (args.countryCode) filterEntries.push(['countryCode', args.countryCode]);
-			const [primaryFilter, secondaryFilter] = filterEntries;
-
-			// Fetch more candidates to allow for quality filtering. When a
-			// post-filter applies, widen further so the post-filter has room to
-			// shed candidates without starving the result set.
-			const candidateLimit = limit + 10 + (secondaryFilter ? 20 : 0);
-
-			const vectorResults = await ctx.vectorSearch('templates', 'by_topicEmbedding', {
-				vector: embedding,
-				limit: candidateLimit,
-				filter: primaryFilter ? (q) => q.eq(primaryFilter[0], primaryFilter[1]) : undefined
-			});
-
-			if (vectorResults.length === 0) {
-				// Fall through to text search
-				throw new Error('No vector results');
-			}
-
-			// Hydrate full docs
-			const templateIds = vectorResults.map((r) => r._id);
-			const templates = (await ctx.runQuery(getByIdsRef, {
-				ids: templateIds
-			})) as Array<CompactPublicTemplateSource | null>;
-
-			// Build score map from vector results
-			const scoreMap = new Map(vectorResults.map((r) => [r._id, r._score]));
-
-			// Apply quality boost, similarity floor, and the secondary post-filter
-			// for multi-field AND that VectorFilterBuilder can't express natively.
-			const scored = templates
-				.filter((t): t is NonNullable<typeof t> => t != null)
-				.filter((t) => t.status === 'published' && t.isPublic)
-				.filter((t) => (secondaryFilter ? t[secondaryFilter[0]] === secondaryFilter[1] : true))
-				.map((t) => {
-					const rawScore = Number(scoreMap.get(t._id) ?? 0);
-					const sends = t.verifiedSends || 0;
-					const qualityBoost = 0.8 + 0.2 * Math.min(sends / 100, 1);
-					return {
-						...t,
-						_score: rawScore * qualityBoost
-					};
-				})
-				.filter((t) => t._score >= 0.4)
-				.sort((a, b) => b._score - a._score)
-				.slice(0, limit);
-
-			return {
-				templates: scored.map((t) => toPublicTemplate(t, t._score)),
-				method: 'semantic' as const
-			};
-		} catch {
-			// Fallback: text search via Convex search index
-			return await keywordFallback();
-		}
+		const textResults = (await ctx.runQuery(textSearchRef, {
+			query: queryText,
+			limit,
+			domain: args.domain,
+			countryCode: args.countryCode
+		})) as CompactPublicTemplateSource[];
+		return {
+			templates: textResults.map((template) => toPublicTemplate(template, null)),
+			method: 'keyword' as const
+		};
 	}
 });
 
 /**
- * Internal: Text-based search fallback using Convex search index.
+ * Internal bounded search over the compact Convex text index.
  */
 export const textSearch = internalQuery({
 	args: {
@@ -4560,7 +4427,7 @@ export const textSearch = internalQuery({
 
 		const results = await q.take(Math.min(args.limit + 20, 50));
 		return results.slice(0, args.limit).map((row) => {
-			assertCompactPublicTemplateSource(row.source);
+			assertCompactPublicTemplateSource(row.source, row.isCwc);
 			return row.source;
 		});
 	}
@@ -5227,6 +5094,7 @@ export const removeEndorsement = mutation({
  * Get cached sources for a template (72h TTL checked by caller).
  */
 const TEMPLATE_SOURCE_CACHE_MAX_ENTRIES = 20;
+const SOURCE_CACHE_INPUT_HASH_RE = /^[a-f0-9]{64}$/;
 const TEMPLATE_SOURCE_CACHE_STRUCTURE_BUDGET = {
 	maxBytes: 64 * 1024,
 	maxDepth: 4,
@@ -5278,13 +5146,14 @@ export const getSourceCache = query({
 		}
 		return {
 			cachedSources: template.cachedSources ?? null,
-			sourcesCachedAt: template.sourcesCachedAt ?? null
+			sourcesCachedAt: template.sourcesCachedAt ?? null,
+			sourceCacheInputHash: template.sourceCacheInputHash ?? null
 		};
 	}
 });
 
 /**
- * Update cached sources on a template (fire-and-forget from stream-message).
+ * Update cached sources on a template (lifetime-bound from stream-message).
  */
 export const updateSourceCache = mutation({
 	args: {
@@ -5292,13 +5161,17 @@ export const updateSourceCache = mutation({
 		userId: v.id('users'),
 		templateId: v.id('templates'),
 		cachedSources: v.any(),
-		sourcesCachedAt: v.number()
+		sourcesCachedAt: v.number(),
+		sourceCacheInputHash: v.string()
 	},
 	handler: async (ctx, args) => {
 		requireInternalSecret(args._secret ?? '');
 		assertTemplateSourceCache(args.cachedSources);
 		if (!Number.isSafeInteger(args.sourcesCachedAt) || args.sourcesCachedAt < 0) {
 			throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_TIMESTAMP_INVALID' });
+		}
+		if (!SOURCE_CACHE_INPUT_HASH_RE.test(args.sourceCacheInputHash)) {
+			throw new ConvexError({ code: 'TEMPLATE_SOURCE_CACHE_INPUT_HASH_INVALID' });
 		}
 		const { userId } = await requireAuth(ctx);
 		requireExpectedTemplateCacheUser(userId, args.userId);
@@ -5309,7 +5182,8 @@ export const updateSourceCache = mutation({
 		}
 		await ctx.db.patch(args.templateId, {
 			cachedSources: args.cachedSources,
-			sourcesCachedAt: args.sourcesCachedAt
+			sourcesCachedAt: args.sourcesCachedAt,
+			sourceCacheInputHash: args.sourceCacheInputHash
 		});
 	}
 });
@@ -5847,6 +5721,289 @@ export const findByContentHash = query({
 	}
 });
 
+const MAX_ORG_TEMPLATE_AUTHORING_ALLOWANCE = 1_000;
+
+type TemplateAuthoringReadCtx = Pick<QueryCtx | MutationCtx, 'db'>;
+
+type TemplateAuthoringAllowance =
+	| { ok: true; orgId?: Id<'organizations'> }
+	| { ok: false; code: 'TEMPLATE_QUOTA_EXCEEDED' }
+	| { ok: false; code: typeof AUTHORING_QUOTA_EXCEEDED; message: string };
+
+/**
+ * Resolve the current authoring allowance with bounded indexed reads.
+ *
+ * Both the cost-saving HTTP preflight and the authoritative create mutation
+ * call this helper. The preflight avoids provider work for known denials; the
+ * mutation repeats the decision in the write transaction so concurrent creates
+ * cannot oversubscribe the allowance.
+ */
+async function evaluateTemplateAuthoringAllowance(
+	ctx: TemplateAuthoringReadCtx,
+	userId: Id<'users'>,
+	now: number
+): Promise<TemplateAuthoringAllowance> {
+	// The launch-ready list projection is one embedding-free row per template.
+	// Count that compact plane after its explicit cutover; retain the canonical
+	// fallback only for pre-migration deployments so this change is deployable
+	// before the one-time projection activation. createTemplate writes both rows
+	// atomically, so Convex OCC preserves the same concurrent quota authority.
+	const listProjectionMigration = await getTemplateListProjectionMigration(ctx);
+	const compactCountReady = listProjectionMigration?.status === 'ready';
+	const monthStart = startOfMonthUTC(now);
+	const membership = await ctx.db
+		.query('orgMemberships')
+		.withIndex('by_userId_orgId', (q) => q.eq('userId', userId))
+		.first();
+
+	if (membership) {
+		const org = await ctx.db.get(membership.orgId);
+		if (!org) throw new Error('TEMPLATE_AUTHORING_ORG_REPAIR_REQUIRED');
+
+		const limit = org.maxTemplatesMonth;
+		if (!Number.isSafeInteger(limit) || limit < 0 || limit > MAX_ORG_TEMPLATE_AUTHORING_ALLOWANCE) {
+			throw new Error('TEMPLATE_AUTHORING_ORG_LIMIT_REPAIR_REQUIRED');
+		}
+		if (limit === 0) return { ok: false, code: 'TEMPLATE_QUOTA_EXCEEDED' };
+
+		const monthToDate = compactCountReady
+			? await ctx.db
+					.query('templateListProjections')
+					.withIndex('by_orgId', (q) =>
+						q.eq('orgId', membership.orgId).gte('templateCreatedAt', monthStart)
+					)
+					.take(limit)
+			: await ctx.db
+					.query('templates')
+					.withIndex('by_orgId', (q) =>
+						q.eq('orgId', membership.orgId).gte('_creationTime', monthStart)
+					)
+					.take(limit);
+		if (monthToDate.length >= limit) {
+			return { ok: false, code: 'TEMPLATE_QUOTA_EXCEEDED' };
+		}
+		return { ok: true, orgId: membership.orgId };
+	}
+
+	const subscriptionRows = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_userId', (q) => q.eq('userId', userId))
+		.take(2);
+	if (subscriptionRows.length > 1) {
+		throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	}
+	const subscription = subscriptionRows[0] ?? null;
+	const effectivelyActive =
+		subscription?.status === 'active' ||
+		subscription?.status === 'trialing' ||
+		(subscription?.status === 'past_due' && subscription.pastDueSince !== undefined);
+	const limit = effectivelyActive
+		? authoredLimitForPlan(subscription?.plan)
+		: authoredLimitForPlan(null);
+	const monthToDate = compactCountReady
+		? await ctx.db
+				.query('templateListProjections')
+				.withIndex('by_userId', (q) => q.eq('userId', userId).gte('templateCreatedAt', monthStart))
+				.take(limit)
+		: await ctx.db
+				.query('templates')
+				.withIndex('by_userId', (q) => q.eq('userId', userId).gte('_creationTime', monthStart))
+				.take(limit);
+	const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
+	return decision.ok
+		? { ok: true }
+		: { ok: false, code: AUTHORING_QUOTA_EXCEEDED, message: decision.message };
+}
+
+function templateAuthoringResponse(template: Doc<'templates'>, deduplicated: boolean) {
+	return {
+		_id: template._id,
+		_creationTime: template._creationTime,
+		slug: template.slug,
+		title: template.title,
+		description: template.description,
+		domain: template.domain,
+		category: template.category,
+		topics: template.topics,
+		type: template.type,
+		deliveryMethod: template.deliveryMethod,
+		messageBody: template.messageBody,
+		sources: template.sources,
+		researchLog: template.researchLog,
+		preview: template.preview,
+		verifiedSends: template.verifiedSends,
+		uniqueDistricts: template.uniqueDistricts,
+		endorsementCount: template.endorsementCount,
+		deliveryConfig: template.deliveryConfig,
+		cwcConfig: template.cwcConfig,
+		recipientConfig: template.recipientConfig,
+		campaignId: template.campaignId,
+		status: template.status,
+		isPublic: template.isPublic,
+		scopes: template.scopes,
+		updatedAt: template.updatedAt,
+		deduplicated
+	};
+}
+
+const TEMPLATE_AUTHORING_LEASE_MS = 10 * 60 * 1000;
+
+function assertTemplateAuthoringLeaseToken(token: string): void {
+	if (token.length < 16 || token.length > 100 || !/^[A-Za-z0-9-]+$/.test(token)) {
+		throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_TOKEN_INVALID' });
+	}
+}
+
+function assertTemplateAuthoringLeaseCoordinate(contentHash: string, slug: string): void {
+	if (contentHash.length < 1 || contentHash.length > 128) {
+		throw new ConvexError({ code: 'TEMPLATE_AUTHORING_CONTENT_HASH_INVALID' });
+	}
+	if (!isCanonicalTemplateSlug(slug)) {
+		throw new ConvexError({ code: 'TEMPLATE_AUTHORING_SLUG_INVALID' });
+	}
+}
+
+async function requireActiveTemplateAuthoringLease(
+	ctx: MutationCtx,
+	input: { userId: Id<'users'>; contentHash: string; slug: string; token: string }
+) {
+	assertTemplateAuthoringLeaseToken(input.token);
+	assertTemplateAuthoringLeaseCoordinate(input.contentHash, input.slug);
+	const lease = await ctx.db
+		.query('templateAuthoringLeases')
+		.withIndex('by_userId_contentHash', (q) =>
+			q.eq('userId', input.userId).eq('contentHash', input.contentHash)
+		)
+		.unique();
+	if (!lease || lease.token !== input.token || lease.slug !== input.slug) {
+		throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_NOT_OWNED' });
+	}
+	if (lease.expiresAt <= Date.now()) {
+		throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_EXPIRED' });
+	}
+	return lease;
+}
+
+/**
+ * Atomically claim provider work for one user/content and one global slug.
+ * Convex OCC serializes both indexed reads, preventing duplicate moderation
+ * when concurrent isolates pass the cheaper query preflight together.
+ */
+export const claimTemplateAuthoringLease = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		contentHash: v.string(),
+		slug: v.string(),
+		token: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (authUserId !== args.userId) {
+			throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_USER_MISMATCH' });
+		}
+		assertTemplateAuthoringLeaseToken(args.token);
+		assertTemplateAuthoringLeaseCoordinate(args.contentHash, args.slug);
+
+		const existingContent = await ctx.db
+			.query('templates')
+			.withIndex('by_userId_contentHash', (q) =>
+				q.eq('userId', authUserId).eq('contentHash', args.contentHash)
+			)
+			.unique();
+		if (existingContent) {
+			return {
+				outcome: 'duplicate' as const,
+				template: templateAuthoringResponse(existingContent, true)
+			};
+		}
+
+		const existingSlug = await ctx.db
+			.query('templates')
+			.withIndex('by_slug', (q) => q.eq('slug', args.slug))
+			.first();
+		if (existingSlug) return { outcome: 'slug_taken' as const };
+
+		const now = Date.now();
+		const contentLease = await ctx.db
+			.query('templateAuthoringLeases')
+			.withIndex('by_userId_contentHash', (q) =>
+				q.eq('userId', authUserId).eq('contentHash', args.contentHash)
+			)
+			.unique();
+		const slugLeases = await ctx.db
+			.query('templateAuthoringLeases')
+			.withIndex('by_slug', (q) => q.eq('slug', args.slug))
+			.take(2);
+		if (slugLeases.length > 1) {
+			throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_CARDINALITY_INVALID' });
+		}
+		const slugLease = slugLeases[0] ?? null;
+		const activeLease = [contentLease, slugLease].find(
+			(lease) => lease !== null && lease.expiresAt > now
+		);
+		if (activeLease) {
+			return { outcome: 'in_progress' as const, retryAt: activeLease.expiresAt };
+		}
+
+		const allowance = await evaluateTemplateAuthoringAllowance(ctx, authUserId, now);
+		if (!allowance.ok) {
+			return {
+				outcome: 'quota_exceeded' as const,
+				code: allowance.code,
+				...('message' in allowance ? { message: allowance.message } : {})
+			};
+		}
+
+		const staleIds = new Set(
+			[contentLease, slugLease].flatMap((lease) =>
+				lease && lease.expiresAt <= now ? [String(lease._id)] : []
+			)
+		);
+		for (const staleId of staleIds) {
+			const staleLeaseId: Id<'templateAuthoringLeases'> = staleId as Id<'templateAuthoringLeases'>;
+			await ctx.db.delete(staleLeaseId);
+		}
+		const expiresAt = now + TEMPLATE_AUTHORING_LEASE_MS;
+		await ctx.db.insert('templateAuthoringLeases', {
+			userId: authUserId,
+			contentHash: args.contentHash,
+			slug: args.slug,
+			token: args.token,
+			expiresAt
+		});
+		return { outcome: 'claimed' as const, expiresAt };
+	}
+});
+
+/** Release only the exact template-authoring provider lease generation. */
+export const releaseTemplateAuthoringLease = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		contentHash: v.string(),
+		token: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (authUserId !== args.userId) {
+			throw new ConvexError({ code: 'TEMPLATE_AUTHORING_LEASE_USER_MISMATCH' });
+		}
+		assertTemplateAuthoringLeaseToken(args.token);
+		const lease = await ctx.db
+			.query('templateAuthoringLeases')
+			.withIndex('by_userId_contentHash', (q) =>
+				q.eq('userId', authUserId).eq('contentHash', args.contentHash)
+			)
+			.unique();
+		if (!lease || lease.token !== args.token) return { released: false as const };
+		await ctx.db.delete(lease._id);
+		return { released: true as const };
+	}
+});
+
 /**
  * Get user's org membership (for quota check).
  */
@@ -5874,12 +6031,16 @@ export const createTemplate = mutation({
 		messageBody: v.string(),
 		preview: v.string(),
 		type: v.string(),
+		// Left as a string on purpose: the handler checks the value against the
+		// shared vocabulary so callers get the named INVALID_DELIVERY_METHOD code
+		// instead of an opaque Convex ArgumentValidationError.
 		deliveryMethod: v.string(),
 		domain: v.string(),
 		topics: v.array(v.string()),
 		sources: v.optional(v.any()),
 		researchLog: v.optional(v.any()),
 		contentHash: v.string(),
+		authoringLeaseToken: v.optional(v.string()),
 		status: v.string(),
 		isPublic: v.boolean(),
 		deliveryConfig: v.optional(v.any()),
@@ -5906,6 +6067,9 @@ export const createTemplate = mutation({
 			!ALLOWED_TEMPLATE_STATUSES.includes(args.status as (typeof ALLOWED_TEMPLATE_STATUSES)[number])
 		) {
 			throw new Error('INVALID_TEMPLATE_STATUS');
+		}
+		if (!isTemplateDeliveryMethod(args.deliveryMethod)) {
+			throw new Error('INVALID_DELIVERY_METHOD');
 		}
 
 		// Mirror the HTTP boundary before any quota reads or source write. The
@@ -5938,6 +6102,30 @@ export const createTemplate = mutation({
 			throw new Error(`TEMPLATE_INPUT_BUDGET_EXCEEDED:${inputBudget.scope}:${inputBudget.reason}`);
 		}
 
+		const authoringLease = args.authoringLeaseToken
+			? await requireActiveTemplateAuthoringLease(ctx, {
+					userId: authUserId,
+					contentHash: args.contentHash,
+					slug: args.slug,
+					token: args.authoringLeaseToken
+				})
+			: null;
+		const authoringLeaseId: Id<'templateAuthoringLeases'> | null = authoringLease?._id ?? null;
+
+		// Content dedupe is authoritative here as well as in the provider-saving
+		// preflight. Convex OCC retries a concurrent loser against the winner's
+		// indexed row, so only one same-content template can be inserted.
+		const existingContent = await ctx.db
+			.query('templates')
+			.withIndex('by_userId_contentHash', (q) =>
+				q.eq('userId', authUserId).eq('contentHash', args.contentHash)
+			)
+			.unique();
+		if (existingContent) {
+			if (authoringLeaseId) await ctx.db.delete(authoringLeaseId);
+			return templateAuthoringResponse(existingContent, true);
+		}
+
 		// Fail duplicate links before the more expensive plan/quota reads. This
 		// indexed range read remains authoritative: Convex OCC serializes a
 		// concurrent same-slug insert and retries the loser against the new row.
@@ -5947,81 +6135,17 @@ export const createTemplate = mutation({
 			.first();
 		if (existingSlug) throw new ConvexError({ code: 'TEMPLATE_SLUG_TAKEN' });
 
-		// Check org quota
-		const membership = await ctx.db
-			.query('orgMemberships')
-			.withIndex('by_userId_orgId', (q) => q.eq('userId', args.userId))
-			.first();
-
-		if (membership) {
-			const org = await ctx.db.get(membership.orgId);
-			if (org && org.maxTemplatesMonth) {
-				const startOfMonth = new Date();
-				startOfMonth.setDate(1);
-				startOfMonth.setHours(0, 0, 0, 0);
-				const templates = await ctx.db
-					.query('templates')
-					.withIndex('by_orgId', (q) =>
-						q.eq('orgId', membership.orgId).gte('_creationTime', startOfMonth.getTime())
-					)
-					.take(org.maxTemplatesMonth);
-				if (templates.length >= org.maxTemplatesMonth) {
-					throw new Error('TEMPLATE_QUOTA_EXCEEDED');
-				}
+		const allowance = await evaluateTemplateAuthoringAllowance(ctx, args.userId, Date.now());
+		if (!allowance.ok) {
+			if (allowance.code === 'TEMPLATE_QUOTA_EXCEEDED') {
+				throw new Error('TEMPLATE_QUOTA_EXCEEDED');
 			}
-		} else {
-			// Individual AI-authoring cap (the L2 metered surface). Individuals are
-			// free forever to ACT on existing messages; the bound is on AI-AUTHORING
-			// NEW templates (the expensive person-layer TemplateCreator generation
-			// path). Org members are governed by their plan's maxTemplatesMonth above,
-			// so this only applies to the un-orged individual path.
-			//
-			// The limit is DYNAMIC: read the user's individual subscription plan and
-			// resolve its authored-per-month allowance (free floor 3, Voice 20,
-			// Advocate 75). The template-creation count IS the meter — query-time
-			// aggregation from timestamped rows (templates.by_userId + _creationTime
-			// >= start-of-month), mirroring the billing pattern, NOT a denormalized
-			// counter that needs resetting.
-			const now = Date.now();
-
-			// Resolve the user's effective individual authored limit. Only honor the
-			// plan when the sub is effectively active (active/trialing, or past_due
-			// within a 7-day grace) — otherwise fall to the free floor. The sub is
-			// user-scoped (by_userId); org-scoped subs never reach this branch (those
-			// users have an orgMembership and take the maxTemplatesMonth path above).
-			const subscriptionRows = await ctx.db
-				.query('subscriptions')
-				.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-				.take(2);
-			if (subscriptionRows.length > 1) {
-				throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
-			}
-			const sub = subscriptionRows[0] ?? null;
-			const effectivelyActive =
-				sub?.status === 'active' ||
-				sub?.status === 'trialing' ||
-				(sub?.status === 'past_due' && sub.pastDueSince !== undefined);
-			// authoredLimitForPlan resolves org slugs + unknowns to the free floor,
-			// so an individual sub can NEVER unlock an org plan's volume here.
-			const limit = effectivelyActive
-				? authoredLimitForPlan(sub?.plan)
-				: authoredLimitForPlan(null);
-
-			const monthStart = startOfMonthUTC(now);
-			const monthToDate = await ctx.db
-				.query('templates')
-				.withIndex('by_userId', (q) => q.eq('userId', args.userId).gte('_creationTime', monthStart))
-				.take(limit);
-			const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
-			if (!decision.ok) {
-				// Coded throw so the SvelteKit route surfaces the at-cap upgrade card.
-				throw new Error(`${AUTHORING_QUOTA_EXCEEDED}:${decision.message}`);
-			}
+			throw new Error(`${AUTHORING_QUOTA_EXCEEDED}:${allowance.message}`);
 		}
 
 		const templateId = await ctx.db.insert('templates', {
 			userId: args.userId,
-			orgId: membership?.orgId,
+			orgId: allowance.orgId,
 			title: args.title,
 			slug: args.slug,
 			description: args.description,
@@ -6105,7 +6229,8 @@ export const createTemplate = mutation({
 			await upsertCompactDiscoverySource(ctx, template);
 			await markPublicDiscoveryListAndRelationsDirty(ctx, 'authored');
 		}
-		return template;
+		if (authoringLeaseId) await ctx.db.delete(authoringLeaseId);
+		return templateAuthoringResponse(template, false);
 	}
 });
 
@@ -6156,7 +6281,12 @@ export const patchMetadata = mutation({
 		const metadataPatch = {
 			updatedAt: Date.now(),
 			...(args.domain !== undefined ? { domain: args.domain } : {}),
-			...(args.topics !== undefined ? { topics: args.topics } : {})
+			...(args.topics !== undefined ? { topics: args.topics } : {}),
+			// Research inputs changed. Removing all three fields prevents an old
+			// source array from surviving as an apparently current cache entry.
+			cachedSources: undefined,
+			sourcesCachedAt: undefined,
+			sourceCacheInputHash: undefined
 		};
 		await ctx.db.patch(args.templateId, metadataPatch);
 		await syncTemplateListProjection(ctx, { ...template, ...metadataPatch });
@@ -6219,16 +6349,16 @@ export const setCwcVerification = mutation({
 });
 
 // =============================================================================
-// BACKFILL: Embed per-tag concepts (denoise the tag space for concept edges)
+// TAG-VECTOR INTAKE (provider work is coordinated outside Convex)
 // =============================================================================
 
 /**
  * Internal: public published templates whose tags are not yet embedded.
  *
- * A template needs a tag-embedding pass when it carries tags but its stored
+ * A template needs a tag-vector pass when it carries tags but its stored
  * `tagEmbeddings` don't cover the current tag set (newly authored, or tags
- * edited since the last pass). Embedding ~a dozen tags per template is a trivial
- * one-time Gemini cost, run alongside the topic-embedding backfill.
+ * edited since the last pass). This bounded reader lets an externally
+ * coordinated, admitted producer discover only the displayed corpus.
  */
 export const listMissingTagEmbeddings = internalQuery({
 	args: {},
@@ -6242,8 +6372,8 @@ export const listMissingTagEmbeddings = internalQuery({
 				error.message === 'PUBLIC_TEMPLATE_SNAPSHOT_INVALID:relations:list-not-ready'
 			) {
 				// Cold start has no truthful displayed corpus yet. The consolidated
-				// homepage rebuild publishes it later in the same daily maintenance
-				// window; the next tag pass then embeds only those displayed IDs.
+				// homepage rebuild publishes it later. A later external producer pass
+				// then sees only those displayed IDs.
 				return [];
 			}
 			throw error;
@@ -6259,14 +6389,14 @@ export const listMissingTagEmbeddings = internalQuery({
 						.withIndex('by_templateId', (q) => q.eq('templateId', id))
 						.unique();
 					if (!row || row.generation !== migration.runToken) return null;
-					assertCompactPublicTemplateSource(row.source);
+					assertCompactPublicTemplateSource(row.source, row.isCwc);
 					return row.source;
 				})
 			)
 		).filter((source): source is CompactPublicTemplateSource => source !== null);
 		const retained = new Set<string>();
 		for (const source of sources) {
-			for (const tag of normalizeTags(source.topics)) {
+			for (const tag of normalizeTags(source.topics).slice(0, MAX_TEMPLATE_TOPICS)) {
 				if (retained.size >= MAX_PUBLIC_RELATION_TAG_VECTORS) break;
 				retained.add(tag);
 			}
@@ -6283,7 +6413,9 @@ export const listMissingTagEmbeddings = internalQuery({
 			coveredRows.flatMap((row) => (row && isFiniteEmbeddingVector(row.embedding) ? [row.tag] : []))
 		);
 		return sources.flatMap((source) => {
-			const tags = normalizeTags(source.topics).filter((tag) => retained.has(tag));
+			const tags = normalizeTags(source.topics)
+				.slice(0, MAX_TEMPLATE_TOPICS)
+				.filter((tag) => retained.has(tag));
 			return tags.length > 0 && tags.some((tag) => !covered.has(tag))
 				? [{ _id: source._id, tags }]
 				: [];
@@ -6292,85 +6424,29 @@ export const listMissingTagEmbeddings = internalQuery({
 });
 
 /**
- * Backfill per-tag embeddings via Gemini, mirroring the topicEmbedding path
- * (same model, RETRIEVAL_DOCUMENT task type, 768 dimensions). Each tag is
- * embedded once; the vectors are stored on the template (server-only) so the
- * concept query can cluster the tag vocabulary into concepts. No auth — internal.
+ * Internal mutation for vectors that were already generated through the
+ * shared provider-budget coordinator. Convex stores and projects the bounded
+ * result but never owns provider credentials or provider I/O for this path.
  */
-export const backfillTagEmbeddings = internalAction({
-	args: {},
-	handler: async (ctx) => {
-		const missing: Array<{ _id: Id<'templates'>; tags: string[] }> = await ctx.runQuery(
-			listMissingTagEmbeddingsRef
-		);
-
-		if (missing.length === 0) {
-			console.log('[backfill-tags] All template tags are embedded.');
-			return { processed: 0 };
-		}
-
-		const apiKey = process.env.GEMINI_API_KEY;
-		if (!apiKey) {
-			console.error('[backfill-tags] GEMINI_API_KEY not configured in Convex env vars.');
-			return { processed: 0, error: 'GEMINI_API_KEY missing' };
-		}
-
-		async function embed(text: string): Promise<number[] | null> {
-			const res = await fetch(
-				`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({
-						content: { parts: [{ text }] },
-						taskType: 'RETRIEVAL_DOCUMENT',
-						outputDimensionality: 768
-					})
-				}
-			);
-			if (!res.ok) return null;
-			const data = await res.json();
-			return data.embedding?.values ?? null;
-		}
-
-		let processed = 0;
-		for (const t of missing) {
-			try {
-				const embedded = await Promise.all(
-					t.tags.map(async (tag) => ({ tag, embedding: await embed(tag) }))
-				);
-				const tagEmbeddings = embedded
-					.filter((e): e is { tag: string; embedding: number[] } => Array.isArray(e.embedding))
-					.map((e) => ({ tag: e.tag, embedding: e.embedding }));
-
-				if (tagEmbeddings.length === 0) {
-					console.error(`[backfill-tags] Gemini returned no tag embeddings for ${t._id}`);
-					continue;
-				}
-
-				await ctx.runMutation(patchTagEmbeddingsRef, {
-					templateId: t._id,
-					tagEmbeddings
-				});
-				processed++;
-				console.log(`[backfill-tags] Embedded ${tagEmbeddings.length} tags for ${t._id}`);
-			} catch (err) {
-				console.error(`[backfill-tags] Failed for ${t._id}:`, err);
-			}
-		}
-
-		console.log(`[backfill-tags] Done: ${processed}/${missing.length} templates.`);
-		return { processed, total: missing.length };
-	}
-});
-
-/** Internal mutation: store per-tag embeddings (server-only) on a template. */
 export const patchTagEmbeddings = internalMutation({
 	args: {
 		templateId: v.id('templates'),
 		tagEmbeddings: v.array(v.object({ tag: v.string(), embedding: v.array(v.float64()) }))
 	},
 	handler: async (ctx, args) => {
+		if (args.tagEmbeddings.length > MAX_TEMPLATE_TOPICS) {
+			throw new Error('TOO_MANY_TAG_EMBEDDINGS');
+		}
+		const tagEncoder = new TextEncoder();
+		const normalizedTags = args.tagEmbeddings.map(({ tag }) => tag.trim());
+		if (
+			normalizedTags.some(
+				(tag) => tag.length === 0 || tagEncoder.encode(tag).byteLength > MAX_TEMPLATE_TOPIC_BYTES
+			) ||
+			new Set(normalizedTags).size !== normalizedTags.length
+		) {
+			throw new Error('INVALID_TAG_EMBEDDING_LABELS');
+		}
 		if (args.tagEmbeddings.some(({ embedding }) => !isFiniteEmbeddingVector(embedding))) {
 			throw new Error('INVALID_TAG_EMBEDDING_DIMENSION:expected=768');
 		}
@@ -6378,13 +6454,19 @@ export const patchTagEmbeddings = internalMutation({
 		if (!template) throw new Error('Template not found');
 		const embeddingsUpdatedAt = Date.now();
 		await ctx.db.patch(args.templateId, {
-			tagEmbeddings: args.tagEmbeddings,
+			tagEmbeddings: args.tagEmbeddings.map((entry, index) => ({
+				tag: normalizedTags[index],
+				embedding: entry.embedding
+			})),
 			embeddingsUpdatedAt
 		});
 		if (template.status === 'published' && template.isPublic) {
 			await upsertCompactDiscoverySource(ctx, {
 				...template,
-				tagEmbeddings: args.tagEmbeddings,
+				tagEmbeddings: args.tagEmbeddings.map((entry, index) => ({
+					tag: normalizedTags[index],
+					embedding: entry.embedding
+				})),
 				embeddingsUpdatedAt
 			});
 			await markPublicDiscoveryRelationsDirty(ctx);

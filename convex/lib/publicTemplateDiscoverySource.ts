@@ -9,6 +9,9 @@ import {
 	MAX_TEMPLATE_TITLE_BYTES,
 	MAX_TEMPLATE_TYPE_BYTES
 } from './templateInputBudget';
+import { isCongressionalDelivery, isTemplateDeliveryMethod } from './templateDeliveryMethod';
+import { kFloorCounter, kFloorDistrictCount } from './publicAggregatePrivacy';
+import { publishableRosterCount, recipientIntentCount } from './recipientRoster';
 import {
 	verifyPublicRecipientProvenance,
 	type PublicRecipientProvenanceClaims
@@ -231,38 +234,16 @@ export function normalizePublicDiscoveryTags(topics: unknown): string[] {
 }
 
 export function publicRecipientIntentCount(recipientConfig: unknown): number {
+	// The object-only door is load-bearing and stays here rather than moving into
+	// the shared arithmetic. `templates.recipientConfig` is `v.any()`, so a
+	// JSON-STRING config is storable; the shared counter parses such a string,
+	// which would turn 0 into N for that shape and silently move both migration
+	// guards that use this function as an upper bound. String parsing belongs on
+	// the wire-facing side, not on this stored-document counter.
 	if (!recipientConfig || typeof recipientConfig !== 'object' || Array.isArray(recipientConfig)) {
 		return 0;
 	}
-	const config = recipientConfig as Record<string, unknown>;
-	const emails: string[] = [];
-	const arrayCounts = new Map<string, number>();
-	for (const field of [
-		'recipients',
-		'decisionMakers',
-		'customRecipients',
-		'emails',
-		'recipientEmails'
-	] as const) {
-		if (!Array.isArray(config[field])) continue;
-		arrayCounts.set(field, config[field].length);
-		for (const value of config[field]) {
-			if (typeof value === 'string') emails.push(value);
-			else if (value && typeof value === 'object' && !Array.isArray(value)) {
-				const email = (value as { email?: unknown }).email;
-				if (typeof email === 'string') emails.push(email);
-			}
-		}
-	}
-	if (typeof config.email === 'string') emails.push(config.email);
-	const uniqueEmails = new Set(emails.map((email) => email.trim()).filter(Boolean)).size;
-	// `recipients` is the alternative multi-target shape. The authoring shape
-	// stores AI decision-makers and manual custom recipients separately, while
-	// `emails`/`recipientEmails` are commonly a denormalized union of both. Count
-	// that largest credible roster without double-counting compatibility arrays.
-	const structuredAuthoringCount =
-		(arrayCounts.get('decisionMakers') ?? 0) + (arrayCounts.get('customRecipients') ?? 0);
-	return Math.max(arrayCounts.get('recipients') ?? 0, structuredAuthoringCount, uniqueEmails);
+	return recipientIntentCount(recipientConfig);
 }
 
 /** Opaque, stable evidence coordinate for operator review; never stores raw PII. */
@@ -495,13 +476,13 @@ export function buildPublicTemplateDetailProjection(
 		research_log: projectPublicResearchLog(template.researchLog),
 		preview: template.preview,
 		is_public: true,
-		verified_sends: template.verifiedSends < 5 ? null : template.verifiedSends,
-		unique_districts: template.uniqueDistricts < 3 ? null : template.uniqueDistricts,
-		send_count: template.verifiedSends < 5 ? null : template.verifiedSends,
+		verified_sends: kFloorCounter(template.verifiedSends),
+		unique_districts: kFloorDistrictCount(template.uniqueDistricts),
+		send_count: kFloorCounter(template.verifiedSends),
 		delivery_config: {},
 		cwc_config: null,
 		recipient_config: recipientConfig,
-		recipient_count: recipientConfig.decisionMakers?.length ?? 0,
+		recipient_count: publishableRosterCount(recipientConfig),
 		recipientEmails: recipientConfig.emails,
 		topics: projectPublicDetailTopics(template.topics),
 		createdAt: new Date(template._creationTime).toISOString()
@@ -831,7 +812,7 @@ export function readPublicTemplateDetailProjection(value: unknown): PublicTempla
 		return invalidDetail('domainHue');
 	}
 	const recipientConfig = readPublicRecipientConfig(value.recipient_config);
-	const visibleRecipientCount = recipientConfig.decisionMakers?.length ?? 0;
+	const visibleRecipientCount = publishableRosterCount(recipientConfig);
 	if (
 		!Array.isArray(value.recipientEmails) ||
 		value.recipientEmails.length !== recipientConfig.emails.length ||
@@ -940,8 +921,23 @@ export function compactPublicTemplateSourceBytes(source: CompactPublicTemplateSo
 	return getConvexSize(source as unknown as Value);
 }
 
+/**
+ * Refuse a stored producer blob that is not a whole, current public card.
+ *
+ * `publicTemplateDiscoverySources.source` is `v.any()`, so nothing about it is
+ * checked by the schema. `deliveryMethod` is therefore admitted by MEMBERSHIP
+ * in the closed column vocabulary — a value outside it is a refused row, never
+ * a row that quietly reads as "not congressional" and enters the
+ * congressional-free feed.
+ *
+ * `expectedIsCwc` is the row's own schema-constrained classification. Both it
+ * and the blob are projections of one write, so a disagreement is drift: the
+ * blob is refused rather than allowed to contradict the constrained column that
+ * feed membership is decided from.
+ */
 export function assertCompactPublicTemplateSource(
-	value: unknown
+	value: unknown,
+	expectedIsCwc?: boolean
 ): asserts value is CompactPublicTemplateSource {
 	if (value === null || typeof value !== 'object' || Array.isArray(value)) {
 		throw new Error('PUBLIC_DISCOVERY_SOURCE_INVALID:container');
@@ -955,7 +951,7 @@ export function assertCompactPublicTemplateSource(
 		typeof source.title !== 'string' ||
 		typeof source.description !== 'string' ||
 		typeof source.type !== 'string' ||
-		typeof source.deliveryMethod !== 'string' ||
+		!isTemplateDeliveryMethod(source.deliveryMethod) ||
 		typeof source.messageBody !== 'string' ||
 		typeof source.preview !== 'string' ||
 		typeof source.recipientCount !== 'number' ||
@@ -980,12 +976,40 @@ export function assertCompactPublicTemplateSource(
 	) {
 		throw new Error('PUBLIC_DISCOVERY_SOURCE_INVALID:shape');
 	}
+	if (
+		expectedIsCwc !== undefined &&
+		expectedIsCwc !== isCongressionalDelivery(source.deliveryMethod)
+	) {
+		throw new Error(`PUBLIC_DISCOVERY_SOURCE_INVALID:isCwc:${String(source._id)}`);
+	}
 	const bytes = getConvexSize(value as Value);
 	if (bytes > MAX_PUBLIC_TEMPLATE_DISCOVERY_SOURCE_BYTES) {
 		throw new Error(
 			`PUBLIC_DISCOVERY_SOURCE_TOO_LARGE:${bytes}>${MAX_PUBLIC_TEMPLATE_DISCOVERY_SOURCE_BYTES}`
 		);
 	}
+}
+
+/**
+ * One discovery row read as a trusted snapshot candidate.
+ *
+ * This is the only place a stored row becomes usable input, and it is what
+ * makes "is this template bound for Congress?" a single decision: the answer is
+ * the schema-constrained `isCwc: v.boolean()` column, carried alongside the blob
+ * instead of re-derived from it. A caller that wants to filter the
+ * congressional-free feed reads `candidate.isCwc`; there is no second answer to
+ * disagree with, because the blob is refused when it disagrees.
+ */
+export type PublicTemplateDiscoveryCandidate = {
+	isCwc: boolean;
+	source: CompactPublicTemplateSource;
+};
+
+export function readPublicTemplateDiscoveryCandidate(
+	row: Pick<Doc<'publicTemplateDiscoverySources'>, 'isCwc' | 'source'>
+): PublicTemplateDiscoveryCandidate {
+	assertCompactPublicTemplateSource(row.source, row.isCwc);
+	return { isCwc: row.isCwc, source: row.source };
 }
 
 function resolveSourceDomain(template: Doc<'templates'>): string {

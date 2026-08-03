@@ -12,6 +12,8 @@ import {
 	accountabilityResponseType
 } from './_validators';
 import { campaignReadModelStateValidator } from './lib/campaignReadModel';
+import { shadowAtlasEngagementStateValidator } from './lib/shadowAtlasEngagement';
+import { shadowAtlasTree1OperationStateValidator } from './lib/shadowAtlasRegistration';
 
 // =============================================================================
 // Commons Convex Schema
@@ -64,6 +66,14 @@ export default defineSchema({
 
 		// Cross-provider identity deduplication
 		identityCommitment: v.optional(v.string()),
+		// Durable Tree-3 lease, one-write reservation, and short proof snapshot.
+		// This lives on the user row so the authenticated primary-key lookup and
+		// state transition remain one serializable document operation.
+		shadowAtlasEngagement: v.optional(shadowAtlasEngagementStateValidator),
+		// Durable Tree-1 register/replace entitlement. The operation remains on
+		// the user row after commit so a lost HTTP response cannot mint a second
+		// external write when the browser retries the same leaf.
+		shadowAtlasTree1Operation: v.optional(shadowAtlasTree1OperationStateValidator),
 
 		// Document type
 		documentType: v.optional(v.string()), // 'passport' | 'drivers_license' | 'national_id'
@@ -129,10 +139,10 @@ export default defineSchema({
 		activeMonths: v.number(),
 
 		// Verified-action count for reputation-tier promotion. Hybrid model:
-		// incremented on-action inside createCampaignAction (ZK paths supplying
-		// userId), then nightly cron `recomputeAllReputationTiers` recomputes
-		// reputationTier from this counter against a threshold table. Optional
-		// because pre-T10-1 rows didn't carry it; cron treats missing as 0.
+		// incremented on-action inside createCampaignAction (registered verified
+		// paths supplying userId), in the same transaction that derives and writes
+		// reputationTier and stamps immutable action attribution. Optional because
+		// pre-T10-1 rows didn't carry it; the explicit legacy repair treats missing as 0.
 		actionCount: v.optional(v.number()),
 
 		// Profile
@@ -174,7 +184,9 @@ export default defineSchema({
 	userSessionAuthorities: defineTable({
 		userId: v.id('users'),
 		userCreatedAt: v.number(),
-		email: v.string(),
+		// Optional only for historical users that predate plaintext-email repair.
+		// The request boundary fails those rows closed until OAuth backfills email.
+		email: v.optional(v.string()),
 		tokenIdentifier: v.optional(v.string()),
 		name: v.optional(v.string()),
 		avatar: v.optional(v.string()),
@@ -263,22 +275,22 @@ export default defineSchema({
 		category: v.optional(v.string()), // DEPRECATED: pre-migration field, replaced by domain. Kept for schema compat with existing documents.
 		topics: v.optional(v.any()), // JSON array of topic tags
 		type: v.string(),
-		deliveryMethod: v.string(),
+		deliveryMethod: v.union(v.literal('cwc'), v.literal('email')),
 		preview: v.string(),
 		messageBody: v.string(),
 		sources: v.optional(v.any()),
 		researchLog: v.optional(v.any()),
 		cachedSources: v.optional(v.any()),
 		sourcesCachedAt: v.optional(v.number()),
+		sourceCacheInputHash: v.optional(v.string()),
 		deliveryConfig: v.any(),
 		cwcConfig: v.optional(v.any()),
 		recipientConfig: v.any(),
 		// DEAD FIELD: no writer anywhere in convex/ or src/ sets
-		// templates.campaignId. Three readers echo it null to the v1 API
+		// templates.campaignId. Two readers echo it null to the v1 API
 		// contract for stability:
-		//   - convex/templates.ts:276 (paginated list)
-		//   - src/routes/api/templates/+server.ts:399 (existing-by-content)
-		//   - src/routes/api/templates/+server.ts:553 (newly-created)
+		//   - convex/templates.ts:1590 (public discovery payload)
+		//   - src/lib/server/templates/authoring-response.ts (authoring endpoint)
 		// All emit `campaign_id: ... ?? null`. Field removal requires
 		// consumers to drop the key, then a schema deploy. Template→
 		// campaign linkage goes the other way (campaigns.templateId).
@@ -444,6 +456,20 @@ export default defineSchema({
 			dimensions: 768,
 			filterFields: ['countryCode']
 		}),
+
+	// Short-lived provider-work lease for template authoring. The lease is
+	// acquired before Groq admission so concurrent same-content or same-slug
+	// requests cannot each spend provider capacity and race at createTemplate.
+	templateAuthoringLeases: defineTable({
+		userId: v.id('users'),
+		contentHash: v.string(),
+		slug: v.string(),
+		token: v.string(),
+		expiresAt: v.number()
+	})
+		.index('by_userId_contentHash', ['userId', 'contentHash'])
+		.index('by_slug', ['slug'])
+		.index('by_expiresAt', ['expiresAt']),
 
 	// Embedding-free authenticated list plane. Every canonical template has
 	// exactly one row after the explicit migration cutover. The 4 KiB writer
@@ -900,7 +926,6 @@ export default defineSchema({
 
 		// Witness encryption
 		encryptedWitness: v.string(),
-		encryptedMessage: v.optional(v.string()),
 		witnessNonce: v.optional(v.string()),
 		ephemeralPublicKey: v.optional(v.string()),
 		teeKeyId: v.optional(v.string()),
@@ -1761,14 +1786,15 @@ export default defineSchema({
 		recipientEmail: v.optional(v.string()),
 		encryptedRecipientEmail: v.optional(v.string()),
 		recipientEmailHash: v.optional(v.string()),
-		deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded'
-		deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed'
+		deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded' | 'mailto_confirmed'
+		deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed' | 'user_confirmed'
 		deliveredAt: v.optional(v.number()),
 		// Optional district attribution for coordination display, backfilled from
 		// the user's Shadow Atlas registration at write time.
 		districtCode: v.optional(v.string())
 	})
 		.index('by_registrationId', ['registrationId'])
+		.index('by_registrationId_recipientKey', ['registrationId', 'recipientKey'])
 		.index('by_templateId_pseudonymousId', ['templateId', 'pseudonymousId'])
 		.index('by_templateId_pseudonymousId_recipientKey', [
 			'templateId',

@@ -1,8 +1,8 @@
 /**
  * Subscription/billing CRUD — queries, mutations, and the Stripe webhook action.
  *
- * Plan definitions are inlined here to avoid importing SvelteKit server code.
- * These must stay in sync with src/lib/server/billing/plans.ts.
+ * Plan definitions come from ./lib/planLimits — the one table both this Convex
+ * boundary and the SvelteKit boundary read. Nothing here restates a limit.
  */
 
 import {
@@ -29,66 +29,16 @@ import {
 	type ProjectedPlanUsage
 } from './lib/planUsage';
 
-// Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
-export const PLANS: Record<
-	string,
-	{
-		priceCents: number;
-		maxSeats: number;
-		maxTemplatesMonth: number;
-		maxVerifiedActions: number;
-		maxEmails: number;
-		maxSms: number;
-	}
-> = {
-	// Gated floor for orgs with no active subscription — author a campaign or
-	// two (2 templates), zero delivery, owner-only. Not a marketed tier.
-	inactive: {
-		priceCents: 0,
-		maxSeats: 1,
-		maxTemplatesMonth: 2,
-		maxVerifiedActions: 0,
-		maxEmails: 0,
-		maxSms: 0
-	},
-	starter: {
-		priceCents: 1_000,
-		maxSeats: 5,
-		maxTemplatesMonth: 100,
-		maxVerifiedActions: 1_000,
-		maxEmails: 20_000,
-		maxSms: 1_000
-	},
-	organization: {
-		priceCents: 7_500,
-		maxSeats: 10,
-		maxTemplatesMonth: 500,
-		maxVerifiedActions: 5_000,
-		maxEmails: 100_000,
-		maxSms: 10_000
-	},
-	coalition: {
-		priceCents: 20_000,
-		maxSeats: 25,
-		maxTemplatesMonth: 1_000,
-		maxVerifiedActions: 10_000,
-		maxEmails: 250_000,
-		maxSms: 50_000
-	}
-};
-
-// Individual (person-layer) paid authoring tiers — mirrored from
-// src/lib/server/billing/plans.ts INDIVIDUAL_PLANS (MUST stay in sync).
-// DELIBERATELY SEPARATE from org PLANS above: individual plans carry ONLY
-// `priceCents` + `authoredPerMonth`. They have NO org quotas (no maxEmails /
-// maxSms / maxSeats / maxTemplatesMonth) — an individual sub never syncs org
-// limits. The org `checkPlanLimits` path reads PLANS (keyed on orgId); the
-// individual authoring cap (templates.ts) reads the per-plan authored limit. The
-// two maps never overlap, so neither scope can read the other's plans.
-const INDIVIDUAL_PLANS: Record<string, { priceCents: number; authoredPerMonth: number }> = {
-	voice: { priceCents: 700, authoredPerMonth: 20 },
-	advocate: { priceCents: 2_000, authoredPerMonth: 75 }
-};
+// Plan tables — the org table and the person-layer table, both read straight
+// from the shared source. They are DELIBERATELY SEPARATE: individual plans carry
+// no org quotas (no maxEmails / maxSms / maxSeats / maxTemplatesMonth), so an
+// individual sub never syncs org limits. The org `checkPlanLimits` path reads
+// PLANS (keyed on orgId); the individual authoring cap (templates.ts) reads the
+// per-plan authored limit. Neither scope can read the other's plans.
+import {
+	ORG_PLAN_LIMITS as PLANS,
+	INDIVIDUAL_PLAN_LIMITS as INDIVIDUAL_PLANS
+} from './lib/planLimits';
 
 const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 const expirePastDueGraceRef = makeFunctionReference<'mutation'>(
@@ -1048,8 +998,8 @@ export const upsertIndividualFromStripe = internalMutation({
 
 /**
  * One-time backfill: re-sync all org limits from their current subscription plan.
- * Fixes orgs created with wrong defaults (maxSeats:10, maxTemplatesMonth:50)
- * or provisioned via drifted Convex PLANS mirror.
+ * Fixes orgs created with the pre-plan org defaults, or provisioned before the
+ * plan table was shared.
  * Safe to run multiple times (idempotent).
  */
 export const backfillOrgLimits = internalMutation({
