@@ -12,9 +12,12 @@ export const MAX_GEOGRAPHIC_SCOPE_BYTES = 1_024;
 export const MAX_PUBLIC_TEMPLATE_SCOPES = 100;
 export const MAX_PUBLIC_TEMPLATE_JURISDICTIONS = 100;
 export const MAX_TEMPLATE_DOMAIN_BYTES = 200;
-// The slug is copied verbatim into route-bearing list projections. Keep this
-// aligned with the HTTP route's 100-code-point sanitizer at the UTF-8 maximum.
+// The slug is copied verbatim into route-bearing list projections. The
+// canonical form is capped at MAX_TEMPLATE_SLUG_CODE_POINTS; this byte budget
+// is the defense-in-depth ceiling on the raw argument.
 export const MAX_TEMPLATE_SLUG_BYTES = 400;
+export const MAX_TEMPLATE_SLUG_CODE_POINTS = 100;
+export const TEMPLATE_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 // These field limits are also the exact public-detail projection envelope.
 // Keeping them here makes every accepted public authoring input projectable;
 // aggregate JSON limits alone cannot prevent one field from consuming an
@@ -207,6 +210,34 @@ function failureFor(
 
 function encodedLength(value: string): number {
 	return encoder.encode(value).byteLength;
+}
+
+/**
+ * Reduce arbitrary text to the canonical template route slug. Every run of
+ * characters outside [a-z0-9] becomes a single hyphen (underscores and
+ * non-ASCII separate, they never survive or vanish), edge hyphens are trimmed
+ * both before and after the code-point cut so truncation can never leave one,
+ * and an input with nothing usable returns '' — callers decide how to reject
+ * it; this function never fabricates a slug. Idempotent by construction.
+ */
+export function canonicalizeTemplateSlug(input: string): string {
+	const collapsed = String(input)
+		.normalize('NFKC')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+	// After collapsing, the alphabet is ASCII-only, so slice counts code points.
+	return collapsed.slice(0, MAX_TEMPLATE_SLUG_CODE_POINTS).replace(/^-+|-+$/g, '');
+}
+
+/** True when a string is already in canonical slug form and inside every bound. */
+export function isCanonicalTemplateSlug(value: string): boolean {
+	return (
+		value.length >= 1 &&
+		value.length <= MAX_TEMPLATE_SLUG_CODE_POINTS &&
+		TEMPLATE_SLUG_PATTERN.test(value) &&
+		encodedLength(value) <= MAX_TEMPLATE_SLUG_BYTES
+	);
 }
 
 function isOptionalBoundedString(value: unknown, maxBytes: number): boolean {
