@@ -15,6 +15,7 @@
 
 import { ed25519 } from '@noble/curves/ed25519';
 import { TIER_CREDENTIAL_TTL } from '$lib/core/identity/credential-policy';
+import { hashDistrictCode } from '$convex/lib/districtHash';
 
 /** Type-safe BufferSource conversion — Uint8Array is a valid BufferSource at runtime;
  *  this helper avoids cross-realm type issues in test environments (vitest/jsdom). */
@@ -330,36 +331,15 @@ export async function hashCredential(
 }
 
 /**
- * Compute HMAC-SHA256 hash of a district string for privacy-preserving storage.
+ * Compute the anonymized district hash used for privacy-preserving storage.
  *
- * Used for User.district_hash — rainbow-table resistant (requires ENV key),
- * deterministic across users (same district → same hash for aggregate queries).
+ * Delegates to the cross-runtime module that Convex actions also call, so a
+ * district hashed on the SvelteKit side is byte-identical to the same district
+ * hashed inside Convex. Throws when `DISTRICT_HASH_KEY` is absent — there is
+ * deliberately no unkeyed path, because a ~435-code space is enumerable.
  *
- * Returns a lowercase hex string.
+ * Returns a 64-character lowercase hex string.
  */
 export async function hashDistrict(district: string): Promise<string> {
-	const key = process.env.DISTRICT_HASH_KEY;
-	if (key) {
-		// HMAC with server-side key — rainbow-table resistant
-		const keyBytes = encoder.encode(key);
-		const cryptoKey = await crypto.subtle.importKey(
-			'raw',
-			keyBytes,
-			{ name: 'HMAC', hash: 'SHA-256' },
-			false,
-			['sign']
-		);
-		const sig = await crypto.subtle.sign('HMAC', cryptoKey, encoder.encode(district));
-		const arr = new Uint8Array(sig);
-		return Array.from(arr)
-			.map((b) => b.toString(16).padStart(2, '0'))
-			.join('');
-	}
-	// Fallback: plain SHA-256 (dev environments without DISTRICT_HASH_KEY)
-	const bytes = encoder.encode(district);
-	const digest = await crypto.subtle.digest('SHA-256', bytes);
-	const arr = new Uint8Array(digest);
-	return Array.from(arr)
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
+	return hashDistrictCode(district);
 }

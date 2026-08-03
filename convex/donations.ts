@@ -14,6 +14,7 @@ import { campaignStatus, donationStatus } from './_validators';
 import { requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { computeOrgScopedEmailHash } from './_orgHash';
+import { hashDistrictCode, hashPostalCode } from './lib/districtHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii, encryptForSupporterV2 } from './_orgKey';
 import { sendViaSesWithResult } from './email';
@@ -620,9 +621,9 @@ export const processCheckout = action({
 		// Compute district hash
 		let districtHash: string | undefined;
 		if (args.districtCode) {
-			districtHash = await sha256Hex(args.districtCode.toLowerCase().trim());
+			districtHash = await hashDistrictCode(args.districtCode);
 		} else if (args.postalCode) {
-			districtHash = await sha256Hex(args.postalCode.toLowerCase().trim());
+			districtHash = await hashPostalCode(args.postalCode);
 		}
 
 		const engagementTier = args.districtCode ? 2 : args.postalCode ? 1 : 0;
@@ -1080,18 +1081,6 @@ export const listDonors = query({
 		};
 	}
 });
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-async function sha256Hex(data: string): Promise<string> {
-	const encoder = new TextEncoder();
-	const hash = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-	return Array.from(new Uint8Array(hash))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
 
 // =============================================================================
 // PLACEHOLDER DONATION CLEANUP (parallels supporters placeholder sweep)

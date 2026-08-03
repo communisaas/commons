@@ -29,6 +29,7 @@ import {
 } from './_orgHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { encryptForSupporterV2 } from './_orgKey';
+import { hashDistrictCode, hashPostalCode } from './lib/districtHash';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 import {
 	CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY,
@@ -64,6 +65,10 @@ import {
 	SUPPORTER_AUDIENCE_ACTION_VERSION
 } from './lib/supporterAudience';
 import { assertSupporterInputBudget } from './lib/supporterInputBudget';
+import {
+	engagementTierForReputationTier,
+	reputationStateForActionCount
+} from './lib/reputationTier';
 import {
 	blockEmailReservation,
 	EMAIL_RESERVATION_LEASE_MS,
@@ -1315,16 +1320,7 @@ export const getAuthenticatedCampaignSubmitter = internalQuery({
 
 		if (!user?.email) return null;
 
-		// Derive engagement tier from user's reputation data
-		// reputationTier is a string: 'new' | 'active' | 'established' | 'veteran' | 'pillar'
-		const tierMap: Record<string, number> = {
-			new: 0,
-			active: 1,
-			established: 2,
-			veteran: 3,
-			pillar: 4
-		};
-		const engagementTier = tierMap[user.reputationTier?.toLowerCase() ?? 'new'] ?? 0;
+		const engagementTier = engagementTierForReputationTier(user.reputationTier);
 
 		return {
 			userId: user._id,
@@ -1575,12 +1571,30 @@ export const createCampaignAction = internalMutation({
 				? normalizedDistrictCode
 				: undefined;
 
+		// A registered user's verified action advances both durable reputation
+		// coordinates before the immutable action and every derived attribution
+		// are constructed. The enclosing mutation makes the user patch, action
+		// insert, read models, histogram, and events one OCC-serialized commit.
+		let effectiveEngagementTier = args.engagementTier;
+		if (args.userId && args.verified) {
+			const user = await ctx.db.get(args.userId);
+			if (!user) throw new Error('CAMPAIGN_ACTION_USER_NOT_FOUND');
+			const nextUserActionCount = (user.actionCount ?? 0) + 1;
+			const nextUserReputation = reputationStateForActionCount(nextUserActionCount);
+			await ctx.db.patch(args.userId, {
+				actionCount: nextUserActionCount,
+				reputationTier: nextUserReputation.reputationTier,
+				updatedAt: Date.now()
+			});
+			effectiveEngagementTier = nextUserReputation.engagementTier;
+		}
+
 		const actionId = await ctx.db.insert('campaignActions', {
 			campaignId: args.campaignId,
 			orgId,
 			supporterId: args.supporterId,
 			verified: args.verified,
-			engagementTier: args.engagementTier,
+			engagementTier: effectiveEngagementTier,
 			districtHash: args.districtHash,
 			districtCode,
 			h3Cell,
@@ -1647,7 +1661,7 @@ export const createCampaignAction = internalMutation({
 				if (args.verified && metersOrgQuota) {
 					patch.verifiedActionsLifetime = (org.verifiedActionsLifetime ?? 0) + 1;
 				}
-				const tier = args.engagementTier;
+				const tier = effectiveEngagementTier;
 				if (typeof tier === 'number' && tier >= 0 && tier <= 4) {
 					const counts = [...(org.actionTierCounts ?? [0, 0, 0, 0, 0])];
 					// Defensive: pad/truncate to exactly 5 slots in case a legacy doc
@@ -1659,20 +1673,6 @@ export const createCampaignAction = internalMutation({
 				if (Object.keys(patch).length > 0) {
 					await ctx.db.patch(orgId, patch);
 				}
-			}
-		}
-
-		// Reputation-tier on-action increment (T10-1 hybrid model). Only ZK
-		// paths supply userId — non-ZK actions rely on the nightly cron to
-		// recompute. Only verified actions count toward reputation; unverified
-		// imports + bot submissions don't promote anyone.
-		if (args.userId && args.verified) {
-			const user = await ctx.db.get(args.userId);
-			if (user) {
-				await ctx.db.patch(args.userId, {
-					actionCount: (user.actionCount ?? 0) + 1,
-					updatedAt: Date.now()
-				});
 			}
 		}
 
@@ -1712,7 +1712,7 @@ export const createCampaignAction = internalMutation({
 					campaignId: args.campaignId,
 					actionId,
 					verified: args.verified,
-					engagementTier: args.engagementTier,
+					engagementTier: effectiveEngagementTier,
 					trustTier: args.trustTier ?? null,
 					districtHash: args.districtHash ?? null,
 					timestamp
@@ -1728,7 +1728,7 @@ export const createCampaignAction = internalMutation({
 					campaignId: args.campaignId,
 					actionId,
 					verified: args.verified,
-					engagementTier: args.engagementTier,
+					engagementTier: effectiveEngagementTier,
 					trustTier: args.trustTier ?? null,
 					districtHash: args.districtHash ?? null,
 					h3Cell: h3Cell ?? null,
@@ -1906,24 +1906,10 @@ export const submitAction = action({
 		const normalizedDistrictCode = args.districtCode?.trim().toUpperCase();
 		const districtCodePattern = /^[A-Z]{2}-(\d{2}|AL)$/;
 		if (normalizedDistrictCode && districtCodePattern.test(normalizedDistrictCode)) {
-			const encoder = new TextEncoder();
-			const salt = 'commons-district-v1';
-			const hashBuffer = await crypto.subtle.digest(
-				'SHA-256',
-				encoder.encode(`${salt}:${normalizedDistrictCode.toLowerCase()}`)
-			);
-			const hashArray = Array.from(new Uint8Array(hashBuffer));
-			districtHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+			districtHash = await hashDistrictCode(normalizedDistrictCode);
 			districtVerified = true;
 		} else if (args.postalCode) {
-			const encoder = new TextEncoder();
-			const salt = 'commons-district-v1';
-			const hashBuffer = await crypto.subtle.digest(
-				'SHA-256',
-				encoder.encode(`${salt}:${args.postalCode.toLowerCase()}`)
-			);
-			const hashArray = Array.from(new Uint8Array(hashBuffer));
-			districtHash = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+			districtHash = await hashPostalCode(args.postalCode);
 		}
 
 		// Compute message hash
@@ -1954,9 +1940,9 @@ export const submitAction = action({
 			messageHash,
 			trustTier,
 			compositionMode: args.compositionMode,
-			// NEW-E-1: thread userId so reputation cron (T10-1) has real data
-			// to promote on. Only set when the submitter is a registered user
-			// — anonymous-email submissions stay null.
+			// NEW-E-1: thread userId so a verified action can advance actionCount,
+			// reputationTier, and immutable engagement attribution atomically. Only
+			// registered users carry it; anonymous-email submissions stay null.
 			userId: userData?.userId,
 			// NEW-E-2: atlas snapshot at action-time. driftCount in the packet
 			// (verification-packet.ts) compares against the modal value across
@@ -2444,55 +2430,6 @@ export const getCampaignReadModelReadiness = query({
 					failureCode: null,
 					updatedAt: null
 				};
-	}
-});
-
-/**
- * Raw action data for server-side verification packet computation.
- * Gated to org-members of the campaign owner: h3Cell is a raw H3 res-7 cell
- * (~5km²) and sentAt is an exact timestamp; together they let a caller
- * de-anonymize individual senders. Anonymous public callers receive
- * "Not authenticated"; use getCampaignPacketSummary for the public aggregate.
- */
-export const getActionsForPacket = query({
-	args: {
-		campaignId: v.id('campaigns'),
-		// Cursor pagination over the campaign's actions. Sub-class (A)
-		// must-enumerate: the packet/analytics need the actual rows, so the caller
-		// loops pages (see fetchAllPacketActions) to enumerate the FULL set across
-		// page boundaries — never a single unbounded .collect() that throws past
-		// the per-query doc cap once a campaign passes ~16K actions. Args are
-		// optional so a legacy single-shot caller still gets the first page.
-		cursor: v.optional(v.union(v.string(), v.null())),
-		numItems: v.optional(v.number())
-	},
-	handler: async (ctx, { campaignId, cursor, numItems }) => {
-		const { userId } = await requireAuth(ctx);
-		const campaign = await ctx.db.get(campaignId);
-		if (!campaign) throw new Error('Campaign not found');
-		await requireOrgMembership(ctx, campaign.orgId, userId);
-
-		const { page, isDone, continueCursor } = await ctx.db
-			.query('campaignActions')
-			.withIndex('by_campaignId', (idx) => idx.eq('campaignId', campaignId))
-			.order('asc')
-			.paginate({ cursor: cursor ?? null, numItems: Math.min(numItems ?? 2000, 4000) });
-
-		return {
-			actions: page.map((a) => ({
-				verified: a.verified,
-				engagementTier: a.engagementTier,
-				districtHash: a.districtHash ?? null,
-				h3Cell: a.h3Cell ?? null,
-				messageHash: a.messageHash ?? null,
-				sentAt: a.sentAt,
-				trustTier: a.trustTier ?? null,
-				compositionMode: a.compositionMode ?? null,
-				atlasVersion: a.atlasVersion ?? null
-			})),
-			continueCursor: isDone ? null : continueCursor,
-			isDone
-		};
 	}
 });
 
@@ -3279,47 +3216,6 @@ export const updateDeliveryStatus = internalMutation({
 		if (args.status === 'sent') {
 			await maybeCreateAccountabilityReceiptForDelivery(ctx, args.deliveryId, args.sentAt);
 		}
-	}
-});
-
-/** Aggregate delivery metrics for campaign analytics dashboard */
-export const getDeliveryMetrics = query({
-	args: { campaignId: v.id('campaigns') },
-	handler: async (ctx, { campaignId }) => {
-		const { userId } = await requireAuth(ctx);
-		const campaign = await ctx.db.get(campaignId);
-		if (!campaign) {
-			throw new Error('You are not a member of this organization');
-		}
-		await requireOrgMembership(ctx, campaign.orgId, userId);
-
-		const migration = await ctx.db
-			.query('campaignReadModelMigrations')
-			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
-			.unique();
-		if (migration?.status !== 'ready') throw new Error('CAMPAIGN_READ_MODEL_NOT_READY');
-		const model = await ctx.db
-			.query('campaignReadModels')
-			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaignId))
-			.unique();
-		const state = model?.state ?? emptyCampaignReadModel(campaign.updatedAt);
-		const sent = state.deliverySentCount;
-		const delivered = state.deliveryDeliveredCount;
-		const opened = state.deliveryOpenedCount;
-		const bounced = state.deliveryBouncedCount;
-		const clicked = state.deliveryVerifyClickedCount;
-
-		return {
-			sent,
-			delivered,
-			opened,
-			clicked,
-			bounced,
-			deliveryRate: sent > 0 ? Math.round((delivered / sent) * 100) : 0,
-			openRate: sent > 0 ? Math.round((opened / sent) * 100) : 0,
-			clickRate: sent > 0 ? Math.round((clicked / sent) * 100) : 0,
-			bounceRate: sent > 0 ? Math.round((bounced / sent) * 100) : 0
-		};
 	}
 });
 

@@ -12,14 +12,10 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import crypto from 'node:crypto';
+import { hashDistrictCode, hashPostalCode } from '$convex/lib/districtHash';
 import type { RequestHandler } from './$types';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function hashDistrict(value: string): string {
-	return crypto.createHash('sha256').update(value.toLowerCase().trim()).digest('hex');
-}
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
@@ -65,9 +61,9 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Compute district hash
 	let dHash: string | undefined;
 	if (districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district') {
-		dHash = hashDistrict(districtCode);
+		dHash = await hashDistrictCode(districtCode);
 	} else if (postalCode) {
-		dHash = hashDistrict(postalCode);
+		dHash = await hashPostalCode(postalCode);
 	}
 
 	// Engagement tier: district-verified = 2, postal = 1, none = 0
