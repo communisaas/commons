@@ -4,11 +4,7 @@
 	import { page } from '$app/stores';
 	import CountrySelector from '$lib/components/geographic/CountrySelector.svelte';
 	import JurisdictionPicker from '$lib/components/geographic/JurisdictionPicker.svelte';
-	import {
-		getOrgCampaignDraft,
-		deleteOrgCampaignDraft,
-		type OrgCampaignDraft
-	} from '$lib/stores/orgCampaignDraft';
+	import { orgCampaignDrafts, type OrgCampaignDraft } from '$lib/stores/orgDraftStore';
 	import type { PageData, ActionData } from './$types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
@@ -29,32 +25,37 @@
 
 	// One-shot Studio → campaigns/new handoff: hydrate the campaign shell from the
 	// authored artifact, then consume the draft + strip the param so a reload does
-	// not re-import over edits. Mirrors the org-email composer handoff.
+	// not re-import over edits. Mirrors the org-email composer handoff. The read
+	// is owner-scoped: consume() only yields a draft the active operator wrote,
+	// and deletes it on success.
 	const studioDraftId = $derived($page.url.searchParams.get('studioDraft') ?? '');
 	let hasAppliedStudioDraft = false;
 	$effect(() => {
 		const draftId = studioDraftId;
+		const operatorId =
+			(($page.data.user as Record<string, unknown> | null)?.id as string | undefined) ?? '';
 		if (!browser || hasAppliedStudioDraft || !draftId) return;
 		hasAppliedStudioDraft = true;
 
-		const draft = getOrgCampaignDraft(draftId);
-		if (!draft) return;
+		(async () => {
+			const draft = await orgCampaignDrafts.consume(draftId, operatorId);
+			if (!draft) return;
 
-		title = draft.title;
-		body = draft.body;
-		campaignType = draft.type;
-		if (draft.targetCountry) targetCountry = draft.targetCountry;
-		if (draft.targetJurisdiction) targetJurisdiction = draft.targetJurisdiction;
-		studioDraftRestored = draft;
-		deleteOrgCampaignDraft(draftId);
+			title = draft.title;
+			body = draft.body;
+			campaignType = draft.type;
+			if (draft.targetCountry) targetCountry = draft.targetCountry;
+			if (draft.targetJurisdiction) targetJurisdiction = draft.targetJurisdiction;
+			studioDraftRestored = draft;
 
-		try {
-			const url = new URL(window.location.href);
-			url.searchParams.delete('studioDraft');
-			window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-		} catch {
-			// URL cleanup is non-critical; the one-time guard prevents re-import loops.
-		}
+			try {
+				const url = new URL(window.location.href);
+				url.searchParams.delete('studioDraft');
+				window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+			} catch {
+				// URL cleanup is non-critical; the one-time guard prevents re-import loops.
+			}
+		})().catch(() => {});
 	});
 </script>
 

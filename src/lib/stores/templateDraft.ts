@@ -1,6 +1,44 @@
 import { writable, type Writable } from 'svelte/store';
-import type { TemplateFormData } from '$lib/types/template';
+import type { Source, TemplateFormData } from '$lib/types/template';
 import { z } from 'zod';
+
+const INCENTIVE_POSITIONS = ['adversarial', 'neutral', 'aligned'] as const;
+const SOURCE_ORDERS = ['primary', 'secondary', 'opinion'] as const;
+
+/**
+ * Plain, serializable copy of one citation.
+ *
+ * `credibility_rationale`, `incentive_position` and `source_order` come from the
+ * paid source-evaluation pass (Exa search → Firecrawl fetch → Gemini incentive
+ * read). The store carries whatever that pass produced, verbatim — including the
+ * literal "Evaluation unavailable…" rationale a search-only source arrives with —
+ * and never manufactures one. A missing field means the source was never
+ * evaluated, so an absent or unrecognized value is dropped rather than defaulted.
+ *
+ * The normalizer runs twice: on the save-time flatten in toPlainTemplateFormData
+ * and again on the getDraft re-read. Drafts come back from localStorage without
+ * a per-field schema, so the re-read application is what keeps a tampered blob
+ * from surfacing an out-of-union value on a Source; the save-time call is
+ * defense in depth.
+ */
+function plainSource(s: Source): Source {
+	const rationale =
+		typeof s.credibility_rationale === 'string' && s.credibility_rationale.trim() !== ''
+			? s.credibility_rationale
+			: undefined;
+	const position = INCENTIVE_POSITIONS.find((allowed) => allowed === s.incentive_position);
+	const order = SOURCE_ORDERS.find((allowed) => allowed === s.source_order);
+
+	return {
+		num: s.num ?? 0,
+		title: s.title ?? '',
+		url: s.url ?? '',
+		type: s.type ?? 'journalism',
+		...(rationale === undefined ? {} : { credibility_rationale: rationale }),
+		...(position === undefined ? {} : { incentive_position: position }),
+		...(order === undefined ? {} : { source_order: order })
+	};
+}
 
 interface PendingSuggestion {
 	subject_line: string;
@@ -19,7 +57,10 @@ interface DraftStorage {
 		pendingSuggestion?: PendingSuggestion | null;
 		/** Short hash of the owning user's id. Drafts with a different ownerHash
 		 * from the active session are ignored on load — prevents cross-user
-		 * draft leakage on shared devices when a user doesn't explicitly log out. */
+		 * draft leakage on shared devices when a user doesn't explicitly log out.
+		 * Absent means the draft was written without a signed-in account, which
+		 * is the only state sign-in may claim. Once set it is immutable: writes
+		 * preserve it and never overwrite one account's stamp with another. */
 		ownerHash?: string;
 	};
 }
@@ -42,7 +83,7 @@ export async function deriveOwnerHash(userIdentifier: string): Promise<string> {
 // Auto-save interval (30 seconds)
 const AUTO_SAVE_INTERVAL = 30 * 1000;
 
-interface TemplateDraftStore {
+export interface TemplateDraftStore {
 	subscribe: Writable<DraftStorage>['subscribe'];
 	saveDraft: (
 		draftId: string,
@@ -68,14 +109,19 @@ interface TemplateDraftStore {
 	hasDraft: (draftId: string) => boolean;
 	getDraftAge: (draftId: string) => number | null;
 	getAllDraftIds: () => string[];
-	/** Set the active owner hash. Drafts saved under a different owner become
-	 * invisible to getDraft/getAllDraftIds/hasDraft after this call. Pass null
-	 * to revert to unscoped (guest) behavior. Call this once at mount, after
-	 * the user's id becomes available. */
+	/** Resolve the active identity. Pass the owner hash for a signed-in account,
+	 * or null for a session that resolved to no account at all (guest). Until
+	 * this is called the store is unbound: it enumerates nothing and never
+	 * surfaces an owner-stamped draft, so a boot-time reader cannot show one
+	 * operator's work to the next. Call it once at mount, as soon as the session
+	 * is known. */
 	setOwner: (ownerHash: string | null) => void;
+	/** Adopt exactly one ownerless guest draft for a newly authenticated user.
+	 * Existing ownership is immutable; a same-owner retry is idempotent. */
+	claimGuestDraft: (draftId: string, ownerHash: string) => boolean;
 }
 
-function createTemplateDraftStore(): TemplateDraftStore {
+export function createTemplateDraftStore(): TemplateDraftStore {
 	const { subscribe, set, update } = writable<DraftStorage>({});
 
 	// Zod schema for draft validation
@@ -101,17 +147,47 @@ function createTemplateDraftStore(): TemplateDraftStore {
 
 	const DraftStorageSchema = z.record(DraftEntrySchema);
 
-	// Active owner scope (set via setOwner after user auth is resolved).
-	// Drafts are filtered to this owner on every read; writes stamp this value.
-	let currentOwnerHash: string | null = null;
+	/**
+	 * Which identity the store is bound to. Three states, because "the owner has
+	 * not resolved yet" and "there is definitively no owner" are different facts
+	 * and must not share a branch:
+	 *
+	 * - `unresolved` — the boot window, before the session has been read. Reads
+	 *   fail closed: an owner-stamped draft belongs to an account this store
+	 *   cannot name yet, so it is not surfaced at all.
+	 * - `guest` — the session resolved to no account. Ownerless drafts are this
+	 *   operator's own writing surface and stay readable; sign-in claims one.
+	 * - `owner` — the session resolved to an account; only that account's drafts
+	 *   are readable.
+	 */
+	type OwnerScope = { kind: 'unresolved' } | { kind: 'guest' } | { kind: 'owner'; hash: string };
 
-	function draftMatchesOwner(entry: DraftStorage[string]): boolean {
-		// No active owner set (pre-auth boot) — show all (legacy behavior).
-		if (currentOwnerHash === null) return true;
-		// Active owner set — require stored ownerHash to match. Drafts with no
-		// ownerHash are legacy, pre-scoping entries; treat them as guest-owned
-		// and visible only when no owner is set.
-		return entry.ownerHash === currentOwnerHash;
+	let ownerScope: OwnerScope = { kind: 'unresolved' };
+
+	/** Targeted read gate: may the caller, which already holds this draft id,
+	 * see this entry? An owner-stamped draft is readable only by that owner. An
+	 * unstamped draft crosses no account boundary, so it stays reachable by id —
+	 * that is the guest writing surface and the OAuth resume link. */
+	function canReadDraft(entry: DraftStorage[string]): boolean {
+		if (ownerScope.kind === 'owner') return entry.ownerHash === ownerScope.hash;
+		return entry.ownerHash === undefined;
+	}
+
+	/** Enumeration gate: discovery needs a resolved identity. An unbound store
+	 * lists nothing, so a boot-time reader cannot walk the device's drafts and
+	 * surface a previous operator's titles before it knows whose they are. A
+	 * resolved guest lists their own unstamped drafts; a resolved owner lists
+	 * theirs. */
+	function canEnumerateDrafts(): boolean {
+		return ownerScope.kind !== 'unresolved';
+	}
+
+	/** Write gate. An owner-stamped draft is writable only by that owner, so a
+	 * save taken before the owner resolves can neither overwrite another
+	 * account's draft nor strip its stamp down to claimable-guest. */
+	function canWriteDraft(entry: DraftStorage[string] | undefined): boolean {
+		if (entry?.ownerHash === undefined) return true;
+		return ownerScope.kind === 'owner' && ownerScope.hash === entry.ownerHash;
 	}
 
 	// Load drafts from localStorage on initialization
@@ -243,7 +319,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							organization: dm.organization ?? '',
 							reasoning: dm.reasoning ?? '',
 							source_url: dm.source_url ?? '',
-							confidence: dm.confidence ?? 0,
+							// Confidence is a measurement from the resolution agent; an
+							// unmeasured contact stays unmeasured rather than becoming 0.
+							confidence: dm.confidence,
 							email: dm.email ?? '',
 							source: dm.source ?? '',
 							isAiResolved: dm.isAiResolved ?? true,
@@ -283,14 +361,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 				preview: data.content?.preview ?? '',
 				variables: Array.isArray(data.content?.variables) ? [...data.content.variables] : [],
 				// Message generation metadata
-				sources: Array.isArray(data.content?.sources)
-					? data.content.sources.map((s) => ({
-							num: s.num ?? 0,
-							title: s.title ?? '',
-							url: s.url ?? '',
-							type: s.type ?? 'journalism'
-						}))
-					: [],
+				sources: Array.isArray(data.content?.sources) ? data.content.sources.map(plainSource) : [],
 				researchLog: Array.isArray(data.content?.researchLog) ? [...data.content.researchLog] : [],
 				geographicScope: data.content?.geographicScope ?? null,
 				aiGenerated: data.content?.aiGenerated ?? false,
@@ -307,7 +378,9 @@ function createTemplateDraftStore(): TemplateDraftStore {
 							processTitle: data.content.draftOrigin.processTitle,
 							createdAt: data.content.draftOrigin.createdAt,
 							effect: data.content.draftOrigin.effect,
-							sourceRef: data.content.draftOrigin.sourceRef
+							sourceRef: data.content.draftOrigin.sourceRef,
+							scopeLabel: data.content.draftOrigin.scopeLabel,
+							scopeBasis: data.content.draftOrigin.scopeBasis
 						}
 					: null
 			},
@@ -321,6 +394,11 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		currentStep: string,
 		suggestionToSave?: PendingSuggestion | null
 	) {
+		// localStorage is the durable ownership record; the in-memory copy can
+		// predate a stamp written by an earlier page load.
+		const stored = loadDrafts()[draftId];
+		if (!canWriteDraft(stored)) return;
+
 		let plain: TemplateFormData;
 		try {
 			// Prefer a structuredClone of a plain object to avoid proxy issues
@@ -337,9 +415,11 @@ function createTemplateDraftStore(): TemplateDraftStore {
 			lastSaved: Date.now(),
 			currentStep,
 			pendingSuggestion: suggestionToSave ?? null,
-			// Stamp owner at save time. Null when auth isn't yet resolved; once
-			// the component calls setOwner(), subsequent saves scope correctly.
-			ownerHash: currentOwnerHash ?? undefined
+			// Ownership is never downgraded by a write: an existing stamp is kept
+			// verbatim, a resolved owner adopts an unstamped draft, and a draft
+			// written before the owner resolves stays unstamped so that the one
+			// sanctioned adoption path — claimGuestDraft on sign-in — can take it.
+			ownerHash: stored?.ownerHash ?? (ownerScope.kind === 'owner' ? ownerScope.hash : undefined)
 		};
 
 		update((drafts) => {
@@ -358,11 +438,28 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		const drafts = loadDrafts();
 		const entry = drafts[draftId];
 		if (!entry) return null;
-		if (!draftMatchesOwner(entry)) return null;
-		return entry;
+		if (!canReadDraft(entry)) return null;
+		// localStorage is untrusted input: re-normalize sources at the read
+		// boundary so a hand-edited blob cannot surface an out-of-union value.
+		const sources = entry.data?.content?.sources;
+		if (!Array.isArray(sources)) return entry;
+		return {
+			...entry,
+			data: {
+				...entry.data,
+				content: {
+					...entry.data.content,
+					sources: sources.map(plainSource)
+				}
+			}
+		};
 	}
 
 	function deleteDraft(draftId: string) {
+		// Same gate as a write: a draft stamped for another account is not this
+		// session's to destroy.
+		if (!canWriteDraft(loadDrafts()[draftId])) return;
+
 		update((drafts) => {
 			const updated = { ...drafts };
 			delete updated[draftId];
@@ -428,7 +525,7 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		const drafts = loadDrafts();
 		const entry = drafts[draftId];
 		if (!entry) return false;
-		return draftMatchesOwner(entry);
+		return canReadDraft(entry);
 	}
 
 	function getDraftAge(draftId: string): number | null {
@@ -438,14 +535,35 @@ function createTemplateDraftStore(): TemplateDraftStore {
 	}
 
 	function getAllDraftIds(): string[] {
+		if (!canEnumerateDrafts()) return [];
 		const drafts = loadDrafts();
 		return Object.entries(drafts)
-			.filter(([, entry]) => draftMatchesOwner(entry))
+			.filter(([, entry]) => canReadDraft(entry))
 			.map(([id]) => id);
 	}
 
 	function setOwner(ownerHash: string | null) {
-		currentOwnerHash = ownerHash;
+		ownerScope = ownerHash === null ? { kind: 'guest' } : { kind: 'owner', hash: ownerHash };
+		// Wake readers that subscribed during the boot window: their fail-closed
+		// read happened before the scope existed, and without a notification it
+		// would stay empty until the next write.
+		update((drafts) => ({ ...drafts }));
+	}
+
+	function claimGuestDraft(draftId: string, ownerHash: string): boolean {
+		if (!draftId || draftId.length > 128 || !/^[a-f0-9]{16}$/u.test(ownerHash)) return false;
+		const drafts = loadDrafts();
+		if (!Object.hasOwn(drafts, draftId)) return false;
+		const entry = drafts[draftId];
+		if (entry.ownerHash === ownerHash) return true;
+		if (entry.ownerHash !== undefined) return false;
+
+		const claimed = { ...drafts, [draftId]: { ...entry, ownerHash } };
+		saveDrafts(claimed);
+		const persisted = loadDrafts();
+		if (persisted[draftId]?.ownerHash !== ownerHash) return false;
+		set(persisted);
+		return true;
 	}
 
 	return {
@@ -458,11 +576,28 @@ function createTemplateDraftStore(): TemplateDraftStore {
 		hasDraft,
 		getDraftAge,
 		getAllDraftIds,
-		setOwner
+		setOwner,
+		claimGuestDraft
 	};
 }
 
 export const templateDraftStore = createTemplateDraftStore();
+
+/**
+ * Complete the OAuth draft handoff before a creator can filter or read it.
+ * Only the exact URL-bound ownerless draft may be adopted; drafts already
+ * owned by any account can never be reassigned on a shared device.
+ */
+export async function claimGuestDraftForUser(
+	draftId: string,
+	userIdentifier: string,
+	store: Pick<TemplateDraftStore, 'claimGuestDraft' | 'setOwner'> = templateDraftStore
+): Promise<boolean> {
+	const ownerHash = await deriveOwnerHash(userIdentifier);
+	const claimed = store.claimGuestDraft(draftId, ownerHash);
+	store.setOwner(ownerHash);
+	return claimed;
+}
 
 // Export alias for backwards compatibility
 export const templateDraft = templateDraftStore;

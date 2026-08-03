@@ -18,10 +18,11 @@
 		isClientDirectEmailCount
 	} from '$lib/data/org-limit-sentences';
 	import {
-		deleteOrgEmailComposeDraft,
-		getOrgEmailComposeDraft,
+		orgComposeAutosaveKey,
+		orgEmailComposeDrafts,
 		type OrgEmailComposeDraft
-	} from '$lib/stores/orgEmailComposeDraft';
+	} from '$lib/stores/orgDraftStore';
+	import { deriveOwnerHash } from '$lib/stores/templateDraft';
 	import {
 		PLATFORM_EXPORT_PROFILES,
 		formatPeopleSourceLabel
@@ -198,49 +199,82 @@
 	let draftRestored = $state(false);
 	let studioDraftRestored = $state<OrgEmailComposeDraft | null>(null);
 	let saveTimer: ReturnType<typeof setTimeout> | undefined;
-	const draftKey = $derived(`draft:compose:${data.org.id}`);
+	// The inline autosave is keyed by operator + org so another account on the
+	// same browser can never restore this operator's unsent draft. While the
+	// owner hash is unresolved the key is null and every read/write/remove
+	// bails (fail closed); the `commons` prefix keeps the key inside the
+	// logout sweep's prefix contract.
+	let ownerHash = $state<string | null>(null);
+	$effect(() => {
+		if (!browser) return;
+		const operatorId =
+			(($page.data.user as Record<string, unknown> | null)?.id as string | undefined) ?? '';
+		if (!operatorId) {
+			ownerHash = null;
+			return;
+		}
+		let cancelled = false;
+		(async () => {
+			const hash = await deriveOwnerHash(operatorId);
+			if (!cancelled) ownerHash = hash;
+		})().catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+	const draftKey = $derived(orgComposeAutosaveKey(ownerHash, data.org.id));
 	const studioDraftId = $derived($page.url.searchParams.get('studioDraft') ?? '');
 
 	// Restore a STUDIO handoff before the generic composer draft restore. This is
 	// a one-time import: STUDIO has already saved the generated subject/body; the
-	// org email composer now owns audience selection, preview, and send.
+	// org email composer now owns audience selection, preview, and send. The read
+	// is owner-scoped: consume() only yields a draft the active operator wrote,
+	// and deletes it on success.
 	let hasAppliedStudioDraft = false;
 	$effect(() => {
 		const draftId = studioDraftId;
+		const operatorId =
+			(($page.data.user as Record<string, unknown> | null)?.id as string | undefined) ?? '';
 		if (!browser || hasAppliedStudioDraft || !draftId) return;
 		hasAppliedStudioDraft = true;
 
-		const draft = getOrgEmailComposeDraft(draftId);
-		if (!draft) return;
+		(async () => {
+			const draft = await orgEmailComposeDrafts.consume(draftId, operatorId);
+			if (!draft) return;
 
-		subject = draft.subject;
-		bodyHtml = draft.bodyHtml;
-		studioDraftRestored = draft;
-		draftRestored = false;
-		if (editor) editor.commands.setContent(bodyHtml);
-		deleteOrgEmailComposeDraft(draftId);
+			subject = draft.subject;
+			bodyHtml = draft.bodyHtml;
+			studioDraftRestored = draft;
+			draftRestored = false;
+			if (editor) editor.commands.setContent(bodyHtml);
 
-		try {
-			const url = new URL(window.location.href);
-			url.searchParams.delete('studioDraft');
-			window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
-		} catch {
-			// URL cleanup is non-critical; the one-time guard prevents re-import loops.
-		}
+			try {
+				const url = new URL(window.location.href);
+				url.searchParams.delete('studioDraft');
+				window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+			} catch {
+				// URL cleanup is non-critical; the one-time guard prevents re-import loops.
+			}
+		})().catch(() => {});
 	});
 
-	// Restore draft on mount (runs once)
+	// Restore draft on mount (runs once the owner-scoped key resolves)
 	let hasRestoredDraft = false;
 	$effect(() => {
+		const key = draftKey;
 		if (!browser || hasRestoredDraft) return;
+		// While the owner hash is unresolved the key is null: bail WITHOUT
+		// consuming the one-shot guard, or the operator's own draft would never
+		// restore once the hash lands.
+		if (key === null) return;
 		hasRestoredDraft = true;
 		try {
-			const saved = localStorage.getItem(draftKey);
+			const saved = localStorage.getItem(key);
 			if (!saved) return;
 			const draft: ComposeDraft = JSON.parse(saved);
 			// Discard drafts older than 7 days
 			if (Date.now() - draft.savedAt > 7 * 24 * 60 * 60 * 1000) {
-				localStorage.removeItem(draftKey);
+				localStorage.removeItem(key);
 				return;
 			}
 			// Only restore if current form is empty
@@ -270,6 +304,9 @@
 		const _seg = selectedSegmentIds;
 
 		if (!browser) return;
+		// Fail closed: no autosave until the owner-scoped key resolves.
+		const key = draftKey;
+		if (key === null) return;
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			// Don't save empty drafts
@@ -285,7 +322,7 @@
 				savedAt: Date.now()
 			};
 			try {
-				localStorage.setItem(draftKey, JSON.stringify(draft));
+				localStorage.setItem(key, JSON.stringify(draft));
 			} catch {
 				/* quota exceeded, ignore */
 			}
@@ -464,7 +501,7 @@
 		studioDraftRestored = null;
 		draftRestored = false;
 		if (editor) editor.commands.clearContent();
-		if (browser) {
+		if (browser && draftKey !== null) {
 			try {
 				localStorage.removeItem(draftKey);
 			} catch {
@@ -730,7 +767,7 @@
 			blastResult = result;
 
 			// Clear draft
-			if (browser) {
+			if (browser && draftKey !== null) {
 				try {
 					localStorage.removeItem(draftKey);
 				} catch {}
@@ -1820,7 +1857,7 @@
 								return;
 							}
 							sending = true;
-							if (browser) {
+							if (browser && draftKey !== null) {
 								try {
 									localStorage.removeItem(draftKey);
 								} catch {}
@@ -2039,7 +2076,7 @@
 								return;
 							}
 							sending = true;
-							if (browser) {
+							if (browser && draftKey !== null) {
 								try {
 									localStorage.removeItem(draftKey);
 								} catch {}

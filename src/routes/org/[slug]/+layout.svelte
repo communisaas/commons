@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { FEATURES } from '$lib/config/features';
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import type { LayoutData } from './$types';
 	import type { Snippet } from 'svelte';
@@ -40,6 +41,31 @@
 	// init is correct — this is intentionally NOT the reactive `base`.
 	const initialBase = `/org/${data.org.slug}`;
 	const os = setOrgOS(spaceForPath($page.url.pathname, initialBase), initialBase);
+
+	// Bind the kernel's process registry to the signed-in operator. Studio
+	// processes carry reasoning traces, resolved decision-maker contacts and
+	// composed messages; scoping their device-local cache to the operator keeps
+	// two staff members sharing one browser from restoring each other's drafts.
+	// Owner binding is a post-init setter because setContext must stay
+	// synchronous during init while the hash derivation is async.
+	$effect(() => {
+		if (!browser) return;
+		const userId = (data.user as Record<string, unknown> | null)?.id as string | undefined;
+		let cancelled = false;
+		(async () => {
+			const { deriveOwnerHash } = await import('$lib/stores/templateDraft');
+			if (cancelled) return;
+			if (!userId) {
+				os.setOwner(null);
+				return;
+			}
+			const hash = await deriveOwnerHash(userId);
+			if (!cancelled) os.setOwner(hash);
+		})().catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	// A canonical space path (/studio, /supporters, /representatives, org root) is
 	// OWNED by a mounted OrgShell space — we show the shell and suppress the
