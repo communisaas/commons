@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+	assembleMailto,
 	encodeMailboxForMailto,
-	generateMailtoUrl,
-	generatePersonalizedMailto
+	generateMailtoUrl
 } from '$lib/services/emailService';
 import type { EmailFlowTemplate } from '$lib/types/template';
 
@@ -56,16 +56,16 @@ describe('mailto recipient encoding', () => {
 		);
 	});
 
-	it('uses the mailbox encoder for personalized mailto URLs', () => {
-		const result = generatePersonalizedMailto({
-			recipient: { name: 'Night Desk', email: 'night+alerts@example.test?bcc=attacker@example.test' },
+	it('uses the mailbox encoder for assembled mailto URLs', () => {
+		const result = assembleMailto({
+			recipients: ['night+alerts@example.test?bcc=attacker@example.test'],
 			subject: 'A subject',
-			opener: '',
-			templateBody: 'A body'
+			zones: { body: 'A body' }
 		});
 
-		expect(result).toEqual({
-			url: 'mailto:night%2Balerts%40example.test%3Fbcc%3Dattacker@example.test?subject=A%20subject&body=A%20body'
-		});
+		if (!result.ok) throw new Error(result.message);
+		expect(result.url).toBe(
+			'mailto:night%2Balerts%40example.test%3Fbcc%3Dattacker@example.test?subject=A%20subject&body=A%20body'
+		);
 	});
 });
