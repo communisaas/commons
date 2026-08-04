@@ -30,7 +30,11 @@ describe('workflow execution boundary', () => {
 		expect(workflows).toContain("if (context.supporter.emailStatus !== 'subscribed')");
 		expect(workflows).toContain('getOrgKeyForAction(ctx, context.org._id)');
 		expect(workflows).toContain('decryptOrgPii(');
-		expect(workflows).toContain('applyWorkflowMergeFields');
+		// Merge fields resolve through the one shared grammar, not a local twin.
+		expect(workflows).toContain("from './lib/emailMergeFields'");
+		expect(workflows).toContain(
+			"applyEmailMergeFields(step.emailSubject ?? '', mergeContext, 'header')"
+		);
 		// Delivery now uses the receipt-bearing SES boundary. A boolean-only
 		// result cannot distinguish an accepted message from an ambiguous
 		// transport outcome, so the workflow must settle only an exact message id

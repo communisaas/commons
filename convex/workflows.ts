@@ -15,6 +15,7 @@ import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
 import { sendViaSesWithResult } from './email';
 import { attachSupporterTagProjection, detachSupporterTagProjection } from './lib/supporterBrowse';
+import { applyEmailMergeFields, buildEmailTierContext } from './lib/emailMergeFields';
 import {
 	getWorkflowExecutionCountMigration,
 	incrementWorkflowExecutionCount,
@@ -223,31 +224,6 @@ function escapeHtml(value: string): string {
 function renderWorkflowEmailBody(body: string): string {
 	if (/<[a-z][\s\S]*>/i.test(body)) return body;
 	return `<div style="font-family:sans-serif;line-height:1.5;">${escapeHtml(body).replace(/\n/g, '<br />')}</div>`;
-}
-
-function applyWorkflowMergeFields(
-	value: string,
-	context: {
-		firstName: string;
-		lastName: string;
-		postalCode: string | null;
-		verificationStatus: 'verified' | 'postal-resolved' | 'imported';
-	}
-): string {
-	const tierContext =
-		context.verificationStatus === 'verified'
-			? 'Your identity is verified. You appear as a verified contact in this campaign.'
-			: context.verificationStatus === 'postal-resolved'
-				? 'Your postal code is on file. Verification is pending.'
-				: 'You were added by an organization. Verification is pending.';
-
-	return value
-		.replace(/\{\{firstName\}\}/g, escapeHtml(context.firstName))
-		.replace(/\{\{lastName\}\}/g, escapeHtml(context.lastName))
-		.replace(/\{\{postalCode\}\}/g, escapeHtml(context.postalCode ?? ''))
-		.replace(/\{\{verificationStatus\}\}/g, escapeHtml(context.verificationStatus))
-		.replace(/\{\{tierLabel\}\}/g, '')
-		.replace(/\{\{tierContext\}\}/g, escapeHtml(tierContext));
 }
 
 function evaluateCondition(
@@ -1474,15 +1450,24 @@ async function sendWorkflowEmailStep(
 		: context.supporter.postalCode
 			? 'postal-resolved'
 			: 'imported';
+	// Engagement tier is not loaded on this path: {{tierLabel}} renders its
+	// fallback (or collapses) and tierContext derives from verification status.
 	const mergeContext = {
 		firstName,
 		lastName,
+		email: recipientEmail,
 		postalCode: context.supporter.postalCode,
-		verificationStatus
+		verificationStatus,
+		tierLabel: '',
+		tierContext: buildEmailTierContext(verificationStatus)
 	} as const;
-	const subject = applyWorkflowMergeFields(step.emailSubject ?? '', mergeContext);
+	// Subject is an email header: 'header' mode strips CR/LF and skips HTML
+	// entities. The body stays in default 'html' mode — renderWorkflowEmailBody
+	// decides plain-text vs passthrough from the already-merged string, so an
+	// unescaped merge value could otherwise flip it into raw HTML.
+	const subject = applyEmailMergeFields(step.emailSubject ?? '', mergeContext, 'header');
 	const htmlBody = renderWorkflowEmailBody(
-		applyWorkflowMergeFields(step.emailBody ?? '', mergeContext)
+		applyEmailMergeFields(step.emailBody ?? '', mergeContext)
 	);
 
 	const claim:

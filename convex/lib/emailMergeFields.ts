@@ -1,3 +1,15 @@
+// Per-recipient merge-field substitution. Single source of the grammar for
+// every send path — the Convex batch and workflow senders, the SvelteKit
+// server compiler, and the browser-direct blast sender all import this module.
+// It stays import-free so it loads unchanged in the Convex isolate, on the
+// server, and in the browser.
+//
+// Grammar: {{token}} or {{token|fallback}}. The fallback (no pipes or braces
+// inside it) renders when the recipient value is blank, so an imported list
+// with missing names gets "Dear Friend," instead of "Dear ,". A token that
+// resolves blank with no usable fallback collapses together with one
+// preceding space, leaving no orphaned punctuation.
+
 export type VerificationStatus = 'verified' | 'postal-resolved' | 'imported';
 
 export type EmailMergeContext = {
@@ -10,11 +22,9 @@ export type EmailMergeContext = {
 	tierContext: string;
 };
 
-// Canonical supported merge-field token names. This is the single source of
-// truth for the token set; the Convex mirror, the server compiler, and the
-// compose page's detection pattern must all support exactly these. A parity
-// suite imports this list and asserts set-equality so a token added at one
-// site but not another fails CI.
+// Canonical supported merge-field token names. Every resolution site must
+// support exactly these; the compose page's detection pattern is the one
+// remaining independent copy, and a parity suite asserts it agrees.
 export const MERGE_FIELD_NAMES = [
 	'firstName',
 	'lastName',
@@ -29,13 +39,6 @@ type MergeFieldName = (typeof MERGE_FIELD_NAMES)[number];
 
 const TOKEN_ALTERNATION = MERGE_FIELD_NAMES.join('|');
 
-// Grammar: {{token}} or {{token|fallback}}. The fallback (no pipes or braces
-// inside it) renders when the recipient value is blank, so an imported list
-// with missing names gets "Dear Friend," instead of "Dear ,". A token that
-// resolves blank with no usable fallback collapses together with one
-// preceding space, leaving no orphaned punctuation. This grammar is mirrored
-// in convex/_emailMergeFields.ts (the Convex bundler cannot resolve $lib
-// paths); a parity suite holds the implementations identical.
 const MERGE_FIELD_RESOLVE_RE = new RegExp(
 	`( ?)\\{\\{(${TOKEN_ALTERNATION})(?:\\|([^{}|]*))?\\}\\}`,
 	'g'

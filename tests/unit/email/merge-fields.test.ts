@@ -5,7 +5,7 @@ import {
 	countEmailMergeFields,
 	hasEmailMergeFields,
 	type EmailMergeContext
-} from '$lib/core/email/merge-fields';
+} from '$convex/lib/emailMergeFields';
 
 const ctx: EmailMergeContext = {
 	firstName: 'Ana <Admin>',

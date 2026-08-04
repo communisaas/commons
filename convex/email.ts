@@ -25,7 +25,7 @@ import {
 	RECIPIENT_SCAN_PAGE
 } from './_emailRecipientFilter';
 import { normalizeEmailAudienceFilter } from './_audienceFilters';
-import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
+import { applyEmailMergeFields, buildEmailTierContext } from './lib/emailMergeFields';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
 import { requireAudienceDispatchJobsReady } from './lib/audienceDispatchGate';
 import {

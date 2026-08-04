@@ -15,7 +15,7 @@ import {
 	buildEmailTierContext,
 	hasEmailMergeFields,
 	type VerificationStatus
-} from '$lib/core/email/merge-fields';
+} from '$convex/lib/emailMergeFields';
 import { FEATURES } from '$lib/config/features';
 
 export interface BlastSendOptions {

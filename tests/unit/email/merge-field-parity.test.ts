@@ -1,13 +1,12 @@
 /**
  * Merge-field grammar parity.
  *
- * The merge-field grammar is implemented at four sites: the server email
- * compiler, the shared core module (the browser client-direct send path),
- * the hand-duplicated Convex batch-send mirror, and the compose page's
- * detection pattern. The Convex mirror cannot import $lib modules, and the
- * compose page keeps a local regex for token counting — this suite is the
- * guard that holds the supported-token set and fallback semantics identical
- * everywhere, so a token an author types behaves the same on every send path.
+ * One module implements the grammar for every send path. Three things outside
+ * it still have to agree with it, and this suite is the guard on each: the
+ * compose page's local detection regex, the server compiler's tier-context
+ * strings, and the workflow send path's source text — which once carried a
+ * hand-written twin of the substitution and must never grow one back. A token
+ * an author types has to behave the same wherever the message is dispatched.
  */
 
 import { readFileSync } from 'node:fs';
@@ -26,23 +25,13 @@ import {
 	MERGE_FIELD_NAMES,
 	type EmailMergeContext,
 	type VerificationStatus
-} from '$lib/core/email/merge-fields';
-import {
-	applyEmailMergeFields as convexApplyEmailMergeFields,
-	buildEmailTierContext as convexBuildEmailTierContext
-} from '../../../convex/_emailMergeFields';
+} from '$convex/lib/emailMergeFields';
 
-// Canonical token set lives in the core module; every other site mirrors it.
+// Canonical token set lives in the shared module; every other site mirrors it.
 const TOKEN_NAMES = MERGE_FIELD_NAMES;
 
-// Extract the literal MERGE_FIELD_NAMES array from a sibling implementation's
-// source so a token added to one site but not another is caught at the set
-// level (not just behaviorally). Returns the names in declaration order.
-function readMergeFieldNames(relPath: string): string[] {
-	const source = readFileSync(resolve(process.cwd(), relPath), 'utf8');
-	const block = source.match(/MERGE_FIELD_NAMES\s*=\s*\[([\s\S]*?)\]/);
-	if (!block) throw new Error(`MERGE_FIELD_NAMES not found in ${relPath}`);
-	return [...block[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+function readSource(relPath: string): string {
+	return readFileSync(resolve(process.cwd(), relPath), 'utf8');
 }
 
 const fullCtx: MergeContext & EmailMergeContext = {
@@ -65,32 +54,21 @@ const blankCtx: MergeContext & EmailMergeContext = {
 	tierContext: buildEmailTierContext('imported')
 };
 
-// All HTML-mode resolvers, by site. compileMergeFields delegates to the core
-// module; the Convex entry is an independent hand-written mirror.
+// All HTML-mode entry points, by site. compileMergeFields delegates to the
+// shared module; running both keeps the delegation itself under test.
 const htmlResolvers: Array<[string, (t: string, ctx: typeof fullCtx) => string]> = [
 	['server compiler', (t, ctx) => compileMergeFields(t, ctx)],
-	['core module', (t, ctx) => applyEmailMergeFields(t, ctx)],
-	['convex mirror', (t, ctx) => convexApplyEmailMergeFields(t, ctx)]
+	['shared module', (t, ctx) => applyEmailMergeFields(t, ctx)]
 ];
 
 function loadComposePagePattern(): RegExp {
-	const source = readFileSync(
-		resolve(process.cwd(), 'src/routes/org/[slug]/emails/compose/+page.svelte'),
-		'utf8'
-	);
+	const source = readSource('src/routes/org/[slug]/emails/compose/+page.svelte');
 	const match = source.match(/mergeFieldPattern\s*=\s*\/((?:[^/\\\n]|\\.)+)\/([a-z]*)/);
 	if (!match) throw new Error('compose page mergeFieldPattern not found');
 	return new RegExp(match[1], match[2]);
 }
 
 describe('supported-token set equality (every resolution site)', () => {
-	it('convex mirror declares exactly the canonical token set', () => {
-		const convexNames = readMergeFieldNames('convex/_emailMergeFields.ts');
-		expect(new Set(convexNames)).toEqual(new Set(TOKEN_NAMES));
-		// Order matters too — the alternation regex is built from this list.
-		expect(convexNames).toEqual([...TOKEN_NAMES]);
-	});
-
 	it('compose page detection pattern matches exactly the canonical token set', () => {
 		const pattern = loadComposePagePattern();
 		// Every canonical token is detected, and an off-list token is not.
@@ -100,10 +78,10 @@ describe('supported-token set equality (every resolution site)', () => {
 		expect('{{notARealToken}}'.match(pattern)?.length ?? 0).toBe(0);
 	});
 
-	it('server compiler + core + convex resolve exactly the canonical tokens (and nothing more)', () => {
+	it('resolution resolves exactly the canonical tokens (and nothing more)', () => {
 		// A canonical token resolves to its value; an off-list token is left
-		// verbatim. Run on every HTML resolver so a token supported at one site
-		// but missing at another diverges here.
+		// verbatim. Run on every HTML entry point so a token supported at one
+		// site but missing at another diverges here.
 		for (const [, run] of htmlResolvers) {
 			for (const name of TOKEN_NAMES) {
 				expect(run(`<<{{${name}}}>>`, fullCtx), `token: ${name}`).not.toBe(`<<{{${name}}}>>`);
@@ -186,12 +164,12 @@ describe('cross-site output parity', () => {
 		}
 	});
 
-	it('core and convex header-mode outputs match and skip HTML entities', () => {
+	it('header-mode output skips HTML entities on every probe', () => {
+		// Header mode is what every send path uses for the subject. It must never
+		// entity-escape, or a subject reads "Friend &amp; co" in the inbox.
 		for (const probe of probes) {
 			for (const ctx of [fullCtx, blankCtx]) {
-				expect(applyEmailMergeFields(probe, ctx, 'header')).toBe(
-					convexApplyEmailMergeFields(probe, ctx, 'header')
-				);
+				expect(applyEmailMergeFields(probe, ctx, 'header')).not.toContain('&amp;');
 			}
 		}
 		expect(applyEmailMergeFields('{{firstName|Friend & co}}', blankCtx, 'header')).toBe(
@@ -199,35 +177,31 @@ describe('cross-site output parity', () => {
 		);
 	});
 
-	it('strips CR/LF from a subject merge value on BOTH send paths (header injection)', () => {
+	it('strips CR/LF from a subject merge value (header injection)', () => {
 		// The subject resolves in header mode on the browser-direct path
-		// (client-blast-sender) and the Convex batch path (email.ts). A merge
-		// value with embedded CR/LF must not survive into the subject header on
-		// either, or it becomes an email-header-injection vector.
+		// (client-blast-sender), the Convex batch path (email.ts), and the
+		// workflow path (workflows.ts). A merge value with embedded CR/LF must
+		// not survive into the subject header, or it becomes an
+		// email-header-injection vector.
 		const injected: EmailMergeContext = {
 			...fullCtx,
 			firstName: 'Jane\r\nBcc: evil@example.com'
 		};
-		const core = applyEmailMergeFields('Hi {{firstName}}', injected, 'header');
-		const convex = convexApplyEmailMergeFields('Hi {{firstName}}', injected, 'header');
-		expect(core).toBe(convex);
-		for (const out of [core, convex]) {
-			expect(out).not.toContain('\r');
-			expect(out).not.toContain('\n');
-			expect(out).toBe('Hi JaneBcc: evil@example.com');
-		}
+		const out = applyEmailMergeFields('Hi {{firstName}}', injected, 'header');
+		expect(out).not.toContain('\r');
+		expect(out).not.toContain('\n');
+		expect(out).toBe('Hi JaneBcc: evil@example.com');
 	});
 
-	it('tier-context builders agree across server, core, and convex', () => {
+	it('tier-context builders agree between the server compiler and the shared module', () => {
 		const statuses: VerificationStatus[] = ['verified', 'postal-resolved', 'imported'];
 		for (const status of statuses) {
 			expect(buildTierContext(status)).toBe(buildEmailTierContext(status));
-			expect(convexBuildEmailTierContext(status)).toBe(buildEmailTierContext(status));
 		}
 	});
 });
 
-describe('detection parity (compose page pattern vs core helpers)', () => {
+describe('detection parity (compose page pattern vs shared helpers)', () => {
 	const composePattern = loadComposePagePattern();
 
 	const detectionProbes: Array<[string, number]> = [
@@ -251,5 +225,31 @@ describe('detection parity (compose page pattern vs core helpers)', () => {
 		// client-blast-sender switches to per-recipient sends off this check;
 		// a fallback-only template must not slip through as non-personalized.
 		expect(hasEmailMergeFields('Dear {{firstName|Friend}},')).toBe(true);
+	});
+});
+
+describe('workflow send path', () => {
+	// The workflow sender once carried its own substitution chain, which
+	// silently supported a narrower token set and no fallbacks. Assert on the
+	// source so a reintroduced twin fails here rather than in an inbox.
+	const workflows = readSource('convex/workflows.ts');
+
+	it('imports the shared grammar', () => {
+		expect(workflows).toContain("from './lib/emailMergeFields'");
+	});
+
+	it('resolves the subject in header mode and derives tier context from the shared builder', () => {
+		expect(workflows).toContain(
+			"applyEmailMergeFields(step.emailSubject ?? '', mergeContext, 'header')"
+		);
+		expect(workflows).toContain('buildEmailTierContext(verificationStatus)');
+	});
+
+	it('carries no local merge-field twin', () => {
+		expect(workflows).not.toMatch(/\.replace\(\/\\\{\\\{/);
+		expect(workflows).not.toContain('applyWorkflowMergeFields');
+		expect(workflows).not.toContain(
+			'Your identity is verified. You appear as a verified contact'
+		);
 	});
 });
