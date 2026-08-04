@@ -7,6 +7,8 @@ import {
 	PUBLIC_DYNAMIC_PATH_PREFIXES,
 	publicDynamicPathMatchesPolicy,
 	validateAnonymousDynamicRouteInventoryCoverage,
+	validateExecutableDynamicRouteFamilyCoverage,
+	validateFirstStatementAuthority,
 	validatePublicDynamicRateLimitPolicy,
 	validatePublicDynamicRateLimitRuleset,
 	validatePublicDynamicRateLimitZone,
@@ -48,8 +50,13 @@ describe('Cloudflare public dynamic Free-plan cost shield', () => {
 		expect(validatePublicDynamicRateLimitPolicy(policy)).toBe(policy);
 		expect(validateAnonymousDynamicRouteInventoryCoverage(inventory, policy)).toEqual({
 			methodScope: 'all',
-			protectedExamples: 36,
+			protectedExamples: 42,
 			bypassExamples: 2
+		});
+		expect(validateExecutableDynamicRouteFamilyCoverage(inventory, policy)).toEqual({
+			executableRoutes: 5,
+			families: 1,
+			handlers: 5
 		});
 		expect(policy.ruleset.scope.methodScope).toBe('all');
 		expect(policy.ruleset.rules[0].expression).toContain('starts_with(http.request.uri.path, "/s/")');
@@ -64,7 +71,10 @@ describe('Cloudflare public dynamic Free-plan cost shield', () => {
 			expect(PUBLIC_DYNAMIC_EXACT_PATHS).toContain(path);
 		}
 		for (const prefix of [
+			'/api/agents/',
 			'/api/auth/passkey/',
+			'/api/moderation/',
+			'/api/deliveries/',
 			'/c/',
 			'/d/',
 			'/dm/',
@@ -77,7 +87,8 @@ describe('Cloudflare public dynamic Free-plan cost shield', () => {
 			'/template-modal/',
 			'/api/templates/',
 			'/api/debates/',
-			'/api/positions/count/'
+			'/api/positions/',
+			'/api/shadow-atlas/'
 		]) {
 			expect(PUBLIC_DYNAMIC_PATH_PREFIXES).toContain(prefix);
 		}
@@ -102,6 +113,69 @@ describe('Cloudflare public dynamic Free-plan cost shield', () => {
 		}
 	});
 
+	it('covers every executable agent route and requires first-statement application authority', () => {
+		for (const pathname of [
+			'/api/agents/message-jobs/[jobId]',
+			'/api/agents/stream-decision-makers',
+			'/api/agents/stream-message',
+			'/api/agents/stream-subject',
+			'/api/agents/traces/[traceId]'
+		]) {
+			expect(publicDynamicPathMatchesPolicy(pathname, policy), pathname).toBe(true);
+		}
+		expect(inventory.requiredExecutableRouteFamilies).toEqual([
+			{
+				authorityCall: 'requireAuthenticatedAgentRequest',
+				boundaryCall: 'readBoundedAgentRequest',
+				pathPrefix: '/api/agents/',
+				sourceRoot: 'src/routes/api/agents'
+			}
+		]);
+	});
+
+	it('rejects an executable agent handler that moves authority behind other work', () => {
+		expect(() =>
+			validateFirstStatementAuthority(
+				`export const POST: RequestHandler = async (event) => {
+					await spendProviderWork();
+					const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+					if (authenticatedUserId instanceof Response) return authenticatedUserId;
+				}`,
+				'requireAuthenticatedAgentRequest'
+			)
+		).toThrow(/first executable statements/);
+	});
+
+	it('rejects a second nonstandard handler hidden beside an authenticated handler', () => {
+		expect(() =>
+			validateFirstStatementAuthority(
+				`export const POST: RequestHandler = async (event) => {
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	return new Response('ok');
+};
+export const DELETE: RequestHandler = async ({ request }) => expensivePaidWork(request);`,
+				'requireAuthenticatedAgentRequest'
+			)
+		).toThrow(/Every exported HTTP handler/);
+	});
+
+	it('rejects a function-declared handler hidden beside an authenticated handler', () => {
+		expect(() =>
+			validateFirstStatementAuthority(
+				`export const GET: RequestHandler = async (event) => {
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	return new Response('ok');
+};
+export async function POST(event: RequestEvent) {
+	return expensivePaidWork(event.request);
+}`,
+				'requireAuthenticatedAgentRequest'
+			)
+		).toThrow(/Every exported HTTP handler/);
+	});
+
 	it('covers public account-bootstrap routes before they can spend the global work budget', () => {
 		for (const pathname of [
 			'/api/waitlist',
@@ -111,6 +185,27 @@ describe('Cloudflare public dynamic Free-plan cost shield', () => {
 		]) {
 			expect(publicDynamicPathMatchesPolicy(pathname, policy), pathname).toBe(true);
 		}
+	});
+
+	it('covers position delivery writes before authentication and Convex admission work', () => {
+		for (const pathname of [
+			'/api/deliveries/record',
+			'/api/positions/batch-register',
+			'/api/positions/confirm-send',
+			'/api/positions/count/template-id',
+			'/api/positions/engagement-by-district/template-id'
+		]) {
+			expect(publicDynamicPathMatchesPolicy(pathname, policy), pathname).toBe(true);
+		}
+		expect(PUBLIC_DYNAMIC_PATH_PREFIXES).toContain('/api/deliveries/');
+		expect(PUBLIC_DYNAMIC_PATH_PREFIXES).toContain('/api/positions/');
+		expect(PUBLIC_DYNAMIC_PATH_PREFIXES).not.toContain('/api/positions/count/');
+	});
+
+	it('covers Shadow Atlas reads and writes before Pages or external relay work', () => {
+		expect(publicDynamicPathMatchesPolicy('/api/shadow-atlas/engagement', policy)).toBe(true);
+		expect(publicDynamicPathMatchesPolicy('/api/shadow-atlas/register', policy)).toBe(true);
+		expect(PUBLIC_DYNAMIC_PATH_PREFIXES).toContain('/api/shadow-atlas/');
 	});
 
 	it('rejects the former debate-family inventory gap', () => {

@@ -815,7 +815,7 @@ export const seedPublic = internalAction({
 		await ctx.runMutation(internal.seed.insertCredentials, { userIds });
 
 		console.log('[seedPublic] Phase 2: Inserting templates (no org assignment)...');
-		const templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, { userIds });
+		const templateIds = await ctx.runMutation(internal.seed.insertTemplates, { userIds });
 
 		console.log('[seedPublic] Phase 3: Inserting debates + arguments...');
 		await ctx.runMutation(internal.seed.insertDebates, { templateIds });
@@ -1336,7 +1336,7 @@ export const insertMemberships = internalMutation({
 export const insertTemplates = internalMutation({
 	args: {
 		userIds: v.array(v.id('users')),
-		orgIds: v.array(v.id('organizations')),
+		orgIds: v.optional(v.array(v.id('organizations'))),
 		suppressDiscoveryRefresh: v.optional(v.boolean()),
 		coordinatedRebuildToken: v.optional(v.string())
 	},
@@ -1355,7 +1355,7 @@ export const insertTemplates = internalMutation({
 			const t = SEED_TEMPLATES[i];
 			assertSeedTemplateInputBudget(t);
 			const userIdx = i % userIds.length;
-			const orgIdx = i % orgIds.length;
+			const orgId = orgIds && orgIds.length > 0 ? orgIds[i % orgIds.length] : undefined;
 
 			const id = await ctx.db.insert('templates', {
 				slug: t.slug,
@@ -1397,101 +1397,9 @@ export const insertTemplates = internalMutation({
 
 				// Relationships
 				userId: userIds[userIdx],
-				orgId: orgIds[orgIdx],
+				...(orgId ? { orgId } : {}),
 
 				updatedAt: now - (SEED_TEMPLATES.length - i) * 86_400_000 // stagger creation times
-			});
-			const inserted = await ctx.db.get(id);
-			if (!inserted) throw new Error(`SEED_TEMPLATE_INSERT_MISSING:${id}`);
-			await syncTemplateListProjection(ctx, inserted);
-			await syncCompactPublicDiscoverySource(ctx, inserted);
-			ids.push(id);
-		}
-
-		// Update templatesContributed counts
-		const countByUser = [0, 0, 0];
-		for (let i = 0; i < SEED_TEMPLATES.length; i++) {
-			countByUser[i % userIds.length]++;
-		}
-		for (let i = 0; i < userIds.length; i++) {
-			await ctx.db.patch(userIds[i], { templatesContributed: countByUser[i] });
-		}
-
-		if (ids.length > 0 && !suppressDiscoveryRefresh) {
-			await markPublicDiscoveryListAndRelationsDirty(ctx, 'aggregate');
-		}
-
-		return ids;
-	}
-});
-
-// =============================================================================
-// PHASE 3-ALT: INSERT TEMPLATES (PUBLIC — no org assignment)
-// =============================================================================
-
-export const insertTemplatesPublic = internalMutation({
-	args: {
-		userIds: v.array(v.id('users')),
-		suppressDiscoveryRefresh: v.optional(v.boolean()),
-		coordinatedRebuildToken: v.optional(v.string())
-	},
-	handler: async (
-		ctx,
-		{ userIds, suppressDiscoveryRefresh, coordinatedRebuildToken }
-	): Promise<Id<'templates'>[]> => {
-		if (suppressDiscoveryRefresh) {
-			await assertPublicDiscoveryCoordinatedRebuildAuthorized(ctx, coordinatedRebuildToken);
-		}
-		const now = Date.now();
-		const ids: Id<'templates'>[] = [];
-
-		for (let i = 0; i < SEED_TEMPLATES.length; i++) {
-			const t = SEED_TEMPLATES[i];
-			assertSeedTemplateInputBudget(t);
-			const userIdx = i % userIds.length;
-
-			const id = await ctx.db.insert('templates', {
-				slug: t.slug,
-				title: t.title,
-				description: t.description,
-				domain: t.domain,
-				topics: t.topics,
-				type: t.type,
-				deliveryMethod: seedDeliveryMethod(t),
-				preview: t.preview,
-				messageBody: t.messageBody,
-				countryCode: t.countryCode,
-				sources: t.sources,
-				researchLog: t.researchLog,
-				deliveryConfig: t.deliveryConfig,
-				cwcConfig: t.cwcConfig,
-				recipientConfig: t.recipientConfig,
-				contentHash: t.contentHash,
-				scopes: t.scopes,
-				jurisdictions: t.jurisdictions,
-				status: 'published',
-				isPublic: true,
-
-				// Community metrics
-				verifiedSends: 0,
-				uniqueDistricts: 0,
-				endorsementCount: 0,
-
-				// Embeddings
-				embeddingVersion: 'none',
-
-				// Moderation
-				flaggedByModeration: false,
-				consensusApproved: true,
-
-				// Reputation
-				reputationDelta: 0,
-				reputationApplied: false,
-
-				// Relationships — user only, no org
-				userId: userIds[userIdx],
-
-				updatedAt: now - (SEED_TEMPLATES.length - i) * 86_400_000
 			});
 			const inserted = await ctx.db.get(id);
 			if (!inserted) throw new Error(`SEED_TEMPLATE_INSERT_MISSING:${id}`);
@@ -4196,21 +4104,12 @@ export const reseedTemplates = internalAction({
 		}
 
 		// 6. Reinsert templates
-		let templateIds: Id<'templates'>[];
-		if (orgIds.length > 0) {
-			templateIds = await ctx.runMutation(internal.seed.insertTemplates, {
-				userIds,
-				orgIds,
-				suppressDiscoveryRefresh: true,
-				coordinatedRebuildToken
-			});
-		} else {
-			templateIds = await ctx.runMutation(internal.seed.insertTemplatesPublic, {
-				userIds,
-				suppressDiscoveryRefresh: true,
-				coordinatedRebuildToken
-			});
-		}
+		const templateIds = await ctx.runMutation(internal.seed.insertTemplates, {
+			userIds,
+			orgIds,
+			suppressDiscoveryRefresh: true,
+			coordinatedRebuildToken
+		});
 
 		// 7. Reinsert debates
 		await ctx.runMutation(internal.seed.insertDebates, {

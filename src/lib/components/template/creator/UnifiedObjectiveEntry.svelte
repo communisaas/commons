@@ -303,27 +303,11 @@
 		}
 	}
 
-	async function generateSuggestionWithTiming(
-		text: string,
-		clarificationAnswers?: ClarificationAnswers,
-		interactionId?: string
-	): Promise<void> {
+	async function generateSuggestionWithTiming(text: string): Promise<void> {
 		const requestId = crypto.randomUUID();
 		currentRequestId = requestId;
 
 		const startTime = Date.now();
-
-		// For clarification answers, use non-streaming API (simpler flow)
-		if (clarificationAnswers || interactionId) {
-			await generateWithNonStreaming(
-				text,
-				requestId,
-				startTime,
-				clarificationAnswers,
-				interactionId
-			);
-			return;
-		}
 
 		// Use streaming for initial generation - show thoughts in real-time
 		try {
@@ -404,116 +388,6 @@
 					suggestionState = {
 						status: 'error',
 						message: err instanceof Error ? err.message : 'Something broke. Try again.'
-					};
-				}
-			}
-		}
-	}
-
-	/**
-	 * Non-streaming generation for clarification follow-ups
-	 * (Multi-turn context requires the standard API)
-	 */
-	async function generateWithNonStreaming(
-		text: string,
-		requestId: string,
-		startTime: number,
-		clarificationAnswers?: ClarificationAnswers,
-		interactionId?: string
-	): Promise<void> {
-		// Delay showing "thinking" to prevent flash
-		const thinkingTimer = setTimeout(() => {
-			if (currentRequestId === requestId) {
-				suggestionState = { status: 'thinking', startTime };
-			}
-		}, AI_SUGGESTION_TIMING.MIN_THINKING_DURATION);
-
-		try {
-			rateLimiter.recordCall();
-
-			const payload: {
-				message: string;
-				interactionId?: string;
-				clarificationAnswers?: ClarificationAnswers;
-			} = { message: text };
-
-			if (interactionId) {
-				payload.interactionId = interactionId;
-			}
-
-			if (clarificationAnswers) {
-				payload.clarificationAnswers = clarificationAnswers;
-			}
-
-			const response = await api.post('/agents/generate-subject', payload, {
-				timeout: AI_SUGGESTION_TIMING.SUGGESTION_TIMEOUT,
-				retries: AI_SUGGESTION_TIMING.MAX_RETRIES,
-				showToast: false,
-				skipErrorLogging: true
-			});
-
-			clearTimeout(thinkingTimer);
-
-			// Ignore stale responses
-			if (requestId !== currentRequestId) {
-				return;
-			}
-
-			if (response.success && response.data) {
-				// Check if agent needs clarification
-				const clarificationData = response.data as ClarificationResponseData;
-				if (clarificationData.needs_clarification) {
-					suggestionState = {
-						status: 'clarifying',
-						questions: clarificationData.clarification_questions || [],
-						inferredContext: clarificationData.inferred_context || defaultInferredContext,
-						interactionId: clarificationData.interactionId || crypto.randomUUID()
-					};
-
-					// Store complete context for reconstruction on answer submission
-					conversationContext = {
-						originalDescription: text,
-						questionsAsked: clarificationData.clarification_questions || [],
-						inferredContext: clarificationData.inferred_context || defaultInferredContext
-					};
-
-					showAISuggest = true;
-					return;
-				}
-
-				// Cache result
-				suggestionCache.set(text.trim().toLowerCase(), response.data as AISuggestion);
-
-				const newSuggestion = response.data as AISuggestion;
-
-				// Add to history (temporal substrate)
-				suggestionHistory = [...suggestionHistory, newSuggestion];
-				selectedIterationIndex = suggestionHistory.length - 1; // Auto-select latest
-
-				suggestionState = { status: 'ready', suggestion: newSuggestion };
-				showAISuggest = true;
-				lastGeneratedText = text;
-				attemptCount++;
-			} else if (response.status === 401) {
-				setAuthenticationRequired();
-			} else {
-				throw new Error(response.error || 'Generation failed');
-			}
-		} catch (err) {
-			clearTimeout(thinkingTimer);
-
-			if (requestId === currentRequestId) {
-				if (err instanceof ApiClientError && err.status === 401) {
-					setAuthenticationRequired();
-				} else {
-					const isTimeout = err instanceof Error && err.name === 'AbortError';
-					suggestionState = {
-						status: 'error',
-						message: isTimeout
-							? 'AI took too long. Try again or write your own.'
-							: err instanceof Error
-								? err.message
-								: 'Something broke. Try again.'
 					};
 				}
 			}

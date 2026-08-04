@@ -7,6 +7,9 @@
 		"/",
 		"/api/release-origin",
 		"/api/waitlist",
+		"/api/agents/stream-subject",
+		"/api/moderation/check",
+		"/api/moderation/personalization",
 		"/api/auth/passkey/authenticate",
 		"/api/templates",
 		"/s/example",
@@ -35,11 +38,22 @@
 		"/api/dm/scorecard/compare",
 		"/api/embed/scorecard/example",
 		"/api/c/example/stats",
+		"/api/deliveries/record",
+		"/api/positions/batch-register",
 		"/api/positions/count/template-id",
 		"/api/positions/engagement-by-district/template-id",
+		"/api/shadow-atlas/engagement",
 		"/api/debates/by-template/template-id",
 		"/api/debates/debate-id/arguments",
 		"/api/debates/debate-id/stream"
+	],
+	"requiredExecutableRouteFamilies": [
+		{
+			"sourceRoot": "src/routes/api/agents",
+			"pathPrefix": "/api/agents/",
+			"authorityCall": "requireAuthenticatedAgentRequest",
+			"boundaryCall": "readBoundedAgentRequest"
+		}
 	],
 	"requiredBypassPathExamples": ["/api/live", "/api/health"]
 }

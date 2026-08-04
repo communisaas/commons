@@ -17,8 +17,7 @@ vi.mock('$lib/server/public-template-queries', () => ({
 	getCachedPublicTemplatePageArtifact: mockGetArtifact
 }));
 
-import { load as loadTemplateModalPage } from '../../../src/routes/template-modal/[slug]/+page.server';
-import templateModalPageSource from '../../../src/routes/template-modal/[slug]/+page.svelte?raw';
+import { load as loadTemplateDetailLayout } from '../../../src/routes/s/[slug]/+layout.server';
 import templateModalComponentSource from '../../../src/lib/components/template/TemplateModal.svelte?raw';
 
 function deferred<T>() {
@@ -121,7 +120,7 @@ describe('public template detail cost shield', () => {
 		).rejects.toThrow('PUBLIC_TEMPLATE_DETAIL_ORIGIN_FALLBACK_RETIRED');
 	});
 
-	it('matches only the three exact cost-bearing route shapes', () => {
+	it('matches only the two exact cost-bearing route shapes', () => {
 		expect(classifyPublicTemplateCostPath('/s/clean-water')).toEqual({
 			kind: 'detail',
 			slug: 'clean-water',
@@ -132,11 +131,7 @@ describe('public template detail cost shield', () => {
 			slug: 'clean-water',
 			validSlug: true
 		});
-		expect(classifyPublicTemplateCostPath('/template-modal/clean-water/')).toEqual({
-			kind: 'modal',
-			slug: 'clean-water',
-			validSlug: true
-		});
+		expect(classifyPublicTemplateCostPath('/template-modal/clean-water/')).toBeNull();
 		expect(classifyPublicTemplateCostPath('/s/clean-water/debate/debate-1')).toBeNull();
 		expect(classifyPublicTemplateCostPath('/s/clean-water/extra')).toBeNull();
 		expect(classifyPublicTemplateCostPath('/directory')).toBeNull();
@@ -147,7 +142,6 @@ describe('public template detail cost shield', () => {
 			'/s/Clean-Water',
 			'/s/clean--water',
 			'/s/%63lean-water',
-			'/template-modal/clean_water',
 			`/s/${'a'.repeat(101)}/og-image`
 		]) {
 			const match = classifyPublicTemplateCostPath(pathname);
@@ -604,22 +598,22 @@ describe('public template detail cost shield', () => {
 	});
 });
 
-describe('template-modal route payload', () => {
-	type ModalLoadEvent = Parameters<typeof loadTemplateModalPage>[0];
+describe('public template detail route payload', () => {
+	type DetailLoadEvent = Parameters<typeof loadTemplateDetailLayout>[0];
 
-	function modalLoadEvent(): ModalLoadEvent {
+	function detailLoadEvent(): DetailLoadEvent {
 		return {
 			params: { slug: 'clean-water' },
-			locals: { user: null },
+			request: new Request('https://commons.example/s/clean-water'),
 			setHeaders: vi.fn(),
-			url: new URL('https://commons.example/template-modal/clean-water'),
+			url,
 			platform: undefined
-		} as unknown as ModalLoadEvent;
+		} as unknown as DetailLoadEvent;
 	}
 
-	async function loadModalPayload(): Promise<{ template: Record<string, unknown> }> {
-		const payload = await loadTemplateModalPage(modalLoadEvent());
-		return payload as { template: Record<string, unknown> };
+	async function loadDetailPayload(): Promise<{ template: Record<string, unknown> }> {
+		const payload = await loadTemplateDetailLayout(detailLoadEvent());
+		return payload as unknown as { template: Record<string, unknown> };
 	}
 
 	function templateFieldsReadBy(source: string): Set<string> {
@@ -628,11 +622,11 @@ describe('template-modal route payload', () => {
 		);
 	}
 
-	it('carries a published send count through to the modal payload', async () => {
+	it('carries a published send count through to the payload', async () => {
 		const detail = { ...detailFixture(), send_count: 12 };
 		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
 
-		const result = await loadModalPayload();
+		const result = await loadDetailPayload();
 		expect(result.template.send_count).toBe(12);
 	});
 
@@ -640,7 +634,7 @@ describe('template-modal route payload', () => {
 		const detail = { ...detailFixture(), send_count: null };
 		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
 
-		const result = await loadModalPayload();
+		const result = await loadDetailPayload();
 		expect('send_count' in result.template).toBe(true);
 		expect(result.template.send_count).toBeNull();
 		expect(result.template.send_count).not.toBe(0);
@@ -650,14 +644,13 @@ describe('template-modal route payload', () => {
 		const detail = { ...detailFixture(), send_count: 12 };
 		mockGetArtifact.mockResolvedValue({ slug: 'clean-water', detail, aggregate: {} });
 
-		const result = await loadModalPayload();
+		const result = await loadDetailPayload();
 		const fields = templateFieldsReadBy(templateModalComponentSource);
 		const missing = [...fields].filter((field) => !(field in result.template));
 		expect(missing).toEqual([]);
 	});
 
-	it('links its fallback action at the canonical template detail path', () => {
-		expect(templateModalPageSource).toContain('href="/s/{data.template.slug}"');
-		expect(templateModalPageSource).not.toMatch(/href="\/\{[^}]*slug[^}]*\}"/);
+	it('leaves the retired modal path outside the cost-bearing grammar', () => {
+		expect(classifyPublicTemplateCostPath('/template-modal/clean-water')).toBeNull();
 	});
 });

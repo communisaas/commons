@@ -1,15 +1,21 @@
 # Anonymous dynamic-route cost inventory
 
 This is the launch inventory for browser-callable routes that can execute
-Convex, Cache API/R2, an action, or image rendering without first proving an
-authenticated application role. It is the independent input to the single
+Convex, Cache API/R2, a metered provider, an action, or image rendering. It
+includes paid-agent routes even though they now prove an authenticated
+application role as their first handler statement. It is the independent input to the single
 Cloudflare Free-plan WAF/rate-limit expression; response cache headers are not
 counted as a pre-Worker defense unless a live outer cache rule is separately
 proven.
 
 The regression-consumable companion is
 `config/anonymous-dynamic-route-cost-inventory.json`. It contains one concrete
-path for every WAF-required row below plus the two probe bypasses. The trusted
+path for every WAF-required row below plus the two probe bypasses. Its executable
+family declaration also makes the trusted verifier walk every
+`src/routes/api/agents/**/+server.ts` handler: each handler must retain the exact
+first-statement session authority, then pass the aggregate-byte/nesting/field
+envelope before rate limiting, database reads, moderation, or providers. The
+complete family must match the WAF prefix. The trusted
 Cloudflare verifier fails if any protected example falls outside the exact
 policy or either probe falls inside it. Because the Free rule cannot match HTTP
 method, every method on a reviewed path intentionally shares the same external
@@ -26,8 +32,10 @@ boundary.
 | `GET /api/templates` | Same public-discovery read plane | Same bounded list cache | Existing API route rule does not throttle GET | Dynamic API; include in WAF |
 | `POST /api/waitlist` | Validates and hashes one address, then performs one secret-gated mutation | Not cacheable | Route-local body and email bounds; global work reservation occurs immediately before Convex | Public account bootstrap; include in WAF |
 | `POST /api/auth/passkey/authenticate` | Reads compact authentication material and creates/consumes a short-lived ceremony before session creation | Not cacheable | Fresh server HMAC proofs at Convex plus the global work budget; no feature flag is a cost boundary | Public account bootstrap; include the complete `/api/auth/passkey/` family in WAF |
+| `POST /api/agents/stream-subject` | Prompt moderation followed by metered Gemini subject generation | Not cacheable | Every executable `/api/agents/` handler proves a session first, then validates one shared bounded request envelope before any admission, state, or provider work | Include the complete `/api/agents/` family in WAF as a coarse pre-Worker fuse; anonymous paid AI is disabled |
+| `POST /api/moderation/check` | Diagnostic two-model Groq moderation | Not cacheable | Session authority runs before parsing; the exact Prompt Guard window is body-bounded and a global `moderation-check` reservation precedes Groq | Include `/api/moderation/` in WAF; do not expose or leave the provider diagnostic unadmitted |
+| `POST /api/moderation/personalization` | Two-model Groq moderation for authenticated senders only | Not cacheable | Guests fail before body parsing. Authenticated input is bounded to the exact classified window, requires global `moderation-personalization` admission before Groq, and provider unavailability fails closed | Include the complete `/api/moderation/` family in WAF |
 | `GET/HEAD /s/:slug` | Reads the current manifest, its bounded immutable page inventory, and the exact revision-qualified page artifact published by the authenticated producer. Anonymous memory/Cache/R2 misses never call Convex or R2 LIST | Valid cold slug: exact GETs only. A random slug stops after the inventory. The artifact is an exhaustive public projection; authenticated viewer overlays are separate indexed reads and force `private, no-store` | Exact canonical slug rejection and 6/IP/10s before auth/Convex | FND-40 protected; include in WAF |
-| `GET/HEAD /template-modal/:slug` | Reuses the same immutable inventory and page artifact; no request-path producer | Same exact-read plane; anonymous misses have zero Convex, LIST, writes, or fallback | Same FND-40 exact shield | FND-40 protected; include in WAF |
 | `GET /s/:slug/og-image` (`HEAD` is 405) | Reads current manifest and bounded inventory, then one exact producer-published PNG; no render, Convex, origin, write, or LIST | Revision-qualified Cache API/R2 binary; missing or corrupt exact objects fail closed with 503 | Same FND-40 exact shield; malformed slug rejected before storage | FND-40 protected; include in WAF |
 | `GET /s/:slug/debate/:debateId` | Cached parent detail plus one paginated public-debate Convex query | Parent detail cache only; debate result is not application-cached | Not covered by the exact FND-40 matcher | Include broader `/s/` family in WAF |
 | `GET /deliberation` | One bounded `debates.listPublic` Convex query | No application cache | None | Include in WAF |
@@ -51,12 +59,26 @@ boundary.
 | `GET /api/dm/scorecard/compare?ids=...` | One comparison query for up to five IDs | No application cache | Count capped at five; no GET throttle | Include API family in WAF |
 | `GET /api/embed/scorecard/:id` | One scorecard query and, with `?org=`, one branding query | No application cache | None | Include embed API family in WAF |
 | `GET /api/c/:slug/stats` | One campaign-stats Convex query | Browser cache header for 10 seconds; no explicit Cache API lookup | Global `/api/c/` 30/IP/min and route-local 30/IP/min | Include in WAF |
+| `POST /api/deliveries/record` | One bounded direct-delivery mutation; no best-effort district read | Not cacheable; exact 16 KiB/two-field JSON envelope, 20 canonical recipients, indexed lifetime ceiling of 20 per pseudonymous actor/template | Session authority before parsing, 5/user/min application rule, durable 5/actor-template/min Convex admission | Include the complete `/api/deliveries/` family in WAF; plaintext recipient email and unproven district attribution are not accepted or persisted |
 | `GET /api/positions/count/:templateId` | One aggregate Convex query | No application cache | No route rule for GET | Include public-stats family in WAF |
 | `GET /api/positions/engagement-by-district/:templateId` | One aggregate Convex query whose key can vary by `userDistrict` | No application cache | No route rule for GET | Include public-stats family in WAF |
+| `POST /api/shadow-atlas/engagement` | One compact authenticated Convex claim; a cold lease owner performs bounded metrics/path reads and at most one permanently reserved registration write | 60-second internally consistent proof snapshot, safely inside EngagementRootRegistry's 180-day registered-root lifetime; 45-second lease coalesces concurrency; failures retain tier-0/last snapshot behind a 30-second cooldown | Session authority, 10/user/min application rule, secret-first authenticated Convex state transitions | Include the complete `/api/shadow-atlas/` family in WAF |
 | `GET /api/debates/by-template/:templateId`, `GET /api/debates/:id/arguments` | One bounded/paginated Convex query | No application cache | Global `/api/debates/` 20/IP-or-user/min plus route-local 60/IP/min | Include API family in WAF |
 | `GET /api/debates/:id/stream` | Authenticated SSE initialization and five-second Convex polling | Long-lived, not cacheable | Requires a session; global `/api/debates/` limit runs after auth | Do not expose as an anonymous polling bypass; retain WAF coverage |
 | `GET /api/live` | No external I/O | Intentionally uncached liveness response | Exempt | WAF bypass candidate for the approved monitor only |
 | `GET /api/health` | Secret-gated dependency/readiness work | Not public | Rejects missing secret before dependencies | Do not use as a public monitor |
+
+The engagement state deliberately leaves an ambiguous external POST in
+`write_reserved`; ordinary traffic can adopt a later metrics result but cannot
+POST again. Repair is an internal operator control-plane mutation, never an HTTP
+route or scheduler. Before using it, the operator must independently prove both
+that Shadow Atlas metrics still reports the identity absent and that relay logs
+contain no accepted write. After a 15-minute observation window, the mutation
+requires the exact user, normalized identity, reservation timestamp, and
+registration generation plus bounded operator/evidence references. Its CAS
+advances the generation once and records the bounded repair audit. Only the new
+generation may reserve one new POST; wrong, early, or replayed repair evidence
+fails closed.
 
 ## Direct Convex origin authority
 

@@ -15,7 +15,7 @@ export const PUBLIC_TEMPLATE_DETAIL_RATE_LIMIT = {
 
 const PUBLIC_TEMPLATE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-export type PublicTemplateCostRoute = 'detail' | 'modal' | 'og-image';
+export type PublicTemplateCostRoute = 'detail' | 'og-image';
 
 export type PublicTemplateCostPath = {
 	kind: PublicTemplateCostRoute;
@@ -51,11 +51,6 @@ export function classifyPublicTemplateCostPath(pathname: string): PublicTemplate
 			slug: ogImage[1],
 			validSlug: isValidPublicTemplateSlug(ogImage[1])
 		};
-	}
-
-	const modal = /^\/template-modal\/([^/]+)\/?$/.exec(pathname);
-	if (modal) {
-		return { kind: 'modal', slug: modal[1], validSlug: isValidPublicTemplateSlug(modal[1]) };
 	}
 
 	return null;

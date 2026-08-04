@@ -310,9 +310,7 @@ export class OAuthCallbackHandler {
 
 		// Determine session type based on funnel
 		const isFromSocialFunnel =
-			returnTo.includes('template-modal') ||
-			returnTo.includes('auth=required') ||
-			returnTo.includes('/s/');
+			returnTo.includes('auth=required') || returnTo.includes('/s/');
 
 		const sessionDurationMs = isFromSocialFunnel
 			? DAY_IN_MS * 90 // 90 days for social funnel

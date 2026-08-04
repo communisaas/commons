@@ -2,7 +2,7 @@
  * Subject Line Generator Agent
  *
  * Transforms raw issue descriptions into structured subject lines with
- * multi-turn refinement support via Gemini Interactions API.
+ * clarification follow-up support via Gemini Interactions API.
  *
  * Design:
  * - Agent has full autonomy to formulate clarifying questions
@@ -16,11 +16,9 @@ import { SUBJECT_LINE_SCHEMA } from '../schemas';
 import { SUBJECT_LINE_PROMPT } from '../prompts/subject-line';
 import type {
 	SubjectLineResponseWithClarification,
-	ClarificationAnswers,
 	ConversationContext,
 	TokenUsage
 } from '../types';
-import { sumTokenUsage } from '../types';
 
 // ============================================================================
 // Zod Schema for Runtime Validation
@@ -46,10 +44,7 @@ const InferredContextSchema = z.object({
 	detected_location: z.string().nullable(),
 	detected_scope: z.enum(['local', 'state', 'national', 'international']).nullable(),
 	detected_target_type: z.enum(['government', 'corporate', 'institutional', 'other']).nullable(),
-	detected_urgency: z
-		.enum(['breaking', 'recent', 'ongoing', 'structural'])
-		.nullable()
-		.optional(),
+	detected_urgency: z.enum(['breaking', 'recent', 'ongoing', 'structural']).nullable().optional(),
 	urgency_confidence: z.number().min(0).max(1).optional(),
 	detected_ask: z.string().nullable().optional(),
 	location_confidence: z.number().min(0).max(1),
@@ -73,10 +68,10 @@ const SubjectLineResponseSchema = z.object({
 export interface GenerateSubjectOptions {
 	description: string;
 	previousInteractionId?: string;
-	refinementFeedback?: string;
-	clarificationAnswers?: ClarificationAnswers;
-	/** Full context for clarification turns (replaces broken multi-turn) */
+	/** Full context for clarification turns */
 	conversationContext?: ConversationContext;
+	/** Abort in-flight Gemini work when the owning request is cancelled. */
+	signal?: AbortSignal;
 }
 
 export interface GenerateSubjectResult {
@@ -88,10 +83,9 @@ export interface GenerateSubjectResult {
 /**
  * Generate a subject line with structured metadata
  *
- * Supports multi-turn refinement and clarification:
+ * Supports a two-turn clarification flow:
  * 1. First call: Pass description, may get clarification questions or output
- * 2. Clarification: Pass same interactionId with clarificationAnswers
- * 3. Refinement: Pass same interactionId with refinementFeedback
+ * 2. Clarification: Pass conversationContext carrying the questions and answers
  *
  * The agent maintains conversation state across turns.
  */
@@ -109,7 +103,9 @@ export function buildClarificationPrompt(ctx: ConversationContext): string {
 			// For multiple_choice: handle multi-select (answers delimited by |||)
 			if (question.type === 'multiple_choice' && question.options?.length) {
 				const DELIMITER = '|||';
-				const parts = answer.includes(DELIMITER) ? answer.split(DELIMITER).map((s) => s.trim()) : [answer];
+				const parts = answer.includes(DELIMITER)
+					? answer.split(DELIMITER).map((s) => s.trim())
+					: [answer];
 
 				// Partition into matched options and custom text
 				const selectedLabels: string[] = [];
@@ -126,15 +122,15 @@ export function buildClarificationPrompt(ctx: ConversationContext): string {
 					.filter((o) => !selectedLabels.includes(o.label))
 					.map((o) => o.label);
 
-				const selectedStr = selectedLabels.length > 0
-					? `Selected: ${selectedLabels.map((l) => `"${l}"`).join(', ')}`
-					: '';
-				const customStr = customTexts.length > 0
-					? `Also wrote: ${customTexts.map((t) => `"${t}"`).join(', ')}`
-					: '';
-				const rejectedStr = rejected.length > 0
-					? `(not: ${rejected.join('; ')})`
-					: '';
+				const selectedStr =
+					selectedLabels.length > 0
+						? `Selected: ${selectedLabels.map((l) => `"${l}"`).join(', ')}`
+						: '';
+				const customStr =
+					customTexts.length > 0
+						? `Also wrote: ${customTexts.map((t) => `"${t}"`).join(', ')}`
+						: '';
+				const rejectedStr = rejected.length > 0 ? `(not: ${rejected.join('; ')})` : '';
 
 				return `- "${question.question}": ${[selectedStr, customStr, rejectedStr].filter(Boolean).join(' ')}`;
 			}
@@ -171,29 +167,6 @@ export async function generateSubjectLine(
 
 	if (options.conversationContext) {
 		prompt = buildClarificationPrompt(options.conversationContext);
-	} else if (options.clarificationAnswers && options.previousInteractionId) {
-		// LEGACY: Keep for backwards compatibility (but this path is broken)
-		// User provided clarification - format all answers for the agent
-		const answers = options.clarificationAnswers;
-		const answerParts = Object.entries(answers)
-			.filter(([, value]) => value && value.trim())
-			.map(([key, value]) => `${key}: ${value}`);
-
-		if (answerParts.length > 0) {
-			prompt = `The user has clarified:
-
-${answerParts.join('\n')}
-
-Now generate the subject line with this additional context.`;
-		} else {
-			// Empty answers = user skipped, use best guess
-			prompt = `The user skipped clarification. Use your best guesses and generate the subject line.`;
-		}
-	} else if (options.refinementFeedback && options.previousInteractionId) {
-		// Multi-turn refinement
-		prompt = `The user wants changes: "${options.refinementFeedback}"
-
-Please generate a new subject line based on this feedback.`;
 	} else {
 		// Initial generation
 		prompt = `Analyze this issue and generate a subject line:
@@ -214,28 +187,29 @@ ${options.description}`;
 	);
 
 	const response = await interact(prompt, {
+		stage: 'subject-line',
 		systemInstruction: systemPrompt,
 		responseSchema: SUBJECT_LINE_SCHEMA,
 		temperature: 0.7, // Creative latitude for sharp, resonant lines
 		thinkingLevel: 'low', // Issue extraction + a short subject line — low reasoning is sufficient and avoids over-elaboration
-		previousInteractionId: options.previousInteractionId
+		previousInteractionId: options.previousInteractionId,
+		signal: options.signal
 	});
 
-	let pipelineTokenUsage: TokenUsage | undefined = response.tokenUsage;
+	const pipelineTokenUsage: TokenUsage | undefined = response.tokenUsage;
 
 	// Parse and validate the response
 	const parsed = JSON.parse(response.outputs);
 	const validationResult = SubjectLineResponseSchema.safeParse(parsed);
 
 	if (!validationResult.success) {
-		console.error('[subject-line] Invalid response structure:', validationResult.error.flatten());
-		throw new Error(
-			`Invalid subject line response: ${validationResult.error.errors[0]?.message || 'Unknown validation error'}`
-		);
+		console.error('[subject-line] Invalid structured response:', {
+			issueCount: validationResult.error.issues.length
+		});
+		throw new Error('Invalid subject line response: invalid structured response');
 	}
 
-	let data = validationResult.data as SubjectLineResponseWithClarification;
-	let currentInteractionId = response.id;
+	const data = validationResult.data as SubjectLineResponseWithClarification;
 
 	// Validate: if needs_clarification is true but no questions provided, override to false
 	// This handles cases where the agent hedges (says it needs clarification but doesn't ask)
@@ -249,44 +223,11 @@ ${options.description}`;
 		data.needs_clarification = false;
 	}
 
-	// If agent returned neither clarification questions nor a subject line, retry with explicit instruction
+	// A schema-valid but semantically empty response is a local/model-quality
+	// failure. Retrying it under the same reservation used to double paid work;
+	// the caller may submit a new, separately admitted request instead.
 	if (!data.needs_clarification && !data.subject_line) {
-		console.debug(
-			'[subject-line] Agent returned empty response - retrying with explicit instruction'
-		);
-
-		const retryResponse = await interact(
-			`You must generate a subject line now. The user said: "${options.description}"
-
-Generate the output with subject_line, core_message, topics, url_slug, and voice_sample. Do not ask for clarification.`,
-			{
-				systemInstruction: systemPrompt,
-				responseSchema: SUBJECT_LINE_SCHEMA,
-				temperature: 0.8, // Higher on retry for creative range
-				thinkingLevel: 'low',
-				previousInteractionId: currentInteractionId
-			}
-		);
-
-		// Parse and validate retry response
-		const retryParsed = JSON.parse(retryResponse.outputs);
-		const retryValidation = SubjectLineResponseSchema.safeParse(retryParsed);
-
-		if (!retryValidation.success) {
-			console.error('[subject-line] Invalid retry response:', retryValidation.error.flatten());
-			throw new Error(
-				`Invalid retry response: ${retryValidation.error.errors[0]?.message || 'Unknown validation error'}`
-			);
-		}
-
-		data = retryValidation.data as SubjectLineResponseWithClarification;
-		currentInteractionId = retryResponse.id;
-		pipelineTokenUsage = sumTokenUsage(pipelineTokenUsage, retryResponse.tokenUsage);
-		data.needs_clarification = false; // Force no clarification on retry
-
-		console.debug('[subject-line] Retry result:', {
-			has_subject_line: !!data.subject_line
-		});
+		throw new Error('Subject-line provider returned no usable subject line');
 	}
 
 	console.debug('[subject-line] Result:', {
@@ -297,7 +238,7 @@ Generate the output with subject_line, core_message, topics, url_slug, and voice
 
 	return {
 		data,
-		interactionId: currentInteractionId,
+		interactionId: response.id,
 		tokenUsage: pipelineTokenUsage
 	};
 }

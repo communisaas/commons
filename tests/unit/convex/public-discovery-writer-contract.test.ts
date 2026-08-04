@@ -728,7 +728,6 @@ const CONTRACT: Record<string, RegExp> = {
 	'seed.ts:zeroTemplateMetrics': AGGREGATE_LIST_DIRTY_RE,
 	'seed.ts:insertOrgs': /ctx\.db\.insert\(\s*['"]organizations['"]/,
 	'seed.ts:insertTemplates': AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE,
-	'seed.ts:insertTemplatesPublic': AGGREGATE_LIST_AND_RELATIONS_DIRTY_RE,
 	'seed.ts:insertDebates': AGGREGATE_LIST_DIRTY_RE,
 	'seed.ts:backfillScopes': AGGREGATE_LIST_DIRTY_RE
 };
@@ -752,7 +751,6 @@ const COMPACT_TEMPLATE_SOURCE_CONTRACT: Record<string, RegExp> = {
 	'submissions.ts:_backfillOneTemplate': /syncCompactPublicDiscoveryProjection\s*\(/,
 	'seed.ts:zeroTemplateMetrics': /syncCompactPublicDiscoveryProjection\s*\(/,
 	'seed.ts:insertTemplates': /syncCompactPublicDiscoverySource\s*\(/,
-	'seed.ts:insertTemplatesPublic': /syncCompactPublicDiscoverySource\s*\(/,
 	'seed.ts:backfillScopes': /syncCompactPublicDiscoveryProjection\s*\(/,
 	'seed.ts:clearTable': /deleteCompactPublicDiscoverySource\s*\(/
 };
@@ -1477,7 +1475,6 @@ describe('public-discovery source writer contract', () => {
 		for (const key of [
 			'seed.ts:clearTable',
 			'seed.ts:insertTemplates',
-			'seed.ts:insertTemplatesPublic',
 			'seed.ts:insertDebates'
 		]) {
 			const body = boundaryByKey.get(key)!.body;

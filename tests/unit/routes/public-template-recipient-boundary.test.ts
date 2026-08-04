@@ -1,3 +1,5 @@
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetCachedPublicTemplatePageArtifact } = vi.hoisted(() => ({
@@ -14,7 +16,6 @@ vi.mock('$lib/config/features', () => ({
 import { analyzeEmailFlow } from '$lib/services/emailService';
 import type { ComponentTemplate } from '$lib/types/component-props';
 import { load as loadTemplateDetail } from '../../../src/routes/s/[slug]/+layout.server';
-import { load as loadTemplateModal } from '../../../src/routes/template-modal/[slug]/+page.server';
 
 const targetEmail = 'recipient@example.test';
 const recipientConfig = {
@@ -84,27 +85,7 @@ describe('public template recipient boundary', () => {
 		expect(flow.mailtoUrl).toMatch(/^mailto:recipient@example\.test\?/);
 	});
 
-	it('preserves the same no-store recipient data for the dedicated TemplateModal route', async () => {
-		const setHeaders = vi.fn();
-		const result = (await loadTemplateModal({
-			params: { slug: convexDetail.slug },
-			locals: { user: null },
-			setHeaders,
-			url: new URL(`https://commons.email/template-modal/${convexDetail.slug}`),
-			platform: undefined
-		} as never)) as { template: ComponentTemplate };
-
-		expect(setHeaders).toHaveBeenCalledWith({
-			'Cache-Control': 'private, no-store, max-age=0'
-		});
-		expect(result.template).toMatchObject({
-			recipient_config: recipientConfig,
-			recipientEmails: [targetEmail],
-			recipient_count: 1
-		});
-
-		const flow = analyzeEmailFlow({ ...result.template, metrics: {} }, null);
-		expect(flow.error).toBeUndefined();
-		expect(flow.mailtoUrl).toMatch(/^mailto:recipient@example\.test\?/);
+	it('keeps a single server surface for public template detail', () => {
+		expect(existsSync(resolve(process.cwd(), 'src/routes/template-modal'))).toBe(false);
 	});
 });
