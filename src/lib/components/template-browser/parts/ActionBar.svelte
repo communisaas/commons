@@ -3,6 +3,7 @@
 	import Button from '$lib/components/ui/Button.svelte';
 	import { type Spring } from 'svelte/motion';
 	import { recipientIntentCount } from '$convex/lib/recipientRoster';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	import { moderatePersonalConnection } from '$lib/utils/personal-connection';
 	import { laneCarriesSenderText, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
@@ -38,7 +39,7 @@
 	// Derived trust tier state
 	const userTrustTier = $derived(user?.trust_tier ?? 0);
 	const isVerifiedConstituent = $derived(userTrustTier >= 2);
-	const isCwcTemplate = $derived(template.deliveryMethod === 'cwc');
+	const isCwcTemplate = $derived(isCongressionalDelivery(template.deliveryMethod));
 
 	// Whether this send's lane delivers the sender's own words. Keyed on the lane,
 	// not on the delivery method: a guest on a congressional template goes out

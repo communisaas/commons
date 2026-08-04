@@ -18,8 +18,8 @@
  * matches. The source guard is the backstop that catches a reintroduced private
  * copy, not the proof.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 // The POST handler pulls in the whole authoring pipeline. Only the outbound
@@ -275,9 +275,52 @@ describe('single-vocabulary source guard', () => {
 		'src/lib/components/template/parts/ProgressiveFormContent.svelte',
 		'src/routes/+page.svelte',
 		'src/routes/api/templates/+server.ts',
-		'src/routes/template-modal/[slug]/+page.server.ts',
-		'src/routes/s/[slug]/+layout.server.ts'
+		'src/routes/s/[slug]/+layout.server.ts',
+		'src/lib/components/auth/parts/OnboardingContent.svelte',
+		'src/lib/components/action/PowerLandscape.svelte',
+		'src/lib/components/template-browser/parts/ActionBar.svelte',
+		'src/lib/components/template-browser/spectrum/TemplateTile.svelte',
+		'src/lib/components/modals/TemplateSuccessModal.svelte'
 	];
+
+	// `convex/` never reaches into `src/`, so it cannot use the `$convex` alias:
+	// it imports the shared module by relative path. Same vocabulary, different
+	// specifier, so the import assertion is its own.
+	const CONVEX_CONSUMERS = ['convex/lib/publicTemplateDiscoverySource.ts'];
+
+	// Sites whose inline congressional comparison has been repointed at the
+	// shared predicate. Each must ask, not compare.
+	const REPOINTED = [
+		'src/lib/components/auth/parts/OnboardingContent.svelte',
+		'src/lib/components/action/PowerLandscape.svelte',
+		'src/lib/components/template-browser/parts/ActionBar.svelte',
+		'src/lib/components/template-browser/spectrum/TemplateTile.svelte',
+		'src/lib/components/modals/TemplateSuccessModal.svelte',
+		'convex/lib/publicTemplateDiscoverySource.ts'
+	];
+
+	/** The inline comparison the shared predicate exists to replace. */
+	const INLINE_PREDICATE = "deliveryMethod === 'cwc'";
+
+	// The source files that still compare the literal inline. This list may only
+	// shrink: the assertion below is a subset check, so clearing a file is a
+	// plain deletion here, while a newly reintroduced inline copy fails.
+	const INLINE_PREDICATE_RESIDUAL = [
+		'src/routes/s/[slug]/+page.svelte',
+		'src/routes/api/templates/+server.ts'
+	];
+
+	const SKIPPED_DIRECTORIES = ['node_modules', '.svelte-kit', 'build'];
+
+	function sourceFilesUnder(dir: string, extensions: string[]): string[] {
+		return readdirSync(join(REPO_ROOT, dir), { recursive: true, withFileTypes: true })
+			.filter((entry) => entry.isFile())
+			.map((entry) => relative(REPO_ROOT, join(entry.parentPath, entry.name)))
+			.filter((path) => extensions.some((extension) => path.endsWith(extension)))
+			// Tests may assert on the literal; they are not decision sites.
+			.filter((path) => !/\.(test|spec)\.ts$/.test(path))
+			.filter((path) => !path.split(sep).some((part) => SKIPPED_DIRECTORIES.includes(part)));
+	}
 
 	const RETIRED_MARKERS = [
 		"deliveryMethod === 'certified'",
@@ -302,6 +345,36 @@ describe('single-vocabulary source guard', () => {
 
 	it.each(CONSUMERS)('%s imports the shared vocabulary', (path) => {
 		expect(read(path)).toContain('$convex/lib/templateDeliveryMethod');
+	});
+
+	it.each(CONVEX_CONSUMERS)('%s imports the shared vocabulary by relative path', (path) => {
+		expect(read(path)).toContain("from './templateDeliveryMethod'");
+	});
+
+	it.each(REPOINTED)('%s asks the shared predicate rather than comparing the literal', (path) => {
+		const source = read(path);
+		expect(source.includes(INLINE_PREDICATE), `${path} still compares inline`).toBe(false);
+		expect(source).toContain('isCongressionalDelivery(');
+	});
+
+	it('no file outside the known residual decides congressional delivery inline', () => {
+		const walked = [
+			...sourceFilesUnder('src', ['.ts', '.svelte']),
+			...sourceFilesUnder('convex', ['.ts'])
+		];
+		// The walk covers both trees and excludes tests, which may name the
+		// literal in an assertion without being a decision site.
+		expect(walked).toContain('src/lib/utils/templateResolver.ts');
+		expect(walked).toContain('convex/lib/templateDeliveryMethod.ts');
+		expect(walked).not.toContain('convex/templates-snapshots.convex.test.ts');
+
+		const inline = walked.filter((path) => read(path).includes(INLINE_PREDICATE));
+		for (const path of inline) {
+			expect(
+				INLINE_PREDICATE_RESIDUAL,
+				`${path} must route through isCongressionalDelivery`
+			).toContain(path);
+		}
 	});
 
 	it('the slug customizer no longer computes a delivery method at all', () => {

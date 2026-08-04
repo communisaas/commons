@@ -1191,7 +1191,7 @@ async function syncCompactPublicDiscoveryProjectionRow(
 		templateId: template._id,
 		generation,
 		templateCreatedAt: template._creationTime,
-		isCwc: template.deliveryMethod === 'cwc',
+		isCwc: isCongressionalDelivery(template.deliveryMethod),
 		title: template.title,
 		domain: resolveSourceDomain(template),
 		countryCode: template.countryCode,

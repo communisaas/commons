@@ -17,6 +17,7 @@
 	import { supportsWebShare, copyToClipboard as clipboardCopy } from '$lib/utils/browserUtils';
 	import { tryNativeShare } from '$lib/utils/web-share';
 	import { generateShareMessage } from '$lib/utils/share-messages';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 	let {
 		template,
@@ -48,7 +49,7 @@
 	const actionRoutePreviewText = $derived(
 		(() => {
 			if (recipientNames.length === 0) {
-				return template.deliveryMethod === 'cwc'
+				return isCongressionalDelivery(template.deliveryMethod)
 					? 'Action page opens representative confirmation'
 					: 'Action page opens reader confirmation';
 			}
@@ -92,9 +93,7 @@
 	let useNativeShare = supportsWebShare();
 	const actionRouteTitle =
 		'Opens the public action page; readers confirm their own sends from that page.';
-	const targetsCongress = $derived(
-		template.deliveryMethod === 'cwc' || Boolean(recipientConfig.includesCongress)
-	);
+	const targetsCongress = $derived(isCongressionalDelivery(template.deliveryMethod));
 
 	function handleClose() {
 		onclose?.();
@@ -217,7 +216,7 @@
 						{template.domain}
 					</span>
 					<span class="font-mono text-xs text-slate-600">
-						{template.deliveryMethod === 'cwc' ? 'Congressional' : 'Direct'}
+						{isCongressionalDelivery(template.deliveryMethod) ? 'Congressional' : 'Direct'}
 					</span>
 				</div>
 			</div>

@@ -1,10 +1,11 @@
 <script lang="ts">
 	import { mergeLandscape, type LandscapeMember, type DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 	import RoleGroup from './RoleGroup.svelte';
-	import type { ProcessedDecisionMaker, Template } from '$lib/types/template';
+	import type { RecipientConfigDecisionMaker, Template } from '$lib/types/template';
 	import { MapPin, ChevronRight, Mail, Loader2 } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 	const labels = getJurisdictionLabels();
 
@@ -26,7 +27,7 @@
 		onReportBounce
 	}: {
 		template: Template;
-		decisionMakers?: ProcessedDecisionMaker[];
+		decisionMakers?: RecipientConfigDecisionMaker[];
 		districtOfficials?: DistrictOfficialInput[];
 		contactedRecipients?: Set<string>;
 		departingRecipients?: Set<string>;
@@ -44,7 +45,7 @@
 	} = $props();
 
 	const landscape = $derived(mergeLandscape(decisionMakers, districtOfficials, viewerIsConstituent));
-	const isCwc = $derived(template.deliveryMethod === 'cwc' || isCongressional);
+	const isCwc = $derived(isCongressionalDelivery(template.deliveryMethod) || isCongressional);
 
 	// Group by organization — the natural institutional link between decision-makers.
 	// Role categories become inline badges on each entity rather than section headers.

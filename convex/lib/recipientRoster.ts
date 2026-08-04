@@ -91,9 +91,25 @@ export function recipientRosterFromConfig(value: unknown): string[] {
  * The largest credible roster without double-counting compatibility arrays:
  * the alternative `recipients` shape, the structured authoring shape
  * (`decisionMakers` + `customRecipients`), or the deduplicated address union —
- * whichever is largest. Emailless decision-makers therefore count as intent
- * even though they contribute no address, which is the one place this can
- * exceed `recipientRosterFromConfig(...).length`.
+ * whichever is largest.
+ *
+ * This legitimately exceeds `recipientRosterFromConfig(...).length`, and three
+ * distinct things cause it. An entry may carry no `email` at all, which the
+ * `typeof email === 'string'` test in the roster walk never pushes. Several
+ * entries may share ONE address — three staffers behind a single office inbox —
+ * which the deduplicating `Set` collapses to one roster slot. Or an entry's
+ * `email` may hold free text rather than an address ("use the web form"), which
+ * the array-length terms below still count as authoring intent while the `'@'`
+ * membership filter keeps it out of the roster. Each names someone the author
+ * means to reach without yielding a distinct deliverable address.
+ *
+ * That membership filter cannot weaken the upper bound the public-detail
+ * migration guards depend on. It narrows only the third `Math.max` term, the
+ * address union. The count those guards compare against is the length of the
+ * provenance-filtered, capped SUBSET of `decisionMakers` that the public detail
+ * projection publishes, and that subset reaches the max through
+ * `structuredAuthoringCount` below, which counts `decisionMakers` entries and is
+ * untouched by any filtering of the addresses they carry.
  */
 export function recipientIntentCount(value: unknown): number {
 	const config = parseRecipientConfigObject(value);

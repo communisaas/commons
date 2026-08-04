@@ -45,7 +45,17 @@ const DIVERGENCE_FIXTURES: ReadonlyArray<readonly [string, Record<string, unknow
 			customRecipients: [{ name: 'Clerk', email: 'clerk@city.gov' }]
 		},
 		2
-	]
+	],
+	// The denormalized union is wider than the structured shape it was built from:
+	// the old card arithmetic stopped at `decisionMakers` and showed 1 of 2.
+	[
+		'denormalized union wider than the structured shape',
+		{ decisionMakers: [{ email: 'a@x.gov' }], emails: ['a@x.gov', 'b@y.gov'] },
+		2
+	],
+	// The only fixture with surrounding whitespace, and so the only exercise of the
+	// `.trim()` that lets one padded address collapse into its unpadded twin.
+	['whitespace-padded duplicate address', { emails: ['a@x.gov', ' a@x.gov ', 'a@x.gov'] }, 1]
 ];
 
 describe('one canonical count across every reader', () => {
@@ -78,9 +88,15 @@ describe('one canonical count across every reader', () => {
 // The asymmetries that remain, and are frozen
 //
 // Intent counts entries a config names; the roster counts distinct deliverable
-// addresses. Two things separate them, and the second is the one real templates
-// actually exhibit — every seeded config whose intent exceeds its roster does so
-// through shared addresses, with no address-less entry involved at all.
+// addresses. Three things separate them: an entry carrying no address, several
+// entries sharing one address, and an entry whose `email` holds free text rather
+// than an address. Shared addresses are the cause real templates actually
+// exhibit at scale — several decision-makers reachable at one staff inbox.
+//
+// The local `addressless` term computed below tests `.includes('@')`, so it folds
+// the no-address and free-text causes into a single bucket. That is why the gap
+// identity `intent - roster.length === addressless + duplicates` still closes
+// with two terms even though three distinct causes exist.
 // ============================================================================
 
 const BOUND_FIXTURES: ReadonlyArray<unknown> = [
@@ -144,7 +160,7 @@ describe('roster never exceeds intent', () => {
 		expect(intent - roster.length).toBe(addressless + duplicates);
 	});
 
-	it('keeps the address-less decision-maker as one of the two asymmetries', () => {
+	it('keeps the address-less decision-maker as one of the three asymmetries', () => {
 		// A decision-maker with no address is real authoring intent but is not a
 		// deliverable recipient, so intent legitimately exceeds the roster here.
 		// Collapsing the two would move the counter that two migration guards use
@@ -152,6 +168,66 @@ describe('roster never exceeds intent', () => {
 		const config = { emails: [], decisionMakers: [{ name: 'X' }] };
 		expect(recipientIntentCount(config)).toBe(1);
 		expect(recipientRosterFromConfig(config)).toEqual([]);
+	});
+});
+
+// ============================================================================
+// Free text in an email field is intent, never an address
+//
+// A decision-maker record carries `email` as free text, so an author with no
+// address for an office legitimately stores a note there. A note is authoring
+// intent but not a deliverable address: it counts toward the intent count and
+// never toward the roster, because the roster becomes a mailto `To:` line.
+// ============================================================================
+
+const FREE_TEXT_EMAIL_CASES: ReadonlyArray<
+	readonly [string, Record<string, unknown>, number, readonly string[]]
+> = [
+	['one address beside one note', { recipientEmails: ['a@b.c', 'use the web form'] }, 1, ['a@b.c']],
+	['every entry a note', { emails: ['call the office', 'use the web form'] }, 0, []],
+	['a top-level note in place of an address', { email: 'no public address' }, 0, []],
+	[
+		'the entry-counted alternative shape',
+		{ recipients: ['a@b.c', 'web form', 'phone only'] },
+		3,
+		['a@b.c']
+	]
+];
+
+describe('a non-address in an email field counts as intent but never as a recipient', () => {
+	it.each(FREE_TEXT_EMAIL_CASES)(
+		'pins %s',
+		(_label, config, expectedIntent, expectedRoster) => {
+			expect(recipientIntentCount(config)).toBe(expectedIntent);
+			expect(publicRecipientIntentCount(config)).toBe(expectedIntent);
+			expect(recipientRosterFromConfig(config)).toEqual(expectedRoster);
+		}
+	);
+
+	it('keeps the alternative shape counting entries, not addresses', () => {
+		// The `recipients` term counts ENTRIES, so three named targets standing
+		// against one deliverable address is the ratified outcome here, not a
+		// defect to normalize away.
+		const config = { recipients: ['a@b.c', 'web form', 'phone only'] };
+		expect(recipientIntentCount(config)).toBe(config.recipients.length);
+		expect(recipientRosterFromConfig(config)).toHaveLength(1);
+	});
+
+	it('leaves the migration guards their upper bound over the publishable subset', () => {
+		const privateConfig = {
+			decisionMakers: [{ email: 'a@b.c' }, { email: 'use the web form' }, { email: 'a@b.c' }]
+		};
+		// The publishable count is the length of a filtered, capped SUBSET of
+		// `decisionMakers`, so it stays under the private intent even though the
+		// private config's roster holds one address.
+		expect(publishableRosterCount({ decisionMakers: [{ email: 'a@b.c' }] })).toBeLessThanOrEqual(
+			recipientIntentCount(privateConfig)
+		);
+		// The bound survives address filtering structurally: intent reaches the max
+		// through the `decisionMakers` entry count, which no filter touches.
+		expect(recipientIntentCount(privateConfig)).toBeGreaterThanOrEqual(
+			privateConfig.decisionMakers.length
+		);
 	});
 });
 

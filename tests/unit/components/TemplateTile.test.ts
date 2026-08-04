@@ -4,6 +4,16 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Template } from '$lib/types/template';
 
+// The deliberation signal sits behind FEATURES.DEBATE. Pin the flag on for this
+// file so the surface is exercised for real rather than asserted relative to
+// whatever the flag currently is — a flag-relative assertion stays green even
+// if the markup were deleted. DEBATE is the only flag this tile reads, so no
+// other render in this file changes.
+vi.mock('$lib/config/features', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/config/features')>();
+	return { ...actual, FEATURES: { ...actual.FEATURES, DEBATE: true } };
+});
+
 // svelte/motion reads prefers-reduced-motion via window.matchMedia at module
 // evaluation — before the shared beforeEach mock from tests/config/setup.ts
 // applies. Shim it first, then import the component dynamically.
@@ -40,7 +50,7 @@ function makeTemplate(overrides: Partial<Template> = {}): Template {
 		description: 'Ask the county to fund evening hours at the public clinic.',
 		domain: 'Public Health',
 		type: 'advocacy',
-		deliveryMethod: 'direct',
+		deliveryMethod: 'email',
 		message_body: 'Body',
 		delivery_config: {},
 		recipient_config: {},
@@ -70,7 +80,7 @@ describe('TemplateTile', () => {
 
 	it('renders a target line derived from delivery — direct email reads as direct delivery', () => {
 		const { getByText, container } = render(TemplateTile, {
-			props: { template: makeTemplate({ deliveryMethod: 'direct' }), onSelect: vi.fn() }
+			props: { template: makeTemplate({ deliveryMethod: 'email' }), onSelect: vi.fn() }
 		});
 		// The target presentation surfaces a label and an accompanying icon.
 		expect(getByText('Direct delivery')).toBeTruthy();
@@ -134,7 +144,7 @@ describe('TemplateTile', () => {
 		expect(heavy.querySelector('.card-weight-light')).toBeNull();
 
 		const { container: light } = render(TemplateTile, {
-			props: { template: makeTemplate({ deliveryMethod: 'direct' }), onSelect: vi.fn() }
+			props: { template: makeTemplate({ deliveryMethod: 'email' }), onSelect: vi.fn() }
 		});
 		expect(light.querySelector('.card-weight-light')).toBeTruthy();
 		expect(light.querySelector('.card-weight-heavy')).toBeNull();
@@ -170,13 +180,15 @@ describe('TemplateTile', () => {
 	});
 
 	it('shows the deliberation signal only when a debate is active', () => {
-		const { queryByText, rerender } = render(TemplateTile, {
+		const { queryByText: quiet } = render(TemplateTile, {
 			props: { template: makeTemplate({ hasActiveDebate: false }), onSelect: vi.fn() }
 		});
-		expect(queryByText('Deliberating')).toBeNull();
+		expect(quiet('Deliberating')).toBeNull();
 
-		rerender({ template: makeTemplate({ hasActiveDebate: true }), onSelect: vi.fn() });
-		expect(queryByText('Deliberating')).toBeTruthy();
+		const { queryByText: deliberating } = render(TemplateTile, {
+			props: { template: makeTemplate({ hasActiveDebate: true }), onSelect: vi.fn() }
+		});
+		expect(deliberating('Deliberating')).toBeTruthy();
 	});
 
 	it('tags each dimension mark by role so a narrow tile can shed the right ones', () => {

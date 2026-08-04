@@ -11,7 +11,7 @@
 	 * - hue tint       ← `resolvedHue` (the band's hue authority, in the landscape)
 	 *                    or the template's domain (`topicHue`, in the list) → `--card-hue`
 	 * - target icon    ← `deriveTargetPresentation` over delivery + recipients
-	 * - weight class   ← `deliveryMethod === 'cwc'` (congressional reach is heavier)
+	 * - weight class   ← `isCongressionalDelivery(deliveryMethod)` (congressional reach is heavier)
 	 * - mini-Pulse     ← `daily_arrivals` (only when sends have arrived)
 	 * - Ratio          ← `district_counts` (only with ≥2 districts)
 	 * - Rings          ← `tier_counts` (only when a tier has weight)
@@ -38,6 +38,7 @@
 	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { topicHue } from '$lib/utils/topic-hue';
 	import { FEATURES } from '$lib/config/features';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 	interface Props {
 		/** The template this tile renders. */
@@ -84,7 +85,7 @@
 
 	// Congressional sends carry heavier coordination weight — the card-weight
 	// class cites `deliveryMethod`, the same signal the list has always used.
-	const isCongressional = $derived(template.deliveryMethod === 'cwc');
+	const isCongressional = $derived(isCongressionalDelivery(template.deliveryMethod));
 
 	// Domain → hue angle, consumed as --card-hue at three chroma levels. In the
 	// landscape the band passes its resolved hue (one authority shared with the
