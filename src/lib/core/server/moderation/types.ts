@@ -7,7 +7,7 @@
  *    - Llama Prompt Guard 2 via GROQ
  *    - Protects AI agents from jailbreak/manipulation attacks
  *
- * 2. Content Safety (OPTIONAL, minimal)
+ * 2. Content Safety (required at delivery/authoring boundaries, minimal policy)
  *    - `openai/gpt-oss-safeguard-20b` via GROQ
  *    - Only blocks TRULY illegal content (S1: threats, S4: CSAM)
  *    - Does NOT block: political speech, defamation claims, electoral opinions
@@ -162,9 +162,14 @@ export interface ModerationResult {
 }
 
 /**
- * Input for template moderation
+ * Input for template moderation.
+ *
+ * Every author-written field that the public surfaces serve is required here:
+ * what a reader can see is what the classifiers reviewed.
  */
 export interface TemplateModerationInput {
 	title: string;
+	description: string;
+	preview: string;
 	message_body: string;
 }
