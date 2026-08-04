@@ -564,47 +564,12 @@ if (enabled('essential')) {
 }
 
 // ---------------------------------------------------------------------------
-// 26. Reputation tier recompute (T10-1) — nightly sweep. Recomputes
-//     reputationTier from users.actionCount against the threshold table. Also
-//     migrates legacy 'verified'/'novice' strings (pre-T10-3) into the new
-//     threshold-derived values. Runs at 03:11 UTC to avoid the other UTC-day
-//     boundary work concentrated near midnight.
-//     OPERATIONAL: no users → no-op (traffic-dependent).
-// ---------------------------------------------------------------------------
-if (enabled('operational')) {
-	crons.daily(
-		'reputation-recompute',
-		{ hourUTC: 3, minuteUTC: 11 },
-		internal.users.recomputeAllReputationTiers,
-		{}
-	);
-}
-
-// ---------------------------------------------------------------------------
-// 28. Tag-concept embedding backfill — embed any newly authored / edited tags
-//     so the tag-concept clustering (which folds synonyms and grounds the
-//     concept edges) tracks the corpus as it grows. Embeds only the tags that
-//     lack a vector, so the Gemini cost is a trivial one-time-per-tag charge.
-//     03:41 UTC to stagger off the midnight crons.
-//     OPERATIONAL: embeds new tags (Gemini cost — needs authored tags).
-// ---------------------------------------------------------------------------
-if (enabled('operational')) {
-	crons.daily(
-		'tag-concept-embedding-backfill',
-		{ hourUTC: 3, minuteUTC: 41 },
-		internal.templates.backfillTagEmbeddings,
-		{}
-	);
-}
-
-// ---------------------------------------------------------------------------
 // 28a. Public homepage snapshots — refresh list and relation variants from one
-//      bounded source plan and publish them atomically. Consolidating the former
-//      list and relation jobs avoids paying twice for corpus selection and makes
-//      their daily generations inseparable. 04:17 UTC leaves the optional tag
-//      backfill 36 minutes to finish while avoiding UTC-hour boundaries.
-//      ESSENTIAL: durable freshness backstop for projection-affecting writes and
-//      any missed write-driven token; request paths still read compact rows only.
+//     bounded source plan and publish them atomically. Consolidating the former
+//     list and relation jobs avoids paying twice for corpus selection and makes
+//     their daily generations inseparable. 04:17 UTC avoids UTC-hour boundaries.
+//     ESSENTIAL: durable freshness backstop for projection-affecting writes and
+//     any missed write-driven token; request paths still read compact rows only.
 // ---------------------------------------------------------------------------
 if (enabled('essential')) {
 	crons.daily(

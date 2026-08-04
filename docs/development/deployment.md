@@ -20,6 +20,27 @@ git push origin main:production    # production deploy after CI + live producer 
 
 Note: `npx convex deploy -y` silently no-ops against prod — always pass `--env-file`.
 
+### Landing a change set
+
+CI builds the deployed tip, not your working tree. A commit that omits a file its committed siblings import produces a tip that fails `npm run check` even though the check passed locally — the missing module still resolves on your disk. Renames must contribute **both** paths, old and new; otherwise the tip keeps a file the new code no longer defines or loses one it still imports.
+
+That set has two consumers needing different lists. The prospective-tip typecheck needs **every** path, including ones the working tree no longer has, so it can delete them from the simulated tip. `git add` needs each pathspec to match something: a path in neither the working tree nor the index is a removal already staged, with nothing left to stage, and **one** unmatched pathspec aborts the entire `git add` with exit 128, staging nothing. So stage a filtered subset. Renames are unaffected — both paths belong in the intended set, and the filter decides on its own whether the old path is still stageable.
+
+```bash
+# 1. Write the intended set to all.txt, one repo-relative path per line.
+# 2. Prove it is closed under its own imports (exit 3 lists the dangling targets to add).
+node scripts/check-tree-self-contained.mjs --manifest all.txt
+# 3. Keep only what git can still stage: on disk, or tracked in the index.
+git ls-files > indexed.txt
+while IFS= read -r p; do
+  { [ -e "$p" ] || grep -qxF -- "$p" indexed.txt; } && printf '%s\n' "$p"
+done < all.txt > add.txt
+# 4. Prove the pathspecs match, then stage.
+git add --dry-run --pathspec-from-file=add.txt && git add --pathspec-from-file=add.txt
+```
+
+To typecheck the prospective tip first: `git worktree add --detach <dir> HEAD`, symlink `node_modules` and copy `.env.local` into it, copy in every path from `all.txt` (deleting any the working tree no longer has), then run `npm run check` there.
+
 ---
 
 ## Architecture

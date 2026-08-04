@@ -125,10 +125,6 @@
 			"kind": "query",
 			"class": "point"
 		},
-		"campaigns:getActionsForPacket": {
-			"kind": "query",
-			"class": "collection"
-		},
 		"campaigns:getCampaignByDebateId": {
 			"kind": "query",
 			"class": "point"
@@ -140,10 +136,6 @@
 		"campaigns:getDebateId": {
 			"kind": "query",
 			"class": "point"
-		},
-		"campaigns:getDeliveryMetrics": {
-			"kind": "query",
-			"class": "collection"
 		},
 		"campaigns:getForOrgPage": {
 			"kind": "query",
@@ -563,7 +555,7 @@
 		},
 		"legislation:rescoreBills": {
 			"kind": "action",
-			"class": "bulk"
+			"class": "maximum"
 		},
 		"legislation:searchBills": {
 			"kind": "query",
@@ -907,15 +899,15 @@
 		},
 		"segments:bulkApplyTag": {
 			"kind": "action",
-			"class": "bulk"
+			"class": "maximum"
 		},
 		"segments:bulkRemoveTag": {
 			"kind": "action",
-			"class": "bulk"
+			"class": "maximum"
 		},
 		"segments:countMatching": {
 			"kind": "action",
-			"class": "bulk"
+			"class": "maximum"
 		},
 		"segments:create": {
 			"kind": "mutation",
@@ -923,11 +915,7 @@
 		},
 		"segments:exportDecrypted": {
 			"kind": "action",
-			"class": "bulk"
-		},
-		"segments:exportMatching": {
-			"kind": "action",
-			"class": "bulk"
+			"class": "maximum"
 		},
 		"segments:list": {
 			"kind": "query",
@@ -1025,10 +1013,6 @@
 			"kind": "query",
 			"class": "point"
 		},
-		"subscriptions:hasActivePaidIndividual": {
-			"kind": "query",
-			"class": "point"
-		},
 		"subscriptions:requestPlanUsageRepair": {
 			"kind": "mutation",
 			"class": "mutation"
@@ -1121,6 +1105,10 @@
 			"kind": "mutation",
 			"class": "mutation"
 		},
+		"templates:claimTemplateAuthoringLease": {
+			"kind": "mutation",
+			"class": "maximum"
+		},
 		"templates:completePublicTemplateEmbeddings": {
 			"kind": "mutation",
 			"class": "bulk"
@@ -1132,14 +1120,6 @@
 		"templates:endorse": {
 			"kind": "mutation",
 			"class": "mutation"
-		},
-		"templates:findByContentHash": {
-			"kind": "query",
-			"class": "point"
-		},
-		"templates:getBySlug": {
-			"kind": "query",
-			"class": "point"
 		},
 		"templates:getSourceCache": {
 			"kind": "query",
@@ -1189,6 +1169,10 @@
 			"kind": "mutation",
 			"class": "mutation"
 		},
+		"templates:releaseTemplateAuthoringLease": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
 		"templates:removeEndorsement": {
 			"kind": "mutation",
 			"class": "mutation"
@@ -1213,7 +1197,23 @@
 			"kind": "mutation",
 			"class": "mutation"
 		},
+		"users:beginShadowAtlasRegistrationDispatch": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
 		"users:clearPasskey": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:claimShadowAtlasEngagement": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:commitShadowAtlasRegistrationOperation": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:completeShadowAtlasEngagement": {
 			"kind": "mutation",
 			"class": "mutation"
 		},
@@ -1224,10 +1224,6 @@
 		"users:countRegistrations": {
 			"kind": "query",
 			"class": "collection"
-		},
-		"users:createShadowAtlasRegistration": {
-			"kind": "mutation",
-			"class": "mutation"
 		},
 		"users:disconnectWallet": {
 			"kind": "mutation",
@@ -1246,14 +1242,6 @@
 			"class": "point"
 		},
 		"users:getDidKey": {
-			"kind": "query",
-			"class": "point"
-		},
-		"users:getIdentityForAtlas": {
-			"kind": "query",
-			"class": "point"
-		},
-		"users:getIdentityForEngagement": {
 			"kind": "query",
 			"class": "point"
 		},
@@ -1293,6 +1281,30 @@
 			"kind": "query",
 			"class": "collection"
 		},
+		"users:markShadowAtlasEngagementRegistered": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:markShadowAtlasRegistrationOperationAmbiguous": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:reconcileShadowAtlasRegistrationOperation": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:recordShadowAtlasEngagementFailure": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:reserveShadowAtlasEngagementRegistration": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
+		"users:reserveShadowAtlasRegistrationOperation": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
 		"users:resolveCredentialHash": {
 			"kind": "query",
 			"class": "point"
@@ -1304,14 +1316,6 @@
 		"users:updateProfile": {
 			"kind": "mutation",
 			"class": "mutation"
-		},
-		"users:updateShadowAtlasRegistration": {
-			"kind": "mutation",
-			"class": "mutation"
-		},
-		"users:upsertRegistration": {
-			"kind": "mutation",
-			"class": "bulk"
 		},
 		"users:verifyAddress": {
 			"kind": "mutation",

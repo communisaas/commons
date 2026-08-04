@@ -14,11 +14,11 @@
  * Convex context. The mirrors below MUST match the handler branches; if the
  * handler changes, these break.
  *
- * Invariants pinned (the design-review blocking issues):
- *   - issue 3: cancel/delete of an INDIVIDUAL sub drops to the individual FREE
- *     FLOOR (no row / no plan write), NOT the org-shaped 'inactive'.
- *   - issue 4: checkout.session.completed routes on metadata (userId →
- *     individual upsert, NO org-limit sync; orgId → org upsert WITH sync).
+ * Invariants pinned:
+ *   - cancel/delete of an INDIVIDUAL sub drops to the individual FREE FLOOR
+ *     (no row / no plan write), NOT the org-shaped 'inactive'.
+ *   - checkout.session.completed routes on metadata (userId → individual
+ *     upsert, NO org-limit sync; orgId → org upsert WITH sync).
  *   - the individual authoring cap reads the plan ONLY when effectively active,
  *     so a canceled individual sub resolves to the free floor 3.
  *   - an individual sub NEVER unlocks org limits (no maxEmails/maxSms/etc).
@@ -26,24 +26,27 @@
 
 import { describe, it, expect } from 'vitest';
 import { PLANS, INDIVIDUAL_PLANS } from '$lib/server/billing/plans';
-import { authoredLimitForPlan, FREE_INDIVIDUAL_TEMPLATES_PER_MONTH } from '../../../convex/_individualAuthoringCap';
+import {
+	authoredLimitForPlan,
+	FREE_INDIVIDUAL_AUTHORED_PER_MONTH,
+	INDIVIDUAL_PLAN_LIMITS,
+	ORG_PLAN_LIMITS
+} from '$convex/lib/planLimits';
 
 // ---------------------------------------------------------------------------
 // Mirror of the webhook checkout.session.completed routing branch
-// (convex/subscriptions.ts processStripeWebhook → INDIVIDUAL_PLANS / PLANS).
+// (convex/subscriptions.ts processStripeWebhook → the two plan tables). The
+// handler reads the same two tables imported here, so the branch conditions are
+// the handler's conditions, not a restatement of them.
 // ---------------------------------------------------------------------------
-const CONVEX_INDIVIDUAL_PLANS: Record<string, { priceCents: number; authoredPerMonth: number }> = {
-	voice: { priceCents: 700, authoredPerMonth: 20 },
-	advocate: { priceCents: 2_000, authoredPerMonth: 75 }
-};
-const CONVEX_ORG_PLANS = new Set(['inactive', 'starter', 'organization', 'coalition']);
+const CONVEX_ORG_PLANS = new Set(Object.keys(ORG_PLAN_LIMITS));
 
 type Route = 'individual-upsert-no-org-sync' | 'org-upsert-with-sync' | 'ignored';
 
 function routeCheckoutCompleted(metadata: { userId?: string; orgId?: string; plan?: string }): Route {
 	const { userId, orgId, plan } = metadata;
 	// INDIVIDUAL branch FIRST: userId + an individual plan → user-scoped, no sync.
-	if (userId && plan && CONVEX_INDIVIDUAL_PLANS[plan]) {
+	if (userId && plan && INDIVIDUAL_PLAN_LIMITS[plan]) {
 		return 'individual-upsert-no-org-sync';
 	}
 	// ORG branch: orgId + a marketed org plan → org upsert WITH limit sync.
@@ -56,7 +59,7 @@ function routeCheckoutCompleted(metadata: { userId?: string; orgId?: string; pla
 // Mirror of upsertIndividualFromStripe's guard: refuse a non-individual plan on
 // a userId checkout (a metadata mismatch must NOT grant org-shaped state).
 function individualUpsertAccepts(plan: string): boolean {
-	return !!CONVEX_INDIVIDUAL_PLANS[plan];
+	return !!INDIVIDUAL_PLAN_LIMITS[plan];
 }
 
 // ---------------------------------------------------------------------------
@@ -86,7 +89,7 @@ function effectiveAuthoredLimit(sub: { plan?: string; status?: string } | null):
 	return effectivelyActive ? authoredLimitForPlan(sub?.plan) : authoredLimitForPlan(null);
 }
 
-describe('webhook checkout.session.completed routing (issue 4)', () => {
+describe('webhook checkout.session.completed routing', () => {
 	it('userId + voice → individual upsert, NO org-limit sync', () => {
 		expect(routeCheckoutCompleted({ userId: 'u1', plan: 'voice' })).toBe(
 			'individual-upsert-no-org-sync'
@@ -121,7 +124,7 @@ describe('webhook checkout.session.completed routing (issue 4)', () => {
 	});
 });
 
-describe('cancel / delete routing (issue 3)', () => {
+describe('cancel / delete routing', () => {
 	it('an ORG sub cancel drops to the org-shaped "inactive" floor + resets org limits', () => {
 		const out = cancelOutcome({ orgId: 'o1' });
 		expect(out.scope).toBe('org');
@@ -141,7 +144,7 @@ describe('cancel / delete routing (issue 3)', () => {
 		// so the authoring cap falls to the free floor — NOT the org 'inactive'
 		// shape (which would be maxTemplatesMonth 2 + zero authored allowance).
 		const canceledVoice = { plan: 'voice', status: 'canceled' };
-		expect(effectiveAuthoredLimit(canceledVoice)).toBe(FREE_INDIVIDUAL_TEMPLATES_PER_MONTH);
+		expect(effectiveAuthoredLimit(canceledVoice)).toBe(FREE_INDIVIDUAL_AUTHORED_PER_MONTH);
 		expect(effectiveAuthoredLimit(canceledVoice)).toBe(3);
 		// org 'inactive' is a DIFFERENT (org-layer) shape — 2 maxTemplatesMonth,
 		// not an authored allowance. The individual free floor must not be it.
@@ -157,7 +160,7 @@ describe('cancel / delete routing (issue 3)', () => {
 	});
 });
 
-describe('individual subs NEVER unlock org tooling (issue 6 cross-contamination)', () => {
+describe('individual subs NEVER unlock org tooling (cross-contamination)', () => {
 	it('INDIVIDUAL_PLANS carry no org quota fields', () => {
 		for (const slug of Object.keys(INDIVIDUAL_PLANS)) {
 			const p = INDIVIDUAL_PLANS[slug] as unknown as Record<string, unknown>;

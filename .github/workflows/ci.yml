@@ -73,6 +73,9 @@ jobs:
       - name: Convex server work-budget policy
         run: npm run check:convex-work-budget
 
+      - name: Convex paid-provider egress policy
+        run: npm run check:convex-paid-provider-egress
+
       - name: Convex native recurring-work policy
         run: npm run check:convex-native-recurring-work
 
@@ -94,6 +97,12 @@ jobs:
       - name: Run tests with coverage
         run: npm run test:coverage
         timeout-minutes: 10
+
+      - name: Component test lane
+        run: npm run test:components
+
+      - name: Tracked-tree self-containment
+        run: npm run check:tree-self-contained
 
       - name: Code Coverage Summary
         uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0

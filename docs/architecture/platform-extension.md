@@ -4,9 +4,9 @@
 >
 > **⚠️ AUDITED 2026-04-23. Known divergences from implementation:**
 > - **Data models:** canonical schema is `convex/schema.ts`. Schema DDL blocks below are illustrative pseudocode. Convex uses camelCase.
-> - **Supporter PII:** The real `supporters` table stores `encryptedEmail` + `emailHash` + `encryptedName` + `globalEmailHash` + `emailStatus` / `smsStatus` enums. Plaintext `email` / `name` columns were dropped in Cycle 6.
+> - **Supporter PII:** The real `supporters` table stores `encryptedEmail` + `emailHash` + `encryptedName` + `globalEmailHash` + `emailStatus` / `smsStatus` enums. Plaintext `email` / `name` columns were dropped.
 > - **Campaign types:** Schema supports `LETTER | EVENT | FORM | FUNDRAISER`, not the 3-type enum in older drafts.
-> - **Missing subsystems (directories referenced but not fully shipped):** `src/lib/server/lists/` (does not exist — supporter/segment logic lives in `convex/supporters.ts` + `convex/segments.ts`), `src/lib/server/campaigns/widgets.ts` (not present), `src/lib/server/fundraising/` (routes exist; server lib does not), `src/lib/server/analytics/` (analytics computation is distributed across `campaign-analytics.ts` and `verification-packet.ts`).
+> - **Missing subsystems (directories referenced but not fully shipped):** `src/lib/server/lists/` (does not exist — supporter/segment logic lives in `convex/supporters.ts` + `convex/segments.ts`), `src/lib/server/campaigns/widgets.ts` (not present), `src/lib/server/fundraising/` (routes exist; server lib does not), `src/lib/server/analytics/` (analytics computation is distributed across `campaign-read-model.ts` and `verification-packet.ts`).
 > - **Email engine:** `src/lib/server/email/` contains `compiler.ts`, `ses.ts`, `sanitize.ts`, `report-template.ts`, `unsubscribe.ts`. Claims of `engine.ts`, `providers/resend.ts`, `ab-test.ts`, `deliverability.ts`, `tracking.ts`, and `templates/` are aspirational.
 > - **Billing:** `src/lib/server/billing/` contains `plans.ts` + `stripe.ts` only. `metering.ts` / `invoices.ts` are not present. Stripe integration is client-init plus webhook handlers; metered-usage billing remains an open gap.
 > - **SMS:** `src/lib/server/sms/` contains `twilio.ts` + `types.ts` only. Campaign-level SMS orchestration is not yet implemented in the server lib.

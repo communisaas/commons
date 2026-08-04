@@ -79,10 +79,10 @@
 	},
 	"profile": {
 		"prelaunch": "contained",
-		"expectedJobs": 39,
+		"expectedJobs": 37,
 		"expectedContainedRegisteredJobs": 0,
 		"expectedEssentialJobs": 25,
-		"expectedOperationalJobs": 11,
+		"expectedOperationalJobs": 9,
 		"expectedSpeculativeJobs": 3,
 		"maximumEssentialRootTicksPerBackendDay": 1278,
 		"maximumEssentialIdleFunctionCallsPerBackendDay": 2335,
@@ -338,20 +338,6 @@
 			"method": "hourly",
 			"schedule": "{ minuteUTC: 53 }",
 			"handler": "internal.orgWebhooks.expireOldDeliveryHistory"
-		},
-		{
-			"name": "reputation-recompute",
-			"tier": "operational",
-			"method": "daily",
-			"schedule": "{ hourUTC: 3, minuteUTC: 11 }",
-			"handler": "internal.users.recomputeAllReputationTiers"
-		},
-		{
-			"name": "tag-concept-embedding-backfill",
-			"tier": "operational",
-			"method": "daily",
-			"schedule": "{ hourUTC: 3, minuteUTC: 41 }",
-			"handler": "internal.templates.backfillTagEmbeddings"
 		},
 		{
 			"name": "public-homepage-snapshot-rebuild",

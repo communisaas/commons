@@ -1,10 +1,10 @@
 /**
- * Plan-limit and metered-usage invariants (D4).
+ * Plan-limit and metered-usage invariants.
  *
  * Request-time capped scans were replaced by exact lifetime-minus-period
  * projections. Reads fail closed while that projection is absent or stale,
  * and bounded cursor workers rebuild the source history. These tests pin that
- * architecture and the duplicated plan-limit mirror.
+ * architecture, plus the fact that the plan table is declared exactly once.
  *
  * Source-scanned (not imported) because convex/subscriptions.ts pulls in the
  * Convex server runtime, which vitest cannot import.
@@ -15,27 +15,20 @@ import { join } from 'node:path';
 
 const n = (s: string) => Number(s.replace(/_/g, ''));
 
-function maxVerifiedActions(src: string): number {
-	const vals = [...src.matchAll(/maxVerifiedActions:\s*([0-9_]+)/g)].map((m) => n(m[1]));
-	expect(vals.length, 'expected maxVerifiedActions literals in source').toBeGreaterThan(0);
-	return Math.max(...vals);
-}
-
 describe('plan-limit invariants', () => {
+	const limitsSrc = readFileSync(join(process.cwd(), 'convex/lib/planLimits.ts'), 'utf8');
 	const subsSrc = readFileSync(join(process.cwd(), 'convex/subscriptions.ts'), 'utf8');
 	const plansSrc = readFileSync(join(process.cwd(), 'src/lib/server/billing/plans.ts'), 'utf8');
 	const usageSrc = readFileSync(join(process.cwd(), 'convex/planUsage.ts'), 'utf8');
 
-	it('keeps verified-action limits identical in both canonical plan maps', () => {
-		const convexLimits = [...subsSrc.matchAll(/maxVerifiedActions:\s*([0-9_]+)/g)].map((m) =>
-			n(m[1])
-		);
-		const serverLimits = [...plansSrc.matchAll(/maxVerifiedActions:\s*([0-9_]+)/g)].map((m) =>
+	it('declares the verified-action column once, in the shared plan table', () => {
+		const convexLimits = [...limitsSrc.matchAll(/maxVerifiedActions:\s*([0-9_]+)/g)].map((m) =>
 			n(m[1])
 		);
 		expect(convexLimits).toEqual([0, 1_000, 5_000, 10_000]);
-		expect(serverLimits).toEqual(convexLimits);
-		expect(maxVerifiedActions(subsSrc)).toBe(maxVerifiedActions(plansSrc));
+		// Neither consumer restates the column — they read the shared table.
+		expect(plansSrc).not.toMatch(/maxVerifiedActions:\s*[0-9]/);
+		expect(subsSrc).not.toMatch(/maxVerifiedActions:\s*[0-9]/);
 	});
 
 	it('reads exact projected usage and fails closed at the plan limit when not ready', () => {

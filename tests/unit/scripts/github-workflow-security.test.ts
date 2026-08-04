@@ -10,6 +10,59 @@ const workflowPaths = readdirSync(WORKFLOW_DIRECTORY)
 
 const workflows = new Map(workflowPaths.map((path) => [basename(path), readFileSync(path, 'utf8')]));
 
+function escapeRegExp(literal: string) {
+	return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Single-quoted entries of the array introduced by `marker`, comments stripped. */
+function quotedEntries(source: string, marker: string) {
+	const start = source.indexOf(marker);
+	expect(start, `${marker} must be present`).toBeGreaterThan(-1);
+	const open = start + marker.length - 1;
+	let depth = 0;
+	let close = -1;
+	for (let index = open; index < source.length; index += 1) {
+		if (source[index] === '[') depth += 1;
+		else if (source[index] === ']' && (depth -= 1) === 0) {
+			close = index;
+			break;
+		}
+	}
+	expect(close, `${marker} must be a closed array`).toBeGreaterThan(open);
+	const body = source.slice(open + 1, close).replace(/\/\/[^\n]*/g, '');
+	return [...body.matchAll(/'([^']+)'/g)].map((match) => match[1]);
+}
+
+function laneMatcher(glob: string) {
+	let pattern = '';
+	for (let index = 0; index < glob.length; index += 1) {
+		if (glob.startsWith('**/', index)) {
+			pattern += '(?:[^/]+/)*';
+			index += 2;
+			continue;
+		}
+		const character = glob[index];
+		if (character === '*') {
+			pattern += '[^/]*';
+			continue;
+		}
+		if (character === '{') {
+			const close = glob.indexOf('}', index);
+			expect(close, 'glob alternation must close').toBeGreaterThan(index);
+			pattern += `(?:${glob
+				.slice(index + 1, close)
+				.split(',')
+				.map(escapeRegExp)
+				.join('|')})`;
+			index = close;
+			continue;
+		}
+		pattern += escapeRegExp(character);
+	}
+	const matcher = new RegExp(`^${pattern}$`);
+	return (candidate: string) => matcher.test(candidate);
+}
+
 function jobBlocks(source: string) {
 	const jobsMarker = '\njobs:\n';
 	const jobsIndex = source.indexOf(jobsMarker);
@@ -122,6 +175,37 @@ describe('GitHub workflow security contract', () => {
 			expect(install, `${name} install`).toBeGreaterThan(-1);
 			expect(budget, `${name} budget ratchet`).toBeGreaterThan(install);
 			expect(nativeLimit, `${name} native-limit ratchet`).toBeGreaterThan(budget);
+		}
+	});
+
+	it('leaves no test lane and no untracked import outside required CI', () => {
+		const ci = workflows.get('ci.yml') ?? '';
+		const install = ci.indexOf('run: npm ci');
+		expect(install, 'ci install').toBeGreaterThan(-1);
+		expect(ci.indexOf('run: npm run test:components', install), 'ci component lane').toBeGreaterThan(
+			install
+		);
+		expect(
+			ci.indexOf('run: npm run check:tree-self-contained', install),
+			'ci tracked-tree gate'
+		).toBeGreaterThan(install);
+
+		const componentsInclude = quotedEntries(
+			readFileSync('vitest.components.config.ts', 'utf8'),
+			'include: ['
+		);
+		expect(componentsInclude).toHaveLength(1);
+		const collectedByComponentsLane = laneMatcher(componentsInclude[0]);
+		const skippedByDefaultLane = quotedEntries(
+			readFileSync('vitest.config.ts', 'utf8'),
+			'exclude: ['
+		).filter((entry) => entry.startsWith('tests/unit/components/'));
+		expect(skippedByDefaultLane.length).toBeGreaterThan(0);
+		for (const entry of skippedByDefaultLane) {
+			expect(
+				collectedByComponentsLane(entry),
+				`${entry} is excluded from the default lane but no lane collects it`
+			).toBe(true);
 		}
 	});
 
