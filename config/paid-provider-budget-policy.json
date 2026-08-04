@@ -1,0 +1,130 @@
+{
+	"version": 1,
+	"protocol": "1",
+	"authorityId": "shared-paid-provider-01",
+	"caps": {
+		"globalDailyUnits": 1000,
+		"globalMonthlyUnits": 2400,
+		"publicDailyUnits": 750,
+		"publicMonthlyUnits": 1800,
+		"actorDailyReservations": {
+			"authenticated": 10,
+			"verified": 15,
+			"operator": 15
+		}
+	},
+	"operations": {
+		"subject-line": {
+			"weightUnits": 20,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "gemini": 1, "groq": 1 },
+			"publicDailyUnits": 200,
+			"publicMonthlyUnits": 1800,
+			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
+		},
+		"decision-makers": {
+			"weightUnits": 150,
+			"maxProviderCallsPerReservation": 150,
+			"providerCallBundle": {
+				"dnsMx": 18,
+				"exaContents": 24,
+				"exaSearch": 72,
+				"firecrawl": 24,
+				"gemini": 13,
+				"groq": 1
+			},
+			"publicDailyUnits": 600,
+			"publicMonthlyUnits": 1800,
+			"hourlyReservations": { "authenticated": 2, "verified": 3, "operator": 3 }
+		},
+		"message-generation": {
+			"weightUnits": 50,
+			"maxProviderCallsPerReservation": 38,
+			"providerCallBundle": {
+				"exaContents": 12,
+				"exaSearch": 9,
+				"firecrawl": 12,
+				"gemini": 2,
+				"groq": 3
+			},
+			"publicDailyUnits": 300,
+			"publicMonthlyUnits": 1800,
+			"hourlyReservations": { "authenticated": 3, "verified": 5, "operator": 5 }
+		},
+		"embeddings": {
+			"weightUnits": 1,
+			"maxProviderCallsPerReservation": 1,
+			"providerCallBundle": { "gemini": 1 },
+			"publicDailyUnits": 200,
+			"publicMonthlyUnits": 1800,
+			"hourlyReservations": { "authenticated": 20, "verified": 20, "operator": 20 }
+		},
+		"moderation-personalization": {
+			"weightUnits": 2,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 10, "verified": 15, "operator": 15 }
+		},
+		"moderation-check": {
+			"weightUnits": 2,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
+		},
+		"template-authoring": {
+			"weightUnits": 5,
+			"maxProviderCallsPerReservation": 3,
+			"providerCallBundle": { "gemini": 1, "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 3, "verified": 5, "operator": 5 }
+		},
+		"delegation-policy": {
+			"weightUnits": 20,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "gemini": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 2, "verified": 3, "operator": 3 }
+		},
+		"embedding-backfill": {
+			"weightUnits": 100,
+			"maxProviderCallsPerReservation": 21,
+			"providerCallBundle": { "gemini": 21 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 1, "verified": 1, "operator": 1 }
+		}
+	},
+	"providerEconomics": {
+		"exa": {
+			"freeMonthlyCreditMicrousd": 10000000,
+			"searchMicrousd": 7000,
+			"contentsPageMicrousd": 1000,
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		},
+		"firecrawl": {
+			"freeMonthlyCredits": 1000,
+			"scrapeCreditsPerAttempt": 1,
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		},
+		"gemini": {
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		},
+		"groq": {
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		}
+	},
+	"cloudflareEnvelope": {
+		"workerDailyRequestFreeLimit": 100000,
+		"durableObjectDailyRequestFreeLimit": 100000,
+		"sqliteDailyRowsReadFreeLimit": 5000000,
+		"sqliteDailyRowsWrittenFreeLimit": 100000,
+		"sqliteRowsReadPerAttempt": 8,
+		"sqliteRowsWrittenPerAdmission": 8
+	}
+}
