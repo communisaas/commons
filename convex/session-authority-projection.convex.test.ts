@@ -48,9 +48,9 @@ describe('session authority projection', () => {
 		);
 	});
 
-	it('rejects missing identity and oversized fields instead of truncating authority', () => {
+	it('refuses to mint an authority row without an email and rejects oversized fields', () => {
 		expect(() => projectSessionAuthority(user({ email: undefined }))).toThrow(
-			'SESSION_AUTHORITY_INVALID:email:missing'
+			'SESSION_AUTHORITY_INVALID:email:required'
 		);
 		expect(() => projectSessionAuthority(user({ avatar: 'x'.repeat(2_049) }))).toThrow(
 			'SESSION_AUTHORITY_INVALID:avatar:bytes'

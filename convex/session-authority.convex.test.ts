@@ -91,6 +91,33 @@ describe('compact session authority plane', () => {
 		});
 	});
 
+	it('fails the authority plane closed on an email-less user instead of minting a partial row', async () => {
+		const t = convexTest({ schema, modules });
+		const userId = await t.run(async (ctx) => {
+			const { email: _unused, ...emailless } = userValue(0);
+			const insertedUserId = await ctx.db.insert('users', emailless);
+			await ctx.db.insert('sessions', {
+				userId: insertedUserId,
+				expiresAt: Date.now() + 86_400_000
+			});
+			return insertedUserId;
+		});
+
+		await expect(
+			t.mutation(internal.sessionAuthority.migrateSessionAuthorities, {
+				scheduleContinuation: false
+			})
+		).resolves.toMatchObject({
+			status: 'blocked',
+			failureCode: 'SESSION_AUTHORITY_INVALID:email:required',
+			failureUserId: userId
+		});
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('userSessionAuthorities').collect()).toEqual([]);
+		});
+	});
+
 	it('holds the request hot path at exactly one session and one compact authority row', async () => {
 		const t = convexTest({ schema, modules });
 		const sessionId = await t.run(async (ctx) => {

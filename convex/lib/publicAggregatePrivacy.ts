@@ -23,8 +23,10 @@
  * disagreement is data loss, not a type error, so the two writers must read
  * one symbol.
  *
- * This module deliberately uses only language built-ins so the SvelteKit HTTP
- * boundary and the Convex runtime can enforce one identical policy.
+ * This module deliberately uses only language built-ins so both runtimes read
+ * the same symbols: the Convex writers and public mappers, and the SvelteKit
+ * projector that reconstructs the cached anonymous card and fails closed when
+ * an aggregate array exceeds the shape declared here.
  */
 
 export const PUBLIC_COUNTER_K_FLOOR = 5;

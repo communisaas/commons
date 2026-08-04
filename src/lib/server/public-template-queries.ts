@@ -3,6 +3,11 @@ import {
 	isCongressionalDelivery,
 	isTemplateDeliveryMethod
 } from '$convex/lib/templateDeliveryMethod';
+import {
+	TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS,
+	TRUST_TIER_BUCKET_COUNT
+} from '$convex/lib/publicAggregatePrivacy';
+import { MAX_PUBLIC_TEMPLATE_DISTRICT_COUNTS } from '$convex/lib/publicTemplateDiscoverySource';
 import type { FunctionReturnType } from 'convex/server';
 import type { Id } from '$convex/_generated/dataModel';
 import { api } from '$lib/convex';
@@ -293,11 +298,14 @@ const PUBLIC_TEMPLATE_SCHEMA = {
 	verified_sends: publicNullable(PUBLIC_NUMBER),
 	unique_districts: publicNullable(PUBLIC_NUMBER),
 	send_count: publicNullable(PUBLIC_NUMBER),
-	daily_arrivals: publicArray(PUBLIC_NUMBER, 30),
-	district_counts: publicArray(publicObject({ code: PUBLIC_STRING, count: PUBLIC_NUMBER }), 6),
+	daily_arrivals: publicArray(PUBLIC_NUMBER, TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS),
+	district_counts: publicArray(
+		publicObject({ code: PUBLIC_STRING, count: PUBLIC_NUMBER }),
+		MAX_PUBLIC_TEMPLATE_DISTRICT_COUNTS
+	),
 	district_counts_suppressed_districts: PUBLIC_NUMBER,
 	district_counts_suppressed_count: PUBLIC_NUMBER,
-	tier_counts: publicArray(PUBLIC_NUMBER, 6),
+	tier_counts: publicArray(PUBLIC_NUMBER, TRUST_TIER_BUCKET_COUNT),
 	delivery_config: PUBLIC_REDACTED_OBJECT,
 	cwc_config: PUBLIC_REDACTED_NULL,
 	recipient_config: PUBLIC_REDACTED_NULL,

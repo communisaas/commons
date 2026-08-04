@@ -5743,13 +5743,11 @@ async function evaluateTemplateAuthoringAllowance(
 	userId: Id<'users'>,
 	now: number
 ): Promise<TemplateAuthoringAllowance> {
-	// The launch-ready list projection is one embedding-free row per template.
-	// Count that compact plane after its explicit cutover; retain the canonical
-	// fallback only for pre-migration deployments so this change is deployable
-	// before the one-time projection activation. createTemplate writes both rows
-	// atomically, so Convex OCC preserves the same concurrent quota authority.
-	const listProjectionMigration = await getTemplateListProjectionMigration(ctx);
-	const compactCountReady = listProjectionMigration?.status === 'ready';
+	// The quota counts the list projection plane: one embedding-free row per
+	// template, so the month-to-date read stays cheap on a hot mutation.
+	// createTemplate inserts the canonical row and its projection in the same
+	// transaction, so Convex OCC still serializes concurrent creates against a
+	// single allowance.
 	const monthStart = startOfMonthUTC(now);
 	const membership = await ctx.db
 		.query('orgMemberships')
@@ -5766,19 +5764,12 @@ async function evaluateTemplateAuthoringAllowance(
 		}
 		if (limit === 0) return { ok: false, code: 'TEMPLATE_QUOTA_EXCEEDED' };
 
-		const monthToDate = compactCountReady
-			? await ctx.db
-					.query('templateListProjections')
-					.withIndex('by_orgId', (q) =>
-						q.eq('orgId', membership.orgId).gte('templateCreatedAt', monthStart)
-					)
-					.take(limit)
-			: await ctx.db
-					.query('templates')
-					.withIndex('by_orgId', (q) =>
-						q.eq('orgId', membership.orgId).gte('_creationTime', monthStart)
-					)
-					.take(limit);
+		const monthToDate = await ctx.db
+			.query('templateListProjections')
+			.withIndex('by_orgId', (q) =>
+				q.eq('orgId', membership.orgId).gte('templateCreatedAt', monthStart)
+			)
+			.take(limit);
 		if (monthToDate.length >= limit) {
 			return { ok: false, code: 'TEMPLATE_QUOTA_EXCEEDED' };
 		}
@@ -5800,15 +5791,10 @@ async function evaluateTemplateAuthoringAllowance(
 	const limit = effectivelyActive
 		? authoredLimitForPlan(subscription?.plan)
 		: authoredLimitForPlan(null);
-	const monthToDate = compactCountReady
-		? await ctx.db
-				.query('templateListProjections')
-				.withIndex('by_userId', (q) => q.eq('userId', userId).gte('templateCreatedAt', monthStart))
-				.take(limit)
-		: await ctx.db
-				.query('templates')
-				.withIndex('by_userId', (q) => q.eq('userId', userId).gte('_creationTime', monthStart))
-				.take(limit);
+	const monthToDate = await ctx.db
+		.query('templateListProjections')
+		.withIndex('by_userId', (q) => q.eq('userId', userId).gte('templateCreatedAt', monthStart))
+		.take(limit);
 	const decision = decideIndividualAuthoring(monthToDate.length, now, limit);
 	return decision.ok
 		? { ok: true }

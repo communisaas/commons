@@ -142,7 +142,8 @@ export default defineSchema({
 		// incremented on-action inside createCampaignAction (registered verified
 		// paths supplying userId), in the same transaction that derives and writes
 		// reputationTier and stamps immutable action attribution. Optional because
-		// pre-T10-1 rows didn't carry it; the explicit legacy repair treats missing as 0.
+		// no users insert sets it; the sole writer reads it as `?? 0`, so absent
+		// and zero are the same state.
 		actionCount: v.optional(v.number()),
 
 		// Profile
@@ -184,9 +185,11 @@ export default defineSchema({
 	userSessionAuthorities: defineTable({
 		userId: v.id('users'),
 		userCreatedAt: v.number(),
-		// Optional only for historical users that predate plaintext-email repair.
-		// The request boundary fails those rows closed until OAuth backfills email.
-		email: v.optional(v.string()),
+		// Required, never optional: email is the anti-sybil control, and
+		// users.emailHash is the dedup key the sybil throttle reads. An authority
+		// row without one would hand the request boundary an unthrottleable
+		// identity, so the projection fails closed rather than mint it.
+		email: v.string(),
 		tokenIdentifier: v.optional(v.string()),
 		name: v.optional(v.string()),
 		avatar: v.optional(v.string()),
@@ -294,7 +297,6 @@ export default defineSchema({
 		// All emit `campaign_id: ... ?? null`. Field removal requires
 		// consumers to drop the key, then a schema deploy. Template→
 		// campaign linkage goes the other way (campaigns.templateId).
-		// See [[F22-templates-campaignId-dead]].
 		campaignId: v.optional(v.string()),
 		status: v.string(), // 'draft' | 'published' | etc.
 		isPublic: v.boolean(),
@@ -916,7 +918,6 @@ export default defineSchema({
 		// tightening to `v.object({publicInputsArray: v.array(v.string()),
 		// actionDomain: v.string(), ...})` would close the divergence
 		// but requires +server.ts to normalize at the boundary first.
-		// See [[F39-publicInputs-normalize-at-boundary]].
 		publicInputs: v.any(),
 		nullifier: v.string(),
 		actionId: v.string(),
@@ -2772,9 +2773,9 @@ export default defineSchema({
 		raisedAmountCents: v.number(),
 		// Counts donations completed, NOT unique donors. Field name is legacy
 		// (renaming is a Convex migration); UI labels it "Donations" to match
-		// the actual semantics. True unique-donor tracking is deferred to
-		// Phase 9 substrate work — would need a (campaignId, supporterId)
-		// composite index plus refund-aware decrement logic. (cure shipped).
+		// the actual semantics. True unique-donor tracking is deferred: it would
+		// need a (campaignId, supporterId) composite index plus refund-aware
+		// decrement logic.
 		donorCount: v.number(),
 		donationCurrency: v.optional(v.string()),
 		donationReceiptPolicy: v.optional(

@@ -6,11 +6,6 @@ export const SESSION_AUTHORITY_MAX_BYTES = 8 * 1024;
 
 const encoder = new TextEncoder();
 
-function requiredString(name: string, value: string | undefined, maxBytes: number): string {
-	if (!value) throw new Error(`SESSION_AUTHORITY_INVALID:${name}:missing`);
-	return boundedString(name, value, maxBytes) as string;
-}
-
 function boundedString(
 	name: string,
 	value: string | undefined,
@@ -21,6 +16,18 @@ function boundedString(
 		throw new Error(`SESSION_AUTHORITY_INVALID:${name}:bytes`);
 	}
 	return value;
+}
+
+function requiredBoundedString(
+	name: string,
+	value: string | undefined,
+	maxBytes: number
+): string {
+	const bounded = boundedString(name, value, maxBytes);
+	if (bounded === undefined || bounded.trim().length === 0) {
+		throw new Error(`SESSION_AUTHORITY_INVALID:${name}:required`);
+	}
+	return bounded;
 }
 
 function finiteNumber(name: string, value: number | undefined): number | undefined {
@@ -39,7 +46,8 @@ export function projectSessionAuthority(user: Doc<'users'>) {
 	const projected = {
 		userId: user._id as Id<'users'>,
 		userCreatedAt: finiteNumber('_creationTime', user._creationTime) as number,
-		email: requiredString('email', user.email, 320),
+		// The projection refuses to mint an authority row without an email.
+		email: requiredBoundedString('email', user.email, 320),
 		tokenIdentifier: boundedString('tokenIdentifier', user.tokenIdentifier, 512),
 		name: boundedString('name', user.name, 512),
 		avatar: boundedString('avatar', user.avatar, 2_048),

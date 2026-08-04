@@ -54,6 +54,7 @@ import {
 	PUBLIC_DISCOVERY_LIST_MIN_REBUILD_INTERVAL_MS,
 	publicDiscoveryManifestControlRetryDelayMs
 } from '../../../convex/lib/publicDiscovery';
+import { TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS } from '$convex/lib/publicAggregatePrivacy';
 import { CONVEX_WORK_BUDGET_MAXIMUM_CONTINUATION_ADMISSIONS_PER_REALM_DAY } from '$lib/server/convex-work-budget-policy';
 
 const URL = new globalThis.URL('https://commons.example/');
@@ -2217,6 +2218,53 @@ describe('public template snapshot queries', () => {
 		expect(persisted).not.toContain('private@example.test');
 		expect(persisted).not.toContain('webhookSecret');
 		expect(persisted).not.toContain('ownerEmail');
+	});
+
+	it('carries a full-width arrival window across the cache boundary', async () => {
+		const context = contextWithR2();
+		const readyManifest = manifest({ ready: true, revision: 4, updatedAt: 400 });
+		const arrivals = Array.from({ length: TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS }, () => 0);
+		mockServerQuery.mockImplementation(async (ref: string, args) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return readyManifest;
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...listSnapshot(4, 400, 'arrival-window'),
+					templates: [{ ...publicCard('arrival-window'), daily_arrivals: arrivals }]
+				};
+			}
+			return safeProducerQueryResult(ref, args, readyManifest);
+		});
+		await refreshPublicDiscoveryManifestControl({ platform: context.platform! });
+
+		await expect(getCachedPublicTemplates(context, false)).resolves.toEqual([
+			{ ...publicCard('arrival-window'), daily_arrivals: arrivals }
+		]);
+	});
+
+	it('fails closed on an arrival window wider than the shared window', async () => {
+		const context = contextWithR2();
+		const readyManifest = manifest({ ready: true, revision: 4, updatedAt: 400 });
+		const arrivals = Array.from({ length: TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS + 1 }, () => 0);
+		mockServerQuery.mockImplementation(async (ref: string, args) => {
+			if (ref === api.templates.publicDiscoveryManifest) {
+				return readyManifest;
+			}
+			if (ref === api.templates.publicDiscoveryList) {
+				return {
+					...listSnapshot(4, 400, 'arrival-window-overflow'),
+					templates: [{ ...publicCard('arrival-window-overflow'), daily_arrivals: arrivals }]
+				};
+			}
+			return safeProducerQueryResult(ref, args, readyManifest);
+		});
+
+		await expect(
+			refreshPublicDiscoveryManifestControl({ platform: context.platform! }).then(() =>
+				getCachedPublicTemplates(context, false)
+			)
+		).rejects.toBeInstanceOf(PublicDiscoverySnapshotContractError);
 	});
 
 	it('does not inspect a poisoned payload LKG when manifest authority is unavailable', async () => {
