@@ -297,16 +297,15 @@ export const MAILTO_URL_MAX_LENGTH = 8000;
 /**
  * Ordered content zones of an outgoing message.
  *
- * Order is the contract: opener → body → rule → (metadata, attestation). Which
- * lane fills which zone is the caller's decision; how the zones become a message
- * is this module's.
+ * Order is the contract: body → rule → (metadata, attestation). Which lane fills
+ * which zone is the caller's decision; how the zones become a message is this
+ * module's.
  *
  * There is deliberately no zone for the sender's personal connection: that text
  * belongs at the author's placeholder inside the body, which the resolver owns.
  * A zone here would be a second, positionally-wrong carriage for the same input.
  */
 export interface MailtoZones {
-	opener?: string;
 	body: string;
 	/** Routing lines the inbound mail relay parses, e.g. `[Template: …]` / `[From: …]`. */
 	metadata?: string;
@@ -342,10 +341,8 @@ export type MailtoAssembly =
  */
 export function assembleMailto(input: MailtoAssemblyInput): MailtoAssembly {
 	const blocks: string[] = [];
-	for (const zone of [input.zones.opener, input.zones.body]) {
-		const trimmed = zone?.trim();
-		if (trimmed) blocks.push(trimmed);
-	}
+	const body = input.zones.body.trim();
+	if (body) blocks.push(body);
 
 	const footerLines: string[] = [];
 	for (const line of [input.zones.metadata, input.zones.attestation]) {

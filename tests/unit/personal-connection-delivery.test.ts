@@ -12,9 +12,10 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { analyzeEmailFlow, generateMailtoUrl } from '$lib/services/emailService';
+import { analyzeEmailFlow, assembleMailto, generateMailtoUrl } from '$lib/services/emailService';
 import { resolveTemplate } from '$lib/utils/templateResolver';
 import { moderatePersonalConnection } from '$lib/utils/personal-connection';
+import { buildAttestation, type VerificationMethod } from '$lib/core/identity/tier-display';
 import type { EmailServiceUser } from '$lib/types/user';
 import type { EmailFlowTemplate } from '$lib/types/template';
 
@@ -31,6 +32,7 @@ const TYPED = 'My son waited eleven months for a hearing aid.';
 const BODY = 'Dear official,\n\n[Personal Connection]\n\nPlease act.\n\n[Name]';
 const SENDER_VISIBLE =
 	'Dear official,\n\nMy son waited eleven months for a hearing aid.\n\nPlease act.';
+const DISTRICT = 'CA-12';
 
 const directTemplate: EmailFlowTemplate = {
 	id: 'hearing-aid-wait',
@@ -61,6 +63,58 @@ const sender: EmailServiceUser = {
 	is_verified: true,
 	verification_method: 'civic_api'
 };
+
+/**
+ * The two `/s/[slug]` sends compose inline inside the route component, so they
+ * cannot be called without mounting it. These helpers run the route's own
+ * recipe — the real resolver, the real attestation builder, the real assembly —
+ * so the lane tests below still read a genuine `mailto:` URL rather than a
+ * hand-joined string. The recipe is reproduced, so it is also pinned: see
+ * `the detail page hands the assembly the zones these lanes reproduce`.
+ */
+function detailPageSingleAssembly() {
+	const resolved = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
+	const attestation =
+		buildAttestation({
+			trustTier: 2,
+			method: sender.verification_method as VerificationMethod,
+			districtCode: DISTRICT,
+			credentialHash: null
+		}).block ?? undefined;
+
+	const assembly = assembleMailto({
+		recipients: ['member@example.test'],
+		subject: directTemplate.title,
+		zones: {
+			body: resolved.body.replace(/\[District\]/g, DISTRICT),
+			attestation
+		}
+	});
+	if (!assembly.ok) throw new Error(assembly.message);
+	return assembly;
+}
+
+function detailPageBatchAssembly() {
+	const resolved = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
+	const attestation =
+		buildAttestation({
+			trustTier: 2,
+			method: sender.verification_method as VerificationMethod,
+			districtCode: DISTRICT,
+			credentialHash: null
+		}).block ?? undefined;
+
+	const assembly = assembleMailto({
+		recipients: ['one@example.test', 'two@example.test', 'three@example.test'],
+		subject: directTemplate.title,
+		zones: {
+			body: resolved.body.replace(/\[District\]/g, DISTRICT).trim(),
+			attestation
+		}
+	});
+	if (!assembly.ok) throw new Error(assembly.message);
+	return assembly;
+}
 
 describe('the words the sender read reach the recipient', () => {
 	it('the flow entry point carries them at the author placeholder', () => {
@@ -97,30 +151,54 @@ describe('the words the sender read reach the recipient', () => {
 	});
 
 	it('the detail page single composition carries them', () => {
-		// The lane resolves the template and hands the result to the shared assembly.
-		const resolved = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
+		const body = recipientBody(detailPageSingleAssembly().url);
 
-		expect(resolved.body).toContain(SENDER_VISIBLE);
-		expect(resolved.body).not.toContain('[Personal Connection]');
+		expect(body).toContain(SENDER_VISIBLE);
+		expect(body).not.toContain('[Personal Connection]');
 	});
 
-	it('the detail page batch composition places them identically, not above the letter', () => {
-		const resolved = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
-		const attestation = 'Self-reported constituent (Census geocoder) · CA-12';
-		const batchBody = [resolved.body, '---', attestation].join('\n\n');
+	it('the detail page batch composition carries them', () => {
+		const body = recipientBody(detailPageBatchAssembly().url);
 
-		expect(batchBody).toContain(SENDER_VISIBLE);
-		// A prepend put the sender's words above the salutation. Same input, same
-		// position, on both lanes — or this is back.
-		expect(batchBody.startsWith(TYPED)).toBe(false);
-		expect(batchBody.startsWith('Dear official,')).toBe(true);
+		expect(body).toContain(SENDER_VISIBLE);
+		expect(body).not.toContain('[Personal Connection]');
 	});
 
-	it('single and batch emit the same letter for the same input', () => {
-		const single = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
-		const batch = resolveTemplate(directTemplate, sender, { personalConnection: TYPED });
+	it('the detail page batch composition places them at the slot, not above the letter', () => {
+		// A prepend put the sender's words above the salutation. The claim is made
+		// against what left in the URL, not against a string the test joined.
+		const body = recipientBody(detailPageBatchAssembly().url);
 
-		expect(single.body).toBe(batch.body);
+		expect(body.startsWith(TYPED)).toBe(false);
+		expect(body.startsWith('Dear official,')).toBe(true);
+	});
+
+	it('single and batch emit the same letter block for the same input', () => {
+		// Two different sends — one addressee, then three, each resolved and
+		// assembled on its own. Strip each one's own footer and the letter the
+		// recipient reads must be the same characters on both lanes.
+		const singleBody = recipientBody(detailPageSingleAssembly().url);
+		const batchBody = recipientBody(detailPageBatchAssembly().url);
+
+		expect(singleBody).toContain('\n\n---');
+		expect(batchBody).toContain('\n\n---');
+
+		// Same offset, or one lane stacked something ahead of the letter that the
+		// other did not — a difference the block comparison below cannot see,
+		// because it starts counting at the salutation.
+		expect(singleBody.indexOf('Dear official,')).toBe(batchBody.indexOf('Dear official,'));
+
+		const singleLetter = singleBody.slice(
+			singleBody.indexOf('Dear official,'),
+			singleBody.indexOf('\n\n---')
+		);
+		const batchLetter = batchBody.slice(
+			batchBody.indexOf('Dear official,'),
+			batchBody.indexOf('\n\n---')
+		);
+
+		expect(singleLetter).toContain(SENDER_VISIBLE);
+		expect(singleLetter).toBe(batchLetter);
 	});
 });
 
@@ -282,6 +360,33 @@ describe('one substitution point', () => {
 		expect(page).toContain('await moderatePersonalConnection(');
 		expect(page).not.toContain('templateWithPC');
 		expect(page).not.toContain('import ActionBar');
+	});
+
+	it('the detail page hands the assembly the zones these lanes reproduce', () => {
+		// Both `/s/[slug]` sends are inline in the route and cannot be invoked
+		// without mounting the component, so the lane helpers above rebuild their
+		// zone recipe. A zone that appears, moves, or disappears in the route has
+		// to turn this file RED — otherwise the reconstruction quietly stops
+		// standing for the product and the lanes prove nothing about it.
+		const page = src('src/routes/s/[slug]/+page.svelte');
+
+		const zoneKeysAt = (from: number) => {
+			const open = page.indexOf('zones: {', from);
+			return page
+				.slice(open + 'zones: {'.length, page.indexOf('}', open))
+				.split('\n')
+				.map((line) => line.trim().match(/^(\w+)/)?.[1])
+				.filter((key): key is string => key != null);
+		};
+
+		const single = page.indexOf('assembleMailto({');
+		const batch = page.indexOf('assembleMailto({', single + 1);
+		expect(single).toBeGreaterThan(-1);
+		expect(batch).toBeGreaterThan(single);
+		expect(page.indexOf('assembleMailto({', batch + 1)).toBe(-1);
+
+		expect(zoneKeysAt(single)).toEqual(['body', 'attestation']);
+		expect(zoneKeysAt(batch)).toEqual(['body', 'attestation']);
 	});
 
 	it('there is one moderation call site abstraction', () => {

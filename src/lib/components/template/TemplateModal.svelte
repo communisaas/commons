@@ -402,6 +402,15 @@
 		// Use unified email service
 		const currentUser = $page.data?.user || user;
 
+		// The district this page already resolved for the viewer. `App.PageData` is
+		// deliberately open, so the key is narrowed at runtime rather than asserted —
+		// routes that resolve no district simply have nothing here.
+		const attestationDistrict =
+			typeof $page.data?.userDistrictCode === 'string' &&
+			$page.data.userDistrictCode.trim() !== ''
+				? $page.data.userDistrictCode
+				: null;
+
 		// Populate credentialHash from IndexedDB for Tier 2+ users
 		// so the email footer can include the verify URL
 		let enrichedUser = currentUser;
@@ -420,12 +429,14 @@
 		// Opt this lane into the attestation footer. The surface a sender reaches this
 		// modal from — the template page — renders that footer, so a send from here
 		// must carry it or the recipient receives less than the sender was shown. The
-		// district rides as a suffix when the account carries one; without it the
-		// method label still states honestly what was verified.
+		// district suffix comes from the district this page resolved for the viewer —
+		// the same value the preview footer reads. Where no district was resolved the
+		// footer degrades to the method label alone, which still states honestly what
+		// was verified.
 		const flow = analyzeEmailFlow(template, enrichedUser, {
 			trustTier: enrichedUser?.trust_tier ?? 0,
 			personalConnection,
-			attestation: { districtCode: enrichedUser?.district_code ?? null }
+			attestation: { districtCode: attestationDistrict }
 		});
 
 		// A message that cannot be assembled is said out loud. Without this the modal

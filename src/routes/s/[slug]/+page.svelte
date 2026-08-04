@@ -615,7 +615,7 @@
 				return;
 			}
 
-			// Direct mailto — opener + resolved template body, no intermediate compose view
+			// Direct mailto — the resolved letter handed to the OS mail app, no intermediate compose view
 			const districtName = data.userDistrictCode ?? '';
 			const subject = template.subject || template.title;
 
@@ -639,7 +639,6 @@
 				recipients: [member.email],
 				subject: subject ?? '',
 				zones: {
-					opener: member.accountabilityOpener ?? '',
 					body: resolvedBody,
 					attestation
 				}
@@ -1174,15 +1173,7 @@
 						/* Intentionally empty - scroll handling not needed */
 					}}
 					expandToContent={true}
-					onOpenModal={() => {
-						const isMobile = typeof window !== 'undefined' ? window.innerWidth < 768 : false;
-						if (isMobile) {
-							modalActions.openModal('mobile-preview', 'mobile_preview', {
-								template,
-								user: data.user
-							});
-						}
-					}}
+					onOpenModal={() => void openTemplateModal(data.user)}
 					onSendMessage={async () => {
 						// Scroll to Power Landscape — no batch mailto
 						await tick();

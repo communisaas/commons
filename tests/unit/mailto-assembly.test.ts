@@ -18,6 +18,7 @@ import {
 	MAILTO_URL_MAX_LENGTH,
 	type MailtoZones
 } from '$lib/services/emailService';
+import { resolveTemplate } from '$lib/utils/templateResolver';
 import type { EmailServiceUser } from '$lib/types/user';
 import type { EmailFlowTemplate } from '$lib/types/template';
 
@@ -41,7 +42,7 @@ describe('sender-visible text equals recipient-visible text', () => {
 			input: {
 				recipients: ['rep@example.test'],
 				subject: 'A subject',
-				zones: { opener: 'An opener', body: 'A body', attestation: ATTESTATION }
+				zones: { body: 'A body', attestation: ATTESTATION }
 			}
 		},
 		{
@@ -174,7 +175,6 @@ describe('zone order and separators', () => {
 			recipients: ['rep@example.test'],
 			subject: 'A subject',
 			zones: {
-				opener: 'An opener',
 				body: 'A body',
 				metadata: '[Template: a-slug]\n[From: ada@example.test]',
 				attestation: ATTESTATION
@@ -183,8 +183,7 @@ describe('zone order and separators', () => {
 		if (!result.ok) throw new Error(result.message);
 
 		expect(recipientVisible(result.url).body).toBe(
-			'An opener\n\nA body\n\n---\n\n' +
-				`[Template: a-slug]\n[From: ada@example.test]\n${ATTESTATION}`
+			'A body\n\n---\n\n' + `[Template: a-slug]\n[From: ada@example.test]\n${ATTESTATION}`
 		);
 	});
 
@@ -193,7 +192,6 @@ describe('zone order and separators', () => {
 			recipients: ['rep@example.test'],
 			subject: 'A subject',
 			zones: {
-				opener: '   ',
 				body: '  A body  ',
 				metadata: '',
 				attestation: undefined
@@ -209,10 +207,9 @@ describe('zone order and separators', () => {
 	it('never emits three consecutive newlines, whichever zones are present', () => {
 		const zoneSets: MailtoZones[] = [
 			{ body: 'A body' },
-			{ opener: 'An opener', body: 'A body' },
 			{ body: 'A body', attestation: ATTESTATION },
-			{ opener: 'An opener', body: '', attestation: ATTESTATION },
-			{ opener: 'An opener', body: 'A body', metadata: 'A line', attestation: ATTESTATION }
+			{ body: '', attestation: ATTESTATION },
+			{ body: 'A body', metadata: 'A line', attestation: ATTESTATION }
 		];
 
 		for (const zones of zoneSets) {
@@ -224,6 +221,75 @@ describe('zone order and separators', () => {
 			if (!result.ok) throw new Error(result.message);
 			expect(recipientVisible(result.url).body).not.toMatch(/\n{3,}/);
 		}
+	});
+});
+
+describe('nothing the sender did not see is prepended', () => {
+	it('the letter is the first thing the recipient reads, on every zone combination', () => {
+		const zoneSets: MailtoZones[] = [
+			{ body: 'A body' },
+			{ body: 'A body', attestation: ATTESTATION },
+			{ body: 'A body', metadata: 'A line', attestation: ATTESTATION }
+		];
+
+		for (const zones of zoneSets) {
+			const result = assembleMailto({
+				recipients: ['rep@example.test'],
+				subject: 'A subject',
+				zones
+			});
+			if (!result.ok) throw new Error(result.message);
+
+			expect(recipientVisible(result.url).body.startsWith('A body')).toBe(true);
+		}
+	});
+
+	it('the resolved letter reaches the recipient starting at its own salutation', () => {
+		// The expected side is a literal this test owns; the actual side is parsed
+		// back out of the URL, so a prepended zone growing back cannot satisfy both.
+		const TYPED = 'The clinic near me closed in March.';
+		const template: EmailFlowTemplate = {
+			id: 'assembly-prepend',
+			slug: 'assembly-prepend',
+			title: 'A subject',
+			description: 'A test template',
+			deliveryMethod: 'email',
+			message_body: 'Dear official,\n\n[Personal Connection]\n\nPlease act.',
+			recipient_config: { emails: ['rep@example.test'] }
+		};
+		const sender: EmailServiceUser = {
+			id: 'u1',
+			email: 'ada@example.test',
+			name: 'Ada',
+			street: '1 Main St',
+			city: 'Springfield',
+			state: 'CA',
+			zip: '90210',
+			is_verified: true,
+			verification_method: 'civic_api'
+		};
+
+		const resolved = resolveTemplate(template, sender, { personalConnection: TYPED });
+		const result = assembleMailto({
+			recipients: ['rep@example.test'],
+			subject: 'A subject',
+			// The detail page hands the resolver's output straight to the assembly.
+			zones: { body: resolved.body, attestation: ATTESTATION }
+		});
+		if (!result.ok) throw new Error(result.message);
+
+		const body = recipientVisible(result.url).body;
+		expect(body.startsWith('Dear official,')).toBe(true);
+		expect(body).toContain(TYPED);
+	});
+
+	it('the detail page hands the assembly no text of the recipient record', () => {
+		const text = src('src/routes/s/[slug]/+page.svelte');
+
+		expect(text).not.toContain('accountabilityOpener');
+		// `noopener` in the contact-form window feature string has no word boundary
+		// before `opener` and no colon after it, so it cannot satisfy this.
+		expect(text).not.toMatch(/\bopener\s*:/);
 	});
 });
 
@@ -263,7 +329,7 @@ describe('one failure contract', () => {
 		const result = assembleMailto({
 			recipients: ['rep@example.test'],
 			subject: '   ',
-			zones: { body: '', opener: '', attestation: '' }
+			zones: { body: '', attestation: '' }
 		});
 
 		expect(result.ok).toBe(false);

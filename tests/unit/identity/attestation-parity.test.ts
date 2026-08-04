@@ -235,18 +235,45 @@ describe('recipient-visible lanes embed the builder output verbatim', () => {
 		expect(body).not.toContain('CA-12');
 	});
 
-	it('the relay lane and the preview lane make the same claim, differing only by the district suffix', () => {
+	it('the relay lane and the direct lane make the same claim, differing only by the district suffix', () => {
 		// Known residual: the relay lane has no canonical district code in scope
 		// (its only district value comes from the ephemeral delivery address, a
 		// different value in a different format), so it claims none. That is a
 		// suffix-only delta — the epistemic class must stay identical on both.
-		const relay = buildAttestation({ trustTier: 2, method: 'civic_api', districtCode: null });
-		const preview = buildAttestation({ trustTier: 2, method: 'civic_api', districtCode: 'CA-12' });
-
-		expect(relay.line).toBe(
-			buildAttestation({ trustTier: 2, method: 'civic_api', districtCode: null }).line
+		//
+		// Both footers are read off real sends and pinned to literal text. Compared
+		// against a re-run of the composer instead, a change that moved both lanes
+		// together would pass while the recipient's inbox changed under it.
+		const relayBody = decodeBody(
+			generateMailtoUrl(congressionalTemplate, directSender, { trustTier: 2 }).url as string
 		);
-		expect(preview.line?.startsWith(relay.line as string)).toBe(true);
+		const directBody = decodeBody(
+			generateMailtoUrl(directTemplate, directSender, {
+				trustTier: 2,
+				attestation: { districtCode: 'NY-14' }
+			}).url as string
+		);
+
+		const relayFooter = (relayBody.split('---').pop() ?? '').trim().split('\n');
+		const directFooter = (directBody.split('---').pop() ?? '').trim().split('\n');
+
+		// The relay footer opens with the two routing lines the inbound relay parses.
+		expect(relayFooter).toEqual([
+			'[Template: attestation-relay]',
+			'[From: ada@example.test]',
+			'Self-reported constituent (Census geocoder)',
+			`Confirm I'm a real constituent: https://commons.email/v/${HASH}`
+		]);
+		expect(directFooter).toEqual([
+			'Self-reported constituent (Census geocoder) · NY-14',
+			`Confirm I'm a real constituent: https://commons.email/v/${HASH}`
+		]);
+
+		// The delta itself, taken from the two bodies rather than restated.
+		const relayClaim = relayFooter[2];
+		const directClaim = directFooter[0];
+		expect(directClaim.startsWith(relayClaim)).toBe(true);
+		expect(directClaim).toBe(`${relayClaim} · NY-14`);
 	});
 });
 
