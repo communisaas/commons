@@ -14,7 +14,6 @@ export type ModalType =
 	| 'auth'
 	| 'address'
 	| 'email_loading'
-	| 'mobile_preview'
 	| 'template_creator'
 	| 'onboarding'
 	| 'template_modal'

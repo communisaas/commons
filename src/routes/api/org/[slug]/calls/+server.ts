@@ -50,7 +50,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const body = await request.json();
-	const { supporterId, targetPhone, targetName, campaignId, districtHash } = body;
+	const { supporterId, targetPhone, targetName, campaignId } = body;
 
 	// Validate required fields
 	if (!supporterId || typeof supporterId !== 'string') {
@@ -101,14 +101,6 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 	if (typeof callerPhone !== 'string' || !/^\+\d{10,15}$/.test(callerPhone)) {
 		throw error(400, 'Invalid callerPhone format (E.164 required)');
 	}
-	// districtHash is SHA-256 hex (64 chars) optionally with 0x prefix.
-	if (
-		districtHash !== undefined &&
-		(typeof districtHash !== 'string' || districtHash.length > 128)
-	) {
-		throw error(400, 'Invalid districtHash format');
-	}
-
 	const callReadiness = getCallInitiationReadiness(callInitiationEnv(), {
 		featureEnabled: FEATURES.SMS,
 		canManageCalls: true,
@@ -125,8 +117,7 @@ export const POST: RequestHandler = async ({ params, request, locals, url }) => 
 		callerPhone,
 		targetPhone,
 		targetName: targetName || undefined,
-		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined,
-		districtHash: districtHash || undefined
+		campaignId: campaignId ? (campaignId as Id<'campaigns'>) : undefined
 	});
 
 	// Initiate the call via Twilio
