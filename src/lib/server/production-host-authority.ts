@@ -20,7 +20,14 @@ const BUILD_RELEASE_SHA = import.meta.env.VITE_RELEASE_SHA as string | undefined
 const RELEASE_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_TRANSACTION_PATTERN = /^[1-9][0-9]{0,19}-[1-9][0-9]{0,9}$/u;
 const JWT_SEGMENT_PATTERN = /^[A-Za-z0-9_-]+$/u;
-const LOCAL_DEVELOPMENT_HOSTS = new Set(['127.0.0.1', '[::1]', 'localhost']);
+// host.docker.internal: the local Convex container fetches the auth-bridge
+// JWKS from the host dev server under this name (see vite allowedHosts).
+const LOCAL_DEVELOPMENT_HOSTS = new Set([
+	'127.0.0.1',
+	'[::1]',
+	'localhost',
+	'host.docker.internal'
+]);
 const RETIRED_RELEASE_CONTROL_PATH = '/api/internal/public-template-og-release-authority';
 const RELEASE_CANDIDATE_PATH = '/api/release-candidate';
 const RELEASE_ORIGIN_PATH = '/api/release-origin';

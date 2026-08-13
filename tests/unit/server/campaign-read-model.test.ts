@@ -98,4 +98,170 @@ describe('campaign read-model materializer', () => {
 		expect(bundle.packet.temporal?.bins).toHaveLength(720);
 		expect(bundle.suppression.hours).toBe(180);
 	});
+
+	it('leaves every coordination scalar uncomputed for a single-action campaign', () => {
+		const packet = materializeCampaignReadModel(
+			fold([
+				{
+					verified: true,
+					engagementTier: 3,
+					trustTier: 2,
+					districtHash: 'district-0',
+					h3Cell: 'cell-0',
+					messageHash: 'message-0',
+					atlasVersion: 'current',
+					sentAt: 0
+				}
+			]),
+			null
+		).packet;
+
+		expect(packet.gds).toBeNull();
+		expect(packet.ald).toBeNull();
+		expect(packet.temporalEntropy).toBeNull();
+		expect(packet.burstVelocity).toBeNull();
+		expect(packet.cai).toBeNull();
+	});
+
+	it('withholds the peak-vs-average ratio while every action shares one hour', () => {
+		const packet = materializeCampaignReadModel(
+			fold([
+				{ verified: true, engagementTier: 2, sentAt: 0 },
+				{ verified: true, engagementTier: 2, sentAt: 60_000 }
+			]),
+			null
+		).packet;
+
+		expect(packet.temporal).toBeNull();
+		expect(packet.burstVelocity).toBeNull();
+	});
+
+	it('emits no coordination scalar and no action for an empty campaign', () => {
+		const packet = materializeCampaignReadModel(fold([]), null).packet;
+
+		expect(packet.total).toBe(0);
+		expect(packet.gds).toBeNull();
+		expect(packet.ald).toBeNull();
+		expect(packet.temporalEntropy).toBeNull();
+		expect(packet.burstVelocity).toBeNull();
+		expect(packet.cai).toBeNull();
+	});
+
+	it('counts a lone action without deriving a peak-vs-average ratio from it', () => {
+		const packet = materializeCampaignReadModel(
+			fold([{ verified: true, engagementTier: 2, sentAt: 0 }]),
+			null
+		).packet;
+
+		expect(packet.total).toBe(1);
+		expect(packet.burstVelocity).toBeNull();
+	});
+
+	it('counts two actions inside one hour while withholding their ratio', () => {
+		const packet = materializeCampaignReadModel(
+			fold([
+				{ verified: true, engagementTier: 2, sentAt: 0 },
+				{ verified: true, engagementTier: 2, sentAt: 60_000 }
+			]),
+			null
+		).packet;
+
+		expect(packet.total).toBe(2);
+		expect(packet.burstVelocity).toBeNull();
+	});
+
+	it('computes the ratio from two actions an hour or more apart', () => {
+		const hour = 3_600_000;
+		const packet = materializeCampaignReadModel(
+			fold([
+				{ verified: true, engagementTier: 2, sentAt: 0 },
+				{ verified: true, engagementTier: 2, sentAt: 2 * hour }
+			]),
+			null
+		).packet;
+
+		expect(packet.total).toBe(2);
+		expect(packet.temporal).not.toBeNull();
+		expect(packet.burstVelocity).toBe(1);
+	});
+
+	it('computes the ratio below the display floor, so the floor withholds a real value', () => {
+		const hour = 3_600_000;
+		const packet = materializeCampaignReadModel(
+			fold(
+				Array.from({ length: 24 }, (_, index) => ({
+					verified: true,
+					engagementTier: 2,
+					sentAt: index * hour
+				}))
+			),
+			null
+		).packet;
+
+		expect(packet.total).toBe(24);
+		expect(packet.burstVelocity).toBe(1);
+	});
+
+	it('computes the same ratio at and above the display floor', () => {
+		const hour = 3_600_000;
+		const hourly = (length: number) =>
+			materializeCampaignReadModel(
+				fold(
+					Array.from({ length }, (_, index) => ({
+						verified: true,
+						engagementTier: 2,
+						sentAt: index * hour
+					}))
+				),
+				null
+			).packet;
+
+		const atFloor = hourly(25);
+		expect(atFloor.total).toBe(25);
+		expect(atFloor.burstVelocity).toBe(1);
+
+		const aboveFloor = hourly(26);
+		expect(aboveFloor.total).toBe(26);
+		expect(aboveFloor.burstVelocity).not.toBeNull();
+	});
+
+	it('leaves the ratio uncomputed just below the floor when actions span under one hour', () => {
+		const packet = materializeCampaignReadModel(
+			fold(
+				Array.from({ length: 24 }, (_, index) => ({
+					verified: true,
+					engagementTier: 2,
+					sentAt: index * 60_000
+				}))
+			),
+			null
+		).packet;
+
+		expect(packet.total).toBe(24);
+		expect(packet.burstVelocity).toBeNull();
+	});
+
+	it('withholds the ratio from actions under an hour apart across two clock hours', () => {
+		const hour = 3_600_000;
+		const early = 59 * 60_000;
+		const late = 61 * 60_000;
+		// The falsifier for "every action arrived inside a single hour": these
+		// land in two different clock buckets, yet span under an hour.
+		expect(Math.floor(early / hour)).not.toBe(Math.floor(late / hour));
+
+		const packet = materializeCampaignReadModel(
+			fold(
+				Array.from({ length: 30 }, (_, index) => ({
+					verified: true,
+					engagementTier: 2,
+					sentAt: index < 15 ? early : late
+				}))
+			),
+			null
+		).packet;
+
+		expect(packet.total).toBe(30);
+		expect(packet.temporal).toBeNull();
+		expect(packet.burstVelocity).toBeNull();
+	});
 });

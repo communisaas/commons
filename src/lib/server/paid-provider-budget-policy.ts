@@ -9,6 +9,13 @@ import {
 	providerCallBundleTotal,
 	type ProviderCallBundle
 } from '$lib/core/agents/provider-call-envelope';
+import {
+	AGENTIC_PROVIDER_REVENUE_ALLOCATION_BASIS_POINTS,
+	AGENTIC_RESOLVE_PROVIDER_COST_MICROUSD,
+	AGENTIC_RESOLVE_PROVIDER_UNITS,
+	ORG_PLAN_LIMITS,
+	ORG_PLAN_ORDER
+} from '../../../convex/lib/planLimits';
 
 export const PAID_PROVIDER_BUDGET_PROTOCOL = '1' as const;
 export const PAID_PROVIDER_BUDGET_AUTHORITY_ID = 'shared-paid-provider-01' as const;
@@ -20,10 +27,83 @@ export const EXA_FREE_MONTHLY_CREDIT_MICROUSD = 10_000_000 as const;
 export const EXA_SEARCH_MICROUSD = 7_000 as const;
 export const EXA_CONTENTS_PAGE_MICROUSD = 1_000 as const;
 export const FIRECRAWL_FREE_MONTHLY_CREDITS = 1_000 as const;
+export const PAID_PROVIDER_PAYG_BILLING_AUTHORITY = 'operator-authorized-pay-as-you-go' as const;
+export const EXA_PAID_ORG_MONTHLY_SPEND_CEILING_MICROUSD = 100_000_000 as const;
+export const FIRECRAWL_PAID_ORG_MONTHLY_SPEND_CEILING_CREDITS = 6_000 as const;
+export const EXA_PAID_ORG_MONTHLY_CEILING_REASON = 'paid-provider-exa-monthly-ceiling' as const;
+export const FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON =
+	'paid-provider-firecrawl-monthly-ceiling' as const;
+
+const EXA_OPERATOR_ACTIVATION_DEPENDENCY =
+	'Paid billing must be enabled in the Exa dashboard before authorized requests can spend.' as const;
+const FIRECRAWL_OPERATOR_ACTIVATION_DEPENDENCY =
+	'Paid billing must be enabled in the Firecrawl dashboard before authorized requests can spend.' as const;
 
 export type PaidProviderTrustTier = 'authenticated' | 'verified' | 'operator';
 
 const PAID_PROVIDER_TRUST_TIERS = ['authenticated', 'verified', 'operator'] as const;
+
+/** Tiers that draw the shared public pool; `operator` spends the reserve instead. */
+const PAID_PROVIDER_PUBLIC_POOL_TIERS = ['authenticated', 'verified'] as const;
+
+/**
+ * Every reason the admitting Durable Object can refuse a reservation with. The
+ * worker builds its rows from this union and the budget client reads the header
+ * against it, so the strings exist once in the tree.
+ */
+export type PaidProviderBudgetReason =
+	| 'actor-daily'
+	| 'actor-monthly'
+	| 'operation'
+	| 'operation-daily'
+	| 'operation-monthly'
+	| 'public-daily'
+	| 'public-monthly'
+	| 'paid-org-balance'
+	| typeof EXA_PAID_ORG_MONTHLY_CEILING_REASON
+	| typeof FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON
+	| 'platform-daily'
+	| 'platform-monthly';
+
+/** Whose capacity ran out: the caller's own share, the shared pool, or unknown. */
+export type PaidProviderBudgetScope = 'actor' | 'platform' | 'blocked';
+
+/**
+ * The one mapping from denial reason to whose capacity was spent. Declared as a
+ * total `Record` over the reason union: adding a reason without deciding its
+ * scope is a compile error rather than a silent misattribution.
+ */
+const PAID_PROVIDER_BUDGET_REASON_SCOPES: Readonly<
+	Record<PaidProviderBudgetReason, Exclude<PaidProviderBudgetScope, 'blocked'>>
+> = Object.freeze({
+	// Keyed on the caller's own actor hash or their own organization.
+	operation: 'actor',
+	'actor-daily': 'actor',
+	'actor-monthly': 'actor',
+	'paid-org-balance': 'actor',
+	// Keyed on a pool anyone can spend, so the caller may have spent none of it.
+	'operation-daily': 'platform',
+	'operation-monthly': 'platform',
+	'public-daily': 'platform',
+	'public-monthly': 'platform',
+	'platform-daily': 'platform',
+	'platform-monthly': 'platform',
+	[EXA_PAID_ORG_MONTHLY_CEILING_REASON]: 'platform',
+	[FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON]: 'platform'
+});
+
+/**
+ * An absent or unrecognised reason resolves to `blocked` — evidence of nothing.
+ * Defaulting an unknown reason to `actor` is exactly how a shared-pool
+ * exhaustion gets told to a person as their own spending, so there is no
+ * `actor`-returning fallback here.
+ */
+export function budgetScopeForReason(reason: string | null): PaidProviderBudgetScope {
+	if (reason === null) return 'blocked';
+	return Object.hasOwn(PAID_PROVIDER_BUDGET_REASON_SCOPES, reason)
+		? PAID_PROVIDER_BUDGET_REASON_SCOPES[reason as PaidProviderBudgetReason]
+		: 'blocked';
+}
 
 type OperationDocument = {
 	weightUnits: number;
@@ -44,19 +124,31 @@ type PolicyDocument = {
 		publicDailyUnits: number;
 		publicMonthlyUnits: number;
 		actorDailyReservations: Record<PaidProviderTrustTier, number>;
+		actorMonthlyPublicUnits: Record<'authenticated' | 'verified', number>;
 	};
 	operations: Record<string, OperationDocument>;
+	paidOrgCapacity: {
+		operation: string;
+		providerUnitsPerResolve: number;
+		providerCostMicrousdPerResolve: number;
+		revenueAllocationBasisPoints: number;
+		billingAuthority: string;
+	};
 	providerEconomics: {
 		exa: {
 			freeMonthlyCreditMicrousd: number;
 			searchMicrousd: number;
 			contentsPageMicrousd: number;
 			launchBillingAuthority: string;
+			monthlyPaidOrgSpendCeilingMicrousd: number;
+			operatorActivationDependency: string;
 		};
 		firecrawl: {
 			freeMonthlyCredits: number;
 			scrapeCreditsPerAttempt: number;
 			launchBillingAuthority: string;
+			monthlyPaidOrgSpendCeilingCredits: number;
+			operatorActivationDependency: string;
 		};
 		gemini: { launchBillingAuthority: string };
 		groq: { launchBillingAuthority: string };
@@ -80,6 +172,25 @@ const PROVIDER_KEYS = [
 	'gemini',
 	'groq'
 ] as const satisfies readonly (keyof ProviderCallBundle)[];
+
+/**
+ * The provider-backed operations a person can actually consume in one complete
+ * free authoring journey. Each entry is grounded in its production request
+ * caller and the server admission that reserves it; diagnostic-only operations
+ * do not belong in this floor.
+ */
+const FREE_JOURNEY_OPERATIONS = [
+	// UnifiedObjectiveEntry.svelte:320 -> stream-subject/+server.ts:54
+	'subject-line',
+	// DecisionMakerResolver.svelte:130 -> stream-decision-makers/+server.ts:138
+	'decision-makers',
+	// MessageGenerationResolver.svelte:422 -> stream-message/+server.ts:189
+	'message-generation',
+	// personal-connection.ts:33 -> moderation/personalization/+server.ts:72
+	'moderation-personalization',
+	// templates.svelte.ts:14 -> templates/+server.ts:841
+	'template-authoring'
+] as const;
 
 function normalizedProviderBundle(bundle: Partial<ProviderCallBundle>): ProviderCallBundle {
 	return Object.freeze({
@@ -144,6 +255,30 @@ function validatePolicy(): void {
 	for (const tier of PAID_PROVIDER_TRUST_TIERS) {
 		invariant(positiveInteger(policy.caps.actorDailyReservations[tier]), `daily_${tier}`);
 	}
+	// The per-actor monthly share of the public pool is sized in journeys, not in
+	// resolves, so a share can never strand someone between a resolved audience
+	// and an unwritten message.
+	let journeyUnits = 0;
+	for (const operation of FREE_JOURNEY_OPERATIONS) {
+		const journeyOperation = policy.operations[operation];
+		invariant(journeyOperation !== undefined, `journey_operation_${operation}`);
+		invariant(positiveInteger(journeyOperation.weightUnits), `journey_weight_${operation}`);
+		journeyUnits += journeyOperation.weightUnits;
+	}
+	for (const tier of PAID_PROVIDER_PUBLIC_POOL_TIERS) {
+		const share = policy.caps.actorMonthlyPublicUnits[tier];
+		invariant(positiveInteger(share), `actor_monthly_${tier}`);
+		invariant(share >= journeyUnits, `actor_monthly_journey_floor_${tier}`);
+		invariant(
+			share <= PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+			`actor_monthly_pool_ceiling_${tier}`
+		);
+	}
+	invariant(
+		policy.caps.actorMonthlyPublicUnits.authenticated <=
+			policy.caps.actorMonthlyPublicUnits.verified,
+		'actor_monthly_tier_order'
+	);
 	invariant(
 		Object.keys(policy.operations).length > 0 && Object.keys(policy.operations).length <= 16,
 		'operation_count'
@@ -209,18 +344,47 @@ function validatePolicy(): void {
 		}
 	}
 
+	const paidOrgCapacity = policy.paidOrgCapacity;
+	invariant(paidOrgCapacity.operation === 'decision-makers', 'paid_org_operation');
+	invariant(
+		paidOrgCapacity.providerUnitsPerResolve === AGENTIC_RESOLVE_PROVIDER_UNITS &&
+			paidOrgCapacity.providerUnitsPerResolve === policy.operations['decision-makers']?.weightUnits,
+		'paid_org_units'
+	);
+	invariant(
+		paidOrgCapacity.providerCostMicrousdPerResolve === AGENTIC_RESOLVE_PROVIDER_COST_MICROUSD,
+		'paid_org_cost'
+	);
+	invariant(
+		paidOrgCapacity.revenueAllocationBasisPoints ===
+			AGENTIC_PROVIDER_REVENUE_ALLOCATION_BASIS_POINTS &&
+			paidOrgCapacity.revenueAllocationBasisPoints > 0 &&
+			paidOrgCapacity.revenueAllocationBasisPoints < 10_000,
+		'paid_org_revenue_allocation'
+	);
+	invariant(
+		paidOrgCapacity.billingAuthority === 'settled-subscription-payment-only',
+		'paid_org_billing_authority'
+	);
+
 	const economics = policy.providerEconomics;
 	invariant(
 		economics.exa.freeMonthlyCreditMicrousd === EXA_FREE_MONTHLY_CREDIT_MICROUSD &&
 			economics.exa.searchMicrousd === EXA_SEARCH_MICROUSD &&
 			economics.exa.contentsPageMicrousd === EXA_CONTENTS_PAGE_MICROUSD &&
-			economics.exa.launchBillingAuthority === 'free-plan-billing-disabled-no-payg',
+			economics.exa.launchBillingAuthority === PAID_PROVIDER_PAYG_BILLING_AUTHORITY &&
+			economics.exa.monthlyPaidOrgSpendCeilingMicrousd ===
+				EXA_PAID_ORG_MONTHLY_SPEND_CEILING_MICROUSD &&
+			economics.exa.operatorActivationDependency === EXA_OPERATOR_ACTIVATION_DEPENDENCY,
 		'exa_economics'
 	);
 	invariant(
 		economics.firecrawl.freeMonthlyCredits === FIRECRAWL_FREE_MONTHLY_CREDITS &&
 			economics.firecrawl.scrapeCreditsPerAttempt === 1 &&
-			economics.firecrawl.launchBillingAuthority === 'free-plan-billing-disabled-no-payg',
+			economics.firecrawl.launchBillingAuthority === PAID_PROVIDER_PAYG_BILLING_AUTHORITY &&
+			economics.firecrawl.monthlyPaidOrgSpendCeilingCredits ===
+				FIRECRAWL_PAID_ORG_MONTHLY_SPEND_CEILING_CREDITS &&
+			economics.firecrawl.operatorActivationDependency === FIRECRAWL_OPERATOR_ACTIVATION_DEPENDENCY,
 		'firecrawl_economics'
 	);
 	for (const provider of ['gemini', 'groq'] as const) {
@@ -259,8 +423,8 @@ function validatePolicy(): void {
 			envelope.durableObjectDailyRequestFreeLimit === 100_000 &&
 			envelope.sqliteDailyRowsReadFreeLimit === 5_000_000 &&
 			envelope.sqliteDailyRowsWrittenFreeLimit === 100_000 &&
-			envelope.sqliteRowsReadPerAttempt === 8 &&
-			envelope.sqliteRowsWrittenPerAdmission === 8 &&
+			envelope.sqliteRowsReadPerAttempt === 9 &&
+			envelope.sqliteRowsWrittenPerAdmission === 9 &&
 			maximumConvexAdmissions * 2 +
 				maximumProviderAdmissions * envelope.sqliteRowsWrittenPerAdmission <=
 				envelope.sqliteDailyRowsWrittenFreeLimit &&
@@ -274,6 +438,8 @@ validatePolicy();
 
 export type PaidProviderBudgetPolicy = Readonly<{
 	actorDailyReservations: number;
+	/** `null` where the tier draws no public pool at all, never a sentinel count. */
+	actorMonthlyPublicUnits: number | null;
 	hourlyReservations: number;
 	maxProviderCallsPerReservation: number;
 	providerCallBundle: ProviderCallBundle;
@@ -282,6 +448,77 @@ export type PaidProviderBudgetPolicy = Readonly<{
 	publicMonthlyUnits: number;
 	weightUnits: number;
 }>;
+
+export type MarketedCapacityShortfall = Readonly<{
+	exaMicrousd: number;
+	firecrawlCredits: number;
+}>;
+
+export type PaidOrgProviderMonthlyCeilings = Readonly<{
+	exa: Readonly<{ incrementMicrousd: number; limitMicrousd: number }>;
+	firecrawl: Readonly<{ incrementCredits: number; limitCredits: number }>;
+}>;
+
+/** Gross, pre-credit provider draw admitted for one paid-org resolve. */
+export function paidOrgProviderMonthlyCeilings(): PaidOrgProviderMonthlyCeilings {
+	const paidOrgCapacity = policy.paidOrgCapacity;
+	const calls = normalizedProviderBundle(
+		policy.operations[paidOrgCapacity.operation]!.providerCallBundle
+	);
+	const economics = policy.providerEconomics;
+	return Object.freeze({
+		exa: Object.freeze({
+			incrementMicrousd:
+				calls.exaSearch * economics.exa.searchMicrousd +
+				calls.exaContents * economics.exa.contentsPageMicrousd,
+			limitMicrousd: economics.exa.monthlyPaidOrgSpendCeilingMicrousd
+		}),
+		firecrawl: Object.freeze({
+			incrementCredits: calls.firecrawl * economics.firecrawl.scrapeCreditsPerAttempt,
+			limitCredits: economics.firecrawl.monthlyPaidOrgSpendCeilingCredits
+		})
+	});
+}
+
+/**
+ * Provider deficit for one fully-used subscription at each marketed org tier.
+ * This three-plan sample is a floor, not a cap: every additional fully-used
+ * Coalition subscription adds 55,208,000 Exa microusd and 3,296 Firecrawl
+ * credits. PAYG authority makes the operator-set monthly ceilings fundable;
+ * removing that authority returns this function to the free-credit shortfall.
+ * `agenticResolvesMonth` is not currently rendered on any user-facing surface,
+ * so this capacity is declared internally but has not yet been promised to a buyer.
+ */
+export function marketedCapacityShortfall(): MarketedCapacityShortfall {
+	const marketedMonthlyResolves = ORG_PLAN_ORDER.reduce(
+		(total, slug) => total + ORG_PLAN_LIMITS[slug].agenticResolvesMonth,
+		0
+	);
+	const paidOrgCapacity = policy.paidOrgCapacity;
+	const paidOperation = normalizedProviderBundle(
+		policy.operations[paidOrgCapacity.operation]!.providerCallBundle
+	);
+	const economics = policy.providerEconomics;
+	const marketedExaMicrousd =
+		marketedMonthlyResolves *
+		(paidOperation.exaSearch * economics.exa.searchMicrousd +
+			paidOperation.exaContents * economics.exa.contentsPageMicrousd);
+	const marketedFirecrawlCredits =
+		marketedMonthlyResolves * paidOperation.firecrawl * economics.firecrawl.scrapeCreditsPerAttempt;
+	const exaFundableMicrousd =
+		economics.exa.launchBillingAuthority === PAID_PROVIDER_PAYG_BILLING_AUTHORITY
+			? economics.exa.monthlyPaidOrgSpendCeilingMicrousd
+			: economics.exa.freeMonthlyCreditMicrousd;
+	const firecrawlFundableCredits =
+		economics.firecrawl.launchBillingAuthority === PAID_PROVIDER_PAYG_BILLING_AUTHORITY
+			? economics.firecrawl.monthlyPaidOrgSpendCeilingCredits
+			: economics.firecrawl.freeMonthlyCredits;
+
+	return Object.freeze({
+		exaMicrousd: Math.max(0, marketedExaMicrousd - exaFundableMicrousd),
+		firecrawlCredits: Math.max(0, marketedFirecrawlCredits - firecrawlFundableCredits)
+	});
+}
 
 export function paidProviderBudgetPolicyFor(
 	operation: string,
@@ -294,6 +531,8 @@ export function paidProviderBudgetPolicyFor(
 	if (!positiveInteger(hourlyReservations) || !positiveInteger(actorDailyReservations)) return null;
 	return Object.freeze({
 		actorDailyReservations,
+		actorMonthlyPublicUnits:
+			tier === 'operator' ? null : policy.caps.actorMonthlyPublicUnits[tier],
 		hourlyReservations,
 		maxProviderCallsPerReservation: entry.maxProviderCallsPerReservation,
 		providerCallBundle: normalizedProviderBundle(entry.providerCallBundle),

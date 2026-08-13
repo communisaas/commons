@@ -160,6 +160,59 @@ describe('Pages Convex work-budget client', () => {
 		).resolves.toBeUndefined();
 	});
 
+	it('keeps local/test mode usable against a backend that maps to no budget realm', async () => {
+		const runtime = setup(undefined, 'http://127.0.0.1:3210');
+		await expect(
+			reserveConvexWorkForEvent({
+				event: runtime.event,
+				kind: 'query',
+				localBypass: true,
+				operation: 'sessionAuthority:get'
+			})
+		).resolves.toBeUndefined();
+		expect(runtime.fetch).not.toHaveBeenCalled();
+	});
+
+	it('still fails closed on an unrecognised realm when local bypass is off', async () => {
+		const runtime = setup(undefined, 'http://127.0.0.1:3210');
+		await expect(
+			reserveConvexWorkForEvent({
+				event: runtime.event,
+				kind: 'query',
+				localBypass: false,
+				operation: 'sessionAuthority:get'
+			})
+		).rejects.toMatchObject({ rejection: { status: 503 } });
+		expect(runtime.fetch).not.toHaveBeenCalled();
+	});
+
+	it('keeps local/test mode usable when an emulated platform lacks the coordinator', async () => {
+		const runtime = setup();
+		delete runtime.event.platform?.env?.CONVEX_WORK_BUDGET;
+		await expect(
+			reserveConvexWorkForEvent({
+				event: runtime.event,
+				kind: 'query',
+				localBypass: true,
+				operation: 'sessionAuthority:get'
+			})
+		).resolves.toBeUndefined();
+		expect(runtime.fetch).not.toHaveBeenCalled();
+	});
+
+	it('still enforces in local/test mode once the coordinator is bound', async () => {
+		const runtime = setup();
+		await expect(
+			reserveConvexWorkForEvent({
+				event: runtime.event,
+				kind: 'query',
+				localBypass: true,
+				operation: 'sessionAuthority:get'
+			})
+		).resolves.toBeUndefined();
+		expect(runtime.fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it('maps both backends and every schema generation to one stable team coordinator', async () => {
 		expect(convexWorkBudgetRealmForConvexUrl('https://quirky-chinchilla-352.convex.cloud')).toBe(
 			'production'

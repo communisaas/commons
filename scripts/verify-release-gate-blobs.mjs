@@ -4,9 +4,11 @@ import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
+	'.github/CODEOWNERS',
 	'.github/brutalist-allowed-signers',
 	'.github/cloudflare-queue-allowed-signers',
 	'.github/convex-quota-allowed-signers',
+	'.github/paid-provider-posture-allowed-signers',
 	'.github/release-gate/package-lock.json',
 	'.github/release-gate/package.json',
 	// Pinning the tree object rejects any S-only workflow path, mode, or blob.
@@ -20,11 +22,28 @@ export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
 	'.github/workflows/public-template-og-release-recovery.yml',
 	'.node-version',
 	'.npmrc',
+	// Candidate dependencies and build configuration are executable inputs, not
+	// inert metadata. A changed script, plugin, lock graph, TypeScript resolver,
+	// or CSS config can rewrite the server bundle even when every route matches T.
+	'package.json',
+	'package-lock.json',
+	'postcss.config.js',
+	'tailwind.config.ts',
+	'tsconfig.json',
 	'config/anonymous-dynamic-route-cost-inventory.json',
+	'config/brutalist-review-authority.json',
 	'config/cloudflare-pages-dev-origin-closure.json',
 	'config/cloudflare-public-dynamic-rate-limit.json',
 	'config/convex-native-usage-limits.json',
+	'config/convex-paid-provider-egress.json',
 	'config/convex-work-budget-policy.json',
+	'config/paid-provider-account-authority.json',
+	'config/paid-provider-budget-policy.json',
+	'convex.json',
+	// Pin the entire backend tree: an added action or a changed transitive import
+	// is just as capable as an edited reviewed export.
+	'convex',
+	'convex/templates.ts',
 	'docs/strategy/public-discovery-release-hypergraph/edges/blocks.json',
 	'docs/strategy/public-discovery-release-hypergraph/edges/requires.json',
 	'docs/strategy/public-discovery-release-hypergraph/edges/rollback.json',
@@ -33,9 +52,13 @@ export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
 	'scripts/cloudflare-pages-production-control.mjs',
 	'scripts/cloudflare-queue-free-envelope.mjs',
 	'scripts/check-convex-server-work-budget.mjs',
+	'scripts/verify-convex-paid-provider-egress.mjs',
 	'scripts/convex-team-usage-attestation.mjs',
 	'scripts/capture-convex-team-usage-attestation.mjs',
 	'scripts/sign-convex-team-usage-attestation.mjs',
+	'scripts/materialize-paid-provider-pages-secrets.mjs',
+	'scripts/paid-provider-account-posture.mjs',
+	'scripts/sign-paid-provider-account-posture.mjs',
 	'scripts/sign-cloudflare-queue-free-envelope.mjs',
 	'scripts/verify-cloudflare-pages-dev-origin-closure.mjs',
 	'scripts/verify-cloudflare-public-dynamic-rate-limit.mjs',
@@ -58,10 +81,12 @@ export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
 	'scripts/run-public-template-og-release-phase.mjs',
 	'scripts/seed-public-discovery-manifest.mjs',
 	'scripts/verify-brutalist-attestation.mjs',
+	'scripts/verify-brutalist-review-authority.mjs',
 	'scripts/verify-containment-deployment.mjs',
 	'scripts/verify-convex-contained-cron-deployments.mjs',
 	'scripts/verify-convex-native-usage-limits.mjs',
 	'scripts/verify-convex-work-budget-deployment.mjs',
+	'scripts/verify-paid-provider-account-posture.mjs',
 	'scripts/verify-github-release-authority.mjs',
 	'scripts/verify-pages-containment-bindings.mjs',
 	'scripts/verify-pages-deployment-retired.mjs',
@@ -76,12 +101,46 @@ export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
 	'scripts/verify-runtime-neutral-client-realm.mjs',
 	'scripts/verify-trusted-pages-release-edge.mjs',
 	'scripts/verify-trusted-pages-release-origin-response.mjs',
+	// The complete SvelteKit execution tree is the only durable transitive-import
+	// bound. Routes, hooks, universal SSR components, and $lib imports all live
+	// beneath src; enumerating current imports would fail open on the next one.
+	'src',
 	'src/hooks.server.ts',
+	'src/hooks.ts',
+	'src/lib/core/agents',
+	'src/lib/core/search/gemini-embeddings.ts',
+	'src/lib/core/security/rate-limiter.ts',
+	'src/lib/core/server/moderation',
+	'src/lib/components/template-browser/parts/ActionBar.svelte',
+	'src/lib/server/agent-request-envelope.ts',
+	'src/lib/server/agent-request-authority.ts',
+	'src/lib/server/bounded-json-request.ts',
+	'src/lib/server/bounded-response.mjs',
+	'src/lib/server/convex-work-budget-client.ts',
+	'src/lib/server/convex-work-budget-policy.ts',
+	'src/lib/server/delegation/parse-policy.ts',
+	'src/lib/server/exa',
+	'src/lib/server/firecrawl',
+	'src/lib/server/llm-cost-protection.ts',
+	'src/lib/server/paid-provider-budget-client.ts',
+	'src/lib/server/paid-provider-budget-policy.ts',
 	'src/lib/server/production-host-authority.ts',
+	'src/lib/server/rate-limiter.ts',
 	'src/lib/server/public-template-og-operation-budget.mjs',
 	'src/lib/server/public-template-og-queue.ts',
 	'src/routes/api/release-candidate/+server.ts',
 	'src/routes/api/release-origin/+server.ts',
+	// Every SvelteKit route is part of the provider-capability closure. Server
+	// code also executes in non-API +server, +page.server, +layout.server, and
+	// universal route modules, so an API-only tree pin is not a security bound.
+	'src/routes',
+	'svelte.config.js',
+	'vite.config.ts',
+	// Static assets can include browser-executable code and service-worker inputs.
+	'static',
+	// Standalone Worker entrypoints may import sibling helpers. Pinning the tree
+	// closes that transitive source graph for trusted-finalized Workers too.
+	'workers',
 	'workers/trusted-pages-release-edge.ts',
 	'workers/trusted-pages-release-edge-entry.ts',
 	'workers/trusted-pages-release-cache.ts',
@@ -95,10 +154,53 @@ export const TRUSTED_RELEASE_GATE_PATHS = Object.freeze([
 	'wrangler.public-discovery-manifest-gate-nonprod.toml',
 	'wrangler.public-discovery-manifest-gate.toml',
 	'wrangler.public-discovery-manifest.toml',
+	'wrangler.public-discovery-bootstrap.toml',
 	'wrangler.public-template-og.toml',
 	'wrangler.trusted-pages-release-edge-staging.toml',
 	'wrangler.trusted-pages-release-edge.toml',
 	'wrangler.toml'
+]);
+
+// These default SvelteKit/Vite entry candidates are intentionally absent from
+// T. Equality alone cannot pin an absent Git path, so the verifier separately
+// proves that S did not add an earlier-resolving config, alternate hook, or
+// server instrumentation module.
+export const TRUSTED_RELEASE_GATE_ABSENT_PATHS = Object.freeze([
+	// Vite build mode is production. A source-only env file can rewrite public
+	// build inputs without changing the pinned workflow or configuration.
+	'.env',
+	'.env.local',
+	'.env.production',
+	'.env.production.local',
+	// Alternate auto-discovered build configs must not outrank or supplement T.
+	'postcss.config.cjs',
+	'postcss.config.mjs',
+	'postcss.config.ts',
+	'postcss.config.cts',
+	'postcss.config.mts',
+	'.postcssrc',
+	'.postcssrc.json',
+	'.postcssrc.yaml',
+	'.postcssrc.yml',
+	'.postcssrc.js',
+	'.postcssrc.cjs',
+	'.postcssrc.mjs',
+	'.postcssrc.ts',
+	'svelte.config.cjs',
+	'svelte.config.mjs',
+	'svelte.config.ts',
+	'src/hooks',
+	'src/hooks.js',
+	'src/hooks.server',
+	'src/hooks.server.js',
+	'src/instrumentation.server',
+	'src/instrumentation.server.js',
+	'src/instrumentation.server.ts',
+	'vite.config.js',
+	'vite.config.mjs',
+	'vite.config.cjs',
+	'vite.config.mts',
+	'vite.config.cts'
 ]);
 
 /** @param {unknown} condition @param {string} message @returns {asserts condition} */
@@ -116,6 +218,14 @@ export function verifyReleaseGateBlobIdentity({ trustedSha, sourceSha, readBlobI
 		new Set(TRUSTED_RELEASE_GATE_PATHS).size === TRUSTED_RELEASE_GATE_PATHS.length,
 		'Trusted release gate allowlist contains a duplicate path.'
 	);
+	invariant(
+		new Set(TRUSTED_RELEASE_GATE_ABSENT_PATHS).size === TRUSTED_RELEASE_GATE_ABSENT_PATHS.length,
+		'Trusted release gate absence list contains a duplicate path.'
+	);
+	invariant(
+		TRUSTED_RELEASE_GATE_ABSENT_PATHS.every((path) => !TRUSTED_RELEASE_GATE_PATHS.includes(path)),
+		'Trusted release gate required and absent paths overlap.'
+	);
 	for (const path of TRUSTED_RELEASE_GATE_PATHS) {
 		const trustedBlob = readBlobId(trustedSha, path);
 		const sourceBlob = readBlobId(sourceSha, path);
@@ -123,7 +233,18 @@ export function verifyReleaseGateBlobIdentity({ trustedSha, sourceSha, readBlobI
 		invariant(/^[a-f0-9]{40,64}$/.test(sourceBlob), `Source gate object is missing: ${path}.`);
 		invariant(sourceBlob === trustedBlob, `Source changed trusted release gate object: ${path}.`);
 	}
-	return { trustedSha, sourceSha, paths: TRUSTED_RELEASE_GATE_PATHS.length };
+	for (const path of TRUSTED_RELEASE_GATE_ABSENT_PATHS) {
+		const trustedBlob = readBlobId(trustedSha, path);
+		const sourceBlob = readBlobId(sourceSha, path);
+		invariant(trustedBlob === '', `Trusted gate absence path is present: ${path}.`);
+		invariant(sourceBlob === '', `Source added trusted release gate execution entry: ${path}.`);
+	}
+	return {
+		trustedSha,
+		sourceSha,
+		paths: TRUSTED_RELEASE_GATE_PATHS.length,
+		absentPaths: TRUSTED_RELEASE_GATE_ABSENT_PATHS.length
+	};
 }
 
 /** @param {string[]} argv */

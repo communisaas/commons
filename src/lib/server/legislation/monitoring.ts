@@ -6,7 +6,7 @@
  */
 
 /** Per-unit cost estimates (USD) */
-const COST_PER_EMBEDDING = 0.00001; // Gemini text-embedding-004, 768-dim
+const COST_PER_EMBEDDING = 0.00001; // Legacy planning estimate; runtime budget authority is provider-unit based.
 
 export interface CostSummary {
 	api_calls: {

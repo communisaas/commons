@@ -201,7 +201,7 @@ export function validatePaidProviderAccountAuthority(rawAuthority) {
 	const requiredLimitations = [
 		'Provider console/account facts are operator assertions countersigned by the independent posture signer; this verifier does not query provider billing APIs.',
 		'Cloudflare does not reveal deployed secret values; the operator and signer assert the protected credential inputs are the exact production Pages secrets.',
-		'Current usage may lag provider billing; all-provider Free plans with billing and pay-as-you-go disabled, not usage or delayed spend caps, are the zero-out-of-pocket cost boundary.'
+		"Current usage may lag provider billing; Exa and Firecrawl pay-as-you-go authority is bounded by Commons' monthly Durable Object ceilings, while Gemini and Groq remain on Free plans with billing and pay-as-you-go disabled."
 	];
 	invariant(
 		JSON.stringify(authority.requiredLimitations) === JSON.stringify(requiredLimitations),
@@ -213,35 +213,35 @@ export function validatePaidProviderAccountAuthority(rawAuthority) {
 			JSON.stringify(PAID_PROVIDER_POSTURE_PROVIDERS),
 		'authority_provider_order'
 	);
-	/** @type {Record<string,{credentialSecretName:string,usageMetric:string,includedLimit:string|null,minimumRemaining:string,allowedZeroCostControls:string[]}>} */
+	/** @type {Record<string,{credentialSecretName:string,usageMetric:string,windowLimit:string|null,minimumRemaining:string,allowedBillingControls:string[]}>} */
 	const expected = {
 		exa: {
 			credentialSecretName: 'EXA_API_KEY',
-			usageMetric: 'monthly-credit-microusd',
-			includedLimit: '10000000',
-			minimumRemaining: '8448000',
-			allowedZeroCostControls: ['free-no-payg']
+			usageMetric: 'monthly-spend-microusd',
+			windowLimit: '100000000',
+			minimumRemaining: '0',
+			allowedBillingControls: ['payg-platform-monthly-ceiling']
 		},
 		firecrawl: {
 			credentialSecretName: 'FIRECRAWL_API_KEY',
 			usageMetric: 'monthly-credits',
-			includedLimit: '1000',
-			minimumRemaining: '576',
-			allowedZeroCostControls: ['free-no-payg']
+			windowLimit: '6000',
+			minimumRemaining: '0',
+			allowedBillingControls: ['payg-platform-monthly-ceiling']
 		},
 		gemini: {
 			credentialSecretName: 'GEMINI_API_KEY',
 			usageMetric: 'current-period-requests',
-			includedLimit: null,
+			windowLimit: null,
 			minimumRemaining: '16',
-			allowedZeroCostControls: ['free-no-payg']
+			allowedBillingControls: ['free-no-payg']
 		},
 		groq: {
 			credentialSecretName: 'GROQ_API_KEY',
 			usageMetric: 'current-period-requests',
-			includedLimit: null,
+			windowLimit: null,
 			minimumRemaining: '9',
-			allowedZeroCostControls: ['free-no-payg']
+			allowedBillingControls: ['free-no-payg']
 		}
 	};
 	for (const rawProvider of authority.providers) {
@@ -250,13 +250,13 @@ export function validatePaidProviderAccountAuthority(rawAuthority) {
 		exactKeys(
 			provider,
 			[
-				'allowedZeroCostControls',
+				'allowedBillingControls',
 				'credentialBinding',
 				'credentialSecretName',
-				'includedLimit',
 				'minimumRemaining',
 				'provider',
-				'usageMetric'
+				'usageMetric',
+				'windowLimit'
 			],
 			`authority_${provider.provider}`
 		);
@@ -270,13 +270,13 @@ export function validatePaidProviderAccountAuthority(rawAuthority) {
 		invariant(
 			provider.credentialSecretName === providerExpected.credentialSecretName &&
 				provider.usageMetric === providerExpected.usageMetric &&
-				provider.includedLimit === providerExpected.includedLimit &&
+				provider.windowLimit === providerExpected.windowLimit &&
 				provider.minimumRemaining === providerExpected.minimumRemaining,
 			`authority_${provider.provider}_provider_policy`
 		);
 		invariant(
-			JSON.stringify(provider.allowedZeroCostControls) ===
-				JSON.stringify(providerExpected.allowedZeroCostControls),
+			JSON.stringify(provider.allowedBillingControls) ===
+				JSON.stringify(providerExpected.allowedBillingControls),
 			`authority_${provider.provider}_controls`
 		);
 	}
@@ -467,15 +467,14 @@ export function validateProviderAccountPostureReceipt({
 		exactKeys(
 			account,
 			[
+				'billingControl',
+				'billingControlPersistence',
 				'billingEnabled',
-				'currentOutOfPocketSpendMicrousd',
 				'fingerprint',
 				'fingerprintAlgorithm',
+				'monthlyTechnicalCeiling',
 				'payAsYouGoEnabled',
-				'plan',
-				'providerEnforcedOutOfPocketSpendCapMicrousd',
-				'zeroCostControl',
-				'zeroCostControlPersistence'
+				'plan'
 			],
 			`${provider.provider}_account`
 		);
@@ -492,20 +491,32 @@ export function validateProviderAccountPostureReceipt({
 			`${provider.provider}_account_fingerprint`
 		);
 		invariant(
-			providerPolicy.allowedZeroCostControls.includes(account.zeroCostControl),
-			`${provider.provider}_zero_cost_control`
+			providerPolicy.allowedBillingControls.includes(account.billingControl),
+			`${provider.provider}_billing_control`
 		);
-		invariant(
-			typeof account.billingEnabled === 'boolean' &&
-				account.payAsYouGoEnabled === false &&
-				account.currentOutOfPocketSpendMicrousd === '0' &&
-				account.providerEnforcedOutOfPocketSpendCapMicrousd === '0' &&
-				account.zeroCostControlPersistence === 'provider-enforced-until-account-mutation',
-			`${provider.provider}_zero_spend_posture`
+		const monthlyTechnicalCeiling = decimalBigInt(
+			account.monthlyTechnicalCeiling,
+			`${provider.provider}_monthly_technical_ceiling`
 		);
-		if (account.zeroCostControl === 'free-no-payg') {
+		if (account.billingControl === 'payg-platform-monthly-ceiling') {
 			invariant(
-				account.plan === 'free' && account.billingEnabled === false,
+				account.billingEnabled === true &&
+					account.payAsYouGoEnabled === true &&
+					account.plan !== 'free' &&
+					account.billingControlPersistence ===
+						'commons-durable-object-enforced-until-policy-mutation' &&
+					providerPolicy.windowLimit !== null &&
+					monthlyTechnicalCeiling === BigInt(providerPolicy.windowLimit),
+				`${provider.provider}_payg_posture`
+			);
+		} else {
+			invariant(
+				account.billingControl === 'free-no-payg' &&
+					account.plan === 'free' &&
+					account.billingEnabled === false &&
+					account.payAsYouGoEnabled === false &&
+					monthlyTechnicalCeiling === 0n &&
+					account.billingControlPersistence === 'provider-enforced-until-account-mutation',
 				`${provider.provider}_free_posture`
 			);
 		}
@@ -517,10 +528,10 @@ export function validateProviderAccountPostureReceipt({
 			[
 				'current',
 				'headroomRole',
-				'includedLimit',
 				'metric',
 				'observedAt',
 				'remaining',
+				'windowLimit',
 				'windowResetsAt',
 				'windowStartsAt'
 			],
@@ -528,22 +539,18 @@ export function validateProviderAccountPostureReceipt({
 		);
 		invariant(
 			usage.metric === providerPolicy.usageMetric &&
-				usage.headroomRole ===
-					'observation-time-availability-signal-not-demo-guarantee-or-cost-authority',
+				usage.headroomRole === 'observation-time-availability-within-reviewed-billing-control',
 			`${provider.provider}_usage_metric`
 		);
 		const current = decimalBigInt(usage.current, `${provider.provider}_usage_current`);
-		const included = decimalBigInt(
-			usage.includedLimit,
-			`${provider.provider}_usage_included_limit`
-		);
+		const windowLimit = decimalBigInt(usage.windowLimit, `${provider.provider}_usage_window_limit`);
 		const remaining = decimalBigInt(usage.remaining, `${provider.provider}_usage_remaining`);
 		invariant(
-			included > 0n && current + remaining === included,
+			windowLimit > 0n && current + remaining === windowLimit,
 			`${provider.provider}_usage_reconciliation`
 		);
-		if (providerPolicy.includedLimit !== null) {
-			invariant(usage.includedLimit === providerPolicy.includedLimit, `${provider.provider}_limit`);
+		if (providerPolicy.windowLimit !== null) {
+			invariant(usage.windowLimit === providerPolicy.windowLimit, `${provider.provider}_limit`);
 		}
 		invariant(
 			remaining >= BigInt(providerPolicy.minimumRemaining),

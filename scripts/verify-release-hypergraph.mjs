@@ -18,6 +18,14 @@ const GRAPH_DOCUMENT_PATHS = {
 	rollback: 'edges/rollback.json'
 };
 const SHA_RE = /^[a-f0-9]{40}$/;
+const REQUIRED_RESIDUAL_FOUNDATIONS = ['FND-51', 'FND-52', 'FND-53', 'FND-54', 'FND-55'];
+const REQUIRED_RESIDUAL_COST_EDGES = [
+	['FND-40B', 'FND-51'],
+	['FND-40B', 'FND-52'],
+	['FND-40B', 'FND-53'],
+	['FND-54', 'FND-40B'],
+	['FND-40B', 'FND-55']
+];
 
 /** @typedef {{ source: string, target: string, [key: string]: unknown }} GraphEdge */
 /** @typedef {{ type: string, edges: GraphEdge[] }} EdgeDocument */
@@ -279,6 +287,23 @@ export function validateReleaseHypergraphDocuments(
 					(edge) => edge.source === task.id && edge.target === 'FND-60'
 				),
 				`${task.id} must have a ${kind} edge to FND-60.`
+			);
+		}
+	}
+	for (const id of REQUIRED_RESIDUAL_FOUNDATIONS) {
+		invariant(taskById.has(id), `Missing launch-residual foundation ${id}.`);
+		for (const kind of ['blocks', 'requires']) {
+			invariant(
+				edgeDocuments[kind].edges.some((edge) => edge.source === id && edge.target === 'PD-10'),
+				`${id} must have a ${kind} edge to PD-10.`
+			);
+		}
+	}
+	for (const [source, target] of REQUIRED_RESIDUAL_COST_EDGES) {
+		for (const kind of ['blocks', 'requires']) {
+			invariant(
+				edgeDocuments[kind].edges.some((edge) => edge.source === source && edge.target === target),
+				`Residual cost topology requires ${kind}:${source}:${target}.`
 			);
 		}
 	}

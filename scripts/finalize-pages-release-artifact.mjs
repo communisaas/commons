@@ -84,7 +84,7 @@ const PINNED_OPTIONAL_DEPENDENCY_STUBS = [
 			'throw new Error("Optional dependency redis is unavailable in this canonical Pages artifact.");\nexport {};\n',
 		compiledInput: 'output/server/chunks/rate-limiter.js',
 		contractStart: '\tasync connect() {',
-		contractEnd: '\n\tasync getTimestamps',
+		contractEnd: '\n\tasync reserve',
 		contractSha256: 'a7a3f92c0bfcd0ae03cf99e85d99ef96e20e80e832ba65ca6929444d25709310'
 	},
 	{

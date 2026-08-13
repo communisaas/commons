@@ -19,6 +19,12 @@ const FORBIDDEN_BINDING_KEYS = Object.freeze([
 	'vectorize_bindings',
 	'workflows'
 ]);
+const FORBIDDEN_PROVIDER_SECRET_NAMES = Object.freeze([
+	'EXA_API_KEY',
+	'FIRECRAWL_API_KEY',
+	'GEMINI_API_KEY',
+	'GROQ_API_KEY'
+]);
 
 /** @param {unknown} condition @param {string} message @returns {asserts condition} */
 function invariant(condition, message) {
@@ -41,9 +47,9 @@ function bindingCollectionIsEmpty(value) {
 /**
  * This is a configuration-only proof. It calls the Pages control plane but no
  * application binding, storage service, Convex deployment, or Atlas endpoint.
- * @param {{pagesProject: unknown, environment: 'preview'|'production'}} input
+ * @param {{pagesProject: unknown, environment: 'preview'|'production', activeDeployment?:unknown}} input
  */
-export function validatePagesContainmentBindings({ pagesProject, environment }) {
+export function validatePagesContainmentBindings({ pagesProject, environment, activeDeployment }) {
 	invariant(
 		environment === 'preview' || environment === 'production',
 		'Invalid Pages environment.'
@@ -68,9 +74,36 @@ export function validatePagesContainmentBindings({ pagesProject, environment }) 
 	);
 	for (const [name, binding] of Object.entries(record(envVars) ?? {})) {
 		invariant(
+			!FORBIDDEN_PROVIDER_SECRET_NAMES.includes(name),
+			`Pages ${environment} containment must not retain provider capability ${name}.`
+		);
+		invariant(
 			record(binding)?.type === 'secret_text',
 			`Pages ${environment} containment must not retain plain-text variable ${name}.`
 		);
+	}
+	if (environment === 'production') {
+		const canonicalId = record(pagesResult?.canonical_deployment)?.id;
+		invariant(
+			typeof canonicalId === 'string' && /^[a-f0-9-]{32,36}$/u.test(canonicalId),
+			'Pages production canonical deployment id is invalid.'
+		);
+		const deployment = record(record(activeDeployment)?.result);
+		invariant(
+			deployment?.id === canonicalId && deployment.environment === 'production',
+			'Pages production containment deployment is not the exact active canonical.'
+		);
+		const deploymentEnvVars = record(deployment.env_vars);
+		invariant(
+			deploymentEnvVars !== null,
+			'Pages production containment deployment env_vars are missing.'
+		);
+		for (const name of FORBIDDEN_PROVIDER_SECRET_NAMES) {
+			invariant(
+				deploymentEnvVars[name] === undefined,
+				`Pages production immutable containment must not retain provider capability ${name}.`
+			);
+		}
 	}
 
 	return {
@@ -129,8 +162,34 @@ export async function verifyPagesContainmentBindings({
 		}
 	);
 	invariant(response.ok, `Pages project settings returned HTTP ${response.status}.`);
+	const project = await readBoundedResponseJson(response, 'Pages project settings response');
+	let activeDeployment;
+	if (environment === 'production') {
+		const canonicalId = record(record(project)?.result)?.canonical_deployment?.id;
+		invariant(
+			typeof canonicalId === 'string' && /^[a-f0-9-]{32,36}$/u.test(canonicalId),
+			'Pages production canonical deployment id is invalid.'
+		);
+		const deploymentResponse = await fetchFn(
+			`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/pages/projects/${encodeURIComponent(pagesProject)}/deployments/${encodeURIComponent(canonicalId)}`,
+			{
+				headers: { Authorization: `Bearer ${apiToken}` },
+				redirect: 'error',
+				signal: AbortSignal.timeout(15_000)
+			}
+		);
+		invariant(
+			deploymentResponse.ok,
+			`Pages canonical deployment returned HTTP ${deploymentResponse.status}.`
+		);
+		activeDeployment = await readBoundedResponseJson(
+			deploymentResponse,
+			'Pages canonical deployment response'
+		);
+	}
 	return validatePagesContainmentBindings({
-		pagesProject: await readBoundedResponseJson(response, 'Pages project settings response'),
+		activeDeployment,
+		pagesProject: project,
 		environment
 	});
 }

@@ -143,7 +143,6 @@ describe('coalition aggregates (convex/networks.ts)', () => {
 			decisionMakerId: 'dm-1',
 			dmName: 'Representative',
 			orgCount: 2,
-			combinedProofWeight: 7,
 			receiptCount: 1,
 			bills: [],
 			latestReceiptAt: 100

@@ -6,23 +6,6 @@
  * into a composite accountability score per decision-maker per org.
  */
 
-export interface ProofWeightedScore {
-	/** Proof-weighted alignment: Σ(alignment × proofWeight) / Σ(proofWeight) */
-	weightedAlignment: number;
-	/** Average proof weight of all receipts for this DM */
-	avgProofWeight: number;
-	/** Fraction of receipts with strong/moderate causality */
-	causalityRate: number;
-	/** Total verified constituents across all receipts */
-	totalVerifiedConstituents: number;
-	/** Number of bills with receipts */
-	billCount: number;
-	/** Conventional responsiveness retained */
-	responsiveness: number;
-	/** Composite normalized to 0-100 for backward compat */
-	composite: number;
-}
-
 export interface DecisionMakerScore {
 	name: string;
 	title: string;
@@ -45,9 +28,6 @@ export interface DecisionMakerScore {
 
 	// Composite (0-100). Null when no scorecard snapshot exists.
 	score: number | null;
-
-	/** Proof-weighted score (null if no accountability receipts exist) */
-	proofWeighted: ProofWeightedScore | null;
 }
 
 export interface ScorecardResult {

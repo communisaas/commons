@@ -181,7 +181,7 @@ if (isMain) {
 			)
 		});
 		console.log(
-			`Verified zero-cost paid-provider posture for ${result.providerCount} providers at ${result.sourceSha}; expires=${result.expiresAt}; signer=${result.signature.keyFingerprint}`
+			`Verified bounded paid-provider posture for ${result.providerCount} providers at ${result.sourceSha}; expires=${result.expiresAt}; signer=${result.signature.keyFingerprint}`
 		);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : String(error));

@@ -45,7 +45,7 @@ const POLICY_PARSE_SCHEMA = {
 		requireReviewAbove: {
 			type: 'number' as const,
 			description:
-				'Proof weight threshold above which human review is required. Default 10.'
+				'Action-magnitude threshold above which human review is required. Default 10.'
 		}
 	},
 	required: ['scope', 'issueFilter', 'orgFilter', 'maxActionsPerDay', 'requireReviewAbove']
@@ -85,9 +85,11 @@ export async function parsePolicy(policyText: string): Promise<ParsedPolicy> {
 	const prompt = `Parse this delegation policy into structured constraints:\n\n"${policyText}"`;
 
 	const response = await generate(prompt, {
+		stage: 'delegation-policy',
 		systemInstruction: SYSTEM_INSTRUCTION,
 		responseSchema: POLICY_PARSE_SCHEMA,
-		temperature: 0.1
+		temperature: 0.1,
+		thinkingLevel: 'low'
 	});
 
 	const text = response.text;

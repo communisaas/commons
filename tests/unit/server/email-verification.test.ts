@@ -25,23 +25,28 @@ afterEach(() => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build a DOH JSON response with MX records. */
+/**
+ * Build a DOH JSON response with MX records. `Status: 0` is NOERROR — real
+ * Cloudflare always carries a numeric RCODE, and the module now gates on it.
+ */
 function mxResponse(domain: string) {
 	return {
+		Status: 0,
 		Answer: [
 			{ name: domain, type: 15, data: `10 mail.${domain}` }
 		]
 	};
 }
 
-/** Build a DOH JSON response with no MX records (e.g., NXDOMAIN). */
+/** Build a NOERROR DOH JSON response carrying no MX records. */
 function noMxResponse() {
-	return { Answer: [] };
+	return { Status: 0, Answer: [] };
 }
 
-/** Build a DOH JSON response with only non-MX records. */
+/** Build a NOERROR DOH JSON response with only non-MX records. */
 function nonMxResponse() {
 	return {
+		Status: 0,
 		Answer: [
 			{ name: 'example.com', type: 1, data: '93.184.216.34' } // A record, not MX
 		]
@@ -75,6 +80,8 @@ describe('verifyEmailBatch', () => {
 		// 'risky' not 'deliverable' — MX proves the domain exists, not the mailbox
 		expect(results.get('mayor@sfgov.org')?.verdict).toBe('risky');
 		expect(results.get('mayor@sfgov.org')?.reason).toContain('MX lookup passed');
+		// A DNS answer was actually parsed — this is an observation, not a block
+		expect(results.get('mayor@sfgov.org')?.mxObserved).toBe(true);
 	});
 
 	it('marks email as undeliverable when domain has no MX records', async () => {
@@ -107,6 +114,9 @@ describe('verifyEmailBatch', () => {
 
 		// Fail open — don't block the pipeline, but verdict is honest
 		expect(results.get('user@example.com')?.verdict).toBe('risky');
+		// Blocked, not absent: nothing was observed, so nothing may be persisted
+		expect(results.get('user@example.com')?.mxObserved).toBe(false);
+		expect(results.get('user@example.com')?.reason).toContain('MX lookup unavailable');
 	});
 
 	it('fails open (risky) when fetch throws (timeout/network error)', async () => {
@@ -115,6 +125,136 @@ describe('verifyEmailBatch', () => {
 		const results = await verifyEmailBatch(['user@example.com']);
 
 		expect(results.get('user@example.com')?.verdict).toBe('risky');
+		expect(results.get('user@example.com')?.mxObserved).toBe(false);
+		expect(results.get('user@example.com')?.reason).toContain('MX lookup unavailable');
+	});
+
+	// -------------------------------------------------------------------------
+	// DNS response codes. Only NOERROR (0) and NXDOMAIN (3) mean the resolver
+	// answered the question; every other RCODE is a failed lookup wearing a 200.
+	// Reading one as "no MX records" would delete a reachable recipient.
+	// -------------------------------------------------------------------------
+
+	/** Serve a DOH body verbatim with a 200, the way a resolver failure arrives. */
+	function serve(body: unknown) {
+		vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+			new Response(JSON.stringify(body), { status: 200 })
+		);
+	}
+
+	it('treats SERVFAIL (Status 2) as blocked, not as an absence', async () => {
+		serve({ Status: 2 });
+
+		const results = await verifyEmailBatch(['user@example.com']);
+
+		expect(results.get('user@example.com')?.verdict).toBe('risky');
+		expect(results.get('user@example.com')?.mxObserved).toBe(false);
+		expect(results.get('user@example.com')?.reason).toContain('MX lookup unavailable');
+	});
+
+	it('treats REFUSED (Status 5) as blocked, not as an absence', async () => {
+		serve({ Status: 5 });
+
+		const results = await verifyEmailBatch(['user@example.com']);
+
+		expect(results.get('user@example.com')?.verdict).toBe('risky');
+		expect(results.get('user@example.com')?.mxObserved).toBe(false);
+		expect(results.get('user@example.com')?.reason).toContain('MX lookup unavailable');
+	});
+
+	it('treats NXDOMAIN (Status 3) as a real observed absence', async () => {
+		// Real Cloudflare omits `Answer` entirely on NXDOMAIN.
+		serve({ Status: 3 });
+
+		const results = await verifyEmailBatch(['user@no-such-domain.fake']);
+
+		expect(results.get('user@no-such-domain.fake')?.verdict).toBe('undeliverable');
+		expect(results.get('user@no-such-domain.fake')?.mxObserved).toBe(true);
+	});
+
+	it('treats NOERROR with no Answer as a real observed absence', async () => {
+		serve({ Status: 0 });
+
+		const results = await verifyEmailBatch(['user@no-mail.example']);
+
+		expect(results.get('user@no-mail.example')?.verdict).toBe('undeliverable');
+		expect(results.get('user@no-mail.example')?.mxObserved).toBe(true);
+	});
+
+	it('treats a 200 body with no DNS status as blocked (proxy interstitial)', async () => {
+		serve({});
+
+		const results = await verifyEmailBatch(['user@example.com']);
+
+		expect(results.get('user@example.com')?.verdict).toBe('risky');
+		expect(results.get('user@example.com')?.mxObserved).toBe(false);
+		expect(results.get('user@example.com')?.reason).toContain('MX lookup unavailable');
+	});
+
+	it('does not memoize a blocked lookup — a later resolution retries', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValueOnce(new Response('Service Unavailable', { status: 503 }))
+			.mockResolvedValueOnce(
+				new Response(JSON.stringify(mxResponse('example.com')), { status: 200 })
+			);
+
+		const first = await verifyEmailBatch(['user@example.com']);
+		expect(first.get('user@example.com')?.mxObserved).toBe(false);
+
+		// Same module instance, same domain: the non-observation must not have
+		// been cached, so a DNS incident cannot pin the domain for the isolate.
+		const second = await verifyEmailBatch(['user@example.com']);
+
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+		expect(second.get('user@example.com')?.mxObserved).toBe(true);
+		expect(second.get('user@example.com')?.verdict).toBe('risky');
+	});
+
+	it('caps MX lookups at maxDomains distinct domains without dropping addresses', async () => {
+		// Fresh Response per call — a Response body is consumable exactly once
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockImplementation(
+				async () => new Response(JSON.stringify(mxResponse('first.org')), { status: 200 })
+			);
+
+		const results = await verifyEmailBatch(
+			['a@first.org', 'b@second.org', 'c@third.org', 'd@fourth.org'],
+			{ maxDomains: 2 }
+		);
+
+		// Exactly two domains admitted → exactly two DOH calls
+		expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+		expect(results.get('a@first.org')?.mxObserved).toBe(true);
+		expect(results.get('b@second.org')?.mxObserved).toBe(true);
+
+		// Ceiling-skipped addresses stay in the map and stay risky — never dropped,
+		// never 'undeliverable'
+		for (const email of ['c@third.org', 'd@fourth.org']) {
+			expect(results.has(email), email).toBe(true);
+			expect(results.get(email)?.verdict, email).toBe('risky');
+			expect(results.get(email)?.mxObserved, email).toBe(false);
+			expect(results.get(email)?.reason, email).toContain('domain ceiling reached');
+		}
+	});
+
+	it('counts the maxDomains ceiling by domain, not by address', async () => {
+		const fetchSpy = vi
+			.spyOn(globalThis, 'fetch')
+			.mockResolvedValue(new Response(JSON.stringify(mxResponse('sfgov.org')), { status: 200 }));
+
+		const emails = Array.from({ length: 8 }, (_, i) => `person${i}@sfgov.org`);
+		const results = await verifyEmailBatch(emails, { maxDomains: 2 });
+
+		// Eight addresses, one domain — the memo makes the extras free
+		expect(fetchSpy).toHaveBeenCalledTimes(1);
+		expect(results.size).toBe(8);
+		for (const email of emails) {
+			expect(results.get(email)?.verdict, email).toBe('risky');
+			expect(results.get(email)?.mxObserved, email).toBe(true);
+		}
 	});
 
 	it('deduplicates DOH requests for the same domain', async () => {

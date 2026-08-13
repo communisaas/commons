@@ -1,4 +1,5 @@
 import type { RequestEvent } from '@sveltejs/kit';
+import { blocked, present, type Fact } from '$lib/core/fact';
 import { convexWorkBudgetRealmForConvexUrl } from '$lib/server/convex-work-budget-client';
 import type { ConvexWorkBudgetRealm } from '$lib/server/convex-work-budget-policy';
 import {
@@ -8,8 +9,12 @@ import {
 	PAID_PROVIDER_BUDGET_PROTOCOL,
 	PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS,
 	PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+	EXA_PAID_ORG_MONTHLY_CEILING_REASON,
+	FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON,
+	budgetScopeForReason,
 	paidProviderBudgetOperationNames,
 	paidProviderBudgetPolicyFor,
+	type PaidProviderBudgetScope,
 	type PaidProviderTrustTier
 } from '$lib/server/paid-provider-budget-policy';
 
@@ -21,13 +26,23 @@ const STATUS_MAXIMUM_BYTES = 16 * 1024;
 
 type ProviderBudgetEvent = Pick<RequestEvent, 'platform'>;
 
+export type PaidOrgProviderGrant = Readonly<{
+	orgId: string;
+	balanceUnits: number;
+	periodStart: number;
+	periodEnd: number;
+}>;
+
 export type PaidProviderBudgetResult = Readonly<{
 	allowed: boolean;
 	remaining: number;
 	limit: number;
 	resetAt: Date;
 	status: 200 | 429 | 503;
+	providerCeiling: Fact<Readonly<{ withinMonthlyCeilings: true }>>;
 	reason?: string;
+	/** Whose capacity ran out. Omitted where nothing ran out at all. */
+	budgetScope?: PaidProviderBudgetScope;
 }>;
 
 export type PaidProviderBudgetBalance = Readonly<{
@@ -75,8 +90,20 @@ function unavailable(): PaidProviderBudgetResult {
 		limit: 0,
 		resetAt: new Date(Date.now() + 60_000),
 		status: 503,
-		reason: 'AI capacity is temporarily unavailable. Please try again shortly.'
+		providerCeiling: blocked('paid-provider-monthly-ceiling-admission-unavailable'),
+		reason: 'AI capacity is temporarily unavailable. Please try again shortly.',
+		budgetScope: 'blocked'
 	});
+}
+
+export function paidProviderMonthlyCeilingWasReached(
+	fact: Fact<Readonly<{ withinMonthlyCeilings: true }>>
+): boolean {
+	return (
+		fact.state === 'blocked' &&
+		(fact.why === EXA_PAID_ORG_MONTHLY_CEILING_REASON ||
+			fact.why === FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON)
+	);
 }
 
 function nonNegativeInteger(value: string | null): number | null {
@@ -334,6 +361,13 @@ export async function paidProviderActorHash(identifier: string): Promise<string 
 	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+async function paidProviderOrgHash(orgId: string): Promise<string | null> {
+	if (orgId.length < 1 || orgId.length > 512) return null;
+	const bytes = new TextEncoder().encode(`commons:paid-provider-org:v1:${orgId}`);
+	const digest = await crypto.subtle.digest('SHA-256', bytes);
+	return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
 function realmFor(event: ProviderBudgetEvent): ConvexWorkBudgetRealm | null {
 	return convexWorkBudgetRealmForConvexUrl(event.platform?.env?.PUBLIC_CONVEX_URL);
 }
@@ -343,6 +377,7 @@ export async function reservePaidProviderBudget(input: {
 	identifier: string;
 	operation: string;
 	tier: PaidProviderTrustTier;
+	paidOrg?: PaidOrgProviderGrant;
 	timeoutMs?: number;
 }): Promise<PaidProviderBudgetResult> {
 	const reviewed = paidProviderBudgetPolicyFor(input.operation, input.tier);
@@ -350,14 +385,46 @@ export async function reservePaidProviderBudget(input: {
 	const namespace = input.event.platform?.env?.CONVEX_WORK_BUDGET;
 	const realm = realmFor(input.event);
 	const actorHash = await paidProviderActorHash(input.identifier);
-	if (!namespace || !realm || !actorHash) return unavailable();
+	const paidOrg = input.paidOrg;
+	const orgHash = paidOrg ? await paidProviderOrgHash(paidOrg.orgId) : null;
+	if (
+		!namespace ||
+		!realm ||
+		!actorHash ||
+		(paidOrg !== undefined &&
+			(!orgHash ||
+				input.operation !== 'decision-makers' ||
+				!Number.isSafeInteger(paidOrg.balanceUnits) ||
+				paidOrg.balanceUnits <= 0 ||
+				!Number.isSafeInteger(paidOrg.periodStart) ||
+				!Number.isSafeInteger(paidOrg.periodEnd) ||
+				paidOrg.periodStart < 0 ||
+				paidOrg.periodEnd <= paidOrg.periodStart))
+	) {
+		return unavailable();
+	}
 
 	let response: Response;
 	try {
 		const id = namespace.idFromName(paidProviderBudgetCoordinatorName());
 		response = await namespace.get(id).fetch(
 			new Request(RESERVATION_URL, {
-				body: JSON.stringify({ actorHash, operation: input.operation, realm, tier: input.tier }),
+				body: JSON.stringify({
+					actorHash,
+					operation: input.operation,
+					realm,
+					tier: input.tier,
+					...(paidOrg && orgHash
+						? {
+								paidOrg: {
+									orgHash,
+									balanceUnits: paidOrg.balanceUnits,
+									periodStart: paidOrg.periodStart,
+									periodEnd: paidOrg.periodEnd
+								}
+							}
+						: {})
+				}),
 				headers: {
 					'content-type': 'application/json',
 					[PAID_PROVIDER_BUDGET_PROTOCOL_HEADER]: PAID_PROVIDER_BUDGET_PROTOCOL
@@ -400,19 +467,28 @@ export async function reservePaidProviderBudget(input: {
 			remaining,
 			limit: reviewed.hourlyReservations,
 			resetAt,
-			status: 200
+			status: 200,
+			providerCeiling: present({ withinMonthlyCeilings: true as const })
 		});
 	}
 	if (response.status !== 429) return unavailable();
 	const retryAfter = positiveInteger(response.headers.get('retry-after'));
 	if (retryAfter === null) return unavailable();
+	const budgetReason = response.headers.get('x-paid-provider-budget-reason');
+	const providerCeiling =
+		budgetReason === EXA_PAID_ORG_MONTHLY_CEILING_REASON ||
+		budgetReason === FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON
+			? blocked(budgetReason)
+			: present({ withinMonthlyCeilings: true as const });
 	return Object.freeze({
 		allowed: false,
 		remaining,
 		limit: reviewed.hourlyReservations,
 		resetAt,
 		status: 429,
-		reason: 'AI capacity limit reached. Please try again after the reset time.'
+		providerCeiling,
+		reason: 'AI capacity limit reached. Please try again after the reset time.',
+		budgetScope: budgetScopeForReason(budgetReason)
 	});
 }
 

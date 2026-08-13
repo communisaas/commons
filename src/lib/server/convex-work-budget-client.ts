@@ -180,13 +180,16 @@ export async function reserveConvexWorkForEvent(input: {
 	const { event, kind, localBypass, operation } = input;
 	const reviewed = convexWorkBudgetPolicyFor(operation, kind);
 	if (!reviewed) rememberRejection(event, unavailable());
-	if (localBypass && event.platform?.env === undefined) return;
-
 	const realm = convexWorkBudgetRealmForConvexUrl(event.platform?.env?.PUBLIC_CONVEX_URL);
 	const coordinatorName = convexWorkBudgetCoordinatorNameForGeneration(
 		CONVEX_WORK_BUDGET_COORDINATOR_GENERATION
 	);
 	const namespace = event.platform?.env?.CONVEX_WORK_BUDGET;
+	// A local or test runtime addresses a Convex deployment that maps to no team
+	// budget realm, so there is no shared quota to reserve against. Deployed
+	// builds resolve `localBypass` to false and always fall through to enforce,
+	// including a dev build aimed at a real deployment.
+	if (localBypass && (!realm || !namespace)) return;
 	if (!realm || !coordinatorName || !namespace) rememberRejection(event, unavailable());
 
 	let response: Response;

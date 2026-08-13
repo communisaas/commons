@@ -3,10 +3,12 @@ import {
 	CAMPAIGN_RECENT_HOUR_LIMIT,
 	campaignReadModelSuppression
 } from '$convex/lib/campaignReadModel';
+import {
+	deriveProofPacketSummary,
+	reportPacketPreimageFields
+} from '$convex/lib/campaignProofPacket';
 import type {
-	AuthorshipBreakdown,
 	DebateMarketSnapshot,
-	IdentityBreakdown,
 	TemporalField,
 	TierCount,
 	VerificationPacket
@@ -47,25 +49,6 @@ function round(value: number, decimals: number): number {
 
 function percentage(numerator: number, denominator: number): number {
 	return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0;
-}
-
-function authorship(state: CampaignReadModelState): AuthorshipBreakdown {
-	return {
-		individual: state.explicitIndividualCount + state.noModeIndividualCount,
-		shared: state.explicitSharedCount + state.noModeSharedCount,
-		unknown: state.explicitUnknownCount + state.noModeUnknownCount,
-		explicit: state.noModeCount === 0 && state.explicitCompositionCount > 0
-	};
-}
-
-function identityBreakdown(state: CampaignReadModelState): IdentityBreakdown | null {
-	if (state.trustTierPresentCount === 0) return null;
-	return {
-		unverified: state.trustTierCounts[0] ?? 0,
-		emailOnly: state.trustTierCounts[1] ?? 0,
-		addressVerified: state.trustTierCounts[2] ?? 0,
-		govId: state.trustTierCounts[3] ?? 0
-	};
 }
 
 function tiers(state: CampaignReadModelState): TierCount[] {
@@ -121,62 +104,38 @@ export function materializeCampaignReadModel(
 ): CampaignReadModelBundle {
 	const suppression = campaignReadModelSuppression(state);
 	const temporal = boundedTemporal(state);
-	const geography =
-		state.districtActionCount < 2
-			? null
-			: state.topDistricts.map((row) => ({ hash: row.key, count: row.count }));
+	const summary = deriveProofPacketSummary(state);
+	const preimageFields = reportPacketPreimageFields(state, state.updatedAt);
 	const cells = state.topCells
 		.filter((row) => row.count >= 5)
 		.map((row) => ({ h3: row.key, count: row.count }));
-	const districtHhi =
-		state.districtActionCount > 0 ? state.districtCountSquares / state.districtActionCount ** 2 : 1;
-	const gds = state.districtActionCount < 2 ? null : round(1 - districtHhi, 2);
-	const ald =
-		state.messageHashActionCount < 2
-			? null
-			: round(state.uniqueMessageHashCount / state.messageHashActionCount, 2);
-	const temporalEntropy =
-		state.actionCount < 2 || temporal.field === null
-			? null
-			: round(Math.log2(state.actionCount) - state.hourCountLog2Count / state.actionCount, 2);
+	// A peak-vs-average ratio is computed over the same bins entropy uses, so it
+	// is null wherever the temporal field is null.
 	const burstVelocity =
-		state.hourBucketCount === 0
+		temporal.field === null || state.hourBucketCount === 0
 			? null
 			: round(state.maxHourCount / (state.actionCount / state.hourBucketCount), 1);
-	const tier1 = state.engagementTierCounts[1] ?? 0;
-	const tier3 = state.engagementTierCounts[3] ?? 0;
-	const tier4 = state.engagementTierCounts[4] ?? 0;
-	const cai =
-		state.actionCount < 2 || tier1 + tier3 + tier4 === 0
-			? null
-			: round((tier3 + tier4) / Math.max(tier1, 1), 2);
 	const driftCount =
 		state.atlasVersionActionCount === 0
 			? null
 			: state.atlasVersionActionCount - state.topAtlasVersionCount;
 	const lastUpdated = new Date(now).toISOString();
-	const earliest = state.firstSentAt ?? now;
-	const latest = state.lastSentAt ?? now;
 
 	const packet: VerificationPacket = {
-		verified: state.verifiedActionCount,
-		total: state.actionCount,
+		verified: summary.verified,
+		total: summary.total,
 		verifiedPct: percentage(state.verifiedActionCount, state.actionCount),
-		districtCount: state.districtCount,
-		authorship: authorship(state),
-		dateRange: {
-			earliest: new Date(earliest).toISOString().slice(0, 10),
-			latest: new Date(latest).toISOString().slice(0, 10),
-			spanDays: Math.floor((latest - earliest) / DAY_MS)
-		},
-		identityBreakdown: identityBreakdown(state),
-		gds,
-		ald,
-		temporalEntropy,
+		districtCount: summary.districtCount,
+		authorship: preimageFields.authorship,
+		dateRange: preimageFields.dateRange,
+		identityBreakdown: preimageFields.identityBreakdown,
+		gds: summary.gds,
+		ald: summary.ald,
+		temporalEntropy: summary.temporalEntropy,
 		burstVelocity,
-		cai,
+		cai: summary.cai,
 		tiers: tiers(state),
-		geography,
+		geography: preimageFields.geography,
 		cells: state.cellActionCount < 2 ? null : cells,
 		temporal: temporal.field,
 		driftCount,

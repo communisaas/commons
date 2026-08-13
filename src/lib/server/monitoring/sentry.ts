@@ -10,10 +10,17 @@ type SentryLevel = 'fatal' | 'error' | 'warning' | 'info' | 'debug';
 
 export function captureWithContext(
 	error: unknown,
-	context?: { userId?: string; orgId?: string; action?: string; level?: SentryLevel }
+	context?: {
+		userId?: string;
+		orgId?: string;
+		action?: string;
+		level?: SentryLevel;
+		detail?: Readonly<Record<string, string | number | boolean>>;
+	}
 ) {
 	try {
-		const { level, ...appContext } = context ?? {};
+		const { level, detail, ...baseContext } = context ?? {};
+		const appContext = { ...baseContext, ...detail };
 		Sentry.captureException(error, {
 			level,
 			contexts: Object.keys(appContext).length > 0 ? { app: appContext } : undefined

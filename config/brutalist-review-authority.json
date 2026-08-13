@@ -1,0 +1,76 @@
+{
+	"schemaVersion": 1,
+	"enrollmentState": "pending-independent-enrollment",
+	"repository": {
+		"id": 599295397,
+		"slug": "communisaas/commons",
+		"ownerId": 90685635,
+		"ownerLogin": "communisaas",
+		"protectedBranch": "main"
+	},
+	"diagnostic": {
+		"workflowName": "Brutalist Review (diagnostic)",
+		"githubActionsAppId": 15368
+	},
+	"authoritativeCheck": {
+		"name": "Commons Brutalist Launch Authority",
+		"protocol": "commons-brutalist-authority-v1",
+		"appId": null,
+		"appSlug": null,
+		"appOwnerId": null,
+		"detailsUrlOrigin": null,
+		"permissions": {
+			"checks": "write",
+			"contents": "read",
+			"metadata": "read",
+			"pull_requests": "read"
+		},
+		"events": ["check_suite", "pull_request", "push"]
+	},
+	"codeOwnerTeam": {
+		"id": null,
+		"slug": null,
+		"memberUserIds": [],
+		"repositoryRole": "write"
+	},
+	"signer": {
+		"principal": null,
+		"githubUserId": null,
+		"keyFingerprint": null,
+		"namespace": "commons-brutalist-launch-v1"
+	},
+	"separation": {
+		"launchSourceAuthorUserIds": [19658882]
+	},
+	"proofRef": {
+		"prefix": "brutalist-attestations/",
+		"requireAdministratorEnforcement": true,
+		"allowForcePushes": false,
+		"allowDeletions": false
+	},
+	"requiredCodeOwnerPaths": [
+		".github/CODEOWNERS",
+		".github/brutalist-allowed-signers",
+		".github/paid-provider-posture-allowed-signers",
+		".github/workflows/brutalist-review.yml",
+		".github/workflows/deploy.yml",
+		".github/workflows/public-template-og-release-recovery.yml",
+		"config/brutalist-review-authority.json",
+		"config/paid-provider-account-authority.json",
+		"docs/strategy/public-discovery-release-hypergraph/docs/BRUTALIST-ATTESTATION.md",
+		"scripts/finalize-brutalist-launch-review.mjs",
+		"scripts/materialize-paid-provider-pages-secrets.mjs",
+		"scripts/paid-provider-account-posture.mjs",
+		"scripts/run-public-template-og-release-phase.mjs",
+		"scripts/run-brutalist-launch-review.mjs",
+		"scripts/sign-brutalist-evidence.mjs",
+		"scripts/sign-paid-provider-account-posture.mjs",
+		"scripts/verify-brutalist-attestation.mjs",
+		"scripts/verify-brutalist-review-authority.mjs",
+		"scripts/verify-paid-provider-account-posture.mjs",
+		"scripts/verify-pages-containment-bindings.mjs",
+		"scripts/verify-pages-durable-object-binding.mjs",
+		"scripts/verify-convex-work-budget-deployment.mjs",
+		"scripts/verify-release-gate-blobs.mjs"
+	]
+}

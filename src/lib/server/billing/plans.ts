@@ -16,13 +16,12 @@
  * zero until they subscribe. `inactive` is NOT in PLAN_ORDER — it never renders
  * as a tier in the plan grid; it is only the fallback floor.
  *
- * `maxResolvesMonth` is the ONE exception to the "inactive = everything zeroed"
- * rule: it is a SUBSTRATE-SALE allowance (keyed /api/v1/resolve-address calls),
- * NOT a delivery quota. The inactive floor carries a FINITE trial credit (1,000
- * resolves/month — mirrors Cicero's 1,000-lookup tier; NOT unlimited, NOT a
- * recurring-free cap) so an org can evaluate the Shadow Atlas substrate before
- * subscribing. It does NOT unlock email/SMS/seat/verified-action quotas — those
- * stay zeroed for inactive. Paid tiers raise only the resolve allowance.
+ * `addressResolvesMonth` is the ONE exception to the "inactive = everything
+ * zeroed" rule: it is a SUBSTRATE-SALE allowance keyed to
+ * /api/v1/resolve-address calls, NOT a delivery quota. The inactive floor
+ * carries a finite trial credit so an org can evaluate the Shadow Atlas
+ * substrate before subscribing. Agentic decision-maker capacity is a separate
+ * paid-only allowance and remains zero on the inactive floor.
  */
 
 import {
@@ -34,7 +33,11 @@ import {
 	type IndividualPlanLimits as IndividualPlanQuotas
 } from '$convex/lib/planLimits';
 
-export { resolveAllowanceForPlan, FREE_INDIVIDUAL_AUTHORED_PER_MONTH } from '$convex/lib/planLimits';
+export {
+	addressResolveAllowanceForPlan,
+	agenticResolveAllowanceForPlan,
+	FREE_INDIVIDUAL_AUTHORED_PER_MONTH
+} from '$convex/lib/planLimits';
 export { INDIVIDUAL_PLAN_ORDER } from '$convex/lib/planLimits';
 
 /** An org plan as the SvelteKit layer sees it: shared limits + its Stripe price. */

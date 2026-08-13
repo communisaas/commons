@@ -11,6 +11,10 @@
 			"authenticated": 10,
 			"verified": 15,
 			"operator": 15
+		},
+		"actorMonthlyPublicUnits": {
+			"authenticated": 243,
+			"verified": 486
 		}
 	},
 	"operations": {
@@ -23,13 +27,13 @@
 			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
 		},
 		"decision-makers": {
-			"weightUnits": 150,
-			"maxProviderCallsPerReservation": 150,
+			"weightUnits": 166,
+			"maxProviderCallsPerReservation": 162,
 			"providerCallBundle": {
-				"dnsMx": 18,
-				"exaContents": 24,
+				"dnsMx": 12,
+				"exaContents": 32,
 				"exaSearch": 72,
-				"firecrawl": 24,
+				"firecrawl": 32,
 				"gemini": 13,
 				"groq": 1
 			},
@@ -100,17 +104,28 @@
 			"hourlyReservations": { "authenticated": 1, "verified": 1, "operator": 1 }
 		}
 	},
+	"paidOrgCapacity": {
+		"operation": "decision-makers",
+		"providerUnitsPerResolve": 166,
+		"providerCostMicrousdPerResolve": 580000,
+		"revenueAllocationBasisPoints": 3000,
+		"billingAuthority": "settled-subscription-payment-only"
+	},
 	"providerEconomics": {
 		"exa": {
 			"freeMonthlyCreditMicrousd": 10000000,
 			"searchMicrousd": 7000,
 			"contentsPageMicrousd": 1000,
-			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+			"launchBillingAuthority": "operator-authorized-pay-as-you-go",
+			"monthlyPaidOrgSpendCeilingMicrousd": 100000000,
+			"operatorActivationDependency": "Paid billing must be enabled in the Exa dashboard before authorized requests can spend."
 		},
 		"firecrawl": {
 			"freeMonthlyCredits": 1000,
 			"scrapeCreditsPerAttempt": 1,
-			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+			"launchBillingAuthority": "operator-authorized-pay-as-you-go",
+			"monthlyPaidOrgSpendCeilingCredits": 6000,
+			"operatorActivationDependency": "Paid billing must be enabled in the Firecrawl dashboard before authorized requests can spend."
 		},
 		"gemini": {
 			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
@@ -124,7 +139,7 @@
 		"durableObjectDailyRequestFreeLimit": 100000,
 		"sqliteDailyRowsReadFreeLimit": 5000000,
 		"sqliteDailyRowsWrittenFreeLimit": 100000,
-		"sqliteRowsReadPerAttempt": 8,
-		"sqliteRowsWrittenPerAdmission": 8
+		"sqliteRowsReadPerAttempt": 9,
+		"sqliteRowsWrittenPerAdmission": 9
 	}
 }

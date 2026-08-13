@@ -39,6 +39,13 @@ export const INTERNAL_API_SECRET_BINDINGS = Object.freeze([
 	'INTERNAL_API_SECRET',
 	'INTERNAL_API_SECRET_PREVIOUS'
 ]);
+export const PAID_PROVIDER_RUNTIME_SECRET_BINDINGS = Object.freeze([
+	'EXA_API_KEY',
+	'FIRECRAWL_API_KEY',
+	'GEMINI_API_KEY',
+	'GROQ_API_KEY'
+]);
+export const PAID_PROVIDER_OPERATOR_BINDING = 'PAID_PROVIDER_OPERATOR_USER_IDS';
 export const PREVIEW_BUILD_SAFE_PLAIN_TEXT_BINDINGS = Object.freeze([
 	'ATLAS_BASE_URL',
 	'EXPECTED_CELL_MAP_DEPTH',
@@ -358,12 +365,14 @@ export function validatePublicDiscoveryGateCustomDomains({ customDomains, realms
  * request. Preview publication proves only the isolated preview realm. A
  * production publication also proves preview because the production cron writes
  * both realms and therefore requires preview to have been restored first.
- * @param {{workerSettingsByEnvironment: Partial<Record<'preview'|'production', unknown>>, workerSubdomainByEnvironment: Partial<Record<'preview'|'production', unknown>>, pagesProject: unknown, environment: 'preview'|'production',expectedTransactionId:string}} input
+ * @param {{workerSettingsByEnvironment: Partial<Record<'preview'|'production', unknown>>, workerSubdomainByEnvironment: Partial<Record<'preview'|'production', unknown>>, pagesProject: unknown, pagesDeployment?:unknown, deploymentId?:string, environment: 'preview'|'production',expectedTransactionId:string}} input
  */
 export function validatePagesDurableObjectBinding({
 	workerSettingsByEnvironment,
 	workerSubdomainByEnvironment,
 	pagesProject,
+	pagesDeployment,
+	deploymentId,
 	environment,
 	expectedTransactionId
 }) {
@@ -414,6 +423,43 @@ export function validatePagesDurableObjectBinding({
 				`Pages ${realm} ${secretName} must be an encrypted secret binding.`
 			);
 		}
+		for (const secretName of PAID_PROVIDER_RUNTIME_SECRET_BINDINGS) {
+			invariant(
+				envVars[secretName] === undefined,
+				`Pages ${realm} project defaults must not retain paid-provider credential ${secretName}.`
+			);
+		}
+		invariant(
+			record(envVars[PAID_PROVIDER_OPERATOR_BINDING])?.type === 'secret_text',
+			`Pages ${realm} paid-provider operator allowlist must be an encrypted secret binding.`
+		);
+		invariant(
+			typeof deploymentId === 'string' &&
+				/^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/u.test(
+					deploymentId
+				),
+			'Exact immutable production Pages deployment id is required.'
+		);
+		const immutableDeployment = record(record(pagesDeployment)?.result);
+		invariant(
+			immutableDeployment?.id === deploymentId && immutableDeployment.environment === 'production',
+			'Paid-provider binding proof is not the exact immutable production deployment.'
+		);
+		const immutableEnvVars = record(immutableDeployment.env_vars);
+		invariant(
+			immutableEnvVars !== null,
+			'Immutable production Pages deployment env_vars are missing.'
+		);
+		for (const secretName of PAID_PROVIDER_RUNTIME_SECRET_BINDINGS) {
+			invariant(
+				record(immutableEnvVars[secretName])?.type === 'secret_text',
+				`Immutable production Pages paid-provider ${secretName} must be encrypted.`
+			);
+		}
+		invariant(
+			record(immutableEnvVars[PAID_PROVIDER_OPERATOR_BINDING])?.type === 'secret_text',
+			'Immutable production Pages paid-provider operator allowlist must be encrypted.'
+		);
 		invariant(
 			envVars[RELEASE_PROBE_SECRET_BINDING] === undefined,
 			`Pages ${realm} must not retain the staging release-probe capability.`
@@ -515,30 +561,49 @@ export function validatePagesDurableObjectBinding({
 		worker: PUBLIC_DISCOVERY_GATE_WORKERS[environment],
 		releaseTransactionId: expectedTransactionId,
 		internalApiSecretBindings: INTERNAL_API_SECRET_BINDINGS,
+		paidProviderDeploymentId: environment === 'production' ? deploymentId : undefined,
+		paidProviderProjectDefaultsAbsent:
+			environment === 'production' ? [...PAID_PROVIDER_RUNTIME_SECRET_BINDINGS] : [],
 		previewInert: true,
 		failOpen: false
 	};
 }
 
-/** @param {string[]} argv @returns {{environment: 'preview'|'production'}} */
+/** @param {string[]} argv @returns {{environment: 'preview'|'production',deploymentId?:string}} */
 export function parsePagesBindingArgs(argv) {
 	let environment;
+	let deploymentId;
 	for (let index = 0; index < argv.length; index += 1) {
 		const flag = argv[index];
-		invariant(flag === '--environment', `Unknown argument: ${flag}`);
-		invariant(environment === undefined, '--environment may be supplied only once.');
-		environment = argv[index + 1];
+		invariant(flag === '--environment' || flag === '--deployment-id', `Unknown argument: ${flag}`);
 		invariant(
-			environment !== undefined && !environment.startsWith('--'),
-			'--environment needs a value.'
+			(flag === '--environment' && environment === undefined) ||
+				(flag === '--deployment-id' && deploymentId === undefined),
+			`${flag} may be supplied only once.`
 		);
+		const value = argv[index + 1];
+		invariant(value !== undefined && !value.startsWith('--'), `${flag} needs a value.`);
+		if (flag === '--environment') environment = value;
+		else deploymentId = value;
 		index += 1;
 	}
 	invariant(
 		environment === 'preview' || environment === 'production',
 		'--environment must be preview or production.'
 	);
-	return { environment: /** @type {'preview'|'production'} */ (environment) };
+	if (environment === 'production') {
+		invariant(
+			typeof deploymentId === 'string' &&
+				/^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/u.test(
+					deploymentId
+				),
+			'Production requires one exact --deployment-id.'
+		);
+	} else invariant(deploymentId === undefined, 'Preview must not accept --deployment-id.');
+	return {
+		deploymentId,
+		environment: /** @type {'preview'|'production'} */ (environment)
+	};
 }
 
 /**
@@ -617,10 +682,11 @@ export async function verifyPublicDiscoveryGateWorkers({
 	return namespaceIds;
 }
 
-/** @param {{accountId: string|undefined, apiToken: string|undefined, environment: 'preview'|'production',expectedTransactionId:string|undefined, fetchFn?: typeof fetch, pagesProject?: string}} options */
+/** @param {{accountId: string|undefined, apiToken: string|undefined, deploymentId?:string, environment: 'preview'|'production',expectedTransactionId:string|undefined, fetchFn?: typeof fetch, pagesProject?: string}} options */
 export async function verifyPagesDurableObjectBinding({
 	accountId,
 	apiToken,
+	deploymentId,
 	environment,
 	expectedTransactionId,
 	fetchFn = fetch,
@@ -653,8 +719,36 @@ export async function verifyPagesDurableObjectBinding({
 		})
 	]);
 	invariant(pagesResponse.ok, `Pages project settings returned HTTP ${pagesResponse.status}.`);
+	let pagesDeployment;
+	if (environment === 'production') {
+		invariant(
+			typeof deploymentId === 'string' &&
+				/^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/u.test(
+					deploymentId
+				),
+			'Exact immutable production Pages deployment id is required.'
+		);
+		const deploymentResponse = await fetchFn(
+			`${base}/pages/projects/${encodeURIComponent(pagesProject)}/deployments/${encodeURIComponent(deploymentId)}`,
+			{
+				headers,
+				redirect: 'error',
+				signal: AbortSignal.timeout(15_000)
+			}
+		);
+		invariant(
+			deploymentResponse.ok,
+			`Pages immutable deployment returned HTTP ${deploymentResponse.status}.`
+		);
+		pagesDeployment = await readBoundedResponseJson(
+			deploymentResponse,
+			'Pages immutable deployment response'
+		);
+	}
 	return validatePagesDurableObjectBinding({
 		...workerInputs,
+		deploymentId,
+		pagesDeployment,
 		pagesProject: await readBoundedResponseJson(pagesResponse, 'Pages project settings response'),
 		environment,
 		expectedTransactionId
@@ -664,10 +758,11 @@ export async function verifyPagesDurableObjectBinding({
 const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
 if (isMain) {
 	try {
-		const { environment } = parsePagesBindingArgs(process.argv.slice(2));
+		const { deploymentId, environment } = parsePagesBindingArgs(process.argv.slice(2));
 		const result = await verifyPagesDurableObjectBinding({
 			accountId: process.env.CLOUDFLARE_ACCOUNT_ID,
 			apiToken: process.env.CLOUDFLARE_API_TOKEN,
+			deploymentId,
 			environment,
 			expectedTransactionId: process.env.PUBLIC_RELEASE_TRANSACTION_ID
 		});

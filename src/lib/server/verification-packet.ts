@@ -72,6 +72,7 @@ const TIER_LABELS: Record<number, string> = {
 type CampaignBundleCacheContext = {
 	url: URL;
 	platform?: App.Platform;
+	fresh?: boolean;
 };
 
 type CampaignBundleEnvelope = {
@@ -142,16 +143,18 @@ export async function loadCampaignReadModelBundleCached(
 ): Promise<CampaignReadModelBundle> {
 	const identity = cacheIdentity(campaignId, orgId, context);
 	const now = Date.now();
-	const memory = validEnvelope(memoryBundles.get(identity), now);
-	if (memory) return memory.value;
+	if (!context.fresh) {
+		const memory = validEnvelope(memoryBundles.get(identity), now);
+		if (memory) return memory.value;
 
-	const existingFlight = bundleFlights.get(identity);
-	if (existingFlight) return existingFlight;
+		const existingFlight = bundleFlights.get(identity);
+		if (existingFlight) return existingFlight;
+	}
 
 	const flight = (async () => {
 		const edge = defaultCache();
 		const request = cacheRequest(identity, context);
-		if (edge) {
+		if (edge && !context.fresh) {
 			try {
 				const response = await edge.match(request);
 				if (response) {
@@ -191,6 +194,7 @@ export async function loadCampaignReadModelBundleCached(
 		}
 		return value;
 	})();
+	if (context.fresh) return flight;
 	bundleFlights.set(identity, flight);
 	try {
 		return await flight;
@@ -535,15 +539,12 @@ function computeVelocityFromBins(bins: number[]): number | null {
  * Coordination Authenticity Index: (tier3 + tier4) / max(tier1, 1).
  * High = campaign backed by deeply engaged participants.
  *
- * Lag bound (T10-1 + T10-4): the engagementTier on each action is the value
- * stamped at action-time. Reputation promotion runs as a nightly cron
- * (recomputeAllReputationTiers, 03:11 UTC), so a user who crosses an
- * action-count threshold on day N appears in CAI at their old tier until the
- * cron writes the new tier on day N+1. The cross-check at /api/submissions/create
- * (T10-2) tolerates ±1 drift specifically to absorb this lag. The drift is
- * bounded by the cron interval, never worse than 24h — the index is meaningful
- * for "is this campaign drawing on deep engagement vs new users?" questions,
- * not for real-time second-order accounting.
+ * Transactional bound (T10-1 + T10-4): a registered user's verified action
+ * increments actionCount, derives reputationTier, and stamps the resulting
+ * engagementTier on the immutable action in one Convex mutation. CAI therefore
+ * observes the exact threshold-crossing tier for that action without a
+ * recurring repair or propagation-lag window. Anonymous/unverified actions
+ * retain their submission-local tier semantics.
  */
 function computeCAI(actions: RawAction[]): number | null {
 	if (actions.length < 2) return null;

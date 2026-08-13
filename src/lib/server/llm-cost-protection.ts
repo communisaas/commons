@@ -9,19 +9,29 @@
  * earn capacity through trust signals (auth, verification).
  *
  * Trust Tiers:
- * - Guest: Can explore (subject lines) but not drain (decision-makers)
+ * - Guest: Paid model work is disabled until a globally coordinated admission
+ *   boundary exists
  * - Authenticated: Reasonable quotas for genuine use
  * - Verified: Higher limits for proven constituents
  *
- * Cost Profile (Gemini 3 Flash Preview + external APIs):
- * - Subject generation: 1-2 Gemini calls (~$0.01-0.02)
- * - Decision-maker resolution: 4-6 Gemini + Exa + Firecrawl (~$0.08-0.15)
- * - Message generation: 2 Gemini + grounding (~$0.03-0.05)
- * Canonical pricing in API_PRICING below. Update there when prices change.
+ * Dollar telemetry is an estimate, not a billing authority. Public work stays
+ * inside the shared free-plan envelope; organization capacity is admitted only
+ * against the balance minted by a settled subscription payment.
  */
 
 import { rateLimiter } from './rate-limiter';
 import type { RequestEvent } from '@sveltejs/kit';
+import {
+	reservePaidProviderBudget,
+	type PaidOrgProviderGrant,
+	type PaidProviderBudgetResult
+} from '$lib/server/paid-provider-budget-client';
+import {
+	paidProviderBudgetPolicyFor,
+	type PaidProviderBudgetScope,
+	type PaidProviderTrustTier
+} from '$lib/server/paid-provider-budget-policy';
+import { paidProviderOperatorConfigured } from '$lib/server/paid-provider-runtime-readiness';
 
 // ============================================
 // Trust Tier Definitions
@@ -45,59 +55,12 @@ export type LLMTrustTier = 'guest' | 'authenticated' | 'verified';
  * - 15 ops/day verified = ~5 letters/day, covers 99%+ of real usage
  * - Worst-case COGS: 15 ops/day * $0.22 = $3.30/day per verified user
  *
- * Verification is the upgrade path, not payment.
- * Per-isolate in-memory enforcement — known limitation at current scale.
+ * Verification is the upgrade path, not payment. Production admissions are
+ * serialized by one SQLite Durable Object; the local limiter is development
+ * defense-in-depth only.
  */
-const QUOTAS: Record<string, Record<LLMTrustTier, [number, number]>> = {
-	// Subject line: cheapest op (~$0.01-0.02)
-	'subject-line': {
-		guest: [3, 3600000], // 3 per hour
-		authenticated: [5, 3600000], // 5 per hour
-		verified: [5, 3600000] // 5 per hour
-	},
-
-	// Decision-makers: most expensive op (~$0.08-0.15)
-	'decision-makers': {
-		guest: [0, 3600000], // BLOCKED for guests (require auth)
-		authenticated: [2, 3600000], // 2 per hour
-		verified: [3, 3600000] // 3 per hour
-	},
-
-	// Message generation: moderate cost (~$0.03-0.05)
-	'message-generation': {
-		guest: [0, 3600000], // BLOCKED (endpoint already requires auth)
-		authenticated: [3, 3600000], // 3 per hour
-		verified: [5, 3600000] // 5 per hour
-	},
-
-	// Embeddings: cheap (~$0.001) but should still be bounded
-	'embeddings': {
-		guest: [0, 3600000], // BLOCKED
-		authenticated: [20, 3600000], // 20 per hour
-		verified: [20, 3600000] // 20 per hour
-	},
-
-	// Global daily limit across all operations (circuit breaker)
-	'daily-global': {
-		guest: [3, 86400000], // 3 per day total
-		authenticated: [10, 86400000], // 10 per day total
-		verified: [15, 86400000] // 15 per day total
-	}
-};
-
-/**
- * Daily-global circuit-breaker ceiling for a PAID individual (Voice/Advocate).
- *
- * The free daily ceilings above are an ABUSE breaker calibrated for free usage
- * (~15/day verified). A paying Advocate (75 authored/mo) can legitimately burst
- * on a heavy day and would otherwise be hard-blocked by the 15/day breaker. The
- * real bound for paid individuals is their MONTHLY authored cap (enforced in
- * convex/templates.ts), so the daily breaker is raised to the full top monthly
- * allowance — high enough that a paying user is never blocked by the abuse
- * breaker, while the monthly cap still bounds total COGS. Per-op limits
- * (decision-makers/message-generation) still apply.
- */
-const PAID_INDIVIDUAL_DAILY_GLOBAL: [number, number] = [75, 86400000];
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
 
 // ============================================
 // Trust Tier Resolution
@@ -108,16 +71,12 @@ interface UserContext {
 	isAuthenticated: boolean;
 	isVerified: boolean;
 	tier: LLMTrustTier;
+	providerTier?: PaidProviderTrustTier;
 	identifier: string; // For rate limit key (userId or IP)
-	/**
-	 * True when the user holds an active paid individual authoring sub
-	 * (Voice/Advocate). Raises the daily-global circuit-breaker ceiling so a
-	 * paying user isn't hard-blocked by the free abuse breaker — their monthly
-	 * authored cap (convex/templates.ts) is the real bound. Optional: absent /
-	 * false means the free abuse ceiling applies. The caller sets it after
-	 * resolving the user's subscription.
-	 */
-	paidIndividual?: boolean;
+}
+
+function isPaidProviderOperator(event: RequestEvent, userId: string | null): boolean {
+	return paidProviderOperatorConfigured(event.platform?.env, userId);
 }
 
 /**
@@ -168,8 +127,12 @@ export function getUserContext(event: RequestEvent): UserContext {
 		isAuthenticated,
 		isVerified,
 		tier,
-		identifier: userId || `ip:${ip}`,
-		paidIndividual: false
+		providerTier: isPaidProviderOperator(event, userId)
+			? 'operator'
+			: tier === 'verified'
+				? 'verified'
+				: 'authenticated',
+		identifier: userId || `ip:${ip}`
 	};
 }
 
@@ -184,6 +147,10 @@ export interface RateLimitCheck {
 	resetAt: Date;
 	tier: LLMTrustTier;
 	reason?: string;
+	status?: 429 | 503;
+	providerCeiling?: PaidProviderBudgetResult['providerCeiling'];
+	/** Whose capacity ran out — only ever set where the limiter measured it. */
+	budgetScope?: PaidProviderBudgetScope;
 }
 
 /**
@@ -197,9 +164,11 @@ export async function checkRateLimit(
 	operation: string,
 	context: UserContext
 ): Promise<RateLimitCheck> {
-	const quota = QUOTAS[operation]?.[context.tier];
+	const policyTier: PaidProviderTrustTier =
+		context.providerTier ?? (context.tier === 'verified' ? 'verified' : 'authenticated');
+	const reviewed = paidProviderBudgetPolicyFor(operation, policyTier);
 
-	if (!quota) {
+	if (!reviewed) {
 		// SECURITY FIX: Fail CLOSED for unknown operations
 		// This prevents typos or new endpoints from bypassing rate limiting
 		console.error(`[LLM-Protection] BLOCKED: Unknown operation "${operation}" - failing closed`);
@@ -213,7 +182,8 @@ export async function checkRateLimit(
 		};
 	}
 
-	const [max, windowMs] = quota;
+	const max = context.tier === 'guest' ? 0 : reviewed.hourlyReservations;
+	const windowMs = HOUR_MS;
 
 	// Zero quota = blocked for this tier
 	if (max === 0) {
@@ -223,7 +193,10 @@ export async function checkRateLimit(
 			limit: 0,
 			resetAt: new Date(Date.now()),
 			tier: context.tier,
-			reason: getBlockedReason(operation, context.tier)
+			reason: getBlockedReason(operation, context.tier),
+			// These fallback limiters are keyed on this caller's own identifier, so
+			// naming the actor here is a measurement rather than a default.
+			budgetScope: 'actor'
 		};
 	}
 
@@ -239,16 +212,16 @@ export async function checkRateLimit(
 			limit: max,
 			resetAt: new Date(result.reset),
 			tier: context.tier,
-			reason: getRateLimitReason(operation, context.tier, result, { success: true, reset: 0 })
+			reason: getRateLimitReason(operation, context.tier, result, { success: true, reset: 0 }),
+			budgetScope: 'actor'
 		};
 	}
 
-	// Also check daily global limit (circuit breaker). Paid individuals get a
-	// raised ceiling so the free abuse breaker doesn't hard-block a paying user;
-	// their monthly authored cap (convex/templates.ts) is the real bound.
-	const dailyQuota = context.paidIndividual
-		? PAID_INDIVIDUAL_DAILY_GLOBAL
-		: QUOTAS['daily-global'][context.tier];
+	// Local development fallback. Production uses the Durable Object path in
+	// enforceLLMRateLimit so operation + actor-day + platform caps are one atomic
+	// reservation. Payment never raises this abuse/cost ceiling: a published-
+	// template cap cannot bound regenerations or abandoned provider calls.
+	const dailyQuota: [number, number] = [reviewed.actorDailyReservations, DAY_MS];
 	const dailyKey = `llm:daily:${context.identifier}`;
 	const dailyResult = await rateLimiter.limit(dailyKey, dailyQuota[0], dailyQuota[1]);
 
@@ -267,7 +240,8 @@ export async function checkRateLimit(
 		limit: max,
 		resetAt: effectiveResetAt,
 		tier: context.tier,
-		reason: allowed ? undefined : getRateLimitReason(operation, context.tier, result, dailyResult)
+		reason: allowed ? undefined : getRateLimitReason(operation, context.tier, result, dailyResult),
+		budgetScope: allowed ? undefined : 'actor'
 	};
 }
 
@@ -297,10 +271,7 @@ function getRateLimitReason(
 	opResult: { success: boolean; reset: number },
 	dailyResult: { success: boolean; reset: number }
 ): string {
-	const verifyHint =
-		tier === 'authenticated'
-			? ' Verify your identity for higher limits.'
-			: '';
+	const verifyHint = tier === 'authenticated' ? ' Verify your identity for higher limits.' : '';
 
 	if (!dailyResult.success) {
 		const resetTime = new Date(dailyResult.reset).toLocaleTimeString();
@@ -343,11 +314,34 @@ function getRateLimitReason(
 export async function enforceLLMRateLimit(
 	event: RequestEvent,
 	operation: string,
-	options?: { paidIndividual?: boolean }
+	paidOrg?: PaidOrgProviderGrant
 ): Promise<RateLimitCheck> {
 	const context = getUserContext(event);
-	if (options?.paidIndividual) context.paidIndividual = true;
-	const check = await checkRateLimit(operation, context);
+	let check: RateLimitCheck;
+	if (context.tier === 'guest') {
+		check = await checkRateLimit(operation, context);
+	} else if (event.platform?.env !== undefined || process.env.NODE_ENV === 'production') {
+		const reservation = await reservePaidProviderBudget({
+			event,
+			identifier: context.identifier,
+			operation,
+			tier: context.providerTier ?? (context.tier === 'verified' ? 'verified' : 'authenticated'),
+			paidOrg
+		});
+		check = {
+			allowed: reservation.allowed,
+			remaining: reservation.remaining,
+			limit: reservation.limit,
+			resetAt: reservation.resetAt,
+			tier: context.tier,
+			reason: reservation.reason,
+			providerCeiling: reservation.providerCeiling,
+			budgetScope: reservation.budgetScope,
+			...(reservation.status === 200 ? {} : { status: reservation.status })
+		};
+	} else {
+		check = await checkRateLimit(operation, context);
+	}
 
 	if (!check.allowed) {
 		console.debug(`[LLM-Protection] Rate limit blocked: ${operation} for ${context.identifier}`);
@@ -372,10 +366,13 @@ export function rateLimitResponse(check: RateLimitCheck): Response {
 			tier: check.tier,
 			remaining: check.remaining,
 			limit: check.limit,
-			resetAt: check.resetAt.toISOString()
+			resetAt: check.resetAt.toISOString(),
+			// Never `?? 'actor'`: an unmeasured denial must not be reported to a
+			// person as capacity they spent themselves.
+			budgetScope: check.budgetScope ?? 'blocked'
 		}),
 		{
-			status: 429,
+			status: check.status ?? 429,
 			headers: { 'Content-Type': 'application/json' }
 		}
 	);
@@ -405,16 +402,18 @@ import { traceCompletion } from '$lib/server/agent-trace';
  * Canonical pricing — single source of truth.
  * Update this table when provider prices change; all cost calculations follow.
  */
-const API_PRICING = {
+export const API_PRICING = {
 	gemini: {
-		inputPer1M: 0.50,
-		outputPer1M: 3.00,
-		thinkingPer1M: 3.00    // thinking tokens billed at output rate
+		inputPer1M: 0.5,
+		outputPer1M: 3.0,
+		thinkingPer1M: 3.0 // thinking tokens billed at output rate
 	},
-	exa: { searchPer1K: 7.00 },
-	firecrawl: { readPerCredit: 0.0053 },  // Hobby plan: ~$0.0053/scrape
-	grounding: { searchPer1K: 14.00, freeMonthly: 5000 },
-	groq: { moderationPerCall: 0 }         // free tier
+	exa: { searchPer1K: 7.0, contentsPerPage: 0.001 },
+	// Firecrawl Free has no pay-per-use: credits are the governing meter.
+	firecrawl: { freePlanUsdPerCredit: 0 },
+	grounding: { searchPer1K: 14.0, freeMonthly: 5000 },
+	// Groq dollar cost is zero only under the required Free-plan, billing-disabled, no-PAYG posture.
+	groq: { freePlanModerationPerCall: 0 }
 } as const;
 
 /**
@@ -445,14 +444,35 @@ export function computeCostUsd(
 		? (tokenUsage.thoughtsTokens / 1_000_000) * API_PRICING.gemini.thinkingPer1M
 		: 0;
 	const exaSearch = (ext.exaSearches / 1000) * API_PRICING.exa.searchPer1K;
-	const firecrawlRead = ext.firecrawlReads * API_PRICING.firecrawl.readPerCredit;
+	// `firecrawlReads` is also the maximum number of Exa contents fallback
+	// pages. Counting every read as a fallback is deliberately conservative.
+	const exaContents = ext.firecrawlReads * API_PRICING.exa.contentsPerPage;
+	const firecrawlRead = ext.firecrawlReads * API_PRICING.firecrawl.freePlanUsdPerCredit;
 	const groundingSearch = (ext.groundingSearches / 1000) * API_PRICING.grounding.searchPer1K;
+	const groqModeration = ext.groqModerations * API_PRICING.groq.freePlanModerationPerCall;
 
 	return {
 		tokenUsage,
 		externalCounts: ext,
-		totalCostUsd: geminiInput + geminiOutput + geminiThinking + exaSearch + firecrawlRead + groundingSearch,
-		components: { geminiInput, geminiOutput, geminiThinking, exaSearch, firecrawlRead, groundingSearch }
+		totalCostUsd:
+			geminiInput +
+			geminiOutput +
+			geminiThinking +
+			exaSearch +
+			exaContents +
+			firecrawlRead +
+			groundingSearch +
+			groqModeration,
+		components: {
+			geminiInput,
+			geminiOutput,
+			geminiThinking,
+			exaSearch,
+			exaContents,
+			firecrawlRead,
+			groundingSearch,
+			groqModeration
+		}
 	};
 }
 
@@ -486,23 +506,32 @@ export function logLLMOperation(
 		...(details.externalCounts && {
 			exaSearches: details.externalCounts.exaSearches,
 			firecrawlReads: details.externalCounts.firecrawlReads,
-			groundingSearches: details.externalCounts.groundingSearches
+			firecrawlCredits: details.externalCounts.firecrawlReads,
+			groundingSearches: details.externalCounts.groundingSearches,
+			groqModerations: details.externalCounts.groqModerations
 		}),
-		costUsd: breakdown ? `$${breakdown.totalCostUsd.toFixed(6)}` : 'no token data'
+		costUsd: breakdown ? `$${breakdown.totalCostUsd.toFixed(6)}` : 'no token data',
+		costBasis:
+			'estimate: Gemini/Exa list prices; every provider requires Free-plan, billing-disabled, no-PAYG posture'
 	});
 
 	// Persist to agent_trace (fire-and-forget) — always write when traceId exists,
 	// even without cost data, so completion traces are never silently dropped.
 	if (traceId) {
-		traceCompletion(traceId, operation, { components: breakdown?.components, externalCounts: breakdown?.externalCounts }, {
-			userId: context.userId,
-			durationMs: details.durationMs,
-			success: details.success,
-			costUsd: breakdown?.totalCostUsd,
-			inputTokens: details.tokenUsage?.promptTokens,
-			outputTokens: details.tokenUsage?.candidatesTokens,
-			thoughtsTokens: details.tokenUsage?.thoughtsTokens,
-			totalTokens: details.tokenUsage?.totalTokens
-		});
+		traceCompletion(
+			traceId,
+			operation,
+			{ components: breakdown?.components, externalCounts: breakdown?.externalCounts },
+			{
+				userId: context.userId,
+				durationMs: details.durationMs,
+				success: details.success,
+				costUsd: breakdown?.totalCostUsd,
+				inputTokens: details.tokenUsage?.promptTokens,
+				outputTokens: details.tokenUsage?.candidatesTokens,
+				thoughtsTokens: details.tokenUsage?.thoughtsTokens,
+				totalTokens: details.tokenUsage?.totalTokens
+			}
+		);
 	}
 }

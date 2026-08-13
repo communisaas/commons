@@ -1,6 +1,7 @@
 {
 	"version": 1,
 	"generatedBy": "scripts/verify-convex-public-function-authority.mjs",
+	"registrationNote": "Every new public Convex function must also be registered in config/convex-work-budget-policy.json before any SvelteKit server call; an unregistered work-budget operation is rejected unconditionally before any bypass.",
 	"categories": [
 		"authenticated-role",
 		"explicitly-io-free",
@@ -9,11 +10,11 @@
 		"server-secret"
 	],
 	"counts": {
-		"authenticated-role": 254,
+		"authenticated-role": 241,
 		"explicitly-io-free": 0,
 		"pre-io-tombstone": 26,
 		"server-hmac": 5,
-		"server-secret": 172
+		"server-secret": 194
 	},
 	"browserDirectAuthenticatedResiduals": [
 		{
@@ -319,14 +320,6 @@
 			"guard": "call:requireAuth"
 		},
 		{
-			"runtimeName": "campaigns:getActionsForPacket",
-			"source": "convex/campaigns.ts",
-			"exportName": "getActionsForPacket",
-			"kind": "query",
-			"authority": "authenticated-role",
-			"guard": "call:requireAuth"
-		},
-		{
 			"runtimeName": "campaigns:getCampaignByDebateId",
 			"source": "convex/campaigns.ts",
 			"exportName": "getCampaignByDebateId",
@@ -365,14 +358,6 @@
 			"kind": "query",
 			"authority": "pre-io-tombstone",
 			"guard": "throw:first-statement"
-		},
-		{
-			"runtimeName": "campaigns:getDeliveryMetrics",
-			"source": "convex/campaigns.ts",
-			"exportName": "getDeliveryMetrics",
-			"kind": "query",
-			"authority": "authenticated-role",
-			"guard": "call:requireAuth"
 		},
 		{
 			"runtimeName": "campaigns:getForOrgPage",
@@ -887,6 +872,14 @@
 			"guard": "call:requireOrgRole"
 		},
 		{
+			"runtimeName": "email:filterSuppressedContactHashes",
+			"source": "convex/email.ts",
+			"exportName": "filterSuppressedContactHashes",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
 			"runtimeName": "email:findUnresolvedReport",
 			"source": "convex/email.ts",
 			"exportName": "findUnresolvedReport",
@@ -949,6 +942,14 @@
 			"kind": "query",
 			"authority": "authenticated-role",
 			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:suppressRecipientByRequest",
+			"source": "convex/email.ts",
+			"exportName": "suppressRecipientByRequest",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "email:updateBlast",
@@ -1387,8 +1388,8 @@
 			"source": "convex/legislation.ts",
 			"exportName": "rescoreBills",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:requireRescoreBillsAuthRef"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "legislation:searchBills",
@@ -1447,6 +1448,14 @@
 			"guard": "call:requireOrgRole"
 		},
 		{
+			"runtimeName": "matters:create",
+			"source": "convex/matters.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
 			"runtimeName": "messageJobs:checkpointPhase",
 			"source": "convex/messageJobs.ts",
 			"exportName": "checkpointPhase",
@@ -1493,6 +1502,14 @@
 			"kind": "mutation",
 			"authority": "authenticated-role",
 			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "metering:agenticResolveAdmission",
+			"source": "convex/metering.ts",
+			"exportName": "agenticResolveAdmission",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "metering:getUsageForPeriod",
@@ -2135,6 +2152,14 @@
 			"guard": "requireInternalSecret:first-statement"
 		},
 		{
+			"runtimeName": "positions:listViewerConfirmedContacts",
+			"source": "convex/positions.ts",
+			"exportName": "listViewerConfirmedContacts",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
 			"runtimeName": "positions:recordDirectDeliveries",
 			"source": "convex/positions.ts",
 			"exportName": "recordDirectDeliveries",
@@ -2227,24 +2252,24 @@
 			"source": "convex/segments.ts",
 			"exportName": "bulkApplyTag",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:getOrgForSegmentActionRef"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "segments:bulkRemoveTag",
 			"source": "convex/segments.ts",
 			"exportName": "bulkRemoveTag",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:getOrgForSegmentActionRef"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "segments:countMatching",
 			"source": "convex/segments.ts",
 			"exportName": "countMatching",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:getOrgForSegmentActionRef"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "segments:create",
@@ -2259,16 +2284,8 @@
 			"source": "convex/segments.ts",
 			"exportName": "exportDecrypted",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:requireExportAuthRef"
-		},
-		{
-			"runtimeName": "segments:exportMatching",
-			"source": "convex/segments.ts",
-			"exportName": "exportMatching",
-			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "call:getOrgForSegmentActionRef"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "segments:list",
@@ -2427,8 +2444,8 @@
 			"source": "convex/submissions.ts",
 			"exportName": "create",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "ctx.auth.getUserIdentity+fail-closed"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "submissions:getCongressionalDeliveryReadiness",
@@ -2623,20 +2640,12 @@
 			"guard": "call:requireOrgRole"
 		},
 		{
-			"runtimeName": "supporters:importBatch",
-			"source": "convex/supporters.ts",
-			"exportName": "importBatch",
-			"kind": "mutation",
-			"authority": "authenticated-role",
-			"guard": "call:requireOrgRole"
-		},
-		{
 			"runtimeName": "supporters:importWithEncryption",
 			"source": "convex/supporters.ts",
 			"exportName": "importWithEncryption",
 			"kind": "action",
-			"authority": "authenticated-role",
-			"guard": "ctx.auth.getUserIdentity+fail-closed"
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "supporters:list",
@@ -2762,6 +2771,14 @@
 			"runtimeName": "templates:claimEmbeddingBackfillLease",
 			"source": "convex/templates.ts",
 			"exportName": "claimEmbeddingBackfillLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:claimTemplateAuthoringLease",
+			"source": "convex/templates.ts",
+			"exportName": "claimTemplateAuthoringLease",
 			"kind": "mutation",
 			"authority": "server-secret",
 			"guard": "requireInternalSecret:first-statement"
@@ -2959,6 +2976,14 @@
 			"guard": "requireInternalSecret:first-statement"
 		},
 		{
+			"runtimeName": "templates:releaseTemplateAuthoringLease",
+			"source": "convex/templates.ts",
+			"exportName": "releaseTemplateAuthoringLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
 			"runtimeName": "templates:removeEndorsement",
 			"source": "convex/templates.ts",
 			"exportName": "removeEndorsement",
@@ -3007,12 +3032,44 @@
 			"guard": "requireInternalSecret:first-statement"
 		},
 		{
+			"runtimeName": "users:beginShadowAtlasRegistrationDispatch",
+			"source": "convex/users.ts",
+			"exportName": "beginShadowAtlasRegistrationDispatch",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:claimShadowAtlasEngagement",
+			"source": "convex/users.ts",
+			"exportName": "claimShadowAtlasEngagement",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
 			"runtimeName": "users:clearPasskey",
 			"source": "convex/users.ts",
 			"exportName": "clearPasskey",
 			"kind": "mutation",
 			"authority": "authenticated-role",
 			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:commitShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "commitShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:completeShadowAtlasEngagement",
+			"source": "convex/users.ts",
+			"exportName": "completeShadowAtlasEngagement",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "users:connectWallet",
@@ -3029,14 +3086,6 @@
 			"kind": "query",
 			"authority": "server-secret",
 			"guard": "requireInternalSecret:first-statement"
-		},
-		{
-			"runtimeName": "users:createShadowAtlasRegistration",
-			"source": "convex/users.ts",
-			"exportName": "createShadowAtlasRegistration",
-			"kind": "mutation",
-			"authority": "authenticated-role",
-			"guard": "call:requireAuth"
 		},
 		{
 			"runtimeName": "users:deleteEncryptedBlob",
@@ -3106,14 +3155,6 @@
 			"runtimeName": "users:getIdentityForAtlas",
 			"source": "convex/users.ts",
 			"exportName": "getIdentityForAtlas",
-			"kind": "query",
-			"authority": "authenticated-role",
-			"guard": "call:requireAuth"
-		},
-		{
-			"runtimeName": "users:getIdentityForEngagement",
-			"source": "convex/users.ts",
-			"exportName": "getIdentityForEngagement",
 			"kind": "query",
 			"authority": "authenticated-role",
 			"guard": "call:requireAuth"
@@ -3215,6 +3256,54 @@
 			"guard": "requireInternalSecret:first-statement"
 		},
 		{
+			"runtimeName": "users:markShadowAtlasEngagementRegistered",
+			"source": "convex/users.ts",
+			"exportName": "markShadowAtlasEngagementRegistered",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:markShadowAtlasRegistrationOperationAmbiguous",
+			"source": "convex/users.ts",
+			"exportName": "markShadowAtlasRegistrationOperationAmbiguous",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reconcileShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "reconcileShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:recordShadowAtlasEngagementFailure",
+			"source": "convex/users.ts",
+			"exportName": "recordShadowAtlasEngagementFailure",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reserveShadowAtlasEngagementRegistration",
+			"source": "convex/users.ts",
+			"exportName": "reserveShadowAtlasEngagementRegistration",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reserveShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "reserveShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
 			"runtimeName": "users:resolveCredentialHash",
 			"source": "convex/users.ts",
 			"exportName": "resolveCredentialHash",
@@ -3239,28 +3328,12 @@
 			"guard": "call:requireAuth"
 		},
 		{
-			"runtimeName": "users:updateShadowAtlasRegistration",
-			"source": "convex/users.ts",
-			"exportName": "updateShadowAtlasRegistration",
-			"kind": "mutation",
-			"authority": "authenticated-role",
-			"guard": "call:requireAuth"
-		},
-		{
 			"runtimeName": "users:upsertEncryptedBlob",
 			"source": "convex/users.ts",
 			"exportName": "upsertEncryptedBlob",
 			"kind": "mutation",
 			"authority": "authenticated-role",
 			"guard": "call:requireAuth"
-		},
-		{
-			"runtimeName": "users:upsertRegistration",
-			"source": "convex/users.ts",
-			"exportName": "upsertRegistration",
-			"kind": "mutation",
-			"authority": "server-secret",
-			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "users:verifyAddress",

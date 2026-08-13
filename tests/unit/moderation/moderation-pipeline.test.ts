@@ -196,7 +196,7 @@ describe('Moderation Pipeline', () => {
 			expect(result.safety?.blocking_hazards).toContain('S4');
 		});
 
-		it('should ALLOW S5 (defamation) - permissive policy', async () => {
+		it('passes through an S5 result classified as non-blocking', async () => {
 			mockClassifySafety.mockResolvedValue(makeSafetyResult(true, ['S5'], []));
 
 			const result = await moderateTemplate({
@@ -211,7 +211,7 @@ describe('Moderation Pipeline', () => {
 			expect(result.safety?.blocking_hazards).toHaveLength(0);
 		});
 
-		it('should ALLOW S10 (hate speech) - permissive policy', async () => {
+		it('passes through an S10 result classified as non-blocking', async () => {
 			mockClassifySafety.mockResolvedValue(makeSafetyResult(true, ['S10'], []));
 
 			const result = await moderateTemplate({
@@ -225,7 +225,7 @@ describe('Moderation Pipeline', () => {
 			expect(result.safety?.hazards).toContain('S10');
 		});
 
-		it('should ALLOW S13 (elections) - permissive policy', async () => {
+		it('passes through an S13 result classified as non-blocking', async () => {
 			mockClassifySafety.mockResolvedValue(makeSafetyResult(true, ['S13'], []));
 
 			const result = await moderateTemplate({
@@ -239,7 +239,7 @@ describe('Moderation Pipeline', () => {
 			expect(result.safety?.hazards).toContain('S13');
 		});
 
-		it('should handle multiple hazards - S1 blocks even with non-blocking hazards', async () => {
+		it('blocks when the classifier marks S1 blocking alongside S10', async () => {
 			mockClassifySafety.mockResolvedValue(makeSafetyResult(false, ['S1', 'S10'], ['S1']));
 
 			const result = await moderateTemplate({
@@ -351,7 +351,7 @@ describe('Moderation Pipeline', () => {
 	});
 });
 
-describe('Civic Speech Permissiveness', () => {
+describe('Moderation result propagation', () => {
 	beforeEach(() => {
 		mockDetectPromptInjection.mockReset();
 		mockClassifySafety.mockReset();
@@ -362,11 +362,11 @@ describe('Civic Speech Permissiveness', () => {
 		{ desc: 'Defamation claim (S5)', hazard: 'S5' },
 		{ desc: 'Strong criticism (S10)', hazard: 'S10' },
 		{ desc: 'Electoral skepticism (S13)', hazard: 'S13' },
-		{ desc: 'Multiple non-blocking (S5+S10)', hazards: ['S5', 'S10'] }
+		{ desc: 'Classifier marks S5+S10 non-blocking', hazards: ['S5', 'S10'] }
 	];
 
 	for (const { desc, hazard, hazards } of civicSpeechCases) {
-		it(`should ALLOW: ${desc}`, async () => {
+		it(`honors a safe classifier result: ${desc}`, async () => {
 			mockDetectPromptInjection.mockResolvedValue(makePromptGuardResult(true, 0.05));
 
 			const detectedHazards = (hazards || (hazard ? [hazard] : [])) as MLCommonsHazard[];

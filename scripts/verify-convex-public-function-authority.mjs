@@ -67,7 +67,7 @@ import ts from 'typescript';
 /** @typedef {GuardSuccess | { error: string }} GuardResult */
 /** @typedef {{ authority: AuthorityClass, guard: string } | { error: string }} Classification */
 /** @typedef {{ runtimeName: string, caller: string, kind: string, callCount: number, workBound?: string }} BrowserResidual */
-/** @typedef {{ version: number, generatedBy: string, categories: AuthorityClass[], counts: Record<AuthorityClass, number>, browserDirectAuthenticatedResiduals: BrowserResidual[], entries: AuthorityEntry[] }} AuthorityManifest */
+/** @typedef {{ version: number, generatedBy: string, registrationNote: string, categories: AuthorityClass[], counts: Record<AuthorityClass, number>, browserDirectAuthenticatedResiduals: BrowserResidual[], entries: AuthorityEntry[] }} AuthorityManifest */
 /** @typedef {{ type?: string, [key: string]: any }} EstreeNode */
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -76,6 +76,8 @@ const CONVEX_ROOT = path.join(ROOT, 'convex');
 const SOURCE_ROOT = path.join(ROOT, 'src');
 const MANIFEST_PATH = path.join(ROOT, 'config/convex-public-function-authority.json');
 const SCRIPT_NAME = 'scripts/verify-convex-public-function-authority.mjs';
+const REGISTRATION_NOTE =
+	'Every new public Convex function must also be registered in config/convex-work-budget-policy.json before any SvelteKit server call; an unregistered work-budget operation is rejected unconditionally before any bypass.';
 
 /** @type {readonly AuthorityClass[]} */
 export const AUTHORITY_CLASSES = Object.freeze([
@@ -1852,6 +1854,7 @@ export function expectedManifest(entries, browserDirectAuthenticatedResiduals = 
 	return {
 		version: 1,
 		generatedBy: SCRIPT_NAME,
+		registrationNote: REGISTRATION_NOTE,
 		categories: [...AUTHORITY_CLASSES],
 		counts,
 		browserDirectAuthenticatedResiduals,

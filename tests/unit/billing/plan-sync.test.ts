@@ -107,7 +107,7 @@ describe('individual (person-layer) tiers derive from the same source', () => {
  * legitimately appear as a response payload field.
  */
 const QUOTA_LITERAL =
-	/(maxVerifiedActions|maxEmails|maxSms|maxSeats|maxTemplatesMonth|maxResolvesMonth|authoredPerMonth)\s*:\s*[0-9]/;
+	/(maxVerifiedActions|maxEmails|maxSms|maxSeats|maxTemplatesMonth|addressResolvesMonth|agenticResolvesMonth|authoredPerMonth)\s*:\s*[0-9]/;
 
 const REPO_ROOT = process.cwd();
 const CANONICAL_TABLE = join('convex', 'lib', 'planLimits.ts');

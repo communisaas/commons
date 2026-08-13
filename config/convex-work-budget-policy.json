@@ -349,6 +349,10 @@
 			"kind": "mutation",
 			"class": "bulk"
 		},
+		"email:filterSuppressedContactHashes": {
+			"kind": "query",
+			"class": "collection"
+		},
 		"email:findUnresolvedReport": {
 			"kind": "query",
 			"class": "point"
@@ -376,6 +380,10 @@
 		"email:resolveRecipientHashesForFilter": {
 			"kind": "query",
 			"class": "point"
+		},
+		"email:suppressRecipientByRequest": {
+			"kind": "mutation",
+			"class": "mutation"
 		},
 		"email:updateBlast": {
 			"kind": "mutation",
@@ -608,6 +616,10 @@
 		"messageJobs:startOrGet": {
 			"kind": "mutation",
 			"class": "mutation"
+		},
+		"metering:agenticResolveAdmission": {
+			"kind": "query",
+			"class": "point"
 		},
 		"metering:getUsageForPeriod": {
 			"kind": "query",
@@ -854,6 +866,10 @@
 			"class": "collection"
 		},
 		"positions:getViewerDistrictMetric": {
+			"kind": "query",
+			"class": "point"
+		},
+		"positions:listViewerConfirmedContacts": {
 			"kind": "query",
 			"class": "point"
 		},

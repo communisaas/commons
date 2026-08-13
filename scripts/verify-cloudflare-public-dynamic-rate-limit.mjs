@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
+import { lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import ts from 'typescript';
 import { readBoundedResponseJson } from '../src/lib/server/bounded-response.mjs';
 
 const MAX_POLICY_BYTES = 16 * 1024;
@@ -26,20 +28,23 @@ export const PUBLIC_DYNAMIC_EXACT_PATHS = Object.freeze([
 ]);
 export const PUBLIC_DYNAMIC_PATH_PREFIXES = Object.freeze([
 	'/accountability/',
+	'/api/agents/',
 	'/api/auth/passkey/',
 	'/api/c/',
 	'/api/campaigns/',
 	'/api/d/',
 	'/api/debates/',
+	'/api/deliveries/',
 	'/api/dm/',
 	'/api/e/',
 	'/api/email/confirm/',
 	'/api/embed/',
 	'/api/ground/',
 	'/api/location/',
-	'/api/positions/count/',
-	'/api/positions/engagement-by-district/',
+	'/api/moderation/',
+	'/api/positions/',
 	'/api/proofs/',
+	'/api/shadow-atlas/',
 	'/api/submissions/',
 	'/api/templates/',
 	'/c/',
@@ -199,7 +204,241 @@ export function validateAnonymousDynamicRouteCostInventory(value) {
 			`${key} must contain unique path-only examples.`
 		);
 	}
+	const routeFamilies = inventory?.requiredExecutableRouteFamilies;
+	invariant(
+		Array.isArray(routeFamilies) && routeFamilies.length > 0,
+		'requiredExecutableRouteFamilies must be a non-empty array.'
+	);
+	const familyKeys = new Set();
+	for (const familyValue of routeFamilies) {
+		const family = record(familyValue);
+		invariant(
+			family !== null &&
+				Object.keys(family).sort().join('\0') ===
+					['authorityCall', 'boundaryCall', 'pathPrefix', 'sourceRoot'].sort().join('\0'),
+			'Every executable route family must contain only sourceRoot, pathPrefix, authorityCall, and boundaryCall.'
+		);
+		invariant(
+			typeof family.sourceRoot === 'string' &&
+				family.sourceRoot.startsWith('src/routes/') &&
+				!path.isAbsolute(family.sourceRoot) &&
+				!family.sourceRoot.split('/').includes('..'),
+			'Executable route family sourceRoot must stay under src/routes.'
+		);
+		invariant(
+			typeof family.pathPrefix === 'string' &&
+				family.pathPrefix.startsWith('/') &&
+				family.pathPrefix.endsWith('/'),
+			'Executable route family pathPrefix must be an absolute trailing-slash prefix.'
+		);
+		invariant(
+			family.authorityCall === 'requireAuthenticatedAgentRequest',
+			'Executable agent routes must use the trusted first-statement authentication authority.'
+		);
+		invariant(
+			family.boundaryCall === 'readBoundedAgentRequest',
+			'Executable agent routes must use the reviewed bounded request-envelope authority.'
+		);
+		const key = `${family.sourceRoot}\0${family.pathPrefix}`;
+		invariant(!familyKeys.has(key), `Duplicate executable route family: ${family.sourceRoot}.`);
+		familyKeys.add(key);
+	}
 	return /** @type {any} */ (inventory);
+}
+
+const EXPORTED_ROUTE_HANDLER_PATTERN =
+	/export const ([A-Z]+): RequestHandler = async \(event\) => \{/gu;
+const HTTP_METHOD_NAMES = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
+
+/** @param {import('typescript').Node} node @param {import('typescript').SyntaxKind} kind */
+function hasModifier(node, kind) {
+	return (
+		ts.canHaveModifiers(node) &&
+		(ts.getModifiers(node)?.some((modifier) => modifier.kind === kind) ?? false)
+	);
+}
+
+/**
+ * Parse exports instead of pattern-matching them so alternate declarations,
+ * comments, line breaks, escaped identifiers, and named re-exports cannot hide
+ * an unauthenticated paid handler beside one compliant route method.
+ *
+ * @param {string} source
+ */
+function exportedHttpMethods(source) {
+	const sourceFile = ts.createSourceFile(
+		'+server.ts',
+		source,
+		ts.ScriptTarget.Latest,
+		true,
+		ts.ScriptKind.TS
+	);
+	const parseDiagnostics =
+		/** @type {import('typescript').SourceFile & { parseDiagnostics: readonly import('typescript').Diagnostic[] }} */ (
+			sourceFile
+		).parseDiagnostics;
+	invariant(
+		parseDiagnostics.length === 0,
+		'Executable route source must be syntactically valid TypeScript.'
+	);
+	/** @type {string[]} */
+	const methods = [];
+	for (const statement of sourceFile.statements) {
+		if (ts.isExportDeclaration(statement)) {
+			invariant(
+				statement.exportClause && ts.isNamedExports(statement.exportClause),
+				'Executable route source cannot use a wildcard export.'
+			);
+			for (const element of statement.exportClause.elements) {
+				if (HTTP_METHOD_NAMES.has(element.name.text)) methods.push(element.name.text);
+			}
+			continue;
+		}
+		if (
+			!hasModifier(statement, ts.SyntaxKind.ExportKeyword) ||
+			hasModifier(statement, ts.SyntaxKind.DefaultKeyword)
+		) {
+			continue;
+		}
+		if (ts.isVariableStatement(statement)) {
+			for (const declaration of statement.declarationList.declarations) {
+				if (ts.isIdentifier(declaration.name) && HTTP_METHOD_NAMES.has(declaration.name.text)) {
+					methods.push(declaration.name.text);
+				}
+			}
+			continue;
+		}
+		const name = /** @type {import('typescript').NamedDeclaration} */ (
+			/** @type {unknown} */ (statement)
+		).name;
+		if (
+			name &&
+			(ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
+			HTTP_METHOD_NAMES.has(name.text)
+		) {
+			methods.push(name.text);
+		}
+	}
+	return methods;
+}
+
+/** @param {string} source @param {string} authorityCall @param {string} [boundaryCall] */
+export function validateFirstStatementAuthority(source, authorityCall, boundaryCall = undefined) {
+	const handlers = [...source.matchAll(EXPORTED_ROUTE_HANDLER_PATTERN)];
+	const exportedMethods = exportedHttpMethods(source);
+	invariant(handlers.length > 0, 'Executable route source has no standard RequestHandler export.');
+	invariant(
+		exportedMethods.length === handlers.length &&
+			exportedMethods.every((method, index) => method === handlers[index][1]),
+		'Every exported HTTP handler must use the reviewed async (event) RequestHandler form.'
+	);
+	for (let index = 0; index < handlers.length; index += 1) {
+		const handler = handlers[index];
+		const bodyStart = /** @type {number} */ (handler.index) + handler[0].length;
+		const bodyEnd = handlers[index + 1]?.index ?? source.length;
+		const body = source.slice(bodyStart, bodyEnd);
+		const preamble = new RegExp(
+			`^\\s*const authenticatedUserId = ${authorityCall}\\(event\\);\\s*` +
+				'if \\(authenticatedUserId instanceof Response\\) return authenticatedUserId;' +
+				(boundaryCall
+					? `\\s*const requestEnvelope = await ${boundaryCall}\\(event, ['\"][a-z-]+['\"]\\);\\s*` +
+						'if \\(requestEnvelope instanceof Response\\) return requestEnvelope;'
+					: ''),
+			'u'
+		);
+		invariant(
+			preamble.test(body),
+			`${handler[1]} handler must authenticate as its first executable statements.`
+		);
+	}
+	return handlers.length;
+}
+
+/**
+ * Walk each declared executable route family. A broad WAF prefix protects every
+ * current and future handler in the family, while an exact first-statement
+ * application authority prevents anonymous paid work even when isolate-local
+ * counters reset.
+ *
+ * @param {unknown} inventoryValue
+ * @param {unknown} policyValue
+ * @param {{ repoRoot?: string }} [options]
+ */
+export function validateExecutableDynamicRouteFamilyCoverage(
+	inventoryValue,
+	policyValue,
+	{ repoRoot = process.cwd() } = {}
+) {
+	const inventory = validateAnonymousDynamicRouteCostInventory(inventoryValue);
+	const policy = validatePublicDynamicRateLimitPolicy(policyValue);
+	const absoluteRepoRoot = realpathSync(repoRoot);
+	const repoPrefix = `${absoluteRepoRoot}${path.sep}`;
+	let executableRoutes = 0;
+	let handlers = 0;
+
+	for (const family of inventory.requiredExecutableRouteFamilies) {
+		const requestedRoot = path.resolve(absoluteRepoRoot, family.sourceRoot);
+		const rootStat = lstatSync(requestedRoot);
+		invariant(
+			rootStat.isDirectory() && !rootStat.isSymbolicLink(),
+			`${family.sourceRoot} must be a real directory.`
+		);
+		const sourceRoot = realpathSync(requestedRoot);
+		invariant(
+			sourceRoot === absoluteRepoRoot || sourceRoot.startsWith(repoPrefix),
+			`${family.sourceRoot} escapes the repository root.`
+		);
+
+		/** @type {string[]} */
+		const routeSources = [];
+		/** @param {string} directory */
+		function visit(directory) {
+			for (const name of readdirSync(directory).sort()) {
+				const entry = path.join(directory, name);
+				const stat = lstatSync(entry);
+				invariant(!stat.isSymbolicLink(), `Executable route inventory forbids symlink: ${entry}.`);
+				if (stat.isDirectory()) visit(entry);
+				else if (stat.isFile() && name === '+server.ts') routeSources.push(entry);
+			}
+		}
+		visit(sourceRoot);
+		invariant(routeSources.length > 0, `${family.sourceRoot} contains no executable routes.`);
+
+		for (const routeSource of routeSources) {
+			const relative = path.relative(sourceRoot, routeSource).split(path.sep).join('/');
+			const suffix = relative === '+server.ts' ? '' : relative.slice(0, -'/+server.ts'.length);
+			const pathname = `${family.pathPrefix}${suffix}`;
+			invariant(
+				publicDynamicPathMatchesPolicy(pathname, policy),
+				`Executable dynamic route is missing from the Cloudflare shield: ${pathname}.`
+			);
+			const bytes = readFileSync(routeSource);
+			invariant(
+				bytes.length <= 512 * 1024,
+				`Executable route source exceeds 512 KiB: ${relative}.`
+			);
+			const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+			try {
+				handlers += validateFirstStatementAuthority(
+					source,
+					family.authorityCall,
+					family.boundaryCall
+				);
+			} catch (error) {
+				throw new Error(
+					`${path.relative(absoluteRepoRoot, routeSource)}: ${error instanceof Error ? error.message : String(error)}`,
+					{ cause: error }
+				);
+			}
+			executableRoutes += 1;
+		}
+	}
+
+	return {
+		executableRoutes,
+		families: inventory.requiredExecutableRouteFamilies.length,
+		handlers
+	};
 }
 
 /** @param {unknown} inventoryValue @param {unknown} policyValue */
@@ -302,16 +541,18 @@ export function validatePublicDynamicRateLimitRuleset(envelope, policy) {
 }
 
 /**
- * @param {{policy: unknown, inventory: unknown, apiToken: string | undefined, fetchFn?: typeof fetch}} options
+ * @param {{policy: unknown, inventory: unknown, apiToken: string | undefined, fetchFn?: typeof fetch, repoRoot?: string}} options
  */
 export async function verifyCloudflarePublicDynamicRateLimit({
 	policy,
 	inventory,
 	apiToken,
-	fetchFn = fetch
+	fetchFn = fetch,
+	repoRoot = process.cwd()
 }) {
 	const exactPolicy = validatePublicDynamicRateLimitPolicy(policy);
 	validateAnonymousDynamicRouteInventoryCoverage(inventory, exactPolicy);
+	validateExecutableDynamicRouteFamilyCoverage(inventory, exactPolicy, { repoRoot });
 	invariant(
 		typeof apiToken === 'string' && apiToken.length > 0,
 		'CLOUDFLARE_API_TOKEN is required.'
@@ -388,12 +629,14 @@ if (isMain) {
 			'Anonymous dynamic-route inventory exceeds 16 KiB.'
 		);
 		const inventory = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(inventoryBytes));
+		const repoRoot = path.dirname(path.dirname(path.resolve(policyPath)));
 		console.log(
 			JSON.stringify(
 				await verifyCloudflarePublicDynamicRateLimit({
 					policy,
 					inventory,
-					apiToken: process.env.CLOUDFLARE_API_TOKEN
+					apiToken: process.env.CLOUDFLARE_API_TOKEN,
+					repoRoot
 				})
 			)
 		);

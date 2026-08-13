@@ -17,6 +17,7 @@ type DecisionMakerRequest = {
 	target_type?: string;
 	target_entity?: string;
 	audience_guidance?: string;
+	org_slug?: string;
 	verbose?: boolean;
 };
 
@@ -58,6 +59,8 @@ const BODY_LIMITS = Object.freeze({
 	'stream-subject': 64 * 1024
 });
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
+// Org context the caller declares for billing. A lookup key, never prose.
+const ORG_SLUG_RE = Object.freeze(/^[a-z0-9][a-z0-9-]{0,127}$/u);
 const ROUTE_IDENTIFIER_RE = /^[A-Za-z0-9:_-]+$/u;
 
 class AgentRequestValidationError extends Error {}
@@ -232,6 +235,8 @@ function validateDecisionMakerRequest(value: unknown): DecisionMakerRequest {
 	optionalString(body.target_type, 128, 'Target type exceeds maximum length');
 	optionalString(body.target_entity, 512, 'Target entity exceeds maximum length');
 	optionalString(body.audience_guidance, 4_000, 'Audience guidance exceeds maximum length');
+	const orgSlug = optionalString(body.org_slug, 128, 'Org slug exceeds maximum length');
+	if (orgSlug !== undefined && !ORG_SLUG_RE.test(orgSlug)) fail('Invalid org slug');
 	optionalBoolean(body.verbose, 'Invalid verbose value');
 	return body as DecisionMakerRequest;
 }
@@ -240,6 +245,7 @@ const DECISION_MAKER_FIELD_LIMITS: Readonly<Record<string, number>> = Object.fre
 	accountabilityOpener: 4_000,
 	contactChannel: 128,
 	contactNotes: 4_000,
+	deliveryTier: 8,
 	email: 320,
 	emailSource: 2_048,
 	emailSourceTitle: 512,
@@ -250,6 +256,7 @@ const DECISION_MAKER_FIELD_LIMITS: Readonly<Record<string, number>> = Object.fre
 	publicRecipientProvenance: 4_096,
 	reasoning: 4_000,
 	roleCategory: 128,
+	seatRoute: 2_048,
 	source_url: 2_048,
 	sourceUrl: 2_048,
 	title: 512

@@ -139,6 +139,13 @@ export default defineConfig({
 			// lane cannot carry is discarded, cleared and announced. Components-lane
 			// only; the lane decision itself runs in CI via tests/unit/send-lane.test.ts.
 			'tests/unit/components/template-preview-sender-text.test.ts',
+			// Mounts TemplateModal to prove the honest receipt and the unobserved
+			// hand-off state are actually rendered, not just declared. Components-lane
+			// only; the evidence table itself runs in CI via
+			// tests/unit/send-evidence-honesty.test.ts.
+			'tests/unit/components/send-handoff-honesty.test.ts',
+			'tests/unit/components/free-lane-exhaustion-copy.test.ts',
+			'tests/unit/components/decision-maker-results-delivery-tier.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

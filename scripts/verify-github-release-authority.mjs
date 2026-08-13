@@ -175,19 +175,43 @@ export function validateGitHubReleaseAuthority({
 	const contexts = requiredChecks.contexts;
 	invariant(
 		Array.isArray(contexts) &&
-			contexts.length <= 1 &&
-			contexts.every((context) => context === requiredStatusCheck),
-		'Protected main legacy status contexts must be empty or exactly test.'
+			contexts.length <= 16 &&
+			contexts.every((context) => typeof context === 'string' && context.length > 0) &&
+			new Set(contexts).size === contexts.length,
+		'Protected main legacy status contexts must be bounded and unique.'
 	);
 	const checks = requiredChecks.checks;
 	invariant(
-		Array.isArray(checks) && checks.length === 1,
-		'Protected main must require exactly one app-bound status check.'
+		Array.isArray(checks) && checks.length >= 1 && checks.length <= 16,
+		'Protected main must require one to sixteen app-bound status checks.'
 	);
-	const requiredCheck = record(checks[0]);
+	/** @type {Record<string, any>[]} */
+	const checkRecords = [];
+	for (const rawCheck of checks) {
+		const check = record(rawCheck);
+		invariant(
+			check !== null &&
+				typeof check.context === 'string' &&
+				check.context.length > 0 &&
+				Number.isSafeInteger(check.app_id) &&
+				check.app_id > 0,
+			'Protected main app-bound status check identity is malformed.'
+		);
+		checkRecords.push(check);
+	}
+	const checkContexts = checkRecords.map((check) => check.context);
 	invariant(
-		requiredCheck?.context === requiredStatusCheck &&
-			requiredCheck?.app_id === RELEASE_AUTHORITY_STATUS_CHECK_APP_ID,
+		new Set(checkContexts).size === checkContexts.length,
+		'Protected main app-bound status check contexts must be unique across Apps.'
+	);
+	invariant(
+		contexts.every((context) => checkContexts.includes(context)),
+		'Protected main contains a legacy context without an app-bound check.'
+	);
+	const releaseChecks = checkRecords.filter((check) => check.context === requiredStatusCheck);
+	invariant(
+		releaseChecks.length === 1 &&
+			releaseChecks[0]?.app_id === RELEASE_AUTHORITY_STATUS_CHECK_APP_ID,
 		'Protected main must bind the exact test status check to the GitHub Actions App.'
 	);
 	const pullRequestReviews = record(branch.required_pull_request_reviews);
@@ -207,6 +231,10 @@ export function validateGitHubReleaseAuthority({
 	invariant(
 		pullRequestReviews.require_last_push_approval === true,
 		'Protected main must require the last push to be approved by someone other than its pusher.'
+	);
+	invariant(
+		pullRequestReviews.require_code_owner_reviews === true,
+		'Protected main must require approval from a CODEOWNER.'
 	);
 	requireEmptyActorSet(
 		pullRequestReviews.bypass_pull_request_allowances,
@@ -234,9 +262,10 @@ export function validateGitHubReleaseAuthority({
 		reviewerCount: reviewers.length,
 		deploymentBranches: [protectedBranch],
 		protectedBranch,
-		requiredStatusChecks: [requiredStatusCheck],
+		requiredStatusChecks: checkContexts,
 		requiredStatusCheckAppId: RELEASE_AUTHORITY_STATUS_CHECK_APP_ID,
 		requiredApprovals: pullRequestReviews.required_approving_review_count,
+		codeOwnerApproval: true,
 		dismissStaleApprovals: true,
 		requireLastPushApproval: true,
 		pullRequestBypassActors: 0,

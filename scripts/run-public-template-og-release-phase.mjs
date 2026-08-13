@@ -49,6 +49,12 @@ import {
 	validatePublicTemplateOgReleaseRecoveryIdentity,
 	verifyPublicTemplateOgReleaseRecoveryBucket
 } from './public-template-og-release-recovery-store.mjs';
+import {
+	clearPaidProviderPagesSecrets,
+	materializePaidProviderPagesSecrets,
+	verifyPaidProviderPagesDeploymentBindings
+} from './materialize-paid-provider-pages-secrets.mjs';
+import { readProviderPostureBindingsFromEnvironment } from './verify-paid-provider-account-posture.mjs';
 
 const ACCOUNT_ID = '019d1184e655db74b7589794a2a2a533';
 const PAGES_PROJECT = 'communique-site';
@@ -74,10 +80,20 @@ function run(command, args, options = {}) {
 	const configuredTimeout = options.timeoutMs ?? READ_COMMAND_TIMEOUT_MS;
 	const remaining = options.deadlineAt ? options.deadlineAt - Date.now() : configuredTimeout;
 	invariant(remaining > 0, 'The receipt-scoped release success window expired.');
+	for (const name of Object.keys(options.env ?? {})) {
+		invariant(
+			!name.startsWith('PROVIDER_POSTURE_'),
+			'Provider posture inputs must never be delegated to a child process.'
+		);
+	}
+	const childEnvironment = { ...process.env };
+	for (const name of Object.keys(childEnvironment)) {
+		if (name.startsWith('PROVIDER_POSTURE_')) delete childEnvironment[name];
+	}
 	const result = (options.spawnFn ?? spawnSync)(command, args, {
 		cwd: options.cwd,
 		encoding: 'utf8',
-		env: { ...process.env, WRANGLER_SEND_METRICS: 'false', ...(options.env ?? {}) },
+		env: { ...childEnvironment, WRANGLER_SEND_METRICS: 'false', ...(options.env ?? {}) },
 		maxBuffer: 4 * 1024 * 1024,
 		shell: false,
 		timeout: Math.max(1, Math.min(configuredTimeout, remaining)),
@@ -286,6 +302,13 @@ export function materializePublicTemplateOgReleaseTransactionConfig(pagesConfigC
 		'Pages release configuration must be a bounded ordinary file.'
 	);
 	let source = readFileSync(target, 'utf8');
+	const previewTables = [...source.matchAll(/^\[{1,2}env\.preview\.[^\r\n]+$/gmu)].map(
+		([table]) => table
+	);
+	invariant(
+		previewTables.length === 1 && previewTables[0] === '[env.preview.vars]',
+		'Pages release configuration must expose only the inert preview vars table.'
+	);
 	invariant(
 		!source.includes(RELEASE_TRANSACTION_VAR),
 		'Pages release configuration already contains transaction authority.'
@@ -888,15 +911,47 @@ async function forwardContainPages({
 			current.artifactDigest === artifactDigest,
 		`PUBLIC_TEMPLATE_OG_RELEASE_SUPERSEDED:${realm}-pages`
 	);
-	if (current.releaseComponent === 'pages-containment') {
+	if (realm === 'production') {
+		const cleanupArguments = [
+			path.join(trusted, 'scripts/materialize-paid-provider-pages-secrets.mjs'),
+			'clear-staged'
+		];
+		if (current.releaseComponent === 'pages') cleanupArguments.push(current.deploymentId);
+		run(process.execPath, cleanupArguments, {
+			spawnFn,
+			label: 'production provider project-default cleanup before forward containment'
+		});
 		run(
 			process.execPath,
-			[path.join(trusted, 'scripts/verify-pages-containment-bindings.mjs'), '--environment', realm],
-			{ spawnFn, label: `${realm} existing forward-containment proof` }
+			[path.join(trusted, 'scripts/materialize-paid-provider-pages-secrets.mjs'), 'assert-absent'],
+			{
+				spawnFn,
+				label: 'production provider project-default absence before forward containment'
+			}
 		);
-		return current;
 	}
-	invariant(current.releaseComponent === 'pages', `${realm} Pages component is not recoverable.`);
+	if (current.releaseComponent === 'pages-containment') {
+		try {
+			run(
+				process.execPath,
+				[
+					path.join(trusted, 'scripts/verify-pages-containment-bindings.mjs'),
+					'--environment',
+					realm
+				],
+				{ spawnFn, label: `${realm} existing forward-containment proof` }
+			);
+			return current;
+		} catch {
+			// A prior interrupted cleanup may have let this immutable containment
+			// deployment inherit a provider capability. The clean project state was
+			// just proved, so forward-replace it with the deterministic artifact.
+		}
+	}
+	invariant(
+		current.releaseComponent === 'pages' || current.releaseComponent === 'pages-containment',
+		`${realm} Pages component is not recoverable.`
+	);
 	const recoveryRoot = mkdtempSync(path.join(os.tmpdir(), 'commons-og-containment-'));
 	try {
 		const recoveryConfig = path.join(recoveryRoot, 'config');
@@ -1472,8 +1527,9 @@ export async function runPublicTemplateOgReleasePhase({
 	let activeVersion;
 	/** @type {string} */
 	let pagesOutput;
-	/** @type {string} */
+	/** @type {string|undefined} */
 	let pagesDeploymentId;
+	let paidProviderProjectSecretsStaged = false;
 
 	const assertSuccessWindow = () =>
 		invariant(Date.now() < deadlineAt, 'The receipt-scoped release success window expired.');
@@ -1895,6 +1951,28 @@ export async function runPublicTemplateOgReleasePhase({
 		// Mutation 3: publish the one Pages producer, still with delivery paused.
 		await markAttempted('pages', 'intent-pages');
 		await authorizeMutation('consumer-paused', 'compatible', 'paused');
+		// Provider credentials exist in mutable project defaults only across the
+		// immediately following upload. Every child process receives a scrubbed env.
+		if (realm === 'production') {
+			const providerBindings = readProviderPostureBindingsFromEnvironment(process.env);
+			for (const name of Object.keys(process.env)) {
+				if (name.startsWith('PROVIDER_POSTURE_')) delete process.env[name];
+			}
+			try {
+				await materializePaidProviderPagesSecrets({
+					accountId,
+					apiToken,
+					bindings: providerBindings,
+					fetchFn
+				});
+			} finally {
+				for (const binding of Object.values(providerBindings)) {
+					binding.credential = '';
+					binding.accountId = '';
+				}
+			}
+			paidProviderProjectSecretsStaged = true;
+		}
 		pagesOutput = run(
 			wrangler,
 			[
@@ -1937,20 +2015,35 @@ export async function runPublicTemplateOgReleasePhase({
 			typeof pagesDeploymentId === 'string' && VERSION_ID_PATTERN.test(pagesDeploymentId),
 			`${realm} Pages deployment id is invalid.`
 		);
-		run(
-			process.execPath,
-			[
-				path.join(trusted, 'scripts/verify-pages-durable-object-binding.mjs'),
-				'--environment',
-				realm
-			],
-			{
-				deadlineAt,
-				env: { PUBLIC_RELEASE_TRANSACTION_ID: transactionId },
-				spawnFn,
-				label: `${realm} Pages Durable Object proof`
-			}
-		);
+		if (realm === 'production') {
+			await verifyPaidProviderPagesDeploymentBindings({
+				accountId,
+				apiToken,
+				deploymentId: pagesDeploymentId,
+				fetchFn
+			});
+			await clearPaidProviderPagesSecrets({
+				accountId,
+				apiToken,
+				expectedDeploymentId: pagesDeploymentId,
+				fetchFn
+			});
+			paidProviderProjectSecretsStaged = false;
+		}
+		const pagesBindingProofArgs = [
+			path.join(trusted, 'scripts/verify-pages-durable-object-binding.mjs'),
+			'--environment',
+			realm
+		];
+		if (realm === 'production') {
+			pagesBindingProofArgs.push('--deployment-id', pagesDeploymentId);
+		}
+		run(process.execPath, pagesBindingProofArgs, {
+			deadlineAt,
+			env: { PUBLIC_RELEASE_TRANSACTION_ID: transactionId },
+			spawnFn,
+			label: `${realm} Pages Durable Object proof`
+		});
 		await deploymentProof('bound', 'paused');
 		await prove('producer-paused');
 		// Candidate execution is qualified later through the isolated, purpose-only
@@ -2057,6 +2150,26 @@ export async function runPublicTemplateOgReleasePhase({
 				/https:\/\/[a-z0-9-]+\.communique-site\.pages\.dev/u.exec(pagesOutput)?.[0] ?? null
 		};
 	} catch (error) {
+		if (realm === 'production') {
+			try {
+				await clearPaidProviderPagesSecrets({
+					accountId,
+					apiToken,
+					expectedDeploymentId:
+						typeof pagesDeploymentId === 'string' && VERSION_ID_PATTERN.test(pagesDeploymentId)
+							? pagesDeploymentId
+							: undefined,
+					fetchFn
+				});
+				paidProviderProjectSecretsStaged = false;
+			} catch (cleanupError) {
+				throw new AggregateError(
+					[error, cleanupError],
+					'Queue phase failed and provider project-default cleanup was incomplete.',
+					{ cause: cleanupError }
+				);
+			}
+		}
 		try {
 			await recoverPublicTemplateOgReleasePhase({
 				journalPath,
@@ -2086,6 +2199,9 @@ export async function runPublicTemplateOgReleasePhase({
 		}
 		throw error;
 	} finally {
+		if (realm === 'production' && paidProviderProjectSecretsStaged) {
+			await clearPaidProviderPagesSecrets({ accountId, apiToken, fetchFn });
+		}
 		if (removeReceiptFiles) {
 			rmSync(attestationPath, { force: true });
 			rmSync(signaturePath, { force: true });

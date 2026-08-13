@@ -78,20 +78,20 @@ function detailFixture() {
 		delivery_config: {},
 		cwc_config: null,
 		recipient_config: {
-			emails: ['recipient@agency.example'],
+			emails: ['press@agency.example'],
 			decisionMakers: [
 				{
-					name: 'Public Recipient',
-					title: 'Director',
+					name: 'Press Office',
+					title: 'Press Desk',
 					organization: 'Public Agency',
-					email: 'recipient@agency.example',
+					email: 'press@agency.example',
 					emailGrounded: true,
 					emailSource: 'https://agency.example/contact'
 				}
 			]
 		},
 		recipient_count: 1,
-		recipientEmails: ['recipient@agency.example'],
+		recipientEmails: ['press@agency.example'],
 		topics: ['water'],
 		createdAt: '2026-07-18T00:00:00.000Z',
 		author: { name: 'Template Author', avatar: null }
@@ -306,7 +306,7 @@ describe('public template detail cost shield', () => {
 			[...cache.entries.values()].map((response) => response.clone().text())
 		);
 		expect(bodies).toHaveLength(1);
-		expect(bodies[0]).toContain('recipient@agency.example');
+		expect(bodies[0]).toContain('press@agency.example');
 		expect(bodies[0]).not.toContain('personalPrompt');
 		expect(bodies[0]).not.toContain('publicRecipientProvenance');
 

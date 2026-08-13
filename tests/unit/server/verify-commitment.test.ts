@@ -53,6 +53,18 @@ const VALID_PINNED_ROOT = '0x' + 'aa'.repeat(32);
 
 const EXPECTED_COMMITMENT = '0xabc' + '0'.repeat(61);
 
+function encodeSubstrateId(value: string): string {
+	return `0x${Buffer.from(value, 'utf8').toString('hex')}`;
+}
+
+function districtsWith(entries: Record<number, string>): string[] {
+	const districts = Array<string>(24).fill('0x0');
+	for (const [slot, value] of Object.entries(entries)) {
+		districts[Number(slot)] = value;
+	}
+	return districts;
+}
+
 const VALID_CELL_DATA = {
 	cellMapRoot: VALID_PINNED_ROOT,
 	cellId: VALID_CELL_ID,
@@ -96,6 +108,80 @@ describe('verifyDistrictCommitment', () => {
 
 		expect(result.matches).toBe(true);
 		expect(result.expectedCommitment).toBe(EXPECTED_COMMITMENT);
+	});
+
+	it('returns county containment decoded from authenticated slot 4', async () => {
+		const districts = districtsWith({ 4: encodeSubstrateId('county-27115') });
+		mockGetFullCellData.mockResolvedValueOnce({ ...VALID_CELL_DATA, districts });
+		mockPoseidonSponge.mockResolvedValueOnce(EXPECTED_COMMITMENT);
+
+		const result = await verifyDistrictCommitment({
+			lat: 45.9,
+			lng: -93.1,
+			clientCommitment: EXPECTED_COMMITMENT
+		});
+
+		expect(result.containment).toContainEqual({
+			slot: 4,
+			districtType: 'county',
+			districtId: 'county-27115'
+		});
+	});
+
+	it('does not return county containment for a zero slot 4', async () => {
+		const districts = districtsWith({ 4: '0x0' });
+		mockGetFullCellData.mockResolvedValueOnce({ ...VALID_CELL_DATA, districts });
+		mockPoseidonSponge.mockResolvedValueOnce(EXPECTED_COMMITMENT);
+
+		const result = await verifyDistrictCommitment({
+			lat: 45.9,
+			lng: -93.1,
+			clientCommitment: EXPECTED_COMMITMENT
+		});
+
+		expect(result.containment.some((entry) => entry.slot === 4)).toBe(false);
+	});
+
+	it('filters decoded values from slots outside the served allowlist', async () => {
+		const districts = districtsWith({
+			1: encodeSubstrateId('senate-27115'),
+			6: encodeSubstrateId('ward-27115'),
+			19: encodeSubstrateId('judicial-27115')
+		});
+		mockGetFullCellData.mockResolvedValueOnce({ ...VALID_CELL_DATA, districts });
+		mockPoseidonSponge.mockResolvedValueOnce(EXPECTED_COMMITMENT);
+
+		const result = await verifyDistrictCommitment({
+			lat: 45.9,
+			lng: -93.1,
+			clientCommitment: EXPECTED_COMMITMENT
+		});
+
+		expect(result.containment.map((entry) => entry.slot)).not.toEqual(
+			expect.arrayContaining([1, 6, 19])
+		);
+	});
+
+	it('returns no containment when cell-map membership rejects', async () => {
+		const districts = districtsWith({ 4: encodeSubstrateId('county-27115') });
+		mockGetFullCellData.mockResolvedValueOnce({ ...VALID_CELL_DATA, districts });
+		mockVerifyCellMapMembership.mockRejectedValueOnce(
+			new Error('CELL_AUTHENTICITY_ROOT_MISMATCH')
+		);
+
+		let returned: Awaited<ReturnType<typeof verifyDistrictCommitment>> | undefined;
+		await expect(
+			verifyDistrictCommitment({
+				lat: 45.9,
+				lng: -93.1,
+				clientCommitment: EXPECTED_COMMITMENT
+			}).then((result) => {
+				returned = result;
+			})
+		).rejects.toThrow(/COMMITMENT_VERIFY_CELL_MAP_ROOT_MISMATCH/);
+
+		expect(returned).toBeUndefined();
+		expect(mockPoseidonSponge).not.toHaveBeenCalled();
 	});
 
 	it('mismatch: throws COMMITMENT_AUTHENTICITY_MISMATCH', async () => {
