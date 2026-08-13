@@ -277,12 +277,26 @@ describe('sender-visible attestation == recipient-visible attestation', () => {
 	});
 
 	it('a sender the preview shows no footer sends the recipient none', async () => {
-		// Tier 0 is the only class that composes to a null line — tier 1 still reads
-		// "Verified sender". A footer here would be a verification claim the sender
-		// never read, arriving through a lane that opts in unconditionally.
+		// Every tier below 2 composes to a null line. A footer here would be a
+		// verification claim the sender never read, arriving through a lane that
+		// opts in unconditionally.
 		seedPage({ trust_tier: 0 });
 
 		const { container } = renderPreview('attestation-parity-tier0');
+		expect(container.querySelector('[data-testid="attestation-line"]')).toBeNull();
+
+		expect(await recipientBody()).not.toContain('---');
+	});
+
+	it('a tier-1 sender — authenticated, not verified — is shown none and sends none', async () => {
+		// `seedPage()` defaults the fixture to tier 2, so the tier is stated here
+		// rather than inherited. `baseUser` keeps its credentialHash, which makes
+		// the assertion strictly stronger: an account that holds a hash still
+		// composes no line below tier 2. Email possession is anti-sybil and cost
+		// control, not civic proof, and there is no honest phrase for it.
+		seedPage({ trust_tier: 1 });
+
+		const { container } = renderPreview('attestation-parity-tier1');
 		expect(container.querySelector('[data-testid="attestation-line"]')).toBeNull();
 
 		expect(await recipientBody()).not.toContain('---');

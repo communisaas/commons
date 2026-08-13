@@ -73,6 +73,8 @@ export const POST: RequestHandler = async (event) => {
 	if (!rateLimitCheck.allowed) return rateLimitResponse(rateLimitCheck);
 
 	try {
+		// This endpoint receives only caller-authored text and no trusted resolved
+		// recipient, so moderation intentionally keeps the strict unknown policy.
 		const result = await moderatePersonalization(text, { signal: event.request.signal });
 		const headers = new Headers();
 		addRateLimitHeaders(headers, rateLimitCheck);

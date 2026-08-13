@@ -10,10 +10,7 @@
 	<meta property="og:type" content="article" />
 	<meta property="og:url" content="https://commons.email/about/integrity" />
 	<meta property="og:title" content="Coordination Integrity Scores | Commons" />
-	<meta property="og:description" content="Five metrics. Real campaign data. No self-report." />
-	<meta property="og:image" content="https://commons.email/og/integrity" />
-	<meta name="twitter:card" content="summary_large_image" />
-	<meta name="twitter:image" content="https://commons.email/og/integrity" />
+	<meta property="og:description" content="How Commons measures whether campaign participation is organic, diverse, and sustained." />
 </svelte:head>
 
 <div class="mx-auto max-w-3xl space-y-12">
@@ -21,7 +18,10 @@
 		<p class="text-[10px] font-mono uppercase tracking-wider text-text-quaternary">Methodology</p>
 		<h1 class="text-3xl font-bold text-text-primary">Coordination Integrity Scores</h1>
 		<p class="text-base text-text-secondary leading-relaxed">
-			Every proof report delivered by Commons includes five integrity scores. These scores measure whether campaign participation is organic, diverse, and sustained &mdash; or manufactured, concentrated, and bursty. They are computed from real campaign data. No score is self-reported.
+			Commons computes five coordination readings from campaign data for the organization running the campaign. These diagnostics measure whether participation is organic, diverse, and sustained &mdash; or manufactured, concentrated, and bursty. They are not included in the message a recipient receives, and no reading is self-reported.
+		</p>
+		<p class="text-sm text-text-tertiary leading-relaxed">
+			These readings can invert: a machine-distributed campaign can score higher than an organic one. They are diagnostics for the organization running the campaign, not a measure of legitimacy. No action available. Both directions of this reading are ambiguous.
 		</p>
 	</header>
 
@@ -40,13 +40,13 @@
 					<th class="px-4 py-2 font-mono font-medium">Score</th><th class="px-4 py-2 font-medium">Interpretation</th>
 				</tr></thead>
 				<tbody class="divide-y divide-surface-border">
-					<tr><td class="px-4 py-2 font-mono text-emerald-400">0.90+</td><td class="px-4 py-2 text-text-secondary">Actions span many districts evenly &mdash; strong geographic breadth</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-teal-400">0.50&ndash;0.89</td><td class="px-4 py-2 text-text-secondary">Moderate spread, some district clustering</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-text-quaternary">&lt; 0.50</td><td class="px-4 py-2 text-text-secondary">Concentrated in few districts</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.90+</td><td class="px-4 py-2 text-text-secondary">Actions span many districts evenly</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.50&ndash;0.89</td><td class="px-4 py-2 text-text-secondary">Actions span several districts, with some district clustering</td></tr>
+					<tr><td class="px-4 py-2 font-mono">&lt; 0.50</td><td class="px-4 py-2 text-text-secondary">Concentrated in few districts</td></tr>
 				</tbody>
 			</table>
 		</div>
-		<p class="text-xs text-text-tertiary">Privacy: Computed from district hashes, not addresses. Districts with fewer than 5 actions are suppressed.</p>
+		<p class="text-xs text-text-tertiary">Privacy: Computed from one-way district hashes, never addresses. No minimum-count floor is applied to districts, so a district with one action can appear. Neighborhood-level (H3 cell) counts are withheld below 5 actions.</p>
 	</section>
 
 	<!-- ALD -->
@@ -56,7 +56,7 @@
 			<span class="font-mono text-xs text-text-quaternary">ALD</span>
 		</div>
 		<p class="text-sm text-text-secondary leading-relaxed">
-			Measures how unique each participant's message is. Computed as the ratio of unique message hashes to total message hashes. When people write in their own words, it demonstrates genuine engagement.
+			Measures how many message hashes are distinct. Computed as the ratio of unique message hashes to total message hashes; repeated hashes lower the ratio.
 		</p>
 		<div class="overflow-hidden rounded-lg border border-surface-border">
 			<table class="w-full text-sm">
@@ -64,9 +64,9 @@
 					<th class="px-4 py-2 font-mono font-medium">Score</th><th class="px-4 py-2 font-medium">Interpretation</th>
 				</tr></thead>
 				<tbody class="divide-y divide-surface-border">
-					<tr><td class="px-4 py-2 font-mono text-emerald-400">0.90+</td><td class="px-4 py-2 text-text-secondary">Nearly every message is distinct &mdash; participants wrote their own words</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-teal-400">0.50&ndash;0.89</td><td class="px-4 py-2 text-text-secondary">Mix of personalized and template messages</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-text-quaternary">&lt; 0.50</td><td class="px-4 py-2 text-text-secondary">Most messages are identical copies</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.90+</td><td class="px-4 py-2 text-text-secondary">At least 90% as many distinct message hashes as messages</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.50&ndash;0.89</td><td class="px-4 py-2 text-text-secondary">Between 50% and 89% as many distinct message hashes as messages</td></tr>
+					<tr><td class="px-4 py-2 font-mono">&lt; 0.50</td><td class="px-4 py-2 text-text-secondary">Fewer than 50% as many distinct message hashes as messages</td></tr>
 				</tbody>
 			</table>
 		</div>
@@ -80,7 +80,7 @@
 			<span class="font-mono text-xs text-text-quaternary">H(t)</span>
 		</div>
 		<p class="text-sm text-text-secondary leading-relaxed">
-			Measures how evenly participation spreads over time using Shannon entropy over hourly buckets. Organic campaigns build over hours and days. Bot operations spike in minutes.
+			Measures how participation is distributed over time using Shannon entropy over hourly buckets.
 		</p>
 		<div class="overflow-hidden rounded-lg border border-surface-border">
 			<table class="w-full text-sm">
@@ -88,9 +88,9 @@
 					<th class="px-4 py-2 font-mono font-medium">Normalized</th><th class="px-4 py-2 font-medium">Interpretation</th>
 				</tr></thead>
 				<tbody class="divide-y divide-surface-border">
-					<tr><td class="px-4 py-2 font-mono text-emerald-400">0.65+</td><td class="px-4 py-2 text-text-secondary">Sustained over many hours or days &mdash; organic growth</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-teal-400">0.33&ndash;0.64</td><td class="px-4 py-2 text-text-secondary">Some temporal spread, some bursts</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-text-quaternary">&lt; 0.33</td><td class="px-4 py-2 text-text-secondary">Nearly all actions in a narrow time window</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.65+</td><td class="px-4 py-2 text-text-secondary">Actions are distributed across multiple hourly buckets</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.33&ndash;0.64</td><td class="px-4 py-2 text-text-secondary">Actions have some temporal spread and some clustering</td></tr>
+					<tr><td class="px-4 py-2 font-mono">&lt; 0.33</td><td class="px-4 py-2 text-text-secondary">Nearly all actions in a narrow time window</td></tr>
 				</tbody>
 			</table>
 		</div>
@@ -103,7 +103,7 @@
 			<span class="font-mono text-xs text-text-quaternary">BV</span>
 		</div>
 		<p class="text-sm text-text-secondary leading-relaxed">
-			The ratio of peak hourly action count to average hourly count. This is the only inverted metric &mdash; lower is better. A steady pace indicates organic human engagement; extreme spikes suggest coordinated inorganic activity.
+			The ratio of the peak hourly action count to the average count across hourly buckets that contain actions.
 		</p>
 		<div class="overflow-hidden rounded-lg border border-surface-border">
 			<table class="w-full text-sm">
@@ -111,9 +111,9 @@
 					<th class="px-4 py-2 font-mono font-medium">Score</th><th class="px-4 py-2 font-medium">Interpretation</th>
 				</tr></thead>
 				<tbody class="divide-y divide-surface-border">
-					<tr><td class="px-4 py-2 font-mono text-emerald-400">1.0&ndash;2.0</td><td class="px-4 py-2 text-text-secondary">Steady pace &mdash; actions flow in at a consistent rate</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-teal-400">2.0&ndash;5.0</td><td class="px-4 py-2 text-text-secondary">Some spikes, likely driven by media mentions or shares</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-amber-400">5.0+</td><td class="px-4 py-2 text-text-secondary">Extreme spike &mdash; may indicate coordinated inorganic activity</td></tr>
+					<tr><td class="px-4 py-2 font-mono">1.0&ndash;2.0</td><td class="px-4 py-2 text-text-secondary">The peak hourly count is up to twice the active-hour average</td></tr>
+					<tr><td class="px-4 py-2 font-mono">2.0&ndash;5.0</td><td class="px-4 py-2 text-text-secondary">The peak hourly count is between two and five times the active-hour average</td></tr>
+					<tr><td class="px-4 py-2 font-mono">5.0+</td><td class="px-4 py-2 text-text-secondary">The peak hourly count is at least five times the active-hour average</td></tr>
 				</tbody>
 			</table>
 		</div>
@@ -126,7 +126,7 @@
 			<span class="font-mono text-xs text-text-quaternary">CAI</span>
 		</div>
 		<p class="text-sm text-text-secondary leading-relaxed">
-			The ratio of deeply engaged participants (Veterans + Pillars) to newer participants (Active tier). Measures whether the people behind a campaign have demonstrated sustained civic participation over time, or appeared for the first time.
+			The ratio of actions from participants in the Veteran and Pillar tiers to actions from participants in the Active tier. It describes the participation-history mix recorded by Commons.
 		</p>
 		<div class="overflow-hidden rounded-lg border border-surface-border">
 			<table class="w-full text-sm">
@@ -134,9 +134,9 @@
 					<th class="px-4 py-2 font-mono font-medium">Score</th><th class="px-4 py-2 font-medium">Interpretation</th>
 				</tr></thead>
 				<tbody class="divide-y divide-surface-border">
-					<tr><td class="px-4 py-2 font-mono text-emerald-400">0.50+</td><td class="px-4 py-2 text-text-secondary">Strong core of long-term engaged supporters</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-teal-400">0.10&ndash;0.49</td><td class="px-4 py-2 text-text-secondary">Mix of new and established participants</td></tr>
-					<tr><td class="px-4 py-2 font-mono text-text-quaternary">&lt; 0.10</td><td class="px-4 py-2 text-text-secondary">Almost entirely new accounts &mdash; could be viral growth or manufactured</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.50+</td><td class="px-4 py-2 text-text-secondary">Veteran- and Pillar-tier actions amount to at least half the Active-tier action count</td></tr>
+					<tr><td class="px-4 py-2 font-mono">0.10&ndash;0.49</td><td class="px-4 py-2 text-text-secondary">Veteran- and Pillar-tier actions amount to between one tenth and just under half the Active-tier action count</td></tr>
+					<tr><td class="px-4 py-2 font-mono">&lt; 0.10</td><td class="px-4 py-2 text-text-secondary">Veteran- and Pillar-tier actions amount to less than one tenth of the Active-tier action count</td></tr>
 				</tbody>
 			</table>
 		</div>
@@ -150,7 +150,7 @@
 			<li><strong class="text-text-primary">No individual addresses.</strong> Geographic diversity is computed from hashed district identifiers. The hash cannot be reversed to an address.</li>
 			<li><strong class="text-text-primary">No message content.</strong> Message authenticity compares SHA-256 hashes. No text is stored or compared.</li>
 			<li><strong class="text-text-primary">No individual attribution.</strong> Scores are aggregates. There is no way to trace a score back to a specific person.</li>
-			<li><strong class="text-text-primary">Small groups are protected.</strong> Any aggregate with fewer than 5 entries is suppressed (k-anonymity).</li>
+			<li><strong class="text-text-primary">Privacy floors are specific.</strong> Neighborhood-level (H3 cell) counts and engagement-tier counts are withheld below 5 entries; district-level counts have no minimum-count floor.</li>
 		</ul>
 	</section>
 

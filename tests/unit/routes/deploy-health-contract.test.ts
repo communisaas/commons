@@ -160,8 +160,8 @@ describe('deployment health contract', () => {
 				'/n/',
 				'/og/',
 				'/api/templates/',
-				'/api/debates/',
-				'/api/positions/count/'
+					'/api/debates/',
+					'/api/positions/'
 			])
 		);
 		expect(policy.ruleset.rules[0].ratelimit.requests_to_origin).toBe(false);
@@ -310,6 +310,10 @@ describe('deployment health contract', () => {
 		expect(readiness).toContain('.publicDiscoveryCache.workBudgetBound == true');
 		expect(readiness).toContain('.publicDiscoveryCache.publication.healthy == true');
 		expect(readiness).toContain('.sessionCookieAuthority.keysIsolated == true');
+		expect(readiness).toContain('.paidProvider.status == "ok"');
+		expect(readiness).toContain('.paidProvider.providerSecretsConfigured == true');
+		expect(readiness).toContain('.paidProvider.operatorAllowlistConfigured == true');
+		expect(readiness).toContain('.paidProvider.missingBindings == []');
 		expect(readiness).toContain('.convexRealm == "production"');
 		expect(readiness).not.toContain('challenge');
 		expect(readiness).not.toContain('|| true');
@@ -648,18 +652,18 @@ describe('deployment health contract', () => {
 		expect(workflow).not.toContain('          - main\n');
 	});
 
-	it('encodes production and preview discovery realms statically in Pages config', () => {
+	it('keeps the Pages preview realm inert while production owns discovery capabilities', () => {
 		expect(pagesConfig).toContain('bucket_name = "commons-public-discovery-cache"');
 		expect(pagesConfig).toContain(
 			'script_name = "commons-public-discovery-manifest-gate"'
 		);
 		expect(pagesConfig).toContain('[env.preview.vars]');
-		expect(pagesConfig).toContain('[[env.preview.r2_buckets]]');
-		expect(pagesConfig).toContain(
+		expect(pagesConfig).not.toContain('[[env.preview.r2_buckets]]');
+		expect(pagesConfig).not.toContain(
 			'bucket_name = "commons-public-discovery-cache-nonprod"'
 		);
-		expect(pagesConfig).toContain('[[env.preview.durable_objects.bindings]]');
-		expect(pagesConfig).toContain(
+		expect(pagesConfig).not.toContain('[[env.preview.durable_objects.bindings]]');
+		expect(pagesConfig).not.toContain(
 			'script_name = "commons-public-discovery-manifest-gate-nonprod"'
 		);
 		expect(nonprodGateConfig).toContain(
@@ -906,7 +910,9 @@ describe('deployment health contract', () => {
 		);
 		expect(preview).not.toContain('--environment production');
 		expect(production).toContain(
-			'node gate/scripts/verify-pages-durable-object-binding.mjs --environment production'
+			'node gate/scripts/verify-pages-durable-object-binding.mjs \\\n' +
+				'            --environment production \\\n' +
+				'            --deployment-id "$PRODUCTION_PAGES_DEPLOYMENT_ID"'
 		);
 		expect(production).not.toContain('--environment preview');
 	});
@@ -923,6 +929,10 @@ describe('deployment health contract', () => {
 		const workBudgetDeploy = workflowStep(
 			'Deploy and prove exact team-global Convex work-budget Worker',
 			'Prove both Convex deployments have zero cron authority'
+		);
+		const workBudgetReceiptProof = workflowStep(
+			'Re-prove work budget immediately before receipt',
+			'Re-prove zero cron authority immediately before receipt'
 		);
 		const quotaIndex = preflight.indexOf(
 			'- name: Prove fresh signed Convex quota before Cloudflare producer eligibility'
@@ -949,9 +959,19 @@ describe('deployment health contract', () => {
 		);
 		expect(workBudgetDeploy).toContain('--config gate/wrangler.convex-work-budget.toml');
 		expect(workBudgetDeploy).toContain('--tag "$DEPLOY_SHA"');
-		expect(workBudgetDeploy).toContain(
-			'verify-convex-work-budget-deployment.mjs \\\n            --environment production --worker-only'
-		);
+		expect(workBudgetDeploy).toContain('verify-convex-work-budget-deployment.mjs \\');
+		expect(workBudgetDeploy).toContain('--deployment-status "$deployment"');
+		expect(workBudgetDeploy).toContain('--active-version "$version"');
+		expect(workBudgetDeploy).toContain('--expected-source-sha "$DEPLOY_SHA"');
+		for (const identityProof of [workBudgetDeploy, workBudgetReceiptProof]) {
+			expect(identityProof).toContain('wrangler deployments status \\');
+			expect(identityProof).toContain('wrangler versions view "$version_id" \\');
+			expect(identityProof).toContain('--name commons-convex-work-budget --json');
+			expect(identityProof).toContain('--deployment-status "$deployment"');
+			expect(identityProof).toContain('--active-version "$version"');
+			expect(identityProof).toContain('--expected-source-sha "$DEPLOY_SHA"');
+			expect(identityProof).not.toContain('--worker-only');
+		}
 		expect(workBudgetDeploy).not.toContain('wrangler rollback');
 		expect(workBudgetDeploy).not.toContain('wrangler delete');
 		expect(workflow).toContain('.publicDiscoveryCache.workBudgetBound == true');

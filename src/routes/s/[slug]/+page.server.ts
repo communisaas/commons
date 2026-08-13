@@ -11,6 +11,8 @@ import { getOfficials } from '$lib/core/shadow-atlas/client';
 import type { DistrictOfficialInput } from '$lib/utils/landscapeMerge';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
+import { absent, blocked, present, type Fact } from '$lib/core/fact';
 
 type DebateArgumentRow = {
 	_id: string;
@@ -53,6 +55,9 @@ type DebateRow = {
 	governanceJustification: string | null;
 	arguments: DebateArgumentRow[];
 };
+
+/** One past self-reported contact, as the page renders it. Nothing contactable. */
+type PriorContact = { name: string; confirmedAt: number };
 
 const onchainId = (value: string | number | null | undefined): string =>
 	value == null ? '' : String(value);
@@ -262,74 +267,111 @@ export const load: PageServerLoad = async ({ locals, parent, url, platform }) =>
 	}
 
 	// Batch 2: Queries depending on Batch 1 results.
-	// Delivery records are intentionally NOT loaded here: a mailto handoff is not
-	// a confirmed send, so prior "started" state must never persist across a
-	// reload or revisit to lock a user out of writing again.
-	const [districtOfficials, positionMetricsResult, credentialHash] = await Promise.all([
-		userDistrictCode
-			? getOfficials(userDistrictCode)
-					.then((data) =>
-						(data.officials || []).map((o) => ({
-							name: o.name || '',
-							title: o.office || (o.chamber === 'senate' ? 'Senator' : 'Representative'),
-							organization: o.party
-								? `${o.chamber === 'senate' ? 'US Senate' : 'US House'} · ${o.party}`
-								: '',
-							bioguideId: o.bioguide_id ?? null,
-							cwcCode: o.cwc_code ?? null,
-							chamber: o.chamber ?? null,
-							phone: o.phone ?? null,
-							contactFormUrl: o.contact_form_url ?? null,
-							websiteUrl: o.website_url ?? null
-						}))
-					)
-					.catch(() => [])
-			: Promise.resolve([]),
+	// Delivery records are intentionally NOT loaded into send state here: a mailto
+	// handoff is not a confirmed send, so prior "started" state must never persist
+	// across a reload or revisit to lock a user out of writing again.
+	// What DOES load is `priorContacts`: the viewer's own past confirmations, read
+	// only to annotate a card ("you said you wrote to them"). It never seeds
+	// `contactedRecipients`/`departingRecipients` and never removes a write button —
+	// the annotation rides alongside the affordance, it does not replace it.
+	const [districtOfficials, positionMetricsResult, credentialHash, priorContacts] =
+		await Promise.all([
+			userDistrictCode
+				? getOfficials(userDistrictCode)
+						.then((data) =>
+							(data.officials || []).map((o) => ({
+								name: o.name || '',
+								title: o.office || (o.chamber === 'senate' ? 'Senator' : 'Representative'),
+								organization: o.party
+									? `${o.chamber === 'senate' ? 'US Senate' : 'US House'} · ${o.party}`
+									: '',
+								bioguideId: o.bioguide_id ?? null,
+								cwcCode: o.cwc_code ?? null,
+								chamber: o.chamber ?? null,
+								phone: o.phone ?? null,
+								contactFormUrl: o.contact_form_url ?? null,
+								websiteUrl: o.website_url ?? null
+							}))
+						)
+						.catch(() => [])
+				: Promise.resolve([]),
 
-		// One compact read supplies both stance totals and district engagement.
-		// It reads the per-template summary plus at most one viewer-district row.
-		userDistrictCode && templateId
-			? serverQuery(api.positions.getViewerDistrictMetric, {
-					_secret: getInternalSecret(),
-					templateId,
-					userDistrictCode
-				})
-					.then((viewerDistrict) => {
-						const base = publicAggregate.positionMetrics;
-						if (!base.engagement) return base;
-						const districts = base.engagement.districts.map((district) => ({
-							...district,
-							is_user_district: district.district_code === userDistrictCode
-						}));
-						if (
-							viewerDistrict &&
-							!districts.some((district) => district.district_code === viewerDistrict.district_code)
-						) {
-							districts.push(viewerDistrict);
-						}
-						return { ...base, engagement: { ...base.engagement, districts } };
+			// One compact read supplies both stance totals and district engagement.
+			// It reads the per-template summary plus at most one viewer-district row.
+			userDistrictCode && templateId
+				? serverQuery(api.positions.getViewerDistrictMetric, {
+						_secret: getInternalSecret(),
+						templateId,
+						userDistrictCode
 					})
-					.catch(() => publicAggregate.positionMetrics)
-			: Promise.resolve(publicAggregate.positionMetrics),
+						.then((viewerDistrict) => {
+							const base = publicAggregate.positionMetrics;
+							if (!base.engagement) return base;
+							const districts = base.engagement.districts.map((district) => ({
+								...district,
+								is_user_district: district.district_code === userDistrictCode
+							}));
+							if (
+								viewerDistrict &&
+								!districts.some(
+									(district) => district.district_code === viewerDistrict.district_code
+								)
+							) {
+								districts.push(viewerDistrict);
+							}
+							return { ...base, engagement: { ...base.engagement, districts } };
+						})
+						.catch(() => publicAggregate.positionMetrics)
+				: Promise.resolve(publicAggregate.positionMetrics),
 
-		// Active credential hash → the public /v/[hash] verify URL in proof footers.
-		// Auth-scoped (serverQuery carries the user's Convex token); resolves to the
-		// same row resolveCredentialHash validates, so the link never 404s. Null when
-		// the user has no active credential — callers then render no link.
-		userId
-			? serverQuery(api.users.getActiveCredentialHash, {
-					_secret: getInternalSecret(),
-					userId: userId as Id<'users'>,
-					asOf: Date.now()
-				})
-					.then((r) => r?.credentialHash ?? null)
-					.catch(() => null)
-			: Promise.resolve(null)
-	]);
+			// Active credential hash → the public /v/[hash] verify URL in proof footers.
+			// Auth-scoped (serverQuery carries the user's Convex token); resolves to the
+			// same row resolveCredentialHash validates, so the link never 404s. Null when
+			// the user has no active credential — callers then render no link.
+			userId
+				? serverQuery(api.users.getActiveCredentialHash, {
+						_secret: getInternalSecret(),
+						userId: userId as Id<'users'>,
+						asOf: Date.now()
+					})
+						.then((r) => r?.credentialHash ?? null)
+						.catch(() => null)
+				: Promise.resolve(null),
+
+			// The viewer's own prior confirmations for this template, as a four-state
+			// Fact so "nothing to show" and "we never looked" stay distinguishable: a
+			// guest is `blocked` (no lookup happened), a thrown or budget-rejected query
+			// is `blocked`, and a completed read with nothing in it is `absent` — a real
+			// observed emptiness. One bounded indexed Convex read, and zero extra calls
+			// for a guest. The pseudonym is derived server-side by the same primitive
+			// the write path uses and never reaches the browser.
+			userId && templateId
+				? Promise.resolve()
+						.then(() =>
+							serverQuery(api.positions.listViewerConfirmedContacts, {
+								_secret: getInternalSecret(),
+								pseudonymousId: computePseudonymousId(userId),
+								templateId
+							})
+						)
+						.then((rows): Fact<PriorContact[]> => {
+							// The query returns status verbatim; deciding what counts as a
+							// self-reported contact is this caller's job, not the query's.
+							const confirmed = rows
+								.filter((row) => row.deliveryStatus === 'user_confirmed')
+								.map((row) => ({ name: row.recipientName, confirmedAt: row.confirmedAt }));
+							return confirmed.length > 0 ? present(confirmed) : absent();
+						})
+						.catch(() => blocked('prior-contact lookup unavailable'))
+				: Promise.resolve<Fact<PriorContact[]>>(blocked('viewer is not signed in'))
+		]);
 	const positionCounts = positionMetricsResult.counts;
 	const engagementByDistrict = positionMetricsResult.engagement;
 
-	// Parse typed recipient_config from template JSON
+	// Parse typed recipient_config from template JSON. Addresses only: a
+	// suppression credential is minted at send time by POST /api/do-not-contact/links,
+	// never eagerly here, so this anonymous payload carries no takedown token for
+	// a roster of people.
 	const recipientConfig = parentData.template
 		? parseRecipientConfig(parentData.template.recipient_config)
 		: {};
@@ -362,6 +404,8 @@ export const load: PageServerLoad = async ({ locals, parent, url, platform }) =>
 		districtOfficials: districtOfficials as DistrictOfficialInput[],
 		recipientConfig,
 		engagementByDistrict,
+		// Annotation only — never send state. See the Batch 2 note above.
+		priorContacts,
 		// Honesty gating + coarse relation. These derived, non-identifying flags
 		// are all that the guarded Convex query returns — no author id/district.
 		viewerIsAuthor,

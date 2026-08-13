@@ -2,14 +2,17 @@ import type { RequestHandler } from './$types';
 import { json } from '@sveltejs/kit';
 import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import { readBoundedAgentRequest } from '$lib/server/agent-request-envelope';
 
 export const GET: RequestHandler = async (event) => {
-	if (!event.locals.session?.userId) {
-		return json({ error: 'Authentication required' }, { status: 401 });
-	}
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'message-job');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
 
 	const job = await serverQuery(api.messageJobs.getForUser, {
-		jobId: event.params.jobId
+		jobId: requestEnvelope.jobId
 	});
 
 	if (!job) {

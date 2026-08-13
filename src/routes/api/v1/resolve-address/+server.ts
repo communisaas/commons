@@ -17,7 +17,7 @@ import { resolveAddress, AtlasInfraError } from '$lib/core/shadow-atlas/client';
 import { DISTRICT_COVERAGE } from '$lib/core/shadow-atlas/coverage';
 import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
-import { resolveAllowanceForPlan } from '$lib/server/billing/plans';
+import { addressResolveAllowanceForPlan } from '$lib/server/billing/plans';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
@@ -143,7 +143,7 @@ export const POST: RequestHandler = async ({ request }) => {
 		return apiError('METERING_UNAVAILABLE', 'Usage metering temporarily unavailable', 502);
 	}
 	const resolvesUsed = usage['resolve_address'] ?? 0;
-	if (resolvesUsed >= resolveAllowanceForPlan(auth.planSlug)) {
+	if (resolvesUsed >= addressResolveAllowanceForPlan(auth.planSlug)) {
 		return apiError('RESOLVE_QUOTA_EXCEEDED', 'Resolve quota exhausted for this plan period', 402);
 	}
 

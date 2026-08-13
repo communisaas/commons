@@ -44,6 +44,7 @@ function toProcessedDecisionMaker(
 		source_url: dm.source_url,
 		recencyCheck: dm.recencyCheck,
 		positionSourceDate: dm.positionSourceDate,
+		inputWindow: dm.inputWindow,
 		emailGrounded: dm.emailGrounded,
 		emailSource: dm.emailSource,
 		emailSourceTitle: dm.emailSourceTitle,
@@ -209,6 +210,7 @@ export const STUDIO_TEMPLATE_HANDOFF: Record<keyof OrgProcess, StudioHandoffDisp
 	entries: 'carried', // Flattened into content.researchLog as readable trace lines.
 	decisionMakers: 'carried', // Mapped one-to-one into audience.decisionMakers, order preserved.
 	droppedEmailless: 'process-local', // Resolution telemetry about contacts that never reached the draft.
+	reachCensus: 'process-local', // Resolution telemetry stays behind the draft.
 	resolutionStopReason: 'process-local', // Why resolution stopped; the draft holds the outcome, not the stop.
 	resolutionStopDetail: 'process-local', // Prose detail for the resolution stop above.
 	geographicScope: 'carried', // content.geographicScope, null-preserving — no scope is invented.

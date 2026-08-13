@@ -25,7 +25,6 @@ type DelegationReviewView = {
 	targetId: string | null;
 	targetTitle: string;
 	reasoning: string;
-	proofWeight: number;
 	createdAt: string | number;
 };
 

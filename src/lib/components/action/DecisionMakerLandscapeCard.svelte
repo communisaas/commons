@@ -33,6 +33,7 @@
 		member,
 		contacted = false,
 		departing = false,
+		priorContact = false,
 		onWriteTo,
 		showRoleBadge = false,
 		canReportBounce = false,
@@ -43,6 +44,13 @@
 		member: LandscapeMember;
 		contacted: boolean;
 		departing: boolean;
+		/**
+		 * This viewer told us, on an earlier visit, that they wrote to this person.
+		 * Nobody observed that send — it is their own claim, so the copy attributes
+		 * it to them and never reads as a receipt. It annotates the write
+		 * affordance; it deliberately does not gate it (see `isActive`).
+		 */
+		priorContact?: boolean;
 		onWriteTo: (member: LandscapeMember) => void;
 		showRoleBadge?: boolean;
 		canReportBounce?: boolean;
@@ -117,6 +125,11 @@
 					Write to them
 					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
+				{#if priorContact}
+					<!-- Their own past claim, beside the still-live affordance — never
+					     instead of it, and never phrased as a delivery we observed. -->
+					<span class="text-xs text-slate-400">You said you wrote to them</span>
+				{/if}
 			{/if}
 		{/if}
 

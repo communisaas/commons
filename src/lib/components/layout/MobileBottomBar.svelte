@@ -12,6 +12,7 @@
 	import { toEmailServiceUser } from '$lib/types/user';
 	import type { HeaderTemplate, HeaderUser, TemplateUseEvent } from '$lib/types/any-replacements';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 	const labels = getJurisdictionLabels();
 
@@ -28,7 +29,7 @@
 	const shareUrl = $derived($page.url.href);
 
 	// Determine primary action
-	const isCongressional = $derived(template.deliveryMethod === 'cwc');
+	const isCongressional = $derived(isCongressionalDelivery(template.deliveryMethod));
 
 	// Share functionality
 	async function handleShare(): Promise<void> {

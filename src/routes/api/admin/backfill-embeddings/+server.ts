@@ -12,11 +12,12 @@ import {
 import { env } from '$env/dynamic/private';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { projectToHue } from '$lib/utils/domain-hue-projection';
+import { enforceLLMRateLimit, rateLimitResponse } from '$lib/server/llm-cost-protection';
 
 const BATCH_SIZE = 20;
 const FALLBACK_CONCURRENCY = 4;
 const EMBEDDING_TASK = { taskType: 'RETRIEVAL_DOCUMENT' as const };
-const FALLBACK_EMBEDDING_TASK = { ...EMBEDDING_TASK, maxRetries: 1 };
+const FALLBACK_EMBEDDING_TASK = { ...EMBEDDING_TASK, maxRetries: 1 as const };
 const TEMPLATE_SPECIFIC_BATCH_FAILURE_PATTERNS = [
 	/\binvalid (?:input|argument)\b/i,
 	/\btext too long\b/i,
@@ -80,7 +81,8 @@ const ADMIN_USER_IDS = new Set((env.ADMIN_USER_IDS || '').split(',').filter(Bool
  *
  * Requires authentication + admin role.
  */
-export const POST: RequestHandler = async ({ locals }) => {
+export const POST: RequestHandler = async (event) => {
+	const { locals } = event;
 	// Auth gate
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
@@ -115,6 +117,10 @@ export const POST: RequestHandler = async ({ locals }) => {
 		const batch = missing.slice(0, BATCH_SIZE);
 		let totalProcessed = 0;
 		const errors: BackfillError[] = [];
+		// One conservative weighted reservation covers the bounded batch and its
+		// input-specific fallback fanout. Empty backlogs consume no provider budget.
+		const rateLimitCheck = await enforceLLMRateLimit(event, 'embedding-backfill');
+		if (!rateLimitCheck.allowed) return rateLimitResponse(rateLimitCheck);
 
 		// Leave one token of headroom because truncateText may append an ellipsis.
 		// Embeddings are derived search material; the stored/public semantic fields

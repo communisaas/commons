@@ -36,7 +36,6 @@ export type ReturnSpaceReceiptSummary = {
 	pendingCount: number;
 	responseLoggedCount: number;
 	anchorFieldCount: number;
-	proofWeightTotal: number;
 	latestProofDeliveredAt: string | null;
 	sampleLimit: number;
 };
@@ -67,7 +66,7 @@ export type ReturnSpaceData = {
 	receipts: ReturnSpaceReceiptSummary | null;
 };
 
-// ─── People: proof-weighted reach ─────────────────────────────────────────
+// ─── People: verified reach ───────────────────────────────────────────────
 
 export type BaseSpaceData = {
 	total: number;
@@ -154,7 +153,6 @@ export type LandscapeScorecard = {
 	avgResponseTime: number | null;
 	lastContactDate: string | null;
 	score: number | null;
-	proofWeighted: null;
 };
 
 export type LandscapeSpaceData = {

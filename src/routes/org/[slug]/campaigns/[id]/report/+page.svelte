@@ -490,10 +490,6 @@
 								<span class="font-mono text-xs text-teal-400 tabular-nums"
 									>{delivery.proofStrength.districtCount}d</span
 								>
-								<span
-									class="text-text-quaternary font-mono text-[10px] tabular-nums"
-									title="Proof weight">w {delivery.proofStrength.weight.toFixed(2)}</span
-								>
 							{/if}
 						</div>
 					</div>

@@ -142,6 +142,11 @@
 										Invited by {network.ownerOrg.name} &middot; {network.memberCount}
 										{memberLabel(network.memberCount)}
 									</p>
+									<p class="text-text-tertiary mt-2 text-xs">
+										Accepting pools this organization's campaign actions and supporter counts into a
+										shared coalition record, with no per-campaign opt-in. The pooled result is
+										readable by every member organization in the coalition.
+									</p>
 								</div>
 								<div class="flex shrink-0 gap-2">
 									<button

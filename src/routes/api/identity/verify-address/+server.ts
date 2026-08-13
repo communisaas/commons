@@ -30,6 +30,7 @@ import {
 	verifyGroundCommitmentAuthenticity
 } from '$lib/server/ground/ground-service';
 import { verifyAddressResolutionToken } from '$lib/server/auth/address-resolution-token';
+import type { DerivedContainmentEntry } from '$lib/server/identity/verify-commitment';
 
 // ============================================================================
 // Input Validation
@@ -69,7 +70,7 @@ interface VerifyAddressInput {
 	officials?: OfficialInput[];
 	// B-2: Client-computed district commitment (replaces plaintext after transition)
 	district_commitment?: string; // Poseidon2_sponge_24(districts[0..24]) hex string
-	slot_count?: number;          // How many of 24 district slots are non-zero
+	slot_count?: number; // How many of 24 district slots are non-zero
 	// FU-1.1: coordinates required when district_commitment is provided.
 	// Server fetches the same IPFS cell data and recomputes the expected
 	// commitment; mismatch is rejected as COMMITMENT_AUTHENTICITY_MISMATCH.
@@ -128,13 +129,17 @@ function validateInput(body: unknown): VerifyAddressInput {
 
 	if (verificationMethod === 'shadow_atlas') {
 		// shadow_atlas: commitment is required, district is optional
-		if (typeof b.district_commitment !== 'string' || !/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)) {
+		if (
+			typeof b.district_commitment !== 'string' ||
+			!/^(0x)?[0-9a-fA-F]{64}$/.test(b.district_commitment)
+		) {
 			throw new Error('shadow_atlas verification requires a valid district_commitment');
 		}
 		districtCommitment = b.district_commitment;
-		slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
-			? b.slot_count
-			: undefined;
+		slotCount =
+			typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
+				? b.slot_count
+				: undefined;
 		// district is optional for shadow_atlas — may be provided for display
 		if (b.district && (typeof b.district !== 'string' || !DISTRICT_FORMAT.test(b.district))) {
 			throw new Error('Invalid district format when provided. Expected "XX-NN" or "XX-AL".');
@@ -157,9 +162,10 @@ function validateInput(body: unknown): VerifyAddressInput {
 				throw new Error('Invalid district_commitment format. Expected 64-char hex string.');
 			}
 			districtCommitment = b.district_commitment;
-			slotCount = typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
-				? b.slot_count
-				: undefined;
+			slotCount =
+				typeof b.slot_count === 'number' && b.slot_count >= 1 && b.slot_count <= 24
+					? b.slot_count
+					: undefined;
 		}
 	}
 
@@ -190,13 +196,17 @@ function validateInput(body: unknown): VerifyAddressInput {
 
 				// Validate bioguide_id format
 				if (typeof o.bioguide_id !== 'string' || !BIOGUIDE_FORMAT.test(o.bioguide_id)) {
-					console.warn(`[verify-address] Skipping official with invalid bioguide_id: ${String(o.bioguide_id)}`);
+					console.warn(
+						`[verify-address] Skipping official with invalid bioguide_id: ${String(o.bioguide_id)}`
+					);
 					return false;
 				}
 
 				// Validate chamber value
 				if (o.chamber !== 'house' && o.chamber !== 'senate') {
-					console.warn(`[verify-address] Skipping official "${o.name}" with invalid chamber: ${String(o.chamber)}`);
+					console.warn(
+						`[verify-address] Skipping official "${o.name}" with invalid chamber: ${String(o.chamber)}`
+					);
 					return false;
 				}
 
@@ -379,8 +389,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 						tokenCheck.reason === 'expired'
 							? 'Address resolution expired. Re-run address lookup.'
 							: 'Address binding could not be verified. Re-run address lookup.',
-					code:
-						tokenCheck.reason === 'expired' ? 'ADDRESS_TOKEN_EXPIRED' : 'ADDRESS_TOKEN_INVALID'
+					code: tokenCheck.reason === 'expired' ? 'ADDRESS_TOKEN_EXPIRED' : 'ADDRESS_TOKEN_INVALID'
 				},
 				{ status: 400 }
 			);
@@ -395,9 +404,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// Coordinates are required when commitment is supplied. Server doesn't
 	// learn anything new — `/api/location/resolve-address` already gave it
 	// the lat/lng during geocoding; the client just echoes them back.
+	let derivedContainment: DerivedContainmentEntry[] = [];
 	if (input.district_commitment) {
 		try {
-			await verifyGroundCommitmentAuthenticity(userId, input);
+			derivedContainment = await verifyGroundCommitmentAuthenticity(userId, input);
 		} catch (err) {
 			if (isGroundServiceError(err)) {
 				return json({ success: false, error: err.message, code: err.code }, { status: err.status });
@@ -414,7 +424,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	}
 
 	try {
-		return json(await issueGroundCredential(userId, input));
+		return json(
+			await issueGroundCredential(userId, {
+				...input,
+				derived_containment: derivedContainment
+			})
+		);
 	} catch (err) {
 		if (isGroundServiceError(err)) {
 			return json({ success: false, error: err.message, code: err.code }, { status: err.status });
@@ -425,19 +440,33 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		const message = err instanceof Error ? err.message : '';
 		if (message.includes('ADDRESS_VERIFICATION_THROTTLED_24H')) {
 			return json(
-				{ success: false, error: 'You re-verified recently. Please wait 24 hours between address changes.', code: 'THROTTLED_24H' },
+				{
+					success: false,
+					error: 'You re-verified recently. Please wait 24 hours between address changes.',
+					code: 'THROTTLED_24H'
+				},
 				{ status: 429 }
 			);
 		}
 		if (message.includes('ADDRESS_VERIFICATION_THROTTLED_180D')) {
 			return json(
-				{ success: false, error: 'Re-verification limit reached for this account. Contact support if you have moved.', code: 'THROTTLED_180D' },
+				{
+					success: false,
+					error:
+						'Re-verification limit reached for this account. Contact support if you have moved.',
+					code: 'THROTTLED_180D'
+				},
 				{ status: 429 }
 			);
 		}
 		if (message.includes('ADDRESS_VERIFICATION_EMAIL_SYBIL')) {
 			return json(
-				{ success: false, error: 'This email is associated with multiple accounts. Contact support to consolidate before re-verifying.', code: 'EMAIL_SYBIL' },
+				{
+					success: false,
+					error:
+						'This email is associated with multiple accounts. Contact support to consolidate before re-verifying.',
+					code: 'EMAIL_SYBIL'
+				},
 				{ status: 429 }
 			);
 		}

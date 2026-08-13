@@ -62,7 +62,22 @@
 	let errorMessage = $state<string | null>(null);
 	let generationBoundary = $state<GenerationBoundary | null>(null);
 	let rateLimitResetAt = $state<string | null>(null);
-	let rateLimitMessage = $state<string | null>(null);
+	/** Whose capacity ran out. Anything the server did not measure is `blocked`. */
+	type BudgetScope = 'actor' | 'platform' | 'blocked';
+	let budgetScope = $state<BudgetScope | null>(null);
+
+	function normalizeBudgetScope(value: unknown): BudgetScope {
+		return value === 'actor' || value === 'platform' ? value : 'blocked';
+	}
+
+	/** Three exhaustion facts, never collapsed: your share, the shared pool, or unknown. */
+	function exhaustionBody(scope: BudgetScope): string {
+		if (scope === 'actor') return "You've used your share of the free authoring pool this month.";
+		if (scope === 'platform') {
+			return 'The shared free authoring pool is empty until it resets. Nobody can generate a message until then.';
+		}
+		return "We couldn't confirm how much capacity is left.";
+	}
 	let isGenerating = $state(false);
 	/** True when the generated message was built for a now-stale subject. */
 	let contentStale = $state(false);
@@ -428,7 +443,12 @@
 				}
 
 				// Authenticated/verified user who exhausted quota → rate-limited
-				throw { _kind: 'rate-limited', resetAt: errorData.resetAt, message: errorData.error };
+				throw {
+					_kind: 'rate-limited',
+					resetAt: errorData.resetAt,
+					message: errorData.error,
+					budgetScope: errorData.budgetScope
+				};
 			}
 
 			if (!response.ok) {
@@ -590,10 +610,10 @@
 				stage = 'auth-required';
 			} else if (err?._kind === 'rate-limited') {
 				rateLimitResetAt = err.resetAt ?? null;
-				rateLimitMessage = err.message ?? null;
+				budgetScope = normalizeBudgetScope(err.budgetScope);
 				generationBoundary = {
 					code: 'message_generation_rate_limited',
-					message: rateLimitMessage || "You've used your message generations for now.",
+					message: exhaustionBody(budgetScope),
 					missing: ['available authoring quota'],
 					dependency: rateLimitResetAt
 						? `authoring quota reset at ${new Date(rateLimitResetAt).toLocaleString()}`
@@ -949,9 +969,7 @@
 			<div class="generation-boundary" role="status">
 				<p class="generation-boundary-title">{generationBoundaryTitle}</p>
 				<p class="generation-note">
-					{generationBoundary?.message ??
-						rateLimitMessage ??
-						"You've used your message generations for now."}
+					{generationBoundary?.message ?? exhaustionBody(budgetScope ?? 'blocked')}
 				</p>
 				{#if rateLimitResetAt}
 					<p class="generation-note">

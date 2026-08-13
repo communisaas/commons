@@ -11,6 +11,10 @@
 		type ClientCellProofResult
 	} from '$lib/core/shadow-atlas/browser-client';
 	import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
+	import JurisdictionLadder from '$lib/components/geographic/JurisdictionLadder.svelte';
+	// Type-only: keeps the atlas client out of the browser bundle.
+	import type { ResolvedDistrictEntry } from '$lib/core/shadow-atlas/client';
+	import type { ResolveCoverage } from '$lib/core/shadow-atlas/coverage';
 	let {
 		_template,
 		oncomplete
@@ -53,6 +57,14 @@
 	let districtCommitment = $state<string | null>(null);
 	let commitmentSlotCount = $state(0);
 	let cellProof = $state<ClientCellProofResult | null>(null);
+
+	// Boundary ladder: the human-readable multi-type view from resolve-address.
+	// NOTE: this is a DIFFERENT `districts` from the ZK path's `cellData.districts`
+	// (a 24-element BN254 hex array). Names here, hashes there — never conflated.
+	// `coverage` is the disclosure that makes an absent row readable; the two are
+	// only ever held together.
+	let resolvedDistricts = $state<ResolvedDistrictEntry[]>([]);
+	let resolvedCoverage = $state<ResolveCoverage | null>(null);
 
 	function validateAddress(): boolean {
 		addressError = '';
@@ -110,6 +122,8 @@
 			}
 
 			const officials = (data.officials ?? []) as Representative[];
+			resolvedDistricts = (data.districts ?? []) as ResolvedDistrictEntry[];
+			resolvedCoverage = (data.coverage ?? null) as ResolveCoverage | null;
 
 			// Client-side ZKP: use geocoded coordinates to fetch circuit-ready district
 			// slots from IPFS (BN254 field elements), compute Poseidon2 commitment.
@@ -231,6 +245,8 @@
 	function editAddress() {
 		currentStep = 'collect';
 		verificationResult = null;
+		resolvedDistricts = [];
+		resolvedCoverage = null;
 	}
 
 	function skipVerification() {
@@ -510,6 +526,15 @@
 									</div>
 								{/each}
 							</div>
+						</div>
+					{/if}
+
+					<!-- Boundary ladder: what this address falls inside, with the server's
+					     coverage disclosure. Ships only when `coverage` is present, because
+					     an absent row is unreadable without it. -->
+					{#if resolvedCoverage}
+						<div class="mb-6">
+							<JurisdictionLadder districts={resolvedDistricts} coverage={resolvedCoverage} />
 						</div>
 					{/if}
 

@@ -3,6 +3,8 @@ import type { RequestHandler } from './$types';
 import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import { readBoundedAgentRequest } from '$lib/server/agent-request-envelope';
 
 type AgentTraceEvent = {
 	_creationTime: number;
@@ -19,7 +21,6 @@ type AgentTraceEvent = {
 
 type TracePayload = Record<string, unknown>;
 
-const MAX_TRACE_ID_LENGTH = 128;
 function internalSecret(): string | null {
 	try {
 		return getInternalSecret();
@@ -140,19 +141,12 @@ function toReplayEvent(event: AgentTraceEvent) {
 }
 
 export const GET: RequestHandler = async (event) => {
-	const session = event.locals.session;
-	if (!session?.userId) {
-		return json({ error: 'Authentication required' }, { status: 401 });
-	}
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'trace-replay');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
 
-	const traceId = event.params.traceId;
-	if (!traceId || traceId.length > MAX_TRACE_ID_LENGTH) {
-		return json({ error: 'Invalid trace id' }, { status: 400 });
-	}
-	const cursor = event.url.searchParams.get('cursor') ?? undefined;
-	if (cursor && cursor.length > 2048) {
-		return json({ error: 'Invalid cursor' }, { status: 400 });
-	}
+	const { cursor, traceId } = requestEnvelope;
 
 	const secret = internalSecret();
 	if (!secret) {
@@ -182,7 +176,7 @@ export const GET: RequestHandler = async (event) => {
 	if (
 		!start ||
 		start.eventType !== 'trace.start' ||
-		start.userId !== session.userId ||
+		start.userId !== authenticatedUserId ||
 		start.endpoint !== 'message-generation'
 	) {
 		return json({ error: 'Trace replay not found' }, { status: 404 });

@@ -7,19 +7,26 @@ const {
 	mockServerQuery,
 	mockServerMutation,
 	mockGenerateBatchEmbeddings,
-	mockProjectToHue
+	mockProjectToHue,
+	mockEnforceLLMRateLimit,
+	mockRateLimitResponse
 } = vi.hoisted(() => ({
 	mockModerateTemplate: vi.fn(),
 	mockGetCachedPublicTemplates: vi.fn(),
 	mockServerQuery: vi.fn(),
 	mockServerMutation: vi.fn(),
 	mockGenerateBatchEmbeddings: vi.fn(),
-	mockProjectToHue: vi.fn()
+	mockProjectToHue: vi.fn(),
+	mockEnforceLLMRateLimit: vi.fn(),
+	mockRateLimitResponse: vi.fn()
 }));
 
-vi.mock('$lib/core/server/moderation', () => ({
-	moderateTemplate: mockModerateTemplate
-}));
+vi.mock('$lib/core/server/moderation', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('$lib/core/server/moderation')>();
+	// Only the provider-calling entry point is replaced; the route's window
+	// preflight must exercise the real content composer.
+	return { ...actual, moderateTemplate: mockModerateTemplate };
+});
 vi.mock('convex-sveltekit', () => ({
 	serverQuery: mockServerQuery,
 	serverMutation: mockServerMutation
@@ -44,6 +51,10 @@ vi.mock('$lib/utils/domain-hue-projection', () => ({
 }));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: vi.fn(() => 'test-internal-secret')
+}));
+vi.mock('$lib/server/llm-cost-protection', () => ({
+	enforceLLMRateLimit: mockEnforceLLMRateLimit,
+	rateLimitResponse: mockRateLimitResponse
 }));
 
 import { GET, POST } from '../../../src/routes/api/templates/+server';
@@ -73,7 +84,8 @@ function postEvent(template: Record<string, unknown>) {
 			body: JSON.stringify(template)
 		}),
 		locals: {
-			user: { id: 'user_1', is_verified: false, trust_score: 100 }
+			user: { id: 'user_1', is_verified: false, trust_score: 100 },
+			session: { userId: 'user_1' }
 		}
 	} as never;
 }
@@ -138,6 +150,23 @@ describe('POST /api/templates authoring cost gate', () => {
 		mockServerMutation.mockReset();
 		mockGenerateBatchEmbeddings.mockReset();
 		mockProjectToHue.mockReset();
+		mockEnforceLLMRateLimit.mockReset();
+		mockRateLimitResponse.mockReset();
+		mockServerQuery.mockResolvedValue({ outcome: 'allowed' });
+		mockServerMutation.mockResolvedValue({
+			outcome: 'claimed',
+			expiresAt: Date.now() + 10 * 60 * 1_000
+		});
+		mockEnforceLLMRateLimit.mockResolvedValue({
+			allowed: true,
+			remaining: 2,
+			limit: 3,
+			resetAt: new Date('2026-07-21T01:00:00.000Z'),
+			tier: 'authenticated'
+		});
+		mockRateLimitResponse.mockImplementation(
+			() => new Response('{"error":"rate limited"}', { status: 429 })
+		);
 	});
 
 	it('rejects an unauthenticated request before parsing or moderation', async () => {
@@ -155,6 +184,20 @@ describe('POST /api/templates authoring cost gate', () => {
 			error: { code: 'AUTH_REQUIRED' }
 		});
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		['unknown nested ballast', { ...VALID_TEMPLATE, ballast: { nested: ['ignored'] } }, 400],
+		['an oversized raw envelope', { ...VALID_TEMPLATE, ballast: 'x'.repeat(33 * 1024) }, 413]
+	])('rejects %s before preflight or provider admission', async (_label, body, status) => {
+		const response = await POST(postEvent(body));
+
+		expect(response.status).toBe(status);
+		await expect(response.json()).resolves.toMatchObject({ success: false });
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerMutation).not.toHaveBeenCalled();
 	});
 
 	it.each([
@@ -214,12 +257,13 @@ describe('POST /api/templates authoring cost gate', () => {
 		[
 			'public projection bytes',
 			{
-				message_body: 'x'.repeat(10_000),
+				title: 'x',
+				message_body: 'x'.repeat(1_900),
 				preview: 'x'.repeat(500),
 				description: 'x'.repeat(1_000),
 				domain: 'x'.repeat(200),
 				topics: Array.from({ length: 5 }, (_, i) => `${i}${'x'.repeat(99)}`),
-				recipient_config: { note: 'x'.repeat(500) }
+				recipient_config: { note: 'x'.repeat(8_000) }
 			},
 			'body'
 		],
@@ -250,14 +294,184 @@ describe('POST /api/templates authoring cost gate', () => {
 		expect(mockModerateTemplate).not.toHaveBeenCalled();
 	});
 
+	it('rejects moderation input beyond the reviewed window before preflight or reservation', async () => {
+		const response = await POST(
+			postEvent({
+				...VALID_TEMPLATE,
+				message_body: 'x'.repeat(2_000)
+			})
+		);
+
+		expect(response.status).toBe(400);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			errors: [{ field: 'message_body', code: 'VALIDATION_TOO_LONG' }]
+		});
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('returns an own-content duplicate without moderation or provider reservation', async () => {
+		mockServerMutation.mockResolvedValue({
+			outcome: 'duplicate',
+			template: {
+				_id: 'template_existing',
+				_creationTime: 100,
+				slug: 'protect-the-public-library',
+				title: VALID_TEMPLATE.title,
+				description: 'Existing description',
+				domain: '',
+				category: 'General',
+				topics: [],
+				type: VALID_TEMPLATE.type,
+				deliveryMethod: VALID_TEMPLATE.deliveryMethod,
+				messageBody: VALID_TEMPLATE.message_body,
+				sources: [],
+				researchLog: [],
+				preview: VALID_TEMPLATE.preview,
+				verifiedSends: 2,
+				uniqueDistricts: 1,
+				deliveryConfig: {},
+				cwcConfig: {},
+				recipientConfig: {},
+				status: 'published',
+				isPublic: true,
+				scopes: [],
+				updatedAt: 100,
+				deduplicated: true
+			}
+		});
+
+		const response = await POST(postEvent(VALID_TEMPLATE));
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toMatchObject({
+			success: true,
+			data: {
+				template: {
+					id: 'template_existing',
+					isNew: false,
+					verified_sends: 2
+				}
+			}
+		});
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockGenerateBatchEmbeddings).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		[
+			'organization cap',
+			{ outcome: 'quota_exceeded', code: 'TEMPLATE_QUOTA_EXCEEDED' },
+			'TEMPLATE_QUOTA_EXCEEDED'
+		],
+		[
+			'individual cap',
+			{
+				outcome: 'quota_exceeded',
+				code: 'AUTHORING_QUOTA_EXCEEDED',
+				message: 'You have reached the individual authoring cap.'
+			},
+			'AUTHORING_QUOTA_EXCEEDED'
+		]
+	])('returns the existing %s shape without provider work', async (_label, preflight, code) => {
+		mockServerMutation.mockResolvedValue(preflight);
+
+		const response = await POST(postEvent(VALID_TEMPLATE));
+
+		expect(response.status).toBe(403);
+		await expect(response.json()).resolves.toMatchObject({
+			success: false,
+			error: { code }
+		});
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerMutation).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		['same content', { outcome: 'in_progress', retryAt: Date.now() + 60_000 }, 409],
+		['existing slug', { outcome: 'slug_taken' }, 400]
+	])('rejects an active %s claim before provider admission', async (_label, claim, status) => {
+		mockServerMutation.mockResolvedValue(claim);
+
+		const response = await POST(postEvent(VALID_TEMPLATE));
+
+		expect(response.status).toBe(status);
+		expect(mockServerMutation).toHaveBeenCalledOnce();
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+	});
+
+	it('claims template-authoring work before shared admission and moderation', async () => {
+		mockModerateTemplate.mockResolvedValue({
+			approved: false,
+			rejection_reason: 'test control',
+			summary: 'Rejected by the mocked moderation control',
+			latency_ms: 1
+		});
+		vi.spyOn(console, 'log').mockImplementation(() => {});
+
+		const response = await POST(postEvent(VALID_TEMPLATE));
+
+		expect(response.status).toBe(400);
+		expect(mockServerMutation).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				_secret: 'test-internal-secret',
+				userId: 'user_1',
+				contentHash: expect.stringMatching(/^[a-f0-9]{40}$/),
+				slug: 'protect-the-public-library',
+				token: expect.stringMatching(/^[A-Za-z0-9-]{16,100}$/)
+			})
+		);
+		expect(mockEnforceLLMRateLimit).toHaveBeenCalledWith(
+			expect.anything(),
+			'template-authoring'
+		);
+		expect(mockServerMutation.mock.invocationCallOrder[0]).toBeLessThan(
+			mockEnforceLLMRateLimit.mock.invocationCallOrder[0]!
+		);
+		expect(mockEnforceLLMRateLimit.mock.invocationCallOrder[0]).toBeLessThan(
+			mockModerateTemplate.mock.invocationCallOrder[0]!
+		);
+		expect(mockServerMutation).toHaveBeenCalledTimes(2);
+	});
+
+	it('returns the shared reservation denial without invoking moderation', async () => {
+		mockEnforceLLMRateLimit.mockResolvedValue({
+			allowed: false,
+			remaining: 0,
+			limit: 3,
+			resetAt: new Date('2026-07-21T01:00:00.000Z'),
+			tier: 'authenticated',
+			status: 503,
+			reason: 'Provider budget authority unavailable'
+		});
+		mockRateLimitResponse.mockReturnValue(
+			new Response('{"error":"Provider budget authority unavailable"}', { status: 503 })
+		);
+
+		const response = await POST(postEvent(VALID_TEMPLATE));
+
+		expect(response.status).toBe(503);
+		expect(mockRateLimitResponse).toHaveBeenCalledOnce();
+		expect(mockModerateTemplate).not.toHaveBeenCalled();
+		expect(mockServerMutation).toHaveBeenCalledTimes(2);
+	});
+
 	it('maps the atomic Convex slug conflict to the existing duplicate validation response', async () => {
 		mockModerateTemplate.mockResolvedValue({
 			approved: true,
 			summary: 'Approved by test control',
 			latency_ms: 1
 		});
-		mockServerQuery.mockResolvedValueOnce(null);
-		mockServerMutation.mockRejectedValue(new ConvexError({ code: 'TEMPLATE_SLUG_TAKEN' }));
+		mockServerMutation
+			.mockResolvedValueOnce({ outcome: 'claimed', expiresAt: Date.now() + 60_000 })
+			.mockRejectedValueOnce(new ConvexError({ code: 'TEMPLATE_SLUG_TAKEN' }))
+			.mockResolvedValueOnce({ released: true });
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 
 		const response = await POST(postEvent({ ...VALID_TEMPLATE, slug: 'shared-link' }));
@@ -270,8 +484,8 @@ describe('POST /api/templates authoring cost gate', () => {
 				code: 'VALIDATION_DUPLICATE'
 			}
 		});
-		expect(mockServerQuery).toHaveBeenCalledOnce();
-		expect(mockServerMutation).toHaveBeenCalledOnce();
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerMutation).toHaveBeenCalledTimes(3);
 	});
 
 	it('budgets the generated slug before moderation when the request omits one', async () => {
@@ -391,6 +605,19 @@ describe('POST /api/templates authoring cost gate', () => {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					...VALID_TEMPLATE,
+					// Current TemplateCreator still sends response-model compatibility
+					// fields. They are explicitly ignored, not treated as unknown ballast.
+					subject: VALID_TEMPLATE.title,
+					campaign_id: null,
+					send_count: 0,
+					coordinationScale: 0,
+					isNew: true,
+					createdAt: '2026-07-21T00:00:00.000Z',
+					updatedAt: '2026-07-21T00:00:00.000Z',
+					applicable_countries: [],
+					jurisdiction_level: null,
+					specific_locations: [],
+					recipientEmails: ['official@example.test'],
 					sources: [
 						{ num: 1, title: 'HTTP source', url: 'http://example.com/source', type: 'web' },
 						{ num: 2, title: 'HTTPS source', url: 'https://example.com/source', type: 'web' }
@@ -408,10 +635,15 @@ describe('POST /api/templates authoring cost gate', () => {
 			error: { code: 'CONTENT_FLAGGED' }
 		});
 		expect(mockModerateTemplate).toHaveBeenCalledOnce();
-		expect(mockModerateTemplate).toHaveBeenCalledWith({
-			title: 'Protect the public library',
-			message_body: 'Please preserve funding for the public library.'
-		});
+		expect(mockModerateTemplate).toHaveBeenCalledWith(
+			{
+				title: 'Protect the public library',
+				message_body: 'Please preserve funding for the public library.',
+				description: VALID_TEMPLATE.preview,
+				preview: VALID_TEMPLATE.preview
+			},
+			{ signal: expect.any(AbortSignal) }
+		);
 	});
 
 	it('allows a verified user with a NaN trust score to reach mocked moderation', async () => {
@@ -448,7 +680,6 @@ describe('POST /api/templates authoring cost gate', () => {
 			summary: 'Approved by test control',
 			latency_ms: 1
 		});
-		mockServerQuery.mockResolvedValue(null);
 		const created = {
 			_id: 'template_1',
 			slug: 'protect-the-public-library',
@@ -470,7 +701,10 @@ describe('POST /api/templates authoring cost gate', () => {
 			_creationTime: 100,
 			updatedAt: 100
 		};
-		mockServerMutation.mockResolvedValueOnce(created).mockResolvedValueOnce(undefined);
+		mockServerMutation
+			.mockResolvedValueOnce({ outcome: 'claimed', expiresAt: Date.now() + 60_000 })
+			.mockResolvedValueOnce(created)
+			.mockResolvedValueOnce(undefined);
 		mockGenerateBatchEmbeddings.mockResolvedValue([
 			Array.from({ length: 768 }, () => 0),
 			Array.from({ length: 768 }, () => 0)
@@ -495,8 +729,8 @@ describe('POST /api/templates authoring cost gate', () => {
 		expect(deferred).toHaveLength(1);
 		await Promise.all(deferred);
 		expect(mockGenerateBatchEmbeddings).toHaveBeenCalledOnce();
-		expect(mockServerMutation).toHaveBeenCalledTimes(2);
-		expect(mockServerMutation.mock.calls[1]?.[1]).toMatchObject({
+		expect(mockServerMutation).toHaveBeenCalledTimes(3);
+		expect(mockServerMutation.mock.calls[2]?.[1]).toMatchObject({
 			templateId: 'template_1',
 			expectedUserId: 'user_1',
 			domainHue: 180

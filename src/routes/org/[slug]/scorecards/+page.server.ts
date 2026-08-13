@@ -51,8 +51,7 @@ export const load: PageServerLoad = async ({ parent }) => {
 			avgResponseTime:
 				responsiveness !== null ? Math.round((1 - responsiveness) * 168 * 10) / 10 : null,
 			lastContactDate: null,
-			score: composite !== null ? Math.round(composite * 100) : null,
-			proofWeighted: null
+			score: composite !== null ? Math.round(composite * 100) : null
 		};
 	});
 	const scoredRows = scorecards.filter((scorecard) => scorecard.score !== null);

@@ -35,13 +35,15 @@ export function _searchErrorResponse(cause: unknown): Response | undefined {
 }
 
 /**
- * Server-side semantic template search.
+ * Server-side compact keyword template search.
  *
  * POST { query, limit?, excludeIds? }
  *
- * Requires authentication. Rate limited to prevent Gemini quota abuse.
+ * Requires authentication. The Convex action retains its stable-actor burst
+ * bound and every dispatch crosses the shared Convex work-budget authority.
  */
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async (event) => {
+	const { request, locals } = event;
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
@@ -70,11 +72,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (query.length > 200) {
 		throw error(400, 'Query too long (max 200 characters)');
 	}
+	const internalSecret = getInternalSecret();
 
 	let result;
 	try {
 		result = await serverAction(api.templates.search, {
-			_secret: getInternalSecret(),
+			_secret: internalSecret,
 			actorKey: locals.user.id,
 			query,
 			limit

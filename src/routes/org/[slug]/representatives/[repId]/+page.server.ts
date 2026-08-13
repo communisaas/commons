@@ -54,7 +54,6 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 		})),
 		receipts: result.receipts.map((r: Record<string, unknown>) => ({
 			id: r._id,
-			proofWeight: r.proofWeight,
 			dmAction: r.dmAction,
 			alignment: r.alignment,
 			causalityClass: r.causalityClass,

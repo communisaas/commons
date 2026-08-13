@@ -326,7 +326,7 @@
 							bind:value={policyInput}
 							class="w-full rounded-lg border border-slate-200 p-3 text-sm text-slate-700 placeholder-slate-400 focus:border-slate-400 focus:outline-none resize-none"
 							rows="4"
-							placeholder="e.g., Sign climate petitions in my district, max 3 per day. Review anything with high proof weight."
+							placeholder="e.g., Sign climate petitions in my district, max 3 per day. Review anything outside those bounds."
 						></textarea>
 						{#if createError}
 							<p class="mt-2 text-xs text-red-600">{createError}</p>
@@ -384,7 +384,7 @@
 									/>
 								</div>
 								<div>
-									<label for="reviewThreshold" class="block text-xs font-medium text-slate-500 mb-1">Review Above (proof weight)</label>
+									<label for="reviewThreshold" class="block text-xs font-medium text-slate-500 mb-1">Review Above</label>
 									<input
 										id="reviewThreshold"
 										type="number"
@@ -440,7 +440,6 @@
 									<p class="text-sm font-medium text-slate-800">{review.targetTitle}</p>
 									<p class="text-xs text-slate-500 mt-1">{review.reasoning}</p>
 									<div class="flex items-center gap-3 mt-2 text-xs text-slate-400">
-										<span>Proof weight: {review.proofWeight}</span>
 										<span>{new Date(dateValue(review.createdAt)).toLocaleDateString()}</span>
 									</div>
 								</div>

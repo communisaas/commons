@@ -189,7 +189,7 @@
 				Per-bill detail
 			</h2>
 			<p class="mt-2 font-brand text-sm text-slate-600">
-				Per-receipt alignment, proof weights, and action timing are at the
+				Per-receipt alignment and action timing are at the
 				accountability view.
 			</p>
 			<p class="mt-4">

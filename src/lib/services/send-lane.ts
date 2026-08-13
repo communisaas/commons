@@ -132,3 +132,69 @@ export function senderVisibleLetter(
 	if (laneCarriesSenderText(template, user)) return text;
 	return resolvePlaceholders(text, manualFillReplacements());
 }
+
+/**
+ * Who witnessed the send.
+ *
+ * `self_reported` — the only witness is the sender. `server_accepted` — this
+ * system observed the message arrive at its own boundary. Neither is proof of
+ * delivery; the difference is whether anything but the sender saw anything at
+ * all.
+ */
+export type SendEvidence = 'self_reported' | 'server_accepted';
+
+/**
+ * What kind of witness each lane produces.
+ *
+ * Keyed by the whole `SendLane` union for the same reason
+ * `LANE_CARRIES_SENDER_TEXT` is: a lane added later that forgets its row is a
+ * compile error, not an `undefined` that reads as the optimistic answer.
+ *
+ * `cwc_zkp: 'server_accepted'` is a statement about what was observed. That lane
+ * POSTs to `src/routes/api/submissions/create/+server.ts` and gets a submission
+ * row back, so acceptance *by this system* is genuinely observed — still not
+ * proof the office read anything. A mailto lane ends at the operating system,
+ * which is told nothing back, so its only witness is the sender.
+ */
+export const LANE_SEND_EVIDENCE: Record<SendLane, SendEvidence> = {
+	mailto_direct: 'self_reported',
+	mailto_congressional_relay: 'self_reported',
+	cwc_zkp: 'server_accepted'
+};
+
+/** Who witnessed this sender's send, given the lane they are on. */
+export function sendEvidence(template: SendLaneTemplate, user: unknown | null): SendEvidence {
+	return LANE_SEND_EVIDENCE[resolveSendLane(template, user)];
+}
+
+/**
+ * What a self-reported receipt says its basis is.
+ *
+ * Same voice as `src/lib/components/action/SendConfirmation.svelte:150`, and it
+ * keeps that surface's literal phrase so one grep finds both. The sentence lives
+ * here rather than in the component for the reason `SENDER_TEXT_NOT_CARRIED_REASON`
+ * does: a sentence copied into two files ends up meaning two things.
+ */
+export const SELF_REPORTED_SEND_BASIS =
+	"You marked this sent — we can't see your mail app, so your word is the record.";
+
+/**
+ * What a server-accepted receipt says. Today's wording, preserved verbatim and
+ * relocated: on this lane the claim is earned, so nothing about it weakens.
+ */
+export const SERVER_ACCEPTED_SEND_BASIS = 'Your message has been sent.';
+
+/** The receipt's headline, named for who witnessed the send. */
+export const RECEIPT_HEADING: Record<SendEvidence, string> = {
+	self_reported: 'Marked sent',
+	server_accepted: 'Sent'
+};
+
+/**
+ * What the receipt's timestamp is a timestamp OF. The clock reading is a real
+ * observation either way; the label names which event it stamps.
+ */
+export const RECEIPT_TIME_LABEL: Record<SendEvidence, string> = {
+	self_reported: 'Marked sent',
+	server_accepted: 'When'
+};

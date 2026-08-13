@@ -199,12 +199,14 @@
 	const CHAMBER_ORDER: Record<string, number> = { house: 0, senate: 1 };
 
 	function sortedRepresentatives(reps: ProfileRepresentative[]): ProfileRepresentative[] {
-		return [...reps].slice(0, 3).sort((a, b) => {
-			const aOrd = CHAMBER_ORDER[a.chamber?.toLowerCase() ?? ''] ?? 9;
-			const bOrd = CHAMBER_ORDER[b.chamber?.toLowerCase() ?? ''] ?? 9;
-			if (aOrd !== bOrd) return aOrd - bOrd;
-			return a.name.localeCompare(b.name);
-		});
+		return [...reps]
+			.sort((a, b) => {
+				const aOrd = CHAMBER_ORDER[a.chamber?.toLowerCase() ?? ''] ?? 9;
+				const bOrd = CHAMBER_ORDER[b.chamber?.toLowerCase() ?? ''] ?? 9;
+				if (aOrd !== bOrd) return aOrd - bOrd;
+				return a.name.localeCompare(b.name);
+			})
+			.slice(0, 3);
 	}
 
 	async function refreshLocalRepresentatives(): Promise<void> {

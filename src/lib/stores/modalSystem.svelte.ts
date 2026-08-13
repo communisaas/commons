@@ -52,7 +52,7 @@ export type LegacyModalState =
 	| 'celebration'
 	| 'tracking'
 	| 'error'
-	| 'retry_needed';
+	| 'handoff_unobserved';
 
 interface LegacyModalContext {
 	template: Template | null;

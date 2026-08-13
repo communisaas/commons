@@ -1,7 +1,13 @@
 import { ConvexError } from 'convex/values';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { api, mockGenerateBatchEmbeddings, mockServerMutation, mockServerQuery } = vi.hoisted(
+const {
+	api,
+	mockEnforceLLMRateLimit,
+	mockGenerateBatchEmbeddings,
+	mockServerMutation,
+	mockServerQuery
+} = vi.hoisted(
 	() => ({
 		api: {
 			templates: {
@@ -13,6 +19,7 @@ const { api, mockGenerateBatchEmbeddings, mockServerMutation, mockServerQuery } 
 				releaseEmbeddingBackfillLease: 'templates.releaseEmbeddingBackfillLease'
 			}
 		},
+		mockEnforceLLMRateLimit: vi.fn(),
 		mockGenerateBatchEmbeddings: vi.fn(),
 		mockServerMutation: vi.fn(),
 		mockServerQuery: vi.fn()
@@ -46,6 +53,10 @@ vi.mock('$lib/server/internal/secret-auth', () => ({
 vi.mock('$lib/utils/domain-hue-projection', () => ({
 	projectToHue: vi.fn(() => 137)
 }));
+vi.mock('$lib/server/llm-cost-protection', () => ({
+	enforceLLMRateLimit: (...args: unknown[]) => mockEnforceLLMRateLimit(...args),
+	rateLimitResponse: () => new Response('rate limited', { status: 429 })
+}));
 
 import { POST } from '../../../src/routes/api/admin/backfill-embeddings/+server';
 
@@ -63,12 +74,39 @@ function missingTemplate(index: number) {
 
 describe('POST /api/admin/backfill-embeddings', () => {
 	beforeEach(() => {
+		mockEnforceLLMRateLimit.mockReset();
+		mockEnforceLLMRateLimit.mockResolvedValue({
+			allowed: true,
+			remaining: 0,
+			limit: 1,
+			resetAt: new Date(),
+			tier: 'verified'
+		});
 		mockGenerateBatchEmbeddings.mockReset();
 		mockServerMutation.mockReset();
 		mockServerQuery.mockReset();
 		vi.spyOn(console, 'log').mockImplementation(() => {});
 		vi.spyOn(console, 'error').mockImplementation(() => {});
 		vi.spyOn(console, 'warn').mockImplementation(() => {});
+	});
+
+	it('spends no provider reservation when the bounded missing-embedding page is empty', async () => {
+		mockServerMutation.mockImplementation(async (ref: string) => {
+			if (ref === api.templates.claimEmbeddingBackfillLease) return { acquired: true };
+			if (ref === api.templates.releaseEmbeddingBackfillLease) return { released: true };
+			throw new Error(`Unexpected mutation: ${ref}`);
+		});
+		mockServerQuery.mockResolvedValue([]);
+
+		const response = await POST(event);
+
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({
+			processed: 0,
+			message: 'All templates have embeddings'
+		});
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockGenerateBatchEmbeddings).not.toHaveBeenCalled();
 	});
 
 	afterEach(() => {
@@ -108,6 +146,8 @@ describe('POST /api/admin/backfill-embeddings', () => {
 			{ taskType: 'RETRIEVAL_DOCUMENT' }
 		);
 		expect(mockGenerateBatchEmbeddings.mock.calls[0][0]).toHaveLength(40);
+		expect(mockEnforceLLMRateLimit).toHaveBeenCalledOnce();
+		expect(mockEnforceLLMRateLimit).toHaveBeenCalledWith(event, 'embedding-backfill');
 
 		const updates = mockServerMutation.mock.calls.filter(
 			([ref]) => ref === api.templates.updateMissingEmbeddingsForBackfill

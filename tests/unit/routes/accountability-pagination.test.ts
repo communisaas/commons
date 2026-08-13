@@ -72,7 +72,6 @@ describe('accountability cursor/export routes', () => {
 					dmName: '@formula',
 					billId: 'bill-1',
 					attestationDigest: 'hash',
-					proofWeight: 1,
 					verifiedCount: 5,
 					totalCount: 5,
 					districtCount: 3,

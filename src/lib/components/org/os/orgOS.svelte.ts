@@ -49,6 +49,12 @@ import type { GeoScope, Source } from '$lib/core/agents/types';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 import type { ResolutionStopReason, StudioProcessEvidence } from '$lib/types/studio-process';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
+import { blocked, type Fact } from '$lib/core/fact';
+import {
+	cloneReachCensusFact,
+	parseReachCensusFact,
+	type ReachCensus
+} from '$lib/core/agents/reach-census';
 
 // ─── Spaces ──────────────────────────────────────────────────────────
 export type SpaceId = 'studio' | 'base' | 'landscape' | 'return';
@@ -207,6 +213,7 @@ export interface OrgProcess {
 	entries: ReasoningEntry[];
 	decisionMakers: ResolvedDecisionMaker[];
 	droppedEmailless: number;
+	reachCensus: Fact<ReachCensus>;
 	resolutionStopReason: ResolutionStopReason | null;
 	resolutionStopDetail: string | null;
 	/** Scope actually sent into source discovery/message generation. */
@@ -286,6 +293,7 @@ function toStoredProcess(proc: OrgProcess): StoredOrgProcess {
 		entries: proc.entries.map((entry) => ({ ...entry })),
 		decisionMakers: proc.decisionMakers.map((dm) => ({ ...dm })),
 		droppedEmailless: proc.droppedEmailless,
+		reachCensus: cloneReachCensusFact(proc.reachCensus),
 		resolutionStopReason: proc.resolutionStopReason,
 		resolutionStopDetail: proc.resolutionStopDetail,
 		geographicScope: proc.geographicScope ? ({ ...proc.geographicScope } as GeoScope) : null,
@@ -349,6 +357,10 @@ function restoreProcess(raw: Partial<StoredOrgProcess>, restoredAt: number): Org
 			? (raw.decisionMakers as ResolvedDecisionMaker[])
 			: [],
 		droppedEmailless: Number.isFinite(raw.droppedEmailless) ? Number(raw.droppedEmailless) : 0,
+		reachCensus: parseReachCensusFact(
+			raw.reachCensus,
+			'Restored process did not record a well-formed reach census'
+		),
 		resolutionStopReason:
 			wasRunning && !raw.composedMessage
 				? 'stopped'
@@ -691,6 +703,7 @@ export function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 				entries: [],
 				decisionMakers: [],
 				droppedEmailless: 0,
+				reachCensus: blocked('Resolution has not completed for this process'),
 				resolutionStopReason: null,
 				resolutionStopDetail: null,
 				geographicScope: null,

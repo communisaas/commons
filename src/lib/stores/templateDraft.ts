@@ -328,6 +328,7 @@ export function createTemplateDraftStore(): TemplateDraftStore {
 							provenance: dm.provenance ?? '',
 							recencyCheck: dm.recencyCheck,
 							positionSourceDate: dm.positionSourceDate,
+							inputWindow: dm.inputWindow,
 							emailGrounded: dm.emailGrounded,
 							emailSource: dm.emailSource,
 							emailSourceTitle: dm.emailSourceTitle,
@@ -341,7 +342,11 @@ export function createTemplateDraftStore(): TemplateDraftStore {
 							relevanceRank: dm.relevanceRank,
 							publicActions: Array.isArray(dm.publicActions) ? [...dm.publicActions] : undefined,
 							personalPrompt: dm.personalPrompt,
-							emailVerified: dm.emailVerified
+							emailVerified: dm.emailVerified,
+							// Server-derived at resolution; carried across the draft round trip so
+							// the roster can still say what was not established. Read for copy only,
+							// never for authority — see `$lib/core/agents/delivery-tier-copy`.
+							deliveryTier: dm.deliveryTier
 						}))
 					: [],
 				// These fields were missing - critical for recipient extraction

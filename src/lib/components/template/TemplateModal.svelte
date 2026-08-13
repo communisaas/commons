@@ -40,8 +40,24 @@
 		isModalOpen as _isModalOpen
 	} from '$lib/stores/modalSystem.svelte';
 	import { analyzeEmailFlow, launchEmail } from '$lib/services/emailService';
-	import { resolveSendLane, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
+	import {
+		describeDoNotContactFailure,
+		fetchDoNotContactUrls,
+		type DoNotContactLinks
+	} from '$lib/utils/do-not-contact-links';
+	import { absent, type Fact } from '$lib/core/fact';
+	import {
+		RECEIPT_HEADING,
+		RECEIPT_TIME_LABEL,
+		resolveSendLane,
+		sendEvidence,
+		SELF_REPORTED_SEND_BASIS,
+		SENDER_TEXT_NOT_CARRIED_REASON,
+		SERVER_ACCEPTED_SEND_BASIS,
+		type SendEvidence
+	} from '$lib/services/send-lane';
 	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
+	import { recipientEmailsFromConfig } from '$lib/types/template';
 	// import TemplatePreview from '$lib/components/landing/template/TemplatePreview.svelte';
 	import SubmissionStatus from '$lib/components/submission/SubmissionStatus.svelte';
 
@@ -91,6 +107,19 @@
 	// The affordance and the routing read ONE decision, so they cannot desync.
 	const sendLane = $derived(resolveSendLane(template, user));
 	const isAuthenticatedCongressional = $derived(sendLane === 'cwc_zkp');
+	// The receipt branches on WHO WITNESSED the send, never on the delivery method:
+	// a lane added later without an evidence row is a compile error, not a silent
+	// optimistic default.
+	const sendEvidenceKind = $derived(sendEvidence(template, user));
+	// The sentence under the receipt's headline, stating the basis for it. Both
+	// sentences are OWNED by `$lib/services/send-lane` and only routed here — the
+	// surface references the identifiers, it never re-types the strings.
+	// Keyed on the whole `SendEvidence` union on purpose: a third kind of witness
+	// is a compile error here, not a receipt that quietly keeps the old wording.
+	const RECEIPT_BASIS: Record<SendEvidence, string> = {
+		self_reported: SELF_REPORTED_SEND_BASIS,
+		server_accepted: SERVER_ACCEPTED_SEND_BASIS
+	};
 
 	const jurisdictionLabels = getJurisdictionLabels();
 
@@ -401,6 +430,15 @@
 
 		// Use unified email service
 		const currentUser = $page.data?.user || user;
+		const directRecipients = isCongressionalDelivery(template.deliveryMethod)
+			? []
+			: recipientEmailsFromConfig(template.recipient_config);
+		// Start the bounded link request alongside the existing credential lookup.
+		// Congressional/no-recipient lanes do no network work at all.
+		const doNotContactUrlsPromise: Promise<Fact<DoNotContactLinks>> =
+			directRecipients.length > 0
+				? fetchDoNotContactUrls(template.slug, directRecipients)
+				: Promise.resolve(absent());
 
 		// The district this page already resolved for the viewer. `App.PageData` is
 		// deliberately open, so the key is narrowed at runtime rather than asserted —
@@ -433,10 +471,20 @@
 		// the same value the preview footer reads. Where no district was resolved the
 		// footer degrades to the method label alone, which still states honestly what
 		// was verified.
+		const doNotContactUrlsFact = await doNotContactUrlsPromise;
+		if (directRecipients.length > 0 && doNotContactUrlsFact.state !== 'present') {
+			submissionError = describeDoNotContactFailure(doNotContactUrlsFact);
+			modalActions.setState('error');
+			return;
+		}
+		const doNotContactUrls =
+			doNotContactUrlsFact.state === 'present' ? doNotContactUrlsFact.value : undefined;
+
 		const flow = analyzeEmailFlow(template, enrichedUser, {
 			trustTier: enrichedUser?.trust_tier ?? 0,
 			personalConnection,
-			attestation: { districtCode: attestationDistrict }
+			attestation: { districtCode: attestationDistrict },
+			doNotContactUrls
 		});
 
 		// A message that cannot be assembled is said out loud. Without this the modal
@@ -492,8 +540,11 @@
 		let hasDetectedSwitch = false;
 		const detectionStartTime = Date.now();
 
-		// Helper to transition to appropriate state
-		const handleDetection = (detected: boolean) => {
+		// Helper to transition to appropriate state.
+		// Two outcomes, and neither is "it failed": either the browser saw the tab
+		// lose focus (the hand-off was observed), or the window never changed and
+		// we know nothing about what the OS did with the mailto.
+		const handleDetection = (outcome: 'handoff_observed' | 'handoff_unobserved') => {
 			if (!hasDetectedSwitch) {
 				hasDetectedSwitch = true;
 
@@ -507,27 +558,27 @@
 					mailAppVisibilityHandler = null;
 				}
 
-				if (detected) {
-					// Email client likely opened - show confirmation
+				if (outcome === 'handoff_observed') {
+					// The window lost focus: something took the hand-off. Ask whether it sent.
 					modalActions.setState('confirmation');
 				} else {
-					// No detection - show retry option
-					modalActions.setState('retry_needed');
+					// Nothing was observed. Say so, and leave every continuation open.
+					modalActions.setState('handoff_unobserved');
 				}
 			}
 		};
 
 		// Detect when user leaves browser (mail app opens)
 		mailAppBlurHandler = () => {
-			// Any blur within 3 seconds means email client opened
+			// A blur within 3 seconds is the hand-off being observed
 			if (Date.now() - detectionStartTime < 3000) {
-				handleDetection(true);
+				handleDetection('handoff_observed');
 			}
 		};
 
 		mailAppVisibilityHandler = () => {
 			if (document.hidden && Date.now() - detectionStartTime < 3000) {
-				handleDetection(true);
+				handleDetection('handoff_observed');
 			}
 		};
 
@@ -535,15 +586,12 @@
 		window.addEventListener('blur', mailAppBlurHandler);
 		document.addEventListener('visibilitychange', mailAppVisibilityHandler);
 
-		// OPTIMISTIC APPROACH: Assume mailto: worked unless we have evidence it didn't
-		// Wait 2 seconds - if user never left the window, they might not have an email client configured
+		// Wait 2 seconds. If the window never changed, nothing was observed — which is
+		// neither a send nor a failure, and gets its own state rather than a guess.
 		coordinated.setTimeout(
 			() => {
 				if (!hasDetectedSwitch) {
-					// CHANGED: Default to success (assume mailto: worked)
-					// Only show error if window NEVER lost focus during the entire flow
-					// This prevents false-negatives when user quickly returns to browser
-					handleDetection(true);
+					handleDetection('handoff_unobserved');
 				}
 			},
 			2000,
@@ -1339,8 +1387,12 @@
 				</Button>
 			</div>
 		</div>
-	{:else if currentState === 'retry_needed'}
-		<!-- Retry Needed State - Email client didn't open -->
+	{:else if currentState === 'handoff_unobserved'}
+		<!--
+			Nothing was observed. The browser never changed focus, which is evidence of
+			nothing at all — not a send, not a failure. It reads as not-known, and every
+			continuation stays open, including the one where the message already went.
+		-->
 		<div class="relative p-6 text-center sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
 			<!-- Close Button -->
 			<button
@@ -1351,14 +1403,17 @@
 			</button>
 
 			<div
-				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 sm:mb-6 sm:h-20 sm:w-20"
+				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full border border-slate-200 bg-slate-50 sm:mb-6 sm:h-20 sm:w-20"
 			>
-				<ExternalLink class="h-8 w-8 text-amber-600 sm:h-10 sm:w-10" />
+				<ExternalLink class="h-8 w-8 text-slate-700 sm:h-10 sm:w-10" />
 			</div>
-			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">Email client didn't open</h3>
+			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">
+				We couldn't tell whether your email app opened
+			</h3>
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
-				Your email app may not be configured. Would you like to try again or copy the message
-				instead?
+				Your message was handed to your email app. The browser cannot see what happened after
+				that, so all of these are still true: it may be waiting in your app, it may have gone
+				already, or nothing may have opened at all.
 			</p>
 
 			<div class="flex flex-col gap-3">
@@ -1370,6 +1425,16 @@
 				>
 					<Send class="mr-2 h-5 w-5" />
 					Try opening email again
+				</Button>
+
+				<Button
+					variant="secondary"
+					size="lg"
+					classNames="w-full"
+					onclick={() => handleSendConfirmation(true)}
+				>
+					<CheckCircle2 class="mr-2 h-5 w-5" />
+					I sent it
 				</Button>
 
 				<button
@@ -1397,8 +1462,10 @@
 							<CheckCircle2 class="h-5 w-5 text-slate-700" />
 						</div>
 						<div>
-							<h2 class="text-lg font-semibold text-slate-900">Sent</h2>
-							<p class="text-sm text-slate-600">Your message has been sent.</p>
+							<h2 class="text-lg font-semibold text-slate-900">
+								{RECEIPT_HEADING[sendEvidenceKind]}
+							</h2>
+							<p class="text-sm text-slate-600">{RECEIPT_BASIS[sendEvidenceKind]}</p>
 						</div>
 					</div>
 					<button
@@ -1423,9 +1490,11 @@
 							<dd class="mt-1 text-slate-900">{template.title}</dd>
 						</div>
 						<div>
-							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">When</dt>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">
+								{RECEIPT_TIME_LABEL[sendEvidenceKind]}
+							</dt>
 							<dd class="mt-1 font-mono tabular-nums text-slate-900">
-								Sent {formatSentAt(sentAt)}
+								{formatSentAt(sentAt)}
 							</dd>
 						</div>
 						<div>

@@ -15,6 +15,7 @@
 		districtOfficials = [],
 		contactedRecipients = new Set(),
 		departingRecipients = new Set(),
+		priorContactIds = new Set(),
 		onWriteTo,
 		onBatchRegister,
 		onVerifyAddress,
@@ -31,6 +32,12 @@
 		districtOfficials?: DistrictOfficialInput[];
 		contactedRecipients?: Set<string>;
 		departingRecipients?: Set<string>;
+		/**
+		 * Members this viewer previously said they wrote to. Annotation only — it is
+		 * deliberately absent from every count and from the batch list below, so a
+		 * past self-report can never shrink what this landscape offers to send.
+		 */
+		priorContactIds?: Set<string>;
 		onWriteTo: (member: LandscapeMember) => void;
 		onBatchRegister: (memberIds: string[]) => void;
 		onVerifyAddress?: () => void;
@@ -62,7 +69,7 @@
 			.sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
 			.map(([org, members]) => ({
 				label: org,
-				members: members.sort((a, b) => a.relevanceRank - b.relevanceRank)
+				members
 			}));
 	});
 
@@ -188,6 +195,7 @@
 						{group}
 						{contactedRecipients}
 						{departingRecipients}
+						{priorContactIds}
 						{onWriteTo}
 						{canReportBounce}
 						{reportedBounces}
@@ -210,6 +218,7 @@
 					group={landscape.districtGroup}
 					{contactedRecipients}
 					{departingRecipients}
+					{priorContactIds}
 					{onWriteTo}
 					{canReportBounce}
 					{reportedBounces}

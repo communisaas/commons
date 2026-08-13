@@ -24,7 +24,7 @@
 	import ModalRegistry from '$lib/components/modals/ModalRegistry.svelte';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { walletState } from '$lib/stores/walletState.svelte';
-	import { analyzeEmailFlow, launchEmail } from '$lib/services/emailService';
+	import { analyzeEmailFlow } from '$lib/services/emailService';
 	import { toEmailServiceUser } from '$lib/types/user';
 	import type { HeaderUser, HeaderTemplate, TemplateUseEvent } from '$lib/types/any-replacements';
 	import type { SessionCredentialForPolicy } from '$lib/core/identity/credential-policy';
@@ -160,13 +160,12 @@
 			// For now, redirect to auth flow which will handle address collection
 			window.location.href = `/auth/google?returnTo=${encodeURIComponent($page.url.pathname)}`;
 		} else if (flow.nextAction === 'email' && flow.mailtoUrl) {
-			if (data.user) {
-				// Show template modal for authenticated users
-				modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
-			} else {
-				// Direct mailto launch for guests
-				launchEmail(flow.mailtoUrl);
-			}
+			// One send surface for everyone. The guest fork used to fire a bare mailto
+			// with nothing watching it and no receipt, while every other guest surface
+			// opened this same modal; the modal handles guests on its own guest arms.
+			// This path carries no personal connection, so there is no sender text here
+			// for `laneCarriesSenderText` to have to protect.
+			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
 		} else {
 			// No URL to hand over. Without this the button is simply inert and the
 			// reader is told nothing at all.

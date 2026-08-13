@@ -143,29 +143,6 @@
 			</div>
 		</div>
 
-		<!-- Proof Weight Bar -->
-		<!--
-			Proof Weight rendered honestly. A green-500 fill would make an
-			aggregate of audit signals (the same signals hidden behind
-			<details> below as infrastructure) read as a celebratory
-			headline. Per design memory "metrics are infrastructure not
-			headlines", the fill is neutral slate-700 — present as a
-			numeric reading, not an editorial judgment of "more = greener
-			= better".
-		-->
-		<div class="mt-4">
-			<div class="mb-1 flex items-center justify-between">
-				<span class="text-xs text-slate-500">Proof Weight</span>
-				<span class="text-xs font-medium text-slate-600">{(r.proofWeight * 100).toFixed(0)}%</span>
-			</div>
-			<div class="h-2 w-full rounded-full bg-slate-100" role="progressbar" aria-valuenow={r.proofWeight * 100} aria-valuemin={0} aria-valuemax={100} aria-label="Proof weight">
-				<div
-					class="h-2 rounded-full bg-slate-700 transition-all"
-					style="width: {Math.min(r.proofWeight * 100, 100)}%"
-				></div>
-			</div>
-		</div>
-
 		<!--
 			Coordination-integrity audit metrics. Per design memory:
 			"tiers/metrics are infrastructure not headlines." These are

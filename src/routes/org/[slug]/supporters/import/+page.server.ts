@@ -10,6 +10,7 @@ import {
 	type PlatformSource
 } from '$lib/data/platform-export-profiles';
 import type { PageServerLoad, Actions } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -422,6 +423,7 @@ export const actions: Actions = {
 
 				if (plaintextBatch.length > 0) {
 					const result = await serverAction(api.supporters.importWithEncryption, {
+						_secret: getInternalSecret(),
 						slug: params.slug,
 						supporters: plaintextBatch
 					});

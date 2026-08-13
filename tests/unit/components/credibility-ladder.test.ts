@@ -83,7 +83,8 @@ describe('CredibilityLadder wiring — verification gate (walls → ladder, P5 f
 	it('the two real callers set electedTarget from the actual target', () => {
 		// TemplateModal: elected iff the template delivers via CWC.
 		const modal = src('src/lib/components/template/TemplateModal.svelte');
-		expect(modal).toContain("electedTarget={template.deliveryMethod === 'cwc'}");
+		expect(modal).toContain('electedTarget={isCongressionalDelivery(template.deliveryMethod)}');
+		expect(modal).toContain('$convex/lib/templateDeliveryMethod');
 		// Profile: generic verify entry, not a target-specific send.
 		const profile = src('src/routes/profile/+page.svelte');
 		expect(profile).toContain('electedTarget={false}');

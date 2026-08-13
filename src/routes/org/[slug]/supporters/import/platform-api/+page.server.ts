@@ -17,6 +17,7 @@ import {
 import { PlatformSyncError } from '$lib/server/platform-sync/types';
 import type { EncryptedPlatformApiCredential } from '$lib/server/platform-api-token-custody';
 import type { PageServerLoad, Actions } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /** Records per importWithEncryption call; keeps each Convex action small. */
 const IMPORT_CHUNK_SIZE = 100;
@@ -399,6 +400,7 @@ export const actions: Actions = {
 			for (let i = 0; i < slice.records.length; i += IMPORT_CHUNK_SIZE) {
 				const chunk = slice.records.slice(i, i + IMPORT_CHUNK_SIZE);
 				const result = await serverAction(api.supporters.importWithEncryption, {
+					_secret: getInternalSecret(),
 					slug: params.slug,
 					supporters: chunk
 				});

@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockConvexQuery, mockConvexConstructor, mockGetInternalSecret, mockMatchInternalSecret, api } =
-	vi.hoisted(() => ({
+const {
+	mockConvexQuery,
+	mockConvexConstructor,
+	mockGetInternalSecret,
+	mockMatchInternalSecret,
+	mockRuntimeConvexUrl,
+	api
+} = vi.hoisted(() => ({
 		mockConvexQuery: vi.fn(),
 		mockConvexConstructor: vi.fn(),
 		mockGetInternalSecret: vi.fn(),
 		mockMatchInternalSecret: vi.fn(),
+		mockRuntimeConvexUrl: vi.fn(),
 		api: {
 			observability: {
 				discoveryProducerStatus: 'observability.discoveryProducerStatus'
@@ -24,7 +31,7 @@ vi.mock('convex/browser', () => ({
 }));
 vi.mock('$lib/convex', () => ({
 	api,
-	getRuntimeConvexUrl: () => 'https://health-probe.convex.cloud'
+	getRuntimeConvexUrl: mockRuntimeConvexUrl
 }));
 vi.mock('$lib/server/internal/secret-auth', () => ({
 	getInternalSecret: mockGetInternalSecret,
@@ -37,12 +44,18 @@ import {
 	_normalizeExactReleaseSha
 } from '../../../src/routes/api/health/+server';
 
+const PRODUCTION_CONVEX_URL = 'https://quirky-chinchilla-352.convex.cloud';
 const HEALTH_ENV = {
 	ATLAS_BASE_URL: 'https://atlas.commons.email',
 	EXPECTED_CELL_MAP_ROOT: `0x${'a'.repeat(64)}`,
 	EXPECTED_CELL_MAP_DEPTH: '20',
-	PUBLIC_CONVEX_URL: 'https://health-probe.convex.cloud',
+	PUBLIC_CONVEX_URL: PRODUCTION_CONVEX_URL,
 	PUBLIC_RELEASE_TRANSACTION_ID: '123456789-2',
+	EXA_API_KEY: 'health-exa-provider-key',
+	FIRECRAWL_API_KEY: 'health-firecrawl-provider-key',
+	GEMINI_API_KEY: 'health-gemini-provider-key',
+	GROQ_API_KEY: 'health-groq-provider-key',
+	PAID_PROVIDER_OPERATOR_USER_IDS: 'health-launch-operator',
 	SESSION_CREATION_SECRET: 'health-session-creation-secret-32-byte-padding',
 	SESSION_COOKIE_SIGNING_SECRET: 'health-cookie-signing-secret-32-byte-padding',
 	CONVEX_WORK_BUDGET: {
@@ -182,6 +195,8 @@ describe('/api/health', () => {
 		mockConvexConstructor.mockReset();
 		mockGetInternalSecret.mockReset();
 		mockMatchInternalSecret.mockReset();
+		mockRuntimeConvexUrl.mockReset();
+		mockRuntimeConvexUrl.mockReturnValue(PRODUCTION_CONVEX_URL);
 		mockMatchInternalSecret.mockReturnValue({ ok: true });
 		mockGetInternalSecret.mockReturnValue('health-probe-internal-secret-32-byte-padding');
 		vi.mocked(HEALTH_ENV.PUBLIC_DISCOVERY_R2.get).mockReset();
@@ -223,7 +238,7 @@ describe('/api/health', () => {
 		expect(body).toMatchObject({
 			status: 'ok',
 			convex: true,
-			convexRealm: 'unknown',
+			convexRealm: 'production',
 			atlas: { status: 'ok' },
 			publicDiscoveryCache: {
 				status: 'ok',
@@ -237,12 +252,19 @@ describe('/api/health', () => {
 				sha: expect.stringMatching(/^[a-f0-9]{40}$/),
 				transactionId: HEALTH_ENV.PUBLIC_RELEASE_TRANSACTION_ID
 			},
-			sessionCookieAuthority: { status: 'ok', keysIsolated: true }
+			sessionCookieAuthority: { status: 'ok', keysIsolated: true },
+			paidProvider: {
+				status: 'ok',
+				budgetCoordinatorBound: true,
+				operatorAllowlistConfigured: true,
+				providerSecretsConfigured: true,
+				missingBindings: []
+			}
 		});
 		expect(response.headers.get('cache-control')).toBe('no-store');
 		expect(HEALTH_ENV.PUBLIC_DISCOVERY_R2.get).toHaveBeenCalledOnce();
 		expect(HEALTH_ENV.PUBLIC_DISCOVERY_R2.get).toHaveBeenCalledWith(
-			'public-discovery/v8/backend%3Dhttps%3A%2F%2Fhealth-probe.convex.cloud/control/manifest/state.json'
+			'public-discovery/v8/backend%3Dhttps%3A%2F%2Fquirky-chinchilla-352.convex.cloud/control/manifest/state.json'
 		);
 		expect(HEALTH_ENV.PUBLIC_DISCOVERY_R2.list).not.toHaveBeenCalled();
 		expect(HEALTH_ENV.PUBLIC_DISCOVERY_R2.put).not.toHaveBeenCalled();
@@ -343,6 +365,23 @@ describe('/api/health', () => {
 		await expect(response.json()).resolves.toMatchObject({ status: 'down', convex: false });
 	});
 
+	it('does not let a mutable runtime fallback approve its own Convex tenant', async () => {
+		mockRuntimeConvexUrl.mockReturnValue('https://attacker-owned.convex.cloud');
+		const { PUBLIC_CONVEX_URL: _configuredRealm, ...envWithoutConfiguredRealm } = HEALTH_ENV;
+
+		const response = await GET(event(envWithoutConfiguredRealm as never));
+
+		expect(response.status).toBe(503);
+		expect(mockConvexConstructor).not.toHaveBeenCalled();
+		expect(mockConvexQuery).not.toHaveBeenCalled();
+		expect(mockGetInternalSecret).not.toHaveBeenCalled();
+		await expect(response.json()).resolves.toMatchObject({
+			status: 'down',
+			convex: false,
+			convexRealm: 'unknown'
+		});
+	});
+
 	it('fails closed when the server-side internal secret is unavailable', async () => {
 		mockGetInternalSecret.mockImplementation(() => {
 			throw new Error('INTERNAL_API_SECRET not configured');
@@ -403,7 +442,29 @@ describe('/api/health', () => {
 		expect(response.status).toBe(503);
 		await expect(response.json()).resolves.toMatchObject({
 			status: 'down',
-			publicDiscoveryCache: { status: 'down', workBudgetBound: false }
+			publicDiscoveryCache: { status: 'down', workBudgetBound: false },
+			paidProvider: { status: 'down', budgetCoordinatorBound: false }
+		});
+	});
+
+	it.each([
+		['EXA_API_KEY', undefined],
+		['FIRECRAWL_API_KEY', ''],
+		['GEMINI_API_KEY', ' short '],
+		['GROQ_API_KEY', 'bad\nkey'],
+		['PAID_PROVIDER_OPERATOR_USER_IDS', 'launch-operator, launch-backup'],
+		['PAID_PROVIDER_OPERATOR_USER_IDS', 'launch-operator,launch-operator']
+	] as const)('fails paid-provider readiness for malformed %s', async (binding, value) => {
+		mockConvexQuery.mockResolvedValue(readyProducerStatus());
+		const response = await GET(event({ ...HEALTH_ENV, [binding]: value }));
+
+		expect(response.status).toBe(503);
+		await expect(response.json()).resolves.toMatchObject({
+			status: 'down',
+			paidProvider: {
+				status: 'down',
+				missingBindings: expect.arrayContaining([binding])
+			}
 		});
 	});
 

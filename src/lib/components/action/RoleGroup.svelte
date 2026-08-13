@@ -14,6 +14,7 @@
 		group,
 		contactedRecipients = new Set(),
 		departingRecipients = new Set(),
+		priorContactIds = new Set(),
 		onWriteTo,
 		isDistrictGroup = false,
 		showRoleBadge = false,
@@ -25,6 +26,8 @@
 		group: RoleGroupData | { label: string; members: LandscapeMember[] };
 		contactedRecipients: Set<string>;
 		departingRecipients: Set<string>;
+		/** Prior self-reports — annotation only; never gates an action. */
+		priorContactIds?: Set<string>;
 		onWriteTo: (member: LandscapeMember) => void;
 		isDistrictGroup?: boolean;
 		showRoleBadge?: boolean;
@@ -45,6 +48,15 @@
 
 	<div class="flex flex-col space-y-5">
 		{#each group.members as member (member.id)}
+			<!--
+				District officials are deliberately NOT annotated with prior contact.
+				They carry a cwc_code, so resolveDeliveryRoute gives them the 'cwc'
+				route, which the page sends through TemplateModal — a different write
+				path that records a synthetic mailto-confirmation row, not the
+				per-recipient rows this annotation reads. An email-routed district
+				official is a known, named residual: it renders here without the
+				annotation rather than with a claim we cannot substantiate.
+			-->
 			{#if member.source === 'district' || isDistrictGroup}
 				<DistrictOfficialCard
 					{member}
@@ -62,6 +74,7 @@
 					{member}
 					contacted={contactedRecipients.has(member.id)}
 					departing={departingRecipients.has(member.id)}
+					priorContact={priorContactIds.has(member.id)}
 					{onWriteTo}
 					{showRoleBadge}
 					{canReportBounce}

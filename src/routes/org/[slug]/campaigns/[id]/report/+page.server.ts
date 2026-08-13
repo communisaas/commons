@@ -6,7 +6,6 @@ import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { renderReport } from '$lib/server/email/report-template';
-import { computeProofWeight } from '$lib/server/legislation/receipts/proof-weight';
 import { DELIVERY_QUOTA_SUBSCRIBE_GATE } from '$lib/data/org-limit-sentences';
 
 const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
@@ -123,9 +122,8 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform, u
 					)
 				: [],
 			proofStrength:
-				typeof delivery.proofWeight === 'number'
+				typeof delivery.verifiedCount === 'number'
 					? {
-							weight: asNumber(delivery.proofWeight),
 							verified: asNumber(delivery.verifiedCount),
 							total: asNumber(delivery.totalCount),
 							districtCount: asNumber(delivery.districtCount)
@@ -209,59 +207,36 @@ export const actions: Actions = {
 		// Render the full report email HTML so the decision-maker gets the same quality as the preview
 		let renderedHtml: string | undefined;
 		let packetDigest: string | undefined;
-		let proofWeight: number | undefined;
-		let packetSummary:
-			| {
-					verified: number;
-					total: number;
-					districtCount: number;
-					gds: number | null;
-					ald: number | null;
-					cai: number | null;
-					temporalEntropy: number | null;
-			  }
-			| undefined;
 		try {
 			const preview = await serverQuery(api.campaigns.getReportPreview, {
 				campaignId: params.id as Id<'campaigns'>,
 				orgSlug: params.slug
 			});
-			if (preview) {
-				const fullPacket = await computeVerificationPacketCached(
-					preview.campaign._id,
-					ctx.org._id,
-					{ url: new URL(request.url), platform }
-				);
-				const rendered = await renderReport({
-					campaignId: String(preview.campaign._id),
-					campaignTitle: preview.campaign.title,
-					orgName: ctx.org.name ?? params.slug,
-					packet: fullPacket,
-					verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
-					// D-09: org branding threaded into the SENT email (this rendered
-					// HTML is what `sendReport` persists + dispatches via SES).
-					branding: {
-						accent: ctx.org.brandingAccent ?? null,
-						logoUrl: ctx.org.logoUrl ?? null
-					},
-					// D-10: white-label de-brands the footer on the sent report.
-					whiteLabel: ctx.org.whiteLabel ?? false
-				});
-				renderedHtml = rendered.html;
-				packetDigest = rendered.attestationHash;
-				proofWeight = computeProofWeight(fullPacket);
-				packetSummary = {
-					verified: fullPacket.verified,
-					total: fullPacket.total,
-					districtCount: fullPacket.districtCount,
-					gds: fullPacket.gds ?? null,
-					ald: fullPacket.ald ?? null,
-					cai: fullPacket.cai ?? null,
-					temporalEntropy: fullPacket.temporalEntropy ?? null
-				};
-			}
+			if (!preview) return fail(404, { error: 'Campaign not found. Nothing was sent.' });
+			const fullPacket = await computeVerificationPacketCached(preview.campaign._id, ctx.org._id, {
+				url: new URL(request.url),
+				platform,
+				fresh: true
+			});
+			const rendered = await renderReport({
+				campaignId: String(preview.campaign._id),
+				campaignTitle: preview.campaign.title,
+				orgName: ctx.org.name ?? params.slug,
+				packet: fullPacket,
+				verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
+				// D-09: org branding threaded into the SENT email (this rendered
+				// HTML is what `sendReport` persists + dispatches via SES).
+				branding: {
+					accent: ctx.org.brandingAccent ?? null,
+					logoUrl: ctx.org.logoUrl ?? null
+				},
+				// D-10: white-label de-brands the footer on the sent report.
+				whiteLabel: ctx.org.whiteLabel ?? false
+			});
+			renderedHtml = rendered.html;
+			packetDigest = rendered.attestationHash;
 		} catch {
-			// Non-fatal: dispatch will use fallback template
+			return fail(500, { error: 'Could not build the report packet. Nothing was sent.' });
 		}
 
 		const result = await serverMutation(api.campaigns.sendReport, {
@@ -269,12 +244,30 @@ export const actions: Actions = {
 			orgSlug: params.slug,
 			targetEmails: selectedEmails,
 			renderedHtml,
-			packetDigest,
-			proofWeight,
-			packetSummary
+			packetDigest
 		});
 
 		if (result.error) {
+			if (result.error === 'CAMPAIGN_REPORT_PACKET_STALE') {
+				return fail(400, {
+					error:
+						'Campaign activity changed while this report was being prepared. Reload the page and send again.'
+				});
+			}
+			if (result.error === 'CAMPAIGN_REPORT_PACKET_HTML_UNBOUND') {
+				return fail(400, {
+					error:
+						"The rendered report did not match the server's packet. Reload the page and send again."
+				});
+			}
+			if (
+				result.error === 'CAMPAIGN_READ_MODEL_NOT_READY' ||
+				result.error === 'CAMPAIGN_READ_MODEL_MISSING'
+			) {
+				return fail(503, {
+					error: 'Campaign metrics are still being built. Nothing was sent; retry shortly.'
+				});
+			}
 			return fail(400, { error: result.error });
 		}
 

@@ -22,6 +22,10 @@ import type { RequestHandler } from './$types';
 import { env } from '$env/dynamic/private';
 import { verifyCronSecret } from '$lib/server/cron-auth';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	SHADOW_ATLAS_REGISTRATION_RETRY_PREFIX,
+	parseShadowAtlasRegistrationRetry
+} from '$lib/server/shadow-atlas-registration-retry';
 
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
 const SHADOW_ATLAS_REGISTRATION_TOKEN = env.SHADOW_ATLAS_REGISTRATION_TOKEN || '';
@@ -47,6 +51,7 @@ export const POST: RequestHandler = async (event) => {
 	const results = {
 		retriesProcessed: 0,
 		retriesSucceeded: 0,
+		retriesStale: 0,
 		retriesFailed: 0,
 		reconciled: 0,
 		mismatches: [] as Array<{ userId: string; leafIndex: number; reason: string }>
@@ -56,45 +61,44 @@ export const POST: RequestHandler = async (event) => {
 	const kv = event.platform?.env?.REGISTRATION_RETRY_KV;
 	if (kv) {
 		try {
-			const list = await kv.list({ prefix: 'retry:' });
+			const list = await kv.list({
+				prefix: SHADOW_ATLAS_REGISTRATION_RETRY_PREFIX,
+				limit: 100
+			});
 			for (const key of list.keys) {
 				results.retriesProcessed++;
 				try {
 					const raw = await kv.get(key.name);
 					if (!raw) continue;
 
-					const data = JSON.parse(raw) as {
-						userId: string;
-						identityCommitment: string;
-						verificationMethod: string;
-						atlasResult: {
-							leafIndex: number;
-							userRoot: string;
-							userPath: string[];
-							pathIndices: number[];
-						};
-						isReplace?: boolean;
-						queuedAt: string;
-					};
-
-					await serverMutation(api.users.upsertRegistration, {
+					const data = parseShadowAtlasRegistrationRetry(raw);
+					const result = await serverMutation(api.users.reconcileShadowAtlasRegistrationOperation, {
 						_secret: getInternalSecret(),
 						userId: data.userId as Id<'users'>,
 						identityCommitment: data.identityCommitment,
+						operation: data.operation,
+						generation: data.generation,
+						leafDigest: data.leafDigest,
+						idempotencyKey: data.idempotencyKey,
+						...(data.priorLeafIndex === undefined
+							? {}
+							: { priorLeafIndex: data.priorLeafIndex }),
 						leafIndex: data.atlasResult.leafIndex,
 						merkleRoot: data.atlasResult.userRoot,
-						merklePath: data.atlasResult.userPath,
-						isReplace: data.isReplace ?? false,
-						verificationMethod: data.verificationMethod,
-						queuedAt: data.queuedAt
+						merklePath: data.atlasResult.userPath
 					});
 
-					// Success — remove from retry queue
+					// Exact success, idempotent prior success, and a proven-stale
+					// generation are all terminal. Stale entries are deleted without
+					// touching the newer operation or canonical registration.
 					await kv.delete(key.name);
-					results.retriesSucceeded++;
+					if (result.status === 'stale') results.retriesStale++;
+					else results.retriesSucceeded++;
 					console.log('[Reconciliation] Retry succeeded', {
 						userId: data.userId,
-						leafIndex: data.atlasResult.leafIndex
+						leafIndex: data.atlasResult.leafIndex,
+						generation: data.generation,
+						status: result.status
 					});
 				} catch (retryError) {
 					results.retriesFailed++;

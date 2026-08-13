@@ -34,7 +34,6 @@ export const load: PageServerLoad = async ({ params }) => {
 		proofVerifiedAt: receipt.proofVerifiedAt ? new Date(receipt.proofVerifiedAt) : null,
 		verifiedCount: safeVerifiedCount,
 		districtCount: safeDistrictCount,
-		proofWeight: receipt.proofWeight,
 		causalityClass: receipt.causalityClass
 	});
 
@@ -43,7 +42,6 @@ export const load: PageServerLoad = async ({ params }) => {
 			id: receipt._id,
 			dmName: receipt.dmName,
 			decisionMakerId: receipt.decisionMakerId,
-			proofWeight: receipt.proofWeight,
 			verifiedCount: safeVerifiedCount,
 			totalCount: safeTotalCount,
 			districtCount: safeDistrictCount,

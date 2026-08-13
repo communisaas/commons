@@ -1,60 +1,34 @@
 <script lang="ts">
-	let {
-		score,
-		aligned,
-		total
-	}: {
-		score: number | null;
-		aligned: number;
-		total: number;
-	} = $props();
+	import type { Fact } from '$lib/core/fact';
 
-	let displayScore = $derived(score != null ? Math.round(score * 10) / 10 : null);
+	type AlignmentCounts = {
+		alignedVotes: number;
+		totalScoredVotes: number;
+	};
 
-	let color = $derived(
-		score == null
-			? 'bg-slate-200'
-			: score >= 67
-				? 'bg-green-500'
-				: score >= 34
-					? 'bg-amber-500'
-					: 'bg-red-500'
-	);
+	let { current }: { current: Fact<AlignmentCounts> } = $props();
 </script>
 
 <div class="rounded-lg border border-slate-200 bg-white p-4">
-	<div class="mb-2 flex items-center justify-between">
-		<h3 class="text-sm font-semibold text-slate-700">Alignment</h3>
-		{#if displayScore != null}
-			<span class="text-lg font-bold text-slate-900">{displayScore}</span>
-		{:else}
-			<span class="text-sm text-slate-400">N/A</span>
-		{/if}
-	</div>
+	<h3 class="mb-3 text-sm font-semibold text-slate-700">Alignment activity</h3>
 
-	<!-- Score bar -->
-	<div
-		class="mb-3 h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
-		role="progressbar"
-		aria-valuenow={displayScore ?? 0}
-		aria-valuemin={0}
-		aria-valuemax={100}
-		aria-label="Alignment score: {displayScore ?? 'not available'}"
-	>
-		<div
-			class="h-full rounded-full transition-all duration-500 {color}"
-			style="width: {displayScore != null ? displayScore : 0}%"
-		></div>
-	</div>
-
-	<!-- Vote breakdown -->
-	<div class="text-xs text-slate-500">
-		<div class="flex justify-between">
-			<span>Aligned votes</span>
-			<span class="font-medium text-slate-700">{aligned} / {total}</span>
+	{#if current.state === 'present'}
+		<div class="text-xs text-slate-500">
+			<div class="flex justify-between">
+				<span>Aligned votes</span>
+				<span class="font-medium text-slate-700">
+					{current.value.alignedVotes} / {current.value.totalScoredVotes}
+				</span>
+			</div>
+			{#if current.value.totalScoredVotes < 2}
+				<p class="mt-1 text-slate-400">Minimum 2 scored votes required</p>
+			{/if}
 		</div>
-		{#if total < 2}
-			<p class="mt-1 text-slate-400">Minimum 2 scored votes required</p>
-		{/if}
-	</div>
+	{:else if current.state === 'absent'}
+		<p class="text-sm text-slate-400">No scored votes are recorded.</p>
+	{:else if current.state === 'withheld'}
+		<p class="text-sm text-slate-400">Public vote counts are withheld.</p>
+	{:else}
+		<p class="text-sm text-slate-400">Vote counts are temporarily unavailable.</p>
+	{/if}
 </div>

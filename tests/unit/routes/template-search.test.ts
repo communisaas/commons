@@ -40,14 +40,16 @@ function rawEvent(body: string, headers: Record<string, string> = {}) {
 }
 
 describe('POST /api/templates/search', () => {
-	beforeEach(() => mockServerAction.mockReset());
+	beforeEach(() => {
+		mockServerAction.mockReset();
+	});
 
 	it('requires authentication before invoking Convex', async () => {
 		await expect(POST(event({ query: 'water' }, null))).rejects.toMatchObject({ status: 401 });
 		expect(mockServerAction).not.toHaveBeenCalled();
 	});
 
-	it('forwards the server secret and stable authenticated actor', async () => {
+	it('forwards the server secret and stable authenticated actor to keyword search', async () => {
 		mockServerAction.mockResolvedValue({ templates: [], method: 'keyword' });
 		const response = await POST(event({ query: ' clean water ', limit: 500 }));
 		await expect(response.json()).resolves.toEqual({ templates: [], method: 'keyword' });

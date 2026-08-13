@@ -141,6 +141,12 @@ export function analyzeEmailFlow(
 		personalConnection?: string;
 		/** Forwarded verbatim — see `generateMailtoUrl`, which owns the semantics. */
 		attestation?: { districtCode?: string | null };
+		/**
+		 * Forwarded verbatim — see `generateMailtoUrl`, which owns the semantics.
+		 * Additive: omitting it leaves every existing caller byte-identical, and the
+		 * direct lane then assembles a message with no suppression block.
+		 */
+		doNotContactUrls?: Readonly<Record<string, string>>;
 	}
 ): EmailFlowResult {
 	try {
@@ -196,7 +202,8 @@ export function analyzeEmailFlow(
 		const mailtoResult = generateMailtoUrl(template, user, {
 			trustTier,
 			personalConnection: options?.personalConnection,
-			attestation: options?.attestation
+			attestation: options?.attestation,
+			doNotContactUrls: options?.doNotContactUrls
 		});
 		if (mailtoResult.error) {
 			return {
@@ -311,6 +318,36 @@ export interface MailtoZones {
 	metadata?: string;
 	/** Verification text produced by the shared attestation builder — never composed here. */
 	attestation?: string;
+	/**
+	 * One `<address> — <url>` line per recipient, giving each mailbox a route off
+	 * the platform. Not a preference: a surface that has the URLs cannot choose to
+	 * withhold them, and if the assembled message then exceeds the URL ceiling the
+	 * assembly fails rather than the block being trimmed away to make it fit.
+	 */
+	suppression?: string;
+}
+
+/**
+ * Build the suppression zone for a set of recipients.
+ *
+ * One line per recipient that has a URL. Recipients without one contribute no
+ * line — the caller could not mint it (secret unset), and a message must not
+ * carry an address with a broken promise attached to it.
+ */
+export function buildSuppressionZone(
+	recipients: ReadonlyArray<{ email: string; doNotContactUrl?: string | null }>
+): string | undefined {
+	const seen = new Set<string>();
+	const lines: string[] = [];
+	for (const recipient of recipients) {
+		const email = recipient.email?.trim();
+		const url = recipient.doNotContactUrl?.trim();
+		if (!email || !url || seen.has(email)) continue;
+		seen.add(email);
+		lines.push(`${email} — ${url}`);
+	}
+	if (lines.length === 0) return undefined;
+	return `To stop receiving messages from Commons at this address, permanently and across every organization:\n${lines.join('\n')}`;
 }
 
 export interface MailtoAssemblyInput {
@@ -353,6 +390,11 @@ export function assembleMailto(input: MailtoAssemblyInput): MailtoAssembly {
 		blocks.push('---');
 		blocks.push(footerLines.join('\n'));
 	}
+
+	// Its own block after the attestation, and last: a recipient scanning the
+	// bottom of a message finds the route off the platform where they look for it.
+	const suppression = input.zones.suppression?.trim();
+	if (suppression) blocks.push(suppression);
 
 	const bodyText = blocks.join('\n\n');
 	const subject = input.subject.trim();
@@ -441,6 +483,13 @@ export function generateMailtoUrl(
 		 * claimed only when it is passed, never synthesized here.
 		 */
 		attestation?: { districtCode?: string | null };
+		/**
+		 * Mailbox-addressed do-not-contact URLs, keyed by the recipient address
+		 * lowercased and trimmed. Data, not a toggle: supplying a URL is the only
+		 * decision a caller makes, and the direct lane then always renders it.
+		 * Callers mint these server-side, where the suppression secret lives.
+		 */
+		doNotContactUrls?: Readonly<Record<string, string>>;
 	}
 ): MailtoUrlResult {
 	try {
@@ -501,13 +550,23 @@ export function generateMailtoUrl(
 		// relay lane uses and carries the same composer block — but only for a lane
 		// that opted in, because a surface showing the sender no footer must not put
 		// a verification claim about them in front of a recipient.
+		// The congressional lane above routes to the certified-delivery relay and
+		// carries no suppression block; only a lane that puts an address in front
+		// of a real mailbox owes that mailbox a way out.
+		const doNotContactUrls = options?.doNotContactUrls;
 		return toMailtoUrlResult(
 			assembleMailto({
 				recipients: resolved.recipients,
 				subject: resolved.subject,
 				zones: {
 					body: resolved.body,
-					attestation: options?.attestation ? (attestation.block ?? undefined) : undefined
+					attestation: options?.attestation ? (attestation.block ?? undefined) : undefined,
+					suppression: buildSuppressionZone(
+						resolved.recipients.map((email) => ({
+							email,
+							doNotContactUrl: doNotContactUrls?.[email.trim().toLowerCase()] ?? null
+						}))
+					)
 				}
 			})
 		);

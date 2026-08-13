@@ -4,6 +4,7 @@ import type { LayoutServerLoad } from './$types';
 
 import { isValidPublicTemplateSlug } from '$lib/server/public-template-detail-path';
 import { getCachedPublicTemplatePageArtifact } from '$lib/server/public-template-queries';
+import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 export const load: LayoutServerLoad = async ({ params, request, setHeaders, url, platform }) => {
 	const { slug } = params;
@@ -30,7 +31,7 @@ export const load: LayoutServerLoad = async ({ params, request, setHeaders, url,
 	const convexTemplate = artifact.detail;
 
 	// Congressional delivery is implemented but not launched while the flag is false.
-	if (!FEATURES.CONGRESSIONAL && convexTemplate.deliveryMethod === 'cwc') {
+	if (!FEATURES.CONGRESSIONAL && isCongressionalDelivery(convexTemplate.deliveryMethod)) {
 		throw error(404, 'Template not found');
 	}
 

@@ -15,6 +15,11 @@
 	} from '$lib/services/emailService';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
 	import { moderatePersonalConnection } from '$lib/utils/personal-connection';
+	import {
+		buildDoNotContactZone,
+		describeDoNotContactFailure
+	} from '$lib/utils/do-not-contact-links';
+	import { absent } from '$lib/core/fact';
 	import { laneCarriesSenderText, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
 	import {
 		trackTemplateView,
@@ -36,6 +41,7 @@
 	import type { EngagementData } from '$lib/types/engagement';
 	import {
 		mergeLandscape,
+		slugify,
 		type LandscapeMember,
 		type DistrictOfficialInput
 	} from '$lib/utils/landscapeMerge';
@@ -396,6 +402,17 @@
 	let contactedRecipients = $state(new Set<string>());
 	let departingRecipients = $state(new Set<string>());
 
+	// The viewer's own past self-reports, from the server. Deliberately a SEPARATE
+	// set from `contactedRecipients`: this one only annotates a card, it never
+	// takes the write button away, so a stale or mismatched id costs an annotation
+	// and never a send. Ids are minted by the same `slugify` that mints
+	// `LandscapeMember.id`, so a name that no longer merges simply doesn't match.
+	const priorContactIds = $derived(
+		data.priorContacts.state === 'present'
+			? new Set(data.priorContacts.value.map((c) => slugify(c.name)))
+			: new Set<string>()
+	);
+
 	// Send confirmation peak (P2): a mailto handoff only tells us the mail app
 	// OPENED, never that mail was sent. "contacted" is set ONLY on an explicit
 	// confirm — never a tab-return/timer heuristic.
@@ -605,13 +622,21 @@
 			// TemplateModal handles tier-based routing (mailto for T1-2, ZKP for T3+)
 			await openTemplateModal(data.user);
 		} else if (member.deliveryRoute === 'email' && member.email) {
-			// Nothing is assembled until the sender's own words clear moderation.
+			// Moderation and the bounded suppression lookup are independent. Start
+			// both together; neither result is erased if the other finishes first.
 			if (sendModerating) return;
 			sendModerating = true;
-			const moderation = await moderatePersonalConnection(personalConnectionValue);
+			const [moderation, suppression] = await Promise.all([
+				moderatePersonalConnection(personalConnectionValue),
+				buildDoNotContactZone(template.slug, [member.email])
+			]);
 			sendModerating = false;
 			if (!moderation.approved) {
 				sendBlocked = moderation.reason;
+				return;
+			}
+			if (suppression.state !== 'present') {
+				sendBlocked = describeDoNotContactFailure(suppression);
 				return;
 			}
 
@@ -640,7 +665,8 @@
 				subject: subject ?? '',
 				zones: {
 					body: resolvedBody,
-					attestation
+					attestation,
+					suppression: suppression.value
 				}
 			});
 
@@ -684,13 +710,6 @@
 		// click during the await would otherwise moderate twice and send twice.
 		batchRegistrationState = 'registering';
 
-		const moderation = await moderatePersonalConnection(personalConnectionValue);
-		if (!moderation.approved) {
-			sendBlocked = moderation.reason;
-			batchRegistrationState = 'idle';
-			return;
-		}
-
 		const allMembers = [
 			...landscape.roleGroups.flatMap((g) => g.members),
 			...(landscape.districtGroup?.members ?? [])
@@ -700,8 +719,32 @@
 			.map((id) => allMembers.find((m) => m.id === id))
 			.filter((m): m is LandscapeMember => m != null);
 
-		// Build single mailto with all email-bearing members in To:
+		// A no-email selection has no mailbox that needs a link, so it performs no
+		// suppression request. Otherwise start it alongside moderation.
 		const emailMembers = members.filter((m) => m.email && m.deliveryRoute === 'email');
+		const suppressionPromise =
+			emailMembers.length > 0
+				? buildDoNotContactZone(
+						template.slug,
+						emailMembers.map((m) => m.email!)
+					)
+				: Promise.resolve(absent());
+		const [moderation, suppression] = await Promise.all([
+			moderatePersonalConnection(personalConnectionValue),
+			suppressionPromise
+		]);
+		if (!moderation.approved) {
+			sendBlocked = moderation.reason;
+			batchRegistrationState = 'idle';
+			return;
+		}
+		if (emailMembers.length > 0 && suppression.state !== 'present') {
+			sendBlocked = describeDoNotContactFailure(suppression);
+			batchRegistrationState = 'idle';
+			return;
+		}
+
+		// Build single mailto with all email-bearing members in To:
 		if (emailMembers.length > 0) {
 			const districtName = data.userDistrictCode ?? '';
 			const subject = template.subject || template.title;
@@ -725,7 +768,8 @@
 				subject: subject ?? '',
 				zones: {
 					body: resolvedBody,
-					attestation
+					attestation,
+					suppression: suppression.state === 'present' ? suppression.value : undefined
 				}
 			});
 
@@ -1227,6 +1271,7 @@
 					districtOfficials={pl.districtOfficials ?? []}
 					{contactedRecipients}
 					{departingRecipients}
+					{priorContactIds}
 					onWriteTo={handleWriteTo}
 					onBatchRegister={handleBatchRegister}
 					{isCongressional}

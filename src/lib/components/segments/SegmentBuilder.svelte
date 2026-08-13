@@ -52,6 +52,21 @@
 	let matchCountPartial = $state(false);
 	let countLoading = $state(false);
 	let countTimeout: ReturnType<typeof setTimeout> | undefined;
+	let countGeneration = 0;
+	let countedFilterKey = $state<string | null>(null);
+
+	// Bulk action state lives beside the count it is authorized by. A confirmation
+	// always carries the exact filter/count snapshot the user saw.
+	let bulkActionLoading = $state(false);
+	let bulkTagId = $state('');
+	let bulkConfirm = $state<{
+		action: 'apply_tag' | 'remove_tag';
+		tagId: string;
+		tagName: string;
+		filter: SegmentFilter;
+		count: number;
+	} | null>(null);
+	let bulkResult = $state<{ message: string; type: 'success' | 'error' } | null>(null);
 
 	// Save/load state
 	let savedSegments = $state<SavedSegment[]>([]);
@@ -63,6 +78,7 @@
 
 	// --- Derived ---
 	const currentFilter = $derived<SegmentFilter>({ logic, conditions });
+	const currentFilterKey = $derived(JSON.stringify(currentFilter));
 	const importedReadableGeographyConditionCount = $derived(
 		conditions.filter((condition) =>
 			['stateCode', 'congressionalDistrict'].includes(condition.field)
@@ -84,19 +100,32 @@
 
 	// Debounced count on filter change
 	$effect(() => {
-		// Read the reactive values to track them
-		const _l = logic;
-		const _c = JSON.stringify(conditions);
+		const filter = snapshotFilter({ logic, conditions });
+		const filterKey = JSON.stringify(filter);
+		const generation = ++countGeneration;
 
 		if (countTimeout) clearTimeout(countTimeout);
-		countTimeout = setTimeout(() => {
-			fetchCount();
-		}, 300);
+		matchCount = null;
+		matchCountPartial = false;
+		countedFilterKey = null;
+		bulkConfirm = null;
+		if (filter.conditions.length === 0) {
+			countLoading = false;
+		} else {
+			countLoading = true;
+			countTimeout = setTimeout(() => {
+				void fetchCount(filter, filterKey, generation);
+			}, 300);
+		}
 
-		onFilterChange?.(currentFilter);
+		onFilterChange?.(filter);
 	});
 
 	// --- Helpers ---
+	function snapshotFilter(filter: SegmentFilter): SegmentFilter {
+		return JSON.parse(JSON.stringify(filter)) as SegmentFilter;
+	}
+
 	function generateId(): string {
 		return Math.random().toString(36).slice(2, 10);
 	}
@@ -133,28 +162,23 @@
 		updateCondition(id, { field, operator: defaultOp, value: defaultValue });
 	}
 
-	async function fetchCount() {
-		if (conditions.length === 0) {
-			matchCount = null;
-			matchCountPartial = false;
-			return;
-		}
-		countLoading = true;
+	async function fetchCount(filter: SegmentFilter, filterKey: string, generation: number) {
 		try {
 			const res = await fetch(`/api/org/${orgSlug}/segments`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'count', filters: currentFilter })
+				body: JSON.stringify({ action: 'count', filters: filter })
 			});
-			if (res.ok) {
+			if (generation === countGeneration && res.ok) {
 				const data = await res.json();
 				matchCount = data.count;
 				matchCountPartial = Boolean(data.partial);
+				countedFilterKey = filterKey;
 			}
 		} catch {
 			// Silently fail count
 		} finally {
-			countLoading = false;
+			if (generation === countGeneration) countLoading = false;
 		}
 	}
 
@@ -240,7 +264,8 @@
 	}
 
 	function handleApply() {
-		onApply?.(currentFilter, matchCount ?? 0, matchCountPartial);
+		if (bulkDisabled || matchCount === null) return;
+		onApply?.(snapshotFilter(currentFilter), matchCount, matchCountPartial);
 	}
 
 	// --- Value renderers for each field type ---
@@ -248,27 +273,30 @@
 		return FIELD_OPTIONS.find((f) => f.value === field)?.operators ?? [];
 	}
 
-	// --- Bulk actions ---
-	let bulkActionLoading = $state(false);
-	let bulkTagId = $state('');
-	let bulkConfirm = $state<{
-		action: 'apply_tag' | 'remove_tag';
-		tagId: string;
-		tagName: string;
-	} | null>(null);
-	let bulkResult = $state<{ message: string; type: 'success' | 'error' } | null>(null);
-
-	const bulkDisabled = $derived(matchCount === null || matchCount === 0 || countLoading);
+	const bulkDisabled = $derived(
+		matchCount === null ||
+			matchCount === 0 ||
+			matchCountPartial ||
+			countLoading ||
+			countedFilterKey !== currentFilterKey
+	);
 
 	function promptBulkTag(action: 'apply_tag' | 'remove_tag') {
-		if (!bulkTagId) return;
+		if (!bulkTagId || bulkDisabled || matchCount === null || countedFilterKey === null) return;
 		const tag = tags.find((t) => t.id === bulkTagId);
 		if (!tag) return;
-		bulkConfirm = { action, tagId: bulkTagId, tagName: tag.name };
+		bulkConfirm = {
+			action,
+			tagId: bulkTagId,
+			tagName: tag.name,
+			filter: snapshotFilter(currentFilter),
+			count: matchCount
+		};
 	}
 
 	async function executeBulkTag() {
 		if (!bulkConfirm) return;
+		const confirmation = bulkConfirm;
 		bulkActionLoading = true;
 		bulkResult = null;
 		try {
@@ -276,16 +304,16 @@
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					action: bulkConfirm.action,
-					filters: currentFilter,
-					tagId: bulkConfirm.tagId
+					action: confirmation.action,
+					filters: confirmation.filter,
+					tagId: confirmation.tagId
 				})
 			});
 			if (res.ok) {
 				const data = await res.json();
-				const verb = bulkConfirm.action === 'apply_tag' ? 'Applied tag to' : 'Removed tag from';
+				const verb = confirmation.action === 'apply_tag' ? 'Applied tag to' : 'Removed tag from';
 				bulkResult = {
-					message: `${verb} ${data.partial ? 'at least ' : ''}${data.affected} supporter${data.affected === 1 ? '' : 's'}${data.partial ? '; action hit the page cap and can be rerun for the remaining matching rows' : ''}`,
+					message: `${verb} ${data.affected} supporter${data.affected === 1 ? '' : 's'}`,
 					type: 'success'
 				};
 			} else {
@@ -301,13 +329,15 @@
 	}
 
 	async function exportCsv() {
+		if (bulkDisabled) return;
+		const filter = snapshotFilter(currentFilter);
 		bulkActionLoading = true;
 		bulkResult = null;
 		try {
 			const res = await fetch(`/api/org/${orgSlug}/segments`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ action: 'export_csv', filters: currentFilter })
+				body: JSON.stringify({ action: 'export_csv', filters: filter })
 			});
 			if (res.ok) {
 				const blob = await res.blob();
@@ -789,7 +819,8 @@
 				<p class="mt-0.5 text-xs text-zinc-500">supporter{matchCount === 1 ? '' : 's'} match</p>
 				{#if matchCountPartial}
 					<p class="mt-1 text-xs text-amber-300">
-						Count hit the page cap; this is a lower bound, not a full cohort total.
+						This organization has more than 400 supporters. The count is a lower bound, and bulk
+						changes and CSV export are temporarily unavailable.
 					</p>
 				{/if}
 			{/if}
@@ -884,17 +915,11 @@
 						'apply_tag'
 							? 'to'
 							: 'from'}
-						{matchCountPartial ? 'at least ' : ''}{matchCount?.toLocaleString()} supporter{matchCount ===
+						{bulkConfirm.count.toLocaleString()} supporter{bulkConfirm.count ===
 						1
 							? ''
 							: 's'}?
 					</p>
-					{#if matchCountPartial}
-						<p class="mt-1 text-xs text-amber-300">
-							This action may stop at the page cap; rerun it to continue through the remaining
-							matching rows.
-						</p>
-					{/if}
 					<div class="mt-2 flex items-center gap-2">
 						<button
 							type="button"
@@ -929,6 +954,7 @@
 		<button
 			type="button"
 			class="w-full rounded-lg bg-teal-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-teal-500"
+			disabled={bulkDisabled}
 			onclick={handleApply}
 		>
 			Apply segment ({matchCountPartial ? 'at least ' : ''}{matchCount.toLocaleString()} supporter{matchCount ===

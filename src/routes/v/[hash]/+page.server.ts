@@ -10,8 +10,62 @@ import { error } from '@sveltejs/kit';
 import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
+import { absent, blocked, present, withheld, type Fact } from '$lib/core/fact';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { PageServerLoad } from './$types';
+
+type ContainmentSource = 'atlas-derived' | 'self-reported';
+
+interface SourcedContainment<T> {
+	value: Fact<T>;
+	source: Fact<ContainmentSource>;
+}
+
+interface ContainmentRow extends SourcedContainment<string> {
+	slot: number;
+	label: string;
+}
+
+function containmentValue(
+	value: unknown,
+	isValid: (candidate: string) => boolean = (candidate) => candidate.trim().length > 0
+): Fact<string> {
+	if (value === null || value === undefined) return absent();
+	if (typeof value !== 'string' || value.trim().length === 0) {
+		return blocked('credential carried an empty value');
+	}
+	if (!isValid(value)) return blocked('credential carried an unresolvable value');
+	return present(value);
+}
+
+function containmentSource(
+	value: Fact<string>,
+	credentialSource: unknown
+): Fact<ContainmentSource> {
+	if (value.state === 'absent') return absent();
+	if (value.state === 'withheld') return withheld(value.why);
+	if (value.state === 'blocked') return blocked(value.why);
+	if (credentialSource === 'atlas-derived' || credentialSource === 'self-reported') {
+		return present(credentialSource);
+	}
+	if (credentialSource === null || credentialSource === undefined) {
+		return absent();
+	}
+	return blocked('credential carried an unsupported provenance');
+}
+
+function stateFromCongressional(
+	value: Fact<string>,
+	source: Fact<ContainmentSource>
+): SourcedContainment<string> {
+	if (value.state !== 'present') return { value, source };
+	const stateCode = value.value.split('-')[0];
+	if (!stateCode) {
+		const why = 'credential carried an unresolvable congressional state';
+		return { value: blocked(why), source: blocked(why) };
+	}
+	return { value: present(stateCode), source };
+}
 
 export const load: PageServerLoad = async ({ params }) => {
 	const { hash } = params;
@@ -58,8 +112,11 @@ export const load: PageServerLoad = async ({ params }) => {
 				},
 				location: {
 					verified: false,
-					state: null as string | null,
-					districts: [] as { slot: number; label: string; value: string }[]
+					state: {
+						value: absent(),
+						source: absent()
+					} as SourcedContainment<string>,
+					districts: [] as ContainmentRow[]
 				},
 				govCredential: false,
 				composition: null as 'individual' | 'template' | 'mixed' | null,
@@ -102,40 +159,59 @@ export const load: PageServerLoad = async ({ params }) => {
 				shadow_atlas: 'gov-id'
 			};
 
-			const districts: { slot: number; label: string; value: string }[] = [];
-			if (credential.congressionalDistrict) {
-				districts.push({
+			const congressional = containmentValue(credential.congressionalDistrict);
+			const stateSenate = containmentValue(credential.stateSenateDistrict);
+			const stateAssembly = containmentValue(credential.stateAssemblyDistrict);
+			const county = containmentValue(credential.countyFips, (candidate) =>
+				/^\d{5}$/.test(candidate)
+			);
+			const congressionalSource = containmentSource(
+				congressional,
+				credential.congressionalDistrictSource
+			);
+			const districts: ContainmentRow[] = [
+				{
 					slot: 0,
 					label: 'Congressional district',
-					value: credential.congressionalDistrict
-				});
-			}
-			if (credential.stateSenateDistrict) {
-				districts.push({
+					value: congressional,
+					source: congressionalSource
+				},
+				{
 					slot: 2,
 					label: 'State senate district',
-					value: credential.stateSenateDistrict
-				});
-			}
-			if (credential.stateAssemblyDistrict) {
-				districts.push({
+					value: stateSenate,
+					source: containmentSource(stateSenate, credential.stateSenateDistrictSource)
+				},
+				{
 					slot: 3,
 					label: 'State assembly district',
-					value: credential.stateAssemblyDistrict
-				});
-			}
+					value: stateAssembly,
+					source: containmentSource(stateAssembly, credential.stateAssemblyDistrictSource)
+				},
+				{
+					slot: 4,
+					label: 'County (FIPS)',
+					value: county,
+					source: containmentSource(county, credential.countyFipsSource)
+				}
+			];
+			const state = stateFromCongressional(congressional, congressionalSource);
 
 			return {
 				hash,
 				mode: 'individual' as const,
-				trustTier: credential.trustTier as 0 | 1 | 2 | 3 | 4 | 5,
+				record: {
+					status: credential.status,
+					retiredAt: credential.retiredAt
+				},
+				trustTier: credential.trustTier,
 				identity: {
-					verified: true,
+					verified: credential.status === 'active',
 					method: methodMap[credential.verificationMethod] ?? 'email'
 				},
 				location: {
-					verified: districts.length > 0,
-					state: credential.congressionalDistrict?.split('-')[0] ?? null,
+					verified: districts.length > 0 && credential.status === 'active',
+					state,
 					districts,
 					// B3 — freshness provenance. Two INDEPENDENT clocks rendered
 					// separately on the certificate; each is `null` when the
@@ -148,7 +224,7 @@ export const load: PageServerLoad = async ({ params }) => {
 					tigerVintage: credential.tigerVintage ?? null,
 					resolutionConfidence: credential.resolutionConfidence ?? null
 				},
-				govCredential: credential.trustTier >= 3,
+				govCredential: credential.trustTier !== null && credential.trustTier >= 3,
 				composition: 'individual' as 'individual' | 'template' | 'mixed',
 				verifiedAt: credential.issuedAt,
 				participantCount: null as number | null,

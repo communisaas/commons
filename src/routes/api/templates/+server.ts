@@ -863,6 +863,8 @@ export const POST: RequestHandler = async (event) => {
 		let consensusResult;
 
 		try {
+			// Authoring is target-agnostic and has no trusted resolved recipient,
+			// so moderation intentionally inherits the strict unknown-target policy.
 			const moderationResult = await moderateTemplate(
 				{
 					title: validData.title,

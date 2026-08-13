@@ -5,6 +5,7 @@
 	import { ArrowRight, ArrowLeft, User, MapPin, Send } from '@lucide/svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import { coordinated, useTimerCleanup } from '$lib/utils/timerCoordinator';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 
 	let {
 		template,
@@ -42,10 +43,11 @@
 	let addressError = $state('');
 	let emailError = $state('');
 
-	const isCongressional = $derived(template.deliveryMethod === 'cwc');
-	const isAuthFlow = $derived(template.deliveryMethod === 'auth');
-	const requiresAddress = $derived(isCongressional && !isAuthFlow);
-	const requiresEmail = $derived(!user || isAuthFlow); // Always need email for auth flow
+	const isCongressional = $derived(isCongressionalDelivery(template.deliveryMethod));
+	// Congressional delivery is the only lane that needs a street address; a
+	// signed-out sender is the only one who still has to type an email.
+	const requiresAddress = $derived(isCongressional);
+	const requiresEmail = $derived(!user);
 
 	// Determine the flow based on template type and user status
 	const steps = $derived(getSteps());
@@ -53,10 +55,7 @@
 	const isLastStep = $derived(currentStepIndex === steps.length - 1);
 
 	function getSteps(): Step[] {
-		if (isAuthFlow) {
-			// Auth flow for template creators - always need name/email
-			return ['name', 'send'];
-		} else if (user) {
+		if (user) {
 			// Authenticated user
 			if (user.address && isCongressional) {
 				return ['send']; // Skip directly to send
@@ -105,7 +104,7 @@
 
 	function validateEmail(): boolean {
 		emailError = '';
-		if ((requiresEmail || isAuthFlow) && !email.trim()) {
+		if (requiresEmail && !email.trim()) {
 			emailError = 'Please enter your email';
 			return false;
 		}
@@ -169,7 +168,7 @@
 		onsend({
 			name: name.trim(),
 			address: requiresAddress ? address.trim() : undefined,
-			email: requiresEmail || isAuthFlow ? email.trim() : undefined
+			email: requiresEmail ? email.trim() : undefined
 		});
 	}
 
@@ -223,12 +222,10 @@
 							<User class="h-6 w-6 text-blue-600" />
 						</div>
 						<h2 class="mb-2 text-xl font-bold text-slate-900">
-							{isAuthFlow ? 'Create Your Account' : 'Quick setup to send'}
+							Quick setup to send
 						</h2>
 						<p class="text-slate-600">
-							{isAuthFlow
-								? 'Save your template and track its impact over time'
-								: `Your name makes this message yours, not generic`}
+							{`Your name makes this message yours, not generic`}
 						</p>
 					</div>
 
@@ -249,7 +246,7 @@
 							{/if}
 						</div>
 
-						{#if requiresEmail || isAuthFlow}
+						{#if requiresEmail}
 							<div>
 								<label for="email" class="mb-2 block text-sm font-medium text-slate-700">
 									Email Address
@@ -308,12 +305,10 @@
 							<Send class="h-6 w-6 text-green-600" />
 						</div>
 						<h2 class="mb-2 text-xl font-bold text-slate-900">
-							{isAuthFlow ? 'Save Your Template' : 'All set - this goes out now'}
+							All set - this goes out now
 						</h2>
 						<p class="text-slate-600">
-							{isAuthFlow
-								? 'Your template will be saved and you can track its impact'
-								: `"${template.title}" will be sent ${isCongressional ? 'to your representatives' : 'via email'}`}
+							{`"${template.title}" will be sent ${isCongressional ? 'to your representatives' : 'via email'}`}
 						</p>
 					</div>
 
@@ -348,7 +343,7 @@
 							disabled={isTransitioning}
 						>
 							<Send class="mr-1 h-4 w-4" />
-							{isAuthFlow ? 'Save Template' : 'Send Message'}
+							Send Message
 						</Button>
 					{:else}
 						<Button

@@ -9,6 +9,7 @@ import {
 	readPublicDiscoveryPublicationStatus,
 	type PublicDiscoveryPublicationStatus
 } from '$lib/server/public-discovery-manifest-shield';
+import { paidProviderRuntimeReadiness } from '$lib/server/paid-provider-runtime-readiness';
 
 const startTime = Date.now();
 const HEALTH_PROBE_TIMEOUT_MS = 5_000;
@@ -51,6 +52,11 @@ type HealthEnv = {
 	SESSION_CREATION_SECRET_PREVIOUS?: string;
 	SESSION_COOKIE_SIGNING_SECRET?: string;
 	SESSION_COOKIE_SIGNING_SECRET_PREVIOUS?: string;
+	EXA_API_KEY?: string;
+	FIRECRAWL_API_KEY?: string;
+	GEMINI_API_KEY?: string;
+	GROQ_API_KEY?: string;
+	PAID_PROVIDER_OPERATOR_USER_IDS?: string;
 };
 
 type AtlasHealth = Awaited<ReturnType<typeof checkAtlas>>;
@@ -75,6 +81,13 @@ type HealthSnapshot = {
 	sessionCookieAuthority: {
 		status: 'down' | 'ok';
 		keysIsolated: boolean;
+	};
+	paidProvider: {
+		status: 'down' | 'ok';
+		budgetCoordinatorBound: boolean;
+		operatorAllowlistConfigured: boolean;
+		providerSecretsConfigured: boolean;
+		missingBindings: readonly string[];
 	};
 };
 
@@ -114,7 +127,6 @@ function pinnedConvexHealthOrigin(env: HealthEnv | undefined): string {
 	const runtimeFallback = getRuntimeConvexUrl();
 	const effective = parseHostedOrigin(env?.PUBLIC_CONVEX_URL || runtimeFallback);
 	const approved = new Set<string>(Object.values(CONVEX_REALMS));
-	if (runtimeFallback) approved.add(parseHostedOrigin(runtimeFallback).origin);
 	if (!approved.has(effective.origin)) {
 		throw new Error('Convex health URL is not an approved deployment realm');
 	}
@@ -164,6 +176,7 @@ export const GET: RequestHandler = async ({ platform, request, locals }) => {
 			publicDiscoveryCache: snapshot.publicDiscoveryCache,
 			release: snapshot.release,
 			sessionCookieAuthority: snapshot.sessionCookieAuthority,
+			paidProvider: snapshot.paidProvider,
 			uptime: Math.floor((Date.now() - startTime) / 1000)
 		},
 		{ status: code, headers: { 'Cache-Control': 'no-store' } }
@@ -183,6 +196,7 @@ async function computeHealthSnapshot(
 		checkPublicDiscoveryPublication(platform)
 	]);
 	const keysIsolated = sessionCookieKeysIsolated(env);
+	const paidProvider = paidProviderRuntimeReadiness(env);
 	const releaseSha = _normalizeExactReleaseSha(BUILD_RELEASE_SHA);
 	const releaseTransactionId = _normalizeExactReleaseTransaction(
 		env?.PUBLIC_RELEASE_TRANSACTION_ID
@@ -195,6 +209,7 @@ async function computeHealthSnapshot(
 		workBudgetBound &&
 		publication.healthy &&
 		keysIsolated &&
+		paidProvider.ready &&
 		releaseSha !== null &&
 		releaseTransactionId !== null;
 	return {
@@ -218,6 +233,13 @@ async function computeHealthSnapshot(
 		sessionCookieAuthority: {
 			status: keysIsolated ? 'ok' : 'down',
 			keysIsolated
+		},
+		paidProvider: {
+			status: paidProvider.ready && workBudgetBound ? 'ok' : 'down',
+			budgetCoordinatorBound: workBudgetBound,
+			operatorAllowlistConfigured: paidProvider.operatorAllowlistConfigured,
+			providerSecretsConfigured: paidProvider.providerSecretsConfigured,
+			missingBindings: paidProvider.missingBindings
 		}
 	};
 }

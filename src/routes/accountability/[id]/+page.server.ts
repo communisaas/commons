@@ -16,7 +16,6 @@ type PublicBill = {
 
 type PublicReceipt = {
 	_id: string;
-	proofWeight: number;
 	verifiedCount: number | null;
 	causalityClass: string;
 	dmAction: string | null;
@@ -66,7 +65,6 @@ export const load: PageServerLoad = async ({ params }) => {
 					},
 					receipts: (entry.receipts as PublicReceipt[]).map((receipt) => ({
 						id: receipt._id,
-						proofWeight: receipt.proofWeight,
 						verifiedCount: receipt.verifiedCount,
 						causalityClass: receipt.causalityClass,
 						dmAction: receipt.dmAction,
@@ -75,7 +73,6 @@ export const load: PageServerLoad = async ({ params }) => {
 						actionOccurredAt: isoDate(receipt.actionOccurredAt),
 						attestationDigest: receipt.attestationDigest
 					})),
-					maxProofWeight: entry.maxProofWeight,
 					totalVerified: entry.totalVerified,
 					latestAction: entry.latestAction
 				};

@@ -55,9 +55,12 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	}
 
 	// API-key auth carries no user identity; the route proved org membership
-	// above, so it presents the internal secret to the gated Convex query.
+	// above, so it presents the internal secret to the gated Convex query. The
+	// key already established which org is reading, so it names that org — the
+	// empirical readings are withheld unless that org's own plan is paid.
 	const stats = await serverQuery(api.networks.getStats, {
 		networkId: params.id as Id<'orgNetworks'>,
+		readerOrgId: auth.orgId as Id<'organizations'>,
 		_secret: getInternalSecret()
 	});
 	return apiOk(stats);

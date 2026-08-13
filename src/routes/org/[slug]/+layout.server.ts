@@ -147,7 +147,6 @@ export const load: LayoutServerLoad = async ({ params, locals, url }) => {
 								pendingCount: returnSummary.receipts.pendingCount,
 								responseLoggedCount: returnSummary.receipts.responseLoggedCount,
 								anchorFieldCount: returnSummary.receipts.anchorFieldCount,
-								proofWeightTotal: returnSummary.receipts.proofWeightTotal,
 								latestProofDeliveredAt: returnSummary.receipts.latestProofDeliveredAt
 									? new Date(returnSummary.receipts.latestProofDeliveredAt).toISOString()
 									: null,

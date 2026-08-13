@@ -4,9 +4,10 @@
  * Source-text pins for the registry-voice presentation of
  * `src/routes/verify/receipt/[id]/+page.svelte`. The page renders a
  * proof-of-action receipt without celebratory chrome (green disc,
- * "Verified" prefix, editorial color chips, green proof-weight fill,
+ * "Verified" prefix, editorial color chips, composite-score bars,
  * 2nd-person voice) — that frame implies the substrate issues approval
- * grades, but causality and alignment are inferences only.
+ * grades, but causality and alignment are inferences only. The composite
+ * bar is gone entirely: the page renders counts, never a graded scalar.
  *
  * Behavioral testing of this page would require mounting it against a
  * fixture-seeded Convex receipt + bill; that's out of scope for this
@@ -53,15 +54,13 @@ describe('receipt page registry-voice contracts', () => {
 		expect(svelte).not.toContain('content="Verified accountability receipt');
 	});
 
-	it('proof-weight bar uses neutral fill, not green celebration', () => {
+	it('renders no composite-score bar at all', () => {
 		const svelte = source();
-		// Find the progressbar block.
-		const bar = svelte.slice(
-			svelte.indexOf('role="progressbar"'),
-			svelte.indexOf('role="progressbar"') + 400
-		);
-		expect(bar).toContain('bg-slate-700');
-		expect(bar).not.toContain('bg-green-500');
+		// Stronger than "the fill is neutral": the graded scalar is gone,
+		// so there is no bar to color.
+		expect(svelte).not.toContain('role="progressbar"');
+		// Any casing or hyphenation of the removed composite's label.
+		expect(svelte).not.toMatch(/proof[\s_-]?weight/i);
 	});
 
 	it('causality and alignment chips are uniformly slate', () => {
