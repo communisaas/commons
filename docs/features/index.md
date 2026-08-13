@@ -178,15 +178,20 @@ LMSR-based debate markets where verified participants stake on SUPPORT/OPPOSE/AM
 
 ## Discovery & Advanced
 
-### 11. Gemini Embeddings (integrated into search.md)
+### 11. Bounded Embedding Infrastructure (not launch template search)
 
-Google Gemini integration for semantic search and template discovery.
+Google Gemini integration for explicitly admitted embedding generation and
+stored-vector workflows.
 
-**What it does**: Generate vector embeddings for templates, enable semantic search via Convex `.vectorIndex("by_topicEmbedding", { dimensions: 768 })`.
+**What it does**: Generates bounded 768-dimensional vectors only through the
+authenticated, Cloudflare-budgeted Pages endpoint. Launch template search uses
+the compact Convex text index and performs zero provider calls.
 
 **Dependencies**: None (standalone service)
 
-**Implementation**: Commons feature (Google Gemini API). See [search.md](search.md) for the full search pipeline including embeddings.
+**Implementation**: Commons feature (Google Gemini API). See
+[search.md](search.md) for the keyword-only launch path and the deferred semantic
+design.
 
 ---
 

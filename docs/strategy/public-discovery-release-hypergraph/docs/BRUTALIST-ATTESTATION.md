@@ -127,12 +127,52 @@ trusted-edge retained-C rollback, with pre-Q and pre-T missing/wrong/current
 capability proof and the normal exact-origin or metadata-bound deterministic
 containment response repeated; purge remaining best-effort only; and single-owner
 anonymous exact-root cache eligibility, cold-miss coalescing, and zero-secret
-60/300/360 publication freshness. `Cache-Tag: public-discovery` is future
+60/300/360 outer-entry freshness plus strict less-than-420-second
+manifest-publication convergence. `Cache-Tag: public-discovery` is future
 optional acceleration, not launch or rollback authority. A source-level proof must not be
 accepted as evidence that external Cloudflare configuration, protected secrets,
 live denial/cache/post-C/rollback behavior, or production Convex quota
 reactivation exists. Those facts remain open launch blockers until operator
 evidence is attached.
+
+The critics must also review the `FND-35` and `FND-40B` closure added for this
+launch: immutable-T identity for every SvelteKit route/hook/config and transitive
+server/provider execution path plus alternate-entry absence; a preview config
+containing only public build-safe vars and no application capability bindings;
+one fixed cross-realm atomic paid-provider authority with exact operation,
+actor, public, and platform pools; the 250/day and 600/month operator reserve
+remaining inside the 1,000/day and 2,400/month hard cap; the retry-aware
+150-call decision-maker scalar envelope plus its 72-search/24-text-content/
+24-Firecrawl/13-Gemini/1-Groq/18-MX element-wise bounds; authenticated bounded
+preflights before provider admission; recoverable message replay before
+readiness/admission/provider work; and byte-identical Prompt Guard
+classification of the complete bounded indirect-source JSON before Gemini.
+Source evidence cannot self-attest the live budget Worker/binding, operator
+allowlist posture, provider credentials, exact production-key Free-plan plus
+billing-disabled/no-PAYG posture, provider reset interval/current balance/sibling consumption,
+signed Free receipts, or Convex reactivation; those remain external launch
+blockers.
+
+The critics must additionally test the residual foundation chain `FND-51`
+through `FND-55`, not infer it from older cache work: submission creation must
+reject a direct Convex caller before any context work and accept only the
+256-KiB-bounded server path; segment/import/rescore actions must be secret-first,
+maximum-class, and fixed at four 100-row pages, 100 import rows, and ten unique
+bills respectively; both batch and mailto position-delivery writers must share
+one 64-KiB/20-recipient/lifetime-cap admission and composite idempotency
+primitive under concurrent replay; template search must be compact-index,
+keyword-only, and absent from the nine-operation provider policy while the
+recursive Convex scanner reports zero provider capabilities; and Shadow Atlas
+must use one durable identity-scoped lease with fresh-cache/coalesced followers,
+metrics-before-POST, a persisted write reservation before the at-most-once
+registration attempt, registered/leaf persistence before path lookup, bounded
+transport, cooldown-backed failure state, and an internal-only 15-minute
+expired-lease/no-leaf/no-snapshot exact-CAS repair with bounded evidence and a
+single generation increment. Any missing cross-writer,
+concurrency, ambiguous-response, direct-call, or capability-resurrection proof
+is a launch finding, even if the ordinary UI happy path passes. Source tests do
+not prove live Atlas availability, deployed rate rules, protected Cloudflare
+configuration, or production activation; those facts remain operator evidence.
 
 When capture ends, destroy the capture VM and reviewer home, revoke every
 reviewer credential, and close the spend-capped accounts or sessions. Complete
@@ -199,7 +239,12 @@ begin/end markers. Its final non-empty line contains exactly one
 `BRUTALIST_LAUNCH_VERDICT_V2` JSON record. Findings have exactly:
 
 ```json
-{"severity":"P0|P1|P2|P3","status":"open","path":"repo/relative","invariant":"specific failing invariant"}
+{
+	"severity": "P0|P1|P2|P3",
+	"status": "open",
+	"path": "repo/relative",
+	"invariant": "specific failing invariant"
+}
 ```
 
 Standalone severity tokens are forbidden in prose. `pass` is derived only when
@@ -224,9 +269,57 @@ exactly one parent equal to the event's exact source SHA.
 This workflow becomes base-owned only after merging it to the default branch.
 It is not an authoritative required gate: repository workflows share the
 GitHub Actions App identity, so candidate Actions can spoof a same-named status.
-Authority requires a distinct GitHub App/check-run identity or an organization-
-required workflow/ruleset that candidate code cannot reproduce. Do not use this
-diagnostic Actions context alone as launch approval.
+Do not use this diagnostic Actions context alone as launch approval.
+
+## Independent launch authority
+
+Production release additionally runs
+`scripts/verify-brutalist-review-authority.mjs` from immutable trusted gate T.
+The verifier consumes only trusted policy files and inert, size-bounded GitHub
+API JSON. It refuses launch unless all of these facts are simultaneously true:
+
+- `config/brutalist-review-authority.json` is explicitly `enrolled`, pins one
+  non-Actions GitHub App id/slug/owner, one organization CODEOWNER team and its
+  complete bounded member-id set, and one offline signer principal, GitHub user
+  id, and Ed25519 fingerprint;
+- protected main is strict, applies to administrators, requires CODEOWNER
+  approval, dismisses stale approvals, requires approval after the latest push,
+  has no pull-request or dismissal bypass actors, and requires both `test` from
+  GitHub Actions App 15368 and `Commons Brutalist Launch Authority` from the
+  pinned distinct App id;
+- the final exact CODEOWNERS rules cover the complete review workflow, signer
+  root, authority policy/verifiers, capture/sign/finalize scripts, and this
+  ceremony document with only the enrolled independent team; live team evidence
+  proves it is visible and has exact write-only (never maintain/admin) access to
+  this repository, so GitHub can actually enforce its ownership;
+- `.github/brutalist-allowed-signers` contains exactly the enrolled principal,
+  namespace, Ed25519 key, and fingerprint; the signer GitHub identity is absent
+  from the reviewer team and does not own the authority App;
+- `brutalist-attestations/<S>` still resolves to exact proof commit A and its
+  effective protection applies to administrators and disables force-push and
+  deletion; and
+- the exact source S has one latest successful check from the pinned App. Its
+  authenticated external id and canonical output bind repository id, S, A,
+  signer principal/fingerprint, and CODEOWNER team id after the signed review.
+
+The committed configuration deliberately remains
+`pending-independent-enrollment` with null App/team/signer fields. This is a
+launch interlock, not a placeholder identity. It must be changed only after the
+independent team, least-privilege App, and dedicated offline key actually exist,
+in a separately reviewed protected-base change. Append the generated exact
+CODEOWNERS suffix, enroll only the public key, configure the main and proof-ref
+protections, install the protected token with repository Actions/Checks/
+Metadata/Administration read and organization Members read (no write scope),
+and then capture the live verifier output. Never copy a personal key, nominate
+the source author as the reviewer/signer, or set an invented App/team id just to
+make tests pass.
+
+The App implementation is an external trust boundary. It must independently
+verify the exact detached proof and GitHub review state before emitting protocol
+`commons-brutalist-authority-v1`; its private key and check-write credential must
+never enter this repository, Actions, the capture VM, or the offline signing
+environment. The production verifier checks the App's exact least-privilege
+permission/event inventory and rejects a same-name check from App 15368.
 
 ## Residual risk
 

@@ -17,6 +17,9 @@ import type { SubjectLineResponseWithClarification } from '$lib/core/agents/type
 
 ### 2. Detect Clarification Needed
 
+The agent is reached over a single streaming endpoint. Turn 1 sends the raw input
+and resolves to either a `clarification` event or a `complete` event.
+
 ```typescript
 // In your component state
 let agentResponse = $state<SubjectLineResponseWithClarification | null>(null);
@@ -24,21 +27,30 @@ let needsClarification = $derived(agentResponse?.needs_clarification ?? false);
 let hasQuestions = $derived((agentResponse?.clarification_questions?.length ?? 0) > 0);
 
 // Call the agent API
-const response = await api.post('/agents/generate-subject', {
-	message: rawInput,
-	interactionId: previousInteractionId
+await api.stream('/agents/stream-subject', { message: rawInput }, (event) => {
+	switch (event.type) {
+		case 'thought':
+			// Model reasoning summary — render it live instead of a spinner
+			thoughts = [...thoughts, event.data.content];
+			break;
+
+		case 'clarification':
+			agentResponse = event.data.data;
+			// Show ClarificationPanel
+			showClarificationUI = true;
+			break;
+
+		case 'complete':
+			agentResponse = event.data.data;
+			// Use the generated subject line directly
+			acceptSubjectLine(agentResponse);
+			break;
+
+		case 'error':
+			showError(event.data.message);
+			break;
+	}
 });
-
-agentResponse = response.data;
-
-// Check if clarification is needed
-if (agentResponse.needs_clarification && agentResponse.clarification_questions) {
-	// Show ClarificationPanel
-	showClarificationUI = true;
-} else {
-	// Use the generated subject line directly
-	acceptSubjectLine(agentResponse);
-}
 ```
 
 ### 3. Render the Panel
@@ -56,21 +68,31 @@ if (agentResponse.needs_clarification && agentResponse.clarification_questions) 
 
 ### 4. Handle User Answers
 
+Turn 2 replays the whole conversation. The client owns the state: it sends the
+original description, the questions the agent asked, the agent's own inferred
+context, and the user's answers. There is no server-side conversation handle.
+
 ```typescript
 async function handleClarificationAnswers(answers: Record<string, string>) {
-	console.log('[Clarification] User answered:', answers);
-
-	// Re-call the agent with clarification context
-	const response = await api.post('/agents/generate-subject', {
-		message: rawInput,
-		interactionId: agentResponse.interactionId, // CRITICAL: Maintain conversation state
-		clarificationAnswers: answers // Agent will use these to refine targeting
-	});
-
-	// Now we should get a complete response
-	if (response.data.subject_line) {
-		acceptSubjectLine(response.data);
-	}
+	// Re-call the agent with the complete conversation context
+	await api.stream(
+		'/agents/stream-subject',
+		{
+			message: rawInput,
+			conversationContext: {
+				originalDescription: rawInput,
+				questionsAsked: agentResponse.clarification_questions ?? [],
+				inferredContext: agentResponse.inferred_context,
+				answers // Agent will use these to refine targeting
+			}
+		},
+		(event) => {
+			// Turn 2 never re-asks: it resolves to 'complete' (or 'error')
+			if (event.type === 'complete' && event.data.data.subject_line) {
+				acceptSubjectLine(event.data.data);
+			}
+		}
+	);
 }
 
 function handleSkipClarification() {
@@ -187,43 +209,46 @@ See `/src/lib/components/template/creator/UnifiedObjectiveEntry.svelte` for the 
 	let rawInput = $state('');
 	let agentResponse = $state<SubjectLineResponseWithClarification | null>(null);
 	let showClarificationPanel = $state(false);
-	let currentInteractionId = $state<string | null>(null);
 
 	// Generate subject line with clarification support
 	async function generateSubjectLine() {
-		const response = await api.post('/agents/generate-subject', {
-			message: rawInput,
-			interactionId: currentInteractionId
+		await api.stream('/agents/stream-subject', { message: rawInput }, (event) => {
+			if (event.type === 'clarification') {
+				agentResponse = event.data.data;
+				showClarificationPanel = true;
+			} else if (event.type === 'complete') {
+				agentResponse = event.data.data;
+				// Direct to acceptance
+				acceptSubjectLine(agentResponse);
+			}
 		});
-
-		agentResponse = response.data;
-		currentInteractionId = response.data.interactionId;
-
-		// Check if clarification needed
-		if (agentResponse.needs_clarification && agentResponse.clarification_questions) {
-			showClarificationPanel = true;
-		} else {
-			// Direct to acceptance
-			acceptSubjectLine(agentResponse);
-		}
 	}
 
 	// Handle clarification answers
 	async function handleClarificationAnswers(answers: Record<string, string>) {
+		if (!agentResponse) return;
 		showClarificationPanel = false;
 
-		// Re-generate with context
-		const response = await api.post('/agents/generate-subject', {
-			message: rawInput,
-			interactionId: currentInteractionId,
-			clarificationAnswers: answers
-		});
+		// Re-generate with the complete conversation replayed from client state
+		const conversationContext = {
+			originalDescription: rawInput,
+			questionsAsked: agentResponse.clarification_questions ?? [],
+			inferredContext: agentResponse.inferred_context,
+			answers
+		};
 
-		agentResponse = response.data;
-
-		if (agentResponse.subject_line) {
-			acceptSubjectLine(agentResponse);
-		}
+		await api.stream(
+			'/agents/stream-subject',
+			{ message: rawInput, conversationContext },
+			(event) => {
+				if (event.type === 'complete') {
+					agentResponse = event.data.data;
+					if (agentResponse.subject_line) {
+						acceptSubjectLine(agentResponse);
+					}
+				}
+			}
+		);
 	}
 
 	// Handle skip
@@ -320,69 +345,87 @@ text-participation-primary-900
 
 ## API Contract
 
+Both turns hit the same endpoint and return a Server-Sent Events stream of
+`thought`, then exactly one of `clarification` / `complete` / `error`.
+
 ### Request (Initial)
 ```typescript
-POST /api/agents/generate-subject
+POST /api/agents/stream-subject
 {
-	"message": "housing crisis in the bay area",
-	"interactionId": null // First call
+	"message": "housing crisis in the bay area"
 }
 ```
 
-### Response (Clarification Needed)
+### Event (Clarification Needed)
 ```typescript
-{
-	"needs_clarification": true,
-	"clarification_questions": [
-		{
-			"id": "location",
-			"question": "Where is this happening?",
-			"type": "location_picker",
-			"preselected": "San Francisco, CA",
-			"required": true
+event: clarification
+data: {
+	"data": {
+		"needs_clarification": true,
+		"clarification_questions": [
+			{
+				"id": "location",
+				"question": "Where is this happening?",
+				"type": "location_picker",
+				"prefilled_location": "San Francisco, CA",
+				"required": true
+			}
+		],
+		"inferred_context": {
+			"detected_location": "San Francisco, CA",
+			"detected_scope": "local",
+			"detected_target_type": "government",
+			"location_confidence": 0.6,
+			"scope_confidence": 0.7,
+			"target_type_confidence": 0.8,
+			"reasoning": "Bay Area named, but the ask reads local"
 		}
-	],
-	"inferred_context": {
-		"detected_location": "San Francisco, CA",
-		"detected_scope": "local",
-		"detected_target_type": "government",
-		"location_confidence": 0.6,
-		"scope_confidence": 0.7,
-		"target_type_confidence": 0.8
-	},
-	"interactionId": "interaction-abc123"
+	}
 }
 ```
 
 ### Request (With Clarification)
 ```typescript
-POST /api/agents/generate-subject
+POST /api/agents/stream-subject
 {
 	"message": "housing crisis in the bay area",
-	"interactionId": "interaction-abc123", // MUST pass same ID
-	"clarificationAnswers": {
-		"location": "San Francisco, CA"
+	"conversationContext": {
+		"originalDescription": "housing crisis in the bay area",
+		"questionsAsked": [/* the clarification_questions echoed back */],
+		"inferredContext": {/* the inferred_context echoed back */},
+		"answers": {
+			"location": "San Francisco, CA"
+		}
 	}
 }
 ```
 
-### Response (Final)
+The whole conversation lives in `conversationContext`; the server keeps no
+per-user conversation state between turns. Bounds enforced on the envelope: at
+most 12 questions, at most 12 answers, 4,000 characters per answer, and a
+64 KiB body.
+
+### Event (Final)
 ```typescript
-{
-	"subject_line": "End SF's Housing Crisis with Affordable Zoning",
-	"core_issue": "San Francisco housing affordability crisis",
-	"topics": ["housing", "zoning", "affordability"],
-	"url_slug": "sf-housing-crisis",
-	"voice_sample": "housing crisis in the bay area",
-	"inferred_context": {
-		"detected_location": "San Francisco, CA",
-		"detected_scope": "local",
-		"detected_target_type": "government",
-		"location_confidence": 1.0,
-		"scope_confidence": 1.0,
-		"target_type_confidence": 1.0
-	},
-	"interactionId": "interaction-abc123"
+event: complete
+data: {
+	"data": {
+		"needs_clarification": false,
+		"subject_line": "End SF's Housing Crisis with Affordable Zoning",
+		"core_message": "San Francisco housing affordability crisis",
+		"topics": ["housing", "zoning", "affordability"],
+		"url_slug": "sf-housing-crisis",
+		"voice_sample": "housing crisis in the bay area",
+		"inferred_context": {
+			"detected_location": "San Francisco, CA",
+			"detected_scope": "local",
+			"detected_target_type": "government",
+			"location_confidence": 1.0,
+			"scope_confidence": 1.0,
+			"target_type_confidence": 1.0,
+			"reasoning": "User confirmed San Francisco"
+		}
+	}
 }
 ```
 
@@ -452,10 +495,6 @@ test('calls onSkip when skip clicked', async () => {
 - **Component**: `/src/lib/components/template/creator/ClarificationPanel.svelte`
 - **Types**: `/src/lib/core/agents/types/clarification.ts`
 - **Agent**: `/src/lib/core/agents/agents/subject-line.ts`
-- **API**: `/src/routes/api/agents/generate-subject/+server.ts`
+- **API**: `/src/routes/api/agents/stream-subject/+server.ts`
 - **Spec**: `/docs/specs/subject-line-clarifying-questions.md`
 - **Example**: `/src/lib/components/template/creator/UnifiedObjectiveEntry.svelte`
-
----
-
-*Last updated: 2025-01-24*

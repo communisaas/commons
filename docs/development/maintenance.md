@@ -62,7 +62,8 @@ npm run preview  # Manual verification of build
 **Database Layer:**
 
 - Convex (cloud-managed). Schema declared in `convex/schema.ts`.
-- Vector search via Convex `.vectorIndex(...)` with Gemini `text-embedding-004` (768 dims).
+- Optional stored-vector workflows via Convex `.vectorIndex(...)` with Gemini
+  `gemini-embedding-001` (768 dims); launch template search is keyword-only.
 - Schema changes applied by `npx convex dev` / `npx convex deploy --env-file .env.production`. No migration files.
 - Types generated automatically by the Convex CLI into `convex/_generated/`.
 

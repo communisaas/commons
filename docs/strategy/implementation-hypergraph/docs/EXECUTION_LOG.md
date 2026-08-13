@@ -5734,11 +5734,11 @@ All endpoints: `requirePublicApi()` → `authenticateApiKey()` → `checkApiPlan
 **Progress:** 13 / 103 tasks closed (12.6%). One chokepoint (T9-3, 8 sub-steps) + 12 W-1 tasks (7 substantive + 4 subsumed-marker + 1 inadvertent-via-T1-1) all done. W-1 is empty.
 
 **Hyperedges unblocked:**
-- T10-1 (reputationTier writer cron) — was blocked by T10-3; now ready
+- T10-1 (transactional reputationTier writer) — was blocked by T10-3; now ready
 - T10-2 (engagementTier server-side cross-check) — was blocked by T10-1's data shape; now ready after T10-1
 - T10-4 (CAI grounded in real engagement) — depends T10-1; ready next
 
-**Next:** W-2 push. Focus on engineering-bound (not ops-bound) tasks: T2-3 (email plaintext multipart), T2-4 (List-Unsubscribe headers), T2-5 (bounce categorization), T9-9 (rate limit policy reconciliation), T10-1 (reputationTier cron writer), T10-9 (atlasVersion per campaignAction), T1-6 (A/B winner picker). Skip ops-bound: T2-2 (Lambda deploy), T9-1/T9-2 (npm/PyPI publish pipelines). Defer or stage: T1-3 (platform API / OSDI adapter 7d), T9-4 (OSDI compliance namespace), T9-5 (audit log), and the 4 W-2 chokepoints (T3-6/T5-5/T6-2 mainnet composite, T5-3 TEE, T4-1 delegation) — each has ops-elapsed gates that cannot be bridged from code alone.
+**Next:** W-2 push. Focus on engineering-bound (not ops-bound) tasks: T2-3 (email plaintext multipart), T2-4 (List-Unsubscribe headers), T2-5 (bounce categorization), T9-9 (rate limit policy reconciliation), T10-1 (transactional reputationTier writer), T10-9 (atlasVersion per campaignAction), T1-6 (A/B winner picker). Skip ops-bound: T2-2 (Lambda deploy), T9-1/T9-2 (npm/PyPI publish pipelines). Defer or stage: T1-3 (platform API / OSDI adapter 7d), T9-4 (OSDI compliance namespace), T9-5 (audit log), and the 4 W-2 chokepoints (T3-6/T5-5/T6-2 mainnet composite, T5-3 TEE, T4-1 delegation) — each has ops-elapsed gates that cannot be bridged from code alone.
 
 ---
 
@@ -5755,11 +5755,11 @@ All endpoints: `requirePublicApi()` → `authenticateApiKey()` → `checkApiPlan
 
 **T9-9 rate-limit-policy** (S, 0.25d) — checkApiPlanRateLimit now method-aware. Free-plan GET/HEAD/OPTIONS bypass the gate (aligns marketing "no rate cap on reads"); writes still hit 100/min. Threaded request.method through 24 v1 +server.ts files.
 
-**T10-1 reputation-tier-writer** (M, 1d) — users.actionCount field added. createCampaignAction takes optional userId; when present and args.verified, increments user.actionCount. New users.recomputeAllReputationTiers internalMutation chunks users (500/run), maps actionCount → tier via REPUTATION_THRESHOLDS (0→new, 5→active, 25→established, 100→veteran, 500→pillar). Daily cron #26 at 03:11 UTC. Idempotent. Sweeps legacy 'verified'/'novice' strings.
+**T10-1 reputation-tier-writer** (M, 1d) — users.actionCount field added. Launch hardening made createCampaignAction the sole steady-state user counter writer: a registered verified action increments actionCount, derives the shared 0/5/25/100/500 reputation state, patches reputationTier, and stamps the post-increment engagement tier before immutable action/read-model/histogram attribution. No native reputation cron is registered. users.recomputeAllReputationTiers remains a bounded, operator-invoked legacy repair.
 
-**T10-2 engagementTier-cross-check** (S, 0.5d) — /api/submissions/create after authorityLevel validation now cross-checks rawInputsArray[30] (claimed engagement tier from circuit) against server-derived tier from users.actionCount via the same threshold ladder. Drift > 1 → HTTP 422 TIER_MISMATCH. ±1 tolerated for cron lag. New users.getMyActionCount query.
+**T10-2 engagementTier-cross-check** (S, 0.5d) — /api/submissions/create after authorityLevel validation cross-checks rawInputsArray[30] (claimed engagement tier from circuit) against the server-derived tier from users.actionCount via the same threshold ladder. Drift > 1 → HTTP 422 TIER_MISMATCH. New users.getMyActionCount query.
 
-**T10-4 cai-lag-comment** (S, 0.1d) — Editorial. computeCAI docstring expanded with the lag-bound documentation. No code change.
+**T10-4 cai-bound-comment** (S, 0.1d) — computeCAI documents that threshold-crossing attribution is transactional and has no recurring propagation lag.
 
 **T10-9 atlasVersion-propagation** (M, 1d) — Substrate end-to-end through packet computation. campaignActions.atlasVersion schema field. createCampaignAction accepts it. getActionsForPacket returns it. VerificationPacket interface adds driftCount + driftPct. computePacket calls new computeAtlasDrift (picks modal version as 'current', null when no signal). Test fixtures (org landing mock + email-report unit test) updated. Submissions-side propagation TBD (substrate ready).
 

@@ -180,9 +180,11 @@ monotonic publication.
 
 Publication advances the R2 manifest but deliberately does not change the
 landing-cache SHA/transaction key. No publication hook, purge credential, or
-Cloudflare API call is required: a busy location revalidates after 60 seconds,
-while a previously cached low-traffic location can show pre-publication HTML for
-at most 360 seconds. `Cache-Tag: public-discovery` remains metadata for a future
+Cloudflare API call is required. The inner manifest cache observes publication
+in less than 60 seconds, and an outer origin fill immediately before that
+observation can remain eligible for less than 360 seconds. The strict
+manifest-publication-to-last-old-HTML bound is therefore less than 420 seconds.
+`Cache-Tag: public-discovery` remains metadata for a future
 optional operator optimization. Free-plan tag purge is limited to five requests
 per minute, but purge is neither launch evidence nor part of publication or
 rollback correctness.
@@ -322,11 +324,20 @@ Once the manifest advances, list/graph payload caches synchronously select the
 new coordinate on their next at-most-60-second control revalidation. Open tabs do
 not poll; the next navigation or reload reconciles page data. The separate
 trusted landing-HTML cache is intentionally keyed by release rather than content
-generation: busy locations revalidate after 60 seconds, and an already cached
-quiet location may show the prior publication for less than 360 seconds. No
-purge credential or paid cache product is required for correctness. Thus a
-change is bounded by producer completion (and the 45-minute unhealthy cutoff)
-plus less than six minutes of landing-cache visibility, not an indefinite TTL.
+generation. An outer origin fill that sees the prior coordinate immediately
+before the inner manifest cache observes publication can remain eligible for
+less than 360 seconds, so publication-to-last-old-HTML is strictly less than
+420 seconds. No purge credential or paid cache product is required for
+correctness.
+
+An incomplete generation is bounded separately. The locally cached authority
+already carries `publicationLag.startedAt`, so it becomes ineligible exactly 45
+minutes after first trusted acquisition without another R2 observation. For an
+authored change, at most 60 seconds of scheduling plus at most five minutes of
+ordinary admission, 45 minutes of prior authority, and less than 360 seconds
+for the last outer fill put the conservative writer-to-last-old-HTML failure
+bound strictly below 57 minutes. Retry, continuation, and rearm cannot
+restart the lag clock.
 
 ## Manifest control plane
 
@@ -581,6 +592,14 @@ containment, not reserved capacity or an availability SLA.
 
 ## Publication, privacy, and freshness
 
+The anonymous detail projection publishes only role-form addresses admitted by
+the closed lexicon in `convex/lib/publicRoleAddress.ts`. Named-individual
+addresses are withheld from that crawlable surface and remain available only to
+an authenticated organization. This gate runs in both the projector and the
+exhaustive reader because the reader—not the projection version—retires a stored
+roster. A channel source may contain a query string, but never credentials or a
+fragment.
+
 Both R2 buckets must remain Standard and private: managed r2.dev access is disabled
 and zero enabled custom domains are allowed. Predictable keys must never bypass
 Pages or the gate. Do not apply an age lifecycle to `public-discovery/`; GETs do not
@@ -737,6 +756,8 @@ Changes must retain tests for:
   and manifest-outage denial;
 - two list variants plus two bundled graph variants and two healthy graph reads;
 - byte/cardinality/privacy projection bounds;
+- role-form-only anonymous recipient projection, reader-side retirement of stored
+  named-individual rosters, and query-string channel-source round trips;
 - distinct production/non-production cron capabilities and both-realm settlement;
 - exact-SHA gate and cron capture/deploy/rollback, atomic secret publication,
   disabled Worker URLs, private R2 domains, Pages namespace identity, actual-200
@@ -754,7 +775,8 @@ Changes must retain tests for:
   dedicated-capability post-C `/api/release-origin` proof; and
   Pages-first/T-second paired recovery with the same retained-window capability;
 - anonymous exact-`GET /` landing-cache eligibility, release/policy-qualified
-  keys, header replacement, 60/300/360 timing, per-location cold misses,
+  keys, header replacement, outer 60/300/360 timing, strict less-than-420-second
+  manifest-publication convergence, per-location cold misses,
   cold-miss and revalidation coalescing, single trusted-edge cache ownership,
   candidate Cache API unavailability, Cache API failure, and zero-purge
   publication/rollback correctness; `public-discovery` tags are optional future

@@ -5,18 +5,25 @@
 **Author:** Distinguished Infrastructure Engineering
 **Scope:** Intelligence system cost structure, ingestion strategy, scaling economics
 
-> ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Cost-model frame and
-> LLM-rate-limit numbers (subject 3/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
-> embeddings 0/20/20/hr, daily-global 3/10/15/day) are accurate against
-> `src/lib/server/ai/llm-cost-protection.ts`. Concrete corrections:
+> ⚠️ **DIVERGENCE BANNER (updated 2026-07-21).** Cost-model frame and
+> LLM-rate-limit numbers (subject 0/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
+> embeddings 0/20/20/hr, actor-day 0/10/15) are sourced from
+> `config/paid-provider-budget-policy.json`. Production additionally enforces
+> one atomic 1,000-unit/day and 2,400-unit/UTC-month platform ceiling, partitioned
+> by operation with an in-cap operator demo reserve. Concrete corrections:
 >
-> - **Embeddings are Gemini, not Voyage AI.** Code uses
->   `text-embedding-004` (768-dim) via `convex/intelligence.ts:~218`.
->   `.env.example:~140` notes OpenAI was removed and Gemini is the
->   live provider. All "Voyage voyage-law-2 $0.12/1M" / "voyage-4
->   $0.06/1M" claims and the "self-hosted Nomic for bulk, Voyage for
->   legal" hybrid strategy describe an integration that was never
->   built. Voyage API is not used anywhere in the repo.
+> - **Embedding provider work is Cloudflare-coordinated, not Convex-native.**
+>   The unused `intelligence:ingest` action and recurring tag-embedding action
+>   were retired on 2026-07-21. `intelligence:store` accepts only an
+>   already-produced, bounded 768-dimensional vector, and template tag-vector
+>   intake is likewise bounded. Authenticated template search is now a compact
+>   Convex text-index read: it performs no embedding generation or vector search.
+>   `config/convex-paid-provider-egress.json` is therefore an empty approval
+>   inventory, and the exhaustive CI scanner rejects provider domains, SDKs,
+>   and credential keys everywhere in executable Convex source. The separate
+>   authenticated `/api/embeddings/generate` Pages endpoint remains behind the
+>   shared Cloudflare paid-provider budget for explicit embedding work. Voyage
+>   was never integrated.
 > - **Moderation Layer 1 migrated.** "Llama Guard 4 12B" referenced
 >   here is deprecated on Groq free tier. Live model is
 >   `openai/gpt-oss-safeguard-20b`

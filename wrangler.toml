@@ -50,10 +50,13 @@ EXPECTED_CELL_MAP_DEPTH = "22"
 # AI Services:
 #   GEMINI_API_KEY           - Gemini API for agents + embeddings
 #   GROQ_API_KEY             - Llama Guard safety moderation
+#   EXA_API_KEY              - Bounded source and decision-maker discovery
+#   FIRECRAWL_API_KEY        - Bounded candidate source page reads
 #
 # Rate Limiting:
-#   REDIS_URL                - Redis connection URL for distributed rate limiting
-#   RATE_LIMITER_ALLOW_MEMORY - Set to "1" only to explicitly allow per-isolate memory rate limiting
+#   REDIS_URL                - Optional distributed generic-route limiter; not the paid-provider authority
+#   RATE_LIMITER_ALLOW_MEMORY - Development/smoke fallback only; never authorizes paid-provider work
+#   PAID_PROVIDER_OPERATOR_USER_IDS - Narrow comma-separated IDs for the in-cap launch demo reserve
 #
 # Wallet — Fiat Onramp:
 #   PUBLIC_TRANSAK_API_KEY   - Transak API key for fiat onramp widget
@@ -129,12 +132,13 @@ name = "CONVEX_WORK_BUDGET"
 class_name = "ConvexWorkBudget"
 script_name = "commons-convex-work-budget"
 
-# Pages has only production and preview configuration realms. Every branch
-# other than the configured production branch uses this complete preview
-# override. Because bindings and vars are non-inheritable Pages keys, the
-# preview realm repeats every such top-level key and changes only the Convex,
-# R2, and Durable Object authorities. Production and preview therefore never
-# share either writable discovery resource.
+# Pages has only production and preview configuration realms. The trusted
+# staging candidate is an inert byte-identity/probe target: preview receives
+# only public build-safe vars and no storage, Queue, KV, session, provider, or
+# Durable Object capability. Preview discovery activation is performed by its
+# separately isolated Workers; it never grants the candidate Pages code access
+# to those resources. Pages binding collections are non-inheritable, so their
+# deliberate absence below is the fail-closed preview posture.
 [env.preview.vars]
 PUBLIC_CONVEX_URL = "https://outstanding-firefly-831.convex.cloud"
 PUBLIC_SCROLL_RPC_URL = "https://rpc.scroll.io"
@@ -142,37 +146,3 @@ ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
 VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
 EXPECTED_CELL_MAP_ROOT = "0x14a6fc8eb8f8643bf420290e9d65059006b194ee335ab1cc1664838e5bc56cd3"
 EXPECTED_CELL_MAP_DEPTH = "22"
-
-[[env.preview.kv_namespaces]]
-binding = "DC_SESSION_KV"
-id = "93471f3e763c4c4f85404fa288dc56e1"
-
-[[env.preview.kv_namespaces]]
-binding = "REJECTION_MONITOR_KV"
-id = "78f28254453d4ecf87a54796326bef71"
-
-[[env.preview.kv_namespaces]]
-binding = "VICAL_KV"
-id = "cfd3e3ddc4cc405dbdbc5ecfe2721e50"
-
-[[env.preview.kv_namespaces]]
-binding = "REGISTRATION_RETRY_KV"
-id = "741d9c87ce424a33a33c29ddfcfac0ca"
-
-[[env.preview.r2_buckets]]
-binding = "PUBLIC_DISCOVERY_R2"
-bucket_name = "commons-public-discovery-cache-nonprod"
-
-[[env.preview.queues.producers]]
-binding = "PUBLIC_TEMPLATE_OG_QUEUE"
-queue = "commons-public-template-og-nonprod"
-
-[[env.preview.durable_objects.bindings]]
-name = "PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE"
-class_name = "PublicDiscoveryManifestRefreshGate"
-script_name = "commons-public-discovery-manifest-gate-nonprod"
-
-[[env.preview.durable_objects.bindings]]
-name = "CONVEX_WORK_BUDGET"
-class_name = "ConvexWorkBudget"
-script_name = "commons-convex-work-budget"

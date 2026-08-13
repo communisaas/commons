@@ -1,6 +1,9 @@
 # Vector Search Guide
 
-Commons uses Convex-native vector search backed by Gemini embeddings.
+Commons retains Convex vector indexes for bounded stored-vector workflows, but
+the launch template-search path is deliberately keyword-only and provider-free.
+This guide documents the optional vector substrate; it is not the request path
+behind `/api/templates/search`.
 
 ## Stack
 
@@ -9,21 +12,21 @@ Commons uses Convex-native vector search backed by Gemini embeddings.
   - `intelligence`: `by_embedding`
   - `bills`: `by_topicEmbedding`
   - `decisionMakers`: `.searchIndex(...)` only (keyword, no vector)
-- **Embeddings:** Gemini `text-embedding-004`, **768 dimensions**
+- **Embeddings:** Gemini `gemini-embedding-001`, **768 dimensions**
   (`src/lib/core/search/gemini-embeddings.ts`, `src/lib/core/search/index.ts`).
-- **Execution:** Query embedding generated server-side; vector search runs
-  server-side via a Convex action. Client cache
-  (`src/lib/core/search/cache.ts`, IndexedDB) stores *results*, not the model.
-- **Rate limit:** Embedding generation is capped at 20/hour for
-  authenticated users (`src/lib/server/ai/llm-cost-protection.ts`).
+- **Execution:** `/api/templates/search` uses neither this client nor a vector
+  index. Explicit `/api/embeddings/generate` requests execute on Pages and must
+  reserve the shared Cloudflare provider budget before Gemini is called.
+- **Admission:** actor, operation, public-pool, daily, and monthly ceilings are
+  defined in `config/paid-provider-budget-policy.json`.
 
 ---
 
 ## Overview
 
-Semantic search across intelligence items (news, legislation, regulatory
-filings, corporate disclosures) and template discovery. Unlike keyword
-search, semantic search understands meaning and context.
+Optional semantic search across intelligence items (news, legislation,
+regulatory filings, corporate disclosures) and offline/template-authoring
+workflows. Launch template discovery uses compact keyword search instead.
 
 ### What you can do
 
@@ -31,11 +34,12 @@ search, semantic search understands meaning and context.
 - **Search by meaning**: "renewable energy tax incentives" matches "clean power subsidies"
 - **Hybrid search**: Combine semantic similarity + keyword matching
 - **Discover related intelligence**: Find contextually relevant civic data
-- **Template discovery**: "my landlord won't fix the heating" → "housing code violations"
+- **Deferred template discovery**: natural-language synonym matching is not in
+  the launch request path
 
 ### Key features
 
-- **768-dimensional embeddings** via Gemini `text-embedding-004`
+- **768-dimensional embeddings** via Gemini `gemini-embedding-001`
 - **Native Convex vector index** — no separate vector store to provision
 - **Cosine similarity** scoring
 - **Pre-filtering** by `filterFields` declared on the index (e.g. `category`, `topics`)
@@ -86,7 +90,7 @@ import { GoogleGenAI } from '@google/genai';
 export async function generateEmbedding(text: string): Promise<number[]> {
   const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   const result = await client.models.embedContent({
-    model: 'text-embedding-004',
+    model: 'gemini-embedding-001',
     contents: text
   });
   return result.embeddings[0].values; // 768 floats
@@ -197,7 +201,7 @@ drift out of sync with the source data.
 
 The Gemini embedding endpoint is rate-limited. Batch where you can;
 back off on 429s. The LLM cost-protection layer
-(`src/lib/server/ai/llm-cost-protection.ts`) enforces 20/hr per user.
+(`src/lib/server/llm-cost-protection.ts`) enforces 20/hr per user.
 
 ### 4. Cache results, not embeddings
 
@@ -220,7 +224,8 @@ on the same table. The UI should never hang on a Gemini outage.
 Error: vector dimensions (512) do not match index (768)
 ```
 
-You generated an embedding with a model other than `text-embedding-004`.
+You generated an embedding with a model or output dimension other than the
+reviewed `gemini-embedding-001` / 768-dimension envelope.
 Regenerate, or update the `dimensions` field on the `.vectorIndex()`
 declaration and redeploy (`npx convex dev`).
 
@@ -232,16 +237,19 @@ declaration and redeploy (`npx convex dev`).
 
 ### High Gemini cost
 
-Check `llm-cost-protection` logs. Embedding regenerations on hot paths
-(e.g. every pageview) are the usual culprit — cache the query embedding
-by query string.
+Check the shared paid-provider budget logs. Convex-native recurring embedding
+generation is prohibited; already-produced vectors enter through bounded
+storage mutations. Explicit Pages embedding requests are admitted through the
+Cloudflare Durable Object and fail closed when their actor, operation,
+public-pool, or global allowance is exhausted. Template search never calls the
+provider and remains keyword-only.
 
 ---
 
 ## Cost
 
-- **Gemini `text-embedding-004`** is currently free on the Google AI
-  Studio tier; paid tier is a fraction of a cent per 1M characters.
+- **Provider allowance is finite even when its monetary price is zero.** Treat
+  quota as spend: all runtime generation must pass the shared coordinator.
 - **Convex vector storage** is counted against your Convex plan's
   storage quota; 768-dim float64 arrays are ~6 KB per row before
   compression.
@@ -257,7 +265,7 @@ both are well within hobby-tier limits.
 - `convex/intelligence.ts` — search actions
 - `src/lib/core/search/gemini-embeddings.ts` — embedding client
 - `src/lib/core/search/cache.ts` — client-side cache
-- `src/lib/server/ai/llm-cost-protection.ts` — rate limiting
+- `src/lib/server/llm-cost-protection.ts` — rate limiting
 
 ---
 

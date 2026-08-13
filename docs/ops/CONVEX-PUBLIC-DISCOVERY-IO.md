@@ -117,7 +117,7 @@ The protection has two independent data layers and one small control plane:
    JSON-only resume re-enqueues without Convex rematerialization; drift resets the
    checkpoint.
 
-   Anonymous `/s/:slug` and `/template-modal/:slug` routes resolve current
+   The anonymous `/s/:slug` route resolves current
    manifest → exact immutable inventory → exact JSON artifact. The GET-only OG
    route resolves the same manifest and inventory to the exact immutable PNG. A valid cold miss, a
    random slug, and a missing artifact all perform zero Convex calls and zero R2
@@ -488,11 +488,22 @@ After manifest advancement, a location observes the new list/graph coordinate
 on its next at-most-60-second manifest revalidation. The separate trusted
 landing-HTML cache is keyed by release rather than content revision: it is fresh
 for 60 seconds, may serve stale while one revalidation is coalesced for another
-300 seconds, and is unusable at 360 seconds from the origin-flight start. A busy
-location therefore normally refreshes after one minute; a previously cached
-quiet location may show the old landing HTML for less than six minutes. No
-purge call or purge credential is required for correctness. An already open tab
-does not poll and reconciles on its next navigation or reload.
+300 seconds, and is unusable at 360 seconds from the origin-flight start. An
+outer fill that sees the old coordinate immediately before the inner manifest
+cache observes publication can therefore remain eligible for less than 360
+more seconds. The strict manifest-publication-to-last-old-HTML bound is less
+than 420 seconds. No purge call or purge credential is required for correctness.
+An already open tab does not poll and reconciles on its next navigation or
+reload.
+
+An incomplete generation has a different bound. The cached manifest already
+carries the monotonic `publicationLag.startedAt`, so prior authority becomes
+ineligible exactly 45 minutes after the first trusted acquisition without
+waiting for another R2 observation. For an authored change, at most 60 seconds
+of scheduling plus at most five minutes of ordinary admission, 45 minutes of
+prior authority, and less than 360 seconds for the last outer fill put the
+conservative writer-to-last-old-HTML failure bound strictly below 57
+minutes. Continuation and retry cannot restart the 45-minute clock.
 
 ## Production activation
 

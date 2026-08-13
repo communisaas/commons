@@ -139,7 +139,11 @@ defineTable({ ... })
 - **Bills:** `by_topicEmbedding`
 - **Decision-makers:** `.searchIndex(...)` only (keyword search, no vector index)
 
-Embedding model is Gemini `text-embedding-004` (768 dims) via `src/lib/core/search/gemini-embeddings.ts`. Embedding generation is rate-limited at 20/hr for authenticated users.
+The reviewed embedding client uses Gemini `gemini-embedding-001` at exactly 768
+dimensions via `src/lib/core/search/gemini-embeddings.ts`. Explicit generation
+is authenticated and admitted by the shared paid-provider budget. Launch
+template search reads the compact text index and does not generate embeddings or
+touch these vector indexes.
 
 ---
 

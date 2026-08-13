@@ -321,7 +321,7 @@ Cron (daily) → fetch new/updated bills from Congress.gov API
         vector: bill.topicEmbedding,
         limit: 1000,
       });
-      // matches = [{ _id, _score }, ...] for all org issue domains above similarity floor
+      // matches = [{ _id, _score }, ...] only for the editor-authorized org
   → bulk insert orgBillRelevances rows for matches with score > 0.6
   → insert legislativeAlerts rows for orgs where score > 0.75 AND bill status changed
 ```
@@ -668,7 +668,7 @@ At 100 orgs: < $1/month incremental.
 At 1,000 orgs: < $10/month (dominated by digest emails).
 At 10,000 orgs: < $100/month (bill ingestion flat, relevance scoring linear in org count but cheap Convex vector-index scans).
 
-The architecture is designed so bill ingestion is O(bills) and relevance scoring is O(bills) via `ctx.vectorSearch()` (one query per bill scores all orgs). The expensive part (embedding generation) is O(bills) regardless of org count.
+Bill embedding remains O(bills). Interactive relevance scoring is explicitly tenant-scoped: one filtered `ctx.vectorSearch()` per authorized org and bill, so an org request can neither hydrate nor write another org's issue domains. Any future cross-org batch must be a separately admitted operator workflow that enumerates bounded org jobs; it cannot reuse an editor's request as global authority.
 
 ### 11. Open States Rate Limits
 
@@ -757,7 +757,7 @@ Three AI critics (Claude, Codex, Gemini) reviewed this architecture. Findings as
 | Finding | Source | Fix Applied |
 |---------|--------|------------|
 | Embedding dimension mismatch: Gemini outputs 768, not 1024 | Claude, Codex | All vector columns changed to `vector(768)` |
-| O(bills × orgs) doesn't fit 30s Workers | All three | Changed to Convex `ctx.vectorSearch()`: one query per bill scores all orgs |
+| O(bills × orgs) doesn't fit 30s Workers | All three | Bill embeddings are shared, while each admitted org job uses one org-filtered Convex vector search per bill |
 | Chunked ingestion needed for Workers | All three | Added cursor-based pagination, N bills per cron invocation |
 | Per-campaign verify URL prevents per-target click attribution | Codex | Changed to per-delivery URL: `/verify/${deliveryId}` |
 | No Campaign→Bill FK breaks scorecard alignment | Claude | Added `billId` to Campaign model |

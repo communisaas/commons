@@ -134,7 +134,7 @@
 		{
 			"source": "FND-35",
 			"target": "FND-60",
-			"reason": "Launch proof is invalid if anonymous readiness can trigger dependency I/O or the exact-SHA readiness, source-setting, exhaustive-inventory, and post-upload reconciliation mechanisms can fail open; live reviewed-SHA promotion remains gated by PD-00, PD-50, and PD-70."
+			"reason": "Launch proof is invalid if anonymous readiness can trigger dependency I/O; if an unpinned SvelteKit route, hook, transitive server import, component SSR path, instrumentation module, or build config can execute after T; if preview receives an application capability binding; or if exact-SHA readiness, source-setting, exhaustive-inventory, and post-upload reconciliation can fail open. Live reviewed-SHA promotion remains gated by PD-00, PD-50, and PD-70."
 		},
 		{
 			"source": "FND-35C",
@@ -154,7 +154,7 @@
 		{
 			"source": "FND-40B",
 			"target": "FND-60",
-			"reason": "Launch cannot rely on cache, point-in-time Convex or Queue Free receipts, or estimated Pages/Queue weights alone: team-global admission layers preserve the reviewed nominal slices, while full normal release remains blocked until live phase proofs plus paid/no-shared-hard-disable or quota-isolation authority close duplicate delivery, browser-direct, native, and sibling-project gaps."
+			"reason": "Launch cannot rely on cache, actor-local throttles, request dedupe after provider work, point-in-time Convex or Queue Free receipts, or estimated Pages/Queue/provider weights alone. One atomic cross-realm provider boundary must constrain every authenticated entrypoint, retain the operator demonstration inside the hard cap, replay existing jobs before provider admission, and classify the exact indirect-source bytes before generation; team-global Convex and Queue admission layers preserve the remaining reviewed slices. Full normal release remains blocked until live budget/phase proofs plus paid/no-shared-hard-disable or quota-isolation authority close duplicate delivery, browser-direct, native, and sibling-project gaps."
 		},
 		{
 			"source": "FND-40C",
@@ -165,6 +165,81 @@
 			"source": "FND-50",
 			"target": "FND-60",
 			"reason": "Legacy rows must preserve projection correctness before adversarial verification."
+		},
+		{
+			"source": "FND-51",
+			"target": "FND-60",
+			"reason": "Launch proof is invalid while a browser can bypass the bounded HTTP boundary and invoke submission proof, database, or scheduler work directly."
+		},
+		{
+			"source": "FND-52",
+			"target": "FND-60",
+			"reason": "Authenticated segment, supporter-import, and legislation actions cannot turn one shared-budget admission into a corpus-wide scan, encryption loop, or vector-search fan-out."
+		},
+		{
+			"source": "FND-53",
+			"target": "FND-60",
+			"reason": "Position-recipient retries and concurrent tabs cannot multiply delivery rows or admit unbounded identity-owned work."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-60",
+			"reason": "Launch cannot retain a Convex-side Gemini credential or paid-provider search path outside the one Pages budget authority."
+		},
+		{
+			"source": "FND-55",
+			"target": "FND-60",
+			"reason": "Shadow Atlas SSR, retries, and concurrent clients cannot repeat registration writes and read fan-out without one durable identity-scoped lease and cooldown."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-51",
+			"reason": "The direct submission cure reuses the stable shared work authority and must retain exactly one bounded maximum-class server dispatch."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-52",
+			"reason": "Fixed bulk action slices depend on the shared maximum-class admission remaining stable across production and preview."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-53",
+			"reason": "Durable position replay closes the per-feature gap after the stable shared Pages-to-Convex admission succeeds."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-40B",
+			"reason": "The paid-provider gate must enumerate only the nine Pages operations and prove zero executable Convex provider egress."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-55",
+			"reason": "Shadow Atlas replay coalescing extends the stable shared dispatch boundary across the external registration and proof handoff."
+		},
+		{
+			"source": "FND-51",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun the direct-submission authority proof."
+		},
+		{
+			"source": "FND-52",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must preserve the bounded bulk-operation contracts and maximum work classes."
+		},
+		{
+			"source": "FND-53",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must preserve shared batch/mailto cardinality, durable admission, and cross-writer replay idempotency."
+		},
+		{
+			"source": "FND-54",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun the zero-Convex-provider-egress ratchet and keyword-only search tests."
+		},
+		{
+			"source": "FND-55",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun Shadow Atlas replay, lease, at-most-once-write, and bounded transport tests."
 		},
 		{
 			"source": "FND-60",

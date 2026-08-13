@@ -29,7 +29,7 @@
 > - **Layer-1 moderation model migrated** to `openai/gpt-oss-safeguard-20b`
 >   (`llama-guard.ts:20`). Any "Llama Guard 4" naming is historical.
 > - **Rate-limit table (canonical, from `llm-cost-protection.ts`):**
->   subject 3/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
+>   subject 0/5/5/hr, DM 0/2/3/hr, message 0/3/5/hr,
 >   embeddings 0/20/20/hr, daily global 3/10/15/day. Higher numbers
 >   elsewhere are wrong.
 > - **`FEATURES.DELEGATION=false`** — agentic-delegation endpoints are
@@ -135,17 +135,17 @@ for await (const event of parseSSEStream<AgentEvent>(response)) {
 | Operation | Gemini Calls | External APIs | Estimated Cost |
 |---|---|---|---|
 | Subject line | 1-2 | None | ~$0.01-0.02 |
-| Decision makers | 4-6 | Exa ($0.005/search) + Firecrawl ($0.01-0.05/page) | ~$0.08-0.15 |
-| Message generation | 2 | Google Search grounding | ~$0.03-0.05 |
+| Decision makers | Bounded by cache split | Exa ($0.007/base ten-result search) + Firecrawl Free credits | See `paid-provider-budget-policy.json` |
+| Message generation | 2 Gemini | Bounded Exa/Firecrawl source ground | See `paid-provider-budget-policy.json` |
 
 ### Per-User Quotas
 
 | Operation | Guest | Authenticated | Verified (Tier 2+) |
 |---|---|---|---|
-| Subject line | 5/hr | 15/hr | 30/hr |
-| Decision makers | Blocked | 3/hr | 10/hr |
-| Message generation | Blocked | 10/hr | 30/hr |
-| Daily global | 10/day | 50/day | 150/day |
+| Subject line | Blocked | 5/hr | 5/hr |
+| Decision makers | Blocked | 2/hr | 3/hr |
+| Message generation | Blocked | 3/hr | 5/hr |
+| Actor daily reservations | Blocked | 10/day | 15/day |
 
 Quota enforcement: `src/lib/server/llm-cost-protection.ts`
 

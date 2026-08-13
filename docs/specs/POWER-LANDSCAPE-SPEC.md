@@ -57,7 +57,7 @@ A citizen arrives at a template. They have a position. Between that position and
 
 The Power Landscape makes that structure visible and addressable. Not as a list of names. As a field of accountability relationships, each one specific: who this person is, what they've done, and why they have power over this issue.
 
-The citizen can engage at their depth. One tap to be counted. One more to see who decides. Another to speak — with an opener that establishes standing, a space for their own words, and a message body grounded in sourced fact. Every level is a legitimate civic act. The crypto proves their standing at each.
+The citizen can engage at their depth. One tap to be counted. One more to see who decides. Another to speak — with a space for their own words and a message body grounded in sourced fact. Every level is a legitimate civic act. The crypto proves their standing at each.
 
 ---
 
@@ -67,7 +67,7 @@ This feature answers the design system's core question — **"Does this make coo
 
 - **Position registration** adds the citizen to a cryptographically verified count. The count ticks with spring physics, weighted and inevitable.
 - **The landscape** reveals power structure. Not decoration — information architecture. Infrastructure for directed pressure.
-- **The compose pane** is the lightest-weight path from caring to speaking. No blank pages. No choice paralysis. An accountability opener grounds the citizen's standing. Their words complete it.
+- **The compose path** is the lightest-weight path from caring to speaking. No blank pages. No choice paralysis. It uses the grounded shared message and the citizen's own words; no model-authored accountability opener is rendered or published.
 
 ### What This Is Not
 
@@ -156,11 +156,6 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 │ │ │ Commissioner Davis                │   │ │
 │ │ │ Riverside Utility Commission      │   │ │
 │ │ │                                   │   │ │
-│ │ │ Deciding vote on the Tier 3 rate  │   │ │
-│ │ │ increase, January 2026.           │   │ │
-│ │ │ ^^^^ accountability opener,       │   │ │
-│ │ │      indigo-600, sm, italic       │   │ │
-│ │ │                                   │   │ │
 │ │ │ Write to her →                    │   │ │
 │ │ │ ^^^^ indigo-600 text, no bg      │   │ │
 │ │ └───────────────────────────────────┘   │ │
@@ -168,8 +163,6 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 │ │ ┌───────────────────────────────────┐   │ │
 │ │ │ Commissioner Park                 │   │ │
 │ │ │ Riverside Utility Commission      │   │ │
-│ │ │                                   │   │ │
-│ │ │ Abstained on rate increase vote.  │   │ │
 │ │ │                                   │   │ │
 │ │ │ Write to him →                    │   │ │
 │ │ └───────────────────────────────────┘   │ │
@@ -181,9 +174,6 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 │ │ ┌───────────────────────────────────┐   │ │
 │ │ │ Rep. Garcia                       │   │ │
 │ │ │ US House · Appropriations         │   │ │
-│ │ │                                   │   │ │
-│ │ │ Education subcommittee member.    │   │ │
-│ │ │ Voted against SB 412 last session.│   │ │
 │ │ │                                   │   │ │
 │ │ │ Write to him →                    │   │ │
 │ │ └───────────────────────────────────┘   │ │
@@ -202,7 +192,7 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 - White background, node-style border (`rgba(148, 163, 184, 0.45)`), 8px radius (`rounded-lg`)
 - Name: Satoshi bold, base size, slate-900
 - Title/org: Satoshi regular, sm, slate-600
-- Accountability opener: Satoshi regular, sm, indigo-600. NOT italic (contradicts voice — confident, not literary). Factual tone.
+- No accountability opener or other model-authored claim about a named person is rendered on the card.
 - "Write to them →": Satoshi medium, sm, indigo-600 text, no background. Right-aligned chevron. Link affordance, not button. Low commitment signal.
 - Hover: 2px lift, shadow intensifies (existing card pattern)
 - Touch target: entire card is tappable (44px minimum height guaranteed)
@@ -220,11 +210,11 @@ The citizen tapped "I support this." The interface transforms — not a page cha
 
 **Decision-maker sources (two origins):**
 
-1. **Template decision-makers:** Resolved at template creation time by the DecisionMakerResolver. Stored in `recipient_config`. These are the people the template author identified as relevant — commissioners, directors, org leaders. They have accountability openers, role categories, and contact info.
+1. **Template decision-makers:** Resolved at template creation time by the DecisionMakerResolver. Stored in private `recipient_config`. These are the people the template author identified as relevant — commissioners, directors, org leaders. The public landscape receives only the permitted identity, role-label, and grounded role-form contact fields.
 
-2. **Citizen's district officials:** Resolved at action time from Shadow Atlas `getOfficials()` + `lookupAll()`. These are the citizen's personal representatives — House rep, senators, state legislators, county commissioners. They have name, party, chamber, contact info, but NO accountability opener (because they weren't part of template creation).
+2. **Citizen's district officials:** Resolved at action time from Shadow Atlas `getOfficials()` + `lookupAll()`. These are the citizen's personal representatives — House rep, senators, state legislators, county commissioners. They have name, party, chamber, and contact info.
 
-The merge: template decision-makers appear first (they have openers, they're the curated landscape). District officials appear in a separate group at the bottom: "YOUR REPRESENTATIVES" — name, party, chamber. No opener. Still addressable — the compose pane provides the template body, just without the accountability-specific lead-in.
+The merge keeps template decision-makers in stable input order inside each role group, then places district officials in a separate group at the bottom: "YOUR REPRESENTATIVES" — name, party, chamber. No forced person-level rank or accountability-specific lead-in crosses into the public landscape or mailto body.
 
 #### State 2: Compose Pane — Speaking to One Person
 
@@ -301,11 +291,10 @@ The citizen taps "Write to her →" on Commissioner Davis. The compose pane appe
 
 **Compose zone details:**
 
-**Zone 1 — Accountability opener:**
-- Background: indigo-50 (very subtle tint — the system's contribution is visually distinct from the citizen's)
-- Pre-filled from `ProcessedDecisionMaker.accountabilityOpener`
-- Editable (contenteditable div, not textarea — preserves formatting)
-- If no opener available (district officials from SA): this zone shows only the recipient's name and title. No empty space, no placeholder.
+**Zone 1 — Recipient context:**
+- Shows only the selected recipient's name and title.
+- `ProcessedDecisionMaker.accountabilityOpener` is agent-side authoring data: it is not published, rendered, or inserted into the mailto body.
+- The message begins with citizen-authored text when present, otherwise with the grounded shared template body.
 
 **Zone 2 — Personal space:**
 - Prompted textarea with issue-specific question
@@ -332,7 +321,6 @@ The citizen taps "Write to her →" on Commissioner Davis. The compose pane appe
 generatePersonalizedMailto({
   recipient: ProcessedDecisionMaker,
   template: Template,
-  opener: string,          // from Zone 1 (possibly citizen-edited)
   personalInput?: string,  // from Zone 2 (possibly empty)
   templateBody: string,    // from Zone 3 (possibly citizen-edited)
   attestation: string,     // from Zone 4 (system-generated)
@@ -440,7 +428,7 @@ interface ProcessedDecisionMaker {
   discovered: string;
 
   // new fields
-  accountabilityOpener: string | null;   // factual accountability line
+  accountabilityOpener: string | null;   // agent-side only; never public or rendered
   roleCategory: RoleCategory;            // functional role in the decision
   relevanceRank: number;                 // 1 = most direct power
   publicActions: string[];               // specific votes, decisions, statements
@@ -509,7 +497,7 @@ Runs after Phase 3 validation. Takes validated decision-makers and generates:
 3. Relevance ranking
 4. Personal prompt (one prompt for the whole template, not per-person)
 
-This is a single LLM call with structured output — NOT per-person calls.
+This is a single LLM call with structured output — NOT per-person calls. Its opener and rank outputs remain agent-side authoring data; neither is published or rendered, and rank never orders the public landscape.
 
 **Prompt strategy:**
 
@@ -542,7 +530,7 @@ Also generate:
 
 ### Shadow Atlas Integration
 
-The citizen's district officials come from `getOfficials(districtCode)` (already called during address verification). These officials have name, party, chamber, contact info — but no accountability opener.
+The citizen's district officials come from `getOfficials(districtCode)` (already called during address verification). These officials have name, party, chamber, and contact info.
 
 **Merge logic (client-side):**
 
@@ -551,7 +539,7 @@ function mergeDecisionMakers(
   templateDMs: ProcessedDecisionMaker[],  // from template recipient_config
   districtOfficials: Official[]           // from Shadow Atlas
 ): MergedLandscape {
-  // 1. Template DMs are primary (have openers, curated)
+  // 1. Template DMs are primary; public fields are projected separately.
   const templateCards = templateDMs.map(dm => ({
     ...dm,
     source: 'template' as const
@@ -569,9 +557,7 @@ function mergeDecisionMakers(
       title: `${o.chamber === 'house' ? 'Representative' : 'Senator'}`,
       organization: `US ${o.chamber === 'house' ? 'House' : 'Senate'} · ${o.party}`,
       email: o.contact_form_url || null,
-      accountabilityOpener: null,  // no opener for district officials
       roleCategory: 'shapes' as RoleCategory,
-      relevanceRank: 100,  // below template DMs
       source: 'district' as const
     }));
 
@@ -755,8 +741,8 @@ Display value: `Math.round($displayCount).toLocaleString()` in JetBrains Mono wi
 |------|--------|-------------|
 | `src/lib/components/action/PowerLandscape.svelte` | Create | Main landscape container with role groups |
 | `src/lib/components/action/RoleGroup.svelte` | Create | Single role category with its cards |
-| `src/lib/components/action/DecisionMakerLandscapeCard.svelte` | Create | Individual DM card with opener + write affordance |
-| `src/lib/components/action/DistrictOfficialCard.svelte` | Create | District official card (no opener) |
+| `src/lib/components/action/DecisionMakerLandscapeCard.svelte` | Create | Individual DM card with identity, route + write affordance |
+| `src/lib/components/action/DistrictOfficialCard.svelte` | Create | District official card |
 | `src/lib/components/action/BatchRegistrationBar.svelte` | Create | Sticky bottom bar for batch action |
 | `src/lib/utils/landscapeMerge.ts` | Create | Merge template DMs + district officials, group by role |
 | `src/routes/s/[slug]/+page.svelte` | Modify | Wire landscape reveal after position registration |
@@ -799,7 +785,6 @@ interface LandscapeMember {
   title: string;
   organization: string;
   email: string | null;
-  accountabilityOpener: string | null;
   source: 'template' | 'district';
   cwcEligible: boolean;
 }
@@ -851,7 +836,7 @@ const ROLE_LABELS: Record<RoleCategory, string> = {
 - Node-style card (white bg, subtle border, 8px radius, existing shadow pattern)
 - Name: Satoshi bold, base, slate-900
 - Title + org: Satoshi regular, sm, slate-600
-- Accountability opener (if present): Satoshi regular, sm, indigo-600. Below title. Max 2 lines, overflow ellipsis.
+- No accountability opener or model-authored person claim is rendered.
 - "Write to them →": Satoshi medium, sm, indigo-600 text. Right-side chevron. Right-aligned bottom of card.
 - Sent state: emerald checkmark replaces "Write to them →". "Sent ✓" in emerald-600.
 - No-email state: card renders without "Write" affordance. Muted appearance (opacity: 0.7). Tooltip: "No public contact info found."
@@ -871,8 +856,8 @@ const ROLE_LABELS: Record<RoleCategory, string> = {
 
 **Acceptance criteria:**
 - [ ] PowerLandscape renders role groups with correct labels
-- [ ] Template decision-makers appear in their role groups with accountability openers
-- [ ] District officials appear in "YOUR REPRESENTATIVES" group without openers
+- [ ] Template decision-makers appear in stable input order inside their role groups
+- [ ] District officials appear in the "YOUR REPRESENTATIVES" group
 - [ ] Deduplication works (same official in template + district doesn't appear twice)
 - [ ] Progressive reveal animation works (staggered entrance, reduced-motion respected)
 - [ ] "Write to them →" affordance triggers onWriteTo callback
@@ -887,14 +872,14 @@ const ROLE_LABELS: Record<RoleCategory, string> = {
 
 ### Cycle 40: The Voice — Compose Pane + Personalized mailto
 
-**Goal:** Build the compose experience — the three-zone pane where the citizen writes to a specific decision-maker, with accountability opener + personal space + template body + attestation footer. Integrate personalized mailto generation. Track sent state.
+**Goal:** Build the compose experience where the citizen writes to a specific decision-maker with personal space + template body + attestation footer. Accountability openers are excluded from the public surface and personalized mailto. Track sent state.
 
 **Files to create/modify (commons):**
 
 | File | Action | Description |
 |------|--------|-------------|
 | `src/lib/components/action/ComposePane.svelte` | Create | Three-zone compose experience |
-| `src/lib/components/action/AccountabilityOpener.svelte` | Create | Zone 1: editable opener block |
+| `src/lib/components/action/AccountabilityOpener.svelte` | Retired | Not rendered and not part of mailto assembly |
 | `src/lib/components/action/PersonalSpace.svelte` | Create | Zone 2: prompted textarea |
 | `src/lib/components/action/TemplateBodyPreview.svelte` | Create | Zone 3: collapsible template body |
 | `src/lib/components/action/AttestationFooter.svelte` | Create | Zone 4: verification badge |
@@ -932,13 +917,10 @@ let {
 
 The compose pane assembles the email in real-time as the citizen types. A preview is unnecessary — the pane IS the preview. What you see is what sends.
 
-**Zone 1 — AccountabilityOpener.svelte:**
-- `contenteditable` div (not textarea — preserves line breaks, allows future rich text)
-- indigo-50 background, rounded-lg, p-4
-- Pre-filled with `recipient.accountabilityOpener`
-- If no opener: shows only "To: [Name], [Title]" header — no empty editable zone
-- Character limit: 500 (soft limit — shows count at 400+)
-- On edit: updates the email body in real-time
+**Zone 1 — Recipient context:**
+- Shows only "To: [Name], [Title]".
+- There is no editable or pre-filled accountability block.
+- Model-authored accountability copy is neither published nor rendered and never enters the email body.
 
 **Zone 2 — PersonalSpace.svelte:**
 - textarea with bottom-border-only styling (minimal chrome)
@@ -975,17 +957,11 @@ The compose pane assembles the email in real-time as the citizen types. A previe
 export function generatePersonalizedMailto(params: {
   recipient: { name: string; email: string; title?: string; organization?: string };
   subject: string;
-  opener: string;          // Zone 1 content
   personalInput?: string;  // Zone 2 content (may be empty)
   templateBody: string;    // Zone 3 content
   attestation?: string;    // Zone 4 content
 }): string {
   const bodyParts: string[] = [];
-
-  // Zone 1: Accountability opener
-  if (params.opener.trim()) {
-    bodyParts.push(params.opener.trim());
-  }
 
   // Zone 2: Personal input (only if non-empty)
   if (params.personalInput?.trim()) {
@@ -1020,8 +996,7 @@ export function generatePersonalizedMailto(params: {
 
 **Acceptance criteria:**
 - [ ] ComposePane opens as TouchModal on mobile, right-panel on desktop
-- [ ] Zone 1 pre-fills with accountability opener, is editable
-- [ ] Zone 1 absent (not empty) when no opener available
+- [ ] Zone 1 shows recipient identity only; no accountability opener is published or rendered
 - [ ] Zone 2 shows personalPrompt as placeholder, auto-resizes
 - [ ] Zone 3 collapses by default, expandable and editable
 - [ ] Zone 4 shows attestation for Tier 2+, absent for lower tiers
@@ -1097,7 +1072,7 @@ Findings are documented below each cycle's section upon completion.
 - `src/lib/utils/landscapeMerge.ts` — `mergeLandscape()` with dedup, role-ordering, personalPrompt extraction
 - `src/lib/components/action/PowerLandscape.svelte` — Container with staggered CSS reveal, `$derived` landscape
 - `src/lib/components/action/RoleGroup.svelte` — Delegates to correct card type by source
-- `src/lib/components/action/DecisionMakerLandscapeCard.svelte` — Rich card with opener, public actions, sent state, a11y
+- `src/lib/components/action/DecisionMakerLandscapeCard.svelte` — Card with identity, route, sent state, and a11y; no opener or model-authored person claim
 - `src/lib/components/action/DistrictOfficialCard.svelte` — Simpler card with CWC badge
 - `src/lib/components/action/BatchRegistrationBar.svelte` — Mobile fixed / desktop relative, safe-area-inset
 - `src/routes/s/[slug]/+page.svelte` — PowerLandscape wired after stance registration, handler stubs for Cycle 40
@@ -1113,7 +1088,7 @@ Findings are documented below each cycle's section upon completion.
 **Completed:** 2026-02-27
 
 **Deliverables:**
-- `src/lib/components/action/AccountabilityOpener.svelte` — Zone 1: contenteditable, indigo-50, "To:" header, 500-char soft limit
+- `src/lib/components/action/AccountabilityOpener.svelte` — retired from the public surface; the current send path does not render or publish opener copy
 - `src/lib/components/action/PersonalSpace.svelte` — Zone 2: textarea, bottom-border styling, auto-resize (3-8 rows), personalPrompt placeholder
 - `src/lib/components/action/TemplateBodyPreview.svelte` — Zone 3: collapsible (line-clamp-3), expandable to editable textarea, [District] replacement
 - `src/lib/components/action/AttestationFooter.svelte` — Zone 4: non-editable, emerald-50, renders only at Tier 2+
@@ -1192,8 +1167,8 @@ Both render simultaneously. A user could click "Write to them" on another card w
 **F-19 [MEDIUM] No `aria-live` regions for state transitions.**
 `StanceRegistration` confirmation, `BatchRegistrationBar` completion, `PositionCount` updates, `ComposePane` errors — none use `aria-live`. Screen readers get no feedback.
 
-**F-20 [MEDIUM] AccountabilityOpener contenteditable missing `aria-multiline`.**
-Also no `aria-describedby` for the character counter. Counter warning has no `aria-live`.
+**F-20 [RETIRED] Historical AccountabilityOpener accessibility finding.**
+The component was later removed from the public render path, so its former contenteditable and character-counter findings no longer describe a shipped surface.
 
 **F-07 [MEDIUM] Empty `message_body` produces blank template preview.**
 `TemplateBodyPreview.svelte:9` — `.replace()` on empty string is safe but produces a blank collapsed preview with no visual indication.
@@ -1363,7 +1338,7 @@ Collapse/expand button doesn't communicate state to assistive technology.
 - `DistrictOfficialCard.svelte` — Same semantic button pattern as above.
 - `StanceRegistration.svelte` — `role="status"` + `aria-live="polite"` on registration confirmation.
 - `PositionCount.svelte` — `role="status"` + `aria-live="polite"` + dynamic `aria-label` on count display.
-- `AccountabilityOpener.svelte` — `aria-multiline="true"`, `aria-describedby` pointing to character counter, `aria-live="polite"` on counter.
+- `AccountabilityOpener.svelte` — historical accessibility repair; the component was subsequently retired from the public render path.
 - `PersonalSpace.svelte` — `aria-label="Personal message"` on textarea.
 - `TemplateBodyPreview.svelte` — `aria-expanded={expanded}` on toggle button.
 
@@ -1372,7 +1347,7 @@ Collapse/expand button doesn't communicate state to assistive technology.
 - F-17 (HIGH): Mobile ComposePane has focus trap, Escape handler, dialog semantics, auto-focus
 - F-18 (HIGH): Cards use semantic `<button>` elements, no more `svelte-ignore` directives
 - F-19 (MEDIUM): `aria-live` regions on StanceRegistration, PositionCount, ComposePane errors
-- F-20 (MEDIUM): AccountabilityOpener has `aria-multiline`, `aria-describedby`, live counter
+- F-20 (RETIRED): AccountabilityOpener is no longer rendered on the public surface
 - F-21 (LOW): PersonalSpace textarea has `aria-label`
 - F-22 (LOW): TemplateBodyPreview toggle has `aria-expanded`
 
@@ -1391,7 +1366,7 @@ Collapse/expand button doesn't communicate state to assistive technology.
 | Action | When | Cost | Amortization |
 |--------|------|------|-------------|
 | Phase 4 accountability generation | Template creation | ~$0.02 | Once per template |
-| District officials opener (cached) | First citizen in district | ~$0.002 | All citizens in district |
+| District officials opener | Not shipped | $0.00 | Not published or rendered |
 | Position registration API | Per citizen | ~$0.0001 (compute) | N/A |
 | Batch position delivery | Per citizen × recipients | ~$0.001 (compute + CWC) | N/A |
 | mailto generation | Per citizen × recipient | $0.00 (client-side) | N/A |
@@ -1406,7 +1381,7 @@ Collapse/expand button doesn't communicate state to assistive technology.
 
 ## Open Questions
 
-1. **Opener caching for district officials:** When a citizen's district officials aren't in the template, should we generate accountability openers on-the-fly (per-district LLM call, cached) or skip openers for district officials entirely? Current spec: skip openers (simpler, no cost). Future: cached generation.
+1. **Opener publishing:** Resolved — do not publish or render model-authored accountability openers for template decision-makers or district officials.
 
 2. **Non-government recipient delivery:** For CEOs, university presidents, etc. — what's the delivery mechanism? Current spec: mailto only (citizen's own email). Future: platform-sent position notifications via discovered email.
 

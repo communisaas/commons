@@ -1,16 +1,16 @@
 # Template Search & Discovery Strategy
 
 **Date**: 2025-01-08 (rewritten 2026-04-23)
-**Purpose**: Define how users find templates (semantic search + embeddings)
+**Purpose**: Define how users find templates with a launch-safe indexed search
 **Context**: Template browser needs search across all templates
 
-> **Current architecture (2026-04-23).** Live search uses Convex
-> `.searchIndex()` (full-text) and `.vectorIndex("by_*", { dimensions: 768 })`.
-> Embedding model is Gemini `text-embedding-004`, 768 dimensions
-> (`convex/intelligence.ts:~206-233`). Query embedding is generated
-> **server-side**; vector similarity runs on Convex. The client calls
-> `/api/templates/search`; it does not compute embeddings. Client IndexedDB
-> cache (`src/lib/core/search/cache.ts`) holds results only.
+> **Current architecture (2026-07-21).** Live template search is provider-free.
+> `/api/templates/search` authenticates the user, bounds the request, crosses
+> the shared Convex work-budget boundary, and invokes secret-gated
+> `templates:search`. That action applies a stable-actor burst limit and reads
+> only the compact `publicTemplateDiscoverySources.search_title` index (at most
+> 20 results). It does not read template embeddings, call Gemini, or execute a
+> Convex vector search. The response reports `method: "keyword"`.
 >
 > **Index coverage:** templates have `by_topicEmbedding` +
 > `by_locationEmbedding`; intelligence has `by_embedding`; bills have
@@ -20,8 +20,11 @@
 > **Schema:** `domain` + `topics` are primary; `category` is deprecated
 > but retained on the record.
 >
-> **Embedding generation is rate-limited** (20/hr authenticated) via
-> `src/lib/server/ai/llm-cost-protection.ts`.
+> **Historical material below.** The semantic/vector design remains a deferred
+> option and describes stored-vector infrastructure, not the launch search
+> request path. Explicit `/api/embeddings/generate` calls are authenticated and
+> admitted by the shared Cloudflare paid-provider budget; they are not used by
+> `/api/templates/search`.
 
 ---
 
@@ -41,11 +44,13 @@ They might search for:
 - "internet privacy" won't match "Tell Comcast to stop data collection"
 - "landlord heating" won't match "Report housing code violations"
 
-**Solution**: Semantic search with text embeddings.
+**Launch solution**: bounded full-text search over the compact public projection.
+Semantic retrieval may return only after it has a provider-free or explicitly
+budgeted design that preserves these request-cost bounds.
 
 ---
 
-## Semantic Search Architecture
+## Deferred Semantic Search Architecture
 
 ### Overview:
 ```
@@ -65,7 +70,7 @@ Matching templates:
 
 ## Implementation Plan
 
-### Existing Implementation
+### Historical / Deferred Implementation
 1. Gemini Embedding API integration (`text-embedding-004`, 768 dim)
 2. Convex `.vectorIndex("by_topicEmbedding", { dimensions: 768 })` on
    `templates`
@@ -107,49 +112,53 @@ const embeddingText = `
 }
 ```
 
-The handler generates a query embedding server-side via Gemini, then
-calls a Convex query that uses `.vectorSearch("templates",
-"by_topicEmbedding", ...)` to retrieve nearest neighbours.
+The launch handler does not execute this flow. It performs the compact keyword
+search described in the current-architecture banner. Any future semantic path
+must remain separate from the default request path and pass the shared provider
+and Convex work budgets before external or database work.
 
 ---
 
 ## Search Strategy (Multi-Tier)
 
-### Tier 1: Semantic Search (Primary)
+### Tier 1: Full-Text Search (Launch Primary)
 **Use case**: Natural language queries, broad topics
-**How**: Text embeddings → Convex vector similarity search
+**How**: Compact public text projection → bounded Convex search-index read
 **Examples**:
 - "my landlord won't fix heating" → Housing code violations templates
 - "internet privacy" → Data collection, net neutrality templates
 - "school funding" → Education budget templates
 
 **Advantages**:
-- Understands intent (not just keywords)
-- Finds related concepts
-- Works across categories
+- No paid-provider call or query embedding per search
+- Reads only compact projection rows, never embedding-bearing templates
+- Stable per-actor and team-wide request budgets
 
 **Limitations**:
-- Requires embedding generation for all templates
-- Bounded by the Convex vector index capacity
+- Lexical matching does not infer unrelated synonyms
+- Semantic retrieval is deferred until it can retain the same cost envelope
 
 ---
 
-### Tier 2: Full-Text Search (Fallback)
-**Use case**: Specific keywords, exact matches
-**How**: Convex `.searchIndex("by_text", { searchField: "...", filterFields: [...] })`
+### Tier 2: Semantic Search (Deferred)
+
+**Use case**: Natural-language synonym and intent matching after a separately
+reviewed cost-bound design exists
+
+**How**: Not active at launch. A future design may combine an explicitly
+admitted query embedding with a bounded stored-vector index.
+
 **Examples**:
-- "Delta Airlines" → Exact company name match
-- "CWC_MESSAGE" → Message type filter
-- "California" → Location-specific templates
+- "landlord heating" → Housing-code and repair templates
+- "internet privacy" → Data-collection and net-neutrality templates
 
 **Advantages**:
-- Fast (native Convex full-text)
-- Exact keyword matching
-- No embedding overhead
+- Can understand intent beyond exact words
+- Can combine semantic relevance with compact quality signals
 
 **Limitations**:
-- No semantic understanding
-- Misses synonyms/related concepts
+- Not active in the launch request path
+- Must not silently add provider or embedding-heavy database work to page loads
 
 ---
 

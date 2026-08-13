@@ -9,12 +9,12 @@
 
 > ⚠️ **DIVERGENCE BANNER (2026-04-23 audit).** Treat as vision framing;
 > numeric and event specs drift from live code. Use
-> `src/lib/server/ai/llm-cost-protection.ts` and
+> `src/lib/server/llm-cost-protection.ts` and
 > `src/lib/core/agents/providers/gemini-provider.ts` as sources of truth.
 >
 > - **Rate limits below are 2–6× higher than enforced.** Live values
 >   from `llm-cost-protection.ts:~52-85` (guest / auth / verified per
->   hour): subject-line `3/5/5`; decision-makers `0/2/3`;
+>   hour): subject-line `0/5/5`; decision-makers `0/2/3`;
 >   message-generation `0/3/5`; embeddings `0/20/20`; daily global
 >   `3/10/15`/day. Any "Auth 15/hr / Verified 30/hr" framing here is
 >   wrong.
@@ -67,7 +67,7 @@ Three production agents with tool-calling loops, grounding verification, streami
 Multi-turn clarification flow. Infers geographic scope, target type, and location confidence. Generates subject line, core message, topics, URL slug, and voice sample (emotional peak from raw input). Supports `location_picker`, `open_text`, and `multiple_choice` clarification types. Rebuilds conversation context across turns via `buildClarificationPrompt()`.
 
 **Endpoint:** `POST /api/agents/stream-subject`
-**Rate:** Guest 5/hr, Auth 15/hr, Verified 30/hr
+**Rate:** Guest BLOCKED, Auth 5/hr, Verified 5/hr
 
 ### Decision-Maker Resolution Agent
 
@@ -79,14 +79,14 @@ Three-phase pipeline with parallel mini-agents:
 - **Phase 2b:** Per-identity contact hunting — N concurrent mini-agents with isolated budgets (`AgenticToolContext` with `maxSearches`/`maxPageReads` per identity)
 - **Phase 4:** Accountability classification — generates context openers per decision-maker
 
-Tool-calling loop via `processGeminiFunctionCall()`: `search_web` (Exa, 25 results), `read_page` (Firecrawl headless rendering), `analyze_document` (Reducto PDF parsing).
+Tool-calling loop via `processGeminiFunctionCall()`: `search_web` (Exa, globally capped at 10 results), `read_page` (Firecrawl headless rendering), `analyze_document` (Reducto PDF parsing).
 
 **Grounding requirement:** All emails must appear verbatim in fetched page content. `extractContactHints()` pre-extracts emails, phones, social URLs from page HTML. Unverified emails filtered before return.
 
 **Progressive reveal:** `identity-found` and `candidate-resolved` events bypass ThoughtEmitter for direct SSE metadata, enabling incremental card rendering as resolution progresses.
 
 **Endpoint:** `POST /api/agents/stream-decision-makers`
-**Rate:** Guest BLOCKED, Auth 3/hr, Verified 10/hr
+**Rate:** Guest BLOCKED, Auth 2/hr, Verified 3/hr
 
 ### Message Writer Agent
 
@@ -99,7 +99,7 @@ Two-phase citation verification:
 Zero citation hallucination: every URL in output was validated accessible in Phase 1.
 
 **Endpoint:** `POST /api/agents/stream-message`
-**Rate:** Guest BLOCKED, Auth 10/hr, Verified 30/hr
+**Rate:** Guest BLOCKED, Auth 3/hr, Verified 5/hr
 
 ### Supporting Infrastructure
 
@@ -107,12 +107,12 @@ Zero citation hallucination: every URL in output was validated accessible in Pha
 |---|---|---|
 | ThoughtEmitter | `src/lib/core/thoughts/emitter.ts` | Structured reasoning visualization with progressive disclosure, citations, action traces, Key Moments footer |
 | Provider Router | `src/lib/core/agents/providers/router.ts` | Priority-based provider selection with fallback |
-| Exa Search | `src/lib/core/agents/exa-search.ts` | Semantic web search ($0.005/search, 25 results, 4 RPS) |
+| Exa Search | `src/lib/core/agents/exa-search.ts` | Metadata-only web search ($0.007 base search, at most 10 results, 4 RPS) |
 | Firecrawl | `src/lib/core/agents/exa-search.ts` | Headless page rendering for JS-heavy sites (20s timeout) |
 | Intelligence Service | `src/lib/server/intelligence/service.ts` | Convex `.vectorIndex(...)` semantic search, topic/entity/embedding storage, 90-day TTL |
 | Prompt Guard | Endpoint middleware | Llama Prompt Guard 2 via Groq (threshold 0.7-0.8) |
 | Cost Tracking | `CostBreakdown` type | Per-component: Gemini (input/output/thinking), Exa, Firecrawl, Grounding, Groq |
-| Gemini Client | `src/lib/core/agents/gemini-client.ts` | Singleton client, gemini-3-flash-preview, exponential backoff, token tracking |
+| Gemini Client | `src/lib/core/agents/gemini-client.ts` | Singleton client, gemini-3.5-flash, stage-specific bounded retry, token tracking |
 
 ---
 

@@ -17,6 +17,16 @@
 > beats below are rephrased accordingly; the "$10 vs Quorum's $10K+/yr"
 > arithmetic still carries the argument.
 
+> ⚠️ **The specimen was removed from `/org` and must not be rebuilt from this
+> document.** "Beat 2: The Specimen" was implemented in
+> `src/routes/org/+page.svelte` as a hand-typed CA-11 packet literal, not a
+> computed one — which fails this document's own constraint below ("every
+> element is verifiable or honestly labeled as interpretive … The specimen IS
+> verifiable"). Its empirical model values (`gds`, `ald`, `cai`,
+> `temporalEntropy`, `burstVelocity`) are a paying-org-only surface and must
+> never appear on a public or marketing page. Any future specimen here renders
+> from a real computed packet or it does not ship. Absence is the correct state.
+
 ---
 
 ## The Problem

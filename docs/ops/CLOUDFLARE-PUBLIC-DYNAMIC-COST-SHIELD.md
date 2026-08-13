@@ -30,8 +30,14 @@ configuration is limited to path/bot-category matching, an IP counter, and a
   families, including `/s/:slug/og-image`;
 - waitlist, organization-invite, and passkey-authentication bootstrap routes,
   which can spend database work before a user has an application session;
+- the complete agent API family; every executable handler is independently
+  required to prove a session as its first statement and validate a shared
+  route-aware byte/shape envelope before rate, database, or provider work;
+- the complete moderation API family: both routes reject guests before body
+  parsing, bound the exact Prompt Guard window, and require global application
+  admission before Groq;
 - the anonymous campaign/event/decision-maker/debate/template/location/
-  position/submission/proof API families enumerated in the policy;
+  position/Shadow-Atlas/submission/proof API families enumerated in the policy;
 - no verified-bot exemption: recognized crawlers consume the same IP/colo
   bucket as every other caller;
 - `cf.colo.id` plus `ip.src` counting;
@@ -83,7 +89,9 @@ not global quota authority.
 | `/c/*`, `/d/*`, `/e/*`, `/n/*`, `/dm/*`, `/embed/*`, `/accountability/*` | Anonymous civic/campaign/event/network/decision-maker views execute bounded server queries. |
 | `/directory`, `/deliberation`, `/governance`, `/org` | Dynamic catalog or entry pages. Governance is authenticated at the app boundary but is included because WAF evaluates before that boundary. |
 | `/v/*`, `/verify/*`, `/unsubscribe*` | Public token/hash resolution can otherwise be multiplied into server queries. |
-| Enumerated `/api/...` prefixes | Public stats, template, position, location, submission, proof, embed, campaign, event, and decision-maker handlers can reach Convex or an external service. |
+| `/api/agents/*` | Metered model/search work is session-gated at handler statement one; the WAF remains a coarse pre-Worker fuse and the trusted verifier walks the complete executable family. |
+| `/api/moderation/*` | Both provider endpoints reject guests before parsing; authenticated Groq moderation is exact-window bounded and globally admitted. The prefix prevents future sibling routes from silently escaping the one Free-plan fuse. |
+| Enumerated `/api/...` prefixes | Public stats, template, position, Shadow Atlas, location, submission, proof, embed, campaign, event, and decision-maker handlers can reach Convex or an external service. |
 
 Deliberately excluded classes are not claimed to have this WAF protection:
 `/api/v1/*` has its own Cloudflare edge limiter plus exact Convex authority;
@@ -228,9 +236,11 @@ An entry is fresh for 60 seconds. During the next 300 seconds it may be served
 while one isolate-coalesced revalidation runs in the background. At trusted age
 360 seconds it is unusable and the request must fetch the authorized origin;
 repeated origin failure cannot create an unbounded stale response. Publication
-advances the R2 manifest without changing the release/policy cache key. A busy
-location therefore revalidates after 60 seconds, while a cached low-traffic
-location can show pre-publication HTML for at most 360 seconds. This is a
+advances the R2 manifest without changing the release/policy cache key. The
+inner manifest cache observes publication in less than 60 seconds; an outer
+fill that sees the old coordinate immediately before that observation can
+remain eligible for less than 360 seconds. The strict
+manifest-publication-to-last-old-HTML bound is therefore less than 420 seconds. This is a
 deliberate zero-secret, zero-Cloudflare-API-call launch contract: no publication
 purge hook or purge credential exists. The `public-discovery` tag remains only
 for a future optional operator optimization; the Free five-purge-per-minute
@@ -367,8 +377,10 @@ normal deployment is authorized until both are attached to the release record.
 
 Landing-page content freshness is not coupled to the WAF rule. Content changes
 advance revisioned application/R2 coordinates and the trusted landing cache
-revalidates after 60 seconds, with the 360-second absolute stale ceiling
-described above. No purge secret or API call is part of launch freshness;
+retains its 360-second absolute per-entry stale ceiling. Combined with the
+inner less-than-60-second manifest observation interval, healthy publication
+converges in less than 420 seconds as described above. No purge secret or API
+call is part of launch freshness;
 `Cache-Tag: public-discovery` is reserved for a future optional operator
 optimization. The WAF rule changes only when its reviewed path or abuse budget
 changes. Any rule update requires changing the trusted policy, tests,

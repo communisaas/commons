@@ -19,6 +19,7 @@ convex/email-read-amplification.convex.test.ts
 convex/essential-supervisors-bounded.convex.test.ts
 convex/event-live-stats.convex.test.ts
 convex/explicit-browse-bounds.convex.test.ts
+convex/intelligence-store-boundary.convex.test.ts
 convex/lib/relatedness.test.ts
 convex/lib/tag_concepts.test.ts
 convex/network-charter-projection.convex.test.ts
@@ -36,6 +37,7 @@ convex/recipient-metrics.convex.test.ts
 convex/seed-public-discovery.convex.test.ts
 convex/session-authority-projection.convex.test.ts
 convex/session-authority.convex.test.ts
+convex/shadow-atlas-registration.convex.test.ts
 convex/submissions-public-discovery-source.convex.test.ts
 convex/subscription-authority.convex.test.ts
 convex/supporter-audience.convex.test.ts
@@ -113,6 +115,7 @@ tests/unit/convex/schema-migration-bounds.test.ts
 tests/unit/convex/seed-read-bounds.test.ts
 tests/unit/convex/segment-projection-boundary.test.ts
 tests/unit/convex/session-authority-writer-contract.test.ts
+tests/unit/convex/shadow-atlas-engagement-foundation.test.ts
 tests/unit/convex/sms-delete-boundary.test.ts
 tests/unit/convex/submission-backfill-bounds.test.ts
 tests/unit/convex/submission-witness-cleanup.test.ts
@@ -156,11 +159,14 @@ tests/unit/routes/release-origin.test.ts
 tests/unit/routes/public-template-recipient-boundary.test.ts
 tests/unit/routes/root-layout-membership-budget.test.ts
 tests/unit/routes/server-endpoint-exports.test.ts
+tests/unit/routes/shadow-atlas-reconcile-registrations.test.ts
+tests/unit/routes/shadow-atlas-register.test.ts
 tests/unit/routes/template-check-slug.test.ts
 tests/unit/routes/template-search.test.ts
 tests/unit/routes/templates-api-auth.test.ts
 tests/unit/routes/user-templates-pagination.test.ts
 tests/unit/scripts/brutalist-attestation.test.ts
+tests/unit/scripts/brutalist-review-authority.test.ts
 tests/unit/scripts/cloudflare-queue-free-envelope.test.ts
 tests/unit/scripts/cloudflare-pages-exposure.test.ts
 tests/unit/scripts/cloudflare-public-dynamic-rate-limit.test.ts
@@ -168,6 +174,7 @@ tests/unit/scripts/convex-work-budget-deployment.test.ts
 tests/unit/scripts/convex-work-budget-ratchet.test.ts
 tests/unit/scripts/convex-native-usage-limits.test.ts
 tests/unit/scripts/convex-native-recurring-work.test.ts
+tests/unit/scripts/convex-paid-provider-egress.test.ts
 tests/unit/scripts/convex-contained-cron-deployments.test.ts
 tests/unit/scripts/convex-public-function-authority.test.ts
 tests/unit/scripts/cloudflare-pages-dev-origin-closure.test.ts
@@ -179,6 +186,7 @@ tests/unit/scripts/pages-containment-bindings.test.ts
 tests/unit/scripts/pages-deployment-retired.test.ts
 tests/unit/scripts/pages-durable-object-binding.test.ts
 tests/unit/scripts/pages-preview-release.test.ts
+tests/unit/scripts/paid-provider-account-posture.test.ts
 tests/unit/scripts/public-discovery-bootstrap-authority-control.test.ts
 tests/unit/scripts/public-discovery-bootstrap-boundary.test.ts
 tests/unit/scripts/public-discovery-bootstrap-completion.test.ts

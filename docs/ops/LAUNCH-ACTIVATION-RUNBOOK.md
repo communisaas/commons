@@ -115,8 +115,10 @@ created merely by merging repository source:
 - one enabled late-transform rule matches only the two hidden hosts and removes
   that header after Access; and
 - production and preview protected Environments contain distinct Access token
-  JSON and token-id proofs. No Access token, release-control secret, provider
-  credential, Convex binding, R2 binding, or Queue authority enters Pages.
+  JSON and token-id proofs. No Access token, release-control secret, or Queue
+  authority enters Pages. Provider credentials follow the separate ephemeral
+  production-only posture below; they never enter preview or persistent Pages
+  project defaults.
 
 Inventory every enabled Access application whose domain/path overlaps a hidden
 host, every attached policy and referenced Service Token, DNS, Pages custom
@@ -188,9 +190,11 @@ coalesced. The edge overwrites
 `X-Commons-Public-Discovery-Cache` with `miss`, `hit`, `stale`, or `bypass`; live
 release and recovery proof must observe `hit` with the exact trusted policy and
 tag from one bounded probe sequence. Publication advances the R2
-manifest without changing that key: busy locations revalidate after 60 seconds,
-while a cached low-traffic location may show pre-publication HTML for at most
-360 seconds. This zero-secret contract requires no purge credential or API
+manifest without changing that key. The inner manifest cache observes
+publication in less than 60 seconds; an outer fill that sees the old coordinate
+immediately before that observation can remain eligible for less than 360 more
+seconds. The strict manifest-publication-to-last-old-HTML bound is therefore
+less than 420 seconds. This zero-secret contract requires no purge credential or API
 call. `Cache-Tag: public-discovery` is only a future optional operator
 optimization; the Free five-purge-per-minute limit is not launch, freshness, or
 rollback authority. Cache hits remain trusted Worker requests and still count
@@ -201,6 +205,39 @@ live topology/denial/candidate/cache evidence are external blockers. The
 production Convex team also remains quota-disabled. Do not run normal
 activation or claim these controls live until both blocker classes have exact
 operator evidence.
+
+## Paid-provider bounded billing posture
+
+Normal production additionally requires the independently signed exact-account
+procedure in `docs/ops/PAID-PROVIDER-POSTURE.md`. Exa and Firecrawl must have
+billing and pay-as-you-go enabled; their paid-org draw is bounded by the exact
+100,000,000-microusd and 6,000-credit monthly Durable Object ceilings. Gemini
+and Groq must remain on their exact Free plans with billing and pay-as-you-go
+disabled. Credits, alerts, and delayed provider caps are not authority. The
+receipt binds that mixed account posture to the exact release SHA, associated
+merged-PR author, dispatcher, four protected credential/account fingerprints,
+current usage/reset windows, and an exhaustive empty sibling-consumer inventory.
+The signer must be an independently enrolled Ed25519 identity distinct from the
+source author and dispatcher.
+
+The Convex provider-egress allowlist is empty and the executable-source scanner
+must report zero findings. Any reintroduced Convex provider credential, SDK, or
+endpoint invalidates the receipt's empty sibling inventory and blocks release.
+The checked-in provider signer root is empty and no live receipt exists, so
+independent enrollment and exact live account evidence remain explicit launch
+blockers.
+
+The trusted release transaction re-verifies the receipt, marks and authorizes
+the Pages mutation, stages the exact four values only in the production project
+config, and immediately uploads the immutable deployment. It verifies that
+exact deployment captured the four encrypted bindings, then null-deletes them
+from both production and preview project defaults using each environment's own
+current Wrangler config hash. Bounded reconciliation permits at most one
+idempotent cleanup retry. In-process recovery, the outer workflow trap, the
+separate recovery workflow, and containment all clean and prove both
+environments absent before further deployment. A cancellation or ambiguous
+control-plane result that cannot prove absence blocks recovery and normal
+release.
 
 ## Queue Free approval receipts
 
@@ -463,11 +500,15 @@ the old authority.
 For later content changes, writers advance immutable revision coordinates and
 the producer publishes the complete new set before advancing the manifest. An
 incomplete producer leaves the prior generation eligible for no more than 45
-minutes; retries cannot restart that clock. Once authority advances, busy edge
-locations revalidate landing HTML after 60 seconds, may use it stale while
-revalidating for 300 more seconds, and reject it at 360 seconds. Quiet cached
-locations can therefore show the preceding landing page for less than six
-minutes; open tabs update on navigation or reload. A purge is optional
+minutes; retries cannot restart that clock. Because that lag clock is present
+in cached authority, prior authority expires without another R2 observation.
+For an authored change, at most 60 seconds of scheduling plus at most five
+minutes of ordinary admission, 45 minutes of prior authority, and less than 360
+seconds for the last outer fill put the conservative writer-to-last-old-HTML
+failure bound strictly below 57 minutes. Once a healthy manifest
+advances, the separate less-than-60-second inner observation plus less than 360
+seconds of outer eligibility yields a strict publication-to-last-old-HTML bound
+below 420 seconds. Open tabs update on navigation or reload. A purge is optional
 acceleration, never freshness or release authority.
 
 **Three orderings are load-bearing (hard requirements, not suggestions):**

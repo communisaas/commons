@@ -25,11 +25,28 @@
 > - **Thresholds vary by endpoint.** Default is 0.5; message/DM routes
 >   pass 0.8 (`moderatePromptOnly(content, 0.8)`). The ADR's "universal
 >   0.5" framing is oversimplified.
-> - **Fail-open behavior:** prompt-guard fails open on all errors
->   (including 429). llama-guard fails open on non-429 errors but
->   **throws on 429 rate-limit**. No HTTP 503.
+> - **Availability behavior (superseded for launch):** both Groq layers
+>   originally failed open in some cases. The launch boundary now holds content
+>   on provider errors, rate limits, missing configuration, or malformed output
+>   and surfaces an availability error.
 > - **Schema refs:** `reviewed_at`, `reviewed_by`, `consensus_approved`
 >   described as persistence fields do not exist on `convex/schema.ts`.
+
+> ⚠️ **POLICY AMENDMENT (target-conditional blocking).** The S1/S4-only
+> permissive set now applies only when a server-derived registry observation
+> establishes that the recipient address belongs to a registration-restricted
+> government namespace. S5 (Defamation), S7 (Privacy), and S10 (Hate) block for
+> every non-governmental class and when the class is unknown. A government
+> registry verdict establishes the address namespace, not that a mailbox belongs
+> to an officeholder; no client-asserted title or target label grants this policy.
+>
+> ADR-006's own rationales — "Political speech protection" and "Edgy political
+> speech allowed" — do not extend to a private employee at a hospital, university,
+> utility, or county contractor. Blocking S7 also enforces the delivery rule that
+> resolution addresses an OFFICE, never a dossier on a person. Agent-drafted
+> message bodies now cross an additional Groq safety call before encrypted
+> persistence or client delivery. That request may fall within Groq's free tier,
+> but it is a real incremental provider call and is not described as free.
 
 ---
 
@@ -154,7 +171,7 @@ Final Decision
 
 **Default threshold: 0.5 (50%)**
 - Catches obvious attacks
-- Allows borderline requests (fail-open for usability)
+- Allows borderline scores below the reviewed threshold
 
 ---
 

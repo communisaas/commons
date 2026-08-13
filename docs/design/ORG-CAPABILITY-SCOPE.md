@@ -561,7 +561,7 @@ Full acquisition page with specimen packet, capability tiles, research citations
 Full methodology page with GDS/ALD/temporal entropy lookup tables.
 
 **OG images + meta** ✅
-Campaign OG images exist at `/og/campaign/[id]` (Satori). Org, segment, and integrity OG endpoints exist at `/og/org`, `/og/org-for/[segment]`, and `/og/integrity`; the corresponding pages now set `og:type`, `og:url`, `og:image`, and Twitter image tags.
+Campaign OG images exist at `/og/campaign/[id]` (Satori). Org and segment OG endpoints exist at `/og/org` and `/og/org-for/[segment]`; the corresponding pages set `og:type`, `og:url`, `og:image`, and Twitter image tags. The integrity OG endpoint was removed because it advertised four metric acronyms with no definition anywhere in the codebase; `/about/integrity` now ships no `og:image`.
 
 **Custom from-line** 🟡
 From-name configurable per blast (sanitized, max 64 chars). From-address hardcoded `${org.slug}@commons.email`. No reply-to config.
@@ -942,7 +942,7 @@ Organized by surface for completeness — see per-domain sections above for indi
 
 1. Donation receipt posture is partial: `buildFundraisingReadiness` now lifts no-PII fundraiser/donation aggregates, baseline confirmation outcomes, provider-accepted send identifiers, receipt-policy text, shared `rows`, and `proofRows` receipt boundaries into the OS map and route-local fundraising strips / `#fundraising-receipt-proof-contract`, but legal/tax acknowledgment proof, mailbox delivery proof, and anchored receipt proof are absent
 
-Closed since the original audit: the org home packet is no longer hardcoded `null`, the first-read funnel/tier data now comes through the layout-fed Results and People slices instead of dashboard-local fabricated zeros, supported email merge fields resolve on Convex batch sends plus browser-direct singleton personalized sends, and org/segment/integrity pages now emit OG image/meta tags.
+Closed since the original audit: the org home packet is no longer hardcoded `null`, the first-read funnel/tier data now comes through the layout-fed Results and People slices instead of dashboard-local fabricated zeros, supported email merge fields resolve on Convex batch sends plus browser-direct singleton personalized sends, and OG image/meta support now covers `/og/org`, `/og/org-for/[segment]`, and `/og/campaign/[id]`.
 
 ### P1 — Blocks incumbent-platform migration (direct API motion)
 
@@ -1015,7 +1015,7 @@ T5-1 auto-debate-spawn is also closed: verified action threshold crossing schedu
 
 Closing these moves the org product from "looks finished, partially is" to "actually launchable to first paying orgs."
 
-Closed since the prior launch-blocker list: campaign clone, postal-code/country/action-context segment matching, soft-bounce suppression verification, verified manual bounce-report consensus suppression, and org/segment/integrity OG image/meta surfaces.
+Closed since the prior launch-blocker list: campaign clone, postal-code/country/action-context segment matching, soft-bounce suppression verification, verified manual bounce-report consensus suppression, and org/segment OG image/meta surfaces.
 
 ## Strategic implications
 

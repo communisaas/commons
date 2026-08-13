@@ -41,6 +41,8 @@ jobs:
       INTERNAL_API_SECRET: ci-test-internal-api-secret-padding-32b
       INTERNAL_API_SECRET_PREVIOUS: ci-test-internal-api-secret-previous-32b
       UNSUBSCRIBE_SECRET: ci-test-unsubscribe-secret-padding-32-bytes
+      RECIPIENT_SUPPRESSION_SECRET: ci-test-recipient-suppression-secret-32b
+      RECIPIENT_SUPPRESSION_SECRET_PREVIOUS: ci-test-recipient-suppression-previous-32b
       ADDRESS_RESOLUTION_TOKEN_SECRET: ci-test-address-resolution-token-32b-pad
       SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
       SESSION_CREATION_SECRET_PREVIOUS: ci-test-session-creation-secret-previous-32b-pad

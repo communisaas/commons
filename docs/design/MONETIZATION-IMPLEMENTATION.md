@@ -251,7 +251,7 @@ Two test categories:
 
 | Operation | Tier | Old | New |
 |---|---|---|---|
-| subject-line | guest | 5/hr | **3/hr** |
+| subject-line | guest | 5/hr | **0 (blocked)** |
 | subject-line | auth | 15/hr | **5/hr** |
 | subject-line | verified | 30/hr | **5/hr** |
 | decision-makers | auth | 3/hr | **2/hr** |
@@ -329,11 +329,11 @@ After all implementation, verify:
 
 ## Known Accepted Risks
 
-1. **In-memory rate limiter (per-isolate)**: Rate limits are per CF isolate, not globally enforced. At current scale (10-50 orgs), COGS exposure is tolerable. Migration to Cloudflare KV is a future enhancement.
+1. **Generic route limiter remains deployment-dependent**: Non-provider route limits still require Redis when exact cross-isolate enforcement matters. Paid-provider work no longer relies on this limiter; one SQLite Durable Object serializes its actor, operation, public, and hard platform ceilings.
 
 2. **`process.env` in `plans.ts` getters**: Stripe Price IDs use `process.env` which is empty on CF Workers. The `/api/billing/checkout` route MUST run in Node mode, never edge. Pre-existing bug, documented in MEMORY.md.
 
-3. **No global COGS circuit breaker**: A viral event could drive 100K simultaneous users. Even at 15 ops/day per user, total COGS could spike. Future: add platform-wide daily budget.
+3. **Global COGS circuit breaker implemented**: Production paid-provider entry points fail closed through the shared weighted Durable Object budget. The remaining operational risk is live deployment/configuration proof, not an absent source boundary.
 
 4. **No verified-action metering enforcement**: `maxVerifiedActions` is defined but not enforced at submission time. The primary billing unit has zero enforcement. Org schema lacks the field. This is the largest future revenue-protection task — tracked separately from this graph.
 

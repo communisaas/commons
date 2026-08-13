@@ -8,3 +8,9 @@
 # Mandatory review on these paths is the practical mitigation until
 # Cloudflare ships per-binding read-only scoping.
 workers/atlas/         @ejmockler
+
+# FND-60 remains fail-closed until an independent organization team exists.
+# Enrollment must append every exact trust-root rule required by
+# config/brutalist-review-authority.json as the final active CODEOWNERS lines,
+# all owned solely by that team. Do not substitute @ejmockler, the source
+# author, the offline signer, or the authoritative GitHub App owner.

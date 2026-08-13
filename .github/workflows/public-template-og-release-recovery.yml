@@ -163,6 +163,21 @@ jobs:
             echo "BOOTSTRAP_RECOVERY_JOURNAL=$RUNNER_TEMP/public-discovery-bootstrap-production.json"
           } >> "$GITHUB_ENV"
 
+      # A hard-cancelled production runner may have died after staging Pages
+      # provider defaults but before its EXIT/always cleanup. Reconcile those
+      # idempotent null-deletes before hydrating or executing any recovery that
+      # can forward-deploy containment.
+      - name: Reconcile provider project defaults before production recovery
+        id: reconcile_provider_project_defaults
+        if: matrix.realm == 'production'
+        timeout-minutes: 3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
+
       - name: Hydrate exact journal and kit from private append-only R2
         id: hydrate
         timeout-minutes: 5
@@ -280,7 +295,10 @@ jobs:
 
       - name: Recover only the exact live transaction
         id: recover_core
-        if: steps.hydrate.outputs.state == 'present'
+        if: >-
+          steps.hydrate.outputs.state == 'present' &&
+          (matrix.realm != 'production' ||
+           steps.reconcile_provider_project_defaults.outcome == 'success')
         timeout-minutes: 15
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
@@ -377,3 +395,13 @@ jobs:
       - name: Record absent schema-v4 activation custody
         if: steps.hydrate.outputs.state == 'absent'
         run: echo 'No schema-v4 Queue/Pages activation mutation could have preceded its absent baseline; bootstrap custody was evaluated independently.'
+
+      - name: Reconcile provider project defaults after production recovery
+        if: always() && matrix.realm == 'production'
+        timeout-minutes: 3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          node scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node scripts/materialize-paid-provider-pages-secrets.mjs assert-absent

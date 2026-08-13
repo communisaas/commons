@@ -9,8 +9,8 @@ Multi-layer rate limiting for Commons, covering API abuse prevention and differe
 - **API layer**: Sliding window rate limits per route, integrated in `hooks.server.ts`
 - **Analytics layer**: DP contribution limits (in-memory or Postgres-backed)
 - **External API layer**: Circuit breakers with exponential backoff (Exa, Firecrawl)
-- **Agent layer**: Per-session and per-tier LLM quotas
-- **Backend**: In-memory per-isolate by default; Redis supported via `REDIS_URL` for distributed rate limiting
+- **Paid-provider layer**: Per-actor quotas plus one atomic account-wide Cloudflare Durable Object budget
+- **Generic API backend**: In-memory in development; Redis is supported for distributed non-provider route limits
 - **Privacy note**: For differential privacy, exact rate limiting is NOT required
 
 ---
@@ -77,19 +77,41 @@ Rate limiting runs after auth so user-keyed limits can use the authenticated use
 
 **Implementation**: `src/lib/server/llm-cost-protection.ts`
 
-Per-user quotas for AI agent operations, tiered by trust level.
+Paid AI work has two layers: per-actor quotas tiered by trust and one
+account-wide weighted budget serialized by the SQLite-backed
+`commons-convex-work-budget` Durable Object. Missing bindings, protocol drift,
+timeouts, malformed state, unknown operations, and preview Pages all fail closed
+before provider work.
 
-**Canonical source:** `src/lib/server/llm-cost-protection.ts` (`QUOTAS` map, ~line 52). Values below verified against that file on 2026-04-23.
+**Canonical source:** `config/paid-provider-budget-policy.json`, validated by
+`src/lib/server/paid-provider-budget-policy.ts`.
 
 | Operation | Guest | Authenticated | Verified |
 |---|---|---|---|
-| Subject line | 3/hr | 5/hr | 5/hr |
+| Subject line | 0 (blocked) | 5/hr | 5/hr |
 | Decision makers | 0 (blocked) | 2/hr | 3/hr |
 | Message generation | 0 (blocked) | 3/hr | 5/hr |
 | Embeddings | 0 (blocked) | 20/hr | 20/hr |
-| Daily global (circuit breaker) | 3/day | 10/day | 15/day |
+| Template search | 0 (blocked) | 20/hr | 30/hr |
+| Template authoring | 0 (blocked) | 3/hr | 5/hr |
+| Moderation check | 0 (blocked) | 5/hr | 5/hr |
+| Moderation personalization | 0 (blocked) | 10/hr | 15/hr |
+| Actor daily reservations | 0/day | 10/day | 15/day |
 
 Trust tiers: guest (no session), authenticated (logged in), verified (trust_tier ≥ 2, address attested).
+
+The platform ceiling is 1,000 weighted units/day and 2,400/UTC month across
+production and preview. Ordinary users share operation-specific pools and a
+750-unit daily / 1,800-unit monthly public tranche, so a decision-maker flood
+cannot starve every other feature. The remaining 250 daily / 600 monthly
+units are available only to an exact server-derived operator allowlist and stay
+inside—not above—the hard platform cap. Payment never increases these limits.
+
+Every public admission performs at most eight SQLite row reads and writes. At
+the 1,000-admission worst case that is 8,000 writes/day; combined with the
+Pages-to-Convex coordinator's 81,920-row ceiling, it remains below Cloudflare's
+100,000 free SQLite-row writes/day. The same stable object name is shared by
+both realms, so a deploy, preview hostname, or new isolate cannot mint capacity.
 
 > **Note:** Earlier revisions of this doc published a 10–30× higher quota table. The numbers above are the actual enforced limits. If you see older documents citing "15/hr" or "30/day verified" for any of these operations, treat those as stale.
 
@@ -289,9 +311,9 @@ For privacy purposes, approximate rate limiting is actually fine. Document that 
 ### Migration Path
 
 ### MVP (Now)
-1. Use in-memory rate limiting
-2. Single Cloudflare Pages instance
-3. Circuit breaker ($5/day) as ultimate protection
+1. Use the SQLite Durable Object as the paid-provider authority
+2. Keep in-memory limits only for local development and approximate analytics
+3. Fail provider work closed whenever the coordinator is unavailable
 
 ### Growth (When Needed)
 1. Add `RATE_LIMIT_USE_DB=true` to environment

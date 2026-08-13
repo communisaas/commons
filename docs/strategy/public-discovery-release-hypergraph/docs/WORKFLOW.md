@@ -7,9 +7,10 @@ traffic.
 
 ## Foundations: close every launch finding
 
-`FND-10`, `FND-15`, and `FND-20` through `FND-50` may proceed in parallel,
-but all converge on `FND-60`. Do not promote a release SHA while any one of
-these proofs is absent:
+Every checked-in source foundation from `FND-10` through `FND-55` may proceed
+according to its dependency edges, but all converge on `FND-60` and are also
+rechecked at `PD-10`. Do not promote a release SHA while any one of these proofs
+is absent:
 
 - **Data plane:** homepage selection reads compact, transactionally maintained
   public-card source rows through exact indexed limits. Relation preparation
@@ -75,6 +76,30 @@ these proofs is absent:
   iterate real database continuation pages. No page rebuilds a 10,000-row
   encrypted window or performs an unbounded supporter-by-tag join; role-based
   PII projection and honest filtered continuation remain invariant.
+- **Submission authority plane:** the direct `submissions:create` Convex action
+  requires the internal server secret before auth, database, scheduler, or
+  other context work. Its sole SvelteKit caller authenticates, streaming-bounds
+  the complete body at 256 KiB, validates exact shape/cardinality, and performs
+  one maximum-class server action. Browser-direct calls cannot bypass the HTTP
+  envelope merely because the Convex export remains public.
+- **Bounded bulk-work plane:** segment count, tag apply/remove, and decrypted
+  export are secret-first and inspect at most four 100-row/512-KiB pages per
+  invocation, return honest partial state, and never double-scan an export.
+  Raw export and supporter import mutations are internal-only. Import
+  encryption admits at most 100 bounded rows and proves editor role before key
+  work. Legislation rescoring deduplicates at most ten ids after secret and
+  editor gates, while the HTTP caller adds one per-user/org/hour
+  defense-in-depth bucket. Every externally reachable operation is
+  maximum-class shared-budget work; that shared authority, not an isolate-local
+  request bucket, is the global cost ceiling.
+- **Position-delivery plane:** both authenticated routes require a verified
+  identity before reading a body. Batch registration caps the request at 64 KiB
+  and 20 exact-shape recipients and canonicalizes duplicates; mailto confirmation
+  accepts only a 1-KiB template-id envelope. Both secret-first mutations use one
+  indexed append primitive, collision-proof system mailto recipient identity,
+  durable five-per-minute identity bucket, and shared 20-recipient lifetime cap.
+  The `(registrationId, recipientKey)` index plus OCC makes cross-writer retries
+  and races idempotent, and admission failure rolls back a newly created stance.
 - **Coalition aggregate plane:** authorized network detail, proof pressure,
   reports, and v1 statistics read write-maintained per-org inputs plus one
   revisioned network aggregate, rather than every member's supporter, action,
@@ -220,9 +245,11 @@ these proofs is absent:
   sole raw put serializes the newest submitted cacheable pending generation, and
   the 1 MiB L1 serves 60 seconds fresh plus 300 seconds stale-while-revalidate
   with a hard origin-start-anchored 360-second ceiling. Publication changes the
-  R2 manifest but not this key: busy colos
-  revalidate after 60 seconds and cached low-traffic colos can show old content
-  for at most 360 seconds, without a purge secret or API call.
+  R2 manifest but not this key. The inner manifest cache observes that change
+  in less than 60 seconds; an outer origin fill immediately before that
+  observation can then remain eligible for less than 360 seconds. Therefore the
+  strict manifest-publication-to-last-old-HTML bound is less than 420 seconds,
+  without a purge secret or API call.
   `Cache-Tag: public-discovery` is future optional acceleration only. Cache is
   per location and every hit still consumes the shared Workers inbound
   allowance. Ordering is not linearizable across isolates; the timestamp bounds
@@ -254,7 +281,12 @@ these proofs is absent:
   same directory is re-digested and uploaded to production. A matching Git SHA or a
   separately built staging artifact is not production-artifact proof. Main
   uploads receive metadata/artifact proof only and are never production runtime
-  acceptance. Normal Queue/Pages expansion is split into exact-SHA
+  acceptance. The committed Pages config gives preview exactly its public
+  build-safe vars and no KV, R2, Queue, Durable Object, session, provider, AI,
+  D1, or service capability. The trusted transaction materializer rejects any
+  preview table except `[env.preview.vars]` before writing the release
+  coordinate; preview discovery authority remains in separately isolated
+  Workers. Normal Queue/Pages expansion is split into exact-SHA
   `activate-preview` and `activate-production` receipts over that same artifact
   id and digest. Production observations occur only after the staging runtime
   handoff. Each phase journals exact prior state and attempted mutations before
@@ -272,17 +304,124 @@ these proofs is absent:
   containment proves captured metadata plus deterministic `503` maintenance.
   Public authority is proved without rewinding the Durable Object ledger;
   optional purge failure is only a warning.
-  `FND-35` proves these normal endpoint and deployment mechanisms plus the
+  Before a protected Environment exposes credentials, immutable T compares Git
+  object identity for every SvelteKit route, both hooks, Svelte/Vite config,
+  and every transitive helper/component/provider action that can execute on the
+  server, while proving alternate hook, instrumentation, and configuration
+  entrypoints remain absent. Adding a non-API `+server`, `+page.server`,
+  `+layout.server`, universal route, or imported SSR provider path cannot evade
+  this closure. `FND-35` proves these normal endpoint and deployment mechanisms plus the
   recorded 2026-07-19 exposure cleanup. `FND-35C` separately proves the
   trusted-generated, binding-free, zero-dependency containment bootstrap; its
   readiness does not imply that normal application readiness is safe. The live
   replacement artifact, exact-SHA custom origin, and post-upload inventory are
   downstream operational evidence in `PD-00`, `PD-50`, and `PD-70`; requiring
   them before `FND-60` would create a deployment-before-deployment cycle.
-- **Cost-abuse plane:** Gemini-backed search is callable only through the
-  authenticated server boundary carrying the internal secret and a stable
-  actor identifier. Query variation shares one atomic bucket row per
-  identity/window. Essential, bounded cleanup removes expired buckets globally.
+- **Cost-abuse plane:** every launch-authorized Gemini, Groq, Exa, Firecrawl,
+  embedding, authoring, delegation, backfill, and moderation entrypoint reaches
+  one fixed cross-production/preview SQLite Durable Object before its first
+  provider call. The exact nine-operation policy has no default; template
+  search is intentionally absent because it performs no provider work. One synchronous
+  transaction charges actor-operation-hour and actor-day, operation day/month,
+  shared-public day/month, and hard-platform day/month pools. The global limits
+  are 1,000 weighted units/day and 2,400 per UTC month; ordinary authenticated
+  traffic also shares 750/day and 1,800/month plus smaller operation pools. A
+  server-derived exact operator allowlist skips only those public pools: actor
+  ceilings and the global rows remain binding, preserving 250 daily and 600
+  monthly units inside the hard ceiling. That reserve covers exactly one
+  reviewed 224-unit launch demonstration. Provider admission uses at most eight
+  SQLite reads and writes, so the 8,000 maximum provider rows plus the 81,920
+  Pages-to-Convex rows remain below Cloudflare's 100,000 daily write allowance;
+  missing bindings, unknown work, malformed identity/replies, timeout, protocol
+  or cap drift, corrupt state, and backward time fail closed.
+
+  Provider-call arithmetic is retry-aware and per-provider. Decision-maker work
+  has a 150-call achievable-total ceiling across every cache split plus
+  element-wise ceilings of 72 Exa searches, 24 text-only Exa content pages, 24
+  Firecrawl attempts, 13 Gemini calls, one Groq call, and 18 MX lookups; those
+  element-wise maxima intentionally sum to 152 because they do not all occur in
+  one cache split. Search is globally capped at Exa's base ten-result price tier,
+  and the contents fallback requests text only. Message generation is bounded
+  to 9 Exa searches, 12 text-only Exa pages, 12 Firecrawl attempts, two Gemini
+  calls, and three Groq calls. At 2,400 units the worst single-operation mix is
+  $8.448 of Exa's current $10 monthly credit and 576 of Firecrawl's 1,000 monthly
+  Free credits. This UTC-month arithmetic is conservative capacity planning,
+  not billing authority. The source gate now requires a canonical
+  `commons-paid-provider-posture-v1` receipt signed by exactly one independently
+  enrolled Ed25519 key. It binds S, the four exact protected credential and
+  opaque account fingerprints, production Pages secret coordinates, current
+  provider/reset windows, exhaustive empty sibling inventories, and the exact
+  mixed billing posture: Exa and Firecrawl PAYG enabled under Commons'
+  100,000,000-microusd and 6,000-credit monthly technical ceilings, with Gemini
+  and Groq on Free plans with billing and PAYG disabled. The signer is
+  pinned by principal, GitHub user id, and key fingerprint, differs from the
+  receipt operator and launch source author, and the workflow derives the exact
+  associated merged-PR author's numeric GitHub id and binds both author and
+  dispatcher identities to the receipt. The checked-in enrollment and
+  allowed-signers root are deliberately empty, so normal launch remains closed.
+
+  The earlier all-provider Free/no-PAYG posture and Exa 8,448,000-microusd /
+  Firecrawl 576-credit receipt thresholds are superseded. The admitting Durable
+  Object's 100,000,000-microusd Exa and 6,000-credit Firecrawl monthly ceilings
+  are the technical spend authority; provider usage remains an observation-time
+  signal that can lag. The verifier explicitly treats console/account facts and
+  Cloudflare secret-value custody as operator assertions countersigned by the
+  independent signer; it does not fabricate provider billing API capture or
+  encrypted-value readback. The canonical operator procedure is
+  `docs/ops/PAID-PROVIDER-POSTURE.md`.
+
+  Production preflight verifies the receipt against the exact GitHub protected
+  values, and activation repeats that proof with three hours of remaining
+  validity. Inside the trusted transaction, after the Pages attempt marker and
+  mutation authorization, it PATCHes only `communique-site` production bindings
+  using those in-memory values and immediately performs the immutable upload.
+  All `PROVIDER_POSTURE_*` inputs are scrubbed from the default child-process
+  environment. Five bounded Cloudflare calls prove preview and non-provider
+  config stability, one unchanged immutable canonical deployment, and the four
+  production `secret_text` names; the secret write is never ambiguously retried.
+  After the Pages transaction, the exact created deployment must expose all four
+  encrypted bindings. The transaction then null-deletes provider project
+  defaults from production and preview with each environment's own current
+  Wrangler config hash, reconciles ambiguity with at most one idempotent retry,
+  and proves all non-provider config plus the immutable deployment unchanged.
+  In-process recovery, the outer workflow trap, the separate recovery workflow,
+  and containment all clean and re-prove absence before further deployment.
+  Cloudflare documents that secrets set before a deployment are captured by the
+  deployment; the source proof still does not claim that Cloudflare can return
+  their values. See
+  `docs/ops/PAID-PROVIDER-POSTURE.md`.
+
+  Agent subject/decision-maker/message routes, template authoring, direct
+  embeddings, delegation parsing, embedding backfill, and moderation
+  check/personalization authenticate and parse bounded exact shapes before one
+  admission immediately before provider work. Template authoring uses one OCC
+  mutation to combine exact own-content/slug dedupe, bounded individual and
+  organization allowances, and an expiring content/slug provider-work lease;
+  the final creation consumes that exact lease and repeats the authoritative
+  invariants. Its one admission covers moderation and deferred embedding.
+  Invalid, oversized, unauthenticated, duplicate,
+  exhausted, replayed, or denied requests perform zero provider calls.
+  Recoverable message `startOrGet` is the caller-owned concurrency gate before
+  readiness, admission, moderation, trace, search, or generation: running and
+  completed jobs replay without another provider reservation, one racing
+  request creates work, and a newly claimed failure is terminally persisted.
+  Fresh and cached source ground follows the same path. At most six
+  URL-validated source records are structurally quoted as untrusted JSON,
+  delimiter-safe, and deterministically shortened or tail-shed within Prompt
+  Guard's complete 2,000-character window. Prompt Guard classifies byte-for-byte
+  the string later shown to Gemini; rejection stops the writer. The evaluator
+  separately quotes fetched page data and accepts only trusted candidate indexes
+  from model output, never model-minted source identity.
+
+  Template search is provider-free and keyword-only. The authenticated server
+  boundary passes an internal secret and stable actor identifier to the Convex
+  action; direct callers fail before readiness or rate-limit I/O, query
+  variation shares one durable 30-per-minute identity bucket, and the internal
+  query reads at most 50 candidates from the generation-scoped compact title
+  index before returning at most 20. The recursive Convex egress ratchet scans
+  all executable modules, permits zero provider capabilities, and tombstones
+  the retired Gemini search and embedding-backfill symbols. A provider or
+  credential reappearing anywhere under `convex/` fails CI.
   Exact anonymous template-detail and OG paths are rejected by an application
   shield before Convex or Sharp, then use bounded schema/backend/origin/slug-keyed
   positive and negative caches with a hard 60-second TTL plus per-isolate
@@ -296,6 +435,24 @@ these proofs is absent:
   enforcement delay and multiple IP/colo buckets mean it is explicitly not a
   global quota. The separate zero-bypass account redirect prevents direct
   Pages-host invocation; the app host hook only prevents data I/O during drift.
+- **Shadow Atlas replay plane:** engagement state is durable per user and
+  normalized identity. A fresh 60-second snapshot performs zero upstream work;
+  one 45-second lease owner refreshes while concurrent followers coalesce.
+  Metrics lookup always precedes a first registration attempt, and a durable
+  `write_reserved` transition is committed before the sole POST so an ambiguous
+  outcome cannot be automatically resent. Registered/leaf state persists
+  before path lookup. Failures retain the last safe snapshot or tier-zero
+  result behind a 30-second cooldown. Reopening an ambiguous write is an
+  internal-only exact-CAS repair after 15 minutes with an expired lease, no
+  leaf/snapshot, bounded operator evidence, and exact user/identity/reservation
+  time/generation; it increments generation once and performs no external I/O.
+  Identity, response fields, bytes, and
+  timeouts are bounded: the route accepts 1 KiB, upstream JSON at most 32 KiB,
+  and every call has an eight-second deadline. Every public state mutation is
+  secret-first and session-owner-bound. The duplicate submissions-side
+  registration path and old engagement-identity query are retired; both app
+  plus Cloudflare inventories rate-shield the route
+  without pretending those outer buckets replace durable replay authority.
 - **Queue artifact and operation plane:** anonymous detail and OG reads resolve
   manifest → exact 250-entry inventory → revision-qualified R2 JSON/PNG without
   Convex, rendering, LIST, write, or fallback. The producer publishes JSON first,
@@ -359,9 +516,10 @@ these proofs is absent:
   Durable Object cannot protect `*.convex.cloud`. The generated AST manifest
   classifies every public query, mutation, and action exactly once as
   secret-first, authenticated/role-first, HMAC-first, pre-I/O retired, or
-  explicitly I/O-free. The current 457-export surface contains 172
-  server-secret gates, 254 authenticated/role gates, 5 HMAC gates, and 26
-  tombstones; `servicePing` is internal. All 192 server-secret callers prove the
+  explicitly I/O-free. The current 461-export surface contains 186
+  server-secret gates, 244 authenticated/role gates, 5 HMAC gates, 26
+  tombstones, and zero explicitly I/O-free exports; `servicePing` is internal.
+  All 206 server-secret callers prove the
   canonical server secret source. The 12 intentional browser-direct operations
   are explicitly enumerated, identity/role-gated, and cardinality-bounded; all
   other browser/server dynamic references, factory aliases/re-exports, stale
@@ -372,10 +530,18 @@ these proofs is absent:
   an exact endorsement counter is lazily repaired and drained by a bounded
   migration rather than inferred from the six-row avatar sample.
 
-The checked graph records every source foundation except `FND-60` as `ready`.
-Here, `ready` means the bounded mechanism, workflow choreography, recovery path,
-and executable source proof are implemented. It does not mean the release or an
-external provider state is ready. The live Convex cron/work inventory,
+The checked graph keeps `FND-52` and `FND-53` `in_progress`. Segment apply,
+remove, count, and export restart from an undefined cursor on every invocation,
+expose no continuation, and therefore cannot reach a stable match beyond row
+400. Legislation rescoring authenticates one organization but does not yet bind
+vector filtering, hydration, and relevance upsert to that same organization.
+The direct-delivery writer also lacks bounded request parsing, application and
+Cloudflare admission, and a durable pseudonym/template lifetime ceiling. Every
+other source foundation except `FND-60` is `ready`. A residual node may move to
+`ready` only after its cited implementation and deterministic tests exist;
+topology prose is not proof. Here, `ready` means the bounded mechanism, workflow
+choreography, recovery path, and executable source proof are implemented. It
+does not mean the release or an external provider state is ready. The live Convex cron/work inventory,
 reactivation and quota isolation, WAF and origin closure, Queue signer/receipts,
 Access applications and tokens, deployed Queue/Worker/Pages state, denial/cache
 timing, and rollback execution remain `PD-05`, `PD-00`, and `PD-20` through
@@ -393,7 +559,8 @@ by the tree it approves. A protected verifier at immutable gate commit T reads
 S only as Git objects, verifies the agy, Claude, and Codex evidence in detached
 signed proof commit A, and binds A to exactly T, S, repository id, repository
 slug, reviewer runtimes, and allowed signers. CI may validate source graph
-structure and implemented foundations, but only this T/S/A proof can authorize
+structure and, only after the open residuals close, implemented foundations,
+but only this T/S/A proof can authorize
 PD-05 or production publication.
 
 A deliberately unavailable feature is acceptable only when its hold is
@@ -763,8 +930,11 @@ and origin flight, quarantines a timed-out raw put until settlement, retains onl
 the newest submitted cacheable pending generation, serves 60 seconds fresh plus
 300 seconds stale, and rejects the entry at 360 seconds from origin-flight
 start. Publication advances the R2 manifest without changing the key:
-busy colos revalidate after 60 seconds and cached low-traffic colos can show old
-HTML for at most 360 seconds. There is no purge hook, credential, or API call.
+the inner manifest cache observes publication in less than 60 seconds, and an
+outer fill that sees the old coordinate immediately before that observation is
+eligible for less than 360 more seconds. The strict
+manifest-publication-to-last-old-HTML bound is therefore less than 420 seconds.
+There is no purge hook, credential, or API call.
 The `public-discovery` tag is future optional operator acceleration only. The
 360-second timestamp is a distributed replay bound, not a claim that Cache API
 writes are monotonic across isolates.
@@ -806,7 +976,9 @@ Materialization generation (`revision:updatedAt`) changes schedule one durably
 coalesced producer push; a gate `202` retains and retries that token. The first
 request after a location's one-minute revalidation interval
 reads the exact global R2 state; it never performs a request-side Convex manifest
-refresh. The 60/300/360 cache clock is the correctness boundary. Confirm the homepage and graph are populated, the API advertises its
+refresh. The 60/300/360 clock is the outer-entry correctness boundary; the
+separate inner observation interval makes healthy published-generation
+convergence strictly less than 420 seconds. Confirm the homepage and graph are populated, the API advertises its
 one-minute browser revalidation policy, `PUBLIC_DISCOVERY_R2` and the external
 SQLite gate namespace are bound, and
 public-query database I/O stays flat as requests arrive. Record two consecutive
@@ -859,9 +1031,15 @@ Never delete or rewind the pending, active, or committed Durable Object state.
 
 Keep the snapshot-safe Convex producer in place. If snapshot content is wrong,
 repair the source/code, rerun the atomic rebuild, and warm the new revision.
-Normal landing content converges after 60 seconds when healthy and has a
-360-second stale failure ceiling without a purge secret or API call. An urgent
-explicit namespace cutover may also bump
+After a healthy manifest publication, the last old landing HTML becomes
+ineligible in less than 420 seconds: less than 60 seconds for inner manifest
+observation plus less than 360 seconds for an outer fill started immediately
+before that observation. An incomplete generation retains prior authority for
+at most 45 minutes from its first trusted acquisition; for an authored change,
+the 60-second scheduler, up-to-five-minute admission wait, and less than 360
+seconds of outer eligibility put the conservative writer-to-last-old-HTML
+failure bound strictly below 57 minutes. Neither path requires a purge secret or API
+call. An urgent explicit namespace cutover may also bump
 `CACHE_SCHEMA_VERSION` before redeploying Pages.
 
 Never roll Convex back to the pre-fix functions that scan all published

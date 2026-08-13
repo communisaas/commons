@@ -4,7 +4,7 @@
     {
       "id": "C-coordination-integrity",
       "carryover_clusters": ["C-coordination-integrity"],
-      "remaining_uncertainty": "Reputation cron promotion + atlasVersion drift surfacing both claim 'realized' after v2. Verify: does the cron actually promote a seeded user? Does packet.driftCount return non-null when atlasVersion varies?"
+      "remaining_uncertainty": "Transactional reputation promotion + atlasVersion drift surfacing both claim 'realized' after v2. Verify: does an exact threshold-crossing action stamp the promoted tier? Does packet.driftCount return non-null when atlasVersion varies?"
     },
     {
       "id": "C-composability",

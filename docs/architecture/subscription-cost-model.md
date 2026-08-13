@@ -306,12 +306,12 @@ The previous model had message generation at $0.004. **The real cost is $0.055 â
 | Service | Plan | Monthly cost | Notes |
 |---|---|---|---|
 | Cloudflare Workers | Paid | $5 | 10M requests included |
-| Firecrawl | Hobby | $16 | 3,000 pages/mo |
+| Firecrawl | Free, billing disabled | $0 | Launch remains within the signed Free allowance |
 | Convex (managed) | â€” | included | Primary data + vector/search indexes |
 | Groq | Free tier | $0 | 432K req/mo covers moderation |
-| Exa | Pay-as-you-go | $0 base | 1K free searches/mo, then $7/1K |
-| Gemini API | Pay-as-you-go | $0 base | 5K free grounded queries/mo |
-| **Total baseline** | | **$21** | |
+| Exa | Free, billing/PAYG disabled | $0 | Launch stops at Free exhaustion |
+| Gemini API | Free, billing/PAYG disabled | $0 | Launch stops at Free exhaustion |
+| **Total baseline** | | **$5** | |
 
 ---
 

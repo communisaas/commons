@@ -20,7 +20,7 @@ Each wave gate is a hard barrier — predecessor wave's exit criteria MUST hold 
 **Gate**: W-0 exit criteria met
 **Exit criteria**:
 - [ ] First org runs first verified campaign through the platform (end-to-end)
-- [ ] NEW-E-1 userId thread-through (reputation cron has real data)
+- [ ] NEW-E-1 userId thread-through (transactional reputation writer has canonical identity)
 - [ ] NEW-E-2 atlasVersion thread-through (driftCount/driftPct non-null)
 - [ ] NEW-E-3 VerificationPacket.debate populated when debateId set
 - [ ] NEW-E-4 brandingAccent renders in CoalitionReport + report email

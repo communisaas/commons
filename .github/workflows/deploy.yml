@@ -70,6 +70,7 @@ jobs:
       deploy_mode: ${{ steps.resolve-sha.outputs.mode }}
       attestation_verified: ${{ steps.resolve-sha.outputs.attestation_verified }}
       attestation_proof_sha: ${{ steps.resolve-sha.outputs.attestation_proof_sha }}
+      source_author_github_user_id: ${{ steps.resolve-sha.outputs.source_author_github_user_id }}
       trusted_gate_sha: ${{ steps.resolve-sha.outputs.trusted_gate_sha }}
     steps:
       # Candidate/source objects remain inert. Verification code and the
@@ -125,8 +126,9 @@ jobs:
         timeout-minutes: 2
         env:
           # GITHUB_TOKEN cannot read branch protection. This is a separate,
-          # single-repository fine-grained token with Actions:read and
-          # Administration:read only; it cannot mutate repository state.
+          # fine-grained read-only token with repository Actions, Checks,
+          # Metadata, and Administration read plus organization Members read.
+          # It cannot mutate repository or organization state.
           RELEASE_AUTHORITY_TOKEN: ${{ secrets.PROTECTED_GITHUB_RELEASE_AUTHORITY_READ_TOKEN }}
           API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
@@ -194,6 +196,8 @@ jobs:
         id: resolve-sha
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_AUTHORITY_TOKEN: ${{ secrets.PROTECTED_GITHUB_RELEASE_AUTHORITY_READ_TOKEN }}
+          API_URL: ${{ github.api_url }}
           REPOSITORY: ${{ github.repository }}
           REPOSITORY_ID: ${{ github.repository_id }}
           SERVER_URL: ${{ github.server_url }}
@@ -283,9 +287,10 @@ jobs:
             fi
           fi
 
-          # Source S may supply application code, but it may not replace any
-          # release authority pinned by trusted gate T. Compare Git objects
-          # directly so candidate files are never executed to prove themselves.
+          # Source S may select the exact reviewed release commit, but every
+          # executable application/backend/build input must match trusted gate T.
+          # Compare Git objects directly so candidate files are never executed to
+          # prove their own transitive closure.
           node gate/scripts/verify-release-gate-blobs.mjs \
             --repository-git-dir "$CANDIDATE_GIT_DIR" \
             --trusted-sha "$TRUSTED_GATE_SHA" \
@@ -304,6 +309,7 @@ jobs:
 
           attestation_verified=false
           attestation_proof_sha=''
+          source_author_github_user_id=''
           if [ "$DEPLOY_BRANCH" = "production" ]; then
             attestation_ref="refs/heads/brutalist-attestations/$verified_sha"
             git_with_auth fetch --no-tags origin \
@@ -318,6 +324,108 @@ jobs:
             BRUTALIST_PROOF_COMMIT_SHA="$attestation_proof_sha" \
             BRUTALIST_REPOSITORY_GIT_DIR="$CANDIDATE_GIT_DIR" \
               node gate/scripts/verify-brutalist-attestation.mjs
+
+            # The signed proof authenticates bytes, but an ordinary repository
+            # workflow cannot authorize itself: every Actions workflow shares
+            # App id 15368. Require an independently owned App check plus live
+            # CODEOWNER, signer-separation, and proof-ref protection evidence.
+            if [ -z "${RELEASE_AUTHORITY_TOKEN:-}" ]; then
+              echo "::error::PROTECTED_GITHUB_RELEASE_AUTHORITY_READ_TOKEN is required."
+              exit 1
+            fi
+            authority_config="gate/config/brutalist-review-authority.json"
+            if ! jq -e '.enrollmentState == "enrolled"' "$authority_config" >/dev/null; then
+              echo "::error::Independent Brutalist App, CODEOWNER team, and signer enrollment is pending."
+              exit 1
+            fi
+            authority_app_id=$(jq -er '.authoritativeCheck.appId | select(type == "number" and . > 0)' "$authority_config")
+            authority_app_slug=$(jq -er '.authoritativeCheck.appSlug | select(type == "string" and length > 0)' "$authority_config")
+            authority_check_name=$(jq -er '.authoritativeCheck.name | select(type == "string" and length > 0)' "$authority_config")
+            codeowner_team_slug=$(jq -er '.codeOwnerTeam.slug | select(type == "string" and length > 0)' "$authority_config")
+            if ! [[ "$authority_app_slug" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]] || \
+              ! [[ "$codeowner_team_slug" =~ ^[a-z0-9]([a-z0-9-]{0,98}[a-z0-9])?$ ]]; then
+              echo "::error::Independent Brutalist App/team enrollment contains an invalid slug."
+              exit 1
+            fi
+            authority_headers=(
+              -H "Accept: application/vnd.github+json"
+              -H "Authorization: Bearer ${RELEASE_AUTHORITY_TOKEN}"
+              -H "X-GitHub-Api-Version: 2022-11-28"
+            )
+            associated_pulls_file="$RUNNER_TEMP/exact-source-associated-pulls.json"
+            curl -fsS --max-filesize 1048576 "${authority_headers[@]}" \
+              "$API_URL/repos/$REPOSITORY/commits/$verified_sha/pulls?per_page=100&page=1" \
+              > "$associated_pulls_file"
+            source_author_github_user_id=$(jq -er \
+              --arg sha "$verified_sha" \
+              --arg repository "$REPOSITORY" \
+              --slurpfile authority "gate/config/paid-provider-account-authority.json" \
+              'select(type == "array" and length < 100) |
+               [.[] | select(
+                 .state == "closed" and (.merged_at | type == "string") and
+                 .merge_commit_sha == $sha and .base.ref == "main" and
+                 .base.repo.full_name == $repository and
+                 (.user.id | type == "number"))] |
+               select(length == 1) | .[0].user.id as $author |
+               select($authority[0].sourceAuthorGithubUserIds | index($author)) |
+               $author' "$associated_pulls_file")
+            [[ "$source_author_github_user_id" =~ ^[1-9][0-9]{0,15}$ ]]
+            repository_owner="${REPOSITORY%%/*}"
+            proof_branch="brutalist-attestations/$verified_sha"
+            encoded_proof_branch=$(jq -rn --arg value "$proof_branch" '$value | @uri')
+            encoded_check_name=$(jq -rn --arg value "$authority_check_name" '$value | @uri')
+            repository_file="$RUNNER_TEMP/brutalist-authority-repository.json"
+            main_protection_file="$RUNNER_TEMP/brutalist-authority-main-protection.json"
+            proof_branch_file="$RUNNER_TEMP/brutalist-authority-proof-branch.json"
+            proof_protection_file="$RUNNER_TEMP/brutalist-authority-proof-protection.json"
+            authority_app_file="$RUNNER_TEMP/brutalist-authority-app.json"
+            codeowner_team_file="$RUNNER_TEMP/brutalist-authority-team.json"
+            codeowner_members_file="$RUNNER_TEMP/brutalist-authority-team-members.json"
+            codeowner_repository_file="$RUNNER_TEMP/brutalist-authority-team-repository.json"
+            check_runs_file="$RUNNER_TEMP/brutalist-authority-check-runs.json"
+            attestation_file="$RUNNER_TEMP/brutalist-authority-attestation.json"
+            curl -fsS "${authority_headers[@]}" "$API_URL/repos/$REPOSITORY" > "$repository_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/repos/$REPOSITORY/branches/main/protection" > "$main_protection_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/repos/$REPOSITORY/branches/$encoded_proof_branch" > "$proof_branch_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/repos/$REPOSITORY/branches/$encoded_proof_branch/protection" > "$proof_protection_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/apps/$authority_app_slug" > "$authority_app_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/orgs/$repository_owner/teams/$codeowner_team_slug" > "$codeowner_team_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/orgs/$repository_owner/teams/$codeowner_team_slug/members?role=all&per_page=100&page=1" > "$codeowner_members_file"
+            curl -fsS "${authority_headers[@]}" "$API_URL/orgs/$repository_owner/teams/$codeowner_team_slug/repos/$REPOSITORY" > "$codeowner_repository_file"
+            curl -fsS "${authority_headers[@]}" \
+              "$API_URL/repos/$REPOSITORY/commits/$verified_sha/check-runs?check_name=$encoded_check_name&app_id=$authority_app_id&filter=latest&per_page=100&page=1" \
+              > "$check_runs_file"
+            git --git-dir="$CANDIDATE_GIT_DIR" cat-file blob \
+              "$attestation_proof_sha:docs/strategy/public-discovery-release-hypergraph/proof/brutalist-launch-review.json" \
+              > "$attestation_file"
+            jq -n \
+              --slurpfile repository "$repository_file" \
+              --slurpfile branchProtection "$main_protection_file" \
+              --slurpfile proofBranch "$proof_branch_file" \
+              --slurpfile proofBranchProtection "$proof_protection_file" \
+              --slurpfile authorityApp "$authority_app_file" \
+              --slurpfile codeOwnerTeam "$codeowner_team_file" \
+              --slurpfile codeOwnerTeamMembers "$codeowner_members_file" \
+              --slurpfile codeOwnerTeamRepository "$codeowner_repository_file" \
+              --slurpfile checkRuns "$check_runs_file" \
+              --slurpfile attestation "$attestation_file" \
+              '{
+                repository: $repository[0],
+                branchProtection: $branchProtection[0],
+                proofBranch: $proofBranch[0],
+                proofBranchProtection: $proofBranchProtection[0],
+                authorityApp: $authorityApp[0],
+                codeOwnerTeam: $codeOwnerTeam[0],
+                codeOwnerTeamMembers: $codeOwnerTeamMembers[0],
+                codeOwnerTeamRepository: $codeOwnerTeamRepository[0],
+                checkRuns: $checkRuns[0],
+                attestation: $attestation[0]
+              }' | node gate/scripts/verify-brutalist-review-authority.mjs \
+                --config "$authority_config" \
+                --codeowners gate/.github/CODEOWNERS \
+                --allowed-signers gate/.github/brutalist-allowed-signers \
+                --expected-head-sha "$verified_sha" \
+                --expected-proof-sha "$attestation_proof_sha"
             attestation_verified=true
           fi
 
@@ -326,6 +434,7 @@ jobs:
             echo "mode=${DEPLOY_MODE}"
             echo "attestation_verified=${attestation_verified}"
             echo "attestation_proof_sha=${attestation_proof_sha}"
+            echo "source_author_github_user_id=${source_author_github_user_id}"
             echo "trusted_gate_sha=${TRUSTED_GATE_SHA}"
           } >> "$GITHUB_OUTPUT"
 
@@ -2077,6 +2186,36 @@ jobs:
         with:
           node-version-file: 'gate/.node-version'
 
+      - name: Prove fresh signed bounded provider posture before production eligibility
+        timeout-minutes: 3
+        env:
+          PROVIDER_POSTURE_RECEIPT_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_RECEIPT_B64 }}
+          PROVIDER_POSTURE_SIGNATURE_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_SIGNATURE_B64 }}
+          PROVIDER_POSTURE_OPERATOR_GITHUB_USER_ID: ${{ github.actor_id }}
+          PROVIDER_POSTURE_SOURCE_AUTHOR_GITHUB_USER_ID: ${{ needs.source-verify.outputs.source_author_github_user_id }}
+          PROVIDER_POSTURE_EXA_CREDENTIAL: ${{ secrets.PROTECTED_EXA_API_KEY }}
+          PROVIDER_POSTURE_EXA_ACCOUNT_ID: ${{ secrets.PROTECTED_EXA_ACCOUNT_ID }}
+          PROVIDER_POSTURE_FIRECRAWL_CREDENTIAL: ${{ secrets.PROTECTED_FIRECRAWL_API_KEY }}
+          PROVIDER_POSTURE_FIRECRAWL_ACCOUNT_ID: ${{ secrets.PROTECTED_FIRECRAWL_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GEMINI_CREDENTIAL: ${{ secrets.PROTECTED_GEMINI_API_KEY }}
+          PROVIDER_POSTURE_GEMINI_ACCOUNT_ID: ${{ secrets.PROTECTED_GEMINI_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GROQ_CREDENTIAL: ${{ secrets.PROTECTED_GROQ_API_KEY }}
+          PROVIDER_POSTURE_GROQ_ACCOUNT_ID: ${{ secrets.PROTECTED_GROQ_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          posture="$RUNNER_TEMP/paid-provider-posture-preflight.json"
+          signature="$RUNNER_TEMP/paid-provider-posture-preflight.sig"
+          printf '%s' "$PROVIDER_POSTURE_RECEIPT_B64" | base64 --decode > "$posture"
+          printf '%s' "$PROVIDER_POSTURE_SIGNATURE_B64" | base64 --decode > "$signature"
+          node gate/scripts/verify-paid-provider-account-posture.mjs \
+            --authority gate/config/paid-provider-account-authority.json \
+            --receipt "$posture" \
+            --signature "$signature" \
+            --allowed-signers gate/.github/paid-provider-posture-allowed-signers \
+            --source-sha "$DEPLOY_SHA" \
+            --min-validity-seconds 10800
+
       - name: Prove both private storage realms before production eligibility
         timeout-minutes: 5
         env:
@@ -2145,8 +2284,21 @@ jobs:
             --config gate/wrangler.convex-work-budget.toml \
             --tag "$DEPLOY_SHA" \
             --message "Pre-receipt exact-SHA team-global Convex work budget"
+          deployment="$RUNNER_TEMP/convex-work-budget-pre-receipt-deployment.json"
+          version="$RUNNER_TEMP/convex-work-budget-pre-receipt-version.json"
+          gate/.github/release-gate/node_modules/.bin/wrangler deployments status \
+            --name commons-convex-work-budget --json > "$deployment"
+          version_id=$(jq -er \
+            '.versions | select(length == 1) | .[0] | select(.percentage == 100) |
+             .version_id | select(test("^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$"))' \
+            "$deployment")
+          gate/.github/release-gate/node_modules/.bin/wrangler versions view "$version_id" \
+            --name commons-convex-work-budget --json > "$version"
           node gate/scripts/verify-convex-work-budget-deployment.mjs \
-            --environment production --worker-only
+            --environment production \
+            --deployment-status "$deployment" \
+            --active-version "$version" \
+            --expected-source-sha "$DEPLOY_SHA"
 
       # Bootstrap authority is implemented by this exact gate artifact. It
       # must be active before the bootstrap job can arm the new control path;
@@ -3211,6 +3363,40 @@ jobs:
         with:
           node-version-file: 'gate/.node-version'
 
+      - name: Re-prove posture and clean provider project defaults before production preparation
+        timeout-minutes: 5
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          PROVIDER_POSTURE_RECEIPT_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_RECEIPT_B64 }}
+          PROVIDER_POSTURE_SIGNATURE_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_SIGNATURE_B64 }}
+          PROVIDER_POSTURE_OPERATOR_GITHUB_USER_ID: ${{ github.actor_id }}
+          PROVIDER_POSTURE_SOURCE_AUTHOR_GITHUB_USER_ID: ${{ needs.source-verify.outputs.source_author_github_user_id }}
+          PROVIDER_POSTURE_EXA_CREDENTIAL: ${{ secrets.PROTECTED_EXA_API_KEY }}
+          PROVIDER_POSTURE_EXA_ACCOUNT_ID: ${{ secrets.PROTECTED_EXA_ACCOUNT_ID }}
+          PROVIDER_POSTURE_FIRECRAWL_CREDENTIAL: ${{ secrets.PROTECTED_FIRECRAWL_API_KEY }}
+          PROVIDER_POSTURE_FIRECRAWL_ACCOUNT_ID: ${{ secrets.PROTECTED_FIRECRAWL_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GEMINI_CREDENTIAL: ${{ secrets.PROTECTED_GEMINI_API_KEY }}
+          PROVIDER_POSTURE_GEMINI_ACCOUNT_ID: ${{ secrets.PROTECTED_GEMINI_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GROQ_CREDENTIAL: ${{ secrets.PROTECTED_GROQ_API_KEY }}
+          PROVIDER_POSTURE_GROQ_ACCOUNT_ID: ${{ secrets.PROTECTED_GROQ_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          umask 077
+          posture="$RUNNER_TEMP/paid-provider-posture-before-pages.json"
+          signature="$RUNNER_TEMP/paid-provider-posture-before-pages.sig"
+          trap 'rm -f "$posture" "$signature"' EXIT
+          printf '%s' "$PROVIDER_POSTURE_RECEIPT_B64" | base64 --decode > "$posture"
+          printf '%s' "$PROVIDER_POSTURE_SIGNATURE_B64" | base64 --decode > "$signature"
+          node gate/scripts/verify-paid-provider-account-posture.mjs \
+            --authority gate/config/paid-provider-account-authority.json \
+            --receipt "$posture" \
+            --signature "$signature" \
+            --allowed-signers gate/.github/paid-provider-posture-allowed-signers \
+            --source-sha "$DEPLOY_SHA" \
+            --min-validity-seconds 10800
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
+
       - name: Re-prove production producer readiness immediately before receipt
         timeout-minutes: 2
         env:
@@ -3248,9 +3434,23 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
-        run: >-
-          node gate/scripts/verify-convex-work-budget-deployment.mjs
-          --environment production --worker-only
+        run: |
+          set -euo pipefail
+          deployment="$RUNNER_TEMP/convex-work-budget-before-receipt-deployment.json"
+          version="$RUNNER_TEMP/convex-work-budget-before-receipt-version.json"
+          gate/.github/release-gate/node_modules/.bin/wrangler deployments status \
+            --name commons-convex-work-budget --json > "$deployment"
+          version_id=$(jq -er \
+            '.versions | select(length == 1) | .[0] | select(.percentage == 100) |
+             .version_id | select(test("^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$"))' \
+            "$deployment")
+          gate/.github/release-gate/node_modules/.bin/wrangler versions view "$version_id" \
+            --name commons-convex-work-budget --json > "$version"
+          node gate/scripts/verify-convex-work-budget-deployment.mjs \
+            --environment production \
+            --deployment-status "$deployment" \
+            --active-version "$version" \
+            --expected-source-sha "$DEPLOY_SHA"
 
       - name: Re-prove zero cron authority immediately before receipt
         timeout-minutes: 3
@@ -3449,8 +3649,60 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
           INTERNAL_API_SECRET: ${{ secrets.PROTECTED_INTERNAL_API_SECRET_PRODUCTION }}
           RELEASE_CONTROL_SECRET: ${{ secrets.PROTECTED_RELEASE_CONTROL_SECRET_PRODUCTION }}
+          PROVIDER_POSTURE_RECEIPT_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_RECEIPT_B64 }}
+          PROVIDER_POSTURE_SIGNATURE_B64: ${{ secrets.PROTECTED_PAID_PROVIDER_POSTURE_SIGNATURE_B64 }}
+          PROVIDER_POSTURE_OPERATOR_GITHUB_USER_ID: ${{ github.actor_id }}
+          PROVIDER_POSTURE_SOURCE_AUTHOR_GITHUB_USER_ID: ${{ needs.source-verify.outputs.source_author_github_user_id }}
+          PROVIDER_POSTURE_EXA_CREDENTIAL: ${{ secrets.PROTECTED_EXA_API_KEY }}
+          PROVIDER_POSTURE_EXA_ACCOUNT_ID: ${{ secrets.PROTECTED_EXA_ACCOUNT_ID }}
+          PROVIDER_POSTURE_FIRECRAWL_CREDENTIAL: ${{ secrets.PROTECTED_FIRECRAWL_API_KEY }}
+          PROVIDER_POSTURE_FIRECRAWL_ACCOUNT_ID: ${{ secrets.PROTECTED_FIRECRAWL_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GEMINI_CREDENTIAL: ${{ secrets.PROTECTED_GEMINI_API_KEY }}
+          PROVIDER_POSTURE_GEMINI_ACCOUNT_ID: ${{ secrets.PROTECTED_GEMINI_ACCOUNT_ID }}
+          PROVIDER_POSTURE_GROQ_CREDENTIAL: ${{ secrets.PROTECTED_GROQ_API_KEY }}
+          PROVIDER_POSTURE_GROQ_ACCOUNT_ID: ${{ secrets.PROTECTED_GROQ_ACCOUNT_ID }}
         run: |
           set -euo pipefail
+          umask 077
+          posture="$RUNNER_TEMP/paid-provider-posture-at-pages-boundary.json"
+          signature="$RUNNER_TEMP/paid-provider-posture-at-pages-boundary.sig"
+          provider_staged=false
+          pages_deployment_id=''
+          cleanup_provider_defaults() {
+            prior_status=$?
+            set +e
+            cleanup_status=0
+            if [ "$provider_staged" = true ]; then
+              if [ -n "$pages_deployment_id" ]; then
+                node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+                  clear-staged "$pages_deployment_id" || cleanup_status=$?
+              else
+                node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+                  clear-staged || cleanup_status=$?
+              fi
+            else
+              node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+                assert-absent || cleanup_status=$?
+            fi
+            rm -f "$posture" "$signature"
+            if [ "$cleanup_status" -ne 0 ]; then
+              exit "$cleanup_status"
+            fi
+            exit "$prior_status"
+          }
+          trap cleanup_provider_defaults EXIT
+          printf '%s' "$PROVIDER_POSTURE_RECEIPT_B64" | base64 --decode > "$posture"
+          printf '%s' "$PROVIDER_POSTURE_SIGNATURE_B64" | base64 --decode > "$signature"
+          node gate/scripts/verify-paid-provider-account-posture.mjs \
+            --authority gate/config/paid-provider-account-authority.json \
+            --receipt "$posture" \
+            --signature "$signature" \
+            --allowed-signers gate/.github/paid-provider-posture-allowed-signers \
+            --source-sha "$DEPLOY_SHA" \
+            --min-validity-seconds 10800
+          # The trusted transaction stages at its internal Pages-upload seam;
+          # this outer trap is defense-in-depth for cancellation and process loss.
+          provider_staged=true
           result=$(node gate/scripts/run-public-template-og-release-phase.mjs \
             --realm production \
             --branch production \
@@ -3494,19 +3746,44 @@ jobs:
              (.ogVersionId | test("^[0-9a-f-]{32,36}$")) and
              (.receiptVerificationDeadlineAt | type == "string") and
              (.releaseAuthorityLeaseId | test("^[0-9a-f-]{36}$"))' >/dev/null
+          pages_deployment_id=$(printf '%s' "$result" | jq -er '.pagesDeploymentId')
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+            verify-deployment "$pages_deployment_id"
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+            clear-staged "$pages_deployment_id"
+          provider_staged=false
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
           {
             echo "source_sha=$DEPLOY_SHA"
             echo "artifact_digest=$ARTIFACT_DIGEST"
             echo "trusted_gate_sha=$TRUSTED_GATE_SHA"
-            echo "pages_deployment_id=$(printf '%s' "$result" | jq -er '.pagesDeploymentId')"
+            echo "pages_deployment_id=$pages_deployment_id"
             echo "og_version_id=$(printf '%s' "$result" | jq -er '.ogVersionId')"
             echo "receipt_verification_deadline=$(printf '%s' "$result" | jq -er '.receiptVerificationDeadlineAt')"
             echo "release_lease_id=$(printf '%s' "$result" | jq -er '.releaseAuthorityLeaseId')"
             echo "completed_at=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Recover an interrupted production activation from its durable journal
+      - name: Reconcile provider project defaults before any outer recovery
+        id: reconcile_provider_project_defaults
         if: always()
+        timeout-minutes: 2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+        run: |
+          set -euo pipefail
+          deployment_id="${{ steps.production_phase.outputs.pages_deployment_id }}"
+          if [ -n "$deployment_id" ]; then
+            node gate/scripts/materialize-paid-provider-pages-secrets.mjs \
+              clear-staged "$deployment_id"
+          else
+            node gate/scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          fi
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
+
+      - name: Recover an interrupted production activation from its durable journal
+        if: always() && steps.reconcile_provider_project_defaults.outcome == 'success'
         timeout-minutes: 8
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
@@ -3530,6 +3807,17 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --transaction-id "$RELEASE_TRANSACTION_ID" \
             --force false > "$recovery_result"
+
+      - name: Reconcile and prove provider project defaults absent after recovery
+        if: always()
+        timeout-minutes: 3
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+        run: |
+          set -euo pipefail
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
 
       - name: Reconcile failed production activation after journal recovery
         if: always() && (failure() || cancelled())
@@ -3984,7 +4272,9 @@ jobs:
           pages=$(node gate/scripts/cloudflare-pages-production-control.mjs capture)
           test "$(printf '%s' "$pages" | jq -er '.deploymentId')" = "$PRODUCTION_PAGES_DEPLOYMENT_ID"
           test "$(printf '%s' "$pages" | jq -er '.releaseSha')" = "$DEPLOY_SHA"
-          node gate/scripts/verify-pages-durable-object-binding.mjs --environment production
+          node gate/scripts/verify-pages-durable-object-binding.mjs \
+            --environment production \
+            --deployment-id "$PRODUCTION_PAGES_DEPLOYMENT_ID"
           status_file="$RUNNER_TEMP/public-template-og-production-qualified-deployment.json"
           version_file="$RUNNER_TEMP/public-template-og-production-qualified-version.json"
           gate/.github/release-gate/node_modules/.bin/wrangler deployments status \
@@ -4293,7 +4583,12 @@ jobs:
              .publicDiscoveryCache.workBudgetBound == true and
              .publicDiscoveryCache.publication.healthy == true and
              .sessionCookieAuthority.status == "ok" and
-             .sessionCookieAuthority.keysIsolated == true' >/dev/null; then
+             .sessionCookieAuthority.keysIsolated == true and
+             .paidProvider.status == "ok" and
+             .paidProvider.budgetCoordinatorBound == true and
+             .paidProvider.providerSecretsConfigured == true and
+             .paidProvider.operatorAllowlistConfigured == true and
+             .paidProvider.missingBindings == []' >/dev/null; then
             echo "::error::The one budgeted production readiness probe did not prove the exact committed release."
             printf '%s\n' "$body" | head -c 4000
             exit 1
@@ -5180,6 +5475,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
         run: |
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
           node gate/scripts/canonical-artifact-tree-digest.mjs \
             --artifact-root "$ARTIFACT_ROOT" \
             --expected-digest "$ARTIFACT_DIGEST"
@@ -5238,6 +5535,8 @@ jobs:
         timeout-minutes: 10
         run: |
           set -euo pipefail
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
           node gate/scripts/canonical-artifact-tree-digest.mjs \
             --artifact-root "$ARTIFACT_ROOT" \
             --expected-digest "$ARTIFACT_DIGEST"
@@ -5339,6 +5638,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
         run: |
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs clear-staged
+          node gate/scripts/materialize-paid-provider-pages-secrets.mjs assert-absent
           node gate/scripts/canonical-artifact-tree-digest.mjs \
             --artifact-root "$ARTIFACT_ROOT" \
             --expected-digest "$ARTIFACT_DIGEST"

@@ -4,7 +4,12 @@
 
 ## Premise
 
-Every consumer of a Commons verification packet — staffer, journalist, donor, anonymous /v/[hash] visitor, indexing bot — sees **the same data**. There is no "trusted reader" exception. K-anonymity floors are the only privacy mechanism.
+Every consumer of a Commons verification packet — staffer, journalist, donor, anonymous /v/[hash] visitor, indexing bot — sees **the same data**. There is no "trusted reader" exception, and K-anonymity floors are the only *privacy* mechanism.
+
+Two axes, deliberately kept apart:
+
+- **Privacy** is reader-independent. The K-anonymity floors apply to the data before any reader is known; every reader of a given packet sees the same floored values, and no runtime check varies them.
+- **Commercial access** to the empirical coordination readings (`gds`, `ald`, `temporalEntropy`, `cai`) is a separate, disclosed axis, keyed on the reader **organization's** billing plan — never on who the person is, how much we trust them, or what they intend to do with it. A reading withheld on this axis is labelled in-product as withheld, never rendered as absent.
 
 ## What this means in practice
 
@@ -15,8 +20,11 @@ Every consumer of a Commons verification packet — staffer, journalist, donor, 
 | Decision-maker (recipient of report email) | report email body | Same |
 | Anonymous /v/[hash] visitor | `/v/[hash]` | Same |
 | Indexing bot | `/v/[hash]` (cached) | Same |
+| Authenticated member of a *partner* org | `/org/[slug]/networks/[networkId]` | The pooled network-wide aggregate — roster, counts, district count, state distribution — with the empirical readings (`gds`, `ald`, `temporalEntropy`, `cai`) withheld unless that org's own plan is currently paid |
 
-There is no row of code that says "show the exact tier breakdown to authenticated staffers but only the rounded percentage to anonymous visitors." That distinction is **architecturally absent**.
+There is no row of code that says "show the exact tier breakdown to authenticated staffers but only the rounded percentage to anonymous visitors." That distinction — varying the **privacy** treatment by who is reading — is **architecturally absent**. The floors are computed once, before a reader is known.
+
+The paid gate on the coalition readings is not that distinction. It does not soften or tighten a K-anonymity floor for anybody: the roster, the floored counts, the district count and the state distribution are byte-identical whether or not the reader org is paid. It withholds a commercial product from an unpaid customer and says so on the surface where the reading would have appeared.
 
 ## Why
 
@@ -47,6 +55,7 @@ Audit checklist when adding a new packet-consuming surface:
 - [ ] If the surface renders prose: the prose uses qualitative thresholds (e.g. "≥ 0.7 = spread"), not raw numeric values.
 - [ ] If the surface renders cells: cells with `count < 5` are filtered or labeled "below K-anonymity floor".
 - [ ] If the surface renders date ranges: precision matches the audience (public = YYYY-MM-DD; staffer = ISO).
+- [ ] If the surface aggregates across organizations: it states in-product that every member organization can read the result, and it resolves the **reader** org's own plan before returning empirical readings.
 
 If any of these are violated, the surface fails the privacy model.
 
