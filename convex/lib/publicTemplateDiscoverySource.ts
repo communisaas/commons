@@ -16,16 +16,23 @@ import {
 	verifyPublicRecipientProvenance,
 	type PublicRecipientProvenanceClaims
 } from './publicRecipientProvenance';
+import { isPublicRoleFormAddress } from './publicRoleAddress';
 import {
 	markPublicDiscoveryListDirty,
 	type PublicDiscoveryListFreshnessClass
 } from './publicDiscovery';
+import { computeGlobalEmailHash } from '../_orgHash';
+import {
+	filterSuppressedEmailContactHashes,
+	RECIPIENT_SUPPRESSION_BATCH_MAX
+} from './contactAuthority';
 
 declare const process: { env: Record<string, string | undefined> };
 
 export const PUBLIC_TEMPLATE_DISCOVERY_SOURCE_VERSION = 4;
 export const MAX_PUBLIC_TEMPLATE_DISCOVERY_SOURCE_BYTES = 16_000;
-export const PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION = 2;
+// Shape cutover: readers reject stale rows before the exhaustive v3 decoder runs.
+export const PUBLIC_TEMPLATE_DETAIL_PROJECTION_VERSION = 3;
 export const PUBLIC_TEMPLATE_PAGE_ARTIFACT_COORDINATE_VERSION = 1;
 export const PUBLIC_TEMPLATE_PAGE_AUTHOR_COORDINATE_MAX = 250;
 export const MAX_PUBLIC_TEMPLATE_DETAIL_PROJECTION_BYTES = 48 * 1024;
@@ -111,7 +118,6 @@ const DETAIL_TEXT_BYTES = {
 	sourceRationale: 4_000,
 	researchEntry: 4_000,
 	recipientLabel: 2_048,
-	recipientPublishedCopy: 8_192,
 	location: 800
 } as const;
 const PUBLIC_DETAIL_SOURCE_CAP = 50;
@@ -138,9 +144,6 @@ type PublicTemplateDetailDecisionMaker = {
 	role?: string;
 	shortName?: string;
 	roleCategory?: string;
-	/** Explicitly published send-page copy; no other prompt-engineering field crosses this boundary. */
-	accountabilityOpener?: string;
-	relevanceRank?: number;
 };
 
 type PublicTemplateDetailRecipientConfig = {
@@ -259,11 +262,11 @@ function publicHttpUrl(value: unknown): string | undefined {
 	if (typeof value !== 'string') return undefined;
 	try {
 		const url = new URL(value);
+		// Real contact and directory URLs carry queries; fragments never reach the publisher.
 		if (
 			url.protocol !== 'https:' ||
 			url.username.length > 0 ||
 			url.password.length > 0 ||
-			url.search.length > 0 ||
 			url.hash.length > 0
 		) {
 			return undefined;
@@ -377,11 +380,23 @@ function projectPublicDetailTopics(value: unknown): string[] {
 		.slice(0, 5);
 }
 
+/**
+ * Whether a recipient may be published, decided on its global email hash alone.
+ *
+ * A predicate rather than a set so independent admission rules compose: each
+ * one narrows the last instead of replacing it, and two rules landing in this
+ * function cannot silently cancel each other out.
+ */
+export type PublicRecipientAdmission = (contactHash: string) => boolean;
+
+const ADMIT_EVERY_RECIPIENT: PublicRecipientAdmission = () => true;
+
 export async function projectPublicDetailRecipientConfig(
 	recipientConfig: unknown,
 	userId: string,
 	secrets: readonly (string | undefined)[],
-	now = Date.now()
+	now = Date.now(),
+	admitRecipient: PublicRecipientAdmission = ADMIT_EVERY_RECIPIENT
 ): Promise<PublicTemplateDetailRecipientConfig> {
 	const projected: PublicTemplateDetailRecipientConfig = { emails: [] };
 	if (!recipientConfig || typeof recipientConfig !== 'object' || Array.isArray(recipientConfig)) {
@@ -424,6 +439,13 @@ export async function projectPublicDetailRecipientConfig(
 			// eligibility. The verifier returns the signed canonical claims, never the
 			// mutable client object.
 			if (!claims) continue;
+			// Directory presence proves employment, not a designated inbound channel:
+			// anonymous detail carries offices, never named persons.
+			if (!isPublicRoleFormAddress(claims.email)) continue;
+
+			// A signed claim is necessary, not sufficient. A mailbox that asked to be
+			// left alone stays out even when its provenance MAC verifies.
+			if (!admitRecipient(await computeGlobalEmailHash(claims.email))) continue;
 
 			const publicDecisionMaker = publicDecisionMakerFromClaims(claims);
 			decisionMakers.push(publicDecisionMaker);
@@ -447,14 +469,75 @@ function publicDecisionMakerFromClaims(
 		organization: claims.organization,
 		...(claims.role === undefined ? {} : { role: claims.role }),
 		...(claims.shortName === undefined ? {} : { shortName: claims.shortName }),
-		...(claims.roleCategory === undefined ? {} : { roleCategory: claims.roleCategory }),
-		// Accountability opener is rendered into the public mailto body. It is the
-		// sole prompt-like field intentionally published and is covered by the MAC.
-		...(claims.accountabilityOpener === undefined
-			? {}
-			: { accountabilityOpener: claims.accountabilityOpener }),
-		...(claims.relevanceRank === undefined ? {} : { relevanceRank: claims.relevanceRank })
+		...(claims.roleCategory === undefined ? {} : { roleCategory: claims.roleCategory })
 	};
+}
+
+/**
+ * Apply an admission predicate to an already-projected recipient config.
+ *
+ * Both `emails` and `decisionMakers` are filtered from the same verdict per
+ * address, so `recipient_count` and `recipientEmails` follow automatically and
+ * the detail projection's own recipient-consistency assertion keeps holding.
+ */
+async function filterRecipientConfigByAdmission(
+	recipientConfig: PublicTemplateDetailRecipientConfig,
+	admitRecipient: PublicRecipientAdmission
+): Promise<PublicTemplateDetailRecipientConfig> {
+	const verdicts = new Map<string, boolean>();
+	const admits = async (email: string): Promise<boolean> => {
+		const cached = verdicts.get(email);
+		if (cached !== undefined) return cached;
+		const verdict = admitRecipient(await computeGlobalEmailHash(email));
+		verdicts.set(email, verdict);
+		return verdict;
+	};
+	const emails: string[] = [];
+	for (const email of recipientConfig.emails) {
+		if (await admits(email)) emails.push(email);
+	}
+	const existingDecisionMakers = recipientConfig.decisionMakers ?? [];
+	const decisionMakers: PublicTemplateDetailDecisionMaker[] = [];
+	for (const decisionMaker of existingDecisionMakers) {
+		if (await admits(decisionMaker.email)) decisionMakers.push(decisionMaker);
+	}
+	if (
+		emails.length === recipientConfig.emails.length &&
+		decisionMakers.length === existingDecisionMakers.length
+	) {
+		return recipientConfig;
+	}
+	const filtered: PublicTemplateDetailRecipientConfig = { ...recipientConfig, emails };
+	if (decisionMakers.length > 0) filtered.decisionMakers = decisionMakers;
+	else delete filtered.decisionMakers;
+	return filtered;
+}
+
+/**
+ * Read the suppression verdict for every address a projected config would
+ * publish. Batched and chunked so this is a bounded number of point reads even
+ * for a config carrying the maximum roster on both of its address-bearing
+ * fields.
+ */
+async function suppressedRecipientAdmission(
+	ctx: MutationCtx,
+	recipientConfig: PublicTemplateDetailRecipientConfig
+): Promise<PublicRecipientAdmission> {
+	const addresses = new Set<string>(recipientConfig.emails);
+	for (const decisionMaker of recipientConfig.decisionMakers ?? []) {
+		addresses.add(decisionMaker.email);
+	}
+	if (addresses.size === 0) return ADMIT_EVERY_RECIPIENT;
+	const hashes = [
+		...new Set(await Promise.all([...addresses].map((email) => computeGlobalEmailHash(email))))
+	];
+	const denied = new Set<string>();
+	for (let index = 0; index < hashes.length; index += RECIPIENT_SUPPRESSION_BATCH_MAX) {
+		const chunk = hashes.slice(index, index + RECIPIENT_SUPPRESSION_BATCH_MAX);
+		for (const hash of await filterSuppressedEmailContactHashes(ctx, chunk)) denied.add(hash);
+	}
+	if (denied.size === 0) return ADMIT_EVERY_RECIPIENT;
+	return (contactHash) => !denied.has(contactHash);
 }
 
 export function buildPublicTemplateDetailProjection(
@@ -573,6 +656,11 @@ function readPublicResearchLog(value: unknown): string[] {
 	return [...value] as string[];
 }
 
+/**
+ * The exhaustive reader enforces role-form retirement because artifact assembly
+ * deliberately reuses stored recipient configs across version rebuilds. Its
+ * invalid-detail throw forces stale named-person rosters through the projector.
+ */
 function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipientConfig {
 	if (
 		!isPlainRecord(value) ||
@@ -588,7 +676,9 @@ function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipien
 		]) ||
 		!Array.isArray(value.emails) ||
 		value.emails.length > PUBLIC_DETAIL_RECIPIENT_CAP ||
-		value.emails.some((email) => !isPublicEmail(email)) ||
+		value.emails.some(
+			(email) => !isPublicEmail(email) || !isPublicRoleFormAddress(email)
+		) ||
 		new Set(value.emails).size !== value.emails.length
 	) {
 		return invalidDetail('recipient_config');
@@ -656,11 +746,9 @@ function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipien
 					'shortName',
 					'organization',
 					'roleCategory',
-					'accountabilityOpener',
 					'email',
 					'emailGrounded',
-					'emailSource',
-					'relevanceRank'
+					'emailSource'
 				])
 			) {
 				return invalidDetail(`recipient_config.decisionMakers.${index}`);
@@ -668,6 +756,7 @@ function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipien
 			const emailSource = publicHttpUrl(candidate.emailSource);
 			if (
 				!isPublicEmail(candidate.email) ||
+				!isPublicRoleFormAddress(candidate.email) ||
 				candidate.emailGrounded !== true ||
 				!emailSource ||
 				emailSource !== candidate.emailSource ||
@@ -692,23 +781,6 @@ function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipien
 					return invalidDetail(`recipient_config.decisionMakers.${index}.${field}`);
 				}
 				decisionMaker[field] = candidate[field];
-			}
-			if (candidate.accountabilityOpener !== undefined) {
-				if (
-					!isBoundedString(candidate.accountabilityOpener, DETAIL_TEXT_BYTES.recipientPublishedCopy)
-				) {
-					return invalidDetail(`recipient_config.decisionMakers.${index}.accountabilityOpener`);
-				}
-				decisionMaker.accountabilityOpener = candidate.accountabilityOpener;
-			}
-			if (candidate.relevanceRank !== undefined) {
-				if (
-					typeof candidate.relevanceRank !== 'number' ||
-					!Number.isFinite(candidate.relevanceRank)
-				) {
-					return invalidDetail(`recipient_config.decisionMakers.${index}.relevanceRank`);
-				}
-				decisionMaker.relevanceRank = candidate.relevanceRank;
 			}
 			return decisionMaker;
 		});
@@ -1152,6 +1224,15 @@ async function syncCompactPublicDiscoveryProjectionRow(
 			[process.env.INTERNAL_API_SECRET, process.env.INTERNAL_API_SECRET_PREVIOUS]
 		);
 	}
+	// Both branches above clear the same admission gate. The cached-reuse branch
+	// returns a stored roster without re-verifying anything, so without this a
+	// mailbox that asked to be left alone would survive in it indefinitely; the
+	// fresh branch is filtered again here rather than being trusted to have been
+	// built under the same predicate.
+	recipientConfig = await filterRecipientConfigByAdmission(
+		recipientConfig,
+		await suppressedRecipientAdmission(ctx, recipientConfig)
+	);
 	const detail = readPublicTemplateDetailProjection(
 		buildPublicTemplateDetailProjection(template, recipientConfig)
 	);

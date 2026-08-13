@@ -152,7 +152,6 @@ describe('coalition source projection and exact cutover', () => {
 				verifiedCount: 7,
 				totalCount: 8,
 				districtCount: 3,
-				proofWeight: 11,
 				attestationDigest: 'attestation',
 				packetDigest: 'packet',
 				proofDeliveredAt: NOW,
@@ -201,15 +200,14 @@ describe('coalition source projection and exact cutover', () => {
 			tier3: 1
 		});
 		expect(projected.pressure).toMatchObject({
-			maxProofWeight: 11,
 			verifiedActionEvidence: 7,
 			districtSignalCount: 3,
 			receiptCount: 1
 		});
 		expect(projected.bill).toMatchObject({
 			billTitle: 'Exact Migration Act',
-			alignmentNumerator: 5.5,
-			alignmentWeight: 11,
+			alignmentNumerator: 0.5,
+			alignmentWeight: 1,
 			receiptCount: 1
 		});
 
@@ -369,16 +367,15 @@ describe('revisioned coalition network generation', () => {
 				entities: [],
 				updatedAt: NOW
 			});
-			for (const [orgId, weight, verified, districts, receipts, numerator, alignmentWeight] of [
-				[org1, 10, 5, 3, 2, 4, 8],
-				[org2, 7, 4, 2, 3, -1, 2]
+			for (const [orgId, verified, districts, receipts, numerator, alignmentWeight] of [
+				[org1, 5, 3, 2, 4, 8],
+				[org2, 4, 2, 3, -1, 2]
 			] as const) {
 				await ctx.db.insert('coalitionOrgPressureInputs', {
 					orgId,
 					decisionMakerId: dmId,
 					dmName: 'Representative Proof',
 					canonicalSlug: 'proof',
-					maxProofWeight: weight,
 					verifiedActionEvidence: verified,
 					districtSignalCount: districts,
 					receiptCount: receipts,
@@ -397,7 +394,20 @@ describe('revisioned coalition network generation', () => {
 					updatedAt: NOW
 				});
 			}
-			return { networkId };
+			// The reading org pays: `getStats` resolves the READER org's own plan
+			// and redacts the empirical models for an unpaid one, so the metric
+			// math below is only observable behind a paid subscription.
+			await ctx.db.insert('subscriptions', {
+				orgId: org1,
+				plan: 'coalition',
+				priceCents: 20_000,
+				status: 'active',
+				paymentMethod: 'stripe',
+				currentPeriodStart: NOW - 1,
+				currentPeriodEnd: NOW + 1,
+				updatedAt: NOW
+			});
+			return { networkId, org1 };
 		});
 
 		await driveNetwork(t, fixture.networkId);
@@ -422,6 +432,7 @@ describe('revisioned coalition network generation', () => {
 		);
 		const stats = await t.query(api.networks.getStats, {
 			networkId: fixture.networkId,
+			readerOrgId: fixture.org1,
 			_secret: SECRET
 		});
 		expect(stats).toMatchObject({
@@ -446,7 +457,6 @@ describe('revisioned coalition network generation', () => {
 			expect.objectContaining({
 				canonicalSlug: 'proof',
 				orgCount: 2,
-				combinedProofWeight: 17,
 				verifiedActionEvidence: 9,
 				districtSignalCount: 5,
 				receiptCount: 5,
@@ -560,8 +570,141 @@ describe('revisioned coalition network generation', () => {
 			return { stats, metrics: await transactionMetrics(ctx) };
 		});
 		expect(observed.stats.totalSupporters).toBe(300);
+		// No reader org is resolvable on the bare-secret call, so the empirical
+		// models fail closed — and the subscription lookup is short-circuited,
+		// which is what keeps the read budget below constant.
+		expect(observed.stats.gds).toBeNull();
 		expect(observed.metrics.documentsRead.used).toBe(2);
 		expect(observed.metrics.databaseQueries.used).toBe(2);
 		expect(observed.metrics.bytesRead.used).toBeLessThan(80_000);
+	});
+
+	it('pins the read budget on the real v1 caller shape, paid and unpaid', async () => {
+		const t = convexTest({
+			schema,
+			modules,
+			transactionLimits: { documentsRead: 30, databaseQueries: 4, bytesRead: 80_000 }
+		});
+		const fixture = await t.run(async (ctx) => {
+			const payingOrgId = await ctx.db.insert(
+				'organizations',
+				orgValue('Paying Reader', 'paying-reader')
+			);
+			const unpaidOrgId = await ctx.db.insert(
+				'organizations',
+				orgValue('Unpaid Reader', 'unpaid-reader')
+			);
+			await ctx.db.insert('subscriptions', {
+				orgId: payingOrgId,
+				plan: 'coalition',
+				priceCents: 20_000,
+				status: 'active',
+				currentPeriodStart: NOW,
+				currentPeriodEnd: NOW + 30 * 24 * 60 * 60 * 1000,
+				paymentMethod: 'stripe',
+				updatedAt: NOW
+			});
+			const networkId = await ctx.db.insert('orgNetworks', {
+				name: 'Reader Budget Network',
+				slug: 'reader-budget-network',
+				ownerOrgId: payingOrgId,
+				status: 'active',
+				applicableCountries: ['US'],
+				coalitionMembershipRevision: 1,
+				updatedAt: NOW
+			});
+			await ctx.db.insert('coalitionMetricsMigrations', {
+				key: 'v1',
+				status: 'ready',
+				runToken: 'reader-budget',
+				phase: 'complete',
+				scannedSupporters: 0,
+				projectedSupporters: 0,
+				scannedActions: 0,
+				projectedActions: 0,
+				scannedReceipts: 0,
+				projectedReceipts: 0,
+				networksScheduled: 1,
+				networksReady: 1,
+				startedAt: NOW,
+				completedAt: NOW,
+				updatedAt: NOW
+			});
+			await ctx.db.insert('coalitionNetworkAggregates', {
+				networkId,
+				version: 1,
+				status: 'ready',
+				activeGeneration: 1,
+				revision: 1,
+				memberCount: 2,
+				totalSupporters: 300,
+				uniqueSupporters: 300,
+				verifiedSupporters: 300,
+				totalCampaignActions: 300,
+				verifiedCampaignActions: 300,
+				messageHashedTotal: 300,
+				uniqueMessages: 300,
+				districtCount: 300,
+				districtSquareSum: 300,
+				hourCountXLogXSum: 300,
+				tier1: 100,
+				tier3: 100,
+				tier4: 100,
+				stateDistribution: [{ code: 'US', count: 300 }],
+				stateDistributionOtherCount: 0,
+				gds: 0.99,
+				ald: 1,
+				temporalEntropy: 4,
+				cai: 2,
+				updatedAt: NOW
+			});
+			return { networkId, payingOrgId, unpaidOrgId };
+		});
+
+		// The v1 route authenticates by API key, presents the internal secret and
+		// names the key's own org as the reader. Both plans pay the readiness row
+		// and the aggregate row; the paid reader additionally reads its own
+		// subscription row, which is the entire delta.
+		const paid = await t.query(async (ctx) => {
+			const stats = await ctx.runQuery(api.networks.getStats, {
+				networkId: fixture.networkId,
+				readerOrgId: fixture.payingOrgId,
+				_secret: SECRET
+			});
+			return { stats, metrics: await transactionMetrics(ctx) };
+		});
+		expect(paid.stats.readingsWithheld).toBe(false);
+		expect(paid.stats.gds).toBeCloseTo(0.99, 10);
+		expect(paid.stats.ald).toBe(1);
+		expect(paid.stats.temporalEntropy).toBe(4);
+		expect(paid.stats.cai).toBe(2);
+		expect(paid.metrics.documentsRead.used).toBe(3);
+		expect(paid.metrics.databaseQueries.used).toBe(3);
+		expect(paid.metrics.bytesRead.used).toBeLessThan(80_000);
+
+		const unpaid = await t.query(async (ctx) => {
+			const stats = await ctx.runQuery(api.networks.getStats, {
+				networkId: fixture.networkId,
+				readerOrgId: fixture.unpaidOrgId,
+				_secret: SECRET
+			});
+			return { stats, metrics: await transactionMetrics(ctx) };
+		});
+		expect(unpaid.stats.readingsWithheld).toBe(true);
+		expect(unpaid.stats.gds).toBeNull();
+		expect(unpaid.stats.ald).toBeNull();
+		expect(unpaid.stats.temporalEntropy).toBeNull();
+		expect(unpaid.stats.cai).toBeNull();
+		// Everything that is not an empirical model survives the redaction.
+		expect(unpaid.stats.memberCount).toBe(paid.stats.memberCount);
+		expect(unpaid.stats.verifiedSupporters).toBe(paid.stats.verifiedSupporters);
+		expect(unpaid.stats.districtCount).toBe(paid.stats.districtCount);
+		expect(unpaid.stats.stateDistribution).toEqual(paid.stats.stateDistribution);
+		expect(unpaid.stats.revision).toBe(paid.stats.revision);
+		expect(unpaid.stats.refreshPending).toBe(paid.stats.refreshPending);
+		// The subscription lookup still runs — it just finds no row.
+		expect(unpaid.metrics.documentsRead.used).toBe(2);
+		expect(unpaid.metrics.databaseQueries.used).toBe(3);
+		expect(unpaid.metrics.bytesRead.used).toBeLessThan(80_000);
 	});
 });

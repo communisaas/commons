@@ -110,7 +110,6 @@ async function insertFollowProjection(
 			pendingCount: 0,
 			responseLoggedCount: 0,
 			anchorFieldCount: 0,
-			proofWeightTotal: 0,
 			version: 1,
 			projectionBytes: 512,
 			updatedAt: NOW + index

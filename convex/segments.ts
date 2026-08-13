@@ -4,11 +4,19 @@
  * No PII involved — segments are filter definitions, not data containers.
  */
 
-import { query, mutation, action, internalQuery, internalMutation } from './_generated/server';
+import {
+	query,
+	mutation,
+	action,
+	internalAction,
+	internalQuery,
+	internalMutation
+} from './_generated/server';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { requireOrgRole } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
 import { internal } from './_generated/api';
@@ -123,22 +131,19 @@ type ExportDecryptedRow = {
 	tags: string;
 };
 
-const getOrganizationBySlugRef = makeFunctionReference<'query'>(
-	'organizations:getBySlug'
-) as unknown as FunctionReference<
-	'query',
-	'public',
-	{ slug: string },
-	{ _id: Id<'organizations'> } | null
->;
-const exportMatchingRef = makeFunctionReference<'query'>(
-	'segments:exportMatching'
-) as unknown as FunctionReference<
-	'query',
-	'public',
-	{ slug: string; filters: unknown },
-	ExportMatchingRow[]
->;
+type ExportMatchingResult = {
+	rows: ExportMatchingRow[];
+	partial: boolean;
+	complete: boolean;
+	scanned: number;
+};
+
+type ExportDecryptedResult = {
+	rows: ExportDecryptedRow[];
+	partial: boolean;
+	complete: boolean;
+	scanned: number;
+};
 
 // =============================================================================
 // QUERIES
@@ -283,17 +288,17 @@ export const remove = mutation({
 // Per-page size for the paginated dispatch pattern. Sized so a page
 // (PAGE_SIZE supporters × ~few tags each ≈ low-thousand reads) stays
 // well below Convex's per-query row-scan cap. The action then iterates
-// pages until isDone — bulk ops scale to any org size via cursor-based
-// dispatch rather than a fixed bulk hard cap.
+// pages until its explicit request budget is exhausted. Larger jobs return
+// `partial` rather than expanding one request into an unbounded org scan.
 const SEGMENT_PAGE_SIZE = 100;
 const SEGMENT_PAGE_MAX_BYTES = 512 * 1024;
 const SEGMENT_CURSOR_MAX_BYTES = 2_048;
-// Action-level safety bound: stop after this many pages per invocation
-// so a single action call doesn't blow past Convex's 10-min execution
-// budget. Operators re-invoke for follow-on coverage; bulk mutations
-// are idempotent against partial completion (the supporterTags
-// composite index makes the per-row insert/delete a no-op on retry).
-const SEGMENT_MAX_PAGES_PER_INVOCATION = 200;
+// A single external request may inspect at most 400 supporter rows. The old
+// 200-page loop admitted 20,000 wide encrypted rows behind one budget token—
+// exactly the shared-I/O amplification shape this launch hardening removes.
+// Larger cohorts remain explicitly partial until a cursor-owned background
+// job exists; one request never silently expands into a whole-org scan.
+const SEGMENT_MAX_PAGES_PER_INVOCATION = 4;
 
 /**
  * Paginated internal query: a single page of segment-matching supporters.
@@ -520,18 +525,17 @@ const bulkDeleteTagLinksRef = makeFunctionReference<'mutation'>(
 /**
  * Count supporters matching a segment filter — paginated dispatch.
  *
- * Returns an EXACT count by iterating paginated pages until isDone.
- * For very large orgs (>~50K supporters) the action may run for up
- * to its `SEGMENT_MAX_PAGES_PER_INVOCATION` page cap; the response
- * includes `partial: true` when the cap was hit so callers can decide
- * whether to re-invoke for resume.
+ * Returns a bounded count over at most four pages. The response includes
+ * `partial: true` when more rows remain; a future cursor-owned background
+ * job can provide whole-cohort work without hiding it inside one request.
  */
 export const countMatching = action({
-	args: { slug: v.string(), filters: v.any() },
+	args: { _secret: v.string(), slug: v.string(), filters: v.any() },
 	handler: async (
 		ctx,
-		{ slug, filters }
+		{ _secret, slug, filters }
 	): Promise<{ count: number; partial: boolean; scanned: number }> => {
+		requireInternalSecret(_secret);
 		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
 			slug,
 			requiredRole: 'member'
@@ -560,22 +564,28 @@ export const countMatching = action({
 });
 
 /**
- * Apply a tag to all supporters matching a segment filter — paginated
- * dispatch. Bulk mutation is split into per-page sub-mutations
- * (`bulkInsertTagLinks`) so each transaction stays bounded; the
- * composite index makes inserts idempotent so partial completion on
- * a re-invocation Just Works.
+ * Apply a tag only when one bounded preflight proves the whole cohort fits.
+ * No mutation occurs while the cohort is still partial: this avoids a
+ * half-applied tag and makes the soft-launch constraint explicit.
  */
 export const bulkApplyTag = action({
 	args: {
+		_secret: v.string(),
 		slug: v.string(),
 		tagId: v.id('tags'),
 		filters: v.any()
 	},
 	handler: async (
 		ctx,
-		{ slug, tagId, filters }
-	): Promise<{ affected: number; partial: boolean; scanned: number }> => {
+		{ _secret, slug, tagId, filters }
+	): Promise<{
+		affected: number;
+		partial: boolean;
+		complete: boolean;
+		scanned: number;
+		rejection?: 'SEGMENT_ORG_EXCEEDS_SCAN_LIMIT';
+	}> => {
+		requireInternalSecret(_secret);
 		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
 			slug,
 			requiredRole: 'editor'
@@ -588,7 +598,7 @@ export const bulkApplyTag = action({
 			throw new Error('Tag not found');
 		}
 
-		let affected = 0;
+		const supporterBatches: Array<Id<'supporters'>[]> = [];
 		let scanned = 0;
 		let isDone = false;
 		let cursor: string | undefined;
@@ -602,35 +612,52 @@ export const bulkApplyTag = action({
 			});
 			pages++;
 			scanned += page.scannedThisPage;
-			if (page.matches.length > 0) {
-				const result = await ctx.runMutation(bulkInsertTagLinksRef, {
-					supporterIds: page.matches.map((m) => m._id),
-					tagId
-				});
-				affected += result.inserted;
-			}
+			supporterBatches.push(page.matches.map((match) => match._id));
 			isDone = page.isDone;
 			cursor = page.continueCursor;
 		}
-		return { affected, partial: !isDone, scanned };
+		if (!isDone) {
+			return {
+				affected: 0,
+				partial: true,
+				complete: false,
+				scanned,
+				rejection: 'SEGMENT_ORG_EXCEEDS_SCAN_LIMIT'
+			};
+		}
+
+		let affected = 0;
+		for (const supporterIds of supporterBatches) {
+			if (supporterIds.length === 0) continue;
+			const result = await ctx.runMutation(bulkInsertTagLinksRef, { supporterIds, tagId });
+			affected += result.inserted;
+		}
+		return { affected, partial: false, complete: true, scanned };
 	}
 });
 
 /**
- * Remove a tag from all supporters matching a segment filter —
- * paginated dispatch. Idempotent via the composite-index lookup;
- * partial completion is safe to resume.
+ * Remove a tag only after the same bounded all-or-nothing preflight. The
+ * indexed delete remains idempotent for a fully admitted cohort.
  */
 export const bulkRemoveTag = action({
 	args: {
+		_secret: v.string(),
 		slug: v.string(),
 		tagId: v.id('tags'),
 		filters: v.any()
 	},
 	handler: async (
 		ctx,
-		{ slug, tagId, filters }
-	): Promise<{ affected: number; partial: boolean; scanned: number }> => {
+		{ _secret, slug, tagId, filters }
+	): Promise<{
+		affected: number;
+		partial: boolean;
+		complete: boolean;
+		scanned: number;
+		rejection?: 'SEGMENT_ORG_EXCEEDS_SCAN_LIMIT';
+	}> => {
+		requireInternalSecret(_secret);
 		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
 			slug,
 			requiredRole: 'editor'
@@ -640,7 +667,7 @@ export const bulkRemoveTag = action({
 			throw new Error('Tag not found');
 		}
 
-		let affected = 0;
+		const supporterBatches: Array<Id<'supporters'>[]> = [];
 		let scanned = 0;
 		let isDone = false;
 		let cursor: string | undefined;
@@ -654,17 +681,27 @@ export const bulkRemoveTag = action({
 			});
 			pages++;
 			scanned += page.scannedThisPage;
-			if (page.matches.length > 0) {
-				const result = await ctx.runMutation(bulkDeleteTagLinksRef, {
-					supporterIds: page.matches.map((m) => m._id),
-					tagId
-				});
-				affected += result.deleted;
-			}
+			supporterBatches.push(page.matches.map((match) => match._id));
 			isDone = page.isDone;
 			cursor = page.continueCursor;
 		}
-		return { affected, partial: !isDone, scanned };
+		if (!isDone) {
+			return {
+				affected: 0,
+				partial: true,
+				complete: false,
+				scanned,
+				rejection: 'SEGMENT_ORG_EXCEEDS_SCAN_LIMIT'
+			};
+		}
+
+		let affected = 0;
+		for (const supporterIds of supporterBatches) {
+			if (supporterIds.length === 0) continue;
+			const result = await ctx.runMutation(bulkDeleteTagLinksRef, { supporterIds, tagId });
+			affected += result.deleted;
+		}
+		return { affected, partial: false, complete: true, scanned };
 	}
 });
 
@@ -694,15 +731,15 @@ export const getOrgTagsInternal = internalQuery({
 /**
  * Export supporters matching a segment filter — paginated dispatch.
  *
- * Returns the full encrypted-PII rowset for any org size (subject to
- * SEGMENT_MAX_PAGES_PER_INVOCATION → ~51K supporters per action call).
+ * Returns at most 400 matching encrypted-PII rows per invocation, with a
+ * `partial` flag when more rows remain.
  * The org-level tag dictionary is loaded ONCE per action invocation
  * (`getOrgTagsInternal`) and used as a Map for the per-row tag-name
  * resolution.
  */
-export const exportMatching = action({
+export const exportMatching = internalAction({
 	args: { slug: v.string(), filters: v.any() },
-	handler: async (ctx, { slug, filters }): Promise<ExportMatchingRow[] & { partial?: boolean }> => {
+	handler: async (ctx, { slug, filters }): Promise<ExportMatchingResult> => {
 		const { orgId } = await ctx.runQuery(getOrgForSegmentActionRef, {
 			slug,
 			requiredRole: 'editor'
@@ -725,6 +762,7 @@ export const exportMatching = action({
 		}> = [];
 
 		let isDone = false;
+		let scanned = 0;
 		let cursor: string | undefined;
 		let pages = 0;
 		while (!isDone && pages < SEGMENT_MAX_PAGES_PER_INVOCATION) {
@@ -735,6 +773,7 @@ export const exportMatching = action({
 				pageSize: SEGMENT_PAGE_SIZE
 			});
 			pages++;
+			scanned += page.scannedThisPage;
 			for (const m of page.matches) {
 				const tagNames: string[] = [];
 				for (const tagId of m.tagIds) {
@@ -761,17 +800,8 @@ export const exportMatching = action({
 		// Strip the transient `creationTime` ordering key from the export
 		// shape but keep `emailHash` so the consumer (`exportDecrypted`)
 		// can dispatch v=org-1 vs v=org-2 decryption per row.
-		const result: ExportMatchingRow[] & { partial?: boolean } = collected.map(
-			({ creationTime: _ct, ...row }) => row
-		) as ExportMatchingRow[] & { partial?: boolean };
-		if (!isDone) {
-			// Action hit the per-invocation page cap. Caller re-invokes if
-			// they need the rest; the result is otherwise complete up to
-			// that point (no synthetic truncation marker row — `partial`
-			// flag is the canonical signal now).
-			result.partial = true;
-		}
-		return result;
+		const rows: ExportMatchingRow[] = collected.map(({ creationTime: _ct, ...row }) => row);
+		return { rows, partial: !isDone, complete: isDone, scanned };
 	}
 });
 
@@ -803,9 +833,9 @@ const exportMatchingActionRef = makeFunctionReference<'action'>(
 	'segments:exportMatching'
 ) as unknown as FunctionReference<
 	'action',
-	'public',
+	'internal',
 	{ slug: string; filters: unknown },
-	ExportMatchingRow[] & { partial?: boolean }
+	ExportMatchingResult
 >;
 
 /**
@@ -813,8 +843,9 @@ const exportMatchingActionRef = makeFunctionReference<'action'>(
  * Returns plaintext email/name/phone for CSV export.
  */
 export const exportDecrypted = action({
-	args: { slug: v.string(), filters: v.any() },
-	handler: async (ctx, { slug, filters }): Promise<ExportDecryptedRow[]> => {
+	args: { _secret: v.string(), slug: v.string(), filters: v.any() },
+	handler: async (ctx, { _secret, slug, filters }): Promise<ExportDecryptedResult> => {
+		requireInternalSecret(_secret);
 		// Bound slug; filters is v.any() and is validated downstream.
 		if (slug.length > 64) throw new Error('SLUG_TOO_LARGE');
 
@@ -824,38 +855,47 @@ export const exportDecrypted = action({
 		// fetch (or replaces the inner query) would silently expose
 		// decrypted PII to any authenticated caller. Any path through this
 		// action must clear the explicit gate before touching the org key.
-		await ctx.runQuery(requireExportAuthRef, { slug });
-
-		// Get org context
-		const org = await ctx.runQuery(getOrganizationBySlugRef, { slug });
-		if (!org) throw new Error('Organization not found');
-
-		const orgKey = await getOrgKeyForAction(ctx, org._id);
-		if (!orgKey) throw new Error('Organization encryption not configured');
+		const { orgId } = await ctx.runQuery(requireExportAuthRef, { slug });
 
 		// Call the action variant of exportMatching (paginated dispatch).
 		// The action handles its own editor-role auth gate via
 		// `getOrgForSegmentAction`, so the belt-and-suspenders contract
 		// holds: both this action's `requireExportAuth` and the inner
 		// action's gate must pass before any decryption work runs.
-		const supporters = await ctx.runAction(exportMatchingActionRef, { slug, filters });
+		const supporters = await ctx.runAction(exportMatchingActionRef, {
+			slug,
+			filters
+		});
 
-		// Truncation is surfaced via the `partial` boolean flag attached to
-		// the result array. If the action hit its page cap, log so
-		// operators see partial exports in the function logs.
-		if ((supporters as ExportMatchingRow[] & { partial?: boolean }).partial) {
+		// Never decrypt or return a partial CSV cohort. Array properties are
+		// dropped by Convex serialization, so completion metadata lives in this
+		// explicit object and callers must reject partial=true.
+		if (supporters.partial) {
 			console.warn(
-				`[segments.exportDecrypted] export partial — action hit SEGMENT_MAX_PAGES_PER_INVOCATION for slug=${slug}; re-invoke for more rows`
+				`[segments.exportDecrypted] export rejected — organization exceeds the soft-launch scan bound for slug=${slug}`
 			);
+			return { rows: [], partial: true, complete: false, scanned: supporters.scanned };
 		}
-		const dataRows = supporters;
 
-		// Decrypt each supporter's PII
-		return Promise.all(
+		const orgKey = await getOrgKeyForAction(ctx, orgId);
+		const dataRows = supporters.rows;
+
+		// Decrypt each supporter's PII. An org without key custody receives the
+		// same bounded rowset with explicit redaction, so the HTTP route never
+		// performs a second full scan merely to build its fallback.
+		const rows = await Promise.all(
 			dataRows.map(async (s) => {
 				let email = '[encrypted]';
 				let name = '';
 				let phone = '';
+				if (!orgKey) {
+					return {
+						email,
+						name: '[encrypted]',
+						phone: '[encrypted]',
+						tags: s.tagNames?.join('; ') ?? ''
+					};
+				}
 
 				// Version-aware dispatch via `decryptOrgPii`. v=org-2 blobs use
 				// the row's emailHash for AAD; v=org-1 legacy blobs use the
@@ -889,5 +929,6 @@ export const exportDecrypted = action({
 				return { email, name, phone, tags: s.tagNames?.join('; ') ?? '' };
 			})
 		);
+		return { rows, partial: false, complete: true, scanned: supporters.scanned };
 	}
 });

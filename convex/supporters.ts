@@ -68,7 +68,9 @@ import { bumpContactAuthorityEpoch } from './lib/contactAuthority';
 import { matchesStrandedPlaceholderSweepCas } from './lib/strandedPlaceholderSweep';
 
 const getOrganizationBySlugRef = makeFunctionReference<'query'>('organizations:getBySlug');
-const importBatchRef = makeFunctionReference<'mutation'>('supporters:importBatch');
+const importBatchRef = makeFunctionReference<'mutation'>(
+	'supporters:importBatch'
+) as unknown as FunctionReference<'mutation', 'internal'>;
 const requireImportAuthRef = makeFunctionReference<'query'>('supporters:requireImportAuth');
 const migrateSupporterBrowseRef = makeFunctionReference<'mutation'>(
 	'supporters:migrateSupporterBrowse'
@@ -1585,7 +1587,7 @@ export const requireImportAuth = internalQuery({
 	}
 });
 
-export const importBatch = mutation({
+export const importBatch = internalMutation({
 	args: {
 		slug: v.string(),
 		supporters: v.array(
@@ -1875,6 +1877,7 @@ export const importBatch = mutation({
  */
 export const importWithEncryption = action({
 	args: {
+		_secret: v.string(),
 		slug: v.string(),
 		supporters: v.array(
 			v.object({
@@ -1900,6 +1903,7 @@ export const importWithEncryption = action({
 		)
 	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		// Auth check first — before any key operations
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) throw new Error('Not authenticated');
@@ -1909,7 +1913,7 @@ export const importWithEncryption = action({
 		// upload produces 5,000 rows of valid data fine, but no single row should
 		// contain a 1MB email. Convex doc cap is 1MiB — outsized rows ruin the batch.
 		if (args.slug.length > 64) throw new Error('SLUG_TOO_LARGE');
-		if (args.supporters.length > 5000) throw new Error('SUPPORTERS_TOO_MANY');
+		if (args.supporters.length > 100) throw new Error('SUPPORTERS_TOO_MANY');
 		for (const s of args.supporters) {
 			if (s.email.length > 254) throw new Error('EMAIL_TOO_LARGE');
 			if (s.name !== undefined && s.name.length > 200) throw new Error('NAME_TOO_LARGE');
@@ -1948,7 +1952,7 @@ export const importWithEncryption = action({
 		// computation / key unsealing / encryption work. The inner
 		// `importBatch` mutation already calls
 		// `requireOrgRole(slug, "editor")`, but that fires only after this
-		// action has computed HMAC hashes for all 5000 supporters and
+		// action has computed HMAC hashes for the whole admitted batch and
 		// unsealed the org key into memory. A malicious authenticated
 		// caller with no membership in {slug} could amplify CPU and trigger
 		// key-unseal repeatedly via this path. The explicit gate here

@@ -30,6 +30,7 @@ import {
 	readCoalitionStats,
 	xLog2X
 } from './lib/coalitionMetrics';
+import { coalitionReadingsPermitted, redactCoalitionReadings } from './lib/coalitionReadingAccess';
 
 const continueCoalitionNetworkRebuildRef = makeFunctionReference<'mutation'>(
 	'networks:continueCoalitionNetworkRebuild'
@@ -102,13 +103,24 @@ async function resolveOrgPlan(
 	ctx: MutationCtx | QueryCtx,
 	orgId: Id<'organizations'>
 ): Promise<string> {
+	return effectivePlan(await readOrgSubscriptionRow(ctx, orgId));
+}
+
+/**
+ * The file's only subscription read. Unfiltered by status — canceled and
+ * past_due rows are READ, then floored by whichever plan helper the caller
+ * delegates to — and fails closed on corrupt multiplicity.
+ */
+async function readOrgSubscriptionRow(
+	ctx: MutationCtx | QueryCtx,
+	orgId: Id<'organizations'>
+): Promise<Doc<'subscriptions'> | null> {
 	const rows = await ctx.db
 		.query('subscriptions')
 		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
 		.take(2);
 	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
-	const sub = rows[0] ?? null;
-	return effectivePlan(sub);
+	return rows[0] ?? null;
 }
 
 // =============================================================================
@@ -1534,7 +1546,6 @@ async function continueCoalitionPressure(
 					? source.dmName
 					: current.dmName,
 			orgCount: (current?.orgCount ?? 0) + 1,
-			combinedProofWeight: (current?.combinedProofWeight ?? 0) + source.maxProofWeight,
 			verifiedActionEvidence:
 				(current?.verifiedActionEvidence ?? 0) + source.verifiedActionEvidence,
 			districtSignalCount: (current?.districtSignalCount ?? 0) + source.districtSignalCount,
@@ -2329,12 +2340,12 @@ async function requireNetworkAccess(
 	networkId: Id<'orgNetworks'>,
 	orgSlug: string | undefined,
 	secret: string | undefined
-): Promise<void> {
+): Promise<Id<'organizations'> | null> {
 	if (secret !== undefined) {
 		// Deliberately before the first database access. An invalid internal
 		// credential cannot be amplified into even a one-row Convex read.
 		requireInternalSecret(secret);
-		return;
+		return null;
 	}
 	if (!orgSlug) throw new Error('Organization context required');
 	const { org } = await requireOrgRole(ctx, orgSlug, 'member');
@@ -2345,22 +2356,42 @@ async function requireNetworkAccess(
 	if (membership?.status !== 'active') {
 		throw new Error('Access denied — no active membership in this network');
 	}
+	return org._id;
 }
 
 /**
  * Constant-read coalition stats. Source cardinality only affects the durable
  * writer/materializer plane; this query reads one readiness row and one active
  * aggregate after authorization.
+ *
+ * The empirical readings are additionally gated on the READER org's own plan —
+ * membership alone does not buy them. `readerOrgId` is honoured ONLY on the
+ * internal-secret branch, whose callers are server code that already proved org
+ * identity by API key; on the signed-in branch the org resolved by the access
+ * gate is the only one consulted, so a caller can never name someone else's
+ * paying org to unlock the readings. No resolvable reader org ⇒ redact. The
+ * lookup is skipped entirely when there is nothing to resolve, so the hot path
+ * keeps its constant read budget. The plan predicate is clock-free — the
+ * past-due runway is durable row state, not arithmetic on `now`.
+ *
+ * The result carries `readingsWithheld` so a payment-gated reading is
+ * distinguishable from one that was never computed; both are `null` on the wire.
  */
 export const getStats = query({
 	args: {
 		networkId: v.id('orgNetworks'),
 		orgSlug: v.optional(v.string()),
+		readerOrgId: v.optional(v.id('organizations')),
 		_secret: v.optional(v.string())
 	},
-	handler: async (ctx, { networkId, orgSlug, _secret }) => {
-		await requireNetworkAccess(ctx, networkId, orgSlug, _secret);
-		return await readCoalitionStats(ctx, networkId);
+	handler: async (ctx, { networkId, orgSlug, readerOrgId, _secret }) => {
+		const callerOrgId = await requireNetworkAccess(ctx, networkId, orgSlug, _secret);
+		const readerOrg = callerOrgId ?? (_secret !== undefined ? (readerOrgId ?? null) : null);
+		const permitted =
+			readerOrg === null
+				? false
+				: coalitionReadingsPermitted(await readOrgSubscriptionRow(ctx, readerOrg));
+		return redactCoalitionReadings(await readCoalitionStats(ctx, networkId), permitted);
 	}
 });
 

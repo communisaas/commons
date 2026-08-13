@@ -43,6 +43,7 @@ const sharedModule = source('convex/lib/publicAggregatePrivacy.ts');
 const templates = source('convex/templates.ts');
 const discoverySource = source('convex/lib/publicTemplateDiscoverySource.ts');
 const submissions = source('convex/submissions.ts');
+const publicTemplateQueries = source('src/lib/server/public-template-queries.ts');
 
 function occurrences(haystack: string, pattern: RegExp): number {
 	return haystack.match(new RegExp(pattern.source, 'g'))?.length ?? 0;
@@ -239,6 +240,21 @@ describe('no private copy survives at the edited call sites', () => {
 		for (const pattern of [/DAILY_WINDOW/, /DISTRICT_CAP/, /const dayMs/]) {
 			expect(`submissions:${occurrences(submissions, pattern)}`).toBe('submissions:0');
 		}
+	});
+
+	it('has the SvelteKit projector schema naming the shared shape symbols', () => {
+		expect(publicTemplateQueries).toContain("from '$convex/lib/publicAggregatePrivacy'");
+		for (const pattern of [
+			/daily_arrivals:\s*publicArray\(\s*PUBLIC_NUMBER,\s*TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS\s*\)/,
+			/district_counts:\s*publicArray\(\s*publicObject\(\{[^}]*\}\),\s*MAX_PUBLIC_TEMPLATE_DISTRICT_COUNTS\s*\)/,
+			/tier_counts:\s*publicArray\(\s*PUBLIC_NUMBER,\s*TRUST_TIER_BUCKET_COUNT\s*\)/
+		]) {
+			expect(`${pattern.source}:${pattern.test(publicTemplateQueries)}`).toBe(
+				`${pattern.source}:true`
+			);
+		}
+		// The public-payload row cap (6), never the storage cap (500).
+		expect(publicTemplateQueries).not.toContain('TEMPLATE_DISTRICT_COUNT_CAP');
 	});
 
 	it('has both template-aggregate writers reading the same shape symbols', () => {

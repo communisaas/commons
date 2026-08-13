@@ -11,6 +11,7 @@ import { v } from 'convex/values';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
 import type { Doc, Id } from './_generated/dataModel';
+import { isPresent } from '../src/lib/core/fact';
 import { requireAuth, requireOrgRole } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { upsertExternalId } from './_externalIds';
@@ -28,6 +29,11 @@ import {
 	normalizeAccountabilityIdentityCommitment,
 	normalizeAccountabilityPageSize
 } from './lib/accountabilityReadModel';
+import {
+	assertMatterUsableByOrg,
+	isMatterVisibleToOrg,
+	measuredMatterRelevanceFact
+} from './lib/matterAuthority';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -95,10 +101,28 @@ const upsertScorecardSnapshotRef = makeFunctionReference<'mutation'>(
 ) as unknown as FunctionReference<'mutation', 'internal'>;
 const scoreBillRelevanceRef = makeFunctionReference<'action'>(
 	'legislation:scoreBillRelevance'
-) as unknown as FunctionReference<'action', 'internal'>;
+) as unknown as FunctionReference<
+	'action',
+	'internal',
+	{ orgId: Id<'organizations'>; billId: Id<'bills'> },
+	{ billId: Id<'bills'>; matchesFound: number; rowsUpserted: number }
+>;
 const requireRescoreBillsAuthRef = makeFunctionReference<'query'>(
 	'legislation:requireRescoreBillsAuth'
-) as unknown as FunctionReference<'query', 'internal', { slug: string }, { ok: true }>;
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ slug: string },
+	{ orgId: Id<'organizations'> }
+>;
+const filterMatterIdsForOrgRef = makeFunctionReference<'query'>(
+	'legislation:filterMatterIdsForOrg'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ orgId: Id<'organizations'>; billIds: Id<'bills'>[] },
+	Id<'bills'>[]
+>;
 const backfillVoteReceiptResponsesRef = makeFunctionReference<'mutation'>(
 	'legislation:backfillVoteReceiptResponses'
 ) as unknown as FunctionReference<
@@ -471,7 +495,6 @@ export const getDmActivity = query({
 				billId: r.billId,
 				billExternalId: r.billExternalId,
 				billTitle: r.billTitle,
-				proofWeight: r.proofWeight,
 				dmAction: r.dmAction ?? null,
 				alignment: r.alignment,
 				causalityClass: r.causalityClass,
@@ -583,7 +606,6 @@ export const getDmFeed = query({
 					billId: r.billId,
 					billExternalId: r.billExternalId,
 					billTitle: r.billTitle,
-					proofWeight: r.proofWeight,
 					dmAction: r.dmAction ?? null,
 					alignment: r.alignment,
 					causalityClass: r.causalityClass,
@@ -628,9 +650,7 @@ export const watchBill = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org, userId } = await requireOrgRole(ctx, args.slug, 'editor');
-
-		const bill = await ctx.db.get(args.billId);
-		if (!bill) throw new Error('Bill not found');
+		await assertMatterUsableByOrg(ctx, args.billId, org._id);
 
 		const existing = await ctx.db
 			.query('orgBillWatches')
@@ -732,7 +752,7 @@ export const browseBills = query({
 
 		const results = await ctx.db
 			.query('orgBillRelevances')
-			.withIndex('by_orgId_score', (q) => q.eq('orgId', org._id))
+			.withIndex('by_orgId_presentScore', (q) => q.eq('orgId', org._id))
 			.order('desc')
 			.paginate({
 				numItems: limit,
@@ -756,7 +776,7 @@ export const browseBills = query({
 					jurisdictionLevel: bill.jurisdictionLevel,
 					chamber: bill.chamber ?? null,
 					sourceUrl: bill.sourceUrl,
-					relevanceScore: r.score,
+					relevance: r.scoreFact,
 					matchedDomains: r.matchedOn
 				};
 			})
@@ -782,7 +802,7 @@ export const searchBills = query({
 		limit: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
-		await requireOrgRole(ctx, args.slug, 'member');
+		const { org } = await requireOrgRole(ctx, args.slug, 'member');
 		const limit = normalizeLegislationLimit(args.limit, 20, 50, 'BILL_SEARCH_LIMIT_INVALID');
 
 		if (!args.q.trim()) throw new Error('Query parameter "q" is required');
@@ -796,9 +816,11 @@ export const searchBills = query({
 		});
 
 		const results = await searchQuery.take(limit);
+		// Tenant filtering after the bounded search may under-fill the requested page.
+		const visibleResults = results.filter((bill) => isMatterVisibleToOrg(bill, org._id));
 
 		return {
-			bills: results.map((b) => ({
+			bills: visibleResults.map((b) => ({
 				_id: b._id,
 				externalId: b.externalId,
 				title: b.title,
@@ -810,7 +832,7 @@ export const searchBills = query({
 				chamber: b.chamber ?? null,
 				sourceUrl: b.sourceUrl
 			})),
-			total: results.length
+			total: visibleResults.length
 		};
 	}
 });
@@ -1182,7 +1204,6 @@ function receiptProjectionDto(row: Doc<'accountabilityReceiptProjections'>) {
 		dmName: row.dmName,
 		billId: row.billId,
 		attestationDigest: row.attestationDigest,
-		proofWeight: row.proofWeight,
 		verifiedCount: row.verifiedCount,
 		totalCount: row.totalCount,
 		districtCount: row.districtCount,
@@ -1315,7 +1336,6 @@ export const getOrgReceiptSummary = query({
 			pendingCount: row?.pendingCount ?? 0,
 			responseLoggedCount: row?.responseLoggedCount ?? 0,
 			anchorFieldCount: row?.anchorFieldCount ?? 0,
-			proofWeightTotal: row?.proofWeightTotal ?? 0,
 			latestProofDeliveredAt: row?.latestProofDeliveredAt ?? null,
 			exact: true as const,
 			sampleLimit: null
@@ -1530,7 +1550,6 @@ export const saveScorecard = internalMutation({
 		responsiveness: v.optional(v.float64()),
 		alignment: v.optional(v.float64()),
 		composite: v.optional(v.float64()),
-		proofWeightTotal: v.float64(),
 		deliveriesSent: v.number(),
 		deliveriesOpened: v.number(),
 		deliveriesVerified: v.number(),
@@ -1558,7 +1577,6 @@ export const saveScorecard = internalMutation({
 				responsiveness: args.responsiveness,
 				alignment: args.alignment,
 				composite: args.composite,
-				proofWeightTotal: args.proofWeightTotal,
 				deliveriesSent: args.deliveriesSent,
 				deliveriesOpened: args.deliveriesOpened,
 				deliveriesVerified: args.deliveriesVerified,
@@ -1717,12 +1735,14 @@ export const syncPipeline = internalAction({
 });
 
 /**
- * Score a bill's relevance against org issue domains using vector search.
- * Uses Convex's built-in vectorSearch on orgIssueDomains.
+ * Score a bill only against the issue domains of the organization whose
+ * editor authorized the outer request. The vector-index filter is the primary
+ * cost and tenant boundary; the hydrated-document assertion is a second guard
+ * against index/configuration drift before any relevance write.
  */
 export const scoreBillRelevance = internalAction({
-	args: { billId: v.id('bills') },
-	handler: async (ctx, { billId }) => {
+	args: { orgId: v.id('organizations'), billId: v.id('bills') },
+	handler: async (ctx, { orgId, billId }) => {
 		// Read the bill's embedding
 		const bill = await ctx.runQuery(getBillInternalRef, {
 			billId
@@ -1731,49 +1751,46 @@ export const scoreBillRelevance = internalAction({
 			return { billId, matchesFound: 0, rowsUpserted: 0 };
 		}
 
-		// Vector search across all org issue domain embeddings
+		// The filter executes inside the vector index. Do not post-filter a
+		// cross-tenant top-50 result: that would still charge this request for
+		// other organizations and could crowd the authorized org out entirely.
 		const matches = await ctx.vectorSearch('orgIssueDomains', 'by_embedding', {
 			vector: bill.topicEmbedding,
-			limit: 50
+			limit: 50,
+			filter: (q) => q.eq('orgId', orgId)
 		});
 
 		if (matches.length === 0) {
 			return { billId, matchesFound: 0, rowsUpserted: 0 };
 		}
 
-		// Resolve full docs to get orgId and label
+		// Resolve only the authorized org's matches and aggregate one relevance
+		// record for that org.
 		const RELEVANCE_THRESHOLD = 0.6;
-		const orgMap = new Map<string, { bestScore: number; labels: string[] }>();
+		let bestScore = 0;
+		const labels: string[] = [];
 
 		for (const match of matches) {
 			if (match._score < RELEVANCE_THRESHOLD) continue;
 
 			const doc = await ctx.runQuery(getIssueDomainInternalRef, { id: match._id });
 			if (!doc) continue;
-
-			const orgIdStr = doc.orgId as string;
-			const existing = orgMap.get(orgIdStr);
-			if (existing) {
-				existing.labels.push(doc.label);
-				if (match._score > existing.bestScore) existing.bestScore = match._score;
-			} else {
-				orgMap.set(orgIdStr, {
-					bestScore: match._score,
-					labels: [doc.label]
-				});
+			if (doc.orgId !== orgId) {
+				throw new Error('LEGISLATION_RESCORE_DOMAIN_SCOPE_VIOLATION');
 			}
+			labels.push(doc.label);
+			if (match._score > bestScore) bestScore = match._score;
 		}
 
-		// Upsert relevance rows
 		let rowsUpserted = 0;
-		for (const [orgIdStr, { bestScore, labels }] of orgMap) {
+		if (labels.length > 0) {
 			await ctx.runMutation(upsertRelevanceRef, {
-				orgId: orgIdStr as Id<'organizations'>,
+				orgId,
 				billId,
 				score: bestScore,
 				matchedOn: labels
 			});
-			rowsUpserted++;
+			rowsUpserted = 1;
 		}
 
 		return { billId, matchesFound: matches.length, rowsUpserted };
@@ -1812,7 +1829,8 @@ export const upsertRelevance = internalMutation({
 
 		if (existing) {
 			await ctx.db.patch(existing._id, {
-				score: args.score,
+				scoreFact: measuredMatterRelevanceFact(args.score),
+				presentScore: args.score,
 				matchedOn: args.matchedOn
 			});
 			return existing._id;
@@ -1821,7 +1839,8 @@ export const upsertRelevance = internalMutation({
 		return await ctx.db.insert('orgBillRelevances', {
 			orgId: args.orgId,
 			billId: args.billId,
-			score: args.score,
+			scoreFact: measuredMatterRelevanceFact(args.score),
+			presentScore: args.score,
 			matchedOn: args.matchedOn
 		});
 	}
@@ -1906,12 +1925,18 @@ export const listRelevantBills = query({
 
 		const relevances = await ctx.db
 			.query('orgBillRelevances')
-			.withIndex('by_orgId_score', (q) => q.eq('orgId', org._id))
+			.withIndex('by_orgId_presentScore', (q) => q.eq('orgId', org._id))
 			.order('desc')
 			.take(limit);
 
+		// Authored matters are browseable, but an authored row is not evidence of
+		// issue-domain relevance. Only measured facts reach the percentage renderer.
+		const measuredRelevances = relevances.flatMap((r) => {
+			const scoreFact = r.scoreFact;
+			return isPresent(scoreFact) ? [{ ...r, score: scoreFact.value }] : [];
+		});
 		return Promise.all(
-			relevances.map(async (r) => {
+			measuredRelevances.map(async (r) => {
 				const bill = await ctx.db.get(r.billId);
 				return {
 					_id: r._id,
@@ -2131,7 +2156,6 @@ export const getDmDetail = query({
 		}
 		const enrichedReceipts = receiptPage.page.map((row) => ({
 			_id: row.receiptId,
-			proofWeight: row.proofWeight,
 			dmAction: row.dmAction ?? null,
 			alignment: row.alignment,
 			causalityClass: row.causalityClass,
@@ -2150,7 +2174,6 @@ export const getDmDetail = query({
 			)
 			.unique();
 		const receiptCount = aggregate?.receiptCount ?? 0;
-		const avgProofWeight = receiptCount > 0 ? (aggregate?.proofWeightTotal ?? 0) / receiptCount : 0;
 
 		return {
 			decisionMaker: {
@@ -2187,7 +2210,6 @@ export const getDmDetail = query({
 			nextReceiptCursor: receiptPage.isDone ? null : receiptPage.continueCursor,
 			accountability: {
 				receiptCount,
-				avgProofWeight: Math.round(avgProofWeight * 100) / 100,
 				alignedCount: aggregate?.alignedCount ?? 0,
 				opposedCount: aggregate?.opposedCount ?? 0
 			}
@@ -2306,9 +2328,6 @@ export const getDmPublicProfile = query({
 			throw new Error('ACCOUNTABILITY_PUBLIC_RECEIPT_PAGE_SPLIT_REQUIRED');
 		}
 		const totalReceipts = aggregate?.publicReceiptCount ?? 0;
-		const totalWeight = aggregate?.publicProofWeightTotal ?? 0;
-		const weightedAlignment =
-			totalWeight > 0 ? (aggregate?.publicWeightedAlignmentTotal ?? 0) / totalWeight : 0;
 
 		const billMap = new Map<
 			string,
@@ -2322,7 +2341,6 @@ export const getDmPublicProfile = query({
 				};
 				receipts: Array<{
 					_id: Id<'accountabilityReceipts'>;
-					proofWeight: number;
 					verifiedCount: number | null;
 					districtCount: number | null;
 					causalityClass: string;
@@ -2332,7 +2350,6 @@ export const getDmPublicProfile = query({
 					actionOccurredAt: number | null;
 					attestationDigest: string;
 				}>;
-				maxProofWeight: number;
 				totalVerified: number;
 				latestAction: string | null;
 			}
@@ -2349,7 +2366,6 @@ export const getDmPublicProfile = query({
 						jurisdiction: r.billJurisdiction
 					},
 					receipts: [],
-					maxProofWeight: 0,
 					totalVerified: 0,
 					latestAction: null
 				});
@@ -2357,7 +2373,6 @@ export const getDmPublicProfile = query({
 			const entry = billMap.get(billIdStr)!;
 			entry.receipts.push({
 				_id: r.receiptId,
-				proofWeight: r.proofWeight,
 				verifiedCount: r.verifiedCount >= 5 ? r.verifiedCount : null,
 				districtCount: r.districtCount >= 3 ? r.districtCount : null,
 				causalityClass: r.causalityClass,
@@ -2367,7 +2382,6 @@ export const getDmPublicProfile = query({
 				actionOccurredAt: r.actionOccurredAt ?? null,
 				attestationDigest: r.attestationDigest
 			});
-			entry.maxProofWeight = Math.max(entry.maxProofWeight, r.proofWeight);
 			entry.totalVerified += r.verifiedCount;
 			if (r.dmAction) entry.latestAction = r.dmAction;
 		}
@@ -2386,17 +2400,14 @@ export const getDmPublicProfile = query({
 				photoUrl: dm.photoUrl ?? null
 			},
 			summary: {
-				accountabilityScore: Math.round((weightedAlignment + 1) * 50),
-				weightedAlignment,
 				totalReceipts,
 				totalVerifiedConstituents:
 					(aggregate?.publicVerifiedCount ?? 0) >= 5 ? (aggregate?.publicVerifiedCount ?? 0) : null,
 				uniqueBills: aggregate?.uniquePublicBillCount ?? 0,
 				causalityRate:
-					totalReceipts > 0 ? (aggregate?.publicCausalReceiptCount ?? 0) / totalReceipts : 0,
-				avgProofWeight: totalReceipts > 0 ? totalWeight / totalReceipts : 0
+					totalReceipts > 0 ? (aggregate?.publicCausalReceiptCount ?? 0) / totalReceipts : 0
 			},
-			bills: Array.from(billMap.values()).sort((a, b) => b.maxProofWeight - a.maxProofWeight),
+			bills: Array.from(billMap.values()).sort((a, b) => b.totalVerified - a.totalVerified),
 			nextCursor: receiptPage.isDone ? null : receiptPage.continueCursor
 		};
 	}
@@ -2414,16 +2425,21 @@ export const getDmScorecard = query({
 		const { decisionMakerId, dm, canonicalSlug } = resolved;
 		await requireAccountabilityReadModelReady(ctx);
 
-		const latest = await ctx.db
-			.query('accountabilityScorecardProjections')
-			.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
-			.unique();
-
-		const history = await ctx.db
-			.query('scorecardSnapshots')
-			.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
-			.order('desc')
-			.take(12);
+		const [latest, history, receiptAggregate] = await Promise.all([
+			ctx.db
+				.query('accountabilityScorecardProjections')
+				.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
+				.unique(),
+			ctx.db
+				.query('scorecardSnapshots')
+				.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
+				.order('desc')
+				.take(12),
+			ctx.db
+				.query('accountabilityDecisionMakerAggregates')
+				.withIndex('by_decisionMakerId', (q) => q.eq('decisionMakerId', decisionMakerId))
+				.unique()
+		]);
 
 		return {
 			canonicalSlug,
@@ -2436,12 +2452,13 @@ export const getDmScorecard = query({
 				jurisdiction: dm.jurisdiction ?? null,
 				photoUrl: dm.photoUrl ?? null
 			},
+			receiptActivityObserved: receiptAggregate !== null,
+			publicReceiptCount: receiptAggregate?.publicReceiptCount ?? 0,
 			current: latest
 				? {
 						responsiveness: latest.responsiveness ?? null,
 						alignment: latest.alignment ?? null,
 						composite: latest.composite ?? null,
-						proofWeightTotal: latest.proofWeightTotal,
 						period: {
 							start: latest.periodStart,
 							end: latest.periodEnd
@@ -2492,7 +2509,6 @@ async function scorecardForOrgDmProjection(
 					composite: latest.composite ?? null,
 					responsiveness: latest.responsiveness ?? null,
 					alignment: latest.alignment ?? null,
-					proofWeightTotal: latest.proofWeightTotal,
 					deliveriesSent: latest.deliveriesSent,
 					deliveriesOpened: latest.deliveriesOpened,
 					deliveriesVerified: latest.deliveriesVerified,
@@ -2796,9 +2812,8 @@ export const trackVotes = internalAction({
  *   deliveriesOpened     = count(responses.type == 'opened')
  *   deliveriesVerified   = count(responses.type == 'clicked_verify')
  *   repliesReceived      = count(responses.type == 'replied')
- *   proofWeightTotal     = Σ receipt.proofWeight
  *   responsiveness       = deliveriesOpened / deliveriesSent (null if no deliveries)
- *   alignment (weighted) = Σ(alignment × proofWeight) / Σ(proofWeight)  over scored receipts
+ *   alignment            = Σ alignment / totalScoredVotes  (unweighted mean over scored receipts)
  *   alignedVotes         = count(receipts where alignment > 0.5)
  *   totalScoredVotes     = count(receipts where alignment is non-zero)
  *   composite            = 0.5 × responsiveness + 0.5 × alignment  (each ∈ [0,1])
@@ -2807,7 +2822,7 @@ export const trackVotes = internalAction({
  * Methodology version bumps when aggregation rules change. Snapshots are upserted
  * by (dmId, periodEnd, methodologyVersion), so re-runs for the same week are idempotent.
  */
-const SCORECARD_METHODOLOGY_VERSION = 1;
+const SCORECARD_METHODOLOGY_VERSION = 2;
 const SCORECARD_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 export const computeScorecards = internalAction({
@@ -2867,7 +2882,6 @@ export const computeScorecards = internalAction({
 						responsiveness: aggregate.responsiveness ?? undefined,
 						alignment: aggregate.alignment ?? undefined,
 						composite: aggregate.composite ?? undefined,
-						proofWeightTotal: aggregate.proofWeightTotal,
 						deliveriesSent: aggregate.deliveriesSent,
 						deliveriesOpened: aggregate.deliveriesOpened,
 						deliveriesVerified: aggregate.deliveriesVerified,
@@ -2899,7 +2913,6 @@ interface ScorecardAggregate {
 	deliveriesOpened: number;
 	deliveriesVerified: number;
 	repliesReceived: number;
-	proofWeightTotal: number;
 	alignedVotes: number;
 	totalScoredVotes: number;
 	responsiveness: number | null;
@@ -2912,11 +2925,9 @@ interface ScorecardReceiptFold {
 	deliveriesOpened: number;
 	deliveriesVerified: number;
 	repliesReceived: number;
-	proofWeightTotal: number;
 	alignedVotes: number;
 	totalScoredVotes: number;
-	weightedAlignmentNumerator: number;
-	scoredProofWeight: number;
+	alignmentNumerator: number;
 }
 
 interface ScorecardDmPage {
@@ -2940,11 +2951,9 @@ function emptyScorecardReceiptFold(): ScorecardReceiptFold {
 		deliveriesOpened: 0,
 		deliveriesVerified: 0,
 		repliesReceived: 0,
-		proofWeightTotal: 0,
 		alignedVotes: 0,
 		totalScoredVotes: 0,
-		weightedAlignmentNumerator: 0,
-		scoredProofWeight: 0
+		alignmentNumerator: 0
 	};
 }
 
@@ -2957,11 +2966,9 @@ function mergeScorecardReceiptFolds(
 		deliveriesOpened: left.deliveriesOpened + right.deliveriesOpened,
 		deliveriesVerified: left.deliveriesVerified + right.deliveriesVerified,
 		repliesReceived: left.repliesReceived + right.repliesReceived,
-		proofWeightTotal: left.proofWeightTotal + right.proofWeightTotal,
 		alignedVotes: left.alignedVotes + right.alignedVotes,
 		totalScoredVotes: left.totalScoredVotes + right.totalScoredVotes,
-		weightedAlignmentNumerator: left.weightedAlignmentNumerator + right.weightedAlignmentNumerator,
-		scoredProofWeight: left.scoredProofWeight + right.scoredProofWeight
+		alignmentNumerator: left.alignmentNumerator + right.alignmentNumerator
 	};
 }
 
@@ -2969,14 +2976,13 @@ function finalizeScorecardAggregate(fold: ScorecardReceiptFold): ScorecardAggreg
 	if (fold.deliveriesSent === 0) return null;
 	const responsiveness = fold.deliveriesOpened / fold.deliveriesSent;
 	const alignment =
-		fold.scoredProofWeight > 0 ? fold.weightedAlignmentNumerator / fold.scoredProofWeight : null;
+		fold.totalScoredVotes > 0 ? fold.alignmentNumerator / fold.totalScoredVotes : null;
 	const composite = alignment === null ? responsiveness : 0.5 * responsiveness + 0.5 * alignment;
 	return {
 		deliveriesSent: fold.deliveriesSent,
 		deliveriesOpened: fold.deliveriesOpened,
 		deliveriesVerified: fold.deliveriesVerified,
 		repliesReceived: fold.repliesReceived,
-		proofWeightTotal: fold.proofWeightTotal,
 		alignedVotes: fold.alignedVotes,
 		totalScoredVotes: fold.totalScoredVotes,
 		responsiveness,
@@ -3047,11 +3053,9 @@ export const aggregateReceiptsForDm = internalQuery({
 			fold.deliveriesOpened += Number(receipt.deliveryOpened);
 			fold.deliveriesVerified += Number(receipt.deliveryVerified);
 			fold.repliesReceived += Number(receipt.replyReceived);
-			fold.proofWeightTotal += receipt.proofWeight;
 			if (receipt.alignment !== 0) {
 				fold.totalScoredVotes++;
-				fold.weightedAlignmentNumerator += receipt.alignment * receipt.proofWeight;
-				fold.scoredProofWeight += receipt.proofWeight;
+				fold.alignmentNumerator += receipt.alignment;
 				if (receipt.alignment > 0.5) fold.alignedVotes++;
 			}
 		}
@@ -3085,7 +3089,6 @@ async function hashScorecardSnapshot(
 		`do=${input.deliveriesOpened}`,
 		`dv=${input.deliveriesVerified}`,
 		`rr=${input.repliesReceived}`,
-		`pw=${input.proofWeightTotal}`,
 		`av=${input.alignedVotes}`,
 		`tv=${input.totalScoredVotes}`,
 		`rs=${input.responsiveness ?? 'null'}`,
@@ -3139,13 +3142,16 @@ export const getPendingAlertsByOrgId = query({
 export const listRecentBills = query({
 	args: { slug: v.string(), limit: v.optional(v.number()) },
 	handler: async (ctx, { slug, limit }) => {
-		await requireOrgRole(ctx, slug, 'editor');
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
 		const max = normalizeLegislationLimit(limit, 100, 200, 'RECENT_BILL_LIMIT_INVALID');
 		const bills = await ctx.db
 			.query('bills')
 			.order('desc')
 			.take(max * 2);
-		const withEmbeddings = bills.filter((b) => b.topicEmbedding != null).slice(0, max);
+		const withEmbeddings = bills
+			.filter((bill) => isMatterVisibleToOrg(bill, org._id))
+			.filter((bill) => bill.topicEmbedding != null)
+			.slice(0, max);
 		return withEmbeddings.map((b) => ({ _id: b._id }));
 	}
 });
@@ -3156,47 +3162,73 @@ export const listRecentBills = query({
 /**
  * Explicit auth+editor-role gate for the `rescoreBills` action.
  * Without this gate, a direct Convex-client call from any caller
- * (authenticated or not) could trigger 200 × vector searches over all
- * orgs' issue domains via `scoreBillRelevance`. The SvelteKit endpoint
+ * (authenticated or not) could trigger repeated vector searches. The gate
+ * returns the authorized orgId, which is then carried through the vector
+ * filter, hydrated-domain assertion, and relevance upsert. The SvelteKit endpoint
  * at `/api/org/[slug]/issue-domains/rescore/+server.ts` happens to call
  * `listRecentBills` first (which DOES enforce editor role), but the
  * Convex action surface is also reachable directly. This explicit gate
- * makes the slug semantically meaningful and binds the action to the
- * SvelteKit endpoint's role contract.
+ * makes the slug both an authorization input and the tenant/cost boundary.
  */
 export const requireRescoreBillsAuth = internalQuery({
 	args: { slug: v.string() },
-	handler: async (ctx, { slug }): Promise<{ ok: true }> => {
-		await requireOrgRole(ctx, slug, 'editor');
-		return { ok: true };
+	handler: async (ctx, { slug }): Promise<{ orgId: Id<'organizations'> }> => {
+		const { org } = await requireOrgRole(ctx, slug, 'editor');
+		return { orgId: org._id };
+	}
+});
+
+export const filterMatterIdsForOrg = internalQuery({
+	args: { orgId: v.id('organizations'), billIds: v.array(v.id('bills')) },
+	handler: async (ctx, { orgId, billIds }): Promise<Id<'bills'>[]> => {
+		if (billIds.length > 10) throw new Error('BILL_IDS_TOO_MANY');
+		const visible: Id<'bills'>[] = [];
+		for (const billId of billIds) {
+			const bill = await ctx.db.get(billId);
+			if (bill && isMatterVisibleToOrg(bill, orgId)) visible.push(billId);
+		}
+		return visible;
 	}
 });
 
 export const rescoreBills = action({
-	args: { slug: v.string(), billIds: v.array(v.id('bills')) },
-	handler: async (ctx, { slug, billIds }) => {
+	args: { _secret: v.string(), slug: v.string(), billIds: v.array(v.id('bills')) },
+	handler: async (ctx, { _secret, slug, billIds }) => {
+		requireInternalSecret(_secret);
 		// action-boundary length caps. v.id() bounds the per-id
 		// shape; slug + array-length are the unbounded surfaces.
 		if (slug.length > 64) throw new Error('SLUG_TOO_LARGE');
-		if (billIds.length > 200) throw new Error('BILL_IDS_TOO_MANY');
+		if (billIds.length > 10) throw new Error('BILL_IDS_TOO_MANY');
 
 		// Explicit editor-role gate at the top, mirroring the SvelteKit
 		// endpoint's contract. The slug argument semantically scopes who
 		// can trigger the (expensive) vector-search loop.
-		await ctx.runQuery(requireRescoreBillsAuthRef, { slug });
+		const { orgId } = await ctx.runQuery(requireRescoreBillsAuthRef, { slug });
 
+		const uniqueBillIds = Array.from(
+			new Map(billIds.map((billId) => [String(billId), billId])).values()
+		);
+		const visibleBillIds = await ctx.runQuery(filterMatterIdsForOrgRef, {
+			orgId,
+			billIds: uniqueBillIds
+		});
+		const visible = new Set(visibleBillIds.map(String));
 		let rowsUpserted = 0;
 		const errors: string[] = [];
-		for (const billId of billIds) {
+		for (const billId of uniqueBillIds) {
+			if (!visible.has(String(billId))) {
+				errors.push(`${billId}: MATTER_NOT_FOUND`);
+				continue;
+			}
 			try {
-				const result = await ctx.runAction(scoreBillRelevanceRef, { billId });
+				const result = await ctx.runAction(scoreBillRelevanceRef, { orgId, billId });
 				rowsUpserted += result.rowsUpserted;
 			} catch (err) {
 				errors.push(`${billId}: ${err instanceof Error ? err.message : String(err)}`);
 			}
 		}
 		return {
-			billsScored: billIds.length,
+			billsScored: uniqueBillIds.length,
 			rowsUpserted,
 			errors: errors.length > 0 ? errors : undefined
 		};
@@ -3225,6 +3257,8 @@ export const rescoreBills = action({
 //   - It is idempotent: re-running against an empty `bills` table is a no-op
 //     that returns zero counts. Always run with `dryRun: true` FIRST and
 //     eyeball the per-table counts before a live pass.
+//   - Org-minted matters are excluded because they are org data with live
+//     accountability receipts, not speculative legislation-sync rows.
 //
 // Pagination is mandatory: `bills` rows can carry a 768-float topicEmbedding
 // (~6 KB each), so a single-transaction `.collect()` over thousands of rows
@@ -3237,10 +3271,11 @@ export const rescoreBills = action({
 // DELIBERATELY ABSENT (preserved, never touched by a prune): legislativeActions
 // and accountabilityReceipts are audit/forensic records — accountabilityReceipts
 // is the off-chain half of on-chain-anchored proofs (attestationDigest,
-// anchorCid, anchorRoot, proofWeight). A bills prune must NOT erase them; their
-// billId may dangle to a deleted bill afterward (readers null-guard), but the
-// forensic row survives. Mirrors `sweep-stranded-donations` ("money moved,
-// audit trail must survive").
+// anchorCid, anchorRoot). Org-minted matters therefore remain in `bills`:
+// convex/lib/accountabilityReadModelDb.ts:475 throws
+// ACCOUNTABILITY_PROJECTION_INVALID:bill:missing rather than null-guarding, so
+// deleting one would brick receipt re-projection. Mirrors
+// `sweep-stranded-donations` ("money moved, audit trail must survive").
 const PRUNE_DELETE_DEPENDENT_TABLES = [
 	'orgBillWatches',
 	'orgBillRelevances',
@@ -3340,7 +3375,9 @@ export const pruneDependentTableBatch = internalMutation({
 /**
  * Process one page of the `bills` table.
  *
- * `dryRun` counts the page; live mode deletes each row in the page. Run
+ * `dryRun` counts only ingested rows; live mode deletes those rows. Org-minted
+ * matters are excluded because their live accountability receipts require the
+ * source row for re-projection. Run
  * `pruneAllBills` (which clears dependents first) rather than calling this
  * directly. Internal-only.
  */
@@ -3357,16 +3394,19 @@ export const pruneBillsBatch = internalMutation({
 			.query('bills')
 			.paginate({ numItems: batchSize, cursor: args.cursor ?? null });
 
+		const deletableBills = page.page.filter((bill) => bill.orgId == null);
 		let deleted = 0;
 		if (!args.dryRun) {
-			for (const bill of page.page) {
+			for (const bill of deletableBills) {
+				// Org-minted matters are org data with live receipts; the projection
+				// writer throws on a missing bill instead of null-guarding it.
 				await ctx.db.delete(bill._id);
 				deleted++;
 			}
 		}
 
 		return {
-			counted: page.page.length,
+			counted: deletableBills.length,
 			deleted,
 			continueCursor: page.continueCursor,
 			isDone: page.isDone

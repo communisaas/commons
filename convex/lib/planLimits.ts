@@ -17,8 +17,8 @@
  * they subscribe. `inactive` is absent from ORG_PLAN_ORDER: it never renders as
  * a tier in the plan grid; it is only the fallback floor.
  *
- * The metered resolve allowance is the ONE exception to the "inactive =
- * everything zeroed" rule: it is a SUBSTRATE-SALE allowance (keyed
+ * The metered address-resolution allowance is the ONE exception to the
+ * "inactive = everything zeroed" rule: it is a SUBSTRATE-SALE allowance (keyed
  * /api/v1/resolve-address calls), NOT a delivery quota. The inactive floor
  * carries a FINITE trial credit (1,000 resolves/month — mirrors Cicero's
  * 1,000-lookup tier; NOT unlimited, NOT a recurring-free cap) so an org can
@@ -26,6 +26,55 @@
  * email/SMS/seat/verified-action quotas — those stay zeroed for inactive. Paid
  * tiers raise only the resolve allowance.
  */
+
+/**
+ * One decision-maker resolve reserves 166 provider-budget units. The measured
+ * all-provider cost envelope is about $0.58; only 30% of settled org revenue is
+ * minted as provider capacity, retaining a 70% gross-margin envelope.
+ *
+ * These constants are shared by Stripe receipt processing, entitlement reads,
+ * the Durable Object policy validator, and plan presentation. A plan slug is
+ * never itself spending authority: only a settled payment converted by
+ * `agenticProviderCapacityForPayment` mints a balance.
+ */
+export const AGENTIC_RESOLVE_PROVIDER_UNITS = 166;
+export const AGENTIC_RESOLVE_PROVIDER_COST_MICROUSD = 580_000;
+export const AGENTIC_PROVIDER_REVENUE_ALLOCATION_BASIS_POINTS = 3_000;
+const BASIS_POINTS = 10_000;
+const MICROUSD_PER_CENT = 10_000;
+const ALLOCATED_MICROUSD_PER_CENT =
+	(MICROUSD_PER_CENT * AGENTIC_PROVIDER_REVENUE_ALLOCATION_BASIS_POINTS) / BASIS_POINTS;
+
+export type AgenticProviderCapacity = Readonly<{
+	amountPaidCents: number;
+	allocatedRevenueMicrousd: number;
+	resolveAllowance: number;
+	balanceUnits: number;
+	maximumProviderSpendMicrousd: number;
+}>;
+
+/** Convert money actually received into the only paid provider grant. */
+export function agenticProviderCapacityForPayment(
+	amountPaidCents: number
+): AgenticProviderCapacity {
+	if (!Number.isSafeInteger(amountPaidCents) || amountPaidCents < 0) {
+		throw new Error('AGENTIC_PROVIDER_PAYMENT_INVALID');
+	}
+	const allocatedRevenueMicrousd = amountPaidCents * ALLOCATED_MICROUSD_PER_CENT;
+	if (!Number.isSafeInteger(allocatedRevenueMicrousd)) {
+		throw new Error('AGENTIC_PROVIDER_PAYMENT_INVALID');
+	}
+	const resolveAllowance = Math.floor(
+		allocatedRevenueMicrousd / AGENTIC_RESOLVE_PROVIDER_COST_MICROUSD
+	);
+	return Object.freeze({
+		amountPaidCents,
+		allocatedRevenueMicrousd,
+		resolveAllowance,
+		balanceUnits: resolveAllowance * AGENTIC_RESOLVE_PROVIDER_UNITS,
+		maximumProviderSpendMicrousd: resolveAllowance * AGENTIC_RESOLVE_PROVIDER_COST_MICROUSD
+	});
+}
 
 export interface OrgPlanLimits {
 	slug: string;
@@ -41,7 +90,12 @@ export interface OrgPlanLimits {
 	 * /api/v1/resolve-address). Substrate-sale credit, separate from delivery
 	 * quotas. FINITE on every plan including inactive (the trial floor).
 	 */
-	maxResolvesMonth: number;
+	addressResolvesMonth: number;
+	/**
+	 * Advertised resolves after a full, undiscounted payment. Runtime authority
+	 * comes from the persisted payment-minted balance, never this scalar.
+	 */
+	agenticResolvesMonth: number;
 }
 
 /**
@@ -65,7 +119,8 @@ export const ORG_PLAN_LIMITS: Record<string, OrgPlanLimits> = {
 		maxTemplatesMonth: 2,
 		// Finite substrate trial credit — mirrors Cicero's 1,000-lookup tier.
 		// Delivery/scale stay zeroed above; only resolve is allowed to evaluate.
-		maxResolvesMonth: 1_000
+		addressResolvesMonth: 1_000,
+		agenticResolvesMonth: 0
 	},
 	starter: {
 		slug: 'starter',
@@ -76,7 +131,8 @@ export const ORG_PLAN_LIMITS: Record<string, OrgPlanLimits> = {
 		maxSms: 1_000,
 		maxSeats: 5,
 		maxTemplatesMonth: 100,
-		maxResolvesMonth: 25_000
+		addressResolvesMonth: 25_000,
+		agenticResolvesMonth: agenticProviderCapacityForPayment(1_000).resolveAllowance
 	},
 	organization: {
 		slug: 'organization',
@@ -87,7 +143,8 @@ export const ORG_PLAN_LIMITS: Record<string, OrgPlanLimits> = {
 		maxSms: 10_000,
 		maxSeats: 10,
 		maxTemplatesMonth: 500,
-		maxResolvesMonth: 150_000
+		addressResolvesMonth: 150_000,
+		agenticResolvesMonth: agenticProviderCapacityForPayment(7_500).resolveAllowance
 	},
 	coalition: {
 		slug: 'coalition',
@@ -98,7 +155,8 @@ export const ORG_PLAN_LIMITS: Record<string, OrgPlanLimits> = {
 		maxSms: 50_000,
 		maxSeats: 25,
 		maxTemplatesMonth: 1_000,
-		maxResolvesMonth: 500_000
+		addressResolvesMonth: 500_000,
+		agenticResolvesMonth: agenticProviderCapacityForPayment(20_000).resolveAllowance
 	}
 };
 
@@ -124,15 +182,29 @@ export function orgPlanLimitsFor(slug: string | null | undefined): OrgPlanLimits
 }
 
 /**
- * Metered resolve allowance for a plan slug. Falls back to the inactive floor
+ * Metered address-resolution allowance for a plan slug. Falls back to the inactive floor
  * (1,000) when the slug is unknown, empty, or leaked — mirrors
  * `orgPlanLimitsFor`'s inactive-floor fallback so an unrecognized slug can never
  * grant more than the trial credit. Substrate-sale credit only; reads the
  * resolve allowance, never a delivery quota.
  */
-export function resolveAllowanceForPlan(slug: string | null | undefined): number {
-	if (!slug) return ORG_PLAN_LIMITS.inactive.maxResolvesMonth;
-	return ORG_PLAN_LIMITS[slug]?.maxResolvesMonth ?? ORG_PLAN_LIMITS.inactive.maxResolvesMonth;
+export function addressResolveAllowanceForPlan(slug: string | null | undefined): number {
+	if (!slug) return ORG_PLAN_LIMITS.inactive.addressResolvesMonth;
+	return (
+		ORG_PLAN_LIMITS[slug]?.addressResolvesMonth ?? ORG_PLAN_LIMITS.inactive.addressResolvesMonth
+	);
+}
+
+/**
+ * Advertised full-price agentic decision-maker allowance for a plan slug.
+ * Unknown, empty, absent, or leaked slugs fall to zero. Runtime spending reads
+ * the receipt-backed balance instead of this presentation value.
+ */
+export function agenticResolveAllowanceForPlan(slug: string | null | undefined): number {
+	if (!slug) return ORG_PLAN_LIMITS.inactive.agenticResolvesMonth;
+	return (
+		ORG_PLAN_LIMITS[slug]?.agenticResolvesMonth ?? ORG_PLAN_LIMITS.inactive.agenticResolvesMonth
+	);
 }
 
 // ===========================================================================

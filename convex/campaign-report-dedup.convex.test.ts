@@ -4,16 +4,71 @@ import { describe, expect, it } from 'vitest';
 import { convexTest, type TestConvex } from 'convex-test';
 
 import { api, internal } from './_generated/api';
+import { emptyCampaignReadModel, type CampaignReadModelState } from './lib/campaignReadModel';
+import { canonicalReportPreimage, reportPacketPreimageFields } from './lib/campaignProofPacket';
 import schema from './schema';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 type Harness = TestConvex<typeof schema>;
 const NOW = Date.parse('2026-07-19T12:00:00.000Z');
 
-async function editorCampaign(t: Harness) {
+function campaignProofState(receiptEligible: boolean): CampaignReadModelState {
+	if (!receiptEligible) return emptyCampaignReadModel(NOW);
+	return {
+		...emptyCampaignReadModel(NOW),
+		actionCount: 9,
+		verifiedActionCount: 7,
+		districtActionCount: 9,
+		districtCount: 3,
+		districtCountSquares: 27,
+		topDistricts: [
+			{ key: 'district-a', count: 3 },
+			{ key: 'district-b', count: 3 },
+			{ key: 'district-c', count: 3 }
+		],
+		firstSentAt: NOW - 2 * 60 * 60 * 1000,
+		lastSentAt: NOW,
+		hourBucketCount: 3,
+		hourCountLog2Count: 9 * Math.log2(3),
+		maxHourCount: 3,
+		recentHours: [
+			{ bucket: Math.floor(NOW / (60 * 60 * 1000)) - 2, count: 3 },
+			{ bucket: Math.floor(NOW / (60 * 60 * 1000)) - 1, count: 3 },
+			{ bucket: Math.floor(NOW / (60 * 60 * 1000)), count: 3 }
+		],
+		engagementTierCounts: [0, 3, 0, 3, 3],
+		messageHashActionCount: 9,
+		uniqueMessageHashCount: 9,
+		noModeCount: 9,
+		noModeIndividualCount: 9
+	};
+}
+
+async function sha256Hex(input: string): Promise<string> {
+	const bytes = new TextEncoder().encode(input);
+	const hash = await crypto.subtle.digest('SHA-256', bytes);
+	return Array.from(new Uint8Array(hash))
+		.map((byte) => byte.toString(16).padStart(2, '0'))
+		.join('');
+}
+
+async function packetDigest(campaignId: string, state: CampaignReadModelState): Promise<string> {
+	return sha256Hex(
+		canonicalReportPreimage({
+			campaignId,
+			campaignTitle: 'Bounded multi-recipient report',
+			orgName: 'Campaign Report Dedup',
+			...reportPacketPreimageFields(state, state.updatedAt),
+			debate: null
+		})
+	);
+}
+
+async function editorCampaign(t: Harness, options: { receiptEligible?: boolean } = {}) {
 	const tokenIdentifier = 'https://issuer.example|campaign-report-dedup';
 	const email = 'campaign-report-dedup@example.test';
-	const { orgId, campaignId } = await t.run(async (ctx) => {
+	const state = campaignProofState(options.receiptEligible === true);
+	const { orgId, campaignId, decisionMakerId, billId } = await t.run(async (ctx) => {
 		const userId = await ctx.db.insert('users', {
 			tokenIdentifier,
 			email,
@@ -87,11 +142,39 @@ async function editorCampaign(t: Harness) {
 			role: 'editor',
 			joinedAt: NOW
 		});
+		// Only the receipt-liveness case needs a bill + a resolvable Power
+		// target; the dedup/envelope cases keep the original ineligible shape.
+		const decisionMakerId = options.receiptEligible
+			? await ctx.db.insert('decisionMakers', {
+					type: 'legislator',
+					name: 'Representative Alpha',
+					lastName: 'Alpha',
+					email: 'alpha@example.test',
+					active: true,
+					updatedAt: NOW
+				})
+			: undefined;
+		const billId = options.receiptEligible
+			? await ctx.db.insert('bills', {
+					externalId: 'hr-1-campaign-report-dedup',
+					jurisdiction: 'us-federal',
+					jurisdictionLevel: 'federal',
+					title: 'Receipt Liveness Act',
+					status: 'introduced',
+					statusDate: NOW,
+					committees: [],
+					sourceUrl: 'https://example.test/hr-1',
+					topics: [],
+					entities: [],
+					updatedAt: NOW
+				})
+			: undefined;
 		const campaignId = await ctx.db.insert('campaigns', {
 			orgId,
 			type: 'LETTER',
 			title: 'Bounded multi-recipient report',
 			status: 'ACTIVE',
+			...(billId ? { billId } : {}),
 			targets: [
 				{ email: 'alpha@example.test', name: 'Alpha' },
 				{ email: 'beta@example.test', name: 'Beta' }
@@ -101,15 +184,29 @@ async function editorCampaign(t: Harness) {
 			raisedAmountCents: 0,
 			donorCount: 0,
 			targetCountry: 'US',
-			actionCount: 0,
-			verifiedActionCount: 0,
+			actionCount: state.actionCount,
+			verifiedActionCount: state.verifiedActionCount,
 			updatedAt: NOW
 		});
-		return { orgId, campaignId };
+		await ctx.db.insert('campaignReadModelMigrations', {
+			key: 'v1',
+			status: 'ready',
+			phase: 'deliveries',
+			actionsScanned: state.actionCount,
+			actionsAdopted: state.actionCount,
+			deliveriesScanned: 0,
+			deliveriesAdopted: 0,
+			updatedAt: NOW
+		});
+		await ctx.db.insert('campaignReadModels', { campaignId, orgId, state });
+		return { orgId, campaignId, decisionMakerId, billId };
 	});
 	return {
 		orgId,
 		campaignId,
+		decisionMakerId,
+		billId,
+		state,
 		authenticated: t.withIdentity({
 			subject: 'campaign-report-dedup',
 			issuer: 'https://issuer.example',
@@ -123,7 +220,12 @@ describe('campaign report target deduplication', () => {
 	it('admits the exact 64 KiB UTF-8 packet envelope and rejects one byte beyond it', async () => {
 		const t = convexTest(schema, modules);
 		const fixture = await editorCampaign(t);
-		const exact64KiB = 'é'.repeat(32 * 1024);
+		const digest = await packetDigest(fixture.campaignId, fixture.state);
+		const binding = `sha256:${digest}`;
+		const remainingBytes = 64 * 1024 - new TextEncoder().encode(binding).byteLength;
+		const exact64KiB = `${binding}${'é'.repeat(Math.floor(remainingBytes / 2))}${'x'.repeat(
+			remainingBytes % 2
+		)}`;
 		expect(new TextEncoder().encode(exact64KiB)).toHaveLength(64 * 1024);
 
 		await expect(
@@ -132,17 +234,7 @@ describe('campaign report target deduplication', () => {
 				orgSlug: 'campaign-report-dedup',
 				targetEmails: ['alpha@example.test'],
 				renderedHtml: exact64KiB,
-				packetDigest: 'a'.repeat(64),
-				proofWeight: 1,
-				packetSummary: {
-					verified: Number.MAX_SAFE_INTEGER,
-					total: Number.MAX_SAFE_INTEGER,
-					districtCount: Number.MAX_SAFE_INTEGER,
-					gds: 1,
-					ald: 1,
-					cai: Number.MAX_VALUE,
-					temporalEntropy: Number.MAX_VALUE
-				}
+				packetDigest: digest
 			})
 		).resolves.toEqual({ error: null, deliveryCount: 1 });
 
@@ -293,5 +385,58 @@ describe('campaign report target deduplication', () => {
 			actualTier3VerifiedActionCount: 150,
 			drift: false
 		});
+	});
+	// Receipt creation used to be gated on a per-delivery composite score. That
+	// gate is gone; if its removal had silently broken creation, nothing else in
+	// the tree would raise an error — the lane would just stop producing
+	// receipts. This pins creation to the surviving gates alone.
+	it('still creates an accountability receipt from an eligible server-derived packet', async () => {
+		const t = convexTest(schema, modules);
+		const fixture = await editorCampaign(t, { receiptEligible: true });
+		const digest = await packetDigest(fixture.campaignId, fixture.state);
+
+		await expect(
+			fixture.authenticated.mutation(api.campaigns.sendReport, {
+				campaignId: fixture.campaignId,
+				orgSlug: 'campaign-report-dedup',
+				targetEmails: ['alpha@example.test'],
+				renderedHtml: `<p>report sha256:${digest}</p>`,
+				packetDigest: digest
+			})
+		).resolves.toMatchObject({ error: null, deliveryCount: 1 });
+
+		const deliveryId = await t.run(async (ctx) => {
+			const delivery = await ctx.db
+				.query('campaignDeliveries')
+				.withIndex('by_campaignId', (q) => q.eq('campaignId', fixture.campaignId))
+				.first();
+			if (!delivery) throw new Error('delivery missing');
+			expect(delivery.receiptEligibility).toBe('eligible');
+			return delivery._id;
+		});
+
+		await t.mutation(internal.campaigns.updateDeliveryStatus, {
+			deliveryId,
+			status: 'sent',
+			sentAt: NOW
+		});
+
+		const receipt = await t.run(async (ctx) =>
+			ctx.db
+				.query('accountabilityReceipts')
+				.withIndex('by_deliveryId', (q) => q.eq('deliveryId', deliveryId))
+				.first()
+		);
+		expect(receipt).not.toBeNull();
+		expect(receipt).toMatchObject({
+			decisionMakerId: fixture.decisionMakerId,
+			billId: fixture.billId,
+			verifiedCount: 7,
+			totalCount: 9,
+			districtCount: 3,
+			packetDigest: digest
+		});
+		// The digest now binds three facts, not four.
+		expect(receipt?.attestationDigest).toMatch(/^[0-9a-f]{64}$/);
 	});
 });

@@ -9,7 +9,6 @@ import {
 	ACCOUNTABILITY_SCORECARD_MAX_BYTES,
 	accountabilityProjectionWithBytes,
 	accountabilityReceiptContribution,
-	applyFiniteMetricDelta,
 	applyNonNegativeMetricDelta,
 	assertProjectionByteBudget,
 	assertReceiptProjectionIdentityStable,
@@ -57,12 +56,6 @@ export async function requireAccountabilityReadModelReady(ctx: DbCtx): Promise<v
 	}
 }
 
-function numberDelta(after: number, before: number): number {
-	const delta = after - before;
-	if (!Number.isFinite(delta)) throw new Error('ACCOUNTABILITY_METRIC_INVALID:delta');
-	return delta;
-}
-
 function boundedDisplay(name: string, value: string | undefined, max: number): string | undefined {
 	if (value === undefined) return undefined;
 	const trimmed = value.trim();
@@ -107,11 +100,6 @@ async function writeOrganizationAggregate(
 				existing?.anchorFieldCount,
 				nextContribution.anchorFieldCount - (oldContribution?.anchorFieldCount ?? 0)
 			),
-			proofWeightTotal: applyNonNegativeMetricDelta(
-				'proofWeightTotal',
-				existing?.proofWeightTotal,
-				numberDelta(nextContribution.proofWeightTotal, oldContribution?.proofWeightTotal ?? 0)
-			),
 			latestProofDeliveredAt: Math.max(
 				existing?.latestProofDeliveredAt ?? 0,
 				projection.proofDeliveredAt
@@ -133,7 +121,6 @@ type OrgDmCounters = Pick<
 	| 'pendingCount'
 	| 'responseLoggedCount'
 	| 'anchorFieldCount'
-	| 'proofWeightTotal'
 	| 'latestProofDeliveredAt'
 >;
 
@@ -145,7 +132,6 @@ function emptyOrgDmCounters(): OrgDmCounters {
 		pendingCount: 0,
 		responseLoggedCount: 0,
 		anchorFieldCount: 0,
-		proofWeightTotal: 0,
 		latestProofDeliveredAt: undefined
 	};
 }
@@ -262,11 +248,6 @@ async function writeOrgDmReceiptTransition(
 				base.anchorFieldCount,
 				nextContribution.anchorFieldCount - (oldContribution?.anchorFieldCount ?? 0)
 			),
-			proofWeightTotal: applyNonNegativeMetricDelta(
-				'proofWeightTotal',
-				base.proofWeightTotal,
-				numberDelta(nextContribution.proofWeightTotal, oldContribution?.proofWeightTotal ?? 0)
-			),
 			latestProofDeliveredAt: Math.max(
 				base.latestProofDeliveredAt ?? 0,
 				projection.proofDeliveredAt
@@ -351,22 +332,6 @@ async function writeDecisionMakerAggregate(
 				'uniquePublicBillCount',
 				existing?.uniquePublicBillCount,
 				uniqueBillDelta
-			),
-			publicProofWeightTotal: applyNonNegativeMetricDelta(
-				'publicProofWeightTotal',
-				existing?.publicProofWeightTotal,
-				numberDelta(
-					nextContribution.publicProofWeightTotal,
-					oldContribution?.publicProofWeightTotal ?? 0
-				)
-			),
-			publicWeightedAlignmentTotal: applyFiniteMetricDelta(
-				'publicWeightedAlignmentTotal',
-				existing?.publicWeightedAlignmentTotal,
-				numberDelta(
-					nextContribution.publicWeightedAlignmentTotal,
-					oldContribution?.publicWeightedAlignmentTotal ?? 0
-				)
 			),
 			latestProofDeliveredAt: Math.max(
 				existing?.latestProofDeliveredAt ?? 0,

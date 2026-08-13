@@ -303,7 +303,8 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(svelte).toMatch(/export const countMatching = action/);
 		expect(svelte).toMatch(/export const bulkApplyTag = action/);
 		expect(svelte).toMatch(/export const bulkRemoveTag = action/);
-		expect(svelte).toMatch(/export const exportMatching = action/);
+		expect(svelte).toMatch(/export const exportMatching = internalAction/);
+		expect(svelte).toContain('const SEGMENT_MAX_PAGES_PER_INVOCATION = 4');
 		// The legacy hard-cap patterns are gone — strip comments first
 		// because the cure references the old constants in prose.
 		const stripped = svelte.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '');
@@ -733,14 +734,17 @@ describe('class-of-vulnerability cures, fifth sweep (source-text pins)', () => {
 		expect(svelte).toContain('hasGlobalPhoneHash');
 	});
 
-	it('exportMatching still loads org tag dictionary once + surfaces partial via flag', () => {
+	it('exportMatching loads the org tag dictionary once and keeps completion metadata off arrays', () => {
 		const svelte = source('convex/segments.ts');
 		// Tag-name resolution uses a Map cache (avoids N×M tag lookup) built
 		// from the org-bounded tag table.
 		expect(svelte).toContain('tagNameByIdMap');
 		expect(svelte).toContain('getOrgTagsInternal');
-		// Truncation surfaced via `partial: true` rather than in-band sentinel.
-		expect(svelte).toContain('result.partial = true');
+		// Convex drops custom properties attached to arrays. Completion metadata
+		// therefore travels in the explicit object and partial exports are withheld.
+		expect(svelte).toContain('return { rows, partial: !isDone, complete: isDone, scanned }');
+		expect(svelte).not.toContain('result.partial = true');
+		expect(svelte).toContain('return { rows: [], partial: true, complete: false');
 	});
 
 	it('workflows.execute marks unimplemented step types as loud no-ops', () => {

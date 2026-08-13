@@ -4,8 +4,11 @@ import {
 	action,
 	internalQuery,
 	internalMutation,
-	internalAction
+	internalAction,
+	type MutationCtx,
+	type QueryCtx
 } from './_generated/server';
+import { makeFunctionReference, type FunctionReference } from 'convex/server';
 import { ConvexError, v } from 'convex/values';
 import { internal } from './_generated/api';
 import { requireAuth } from './_authHelpers';
@@ -13,7 +16,7 @@ import { requireInternalSecret } from './_internalAuth';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { applyDowngradeGuardFromHistory } from './_downgradeGuard';
 import { upsertExternalId } from './_externalIds';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 import {
 	TEMPLATE_LIST_MAX_PAGE_SIZE,
 	readTemplateListPageByUser,
@@ -21,6 +24,38 @@ import {
 	toProfileTemplateListItem
 } from './lib/templateListProjection';
 import { syncSessionAuthority } from './lib/sessionAuthority';
+import { reputationStateForActionCount } from './lib/reputationTier';
+import {
+	SHADOW_ATLAS_ENGAGEMENT_CACHE_TTL_MS,
+	SHADOW_ATLAS_ENGAGEMENT_FAILURE_COOLDOWN_MS,
+	SHADOW_ATLAS_ENGAGEMENT_LEASE_MS,
+	SHADOW_ATLAS_ENGAGEMENT_REPAIR_OBSERVATION_MS,
+	assertShadowAtlasEngagementSnapshot,
+	assertShadowAtlasLeafIndex,
+	assertShadowAtlasLeaseToken,
+	assertShadowAtlasRegistrationGeneration,
+	normalizeShadowAtlasIdentityCommitment,
+	normalizeShadowAtlasRepairReference,
+	normalizeShadowAtlasSignerAddress,
+	shadowAtlasEngagementSnapshotValidator,
+	type ShadowAtlasEngagementState
+} from './lib/shadowAtlasEngagement';
+import {
+	SHADOW_ATLAS_TREE1_MAX_GENERATION,
+	SHADOW_ATLAS_TREE1_REPAIR_OBSERVATION_MS,
+	assertShadowAtlasTree1FailureCode,
+	assertShadowAtlasTree1Generation,
+	assertShadowAtlasTree1IdempotencyKey,
+	assertShadowAtlasTree1LeafDigest,
+	assertShadowAtlasTree1LeafIndex,
+	assertShadowAtlasTree1Proof,
+	normalizeShadowAtlasTree1Identity,
+	publicShadowAtlasCongressionalDistrict,
+	sameShadowAtlasTree1Proof,
+	type ShadowAtlasTree1Operation,
+	type ShadowAtlasTree1OperationState,
+	type ShadowAtlasTree1Proof
+} from './lib/shadowAtlasRegistration';
 import {
 	MAX_REVERIFICATIONS_PER_180D,
 	MAX_USERIDS_PER_EMAIL_HASH_180D,
@@ -705,6 +740,11 @@ export const verifyAddress = mutation({
 		district: v.optional(v.string()),
 		stateSenateDistrict: v.optional(v.string()),
 		stateAssemblyDistrict: v.optional(v.string()),
+		countyFips: v.optional(v.string()),
+		congressionalDistrictSource: v.optional(v.string()),
+		stateSenateDistrictSource: v.optional(v.string()),
+		stateAssemblyDistrictSource: v.optional(v.string()),
+		countyFipsSource: v.optional(v.string()),
 		verificationMethod: v.string(),
 		credentialHash: v.optional(v.string()),
 		districtHash: v.optional(v.string()),
@@ -772,6 +812,30 @@ export const verifyAddress = mutation({
 			)
 		) {
 			throw new Error('INVALID_VERIFICATION_METHOD');
+		}
+		if (args.countyFips !== undefined && !/^\d{5}$/.test(args.countyFips)) {
+			throw new Error('INVALID_COUNTY_FIPS');
+		}
+		const containmentSources = [
+			args.congressionalDistrictSource,
+			args.stateSenateDistrictSource,
+			args.stateAssemblyDistrictSource,
+			args.countyFipsSource
+		];
+		for (const source of containmentSources) {
+			if (source !== undefined && source !== 'atlas-derived' && source !== 'self-reported') {
+				throw new Error('INVALID_CONTAINMENT_SOURCE');
+			}
+		}
+		if (
+			(args.congressionalDistrictSource !== undefined && !args.district?.trim()) ||
+			(args.stateSenateDistrictSource !== undefined && !args.stateSenateDistrict?.trim()) ||
+			(args.stateAssemblyDistrictSource !== undefined && !args.stateAssemblyDistrict?.trim()) ||
+			(args.countyFipsSource !== undefined && args.countyFips === undefined) ||
+			(args.countyFips !== undefined && args.countyFipsSource !== 'atlas-derived') ||
+			args.countyFipsSource === 'self-reported'
+		) {
+			throw new Error('INVALID_CONTAINMENT_SOURCE');
 		}
 
 		// H1 — defend cellAnchorMode at the handler boundary. Schema is permissive
@@ -904,6 +968,7 @@ export const verifyAddress = mutation({
 			const scheduleOnChain = Boolean(cred.districtCommitment);
 			await ctx.db.patch(cred._id, {
 				revokedAt: now,
+				retirementReason: 'superseded_by_reissue' as const,
 				// Only flag for on-chain revocation when the credential carries a
 				// districtCommitment (post-sponge-24 credentials). Legacy credentials
 				// without a commitment have no revocation_nullifier preimage and are
@@ -945,6 +1010,17 @@ export const verifyAddress = mutation({
 			congressionalDistrict: args.district ?? '',
 			stateSenateDistrict: args.stateSenateDistrict,
 			stateAssemblyDistrict: args.stateAssemblyDistrict,
+			...(args.countyFips !== undefined ? { countyFips: args.countyFips } : {}),
+			...(args.congressionalDistrictSource !== undefined
+				? { congressionalDistrictSource: args.congressionalDistrictSource }
+				: {}),
+			...(args.stateSenateDistrictSource !== undefined
+				? { stateSenateDistrictSource: args.stateSenateDistrictSource }
+				: {}),
+			...(args.stateAssemblyDistrictSource !== undefined
+				? { stateAssemblyDistrictSource: args.stateAssemblyDistrictSource }
+				: {}),
+			...(args.countyFipsSource !== undefined ? { countyFipsSource: args.countyFipsSource } : {}),
 			verificationMethod: args.verificationMethod,
 			issuedAt: now,
 			expiresAt: args.expiresAt,
@@ -1228,26 +1304,10 @@ export const getIdentityForAtlas = query({
 });
 
 /**
- * Get user's identity commitment + wallet address for engagement.
- */
-export const getIdentityForEngagement = query({
-	args: { userId: v.id('users') },
-	handler: async (ctx, args) => {
-		const { userId: authUserId } = await requireAuth(ctx);
-		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		const user = await ctx.db.get(args.userId);
-		if (!user) return null;
-		return {
-			identityCommitment: user.identityCommitment ?? null,
-			walletAddress: user.walletAddress ?? null
-		};
-	}
-});
-
-/**
  * Resolve a credential hash to verification data for the /v/[hash] certificate page.
- * Returns user trust tier, verification method, districts, and issuance data.
- * No PII returned — only verification status and district codes.
+ * Known hashes retain their issuance facts after revocation or expiry and carry an
+ * explicit active, lapsed, superseded, operator-retired, or unrecorded-reason state.
+ * Unknown hashes still return null. No PII or successor-credential data is returned.
  */
 export const resolveCredentialHash = query({
 	args: { _secret: v.string(), credentialHash: v.string(), asOf: v.number() },
@@ -1260,18 +1320,33 @@ export const resolveCredentialHash = query({
 			.first();
 
 		if (!credential) return null;
-		if (credential.revokedAt) return null;
-		if (credential.expiresAt <= asOf) return null;
+		const status =
+			credential.revokedAt !== undefined
+				? credential.retirementReason === 'superseded_by_reissue'
+					? ('superseded' as const)
+					: credential.retirementReason === 'operator_cutover'
+						? ('operator_retired' as const)
+						: ('retired_reason_unrecorded' as const)
+				: credential.expiresAt <= asOf
+					? ('lapsed' as const)
+					: ('active' as const);
+		const retiredAt = credential.revokedAt ?? (status === 'lapsed' ? credential.expiresAt : null);
 
 		const user = await ctx.db.get(credential.userId);
-		if (!user) return null;
 
 		return {
-			trustTier: user.trustTier,
+			status,
+			retiredAt,
+			trustTier: credential.trustTier ?? user?.trustTier ?? null,
 			verificationMethod: credential.verificationMethod,
-			congressionalDistrict: credential.congressionalDistrict || null,
+			congressionalDistrict: credential.congressionalDistrict ?? null,
 			stateSenateDistrict: credential.stateSenateDistrict ?? null,
 			stateAssemblyDistrict: credential.stateAssemblyDistrict ?? null,
+			countyFips: credential.countyFips ?? null,
+			congressionalDistrictSource: credential.congressionalDistrictSource ?? null,
+			stateSenateDistrictSource: credential.stateSenateDistrictSource ?? null,
+			stateAssemblyDistrictSource: credential.stateAssemblyDistrictSource ?? null,
+			countyFipsSource: credential.countyFipsSource ?? null,
 			issuedAt: credential.issuedAt,
 			expiresAt: credential.expiresAt,
 			hasDistrictCommitment: !!credential.districtCommitment,
@@ -1331,72 +1406,861 @@ export const deleteEncryptedBlob = mutation({
 // SHADOW ATLAS REGISTRATION
 // =============================================================================
 
-export const getShadowAtlasRegistration = query({
-	args: { userId: v.id('users') },
+type ShadowAtlasEngagementFailureStage = 'metrics' | 'registration' | 'path';
+
+function clearShadowAtlasEngagementLease(
+	state: ShadowAtlasEngagementState
+): ShadowAtlasEngagementState {
+	const { leaseToken: _leaseToken, leaseExpiresAt: _leaseExpiresAt, ...withoutLease } = state;
+	return withoutLease;
+}
+
+function clearShadowAtlasEngagementCooldown(
+	state: ShadowAtlasEngagementState
+): ShadowAtlasEngagementState {
+	const {
+		nextAttemptAt: _nextAttemptAt,
+		lastFailureStage: _lastFailureStage,
+		...withoutCooldown
+	} = state;
+	return withoutCooldown;
+}
+
+/**
+ * Atomically load the canonical Tree-3 identity and claim one bounded refresh
+ * lease. Replays consume one small mutation and either receive the fresh
+ * snapshot or coalesce behind the existing owner; they never fan out to the
+ * Shadow Atlas relay independently.
+ */
+export const claimShadowAtlasEngagement = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		leaseToken: v.string()
+	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasLeaseToken(args.leaseToken);
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		return await ctx.db
-			.query('shadowAtlasRegistrations')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
+
+		const user = await ctx.db.get(args.userId);
+		if (!user) throw new Error('User not found');
+		const identityCommitment = user.identityCommitment
+			? normalizeShadowAtlasIdentityCommitment(user.identityCommitment)
+			: null;
+		if (!identityCommitment) return { kind: 'identity_required' as const };
+
+		const signerAddress = normalizeShadowAtlasSignerAddress(user.walletAddress);
+		if (!signerAddress) return { kind: 'signer_required' as const };
+
+		const now = Date.now();
+		const prior = user.shadowAtlasEngagement;
+		let state: ShadowAtlasEngagementState =
+			prior?.identityCommitment === identityCommitment
+				? prior
+				: {
+						identityCommitment,
+						registrationGeneration: 1,
+						registrationStatus: 'unseen',
+						failureCount: 0,
+						repairCount: 0,
+						updatedAt: now
+					};
+
+		if (state.snapshot && (state.snapshotExpiresAt ?? 0) > now) {
+			return { kind: 'cached' as const, snapshot: state.snapshot };
+		}
+		if (state.leaseToken && (state.leaseExpiresAt ?? 0) > now) {
+			return { kind: 'in_flight' as const, snapshot: state.snapshot ?? null };
+		}
+		if ((state.nextAttemptAt ?? 0) > now) {
+			return { kind: 'cooldown' as const, snapshot: state.snapshot ?? null };
+		}
+
+		if (state.registrationStatus === 'registered') {
+			try {
+				assertShadowAtlasLeafIndex(state.leafIndex ?? -1);
+			} catch {
+				// Corrupt legacy state must not reopen the registration write. Metrics
+				// can repair the leaf index, so retain the one-write reservation.
+				const { leafIndex: _leafIndex, ...withoutLeaf } = state;
+				state = { ...withoutLeaf, registrationStatus: 'write_reserved' };
+			}
+		}
+
+		const claimed = clearShadowAtlasEngagementCooldown({
+			...state,
+			leaseToken: args.leaseToken,
+			leaseExpiresAt: now + SHADOW_ATLAS_ENGAGEMENT_LEASE_MS,
+			updatedAt: now
+		});
+		await ctx.db.patch(args.userId, { shadowAtlasEngagement: claimed });
+
+		return {
+			kind: 'owner' as const,
+			identityCommitment,
+			signerAddress,
+			registrationStatus: claimed.registrationStatus,
+			registrationGeneration: claimed.registrationGeneration,
+			leafIndex: claimed.leafIndex ?? null,
+			snapshot: claimed.snapshot ?? null
+		};
 	}
 });
 
-export const createShadowAtlasRegistration = mutation({
+/** Persist a permanent one-write reservation before the external POST begins. */
+export const reserveShadowAtlasEngagementRegistration = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		identityCommitment: v.string(),
+		leaseToken: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasLeaseToken(args.leaseToken);
+		const identityCommitment = normalizeShadowAtlasIdentityCommitment(args.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_ENGAGEMENT_IDENTITY_INVALID');
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasEngagement;
+		if (
+			!state ||
+			state.identityCommitment !== identityCommitment ||
+			state.leaseToken !== args.leaseToken
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_LEASE_LOST');
+		}
+		if (state.registrationStatus !== 'unseen') {
+			return {
+				reserved: false,
+				registrationStatus: state.registrationStatus,
+				leafIndex: state.leafIndex ?? null
+			};
+		}
+
+		const now = Date.now();
+		const reserved: ShadowAtlasEngagementState = {
+			...state,
+			registrationStatus: 'write_reserved',
+			registrationWriteReservedAt: now,
+			leaseExpiresAt: now + SHADOW_ATLAS_ENGAGEMENT_LEASE_MS,
+			updatedAt: now
+		};
+		await ctx.db.patch(args.userId, { shadowAtlasEngagement: reserved });
+		return {
+			reserved: true,
+			registrationStatus: 'write_reserved' as const,
+			registrationGeneration: state.registrationGeneration,
+			leafIndex: null
+		};
+	}
+});
+
+/** Commit registration before attempting the later Merkle-path read. */
+export const markShadowAtlasEngagementRegistered = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		identityCommitment: v.string(),
+		leaseToken: v.string(),
+		leafIndex: v.number()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasLeaseToken(args.leaseToken);
+		assertShadowAtlasLeafIndex(args.leafIndex);
+		const identityCommitment = normalizeShadowAtlasIdentityCommitment(args.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_ENGAGEMENT_IDENTITY_INVALID');
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasEngagement;
+		if (
+			!state ||
+			state.identityCommitment !== identityCommitment ||
+			state.leaseToken !== args.leaseToken
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_LEASE_LOST');
+		}
+		const now = Date.now();
+		await ctx.db.patch(args.userId, {
+			shadowAtlasEngagement: {
+				...state,
+				registrationStatus: 'registered',
+				leafIndex: args.leafIndex,
+				leaseExpiresAt: now + SHADOW_ATLAS_ENGAGEMENT_LEASE_MS,
+				updatedAt: now
+			}
+		});
+		return { registered: true };
+	}
+});
+
+/** Validate and publish a short-lived proof/metrics snapshot, then release the lease. */
+export const completeShadowAtlasEngagement = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		identityCommitment: v.string(),
+		leaseToken: v.string(),
+		snapshot: shadowAtlasEngagementSnapshotValidator
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasLeaseToken(args.leaseToken);
+		assertShadowAtlasEngagementSnapshot(args.snapshot);
+		const identityCommitment = normalizeShadowAtlasIdentityCommitment(args.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_ENGAGEMENT_IDENTITY_INVALID');
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasEngagement;
+		if (
+			!state ||
+			state.identityCommitment !== identityCommitment ||
+			state.leaseToken !== args.leaseToken ||
+			state.registrationStatus !== 'registered' ||
+			state.leafIndex !== args.snapshot.engagementIndex
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_LEASE_LOST');
+		}
+		const now = Date.now();
+		const completed = clearShadowAtlasEngagementCooldown(
+			clearShadowAtlasEngagementLease({
+				...state,
+				snapshot: args.snapshot,
+				snapshotExpiresAt: now + SHADOW_ATLAS_ENGAGEMENT_CACHE_TTL_MS,
+				failureCount: 0,
+				updatedAt: now
+			})
+		);
+		await ctx.db.patch(args.userId, { shadowAtlasEngagement: completed });
+		return { cachedUntil: now + SHADOW_ATLAS_ENGAGEMENT_CACHE_TTL_MS };
+	}
+});
+
+/** Release an owned lease into a bounded cooldown while retaining any last snapshot. */
+export const recordShadowAtlasEngagementFailure = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		identityCommitment: v.string(),
+		leaseToken: v.string(),
+		stage: v.union(v.literal('metrics'), v.literal('registration'), v.literal('path'))
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasLeaseToken(args.leaseToken);
+		const identityCommitment = normalizeShadowAtlasIdentityCommitment(args.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_ENGAGEMENT_IDENTITY_INVALID');
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasEngagement;
+		if (
+			!state ||
+			state.identityCommitment !== identityCommitment ||
+			state.leaseToken !== args.leaseToken
+		) {
+			return { recorded: false };
+		}
+		const now = Date.now();
+		const failed = clearShadowAtlasEngagementLease({
+			...state,
+			nextAttemptAt: now + SHADOW_ATLAS_ENGAGEMENT_FAILURE_COOLDOWN_MS,
+			failureCount: Math.min(state.failureCount + 1, 1_000_000),
+			lastFailureStage: args.stage as ShadowAtlasEngagementFailureStage,
+			updatedAt: now
+		});
+		await ctx.db.patch(args.userId, { shadowAtlasEngagement: failed });
+		return { recorded: true };
+	}
+});
+
+/**
+ * Operator-only recovery for an ambiguous external POST.
+ *
+ * Automatic requests can never clear `write_reserved`. An operator must first
+ * independently prove that metrics still reports the identity absent, then use
+ * the exact reservation timestamp + generation as a CAS after a 15-minute
+ * observation window. The mutation advances the generation and performs no
+ * scheduling or external work; each generation therefore authorizes at most
+ * one registration POST.
+ */
+export const repairShadowAtlasEngagementReservation = internalMutation({
 	args: {
 		userId: v.id('users'),
 		identityCommitment: v.string(),
-		leafIndex: v.number(),
-		merkleRoot: v.string(),
-		merklePath: v.any(),
-		verificationMethod: v.string(),
-		verificationId: v.string()
+		expectedReservationTimestamp: v.number(),
+		expectedGeneration: v.number(),
+		operator: v.string(),
+		evidenceReference: v.string()
 	},
 	handler: async (ctx, args) => {
+		const identityCommitment = normalizeShadowAtlasIdentityCommitment(args.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_ENGAGEMENT_IDENTITY_INVALID');
+		assertShadowAtlasRegistrationGeneration(args.expectedGeneration);
+		if (
+			!Number.isSafeInteger(args.expectedReservationTimestamp) ||
+			args.expectedReservationTimestamp < 0
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_REPAIR_TIMESTAMP_INVALID');
+		}
+		const operator = normalizeShadowAtlasRepairReference(args.operator, 'operator');
+		const evidenceReference = normalizeShadowAtlasRepairReference(
+			args.evidenceReference,
+			'evidence'
+		);
+
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasEngagement;
+		if (
+			!state ||
+			state.identityCommitment !== identityCommitment ||
+			state.registrationStatus !== 'write_reserved' ||
+			state.registrationGeneration !== args.expectedGeneration ||
+			state.registrationWriteReservedAt !== args.expectedReservationTimestamp
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_REPAIR_CAS_MISMATCH');
+		}
+		const now = Date.now();
+		if ((state.leaseExpiresAt ?? 0) > now) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_REPAIR_LEASE_ACTIVE');
+		}
+		if (
+			state.leafIndex !== undefined ||
+			state.snapshot !== undefined ||
+			state.snapshotExpiresAt !== undefined
+		) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_REPAIR_REGISTRATION_EVIDENCE_PRESENT');
+		}
+		if (now - state.registrationWriteReservedAt < SHADOW_ATLAS_ENGAGEMENT_REPAIR_OBSERVATION_MS) {
+			throw new Error('SHADOW_ATLAS_ENGAGEMENT_REPAIR_TOO_EARLY');
+		}
+
+		const {
+			registrationWriteReservedAt: _registrationWriteReservedAt,
+			leaseToken: _leaseToken,
+			leaseExpiresAt: _leaseExpiresAt,
+			nextAttemptAt: _nextAttemptAt,
+			lastFailureStage: _lastFailureStage,
+			...retained
+		} = state;
+		const nextGeneration = state.registrationGeneration + 1;
+		assertShadowAtlasRegistrationGeneration(nextGeneration);
+		await ctx.db.patch(args.userId, {
+			shadowAtlasEngagement: {
+				...retained,
+				registrationGeneration: nextGeneration,
+				registrationStatus: 'unseen',
+				repairCount: Math.min(state.repairCount + 1, 1_000_000),
+				lastRepairAt: now,
+				lastRepairOperator: operator,
+				lastRepairEvidence: evidenceReference,
+				updatedAt: now
+			}
+		});
+		return {
+			repaired: true,
+			registrationGeneration: nextGeneration,
+			repairCount: Math.min(state.repairCount + 1, 1_000_000)
+		};
+	}
+});
+
+type ShadowAtlasTree1Coordinates = {
+	userId: Id<'users'>;
+	identityCommitment: string;
+	operation: ShadowAtlasTree1Operation;
+	generation: number;
+	leafDigest: string;
+	idempotencyKey: string;
+	priorLeafIndex?: number;
+};
+
+type ShadowAtlasTree1CommitInput = ShadowAtlasTree1Coordinates & ShadowAtlasTree1Proof;
+
+const shadowAtlasTree1CoordinateValidators = {
+	userId: v.id('users'),
+	identityCommitment: v.string(),
+	operation: v.union(v.literal('register'), v.literal('replace')),
+	generation: v.number(),
+	leafDigest: v.string(),
+	idempotencyKey: v.string(),
+	priorLeafIndex: v.optional(v.number())
+};
+
+async function readSingleShadowAtlasRegistration(
+	ctx: QueryCtx | MutationCtx,
+	userId: Id<'users'>
+): Promise<Doc<'shadowAtlasRegistrations'> | null> {
+	const rows = await ctx.db
+		.query('shadowAtlasRegistrations')
+		.withIndex('by_userId', (q) => q.eq('userId', userId))
+		.take(2);
+	if (rows.length > 1) throw new Error('SHADOW_ATLAS_TREE1_REGISTRATION_MULTIPLICITY');
+	return rows[0] ?? null;
+}
+
+function shadowAtlasTree1ProofFromRegistration(
+	registration: Doc<'shadowAtlasRegistrations'>
+): ShadowAtlasTree1Proof {
+	if (
+		!Array.isArray(registration.merklePath) ||
+		registration.merklePath.some((field) => typeof field !== 'string')
+	) {
+		throw new Error('SHADOW_ATLAS_TREE1_PATH_INVALID');
+	}
+	const proof = {
+		leafIndex: registration.leafIndex,
+		merkleRoot: registration.merkleRoot,
+		merklePath: registration.merklePath as string[]
+	};
+	assertShadowAtlasTree1Proof(proof);
+	return proof;
+}
+
+function publicShadowAtlasRegistration(registration: Doc<'shadowAtlasRegistrations'>) {
+	const proof = shadowAtlasTree1ProofFromRegistration(registration);
+	return {
+		...registration,
+		...proof,
+		congressionalDistrict: publicShadowAtlasCongressionalDistrict(
+			registration.congressionalDistrict
+		)
+	};
+}
+
+function shadowAtlasTree1AuthorityLevel(user: Doc<'users'>): number {
+	const trustTier = user.trustTier ?? 0;
+	return trustTier >= 5 ? 5 : trustTier >= 3 ? 3 : 1;
+}
+
+function shadowAtlasTree1VerificationMethod(user: Doc<'users'>): string {
+	const value = user.verificationMethod?.normalize('NFKC').trim();
+	return value && value.length <= 64 ? value : 'unknown';
+}
+
+function assertShadowAtlasTree1Coordinates(args: ShadowAtlasTree1Coordinates): void {
+	const identityCommitment = normalizeShadowAtlasTree1Identity(args.identityCommitment);
+	if (!identityCommitment || identityCommitment !== args.identityCommitment) {
+		throw new Error('SHADOW_ATLAS_TREE1_IDENTITY_INVALID');
+	}
+	assertShadowAtlasTree1Generation(args.generation);
+	assertShadowAtlasTree1LeafDigest(args.leafDigest);
+	assertShadowAtlasTree1IdempotencyKey(args.idempotencyKey);
+	if (args.operation === 'register' && args.priorLeafIndex !== undefined) {
+		throw new Error('SHADOW_ATLAS_TREE1_PRIOR_INDEX_INVALID');
+	}
+	if (args.operation === 'replace') {
+		if (args.priorLeafIndex === undefined) {
+			throw new Error('SHADOW_ATLAS_TREE1_PRIOR_INDEX_REQUIRED');
+		}
+		assertShadowAtlasTree1LeafIndex(args.priorLeafIndex);
+	}
+}
+
+function shadowAtlasTree1StateMatches(
+	state: ShadowAtlasTree1OperationState,
+	args: ShadowAtlasTree1Coordinates
+): boolean {
+	return (
+		state.identityCommitment === args.identityCommitment &&
+		state.operation === args.operation &&
+		state.generation === args.generation &&
+		state.leafDigest === args.leafDigest &&
+		state.idempotencyKey === args.idempotencyKey &&
+		(state.priorLeafIndex ?? undefined) === (args.priorLeafIndex ?? undefined)
+	);
+}
+
+/**
+ * Claim the sole external Tree-1 register/replace entitlement for this user.
+ * The winning idempotency key is persisted before the route can call Atlas.
+ */
+export const reserveShadowAtlasRegistrationOperation = mutation({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		leafDigest: v.string(),
+		requestedReplace: v.boolean(),
+		idempotencyKey: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasTree1LeafDigest(args.leafDigest);
+		assertShadowAtlasTree1IdempotencyKey(args.idempotencyKey);
 		const { userId: authUserId } = await requireAuth(ctx);
 		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		return await ctx.db.insert('shadowAtlasRegistrations', {
+
+		const user = await ctx.db.get(args.userId);
+		if (!user) throw new Error('User not found');
+		const identityCommitment = normalizeShadowAtlasTree1Identity(user.identityCommitment);
+		if (!identityCommitment) throw new Error('SHADOW_ATLAS_TREE1_IDENTITY_REQUIRED');
+		const registration = await readSingleShadowAtlasRegistration(ctx, args.userId);
+		const prior = user.shadowAtlasTree1Operation;
+
+		if (prior && prior.status !== 'committed') {
+			if (prior.identityCommitment === identityCommitment && prior.leafDigest === args.leafDigest) {
+				if (prior.status === 'reserved') {
+					return {
+						kind: 'owner' as const,
+						resumed: true,
+						identityCommitment,
+						authorityLevel: shadowAtlasTree1AuthorityLevel(user),
+						operation: prior.operation,
+						generation: prior.generation,
+						leafDigest: prior.leafDigest,
+						idempotencyKey: prior.idempotencyKey,
+						...(prior.priorLeafIndex === undefined ? {} : { priorLeafIndex: prior.priorLeafIndex })
+					};
+				}
+				return {
+					kind: 'in_flight' as const,
+					status: prior.status,
+					operation: prior.operation,
+					generation: prior.generation
+				};
+			}
+			throw new Error('SHADOW_ATLAS_TREE1_OPERATION_CONFLICT');
+		}
+
+		if (prior?.status === 'committed') {
+			if (!registration || prior.committedLeafIndex !== registration.leafIndex) {
+				throw new Error('SHADOW_ATLAS_TREE1_COMMITTED_STATE_CORRUPT');
+			}
+			if (prior.identityCommitment === identityCommitment && prior.leafDigest === args.leafDigest) {
+				return {
+					kind: 'cached' as const,
+					identityCommitment,
+					authorityLevel: shadowAtlasTree1AuthorityLevel(user),
+					registration: publicShadowAtlasRegistration(registration)
+				};
+			}
+		}
+
+		if (registration && !args.requestedReplace) {
+			if (
+				normalizeShadowAtlasTree1Identity(registration.identityCommitment) !== identityCommitment
+			) {
+				throw new Error('SHADOW_ATLAS_TREE1_IDENTITY_REPLACEMENT_REQUIRED');
+			}
+			return {
+				kind: 'cached' as const,
+				identityCommitment,
+				authorityLevel: shadowAtlasTree1AuthorityLevel(user),
+				registration: publicShadowAtlasRegistration(registration)
+			};
+		}
+
+		const operation: ShadowAtlasTree1Operation = registration ? 'replace' : 'register';
+		const generation = (prior?.generation ?? 0) + 1;
+		if (generation > SHADOW_ATLAS_TREE1_MAX_GENERATION) {
+			throw new Error('SHADOW_ATLAS_TREE1_GENERATION_EXHAUSTED');
+		}
+		const now = Date.now();
+		const reserved: ShadowAtlasTree1OperationState = {
+			v: 1,
+			identityCommitment,
+			operation,
+			generation,
+			leafDigest: args.leafDigest,
+			idempotencyKey: args.idempotencyKey,
+			...(registration ? { priorLeafIndex: registration.leafIndex } : {}),
+			status: 'reserved',
+			reservedAt: now,
+			updatedAt: now
+		};
+		await ctx.db.patch(args.userId, { shadowAtlasTree1Operation: reserved });
+		return {
+			kind: 'owner' as const,
+			identityCommitment,
+			authorityLevel: shadowAtlasTree1AuthorityLevel(user),
+			operation,
+			generation,
+			leafDigest: args.leafDigest,
+			idempotencyKey: args.idempotencyKey,
+			...(registration ? { priorLeafIndex: registration.leafIndex } : {})
+		};
+	}
+});
+
+/**
+ * Cross the external-dispatch boundary exactly once. A crash before this
+ * mutation is safely resumable with the persisted key; a crash after it is
+ * ambiguous and must fail closed until exact operator repair or reconciliation.
+ */
+export const beginShadowAtlasRegistrationDispatch = mutation({
+	args: {
+		_secret: v.string(),
+		...shadowAtlasTree1CoordinateValidators
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasTree1Coordinates(args);
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasTree1Operation;
+		if (!state || !shadowAtlasTree1StateMatches(state, args)) {
+			throw new Error('SHADOW_ATLAS_TREE1_DISPATCH_CAS_MISMATCH');
+		}
+		if (state.status !== 'reserved') {
+			return { started: false, status: state.status };
+		}
+		const now = Date.now();
+		await ctx.db.patch(args.userId, {
+			shadowAtlasTree1Operation: {
+				...state,
+				status: 'dispatching',
+				dispatchStartedAt: now,
+				updatedAt: now
+			}
+		});
+		return { started: true, status: 'dispatching' as const };
+	}
+});
+
+async function commitShadowAtlasTree1Operation(
+	ctx: MutationCtx,
+	args: ShadowAtlasTree1CommitInput,
+	staleSafe: boolean
+): Promise<{ status: 'committed' | 'already_committed' | 'stale' }> {
+	assertShadowAtlasTree1Coordinates(args);
+	assertShadowAtlasTree1Proof(args);
+	const user = await ctx.db.get(args.userId);
+	const canonicalIdentity = normalizeShadowAtlasTree1Identity(user?.identityCommitment);
+	if (!user || canonicalIdentity !== args.identityCommitment) {
+		if (staleSafe) return { status: 'stale' };
+		throw new Error('SHADOW_ATLAS_TREE1_IDENTITY_CHANGED');
+	}
+	const state = user.shadowAtlasTree1Operation;
+	if (!state || !shadowAtlasTree1StateMatches(state, args)) {
+		if (staleSafe) return { status: 'stale' };
+		throw new Error('SHADOW_ATLAS_TREE1_COMMIT_CAS_MISMATCH');
+	}
+
+	const registration = await readSingleShadowAtlasRegistration(ctx, args.userId);
+	if (state.status === 'committed') {
+		if (
+			!registration ||
+			state.committedLeafIndex !== args.leafIndex ||
+			!sameShadowAtlasTree1Proof(shadowAtlasTree1ProofFromRegistration(registration), args)
+		) {
+			throw new Error('SHADOW_ATLAS_TREE1_COMMITTED_STATE_CORRUPT');
+		}
+		return { status: 'already_committed' };
+	}
+	if (state.status !== 'dispatching' && state.status !== 'ambiguous') {
+		if (staleSafe) return { status: 'stale' };
+		throw new Error('SHADOW_ATLAS_TREE1_COMMIT_STATE_INVALID');
+	}
+
+	const now = Date.now();
+	const verificationMethod = shadowAtlasTree1VerificationMethod(user);
+	if (args.operation === 'register') {
+		if (registration) throw new Error('SHADOW_ATLAS_TREE1_REGISTER_PRECONDITION_FAILED');
+		await ctx.db.insert('shadowAtlasRegistrations', {
 			userId: args.userId,
-			congressionalDistrict: 'three-tree',
+			// Tree 1 contains no district plaintext. Empty remains non-attributable
+			// at position/recipient metric boundaries; never publish a sentinel.
+			congressionalDistrict: '',
 			identityCommitment: args.identityCommitment,
 			leafIndex: args.leafIndex,
 			merkleRoot: args.merkleRoot,
 			merklePath: args.merklePath,
 			credentialType: 'three-tree',
-			verificationMethod: args.verificationMethod,
-			verificationId: args.verificationId,
-			verificationTimestamp: Date.now(),
+			verificationMethod,
+			verificationId: args.userId,
+			verificationTimestamp: now,
 			registrationStatus: 'registered',
-			expiresAt: Date.now() + 180 * 24 * 60 * 60 * 1000,
-			updatedAt: Date.now()
+			expiresAt: now + 180 * 24 * 60 * 60 * 1000,
+			updatedAt: now
 		});
-	}
-});
-
-export const updateShadowAtlasRegistration = mutation({
-	args: {
-		userId: v.id('users'),
-		identityCommitment: v.string(),
-		leafIndex: v.number(),
-		merkleRoot: v.string(),
-		merklePath: v.any()
-	},
-	handler: async (ctx, args) => {
-		const { userId: authUserId } = await requireAuth(ctx);
-		if (args.userId !== authUserId) throw new Error('Unauthorized');
-		const existing = await ctx.db
-			.query('shadowAtlasRegistrations')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
-		if (!existing) throw new Error('No registration found');
-		await ctx.db.patch(existing._id, {
+	} else {
+		if (!registration || registration.leafIndex !== args.priorLeafIndex) {
+			throw new Error('SHADOW_ATLAS_TREE1_REPLACE_PRECONDITION_FAILED');
+		}
+		await ctx.db.patch(registration._id, {
 			identityCommitment: args.identityCommitment,
 			leafIndex: args.leafIndex,
 			merkleRoot: args.merkleRoot,
 			merklePath: args.merklePath,
-			updatedAt: Date.now()
+			verificationMethod,
+			verificationId: args.userId,
+			verificationTimestamp: now,
+			registrationStatus: 'registered',
+			expiresAt: now + 180 * 24 * 60 * 60 * 1000,
+			updatedAt: now
 		});
+	}
+
+	const { ambiguousAt: _ambiguousAt, lastFailureCode: _lastFailureCode, ...retainedState } = state;
+	await ctx.db.patch(args.userId, {
+		shadowAtlasTree1Operation: {
+			...retainedState,
+			status: 'committed',
+			committedAt: now,
+			committedLeafIndex: args.leafIndex,
+			updatedAt: now
+		}
+	});
+	return { status: 'committed' };
+}
+
+/** Owner-bound normal completion for the route that owns the reservation. */
+export const commitShadowAtlasRegistrationOperation = mutation({
+	args: {
+		_secret: v.string(),
+		...shadowAtlasTree1CoordinateValidators,
+		leafIndex: v.number(),
+		merkleRoot: v.string(),
+		merklePath: v.array(v.string())
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		return await commitShadowAtlasTree1Operation(ctx, args, false);
+	}
+});
+
+/** Exact generation-bound completion for the protected KV reconciler. */
+export const reconcileShadowAtlasRegistrationOperation = mutation({
+	args: {
+		_secret: v.string(),
+		...shadowAtlasTree1CoordinateValidators,
+		leafIndex: v.number(),
+		merkleRoot: v.string(),
+		merklePath: v.array(v.string())
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		return await commitShadowAtlasTree1Operation(ctx, args, true);
+	}
+});
+
+/** Preserve an uncertain external outcome permanently; automatic callers cannot reopen it. */
+export const markShadowAtlasRegistrationOperationAmbiguous = mutation({
+	args: {
+		_secret: v.string(),
+		...shadowAtlasTree1CoordinateValidators,
+		failureCode: v.string()
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		assertShadowAtlasTree1Coordinates(args);
+		assertShadowAtlasTree1FailureCode(args.failureCode);
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasTree1Operation;
+		if (!state || !shadowAtlasTree1StateMatches(state, args)) {
+			throw new Error('SHADOW_ATLAS_TREE1_AMBIGUOUS_CAS_MISMATCH');
+		}
+		if (state.status === 'committed') return { recorded: false, status: 'committed' as const };
+		if (state.status === 'ambiguous') return { recorded: false, status: 'ambiguous' as const };
+		if (state.status !== 'dispatching') {
+			throw new Error('SHADOW_ATLAS_TREE1_DISPATCH_NOT_STARTED');
+		}
+		const now = Date.now();
+		await ctx.db.patch(args.userId, {
+			shadowAtlasTree1Operation: {
+				...state,
+				status: 'ambiguous',
+				ambiguousAt: now,
+				lastFailureCode: args.failureCode,
+				updatedAt: now
+			}
+		});
+		return { recorded: true, status: 'ambiguous' as const };
+	}
+});
+
+/**
+ * Operator-only reopening after independent proof that Atlas did not apply the
+ * dispatch. The exact operation is returned to `reserved` with the SAME
+ * generation and idempotency key; repair never creates external entitlement.
+ */
+export const repairShadowAtlasRegistrationOperation = internalMutation({
+	args: {
+		...shadowAtlasTree1CoordinateValidators,
+		expectedDispatchStartedAt: v.number(),
+		operator: v.string(),
+		evidenceReference: v.string()
+	},
+	handler: async (ctx, args) => {
+		assertShadowAtlasTree1Coordinates(args);
+		if (
+			!Number.isSafeInteger(args.expectedDispatchStartedAt) ||
+			args.expectedDispatchStartedAt < 0
+		) {
+			throw new Error('SHADOW_ATLAS_TREE1_REPAIR_TIMESTAMP_INVALID');
+		}
+		const operator = normalizeShadowAtlasRepairReference(args.operator, 'operator');
+		const evidenceReference = normalizeShadowAtlasRepairReference(
+			args.evidenceReference,
+			'evidence'
+		);
+		const user = await ctx.db.get(args.userId);
+		const state = user?.shadowAtlasTree1Operation;
+		if (
+			!state ||
+			!shadowAtlasTree1StateMatches(state, args) ||
+			(state.status !== 'dispatching' && state.status !== 'ambiguous') ||
+			state.dispatchStartedAt !== args.expectedDispatchStartedAt
+		) {
+			throw new Error('SHADOW_ATLAS_TREE1_REPAIR_CAS_MISMATCH');
+		}
+		const now = Date.now();
+		if (now - args.expectedDispatchStartedAt < SHADOW_ATLAS_TREE1_REPAIR_OBSERVATION_MS) {
+			throw new Error('SHADOW_ATLAS_TREE1_REPAIR_TOO_EARLY');
+		}
+		const registration = await readSingleShadowAtlasRegistration(ctx, args.userId);
+		if (
+			(args.operation === 'register' && registration) ||
+			(args.operation === 'replace' &&
+				(!registration || registration.leafIndex !== args.priorLeafIndex))
+		) {
+			throw new Error('SHADOW_ATLAS_TREE1_REPAIR_REGISTRATION_CHANGED');
+		}
+		const {
+			dispatchStartedAt: _dispatchStartedAt,
+			ambiguousAt: _ambiguousAt,
+			lastFailureCode: _lastFailureCode,
+			...retained
+		} = state;
+		await ctx.db.patch(args.userId, {
+			shadowAtlasTree1Operation: {
+				...retained,
+				status: 'reserved',
+				updatedAt: now
+			}
+		});
+		return {
+			repaired: true,
+			generation: state.generation,
+			idempotencyKey: state.idempotencyKey,
+			operator,
+			evidenceReference
+		};
+	}
+});
+
+export const getShadowAtlasRegistration = query({
+	args: { userId: v.id('users') },
+	handler: async (ctx, args) => {
+		const { userId: authUserId } = await requireAuth(ctx);
+		if (args.userId !== authUserId) throw new Error('Unauthorized');
+		const registration = await readSingleShadowAtlasRegistration(ctx, args.userId);
+		return registration ? publicShadowAtlasRegistration(registration) : null;
 	}
 });
 
@@ -1508,61 +2372,6 @@ export const bindIdentityCommitment = internalMutation({
 			linkedToExisting: false,
 			requireReauth: false
 		};
-	}
-});
-
-export const upsertRegistration = mutation({
-	args: {
-		_secret: v.string(),
-		userId: v.id('users'),
-		identityCommitment: v.string(),
-		leafIndex: v.number(),
-		merkleRoot: v.string(),
-		merklePath: v.any(),
-		isReplace: v.boolean(),
-		verificationMethod: v.string(),
-		queuedAt: v.string()
-	},
-	handler: async (ctx, args) => {
-		requireInternalSecret(args._secret);
-		const existing = await ctx.db
-			.query('shadowAtlasRegistrations')
-			.withIndex('by_userId', (q) => q.eq('userId', args.userId))
-			.first();
-
-		if (args.isReplace && existing) {
-			await ctx.db.patch(existing._id, {
-				identityCommitment: args.identityCommitment,
-				leafIndex: args.leafIndex,
-				merkleRoot: args.merkleRoot,
-				merklePath: args.merklePath,
-				updatedAt: Date.now()
-			});
-		} else if (existing) {
-			await ctx.db.patch(existing._id, {
-				identityCommitment: args.identityCommitment,
-				leafIndex: args.leafIndex,
-				merkleRoot: args.merkleRoot,
-				merklePath: args.merklePath,
-				updatedAt: Date.now()
-			});
-		} else {
-			await ctx.db.insert('shadowAtlasRegistrations', {
-				userId: args.userId,
-				congressionalDistrict: 'three-tree',
-				identityCommitment: args.identityCommitment,
-				leafIndex: args.leafIndex,
-				merkleRoot: args.merkleRoot,
-				merklePath: args.merklePath,
-				credentialType: 'three-tree',
-				verificationMethod: args.verificationMethod,
-				verificationId: args.userId,
-				verificationTimestamp: new Date(args.queuedAt).getTime(),
-				registrationStatus: 'registered',
-				expiresAt: Date.now() + 180 * 24 * 60 * 60 * 1000,
-				updatedAt: Date.now()
-			});
-		}
 	}
 });
 
@@ -2032,30 +2841,23 @@ export const getMyReputationPortable = query({
 });
 
 // =============================================================================
-// REPUTATION TIER RECOMPUTE (T10-1)
+// EXPLICIT LEGACY REPUTATION TIER REPAIR (T10-1)
 // =============================================================================
 
-// Threshold table — actionCount → tier label. Order matters; pick the highest
-// matching label. Tier labels mirror the engagement-tier vocabulary (New /
-// Active / Established / Veteran / Pillar) because the UI already labels the
-// reputationTier field with those words. Tune thresholds as real distribution
-// emerges; these starting values keep early users 'new' until they've done
-// real work (≥5 verified actions = active) and reserve 'pillar' for users
-// who've sustained engagement across many campaigns.
-const REPUTATION_THRESHOLDS: ReadonlyArray<{ min: number; tier: string }> = [
-	{ min: 500, tier: 'pillar' },
-	{ min: 100, tier: 'veteran' },
-	{ min: 25, tier: 'established' },
-	{ min: 5, tier: 'active' },
-	{ min: 0, tier: 'new' }
-];
+const REPUTATION_RECOMPUTE_PAGE_SIZE = 100;
+const REPUTATION_RECOMPUTE_MAX_CURSOR_CHARS = 2_048;
+const REPUTATION_RECOMPUTE_MAX_BYTES = 8 * 1024 * 1024;
 
-function reputationTierFor(actionCount: number): string {
-	for (const { min, tier } of REPUTATION_THRESHOLDS) {
-		if (actionCount >= min) return tier;
-	}
-	return 'new';
-}
+type ReputationRecomputeArgs = {
+	cursor?: string | null;
+	limit?: number;
+	sweepUpperBoundId?: Id<'users'>;
+	sweepUpperBoundCreationTime?: number;
+};
+
+const continueReputationTierRecomputeRef = makeFunctionReference<'mutation'>(
+	'users:recomputeAllReputationTiers'
+) as unknown as FunctionReference<'mutation', 'internal', ReputationRecomputeArgs, unknown>;
 
 /**
  * Return the calling user's actionCount (0 if absent). Used by the
@@ -2071,25 +2873,128 @@ export const getMyActionCount = query({
 });
 
 /**
- * Recompute reputationTier for all users from their actionCount counter. Run
- * nightly via cron — see convex/crons.ts. Idempotent (only patches rows whose
- * computed tier differs from the stored value) and sweeps the legacy
- * 'verified'/'novice' strings T10-3 retired into the threshold-derived values
- * over time. Chunked to bound any single run.
+ * Explicit one-time repair for legacy rows whose stored reputationTier
+ * predates transactional action-count derivation. This function is not
+ * registered in convex/crons.ts. An operator invocation freezes the repair at
+ * the last user that exists when it starts; one bounded page schedules at most
+ * one successor and the endpoint page schedules none.
  */
 export const recomputeAllReputationTiers = internalMutation({
-	args: { limit: v.optional(v.number()) },
-	handler: async (ctx, { limit }) => {
-		const BATCH = limit ?? 500;
-		const users = await ctx.db.query('users').take(BATCH);
+	args: {
+		cursor: v.optional(v.union(v.string(), v.null())),
+		limit: v.optional(v.number()),
+		sweepUpperBoundId: v.optional(v.id('users')),
+		sweepUpperBoundCreationTime: v.optional(v.number())
+	},
+	returns: v.object({
+		status: v.union(v.literal('running'), v.literal('complete')),
+		scanned: v.number(),
+		updated: v.number(),
+		nextCursor: v.union(v.string(), v.null()),
+		pageSize: v.number()
+	}),
+	handler: async (ctx, args) => {
+		const cursor = args.cursor ?? null;
+		const hasCursor = cursor !== null;
+		if (cursor !== null && cursor.length > REPUTATION_RECOMPUTE_MAX_CURSOR_CHARS) {
+			throw new Error('REPUTATION_RECOMPUTE_CURSOR_INVALID');
+		}
+		const requestedLimit = args.limit ?? REPUTATION_RECOMPUTE_PAGE_SIZE;
+		if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+			throw new Error('REPUTATION_RECOMPUTE_LIMIT_INVALID');
+		}
+		const pageSize = Math.min(requestedLimit, REPUTATION_RECOMPUTE_PAGE_SIZE);
+		const hasUpperBoundId = args.sweepUpperBoundId !== undefined;
+		const hasUpperBoundCreationTime = args.sweepUpperBoundCreationTime !== undefined;
+		if (hasUpperBoundId !== hasUpperBoundCreationTime || (hasCursor && !hasUpperBoundId)) {
+			throw new Error('REPUTATION_RECOMPUTE_BOUNDARY_INVALID');
+		}
+		if (
+			args.sweepUpperBoundCreationTime !== undefined &&
+			(!Number.isFinite(args.sweepUpperBoundCreationTime) || args.sweepUpperBoundCreationTime < 0)
+		) {
+			throw new Error('REPUTATION_RECOMPUTE_BOUNDARY_INVALID');
+		}
+
+		const rootUpperBound = hasUpperBoundId
+			? null
+			: await ctx.db.query('users').order('desc').first();
+		if (!hasUpperBoundId && !rootUpperBound) {
+			return {
+				status: 'complete' as const,
+				scanned: 0,
+				updated: 0,
+				nextCursor: null,
+				pageSize
+			};
+		}
+		const sweepUpperBoundId = args.sweepUpperBoundId ?? rootUpperBound!._id;
+		const sweepUpperBoundCreationTime =
+			args.sweepUpperBoundCreationTime ?? rootUpperBound!._creationTime;
+		const page = await ctx.db
+			.query('users')
+			.order('asc')
+			.paginate({
+				cursor,
+				numItems: pageSize,
+				maximumRowsRead: pageSize + 1,
+				maximumBytesRead: REPUTATION_RECOMPUTE_MAX_BYTES
+			});
+
+		if (page.pageStatus === 'SplitRequired') {
+			if (pageSize === 1) throw new Error('REPUTATION_RECOMPUTE_ROW_TOO_LARGE');
+			const retryPageSize = Math.max(1, Math.floor(pageSize / 2));
+			await ctx.scheduler.runAfter(0, continueReputationTierRecomputeRef, {
+				cursor,
+				limit: retryPageSize,
+				sweepUpperBoundId,
+				sweepUpperBoundCreationTime
+			});
+			return {
+				status: 'running' as const,
+				scanned: 0,
+				updated: 0,
+				nextCursor: cursor,
+				pageSize: retryPageSize
+			};
+		}
+
+		const endpointIndex = page.page.findIndex((user) => user._id === sweepUpperBoundId);
+		const beyondEndpointIndex = page.page.findIndex(
+			(user) => user._creationTime > sweepUpperBoundCreationTime
+		);
+		const users =
+			endpointIndex >= 0
+				? page.page.slice(0, endpointIndex + 1)
+				: beyondEndpointIndex >= 0
+					? page.page.slice(0, beyondEndpointIndex)
+					: page.page;
 		let updated = 0;
 		for (const u of users) {
-			const next = reputationTierFor(u.actionCount ?? 0);
+			const next = reputationStateForActionCount(u.actionCount ?? 0).reputationTier;
 			if (u.reputationTier !== next) {
-				await ctx.db.patch(u._id, { reputationTier: next, updatedAt: Date.now() });
+				const userId: Id<'users'> = u._id;
+				await ctx.db.patch(userId, { reputationTier: next, updatedAt: Date.now() });
 				updated++;
 			}
 		}
-		return { scanned: users.length, updated };
+
+		const complete = endpointIndex >= 0 || beyondEndpointIndex >= 0 || page.isDone;
+		if (!complete) {
+			await ctx.scheduler.runAfter(0, continueReputationTierRecomputeRef, {
+				cursor: page.continueCursor,
+				limit:
+					page.pageStatus === 'SplitRecommended' ? Math.max(1, Math.floor(pageSize / 2)) : pageSize,
+				sweepUpperBoundId,
+				sweepUpperBoundCreationTime
+			});
+		}
+		return {
+			status: complete ? ('complete' as const) : ('running' as const),
+			scanned: users.length,
+			updated,
+			nextCursor: complete ? null : page.continueCursor,
+			pageSize
+		};
 	}
 });

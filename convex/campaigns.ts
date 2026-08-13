@@ -9,7 +9,7 @@ import {
 import { internal } from './_generated/api';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
-import type { MutationCtx } from './_generated/server';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { ConvexError, v } from 'convex/values';
 import { campaignType, campaignStatus } from './_validators';
 import { requireOrgRole, loadOrg, requireAuth, requireOrgMembership } from './_authHelpers';
@@ -47,8 +47,16 @@ import {
 import {
 	CAMPAIGN_READ_MODEL_MIGRATION_KEY,
 	CAMPAIGN_READ_MODEL_VERSION,
-	emptyCampaignReadModel
+	emptyCampaignReadModel,
+	type CampaignReadModelState
 } from './lib/campaignReadModel';
+import {
+	canonicalReportPreimage,
+	deriveProofPacketSummary,
+	reportPacketPreimageFields,
+	type ProofPacketSummary,
+	type ReportDebatePreimage
+} from './lib/campaignProofPacket';
 import { requireDebateReadModelReady } from './lib/debateReadModel';
 import {
 	applyCoalitionActionTransition,
@@ -65,6 +73,7 @@ import {
 	SUPPORTER_AUDIENCE_ACTION_VERSION
 } from './lib/supporterAudience';
 import { assertSupporterInputBudget } from './lib/supporterInputBudget';
+import { assertMatterUsableByOrg } from './lib/matterAuthority';
 import {
 	engagementTierForReputationTier,
 	reputationStateForActionCount
@@ -76,6 +85,14 @@ import {
 	renewEmailReservationLease,
 	reserveEmailUsage
 } from './lib/planUsageReservations';
+import {
+	admitPersonBoundRoute,
+	isPersonBoundTargetClass,
+	recordPersonBoundRoute,
+	type PersonBoundDegradeReason,
+	type PersonBoundRouteRecordInput,
+	type PersonBoundTargetClass
+} from './lib/personBoundRouteLedger';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -112,8 +129,6 @@ async function assertActiveTemplateAttributionAvailable(
 function assertCampaignReportPacketInput(args: {
 	renderedHtml?: string;
 	packetDigest?: string;
-	proofWeight?: number;
-	packetSummary?: ProofPacketSummary;
 }): void {
 	if (
 		args.renderedHtml !== undefined &&
@@ -123,39 +138,6 @@ function assertCampaignReportPacketInput(args: {
 	}
 	if (args.packetDigest !== undefined && !CAMPAIGN_REPORT_DIGEST_RE.test(args.packetDigest)) {
 		throw new Error('CAMPAIGN_REPORT_PACKET_DIGEST_INVALID');
-	}
-	if (
-		args.proofWeight !== undefined &&
-		(!Number.isFinite(args.proofWeight) || args.proofWeight < 0 || args.proofWeight > 1)
-	) {
-		throw new Error('CAMPAIGN_REPORT_PROOF_WEIGHT_INVALID');
-	}
-	const summary = args.packetSummary;
-	if (!summary) return;
-	for (const [name, value] of [
-		['verified', summary.verified],
-		['total', summary.total],
-		['districtCount', summary.districtCount]
-	] as const) {
-		if (!Number.isSafeInteger(value) || value < 0) {
-			throw new Error(`CAMPAIGN_REPORT_PACKET_${name.toUpperCase()}_INVALID`);
-		}
-	}
-	if (summary.verified > summary.total || summary.districtCount > summary.total) {
-		throw new Error('CAMPAIGN_REPORT_PACKET_COUNTS_INCONSISTENT');
-	}
-	for (const [name, value] of [
-		['gds', summary.gds],
-		['ald', summary.ald],
-		['cai', summary.cai],
-		['temporalEntropy', summary.temporalEntropy]
-	] as const) {
-		if (value != null && (!Number.isFinite(value) || value < 0)) {
-			throw new Error(`CAMPAIGN_REPORT_PACKET_${name.toUpperCase()}_INVALID`);
-		}
-	}
-	if ((summary.gds ?? 0) > 1 || (summary.ald ?? 0) > 1) {
-		throw new Error('CAMPAIGN_REPORT_PACKET_RATIO_INVALID');
 	}
 }
 
@@ -199,6 +181,20 @@ type CampaignTarget = {
 	title?: string;
 	district?: string;
 	decisionMakerId?: Id<'decisionMakers'> | string;
+	targetClass?: PersonBoundTargetClass;
+	officeFallbackEmail?: string;
+};
+
+type CampaignReportDegradation = {
+	requestedEmail: string;
+	deliveredEmail: string | null;
+	reason: PersonBoundDegradeReason;
+};
+
+type SendReportResult = {
+	error: string | null;
+	deliveryCount: number;
+	degraded?: CampaignReportDegradation[];
 };
 
 type ReceiptEligibility =
@@ -210,16 +206,6 @@ type ReceiptEligibility =
 type ReceiptReadiness = {
 	receiptEligibility: ReceiptEligibility;
 	receiptBlockers: string[];
-};
-
-type ProofPacketSummary = {
-	verified: number;
-	total: number;
-	districtCount: number;
-	gds?: number | null;
-	ald?: number | null;
-	cai?: number | null;
-	temporalEntropy?: number | null;
 };
 
 function receiptReadinessFor(
@@ -308,11 +294,9 @@ async function sha256Hex(input: string): Promise<string> {
 async function computeReceiptAttestationDigest(
 	packetDigest: string,
 	billExternalId: string,
-	decisionMakerId: Id<'decisionMakers'>,
-	proofWeight: number
+	decisionMakerId: Id<'decisionMakers'>
 ): Promise<string> {
-	const scaledWeight = Math.round(proofWeight * 10000).toString();
-	return sha256Hex(`${packetDigest}:${billExternalId}:${decisionMakerId}:${scaledWeight}`);
+	return sha256Hex(`${packetDigest}:${billExternalId}:${decisionMakerId}`);
 }
 
 const getActiveCampaignRef = makeFunctionReference<'query'>(
@@ -683,6 +667,10 @@ export const create = mutation({
 			if (!template || template.orgId !== org._id) {
 				throw new Error('Template not found in this organization');
 			}
+		}
+		// Matter ownership: an org cannot attach its campaign to another tenant's proceeding.
+		if (args.billId !== undefined) {
+			await assertMatterUsableByOrg(ctx, args.billId, org._id);
 		}
 
 		const now = Date.now();
@@ -2226,33 +2214,37 @@ export const getStats = query({
  * Constant-read campaign proof/analytics source for trusted SSR. The caller
  * must establish org authorization before using this service credential.
  */
-export const getReadModelBundle = query({
-	args: {
-		_secret: v.string(),
-		campaignId: v.id('campaigns'),
-		orgId: v.id('organizations')
-	},
-	handler: async (ctx, args) => {
-		requireInternalSecret(args._secret);
-		const campaign = await ctx.db.get(args.campaignId);
-		if (!campaign || campaign.orgId !== args.orgId) throw new Error('CAMPAIGN_NOT_FOUND');
+type CampaignProofStateResult =
+	| { ok: true; state: CampaignReadModelState; debate: ReportDebatePreimage }
+	| { ok: false; code: string };
+
+async function loadCampaignProofState(
+	ctx: QueryCtx | MutationCtx,
+	campaign: Doc<'campaigns'>
+): Promise<CampaignProofStateResult> {
+	try {
 		const migration = await ctx.db
 			.query('campaignReadModelMigrations')
 			.withIndex('by_key', (q) => q.eq('key', CAMPAIGN_READ_MODEL_MIGRATION_KEY))
 			.unique();
 		if (migration?.status !== 'ready') {
-			throw new Error(migration?.failureCode ?? 'CAMPAIGN_READ_MODEL_NOT_READY');
+			return {
+				ok: false,
+				code: migration?.failureCode ?? 'CAMPAIGN_READ_MODEL_NOT_READY'
+			};
 		}
 		const model = await ctx.db
 			.query('campaignReadModels')
-			.withIndex('by_campaignId', (q) => q.eq('campaignId', args.campaignId))
+			.withIndex('by_campaignId', (q) => q.eq('campaignId', campaign._id))
 			.unique();
 		if (model && model.state.version !== CAMPAIGN_READ_MODEL_VERSION) {
-			throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+			return { ok: false, code: 'CAMPAIGN_READ_MODEL_MISSING' };
 		}
-		if (!model && (campaign.actionCount ?? 0) > 0) throw new Error('CAMPAIGN_READ_MODEL_MISSING');
+		if (!model && (campaign.actionCount ?? 0) > 0) {
+			return { ok: false, code: 'CAMPAIGN_READ_MODEL_MISSING' };
+		}
 
-		let debate = null;
+		let debate: ReportDebatePreimage = null;
 		if (campaign.debateId) {
 			await requireDebateReadModelReady(ctx);
 			const [debateDoc, debateModel] = await Promise.all([
@@ -2262,7 +2254,9 @@ export const getReadModelBundle = query({
 					.withIndex('by_debateId', (q) => q.eq('debateId', campaign.debateId!))
 					.unique()
 			]);
-			if (!debateDoc || !debateModel) throw new Error('DEBATE_READ_MODEL_MISSING');
+			if (!debateDoc || !debateModel) {
+				return { ok: false, code: 'DEBATE_READ_MODEL_MISSING' };
+			}
 			const participantCount = debateModel.uniqueParticipants;
 			debate = {
 				marketPosition:
@@ -2277,7 +2271,33 @@ export const getReadModelBundle = query({
 						: null
 			};
 		}
-		return { state: model?.state ?? emptyCampaignReadModel(campaign.updatedAt), debate };
+
+		return {
+			ok: true,
+			state: model?.state ?? emptyCampaignReadModel(campaign.updatedAt),
+			debate
+		};
+	} catch (error) {
+		return {
+			ok: false,
+			code: error instanceof Error ? error.message : 'CAMPAIGN_READ_MODEL_NOT_READY'
+		};
+	}
+}
+
+export const getReadModelBundle = query({
+	args: {
+		_secret: v.string(),
+		campaignId: v.id('campaigns'),
+		orgId: v.id('organizations')
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		const campaign = await ctx.db.get(args.campaignId);
+		if (!campaign || campaign.orgId !== args.orgId) throw new Error('CAMPAIGN_NOT_FOUND');
+		const proof = await loadCampaignProofState(ctx, campaign);
+		if (!proof.ok) throw new Error(proof.code);
+		return { state: proof.state, debate: proof.debate };
 	}
 });
 
@@ -2630,21 +2650,9 @@ export const sendReport = mutation({
 		orgSlug: v.string(),
 		targetEmails: v.array(v.string()),
 		renderedHtml: v.optional(v.string()), // Pre-rendered report email HTML from server
-		packetDigest: v.optional(v.string()),
-		proofWeight: v.optional(v.float64()),
-		packetSummary: v.optional(
-			v.object({
-				verified: v.number(),
-				total: v.number(),
-				districtCount: v.number(),
-				gds: v.union(v.float64(), v.null()),
-				ald: v.union(v.float64(), v.null()),
-				cai: v.union(v.float64(), v.null()),
-				temporalEntropy: v.union(v.float64(), v.null())
-			})
-		)
+		packetDigest: v.optional(v.string())
 	},
-	handler: async (ctx, args): Promise<{ error: string | null; deliveryCount: number }> => {
+	handler: async (ctx, args): Promise<SendReportResult> => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 		assertCampaignReportPacketInput(args);
 		if (args.targetEmails.length > CAMPAIGN_REPORT_TARGET_LIMIT) {
@@ -2669,6 +2677,25 @@ export const sendReport = mutation({
 				error: 'Campaign must be active, paused, or complete to send reports',
 				deliveryCount: 0
 			};
+		}
+
+		const proof = await loadCampaignProofState(ctx, campaign);
+		if (!proof.ok) return { error: proof.code, deliveryCount: 0 };
+		const derivedSummary = deriveProofPacketSummary(proof.state);
+		const derivedDigest = await sha256Hex(
+			canonicalReportPreimage({
+				campaignId: campaign._id,
+				campaignTitle: campaign.title,
+				orgName: org.name ?? org.slug,
+				...reportPacketPreimageFields(proof.state, proof.state.updatedAt),
+				debate: proof.debate
+			})
+		);
+		if (args.packetDigest !== undefined && args.packetDigest.toLowerCase() !== derivedDigest) {
+			return { error: 'CAMPAIGN_REPORT_PACKET_STALE', deliveryCount: 0 };
+		}
+		if (args.renderedHtml !== undefined && !args.renderedHtml.includes(derivedDigest)) {
+			return { error: 'CAMPAIGN_REPORT_PACKET_HTML_UNBOUND', deliveryCount: 0 };
 		}
 
 		const targets = (campaign.targets as CampaignTarget[]) ?? [];
@@ -2724,17 +2751,56 @@ export const sendReport = mutation({
 		}
 
 		let deliveryCount = 0;
+		const degraded: CampaignReportDegradation[] = [];
 		for (const target of plannedTargets) {
-			const email = target.email;
-			const resolvedDecisionMaker = await resolveDecisionMakerForTarget(ctx, target);
+			let email = target.email;
+			let ledgerRecord: PersonBoundRouteRecordInput | undefined;
+			if (isPersonBoundTargetClass(target.targetClass)) {
+				const routeInput = {
+					personEmail: target.email,
+					officeFallbackEmail: target.officeFallbackEmail,
+					campaignKey: String(args.campaignId),
+					senderScope: String(org._id),
+					now: Date.now()
+				};
+				const routeDecision = await admitPersonBoundRoute(ctx, routeInput);
+				if (routeDecision.decision === 'refused') {
+					degraded.push({
+						requestedEmail: target.email,
+						deliveredEmail: null,
+						reason: routeDecision.reason
+					});
+					continue;
+				}
+				email = routeDecision.email;
+				ledgerRecord = { ...routeInput, decidedEmail: email };
+				if (routeDecision.decision === 'degraded') {
+					degraded.push({
+						requestedEmail: target.email,
+						deliveredEmail: email,
+						reason: routeDecision.reason
+					});
+					const existingFallbackRows = await ctx.db
+						.query('campaignDeliveries')
+						.withIndex('by_campaignId_targetEmail', (q) =>
+							q.eq('campaignId', args.campaignId).eq('targetEmail', email)
+						)
+						.take(2);
+					if (existingFallbackRows.length > 1) {
+						throw new Error('CAMPAIGN_DELIVERY_DEDUP_STATE_DIVERGED');
+					}
+					if (existingFallbackRows[0]) continue;
+				}
+			}
+			const resolvedDecisionMaker = await resolveDecisionMakerForTarget(
+				ctx,
+				email === target.email ? target : { email }
+			);
 			const readiness = receiptReadinessFor(campaign.billId, resolvedDecisionMaker?._id);
-			const packetSnapshot =
-				args.renderedHtml || args.packetSummary
-					? {
-							...(args.renderedHtml ? { html: args.renderedHtml } : {}),
-							...(args.packetSummary ? { summary: args.packetSummary } : {})
-						}
-					: undefined;
+			const packetSnapshot = {
+				...(args.renderedHtml !== undefined ? { html: args.renderedHtml } : {}),
+				summary: derivedSummary
+			};
 
 			const deliveryId = await ctx.db.insert('campaignDeliveries', {
 				campaignId: args.campaignId,
@@ -2747,13 +2813,13 @@ export const sendReport = mutation({
 				targetDistrict: target.district,
 				status: 'queued',
 				packetSnapshot,
-				packetDigest: args.packetDigest,
-				proofWeight: args.proofWeight,
+				packetDigest: derivedDigest,
 				receiptEligibility: readiness.receiptEligibility,
 				receiptBlockers:
 					readiness.receiptBlockers.length > 0 ? readiness.receiptBlockers : undefined,
 				createdAt: Date.now()
 			});
+			if (ledgerRecord) await recordPersonBoundRoute(ctx, ledgerRecord);
 			const reservation = await reserveEmailUsage(ctx, {
 				orgId: org._id,
 				sourceType: 'campaignDelivery',
@@ -2778,7 +2844,9 @@ export const sendReport = mutation({
 			});
 		}
 
-		return { error: null, deliveryCount };
+		return degraded.length > 0
+			? { error: null, deliveryCount, degraded }
+			: { error: null, deliveryCount };
 	}
 });
 
@@ -3035,9 +3103,6 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 	if (delivery.receiptEligibility !== 'eligible') return null;
 	if (!delivery.decisionMakerId || !delivery.billId) return null;
 	if (!delivery.packetDigest || typeof delivery.packetDigest !== 'string') return null;
-	if (typeof delivery.proofWeight !== 'number' || !Number.isFinite(delivery.proofWeight)) {
-		return null;
-	}
 
 	const packetSummary = packetSummaryFromSnapshot(delivery.packetSnapshot);
 	if (!packetSummary || packetSummary.total <= 0 || packetSummary.verified <= 0) return null;
@@ -3063,8 +3128,7 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 	const attestationDigest = await computeReceiptAttestationDigest(
 		delivery.packetDigest,
 		billExternalId,
-		delivery.decisionMakerId,
-		delivery.proofWeight
+		delivery.decisionMakerId
 	);
 
 	const receiptId = await ctx.db.insert('accountabilityReceipts', {
@@ -3080,7 +3144,6 @@ async function maybeCreateAccountabilityReceiptForDelivery(
 		cai: finiteOptional(packetSummary.cai),
 		temporalEntropy: finiteOptional(packetSummary.temporalEntropy),
 		districtCount: packetSummary.districtCount,
-		proofWeight: delivery.proofWeight,
 		attestationDigest,
 		packetDigest: delivery.packetDigest,
 		proofDeliveredAt: proofDeliveredAt ?? delivery.sentAt ?? now,
@@ -3452,7 +3515,6 @@ export const getPastDeliveries = query({
 				receiptBacked: !!receipt,
 				receiptEligibility: readiness.receiptEligibility,
 				receiptBlockers: readiness.receiptBlockers,
-				proofWeight: d.proofWeight ?? receipt?.proofWeight ?? null,
 				verifiedCount: receipt?.verifiedCount ?? packetSummary?.verified ?? null,
 				totalCount: receipt?.totalCount ?? packetSummary?.total ?? null,
 				districtCount: receipt?.districtCount ?? packetSummary?.districtCount ?? null,

@@ -168,7 +168,6 @@ export function projectAccountabilityReceipt(
 			verifiedCount,
 			totalCount,
 			districtCount: safeNonNegativeInteger('districtCount', receipt.districtCount),
-			proofWeight: finiteNonNegative('proofWeight', receipt.proofWeight),
 			attestationDigest: boundedString('attestationDigest', receipt.attestationDigest, 512),
 			proofDeliveredAt: finiteNonNegative('proofDeliveredAt', receipt.proofDeliveredAt),
 			proofVerifiedAt:
@@ -293,7 +292,6 @@ export function projectAccountabilityScorecard(snapshot: Doc<'scorecardSnapshots
 			responsiveness: finiteOptional('responsiveness', snapshot.responsiveness),
 			alignment: finiteOptional('scorecardAlignment', snapshot.alignment),
 			composite: finiteOptional('composite', snapshot.composite),
-			proofWeightTotal: finiteNonNegative('scorecardProofWeight', snapshot.proofWeightTotal),
 			deliveriesSent,
 			deliveriesOpened,
 			deliveriesVerified,
@@ -314,14 +312,11 @@ export type AccountabilityReceiptContribution = {
 	pendingCount: number;
 	responseLoggedCount: number;
 	anchorFieldCount: number;
-	proofWeightTotal: number;
 	alignedCount: number;
 	opposedCount: number;
 	publicReceiptCount: number;
 	publicVerifiedCount: number;
 	publicCausalReceiptCount: number;
-	publicProofWeightTotal: number;
-	publicWeightedAlignmentTotal: number;
 };
 
 export function accountabilityReceiptContribution(
@@ -333,16 +328,13 @@ export function accountabilityReceiptContribution(
 		pendingCount: projection.status === 'pending_response' ? 1 : 0,
 		responseLoggedCount: projection.hasResponse ? 1 : 0,
 		anchorFieldCount: projection.anchorCid || projection.anchorRoot ? 1 : 0,
-		proofWeightTotal: projection.proofWeight,
 		alignedCount: projection.alignment > 0 ? 1 : 0,
 		opposedCount: projection.alignment < 0 ? 1 : 0,
 		publicReceiptCount: publicMultiplier,
 		publicVerifiedCount: publicMultiplier * projection.verifiedCount,
 		publicCausalReceiptCount:
 			publicMultiplier *
-			(projection.causalityClass === 'strong' || projection.causalityClass === 'moderate' ? 1 : 0),
-		publicProofWeightTotal: publicMultiplier * projection.proofWeight,
-		publicWeightedAlignmentTotal: publicMultiplier * projection.proofWeight * projection.alignment
+			(projection.causalityClass === 'strong' || projection.causalityClass === 'moderate' ? 1 : 0)
 	};
 }
 

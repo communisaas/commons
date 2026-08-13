@@ -11,6 +11,7 @@ import { computeTwinEdges } from './lib/relatedness';
 import { clusterTagConcepts, conceptEdges, tagConceptMap } from './lib/tag_concepts';
 import { invalidatePublicDiscoveryAfterDestructiveSourceChange } from './lib/publicDiscovery';
 import { issuePublicRecipientProvenance } from './lib/publicRecipientProvenance';
+import { PUBLIC_ROLE_LOCAL_PARTS } from './lib/publicRoleAddress';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 
@@ -274,7 +275,7 @@ async function attestedRecipient(
 		name: 'Target one',
 		title: 'Director',
 		organization: 'Public agency',
-		email: 'public-action-target@example.test',
+		email: 'info@example.test',
 		emailGrounded: true,
 		emailSource: 'https://agency.example.test/contact',
 		isAiResolved: true,
@@ -663,15 +664,13 @@ describe('templates materialized public snapshots', () => {
 
 	it('redacts public configs while preserving only the attested detail/send roster', async () => {
 		const t = newHarness();
-		const targetEmail = 'public-action-target@example.test';
+		const targetEmail = 'press@example.test';
 		const deliveryConfig = { provider: 'detail-only-provider' };
 		const cwcConfig = { apiKey: 'detail-only-secret' };
 		const userId = await insertTestUser(t, 9_000);
 		const eligibleRecipient = await attestedRecipient(userId, {
 			email: targetEmail,
-			accountabilityOpener: 'You oversee this decision.',
 			personalPrompt: 'How has this affected you?',
-			relevanceRank: 1,
 			publicActions: ['Approved the current policy'],
 			emailVerified: 'deliverable',
 			emailSourceTitle: 'Internal source title',
@@ -736,8 +735,6 @@ describe('templates materialized public snapshots', () => {
 						title: 'Director',
 						organization: 'Public agency',
 						email: targetEmail,
-						accountabilityOpener: 'You oversee this decision.',
-						relevanceRank: 1,
 						emailGrounded: true,
 						emailSource: 'https://agency.example.test/contact'
 					}
@@ -746,6 +743,9 @@ describe('templates materialized public snapshots', () => {
 			recipientEmails: [targetEmail],
 			recipient_count: 1
 		});
+		const projectedDecisionMaker = detail?.recipient_config?.decisionMakers?.[0];
+		expect(projectedDecisionMaker).not.toHaveProperty('accountabilityOpener');
+		expect(projectedDecisionMaker).not.toHaveProperty('relevanceRank');
 		expect(JSON.stringify(listCard)).not.toContain(targetEmail);
 		expect(JSON.stringify(detail)).not.toContain(cwcConfig.apiKey);
 		expect(JSON.stringify(detail)).not.toContain(deliveryConfig.provider);
@@ -765,11 +765,13 @@ describe('templates materialized public snapshots', () => {
 	it('caps both public detail roster projections from the same normalized allowlist', async () => {
 		const t = newHarness();
 		const userId = await insertTestUser(t, 9_001);
+		const roleLocalParts = [...PUBLIC_ROLE_LOCAL_PARTS].slice(0, 55);
+		expect(roleLocalParts).toHaveLength(55);
 		const decisionMakers = await Promise.all(
-			Array.from({ length: 55 }, (_, index) =>
+			roleLocalParts.map((roleLocalPart, index) =>
 				attestedRecipient(userId, {
-					name: `Public target ${index}`,
-					email: `public-target-${index}@example.test`,
+					name: `Public ${roleLocalPart} office`,
+					email: `${roleLocalPart}@example.test`,
 					emailSource: `https://agency.example.test/contact/${index}`
 				})
 			)
@@ -793,13 +795,21 @@ describe('templates materialized public snapshots', () => {
 		expect(detail?.recipient_count).toBe(50);
 	});
 
-	it('does not expose query- or fragment-carried credentials in public email sources', async () => {
+	it('round-trips query-string public email sources and refuses fragments', async () => {
 		const t = newHarness();
-		const targetEmail = 'public-source-target@example.test';
+		const bareEmail = 'info@example.test';
+		const queryEmail = 'planning@example.test';
+		const fragmentEmail = 'press@example.test';
+		const querySource = 'https://agency.example.test/contact?dept=planning&view=staff';
 		const userId = await insertTestUser(t, 9_003);
 		const bareSource = await attestedRecipient(userId, {
 			name: 'Bare source',
-			email: targetEmail
+			email: bareEmail
+		});
+		const queryStringSource = await attestedRecipient(userId, {
+			name: 'Planning desk',
+			email: queryEmail,
+			emailSource: querySource
 		});
 		await t.run((ctx) =>
 			ctx.db.insert(
@@ -807,23 +817,15 @@ describe('templates materialized public snapshots', () => {
 				templateValue(9_003, {
 					userId,
 					recipientConfig: {
-						emails: [targetEmail],
+						emails: [bareEmail, queryEmail, fragmentEmail],
 						decisionMakers: [
 							bareSource,
-							{
-								name: 'Query credential',
-								title: 'Director',
-								organization: 'Public agency',
-								email: targetEmail,
-								isAiResolved: true,
-								emailGrounded: true,
-								emailSource: 'https://agency.example.test/contact?token=private-query'
-							},
+							queryStringSource,
 							{
 								name: 'Fragment credential',
 								title: 'Director',
 								organization: 'Public agency',
-								email: targetEmail,
+								email: fragmentEmail,
 								isAiResolved: true,
 								emailGrounded: true,
 								emailSource: 'https://agency.example.test/contact#access_token=private-fragment'
@@ -850,27 +852,36 @@ describe('templates materialized public snapshots', () => {
 				name: 'Bare source',
 				title: 'Director',
 				organization: 'Public agency',
-				email: targetEmail,
+				email: bareEmail,
 				emailGrounded: true,
 				emailSource: 'https://agency.example.test/contact'
+			},
+			{
+				name: 'Planning desk',
+				title: 'Director',
+				organization: 'Public agency',
+				email: queryEmail,
+				emailGrounded: true,
+				emailSource: querySource
 			}
 		]);
-		expect(JSON.stringify(detail)).not.toContain('private-query');
+		expect(JSON.stringify(detail)).toContain(querySource);
 		expect(JSON.stringify(detail)).not.toContain('private-fragment');
 	});
 
 	it('ignores compatibility string arrays rather than granting or consuming roster eligibility', async () => {
 		const t = newHarness();
 		const userId = await insertTestUser(t, 9_002);
+		const roleEmails = ['press@example.test', 'info@example.test', 'superintendent@example.test'];
 		const compatibilityEmails = Array.from(
 			{ length: 50 },
 			(_, index) => `compatibility-target-${index}@example.test`
 		);
 		const decisionMakers = await Promise.all(
-			Array.from({ length: 3 }, (_, index) =>
+			roleEmails.map((email, index) =>
 				attestedRecipient(userId, {
 					name: `Decision maker ${index}`,
-					email: `decision-maker-${index}@example.test`,
+					email,
 					emailSource: `https://sources.example.test/address-${index}`
 				})
 			)
@@ -898,11 +909,7 @@ describe('templates materialized public snapshots', () => {
 			emails: string[];
 			decisionMakers: Array<{ name: string; email?: string }>;
 		};
-		expect(detail?.recipientEmails).toEqual([
-			'decision-maker-0@example.test',
-			'decision-maker-1@example.test',
-			'decision-maker-2@example.test'
-		]);
+		expect(detail?.recipientEmails).toEqual(roleEmails);
 		expect(projectedConfig.emails).toEqual(detail?.recipientEmails);
 		expect(projectedConfig.decisionMakers).toHaveLength(3);
 		expect(JSON.stringify(detail)).not.toContain(compatibilityEmails[0]);

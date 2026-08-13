@@ -1474,7 +1474,6 @@ export const getDmScorecard = query({
 						responsiveness: latest.responsiveness,
 						alignment: latest.alignment,
 						composite: latest.composite,
-						proofWeightTotal: latest.proofWeightTotal,
 						period: {
 							start: new Date(latest.periodStart).toISOString().slice(0, 10),
 							end: new Date(latest.periodEnd).toISOString().slice(0, 10)
@@ -1540,7 +1539,6 @@ export const compareDmScorecards = query({
 								responsiveness: latest.responsiveness,
 								alignment: latest.alignment,
 								composite: latest.composite,
-								proofWeightTotal: latest.proofWeightTotal,
 								period: {
 									start: new Date(latest.periodStart).toISOString().slice(0, 10),
 									end: new Date(latest.periodEnd).toISOString().slice(0, 10)
@@ -1985,7 +1983,6 @@ export const listActivityFeed = query({
 					date: receipt.proofDeliveredAt,
 					decisionMakerId: receipt.decisionMakerId,
 					billId: receipt.billId,
-					proofWeight: receipt.proofWeight,
 					status: receipt.status,
 					causalityClass: receipt.causalityClass,
 					attestationDigest: receipt.attestationDigest

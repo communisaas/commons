@@ -70,11 +70,9 @@ const aggregateScorecardReceiptsRef = makeFunctionReference<'query'>(
 			deliveriesOpened: number;
 			deliveriesVerified: number;
 			repliesReceived: number;
-			proofWeightTotal: number;
 			alignedVotes: number;
 			totalScoredVotes: number;
-			weightedAlignmentNumerator: number;
-			scoredProofWeight: number;
+			alignmentNumerator: number;
 		};
 		continueCursor: string | null;
 		isDone: boolean;
@@ -215,7 +213,6 @@ async function seedFixture(t: Harness, options: { poisonName?: boolean } = {}) {
 			verifiedCount: 5,
 			totalCount: 5,
 			districtCount: 3,
-			proofWeight: 2,
 			attestationDigest: 'attestation-k-safe',
 			packetDigest: 'packet-k-safe',
 			proofDeliveredAt: NOW,
@@ -244,7 +241,6 @@ async function seedFixture(t: Harness, options: { poisonName?: boolean } = {}) {
 			verifiedCount: 4,
 			totalCount: 4,
 			districtCount: 2,
-			proofWeight: 1,
 			attestationDigest: 'attestation-sub-k',
 			packetDigest: 'packet-sub-k',
 			proofDeliveredAt: NOW + 1,
@@ -268,7 +264,6 @@ async function seedFixture(t: Harness, options: { poisonName?: boolean } = {}) {
 			responsiveness: 0.5,
 			alignment: 0.75,
 			composite: 0.625,
-			proofWeightTotal: 2,
 			deliveriesSent: 2,
 			deliveriesOpened: 1,
 			deliveriesVerified: 1,
@@ -456,9 +451,7 @@ describe('accountability read-model runtime', () => {
 				publicReceiptCount: 0,
 				publicVerifiedCount: 0,
 				publicCausalReceiptCount: 0,
-				uniquePublicBillCount: 0,
-				publicProofWeightTotal: 0,
-				publicWeightedAlignmentTotal: 0
+				uniquePublicBillCount: 0
 			},
 			bill: null
 		});
@@ -600,7 +593,6 @@ describe('accountability read-model runtime', () => {
 				verifiedCount: source.verifiedCount,
 				totalCount: source.totalCount,
 				districtCount: source.districtCount,
-				proofWeight: source.proofWeight,
 				attestationDigest: 'duplicate-delivery',
 				packetDigest: 'duplicate-delivery-packet',
 				proofDeliveredAt: NOW + 20,
@@ -663,7 +655,6 @@ describe('accountability read-model runtime', () => {
 					verifiedCount: 5,
 					totalCount: 5,
 					districtCount: 3,
-					proofWeight: 1,
 					attestationDigest: `attestation-page-${index}`,
 					packetDigest: `packet-page-${index}`,
 					proofDeliveredAt,
@@ -701,8 +692,6 @@ describe('accountability read-model runtime', () => {
 				publicVerifiedCount: 530,
 				publicCausalReceiptCount: 1,
 				uniquePublicBillCount: 1,
-				publicProofWeightTotal: 107,
-				publicWeightedAlignmentTotal: 1.5,
 				latestProofDeliveredAt: NOW + 1_104,
 				updatedAt: NOW + 1_104
 			});
@@ -732,7 +721,6 @@ describe('accountability read-model runtime', () => {
 							pendingCount: 1,
 							responseLoggedCount: 0,
 							anchorFieldCount: 0,
-							proofWeightTotal: 1,
 							latestProofDeliveredAt: NOW + index,
 							version: 1,
 							updatedAt: NOW + index
@@ -749,8 +737,6 @@ describe('accountability read-model runtime', () => {
 							publicVerifiedCount: 0,
 							publicCausalReceiptCount: 0,
 							uniquePublicBillCount: 0,
-							publicProofWeightTotal: 0,
-							publicWeightedAlignmentTotal: 0,
 							latestProofDeliveredAt: NOW + index,
 							version: 1,
 							updatedAt: NOW + index
@@ -786,8 +772,8 @@ describe('accountability read-model runtime', () => {
 			scorecardReceiptSecond.fold.deliveriesSent
 		]).toEqual([100, 7]);
 		expect(
-			scorecardReceiptFirst.fold.proofWeightTotal + scorecardReceiptSecond.fold.proofWeightTotal
-		).toBe(108);
+			scorecardReceiptFirst.fold.totalScoredVotes + scorecardReceiptSecond.fold.totalScoredVotes
+		).toBe(1);
 		expect(scorecardReceiptFirst.isDone).toBe(false);
 		expect(scorecardReceiptSecond.isDone).toBe(true);
 

@@ -9,6 +9,7 @@ import schema from './schema';
 
 const modules = import.meta.glob(['./**/*.ts', '!./**/*.test.ts']);
 const SECRET = 'private-template-query-secret-32-bytes';
+const SOURCE_CACHE_INPUT_HASH = 'a'.repeat(64);
 type Harness = TestConvex<typeof schema>;
 
 function harness(): Harness {
@@ -160,7 +161,8 @@ describe('private template query boundaries', () => {
 				userId: owner.userId,
 				templateId,
 				cachedSources,
-				sourcesCachedAt: 10
+				sourcesCachedAt: 10,
+				sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
 			})
 		).rejects.toThrow('Unauthorized');
 		await expect(
@@ -169,7 +171,8 @@ describe('private template query boundaries', () => {
 				userId: other.userId,
 				templateId,
 				cachedSources,
-				sourcesCachedAt: 10
+				sourcesCachedAt: 10,
+				sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
 			})
 		).rejects.toThrow('TEMPLATE_SOURCE_CACHE_USER_MISMATCH');
 		await expect(
@@ -178,16 +181,28 @@ describe('private template query boundaries', () => {
 				userId: owner.userId,
 				templateId: otherTemplateId,
 				cachedSources,
-				sourcesCachedAt: 10
+				sourcesCachedAt: 10,
+				sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
 			})
 		).rejects.toThrow('TEMPLATE_SOURCE_CACHE_NOT_OWNED');
+		await expect(
+			owner.authenticated.mutation(api.templates.updateSourceCache, {
+				_secret: SECRET,
+				userId: owner.userId,
+				templateId,
+				cachedSources,
+				sourcesCachedAt: 10,
+				sourceCacheInputHash: 'caller-controlled-cache-key'
+			})
+		).rejects.toThrow('TEMPLATE_SOURCE_CACHE_INPUT_HASH_INVALID');
 
 		await owner.authenticated.mutation(api.templates.updateSourceCache, {
 			_secret: SECRET,
 			userId: owner.userId,
 			templateId,
 			cachedSources,
-			sourcesCachedAt: 10
+			sourcesCachedAt: 10,
+			sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
 		});
 		await expect(
 			owner.authenticated.query(api.templates.getSourceCache, {
@@ -195,7 +210,11 @@ describe('private template query boundaries', () => {
 				userId: owner.userId,
 				templateId
 			})
-		).resolves.toEqual({ cachedSources, sourcesCachedAt: 10 });
+		).resolves.toEqual({
+			cachedSources,
+			sourcesCachedAt: 10,
+			sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
+		});
 		await expect(
 			other.authenticated.query(api.templates.getSourceCache, {
 				_secret: SECRET,
@@ -223,7 +242,8 @@ describe('private template query boundaries', () => {
 					userId: owner.userId,
 					templateId,
 					cachedSources,
-					sourcesCachedAt: 10
+					sourcesCachedAt: 10,
+					sourceCacheInputHash: SOURCE_CACHE_INPUT_HASH
 				})
 			).rejects.toThrow(/TEMPLATE_SOURCE_CACHE_(INVALID_STRUCTURE|BUDGET_EXCEEDED)/);
 		}
@@ -231,6 +251,7 @@ describe('private template query boundaries', () => {
 		const unchanged = await t.run((ctx) => ctx.db.get(templateId));
 		expect(unchanged).not.toHaveProperty('cachedSources');
 		expect(unchanged).not.toHaveProperty('sourcesCachedAt');
+		expect(unchanged).not.toHaveProperty('sourceCacheInputHash');
 	});
 
 	it('authorizes CWC verification by secret, expected identity, owner, and strict fields', async () => {

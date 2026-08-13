@@ -37,7 +37,8 @@ import {
 // per-plan authored limit. Neither scope can read the other's plans.
 import {
 	ORG_PLAN_LIMITS as PLANS,
-	INDIVIDUAL_PLAN_LIMITS as INDIVIDUAL_PLANS
+	INDIVIDUAL_PLAN_LIMITS as INDIVIDUAL_PLANS,
+	agenticProviderCapacityForPayment
 } from './lib/planLimits';
 
 const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -79,6 +80,87 @@ const continueCampaignActionOrgBackfillRef = makeFunctionReference<'mutation'>(
 
 const SUBSCRIPTION_AUTHORITY_KEY = 'subscription-authority-v1' as const;
 const SUBSCRIPTION_AUTHORITY_PAGE = 50;
+
+type StripeBillingPeriodSeconds = Readonly<{ start: number; end: number }>;
+
+function record(value: unknown): Record<string, unknown> | null {
+	return value !== null && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function stripeBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const period = record(value);
+	if (
+		!period ||
+		!Number.isSafeInteger(period.start) ||
+		!Number.isSafeInteger(period.end) ||
+		Number(period.start) < 0 ||
+		Number(period.end) <= Number(period.start)
+	) {
+		return null;
+	}
+	return { start: Number(period.start), end: Number(period.end) };
+}
+
+function oneStripeBillingPeriod(
+	periods: readonly (StripeBillingPeriodSeconds | null)[]
+): StripeBillingPeriodSeconds | null {
+	if (periods.length === 0 || periods.some((period) => period === null)) return null;
+	const unique = new Map<string, StripeBillingPeriodSeconds>();
+	for (const period of periods as readonly StripeBillingPeriodSeconds[]) {
+		unique.set(`${period.start}:${period.end}`, period);
+	}
+	return unique.size === 1 ? [...unique.values()][0]! : null;
+}
+
+/**
+ * Dahlia moved subscription periods onto subscription items. Commons supports
+ * one service window per subscription, so multiple distinct item windows are
+ * unrepresentable and must fail closed instead of choosing one accidentally.
+ */
+export function stripeSubscriptionBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const subscription = record(value);
+	const items = record(subscription?.items)?.data;
+	if (!Array.isArray(items)) return null;
+	return oneStripeBillingPeriod(
+		items.map((item) => {
+			const row = record(item);
+			return stripeBillingPeriod({
+				start: row?.current_period_start,
+				end: row?.current_period_end
+			});
+		})
+	);
+}
+
+/**
+ * Invoice headers are degenerate on the first subscription invoice. The
+ * service window lives on its subscription line item, which is therefore the
+ * canonical payment coordinate. Header periods are a legacy fallback only
+ * when Stripe supplied no subscription lines at all.
+ */
+export function stripeInvoiceBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const invoice = record(value);
+	const lines = record(invoice?.lines)?.data;
+	const subscriptionLines = Array.isArray(lines)
+		? lines.filter((line) => {
+				const row = record(line);
+				const parent = record(row?.parent);
+				return (
+					parent?.type === 'subscription_item_details' ||
+					parent?.subscription_item_details !== undefined ||
+					row?.subscription !== undefined
+				);
+			})
+		: [];
+	if (subscriptionLines.length > 0) {
+		return oneStripeBillingPeriod(
+			subscriptionLines.map((line) => stripeBillingPeriod(record(line)?.period))
+		);
+	}
+	return stripeBillingPeriod({ start: invoice?.period_start, end: invoice?.period_end });
+}
 
 export async function uniqueSubscriptionForOrg(
 	ctx: { db: QueryCtx['db'] },
@@ -697,6 +779,7 @@ export const processStripeWebhook = internalAction({
 				break;
 			}
 
+			case 'customer.subscription.created':
 			case 'customer.subscription.updated': {
 				const sub = data;
 				// cancel_at_period_end means "still active until period end, then cancel"
@@ -708,9 +791,12 @@ export const processStripeWebhook = internalAction({
 				const plan = priceItem?.price?.lookup_key ?? sub.metadata?.plan ?? undefined;
 				const priceCents = priceItem?.price?.unit_amount ?? undefined;
 
-				// Use Stripe's actual period timestamps (seconds → ms)
-				const periodStart = sub.current_period_start ? sub.current_period_start * 1000 : undefined;
-				const periodEnd = sub.current_period_end ? sub.current_period_end * 1000 : undefined;
+				// Dahlia's authoritative period lives on the subscription item. A
+				// successful invoice later writes this same coordinate transactionally
+				// with its provider-capacity balance.
+				const billingPeriod = stripeSubscriptionBillingPeriod(sub);
+				const periodStart = billingPeriod ? billingPeriod.start * 1_000 : undefined;
+				const periodEnd = billingPeriod ? billingPeriod.end * 1_000 : undefined;
 
 				// Accept BOTH org and individual plan slugs as valid plan changes (e.g.
 				// a Stripe-portal voice→advocate switch). Only request org-limit sync
@@ -728,6 +814,7 @@ export const processStripeWebhook = internalAction({
 					priceCents,
 					currentPeriodStart: periodStart,
 					currentPeriodEnd: periodEnd,
+					billingPeriodSource: billingPeriod ? 'stripe_subscription_item' : undefined,
 					syncOrgLimits: isOrgPlan ? true : undefined
 				});
 				break;
@@ -758,14 +845,17 @@ export const processStripeWebhook = internalAction({
 			}
 
 			case 'invoice.payment_succeeded': {
-				// Clear past_due status when payment retry succeeds.
-				// Guard: only transition past_due → active, not canceled → active.
+				// This signed Stripe event is the sole authority that mints paid
+				// provider capacity. Subscription status and plan price are not proof
+				// of money received; the invoice id makes retries idempotent.
 				const invoice = data;
 				const subId = invoice.parent?.subscription_details?.subscription;
 				if (!subId) break;
 				const stripeSubId = typeof subId === 'string' ? subId : subId.id;
 
-				// Read current status to guard the transition
+				// Preserve the pre-existing delinquency recovery even if the separate
+				// capacity proof below is malformed. Convex actions do not roll back a
+				// completed mutation when a later step throws.
 				const currentSub = await ctx.runQuery(internal.subscriptions.getByStripeId, {
 					stripeSubscriptionId: stripeSubId
 				});
@@ -775,6 +865,23 @@ export const processStripeWebhook = internalAction({
 						status: 'active'
 					});
 				}
+
+				const billingPeriod = stripeInvoiceBillingPeriod(invoice);
+				if (
+					typeof invoice.id !== 'string' ||
+					!Number.isSafeInteger(invoice.amount_paid) ||
+					billingPeriod === null
+				) {
+					throw new Error('AGENTIC_PROVIDER_PAYMENT_PROOF_INVALID');
+				}
+
+				await ctx.runMutation(internal.subscriptions.creditAgenticProviderPayment, {
+					stripeSubscriptionId: stripeSubId,
+					paymentId: invoice.id,
+					amountPaidCents: invoice.amount_paid,
+					billingPeriodStart: billingPeriod.start * 1_000,
+					billingPeriodEnd: billingPeriod.end * 1_000
+				});
 				break;
 			}
 
@@ -869,24 +976,24 @@ export const upsertFromStripe = internalMutation({
 
 		const now = Date.now();
 
-		// checkout.session.completed can arrive after a newer
-		// customer.subscription.updated event. Never let its approximate
-		// session-created period rewind authoritative Stripe subscription state.
-		if (
-			existing?.currentPeriodStart !== undefined &&
-			args.currentPeriodStart < existing.currentPeriodStart
-		) {
-			return { ignored: true as const, reason: 'STALE_STRIPE_PERIOD' as const };
-		}
-
 		if (existing) {
+			const sameStripeSubscription = existing.stripeSubscriptionId === args.stripeSubscriptionId;
 			await ctx.db.patch(existing._id, {
 				plan: args.plan,
 				priceCents: args.priceCents,
 				status: args.status,
 				stripeSubscriptionId: args.stripeSubscriptionId,
-				currentPeriodStart: args.currentPeriodStart,
-				currentPeriodEnd: args.currentPeriodEnd,
+				// Checkout knows only session.created. Once this exact Stripe
+				// subscription has a coordinate, only subscription items or a settled
+				// invoice may replace it; a delayed checkout cannot reintroduce the
+				// synthetic window after capacity was minted.
+				...(sameStripeSubscription
+					? {}
+					: {
+							currentPeriodStart: args.currentPeriodStart,
+							currentPeriodEnd: args.currentPeriodEnd,
+							billingPeriodSource: 'checkout_approximate' as const
+						}),
 				updatedAt: now
 			});
 		} else {
@@ -899,6 +1006,7 @@ export const upsertFromStripe = internalMutation({
 				stripeSubscriptionId: args.stripeSubscriptionId,
 				currentPeriodStart: args.currentPeriodStart,
 				currentPeriodEnd: args.currentPeriodEnd,
+				billingPeriodSource: 'checkout_approximate',
 				updatedAt: now
 			});
 		}
@@ -916,7 +1024,13 @@ export const upsertFromStripe = internalMutation({
 		// Enqueue an exact period projection. The worker reconstructs from the
 		// authoritative period start, so a delayed webhook cannot erase sends that
 		// already happened in this period.
-		await snapshotPlanUsageBaselines(ctx, org._id, args.currentPeriodStart);
+		await snapshotPlanUsageBaselines(
+			ctx,
+			org._id,
+			existing?.stripeSubscriptionId === args.stripeSubscriptionId
+				? existing.currentPeriodStart
+				: args.currentPeriodStart
+		);
 	}
 });
 
@@ -969,13 +1083,19 @@ export const upsertIndividualFromStripe = internalMutation({
 		const now = Date.now();
 
 		if (existing) {
+			const sameStripeSubscription = existing.stripeSubscriptionId === args.stripeSubscriptionId;
 			await ctx.db.patch(existing._id, {
 				plan: args.plan,
 				priceCents: args.priceCents,
 				status: args.status,
 				stripeSubscriptionId: args.stripeSubscriptionId,
-				currentPeriodStart: args.currentPeriodStart,
-				currentPeriodEnd: args.currentPeriodEnd,
+				...(sameStripeSubscription
+					? {}
+					: {
+							currentPeriodStart: args.currentPeriodStart,
+							currentPeriodEnd: args.currentPeriodEnd,
+							billingPeriodSource: 'checkout_approximate' as const
+						}),
 				updatedAt: now
 			});
 		} else {
@@ -988,6 +1108,7 @@ export const upsertIndividualFromStripe = internalMutation({
 				stripeSubscriptionId: args.stripeSubscriptionId,
 				currentPeriodStart: args.currentPeriodStart,
 				currentPeriodEnd: args.currentPeriodEnd,
+				billingPeriodSource: 'checkout_approximate',
 				updatedAt: now
 			});
 		}
@@ -1133,6 +1254,118 @@ export const getByStripeId = internalQuery({
 });
 
 /**
+ * Convert one settled Stripe invoice into an additive, per-org provider
+ * balance. Both the receipt dedupe row and aggregate balance update commit in
+ * the same Convex mutation transaction.
+ */
+export const creditAgenticProviderPayment = internalMutation({
+	args: {
+		stripeSubscriptionId: v.string(),
+		paymentId: v.string(),
+		amountPaidCents: v.number(),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number()
+	},
+	handler: async (ctx, args) => {
+		if (
+			args.paymentId.length < 1 ||
+			args.paymentId.length > 255 ||
+			!Number.isSafeInteger(args.amountPaidCents) ||
+			args.amountPaidCents < 0 ||
+			!Number.isSafeInteger(args.billingPeriodStart) ||
+			!Number.isSafeInteger(args.billingPeriodEnd) ||
+			args.billingPeriodStart < 0 ||
+			args.billingPeriodEnd <= args.billingPeriodStart ||
+			args.billingPeriodEnd - args.billingPeriodStart > 370 * 24 * 60 * 60 * 1_000
+		) {
+			throw new Error('AGENTIC_PROVIDER_PAYMENT_PROOF_INVALID');
+		}
+
+		const duplicate = await ctx.db
+			.query('agenticProviderReceipts')
+			.withIndex('by_paymentId', (q) => q.eq('paymentId', args.paymentId))
+			.unique();
+		if (duplicate) {
+			if (
+				duplicate.amountPaidCents !== args.amountPaidCents ||
+				duplicate.billingPeriodStart !== args.billingPeriodStart ||
+				duplicate.billingPeriodEnd !== args.billingPeriodEnd
+			) {
+				throw new Error('AGENTIC_PROVIDER_PAYMENT_ID_COLLISION');
+			}
+			return { credited: false as const, balanceUnits: duplicate.balanceUnits };
+		}
+
+		const sub = await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
+		if (!sub) throw new Error('AGENTIC_PROVIDER_SUBSCRIPTION_MISSING');
+		if (
+			!sub.orgId ||
+			sub.userId ||
+			sub.paymentMethod !== 'stripe' ||
+			!PLANS[sub.plan] ||
+			sub.plan === 'inactive'
+		) {
+			return { credited: false as const, balanceUnits: 0 };
+		}
+		const capacity = agenticProviderCapacityForPayment(args.amountPaidCents);
+		const rows = await ctx.db
+			.query('agenticProviderBalances')
+			.withIndex('by_orgId_period', (q) =>
+				q.eq('orgId', sub.orgId!).eq('billingPeriodStart', args.billingPeriodStart)
+			)
+			.take(2);
+		if (rows.length > 1) throw new Error('AGENTIC_PROVIDER_BALANCE_CARDINALITY_INVALID');
+		const existing = rows[0];
+		if (
+			existing &&
+			(existing.subscriptionId !== sub._id || existing.billingPeriodEnd !== args.billingPeriodEnd)
+		) {
+			throw new Error('AGENTIC_PROVIDER_BALANCE_COORDINATE_INVALID');
+		}
+		const balanceUnits = (existing?.balanceUnits ?? 0) + capacity.balanceUnits;
+		const amountPaidCents = (existing?.amountPaidCents ?? 0) + args.amountPaidCents;
+		if (!Number.isSafeInteger(balanceUnits) || !Number.isSafeInteger(amountPaidCents)) {
+			throw new Error('AGENTIC_PROVIDER_BALANCE_OVERFLOW');
+		}
+		const now = Date.now();
+		// The successful invoice line is the period authority for both readers and
+		// spend. Updating the subscription and its balance inside this mutation
+		// makes mismatched coordinates impossible to commit at the payment seam.
+		await ctx.db.patch(sub._id, {
+			currentPeriodStart: args.billingPeriodStart,
+			currentPeriodEnd: args.billingPeriodEnd,
+			billingPeriodSource: 'settled_invoice',
+			updatedAt: now
+		});
+		if (existing) {
+			await ctx.db.patch(existing._id, { balanceUnits, amountPaidCents, updatedAt: now });
+		} else {
+			await ctx.db.insert('agenticProviderBalances', {
+				orgId: sub.orgId,
+				subscriptionId: sub._id,
+				billingPeriodStart: args.billingPeriodStart,
+				billingPeriodEnd: args.billingPeriodEnd,
+				balanceUnits,
+				amountPaidCents,
+				updatedAt: now
+			});
+		}
+		await ctx.db.insert('agenticProviderReceipts', {
+			paymentId: args.paymentId,
+			orgId: sub.orgId,
+			subscriptionId: sub._id,
+			billingPeriodStart: args.billingPeriodStart,
+			billingPeriodEnd: args.billingPeriodEnd,
+			amountPaidCents: args.amountPaidCents,
+			balanceUnits: capacity.balanceUnits,
+			createdAt: now
+		});
+		await snapshotPlanUsageBaselines(ctx, sub.orgId, args.billingPeriodStart);
+		return { credited: true as const, balanceUnits };
+	}
+});
+
+/**
  * Update subscription by Stripe subscription ID.
  */
 export const updateByStripeId = internalMutation({
@@ -1143,6 +1376,7 @@ export const updateByStripeId = internalMutation({
 		priceCents: v.optional(v.number()),
 		currentPeriodStart: v.optional(v.number()),
 		currentPeriodEnd: v.optional(v.number()),
+		billingPeriodSource: v.optional(v.literal('stripe_subscription_item')),
 		resetOrgLimits: v.optional(v.boolean()),
 		syncOrgLimits: v.optional(v.boolean()),
 		setPastDueSince: v.optional(v.boolean())
@@ -1168,12 +1402,16 @@ export const updateByStripeId = internalMutation({
 		const stalePeriod =
 			args.currentPeriodStart !== undefined &&
 			sub.currentPeriodStart !== undefined &&
-			args.currentPeriodStart < sub.currentPeriodStart;
+			args.currentPeriodStart < sub.currentPeriodStart &&
+			sub.billingPeriodSource !== 'checkout_approximate';
 		if (args.currentPeriodStart !== undefined && !stalePeriod) {
 			patch.currentPeriodStart = args.currentPeriodStart;
 		}
 		if (args.currentPeriodEnd !== undefined && !stalePeriod) {
 			patch.currentPeriodEnd = args.currentPeriodEnd;
+		}
+		if (args.billingPeriodSource !== undefined && !stalePeriod) {
+			patch.billingPeriodSource = args.billingPeriodSource;
 		}
 
 		// pastDueSince: set only on first transition to past_due (or repair a

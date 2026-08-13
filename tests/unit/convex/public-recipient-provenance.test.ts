@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	PUBLIC_RECIPIENT_PROVENANCE_TTL_MS,
 	issuePublicRecipientProvenance,
+	normalizePublicRecipientProvenanceClaims,
 	verifyPublicRecipientProvenance
 } from '../../../convex/lib/publicRecipientProvenance';
 import { publicRecipientIntentCount } from '../../../convex/lib/publicTemplateDiscoverySource';
@@ -26,8 +27,6 @@ function groundedRecipient() {
 			source: 'https://agency.gov/contact'
 		},
 		roleCategory: 'executes',
-		accountabilityOpener: 'Please account for the published decision.',
-		relevanceRank: 1,
 		personalPrompt: 'private authoring prompt'
 	};
 }
@@ -79,11 +78,27 @@ describe('public recipient provenance', () => {
 			name: 'Ada Lovelace',
 			title: 'Director',
 			organization: 'Agency',
-			roleCategory: 'executes',
-			accountabilityOpener: 'Please account for the published decision.',
-			relevanceRank: 1
+			roleCategory: 'executes'
 		});
 		expect(verified).not.toHaveProperty('personalPrompt');
+	});
+
+	it('excludes accountability copy and model rank from normalized claims and the signature preimage', async () => {
+		const recipient = groundedRecipient();
+		const withExcludedFields = {
+			...recipient,
+			accountabilityOpener: 'Please account for the published decision.',
+			relevanceRank: 1
+		};
+		const [proofWithoutExcludedFields, proofWithExcludedFields] = await Promise.all([
+			issuePublicRecipientProvenance(recipient, USER_ID, ACTIVE_SECRET, NOW),
+			issuePublicRecipientProvenance(withExcludedFields, USER_ID, ACTIVE_SECRET, NOW)
+		]);
+
+		expect(proofWithExcludedFields?.signature).toBe(proofWithoutExcludedFields?.signature);
+		const normalized = normalizePublicRecipientProvenanceClaims(withExcludedFields);
+		expect(normalized).not.toHaveProperty('accountabilityOpener');
+		expect(normalized).not.toHaveProperty('relevanceRank');
 	});
 
 	it('rejects forgeable client flags without a server proof', async () => {
@@ -103,9 +118,7 @@ describe('public recipient provenance', () => {
 		['name', 'Other Person'],
 		['title', 'Deputy Director'],
 		['organization', 'Other Agency'],
-		['accountabilityOpener', 'Changed public copy'],
-		['roleCategory', 'shapes'],
-		['relevanceRank', 2]
+		['roleCategory', 'shapes']
 	] as const)('rejects tampering with signed %s', async (field, value) => {
 		const recipient = await attestedRecipient();
 		const tampered = { ...recipient, [field]: value };
@@ -141,11 +154,10 @@ describe('public recipient provenance', () => {
 		).not.toBeNull();
 	});
 
-	it('refuses non-HTTPS sources, credentials, query strings, or fragments', async () => {
+	it('refuses non-HTTPS sources, credentials, or fragments', async () => {
 		for (const emailSource of [
 			'http://agency.gov/contact',
 			'https://user:pass@agency.gov/contact',
-			'https://agency.gov/contact?person=ada',
 			'https://agency.gov/contact#ada'
 		]) {
 			expect(
@@ -165,6 +177,34 @@ describe('public recipient provenance', () => {
 				)
 			).toBeNull();
 		}
+	});
+
+	it('round-trips a query-string source byte-identically', async () => {
+		const emailSource = 'https://agency.gov/contact?dept=planning&view=staff';
+		const recipient = {
+			...groundedRecipient(),
+			emailSource,
+			publicEmailGrounding: {
+				version: 1,
+				method: 'page-read',
+				source: emailSource
+			}
+		};
+		const publicRecipientProvenance = await issuePublicRecipientProvenance(
+			recipient,
+			USER_ID,
+			ACTIVE_SECRET,
+			NOW
+		);
+		expect(publicRecipientProvenance).not.toBeNull();
+
+		const claims = await verifyPublicRecipientProvenance(
+			{ ...recipient, publicRecipientProvenance: publicRecipientProvenance! },
+			USER_ID,
+			[ACTIVE_SECRET],
+			NOW
+		);
+		expect(claims?.emailSource).toBe(emailSource);
 	});
 
 	it('refuses stale cache hits and unbound grounding markers', async () => {

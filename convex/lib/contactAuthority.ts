@@ -32,6 +32,16 @@ const EMAIL_DENY_STATES = new Set<ContactAuthorityState>([
 	'email_suppressed'
 ]);
 
+/**
+ * `source` value that marks a suppression the mailbox itself asked for, as
+ * opposed to one two strangers reported. It is the only field that can tell
+ * those apart, and it is what makes the row terminal.
+ */
+export const RECIPIENT_REQUEST_SUPPRESSION_SOURCE = 'recipient_request';
+
+/** Point reads one batched suppression check may perform. */
+export const RECIPIENT_SUPPRESSION_BATCH_MAX = 64;
+
 export function contactFanoutPriority(kind: ContactFanoutKind): number {
 	if (kind === 'sms_stop') return 0;
 	if (kind === 'email_set_complained' || kind === 'email_set_bounced') return 1;
@@ -267,13 +277,26 @@ async function writeContactAuthority(
 		input.scopeOrgId
 	);
 	const effectiveUpdatedAt = Math.max(input.updatedAt, (existing?.updatedAt ?? 0) + 1);
+	// Terminality, enforced at the single writer every ingress funnels through so
+	// no future ingress can route around it. Once a mailbox has asked to be left
+	// alone, nothing may move it off `email_suppressed` or overwrite the source
+	// that records who asked; softBounceCount and updatedAt still advance so
+	// ordinary bookkeeping is unaffected. Scoped narrowly on purpose: an SMS row
+	// and an email row suppressed by any other source are untouched by this.
+	const terminalRecipientRequest =
+		input.channel === 'email' &&
+		existing?.channel === 'email' &&
+		existing.state === 'email_suppressed' &&
+		existing.source === RECIPIENT_REQUEST_SUPPRESSION_SOURCE;
 	const value = {
 		channel: input.channel,
 		contactHash: input.contactHash,
 		...(input.scopeOrgId ? { scopeOrgId: input.scopeOrgId } : {}),
-		state: input.state,
+		state: terminalRecipientRequest ? ('email_suppressed' as const) : input.state,
 		...(input.softBounceCount !== undefined ? { softBounceCount: input.softBounceCount } : {}),
-		source: input.source.slice(0, 64),
+		source: terminalRecipientRequest
+			? RECIPIENT_REQUEST_SUPPRESSION_SOURCE
+			: input.source.slice(0, 64),
 		...(input.sourceEventId ? { sourceEventId: input.sourceEventId.slice(0, 256) } : {}),
 		version: CONTACT_AUTHORITY_VERSION,
 		projectionBytes: 0,
@@ -349,6 +372,76 @@ export async function applyManualEmailSuppressionAuthority(
 		sourceEventId: input.sourceEventId,
 		updatedAt: input.now
 	});
+}
+
+/**
+ * Suppress an email contact because the mailbox itself asked to be left alone.
+ *
+ * Unlike the bounce-consensus writer above, a request overrides `email_complained`
+ * as well: a complaint and a request both mean stop, and the request is the more
+ * authoritative of the two because it came from the address in question.
+ *
+ * No `suppressedEmails` row is written and none should be: nothing on a send or
+ * projection path reads that table, and its required 30-day `expiresAt` directly
+ * contradicts the permanence this write promises. The `contactAuthorities` row is
+ * the permanent record — it has no TTL and no sweeper.
+ *
+ * No fanout job is enqueued either. A resolved recipient owns no supporter row to
+ * fan out to, and when the hash does happen to belong to a supporter,
+ * `filterEmailSendAuthorized` already denies the send synchronously off this row.
+ */
+export async function applyRecipientRequestSuppressionAuthority(
+	ctx: MutationCtx,
+	input: { contactHash: string; sourceEventId?: string; now: number }
+): Promise<Doc<'contactAuthorities'>> {
+	const existing = await readContactAuthority(ctx, 'email', input.contactHash);
+	return writeContactAuthority(ctx, {
+		channel: 'email',
+		contactHash: input.contactHash,
+		state: 'email_suppressed',
+		softBounceCount: existing?.softBounceCount,
+		source: RECIPIENT_REQUEST_SUPPRESSION_SOURCE,
+		sourceEventId: input.sourceEventId,
+		updatedAt: input.now
+	});
+}
+
+/**
+ * Whether an email contact is denied globally. Suppression enforcement seams
+ * call this; they are not supporter-scoped and must work for a hash that belongs
+ * to no row in this database at all.
+ */
+export async function isEmailContactSuppressed(
+	ctx: ContactReadCtx,
+	contactHash: string
+): Promise<boolean> {
+	// No `requireContactAuthorityReady` on purpose: its only writer has not run
+	// pre-launch, so inheriting that gate would make every suppression read throw
+	// and every enforcement seam fail open.
+	const authority = await readContactAuthority(ctx, 'email', contactHash);
+	return authority ? EMAIL_DENY_STATES.has(authority.state) : false;
+}
+
+/**
+ * The denied subset of a batch of global email hashes. Bounded so one call is
+ * always a small, predictable number of point reads.
+ */
+export async function filterSuppressedEmailContactHashes(
+	ctx: ContactReadCtx,
+	contactHashes: readonly string[]
+): Promise<Set<string>> {
+	if (contactHashes.length > RECIPIENT_SUPPRESSION_BATCH_MAX) {
+		throw new Error('RECIPIENT_SUPPRESSION_BATCH_TOO_LARGE');
+	}
+	// No `requireContactAuthorityReady` on purpose — same reason as above: a
+	// readiness gate whose writer has not run would fail this filter open.
+	const denied = new Set<string>();
+	await Promise.all(
+		[...new Set(contactHashes)].map(async (contactHash) => {
+			if (await isEmailContactSuppressed(ctx, contactHash)) denied.add(contactHash);
+		})
+	);
+	return denied;
 }
 
 export async function applySmsAuthorityEvent(

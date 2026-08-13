@@ -91,7 +91,6 @@ async function seedFixture() {
 			verifiedCount: 5,
 			totalCount: 5,
 			districtCount: 3,
-			proofWeight: 1,
 			attestationDigest: 'attestation',
 			packetDigest: 'packet',
 			proofDeliveredAt: NOW,

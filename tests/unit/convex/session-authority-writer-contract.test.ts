@@ -31,7 +31,7 @@ describe('session authority writer contract', () => {
 		['updateMdlVerification', 'finalizeMdlVerification'],
 		['finalizeMdlVerification', 'verifyAddress'],
 		['verifyAddress', 'getReverificationBudget'],
-		['bindIdentityCommitment', 'upsertRegistration']
+		['bindIdentityCommitment', 'getCredentialForRevocation']
 	])('%s updates its compact authority transactionally', (name, nextName) => {
 		expect(exportedFunction(users, name, nextName)).toContain('await syncSessionAuthority(ctx,');
 	});

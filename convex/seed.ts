@@ -2732,7 +2732,6 @@ export const insertCampaignActions = internalMutation({
 						targetDistrict: rep.district,
 						status: deliveryStatuses[(i + r) % deliveryStatuses.length],
 						sentAt: daysAgo(i + 1),
-						proofWeight: isVerified ? 0.85 : 0.3,
 						createdAt: daysAgo(i + 1)
 					});
 				}

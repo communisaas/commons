@@ -268,6 +268,298 @@ describe('templates.createTemplate input budgets', () => {
 		});
 	});
 
+	it('claims provider work only after secret-bound dedupe and allowance checks', async () => {
+		const t = newHarness();
+		const owner = await createAuthenticatedUser(t);
+		const otherTokenIdentifier = 'https://issuer.example|input-budget-other';
+		const otherUserId = await t.run((ctx) =>
+			ctx.db.insert('users', {
+				tokenIdentifier: otherTokenIdentifier,
+				updatedAt: Date.now(),
+				isVerified: true,
+				authorityLevel: 1,
+				trustTier: 1,
+				trustScore: 100,
+				reputationTier: 'novice',
+				districtVerified: false,
+				templatesContributed: 0,
+				templateAdoptionRate: 0,
+				peerEndorsements: 0,
+				activeMonths: 0,
+				profileVisibility: 'private'
+			})
+		);
+		const created = await owner.authenticated.mutation(
+			api.templates.createTemplate,
+			baseCreateArgs(owner.userId)
+		);
+		await expect(
+			owner.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: 'wrong-secret',
+				userId: owner.userId,
+				contentHash: 'bounded-authoring-input',
+				slug: 'bounded-authoring-input',
+				token: 'wrong-secret-lease-token'
+			})
+		).rejects.toThrow('Unauthorized');
+		await expect(
+			owner.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: otherUserId,
+				contentHash: 'new-content',
+				slug: 'new-content',
+				token: 'mismatched-user-lease-token'
+			})
+		).rejects.toThrow('TEMPLATE_AUTHORING_LEASE_USER_MISMATCH');
+
+		await expect(
+			owner.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: owner.userId,
+				contentHash: 'bounded-authoring-input',
+				slug: 'bounded-authoring-input',
+				token: 'duplicate-content-lease-token'
+			})
+		).resolves.toMatchObject({
+			outcome: 'duplicate',
+			template: {
+				_id: created!._id,
+				deduplicated: true
+			}
+		});
+
+		await expect(
+			owner.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: owner.userId,
+				contentHash: 'new-content',
+				slug: 'new-content',
+				token: 'new-content-lease-token'
+			})
+		).resolves.toMatchObject({ outcome: 'claimed', expiresAt: expect.any(Number) });
+	});
+
+	it('lease claims deny exhausted individual and organization allowances', async () => {
+		const individualHarness = newHarness();
+		const individual = await createAuthenticatedUser(individualHarness);
+		for (let index = 0; index < 3; index += 1) {
+			await individual.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(individual.userId),
+				title: `Individual allowance ${index}`,
+				slug: `individual-allowance-${index}`,
+				contentHash: `individual-allowance-${index}`
+			});
+		}
+		await expect(
+			individual.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: individual.userId,
+				contentHash: 'individual-over-cap',
+				slug: 'individual-over-cap',
+				token: 'individual-over-cap-token'
+			})
+		).resolves.toMatchObject({
+			outcome: 'quota_exceeded',
+			code: 'AUTHORING_QUOTA_EXCEEDED',
+			message: expect.stringContaining('3 free messages this month')
+		});
+		await individualHarness.run(async (ctx) => {
+			expect(await ctx.db.query('templateListProjectionMigrations').collect()).toHaveLength(0);
+			expect(await ctx.db.query('templateListProjections').collect()).toHaveLength(3);
+		});
+
+		const orgHarness = newHarness();
+		const orgAuthor = await createAuthenticatedUser(orgHarness);
+		await orgHarness.run(async (ctx) => {
+			const orgId = await ctx.db.insert('organizations', {
+				name: 'Bounded authoring org',
+				slug: 'bounded-authoring-org',
+				maxSeats: 1,
+				maxTemplatesMonth: 1,
+				dmCacheTtlDays: 7,
+				countryCode: 'US',
+				isPublic: false,
+				updatedAt: Date.now()
+			});
+			await ctx.db.insert('orgMemberships', {
+				userId: orgAuthor.userId,
+				orgId,
+				role: 'admin',
+				joinedAt: Date.now()
+			});
+		});
+		await orgAuthor.authenticated.mutation(
+			api.templates.createTemplate,
+			baseCreateArgs(orgAuthor.userId)
+		);
+		await expect(
+			orgAuthor.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: orgAuthor.userId,
+				contentHash: 'org-over-cap',
+				slug: 'org-over-cap',
+				token: 'organization-over-cap-token'
+			})
+		).resolves.toEqual({
+			outcome: 'quota_exceeded',
+			code: 'TEMPLATE_QUOTA_EXCEEDED'
+		});
+		await orgHarness.run(async (ctx) => {
+			expect(await ctx.db.query('templateListProjectionMigrations').collect()).toHaveLength(0);
+			expect(await ctx.db.query('templateListProjections').collect()).toHaveLength(1);
+		});
+	});
+
+	it('serializes provider-work leases by both user content and global slug', async () => {
+		const contentHarness = newHarness();
+		const contentAuthor = await createAuthenticatedUser(contentHarness);
+		const contentTokens = ['content-lease-token-a', 'content-lease-token-b'];
+		const contentClaims = await Promise.all(
+			contentTokens.map((token, index) =>
+				contentAuthor.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+					_secret: SECRET,
+					userId: contentAuthor.userId,
+					contentHash: 'same-provider-content',
+					slug: `same-provider-content-${index}`,
+					token
+				})
+			)
+		);
+		expect(contentClaims.map(({ outcome }) => outcome).sort()).toEqual([
+			'claimed',
+			'in_progress'
+		]);
+		const winningContentIndex = contentClaims.findIndex(({ outcome }) => outcome === 'claimed');
+		const winningContentToken = contentTokens[winningContentIndex];
+		const winningContentSlug = `same-provider-content-${winningContentIndex}`;
+
+		await expect(
+			contentAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(contentAuthor.userId),
+				slug: winningContentSlug,
+				contentHash: 'same-provider-content',
+				authoringLeaseToken: 'content-lease-token-wrong'
+			})
+		).rejects.toThrow('TEMPLATE_AUTHORING_LEASE_NOT_OWNED');
+
+		await contentAuthor.authenticated.mutation(api.templates.createTemplate, {
+			...baseCreateArgs(contentAuthor.userId),
+			slug: winningContentSlug,
+			contentHash: 'same-provider-content',
+			authoringLeaseToken: winningContentToken
+		});
+		await contentHarness.run(async (ctx) => {
+			expect(await ctx.db.query('templateAuthoringLeases').collect()).toEqual([]);
+		});
+
+		const slugHarness = newHarness();
+		const firstAuthor = await createAuthenticatedUser(slugHarness);
+		const secondTokenIdentifier = 'https://issuer.example|second-lease-author';
+		const secondUserId = await slugHarness.run((ctx) =>
+			ctx.db.insert('users', {
+				tokenIdentifier: secondTokenIdentifier,
+				updatedAt: Date.now(),
+				isVerified: true,
+				authorityLevel: 1,
+				trustTier: 1,
+				trustScore: 100,
+				reputationTier: 'novice',
+				districtVerified: false,
+				templatesContributed: 0,
+				templateAdoptionRate: 0,
+				peerEndorsements: 0,
+				activeMonths: 0,
+				profileVisibility: 'private'
+			})
+		);
+		const secondAuthor = slugHarness.withIdentity({
+			subject: 'second-lease-author',
+			issuer: 'https://issuer.example',
+			tokenIdentifier: secondTokenIdentifier
+		});
+		const slugClaims = await Promise.all([
+			firstAuthor.authenticated.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: firstAuthor.userId,
+				contentHash: 'first-slug-content',
+				slug: 'globally-shared-provider-slug',
+				token: 'global-slug-lease-token-a'
+			}),
+			secondAuthor.mutation(api.templates.claimTemplateAuthoringLease, {
+				_secret: SECRET,
+				userId: secondUserId,
+				contentHash: 'second-slug-content',
+				slug: 'globally-shared-provider-slug',
+				token: 'global-slug-lease-token-b'
+			})
+		]);
+		expect(slugClaims.map(({ outcome }) => outcome).sort()).toEqual(['claimed', 'in_progress']);
+	});
+
+	it('keeps content dedupe and allowance authoritative across concurrent creates', async () => {
+		const dedupeHarness = newHarness();
+		const dedupeAuthor = await createAuthenticatedUser(dedupeHarness);
+		const sameContent = await Promise.all([
+			dedupeAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(dedupeAuthor.userId),
+				slug: 'concurrent-content-a',
+				contentHash: 'concurrent-content'
+			}),
+			dedupeAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(dedupeAuthor.userId),
+				slug: 'concurrent-content-b',
+				contentHash: 'concurrent-content'
+			})
+		]);
+		expect(sameContent.map((result) => result!.deduplicated).sort()).toEqual([false, true]);
+		await dedupeHarness.run(async (ctx) => {
+			const rows = await ctx.db
+				.query('templates')
+				.withIndex('by_userId_contentHash', (q) =>
+					q.eq('userId', dedupeAuthor.userId).eq('contentHash', 'concurrent-content')
+				)
+				.collect();
+			expect(rows).toHaveLength(1);
+		});
+
+		const quotaHarness = newHarness();
+		const quotaAuthor = await createAuthenticatedUser(quotaHarness);
+		for (let index = 0; index < 2; index += 1) {
+			await quotaAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(quotaAuthor.userId),
+				title: `Quota seed ${index}`,
+				slug: `quota-seed-${index}`,
+				contentHash: `quota-seed-${index}`
+			});
+		}
+		const quotaRace = await Promise.allSettled([
+			quotaAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(quotaAuthor.userId),
+				title: 'Quota contender A',
+				slug: 'quota-contender-a',
+				contentHash: 'quota-contender-a'
+			}),
+			quotaAuthor.authenticated.mutation(api.templates.createTemplate, {
+				...baseCreateArgs(quotaAuthor.userId),
+				title: 'Quota contender B',
+				slug: 'quota-contender-b',
+				contentHash: 'quota-contender-b'
+			})
+		]);
+		expect(quotaRace.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+		const denied = quotaRace.find(
+			(result): result is PromiseRejectedResult => result.status === 'rejected'
+		);
+		expect(String(denied?.reason)).toContain('AUTHORING_QUOTA_EXCEEDED');
+		await quotaHarness.run(async (ctx) => {
+			const rows = await ctx.db
+				.query('templates')
+				.withIndex('by_userId', (q) => q.eq('userId', quotaAuthor.userId))
+				.collect();
+			expect(rows).toHaveLength(3);
+		});
+	});
+
 	it('rechecks the resulting public projection when metadata is patched', async () => {
 		const t = newHarness();
 		const { authenticated, userId } = await createAuthenticatedUser(t);

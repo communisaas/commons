@@ -177,7 +177,7 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 
 	it('importBatch pre-validates cross-org tagIds + logs row errors', () => {
 		const svelte = source('convex/supporters.ts');
-		const start = svelte.indexOf('export const importBatch = mutation');
+		const start = svelte.indexOf('export const importBatch = internalMutation');
 		expect(start).toBeGreaterThan(-1);
 		const next = svelte.indexOf('export const ', start + 30);
 		const importB = svelte.slice(start, next > 0 ? next : start + 9000);

@@ -1068,10 +1068,27 @@ export default defineSchema({
 		congressionalDistrict: v.string(),
 		stateSenateDistrict: v.optional(v.string()),
 		stateAssemblyDistrict: v.optional(v.string()),
+		// County is server-derived from the root-verified atlas cell array and is never
+		// client-supplied. Provenance is stored per slot beside the value it qualifies.
+		// These added fields are strictly optional and never backfilled: `undefined`
+		// means the credential did not carry that fact at issuance, never that the
+		// address is outside the jurisdiction.
+		countyFips: v.optional(v.string()),
+		congressionalDistrictSource: v.optional(v.string()),
+		stateSenateDistrictSource: v.optional(v.string()),
+		stateAssemblyDistrictSource: v.optional(v.string()),
+		countyFipsSource: v.optional(v.string()),
 		verificationMethod: v.string(), // 'civic_api' | 'postal'
 		issuedAt: v.number(),
 		expiresAt: v.number(),
 		revokedAt: v.optional(v.number()),
+		// STRICTLY OPTIONAL and NEVER backfilled. `undefined` is a distinct third
+		// fact: retired before this field existed / reason not recorded, never a
+		// synonym for either recorded reason. This is a render label only and MUST
+		// NOT be read by any credential-admissibility path.
+		retirementReason: v.optional(
+			v.union(v.literal('superseded_by_reissue'), v.literal('operator_cutover'))
+		),
 		credentialHash: v.string(),
 
 		// Privacy-preserving district storage
@@ -2273,7 +2290,6 @@ export default defineSchema({
 		decisionMakerId: v.id('decisionMakers'),
 		dmName: v.string(),
 		canonicalSlug: v.optional(v.string()),
-		maxProofWeight: v.float64(),
 		verifiedActionEvidence: v.number(),
 		districtSignalCount: v.number(),
 		receiptCount: v.number(),
@@ -2356,7 +2372,6 @@ export default defineSchema({
 		canonicalSlug: v.optional(v.string()),
 		dmName: v.string(),
 		orgCount: v.number(),
-		combinedProofWeight: v.float64(),
 		verifiedActionEvidence: v.number(),
 		districtSignalCount: v.number(),
 		receiptCount: v.number(),
@@ -2377,10 +2392,10 @@ export default defineSchema({
 			'generation',
 			'decisionMakerId'
 		])
-		.index('by_networkId_generation_combinedProofWeight', [
+		.index('by_networkId_generation_verifiedActionEvidence', [
 			'networkId',
 			'generation',
-			'combinedProofWeight'
+			'verifiedActionEvidence'
 		]),
 
 	coalitionNetworkPressureBills: defineTable({
@@ -2941,7 +2956,6 @@ export default defineSchema({
 		previousSesMessageIds: v.optional(v.array(v.string())),
 		packetSnapshot: v.optional(v.any()),
 		packetDigest: v.optional(v.string()),
-		proofWeight: v.optional(v.number()),
 		// Sender-side delivery rows become receipt-eligible only when they
 		// are bound to both a Power target and a bill. This is readiness,
 		// not a Merkle-anchored accountability receipt.
@@ -2983,6 +2997,28 @@ export default defineSchema({
 		// O(n) over every campaign delivery, ever. With the index this is
 		// a bounded read by SES MessageId, which is unique per send.
 		.index('by_sesMessageId', ['sesMessageId']),
+
+	// Meters only institution-designated person-bound routes. Officeholder,
+	// statutory-record, and office-inbox routes never write a binding row.
+	personBoundRouteBindings: defineTable({
+		targetHash: v.string(),
+		boundCampaignKey: v.string(),
+		boundAt: v.number(),
+		boundUntil: v.number(),
+		updatedAt: v.number()
+	}).index('by_targetHash', ['targetHash']),
+
+	// Meters only institution-designated person-bound routes. Officeholder,
+	// statutory-record, and office-inbox routes never write a sender row.
+	personBoundRouteSends: defineTable({
+		targetHash: v.string(),
+		senderToken: v.string(),
+		campaignKey: v.string(),
+		firstSeenAt: v.number(),
+		expiresAt: v.number()
+	})
+		.index('by_targetHash_expiresAt', ['targetHash', 'expiresAt'])
+		.index('by_targetHash_senderToken', ['targetHash', 'senderToken']),
 
 	// Compact campaign proof/analytics singleton. Every embedded list has a
 	// hard cap in lib/campaignReadModel.ts.
@@ -3271,6 +3307,17 @@ export default defineSchema({
 		),
 		currentPeriodStart: v.number(),
 		currentPeriodEnd: v.number(),
+		// Checkout can only seed a synthetic window. Stripe subscription items and
+		// settled invoice lines are authoritative; this provenance lets an exact
+		// period correct an earlier-looking checkout timestamp without permitting a
+		// stale exact webhook to rewind a later settled period.
+		billingPeriodSource: v.optional(
+			v.union(
+				v.literal('checkout_approximate'),
+				v.literal('stripe_subscription_item'),
+				v.literal('settled_invoice')
+			)
+		),
 
 		paymentMethod: v.union(v.literal('stripe'), v.literal('crypto')),
 
@@ -3294,6 +3341,32 @@ export default defineSchema({
 		.index('by_orgId', ['orgId'])
 		.index('by_stripeSubscriptionId', ['stripeSubscriptionId'])
 		.index('by_status_pastDueSince', ['status', 'pastDueSince']),
+
+	// Revenue-backed provider capacity. A balance is the aggregate for one exact
+	// org subscription period; immutable payment receipts make Stripe retries
+	// idempotent while allowing legitimate prorations to add capacity.
+	agenticProviderBalances: defineTable({
+		orgId: v.id('organizations'),
+		subscriptionId: v.id('subscriptions'),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number(),
+		balanceUnits: v.number(),
+		amountPaidCents: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_period', ['orgId', 'billingPeriodStart'])
+		.index('by_subscriptionId_period', ['subscriptionId', 'billingPeriodStart']),
+
+	agenticProviderReceipts: defineTable({
+		paymentId: v.string(),
+		orgId: v.id('organizations'),
+		subscriptionId: v.id('subscriptions'),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number(),
+		amountPaidCents: v.number(),
+		balanceUnits: v.number(),
+		createdAt: v.number()
+	}).index('by_paymentId', ['paymentId']),
 
 	// Bounded pre-activation proof that subscription owner and Stripe identity
 	// cardinality are exact. All entitlement readers fail closed independently;
@@ -3504,6 +3577,8 @@ export default defineSchema({
 		keyId: v.optional(v.id('apiKeys')),
 		meter: v.union(
 			v.literal('resolve_address'),
+			// agentic_resolve is an ENTITLEMENT counter (a hard block), not a billable overage meter.
+			v.literal('agentic_resolve'),
 			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
 			v.literal('resolve_district'),
 			v.literal('resolve_officials')
@@ -3529,6 +3604,8 @@ export default defineSchema({
 		orgId: v.id('organizations'),
 		meter: v.union(
 			v.literal('resolve_address'),
+			// agentic_resolve is an ENTITLEMENT counter (a hard block), not a billable overage meter.
+			v.literal('agentic_resolve'),
 			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
 			v.literal('resolve_district'),
 			v.literal('resolve_officials')
@@ -3987,6 +4064,8 @@ export default defineSchema({
 
 	bills: defineTable({
 		externalId: v.string(),
+		// Set iff org-minted; unset iff ingested. Read by tenancy filters/refusals and prune.
+		orgId: v.optional(v.id('organizations')),
 		jurisdiction: v.string(), // 'us-federal' | 'us-state-ca' | etc.
 		jurisdictionLevel: v.string(), // 'federal' | 'state' | 'local'
 		chamber: v.optional(v.string()), // 'house' | 'senate' | 'council'
@@ -4007,6 +4086,7 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_externalId', ['externalId'])
+		.index('by_orgId', ['orgId'])
 		.index('by_jurisdiction_status', ['jurisdiction', 'status'])
 		.index('by_jurisdiction_status_statusDate', ['jurisdiction', 'status', 'statusDate'])
 		.index('by_jurisdiction_statusDate', ['jurisdiction', 'statusDate'])
@@ -4025,11 +4105,19 @@ export default defineSchema({
 	orgBillRelevances: defineTable({
 		orgId: v.id('organizations'),
 		billId: v.id('bills'),
-		score: v.float64(), // 0.0-1.0
+		// `scoreFact` is the truth. `presentScore` exists only to index a measured value;
+		// unscored authored matters carry an explicit BLOCKED fact, never a scalar sentinel.
+		scoreFact: v.union(
+			v.object({ state: v.literal('present'), value: v.float64() }),
+			v.object({ state: v.literal('absent') }),
+			v.object({ state: v.literal('withheld'), why: v.string() }),
+			v.object({ state: v.literal('blocked'), why: v.string() })
+		),
+		presentScore: v.optional(v.float64()),
 		matchedOn: v.array(v.string())
 	})
 		.index('by_orgId_billId', ['orgId', 'billId'])
-		.index('by_orgId_score', ['orgId', 'score']),
+		.index('by_orgId_presentScore', ['orgId', 'presentScore']),
 
 	legislativeAlerts: defineTable({
 		orgId: v.id('organizations'),
@@ -4068,7 +4156,7 @@ export default defineSchema({
 		orgId: v.id('organizations'),
 		deliveryId: v.optional(v.string()),
 
-		// Proof weight components
+		// Verification packet components
 		verifiedCount: v.number(),
 		totalCount: v.number(),
 		gds: v.optional(v.float64()),
@@ -4076,7 +4164,6 @@ export default defineSchema({
 		cai: v.optional(v.float64()),
 		temporalEntropy: v.optional(v.float64()),
 		districtCount: v.number(),
-		proofWeight: v.float64(),
 
 		// Cryptographic binding
 		attestationDigest: v.string(),
@@ -4151,7 +4238,6 @@ export default defineSchema({
 		verifiedCount: v.number(),
 		totalCount: v.number(),
 		districtCount: v.number(),
-		proofWeight: v.float64(),
 		attestationDigest: v.string(),
 		proofDeliveredAt: v.number(),
 		proofVerifiedAt: v.optional(v.number()),
@@ -4232,7 +4318,6 @@ export default defineSchema({
 		pendingCount: v.number(),
 		responseLoggedCount: v.number(),
 		anchorFieldCount: v.number(),
-		proofWeightTotal: v.float64(),
 		latestProofDeliveredAt: v.optional(v.number()),
 		version: v.number(),
 		projectionBytes: v.number(),
@@ -4260,7 +4345,6 @@ export default defineSchema({
 		pendingCount: v.number(),
 		responseLoggedCount: v.number(),
 		anchorFieldCount: v.number(),
-		proofWeightTotal: v.float64(),
 		latestProofDeliveredAt: v.optional(v.number()),
 		version: v.number(),
 		projectionBytes: v.number(),
@@ -4275,8 +4359,6 @@ export default defineSchema({
 		publicVerifiedCount: v.number(),
 		publicCausalReceiptCount: v.number(),
 		uniquePublicBillCount: v.number(),
-		publicProofWeightTotal: v.float64(),
-		publicWeightedAlignmentTotal: v.float64(),
 		latestProofDeliveredAt: v.optional(v.number()),
 		version: v.number(),
 		projectionBytes: v.number(),
@@ -4302,7 +4384,6 @@ export default defineSchema({
 		responsiveness: v.optional(v.float64()),
 		alignment: v.optional(v.float64()),
 		composite: v.optional(v.float64()),
-		proofWeightTotal: v.float64(),
 		deliveriesSent: v.number(),
 		deliveriesOpened: v.number(),
 		deliveriesVerified: v.number(),
@@ -4492,7 +4573,6 @@ export default defineSchema({
 		responsiveness: v.optional(v.float64()),
 		alignment: v.optional(v.float64()),
 		composite: v.optional(v.float64()),
-		proofWeightTotal: v.float64(),
 
 		// Input counts
 		deliveriesSent: v.number(),
@@ -4586,7 +4666,6 @@ export default defineSchema({
 		targetId: v.string(),
 		targetTitle: v.string(),
 		reasoning: v.string(),
-		proofWeight: v.float64(),
 
 		// User decision
 		decision: v.optional(v.string()), // 'approve' | 'reject'

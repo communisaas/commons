@@ -265,6 +265,42 @@ describe('bounded embedding backfill discovery', () => {
 		expect(missing.map(({ _id }) => _id)).not.toContain(coveredId);
 	});
 
+	it('accepts only bounded, finite, already-produced tag vectors', async () => {
+		const t = writeHarness();
+		const templateId = await t.run((ctx) =>
+			ctx.db.insert(
+				'templates',
+				missingTemplateValue('bounded-tag-vector-intake', { topics: ['libraries'] })
+			)
+		);
+
+		await expect(
+			t.mutation(internal.templates.patchTagEmbeddings, {
+				templateId,
+				tagEmbeddings: Array.from({ length: 6 }, (_, index) => ({
+					tag: `tag-${index}`,
+					embedding: validEmbedding()
+				}))
+			})
+		).rejects.toThrow('TOO_MANY_TAG_EMBEDDINGS');
+		await expect(
+			t.mutation(internal.templates.patchTagEmbeddings, {
+				templateId,
+				tagEmbeddings: [{ tag: 'x'.repeat(101), embedding: validEmbedding() }]
+			})
+		).rejects.toThrow('INVALID_TAG_EMBEDDING_LABELS');
+		await expect(
+			t.mutation(internal.templates.patchTagEmbeddings, {
+				templateId,
+				tagEmbeddings: [{ tag: 'libraries', embedding: [1, 0] }]
+			})
+		).rejects.toThrow('INVALID_TAG_EMBEDDING_DIMENSION:expected=768');
+
+		await expect(t.run((ctx) => ctx.db.get(templateId))).resolves.not.toHaveProperty(
+			'tagEmbeddings'
+		);
+	});
+
 	it('serializes Pages isolates with an expiring token-checked lease', async () => {
 		vi.useFakeTimers();
 		vi.setSystemTime(new Date('2026-07-18T00:00:00.000Z'));

@@ -47,7 +47,7 @@ export const getCampaignForVerify = query({
  *
  * H6 — projects the H1 trust-context snapshot (trustTier, cellStraddles,
  * cellAnchorMode, atlasVersion) so /v/[hash] can render the same honest
- * tier-display copy as AttestationFooter and emailService, plus the
+ * tier-display copy as emailService, plus the
  * atlas-version drift surface when the credential predates the current
  * atlas. All four fields are optional in the schema; legacy rows return
  * `undefined` and the UI must render "unknown" rather than a default.
@@ -117,7 +117,6 @@ export const getReceipt = query({
 			dmName: receipt.dmName,
 			decisionMakerId: receipt.decisionMakerId,
 			dmAction: receipt.dmAction ?? null,
-			proofWeight: receipt.proofWeight ?? null,
 			verifiedCount: kFloor5(receipt.verifiedCount ?? 0),
 			totalCount: kFloor5(receipt.totalCount ?? 0),
 			districtCount: kFloor3(receipt.districtCount ?? 0),

@@ -213,6 +213,45 @@ describe('compact recipient metrics plane', () => {
 		});
 	});
 
+	it('never publishes the legacy three-tree sentinel as a district bucket', async () => {
+		const t = convexTest({ schema, modules });
+		const templateId = await t.run(async (ctx) => {
+			const id = await ctx.db.insert('templates', templateValue('sentinel-recipient-metrics'));
+			for (let index = 0; index < 3; index += 1) {
+				await ctx.db.insert('positionRegistrations', {
+					templateId: id,
+					identityCommitment: `three-tree-${index}`,
+					stance: 'support',
+					districtCode: 'three-tree',
+					registeredAt: index + 1
+				});
+			}
+			return id;
+		});
+
+		await finishMigration(t);
+		const metrics = await t.query(api.positions.getMetrics, {
+			_secret: SECRET,
+			templateId,
+			userDistrictCode: 'three-tree'
+		});
+		expect(metrics.engagement?.districts).toEqual([]);
+		expect(JSON.stringify(metrics)).not.toContain('THREE-TREE');
+		expect(JSON.stringify(metrics)).not.toContain('three-tree');
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('templatePositionDistrictMetrics').collect()).toEqual([]);
+			const summary = await ctx.db
+				.query('templateRecipientMetrics')
+				.withIndex('by_templateId', (q) => q.eq('templateId', templateId))
+				.unique();
+			expect(summary).toMatchObject({
+				positionCount: 3,
+				positionDistrictCount: 0,
+				positionTopDistricts: []
+			});
+		});
+	});
+
 	it('dual-writes every new position exactly once in the registration transaction', async () => {
 		const t = convexTest({ schema, modules });
 		await finishMigration(t);
@@ -374,7 +413,7 @@ describe('compact recipient metrics plane', () => {
 				positionOppose: 900,
 				positionDistrictCount: 400,
 				positionTopDistricts: Array.from({ length: 20 }, (_, index) => ({
-					districtCode: `position-top-${index}`,
+					districtCode: `US-CA-${String(index + 1).padStart(2, '0')}`,
 					support: 50 - index,
 					oppose: 20
 				})),
@@ -388,7 +427,7 @@ describe('compact recipient metrics plane', () => {
 			});
 			await ctx.db.insert('templatePositionDistrictMetrics', {
 				templateId: id,
-				districtCode: 'viewer-position-district',
+				districtCode: 'US-NY-99',
 				support: 3,
 				oppose: 2,
 				updatedAt: 2
@@ -415,7 +454,7 @@ describe('compact recipient metrics plane', () => {
 			const value = await ctx.runQuery(api.positions.getMetrics, {
 				_secret: SECRET,
 				templateId,
-				userDistrictCode: 'viewer-position-district'
+				userDistrictCode: 'US-NY-99'
 			});
 			return { value, metrics: await transactionMetrics(ctx) };
 		});

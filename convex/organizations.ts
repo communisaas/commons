@@ -265,7 +265,6 @@ export const getOrgContext = query({
 						pendingCount: number;
 						responseLoggedCount: number;
 						anchorFieldCount: number;
-						proofWeightTotal: number;
 						latestProofDeliveredAt: number | null;
 					};
 					campaignCardsReady: boolean;
@@ -330,7 +329,6 @@ export const getOrgContext = query({
 							pendingCount: receipts.pendingCount,
 							responseLoggedCount: receipts.responseLoggedCount,
 							anchorFieldCount: receipts.anchorFieldCount,
-							proofWeightTotal: receipts.proofWeightTotal,
 							latestProofDeliveredAt: receipts.latestProofDeliveredAt ?? null
 						}
 					: readModelReady
@@ -339,7 +337,6 @@ export const getOrgContext = query({
 								pendingCount: 0,
 								responseLoggedCount: 0,
 								anchorFieldCount: 0,
-								proofWeightTotal: 0,
 								latestProofDeliveredAt: null
 							}
 						: null,

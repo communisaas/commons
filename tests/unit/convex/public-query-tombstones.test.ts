@@ -11,9 +11,11 @@ import submissionsSource from '../../../convex/submissions.ts?raw';
 import supportersSource from '../../../convex/supporters.ts?raw';
 import usersSource from '../../../convex/users.ts?raw';
 
-function exportedBlock(source: string, symbol: string, nextMarker: string): string {
+function exportedBlock(source: string, symbol: string, nextMarker?: string): string {
 	const start = source.indexOf(`export const ${symbol}`);
-	const end = source.indexOf(nextMarker, start);
+	const markerEnd = nextMarker ? source.indexOf(nextMarker, start) : -1;
+	const nextExport = source.indexOf('\nexport const ', start + `export const ${symbol}`.length);
+	const end = markerEnd >= 0 ? markerEnd : nextExport >= 0 ? nextExport : source.length;
 	if (start < 0 || end < 0) throw new Error(`Could not isolate ${symbol}`);
 	return source.slice(start, end);
 }

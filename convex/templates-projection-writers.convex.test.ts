@@ -50,6 +50,9 @@ describe('template compact-projection writers', () => {
 				messageBody: 'Message',
 				deliveryConfig: {},
 				recipientConfig: {},
+				cachedSources: [{ title: 'stale evidence' }],
+				sourcesCachedAt: Date.now(),
+				sourceCacheInputHash: 'a'.repeat(64),
 				status: 'published',
 				isPublic: true,
 				verifiedSends: 0,
@@ -126,8 +129,12 @@ describe('template compact-projection writers', () => {
 
 			const topic = await ctx.db.get(vectorIdentity.topicId);
 			const tag = await ctx.db.get(vectorIdentity.tagId);
+			const template = await ctx.db.get(templateId);
 			expect(topic).toMatchObject({ _id: vectorIdentity.topicId, updatedAt: 101 });
 			expect(tag).toMatchObject({ _id: vectorIdentity.tagId, updatedAt: 202 });
+			expect(template).not.toHaveProperty('cachedSources');
+			expect(template).not.toHaveProperty('sourcesCachedAt');
+			expect(template).not.toHaveProperty('sourceCacheInputHash');
 		});
 	});
 });

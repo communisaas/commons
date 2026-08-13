@@ -1,5 +1,5 @@
-const PUBLIC_RECIPIENT_PROVENANCE_PURPOSE = 'commons:public-template-recipient:v1';
-export const PUBLIC_RECIPIENT_PROVENANCE_VERSION = 1 as const;
+const PUBLIC_RECIPIENT_PROVENANCE_PURPOSE = 'commons:public-template-recipient:v2';
+export const PUBLIC_RECIPIENT_PROVENANCE_VERSION = 2 as const;
 export const PUBLIC_RECIPIENT_PROVENANCE_TTL_MS = 24 * 60 * 60 * 1000;
 const PUBLIC_RECIPIENT_PROVENANCE_CLOCK_SKEW_MS = 60 * 1000;
 const MAX_SECRET_CACHE_ENTRIES = 4;
@@ -22,8 +22,6 @@ export type PublicRecipientProvenanceClaims = {
 	role?: string;
 	shortName?: string;
 	roleCategory?: string;
-	accountabilityOpener?: string;
-	relevanceRank?: number;
 };
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -57,11 +55,11 @@ function normalizedPublicSource(value: unknown): string | undefined {
 	if (typeof value !== 'string' || textEncoder.encode(value).byteLength > 8_192) return undefined;
 	try {
 		const url = new URL(value);
+		// Real contact and directory URLs carry queries; fragments never reach the publisher.
 		if (
 			url.protocol !== 'https:' ||
 			url.username.length > 0 ||
 			url.password.length > 0 ||
-			url.search.length > 0 ||
 			url.hash.length > 0
 		) {
 			return undefined;
@@ -91,11 +89,6 @@ export function normalizePublicRecipientProvenanceClaims(
 	const role = normalizedText(value.role, 2_048);
 	const shortName = normalizedText(value.shortName, 2_048);
 	const roleCategory = normalizedText(value.roleCategory, 2_048);
-	const accountabilityOpener = normalizedText(value.accountabilityOpener, 8_192);
-	const relevanceRank =
-		typeof value.relevanceRank === 'number' && Number.isFinite(value.relevanceRank)
-			? value.relevanceRank
-			: undefined;
 	return {
 		email,
 		emailSource,
@@ -104,9 +97,7 @@ export function normalizePublicRecipientProvenanceClaims(
 		organization,
 		...(role === undefined ? {} : { role }),
 		...(shortName === undefined ? {} : { shortName }),
-		...(roleCategory === undefined ? {} : { roleCategory }),
-		...(accountabilityOpener === undefined ? {} : { accountabilityOpener }),
-		...(relevanceRank === undefined ? {} : { relevanceRank })
+		...(roleCategory === undefined ? {} : { roleCategory })
 	};
 }
 
@@ -126,9 +117,7 @@ function canonicalPayload(
 		claims.organization,
 		claims.role ?? null,
 		claims.shortName ?? null,
-		claims.roleCategory ?? null,
-		claims.accountabilityOpener ?? null,
-		claims.relevanceRank ?? null
+		claims.roleCategory ?? null
 	]);
 }
 

@@ -64,6 +64,7 @@ export const markCredentialForCutover = internalMutation({
 
 		await ctx.db.patch(credentialId, {
 			revokedAt: now,
+			retirementReason: 'operator_cutover' as const,
 			...(hasCommitment
 				? {
 						revocationStatus: 'pending' as const,

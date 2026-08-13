@@ -16,7 +16,7 @@ import { requireOrgRole, requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
-import { computeOrgScopedEmailHash } from './_orgHash';
+import { computeGlobalEmailHash, computeOrgScopedEmailHash } from './_orgHash';
 import {
 	countRecipientPage,
 	pageFilteredRecipients,
@@ -35,9 +35,13 @@ import {
 } from './lib/emailInputBudget';
 import {
 	applyManualEmailSuppressionAuthority,
+	applyRecipientRequestSuppressionAuthority,
 	bumpContactAuthorityEpoch,
-	enqueueContactFanoutJob
+	enqueueContactFanoutJob,
+	filterSuppressedEmailContactHashes,
+	RECIPIENT_SUPPRESSION_BATCH_MAX
 } from './lib/contactAuthority';
+import { syncCompactPublicDiscoveryProjection } from './lib/publicTemplateDiscoverySource';
 import {
 	AB_WINNER_CANDIDATE_READ_MAX,
 	syncEmailAbWinnerCandidate
@@ -166,6 +170,14 @@ const assertEmailSendAdmissionsRef = makeFunctionReference<'query'>(
 const drainContactFanoutQueueRef = makeFunctionReference<'action'>(
 	'webhooks:drainContactFanoutQueue'
 ) as unknown as FunctionReference<'action', 'internal', Record<string, never>, unknown>;
+const reprojectSuppressedRecipientTemplatesRef = makeFunctionReference<'mutation'>(
+	'email:reprojectSuppressedRecipientTemplates'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ contactHash: string; cursor?: string | null },
+	unknown
+>;
 const enqueuePlanUsageRepairRef = makeFunctionReference<'mutation'>(
 	'planUsage:enqueueForOrg'
 ) as unknown as FunctionReference<
@@ -190,6 +202,15 @@ const USER_BOUNCE_REPORT_WRITE_CAP = 100;
 // enforces this in the same transaction so parallel/direct calls cannot race it.
 const MAX_ACTIVE_BOUNCE_REPORTS_PER_USER = 10;
 const USER_BOUNCE_SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000;
+// Re-projection after a recipient-request suppression. There is no index on a
+// published address, so the sweep pages the detail projections and re-runs the
+// single-row projection writer for every row that carries the hash. Small page,
+// smaller re-sync cap: each re-sync rewrites three rows in the same transaction.
+const RECIPIENT_SUPPRESSION_REPROJECT_PAGE = 25;
+const RECIPIENT_SUPPRESSION_REPROJECT_CAP = 8;
+// Opaque per-request marker recorded on the authority row so an operator can see
+// a burst without learning anything about a person.
+const RECIPIENT_SUPPRESSION_REQUEST_ID_RE = /^[a-z0-9-]{1,64}$/;
 
 type RecipientFilterShape = {
 	tagIds?: Id<'tags'>[];
@@ -2541,5 +2562,132 @@ export const createBounceReport = mutation({
 		});
 
 		return { id, duplicate: false as const };
+	}
+});
+
+/**
+ * Suppress an email contact because the mailbox asked to be left alone.
+ *
+ * Internal-only: the caller-supplied hash makes this a probe oracle otherwise.
+ * SvelteKit's do-not-contact route verifies the mailbox-addressed HMAC token and
+ * rate-limits the request before invoking.
+ *
+ * The response is byte-identical for a hash that is known, unknown, or already
+ * suppressed. Nothing here may reveal whether an address was ever resolved,
+ * appears in a template, or already asked once — a differing status, body, or
+ * error shape would turn this endpoint into an address-enumeration oracle.
+ */
+export const suppressRecipientByRequest = mutation({
+	args: { _secret: v.string(), contactHash: v.string(), requestId: v.optional(v.string()) },
+	handler: async (ctx, { _secret, contactHash, requestId }) => {
+		requireInternalSecret(_secret);
+		if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		if (requestId !== undefined && !RECIPIENT_SUPPRESSION_REQUEST_ID_RE.test(requestId)) {
+			throw new Error('RECIPIENT_SUPPRESSION_REQUEST_ID_INVALID');
+		}
+		await applyRecipientRequestSuppressionAuthority(ctx, {
+			contactHash,
+			sourceEventId: requestId,
+			now: Date.now()
+		});
+		// A suppression that only affects future work is not a route off the
+		// platform: already-published projections have to be rebuilt filtered.
+		await ctx.scheduler.runAfter(0, reprojectSuppressedRecipientTemplatesRef, {
+			contactHash,
+			cursor: null
+		});
+		return { suppressed: true as const };
+	}
+});
+
+/**
+ * The denied subset of a batch of global email hashes.
+ *
+ * Internal-only for the same reason as the mutation: an anonymous caller could
+ * otherwise probe whether a guessed address is suppressed.
+ */
+export const filterSuppressedContactHashes = query({
+	args: { _secret: v.string(), contactHashes: v.array(v.string()) },
+	handler: async (ctx, { _secret, contactHashes }) => {
+		requireInternalSecret(_secret);
+		if (contactHashes.length > RECIPIENT_SUPPRESSION_BATCH_MAX) {
+			throw new Error('RECIPIENT_SUPPRESSION_BATCH_TOO_LARGE');
+		}
+		for (const contactHash of contactHashes) {
+			if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		}
+		return [...(await filterSuppressedEmailContactHashes(ctx, contactHashes))];
+	}
+});
+
+/**
+ * Rebuild every published projection that carries a now-suppressed address.
+ *
+ * There is no index on a published address, so this pages the detail projections
+ * and re-runs the single-row projection writer for each match. Re-running the
+ * writer rather than deleting the rows is deliberate: the writer applies the
+ * suppression filter, keeps the discovery source, detail projection and page
+ * artifact coordinate consistent by construction — so no orphaned coordinate can
+ * fail a materialization batch — and bumps the artifact revision so the cached
+ * page rolls instead of the template dropping out of discovery until some later
+ * rebuild.
+ *
+ * Idempotent: a re-projected row no longer carries the address, so a second pass
+ * over the same page matches nothing.
+ */
+export const reprojectSuppressedRecipientTemplates = internalMutation({
+	args: { contactHash: v.string(), cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { contactHash, cursor }) => {
+		if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		const page = await ctx.db.query('publicTemplateDetailProjections').paginate({
+			cursor: cursor ?? null,
+			numItems: RECIPIENT_SUPPRESSION_REPROJECT_PAGE
+		});
+		let reprojected = 0;
+		let capped = false;
+		for (const row of page.page) {
+			if (reprojected >= RECIPIENT_SUPPRESSION_REPROJECT_CAP) {
+				capped = true;
+				break;
+			}
+			const recipientConfig = (row.detail as { recipient_config?: unknown } | null)
+				?.recipient_config as { emails?: unknown; decisionMakers?: unknown } | null | undefined;
+			if (!recipientConfig) continue;
+			const addresses = new Set<string>();
+			if (Array.isArray(recipientConfig.emails)) {
+				for (const email of recipientConfig.emails) {
+					if (typeof email === 'string') addresses.add(email);
+				}
+			}
+			if (Array.isArray(recipientConfig.decisionMakers)) {
+				for (const decisionMaker of recipientConfig.decisionMakers) {
+					const email = (decisionMaker as { email?: unknown } | null)?.email;
+					if (typeof email === 'string') addresses.add(email);
+				}
+			}
+			let matches = false;
+			for (const address of addresses) {
+				if ((await computeGlobalEmailHash(address)) === contactHash) {
+					matches = true;
+					break;
+				}
+			}
+			if (!matches) continue;
+			const template = await ctx.db.get(row.templateId);
+			if (!template) continue;
+			await syncCompactPublicDiscoveryProjection(ctx, template);
+			reprojected++;
+		}
+		// Capping mid-page reschedules the SAME cursor rather than skipping the
+		// rows it did not reach. The pass is idempotent, so re-reading them costs a
+		// scan and never a duplicate write.
+		const done = !capped && page.isDone;
+		if (!done) {
+			await ctx.scheduler.runAfter(0, reprojectSuppressedRecipientTemplatesRef, {
+				contactHash,
+				cursor: capped ? (cursor ?? null) : page.continueCursor
+			});
+		}
+		return { reprojected, done };
 	}
 });

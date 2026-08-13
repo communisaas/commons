@@ -9,6 +9,9 @@ export const RECIPIENT_METRICS_PRIVACY_FLOOR = 5;
 export const PUBLIC_RECIPIENT_PAGE_METRICS_BATCH_MAX = 4;
 
 const MAX_DISTRICT_KEY_BYTES = 200;
+// Canonical congressional districts accepted from both current Shadow Atlas
+// (`CA-12`) and country-qualified legacy registrations (`US-CA-01`).
+const POSITION_DISTRICT_CODE = /^(?:[A-Z]{2}-)?[A-Z]{2}-(?:AL|[0-9]{1,6})$/u;
 const encoder = new TextEncoder();
 
 export type MessageDistrictMetric = {
@@ -54,11 +57,22 @@ function normalizeDistrictKey(value: string | undefined): string | undefined {
 }
 
 export function assertPositionDistrictCode(value: string | undefined): string | undefined {
-	const normalized = normalizeDistrictKey(value);
+	const normalized = canonicalPositionDistrictCode(value);
+	if (value?.trim().toLowerCase() === 'three-tree') return undefined;
 	if (value !== undefined && normalized === undefined) {
 		throw new Error('POSITION_DISTRICT_CODE_INVALID');
 	}
 	return normalized;
+}
+
+/**
+ * Defensive metric-plane normalization. Legacy sentinel registrations such as
+ * `three-tree` still count as positions, but can never become a public district
+ * bucket or an indexed viewer coordinate.
+ */
+function canonicalPositionDistrictCode(value: string | undefined): string | undefined {
+	const normalized = normalizeDistrictKey(value)?.toUpperCase();
+	return normalized && POSITION_DISTRICT_CODE.test(normalized) ? normalized : undefined;
 }
 
 function messageTopDistricts(
@@ -143,7 +157,7 @@ export async function applyPositionRegistrationMetric(
 		districtCode?: string;
 	}
 ): Promise<void> {
-	const districtCode = normalizeDistrictKey(args.districtCode);
+	const districtCode = canonicalPositionDistrictCode(args.districtCode);
 	const existingSummary = await metricSummary(ctx, args.templateId);
 	const current = summaryValue(existingSummary);
 	let positionDistrictCount = current.positionDistrictCount;
@@ -261,6 +275,7 @@ function publicRecipientPageMetrics(
 		(entry) => entry.count >= RECIPIENT_METRICS_PRIVACY_FLOOR
 	);
 	const positionDistricts = summary.positionTopDistricts
+		.filter((entry) => canonicalPositionDistrictCode(entry.districtCode) !== undefined)
 		.filter((entry) => positionMetricTotal(entry) >= RECIPIENT_METRICS_PRIVACY_FLOOR)
 		.sort(
 			(a, b) =>
@@ -397,7 +412,7 @@ export async function readPositionMetrics(
 	args: { templateId: Id<'templates'>; viewerDistrictCode?: string }
 ) {
 	await requireRecipientMetricsReady(ctx);
-	const viewerDistrictCode = normalizeDistrictKey(args.viewerDistrictCode);
+	const viewerDistrictCode = canonicalPositionDistrictCode(args.viewerDistrictCode);
 	const [row, viewerDistrict] = await Promise.all([
 		metricSummary(ctx, args.templateId),
 		viewerDistrictCode === undefined
@@ -421,6 +436,7 @@ export async function readPositionMetrics(
 		});
 	}
 	const districts = [...districtsByCode.values()]
+		.filter((entry) => canonicalPositionDistrictCode(entry.districtCode) !== undefined)
 		.filter((entry) => positionMetricTotal(entry) >= RECIPIENT_METRICS_PRIVACY_FLOOR)
 		.sort(
 			(a, b) =>

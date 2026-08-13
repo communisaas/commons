@@ -50,7 +50,6 @@ type CoalitionReceiptLike = {
 	billId: Id<'bills'>;
 	verifiedCount: number;
 	districtCount: number;
-	proofWeight: number;
 	alignment: number;
 	dmAction?: string;
 	proofDeliveredAt: number;
@@ -480,7 +479,6 @@ export async function applyCoalitionReceiptProjection(
 	if (receipt.coalitionMetricsVersion === COALITION_METRICS_VERSION) return false;
 	finiteNonnegative(receipt.verifiedCount, 'COALITION_RECEIPT_VERIFIED_COUNT');
 	finiteNonnegative(receipt.districtCount, 'COALITION_RECEIPT_DISTRICT_COUNT');
-	finiteNonnegative(receipt.proofWeight, 'COALITION_RECEIPT_PROOF_WEIGHT');
 	if (!Number.isFinite(receipt.alignment)) throw new Error('COALITION_RECEIPT_ALIGNMENT_INVALID');
 	const now = Date.now();
 	const canonicalSlug = await canonicalSlugForDecisionMaker(ctx, receipt.decisionMakerId);
@@ -493,7 +491,6 @@ export async function applyCoalitionReceiptProjection(
 	const pressurePatch = {
 		dmName: boundedKey(receipt.dmName, 256) ?? String(receipt.decisionMakerId),
 		canonicalSlug: canonicalSlug ?? pressure?.canonicalSlug,
-		maxProofWeight: Math.max(pressure?.maxProofWeight ?? 0, receipt.proofWeight),
 		verifiedActionEvidence: nextNonnegative(
 			pressure?.verifiedActionEvidence ?? 0,
 			receipt.verifiedCount,
@@ -526,11 +523,10 @@ export async function applyCoalitionReceiptProjection(
 				.eq('billId', receipt.billId)
 		)
 		.unique();
-	const alignmentWeight = Math.max(receipt.proofWeight, 1);
 	const billPatch = {
 		billTitle: boundedKey(billTitle, 512) ?? String(receipt.billId),
-		alignmentNumerator: (bill?.alignmentNumerator ?? 0) + receipt.alignment * alignmentWeight,
-		alignmentWeight: (bill?.alignmentWeight ?? 0) + alignmentWeight,
+		alignmentNumerator: (bill?.alignmentNumerator ?? 0) + receipt.alignment,
+		alignmentWeight: (bill?.alignmentWeight ?? 0) + 1,
 		dmAction: bill?.dmAction ?? boundedKey(receipt.dmAction, 256),
 		receiptCount: nextNonnegative(bill?.receiptCount ?? 0, 1, 'COALITION_PRESSURE_BILL_RECEIPTS'),
 		latestReceiptAt: Math.max(bill?.latestReceiptAt ?? 0, receipt.proofDeliveredAt),
@@ -627,7 +623,7 @@ export async function readCoalitionPressure(
 	}
 	const rows = await ctx.db
 		.query('coalitionNetworkPressureRows')
-		.withIndex('by_networkId_generation_combinedProofWeight', (q) =>
+		.withIndex('by_networkId_generation_verifiedActionEvidence', (q) =>
 			q.eq('networkId', networkId).eq('generation', aggregate.activeGeneration!)
 		)
 		.order('desc')
@@ -637,7 +633,6 @@ export async function readCoalitionPressure(
 		canonicalSlug: row.canonicalSlug ?? null,
 		dmName: row.dmName,
 		orgCount: row.orgCount,
-		combinedProofWeight: row.combinedProofWeight,
 		verifiedActionEvidence: floor5(row.verifiedActionEvidence),
 		districtSignalCount: floor3(row.districtSignalCount),
 		receiptCount: row.receiptCount,
