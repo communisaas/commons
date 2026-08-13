@@ -107,10 +107,22 @@ describe('paid provider budget policy', () => {
 			0
 		);
 
-		// 20 + 166 + 50 + 2 + 5 = 243. The verified tier carries two
-		// complete journeys, so neither tier is stranded after spending units.
+		// 20 + 166 + 50 + 2 + 5 = 243, plus one retry of the only step a person
+		// repeats before the irreversible expensive one.
 		expect(journeyUnits).toBe(243);
-		expect(policy.caps.actorMonthlyPublicUnits).toEqual({ authenticated: 243, verified: 486 });
+
+		// THE POINT OF THIS TEST. A share EQUAL to the journey is not a journey's
+		// worth of budget: rewording the ask once costs 20 + 243 = 263, and the
+		// denial lands after `decision-makers` has already spent 166 — an audience
+		// resolved, no message, nothing left for 30 days. The floor must carry a
+		// retry, and it must be derived from subject-line's own weight so a
+		// re-costing moves it too.
+		const retryHeadroom = paidProviderBudgetPolicyFor('subject-line', 'authenticated')!.weightUnits;
+		expect(retryHeadroom).toBe(20);
+		expect(policy.caps.actorMonthlyPublicUnits.authenticated).toBeGreaterThanOrEqual(
+			journeyUnits + retryHeadroom
+		);
+		expect(policy.caps.actorMonthlyPublicUnits).toEqual({ authenticated: 263, verified: 486 });
 		expect(Object.keys(policy.caps.actorMonthlyPublicUnits).sort()).toEqual([
 			'authenticated',
 			'verified'
@@ -118,7 +130,7 @@ describe('paid provider budget policy', () => {
 
 		for (const tier of ['authenticated', 'verified'] as const) {
 			const share = paidProviderBudgetPolicyFor('decision-makers', tier)!.actorMonthlyPublicUnits;
-			expect(share, tier).toBeGreaterThanOrEqual(journeyUnits);
+			expect(share, tier).toBeGreaterThanOrEqual(journeyUnits + retryHeadroom);
 			expect(share, tier).toBeLessThanOrEqual(PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS);
 		}
 		expect(

@@ -128,7 +128,10 @@ export const POST: RequestHandler = async (event) => {
 	if (requestEnvelope instanceof Response) return requestEnvelope;
 	const body = requestEnvelope;
 
-	let agenticAdmission;
+	type AgenticAdmission = Awaited<
+		ReturnType<typeof serverQuery<typeof api.metering.agenticResolveAdmission>>
+	>;
+	let agenticAdmission: AgenticAdmission;
 	try {
 		agenticAdmission = await serverQuery(api.metering.agenticResolveAdmission, {
 			_secret: getInternalSecret(),
@@ -142,18 +145,26 @@ export const POST: RequestHandler = async (event) => {
 			userId: authenticatedUserId,
 			level: 'error'
 		});
-		// Fail closed: without the admission read, the org allowance cannot be
-		// honestly enforced before provider capacity is reserved.
-		return new Response(
-			JSON.stringify({
-				error: 'Agentic capacity metering temporarily unavailable',
-				code: 'METERING_UNAVAILABLE'
-			}),
-			{
-				status: 503,
-				headers: { 'Content-Type': 'application/json' }
-			}
-		);
+		// Fail closed on the ORG lane only. The person lane declares no org, and
+		// `agenticResolveAdmission` returns {scope:'individual'} before touching a
+		// row when no slug is declared — so its answer is DISCARDED below. Denying
+		// someone who needs no metering, because a read we never use was briefly
+		// unavailable, inverts M1's rule: membership grants capacity, it never
+		// withholds admission.
+		if (!body.org_slug) {
+			agenticAdmission = { scope: 'individual' } as AgenticAdmission;
+		} else {
+			return new Response(
+				JSON.stringify({
+					error: 'Agentic capacity metering temporarily unavailable',
+					code: 'METERING_UNAVAILABLE'
+				}),
+				{
+					status: 503,
+					headers: { 'Content-Type': 'application/json' }
+				}
+			);
+		}
 	}
 	let paidOrgGrant:
 		| {

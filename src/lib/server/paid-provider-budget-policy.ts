@@ -192,6 +192,13 @@ const FREE_JOURNEY_OPERATIONS = [
 	'template-authoring'
 ] as const;
 
+/**
+ * One retry of `subject-line`, the only journey step a person repeats before the
+ * irreversible expensive one. Grounded in the operation's own weightUnits rather
+ * than a magic number, so a re-costing of subject-line moves this with it.
+ */
+const JOURNEY_RETRY_OPERATION = 'subject-line' as const;
+
 function normalizedProviderBundle(bundle: Partial<ProviderCallBundle>): ProviderCallBundle {
 	return Object.freeze({
 		dnsMx: bundle.dnsMx ?? 0,
@@ -258,6 +265,22 @@ function validatePolicy(): void {
 	// The per-actor monthly share of the public pool is sized in journeys, not in
 	// resolves, so a share can never strand someone between a resolved audience
 	// and an unwritten message.
+	//
+	// That promise was FALSE while the shipped share equalled the journey exactly.
+	// `subject-line` is the one step a person naturally repeats before committing
+	// to the expensive resolve — they reword the ask and try again — and the
+	// hourly grant permits it. With share == journey, a single reword costs
+	// 20 + 243 = 263 > 243, and the denial lands AFTER `decision-makers` has
+	// already spent 166 units: an audience resolved, no message, nothing left for
+	// 30 days. Asymmetric caution decides the direction — a share slightly too
+	// generous wastes budget, a share slightly too small strands a person who has
+	// already paid for the expensive half. So the floor carries one retry of the
+	// cheapest pre-resolve step.
+	const retryOperation = policy.operations[JOURNEY_RETRY_OPERATION];
+	invariant(retryOperation !== undefined, `journey_retry_operation`);
+	invariant(positiveInteger(retryOperation.weightUnits), `journey_retry_weight`);
+	const JOURNEY_RETRY_HEADROOM_UNITS = retryOperation.weightUnits;
+
 	let journeyUnits = 0;
 	for (const operation of FREE_JOURNEY_OPERATIONS) {
 		const journeyOperation = policy.operations[operation];
@@ -268,7 +291,10 @@ function validatePolicy(): void {
 	for (const tier of PAID_PROVIDER_PUBLIC_POOL_TIERS) {
 		const share = policy.caps.actorMonthlyPublicUnits[tier];
 		invariant(positiveInteger(share), `actor_monthly_${tier}`);
-		invariant(share >= journeyUnits, `actor_monthly_journey_floor_${tier}`);
+		invariant(
+			share >= journeyUnits + JOURNEY_RETRY_HEADROOM_UNITS,
+			`actor_monthly_journey_floor_${tier}`
+		);
 		invariant(
 			share <= PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
 			`actor_monthly_pool_ceiling_${tier}`

@@ -723,9 +723,20 @@ describe('SQLite paid-provider budget', () => {
 			kind: 'monthly',
 			key: '2026-07',
 			used: 243,
-			cap: 243
+			cap: 263
 		});
 
+		// THE HEADROOM IS THE POINT. A share equal to the journey stranded anyone
+		// who reworded their ask: the retry lands AFTER `decision-makers` has spent
+		// 166 units, leaving an audience resolved and no message for 30 days. One
+		// retry of the only repeatable pre-resolve step must still be admitted.
+		const retry = await storage.budget.fetch(providerRequest(actorHash, 'subject-line'));
+		expect(retry.status).toBe(200);
+		expect(
+			storage.sql.providerPeriods.get(`actor-monthly:${actorHash}:authenticated`)?.used
+		).toBe(263);
+
+		// And the share is still a bound, not an allowance: the next unit is refused.
 		const denied = await storage.budget.fetch(providerRequest(actorHash, 'embeddings'));
 		expect(denied.status).toBe(429);
 		expect(denied.headers.get('x-paid-provider-budget-reason')).toBe('actor-monthly');
@@ -746,7 +757,7 @@ describe('SQLite paid-provider budget', () => {
 			{ used: 167 }
 		);
 
-		// 167 + 166 > 243: the guard is measured in the same weighted units as the
+		// 167 + 166 > 263: the guard is measured in the same weighted units as the
 		// pool, so a one-unit operation buys no headroom for a 166-unit resolve.
 		const denied = await storage.budget.fetch(providerRequest(actorHash));
 		expect(denied.status).toBe(429);

@@ -433,7 +433,7 @@
 		const directRecipients = isCongressionalDelivery(template.deliveryMethod)
 			? []
 			: recipientEmailsFromConfig(template.recipient_config);
-		// Start the bounded link request alongside the existing credential lookup.
+		// Start the link request alongside the existing credential lookup.
 		// Congressional/no-recipient lanes do no network work at all.
 		const doNotContactUrlsPromise: Promise<Fact<DoNotContactLinks>> =
 			directRecipients.length > 0
