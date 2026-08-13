@@ -17,15 +17,25 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 // MOCKS - Using vi.hoisted for proper hoisting
 // =============================================================================
 
-const { mockModeratePromptOnly, mockEnforceLLMRateLimit, mockResolveDecisionMakers, mockGenerateMessage } = vi.hoisted(() => ({
+const { mockModeratePromptOnly, mockClassifySafety, mockEnforceLLMRateLimit, mockResolveDecisionMakers, mockGenerateMessage } = vi.hoisted(() => ({
 	mockModeratePromptOnly: vi.fn(),
+	mockClassifySafety: vi.fn(async () => ({
+		safe: true,
+		hazards: [],
+		blocking_hazards: [],
+		hazard_descriptions: [],
+		reasoning: 'safe',
+		timestamp: new Date().toISOString(),
+		model: 'test'
+	})),
 	mockEnforceLLMRateLimit: vi.fn(),
 	mockResolveDecisionMakers: vi.fn(),
 	mockGenerateMessage: vi.fn()
 }));
 
 vi.mock('$lib/core/server/moderation', () => ({
-	moderatePromptOnly: mockModeratePromptOnly
+	moderatePromptOnly: mockModeratePromptOnly,
+	classifySafety: mockClassifySafety
 }));
 
 vi.mock('$lib/server/llm-cost-protection', () => ({

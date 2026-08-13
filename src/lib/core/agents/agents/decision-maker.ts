@@ -31,10 +31,8 @@ import { ThoughtEmitter } from '$lib/core/thoughts/emitter';
 import { decisionMakerRouter } from '../providers';
 import { sumTokenUsage } from '../types';
 import { verifyEmailBatch, type EmailVerdict } from '$lib/server/email-verification';
-import {
-	updateContactVerification,
-	type ContactVerificationStatus
-} from '../utils/contact-cache';
+import { DECISION_MAKER_PROVIDER_LIMITS } from '../provider-call-envelope';
+import { updateContactVerification, type ContactVerificationStatus } from '../utils/contact-cache';
 import { generateAccountabilityOpeners } from './decision-maker-accountability';
 import {
 	documentToolDefinition,
@@ -49,13 +47,11 @@ import type { ResolveContext, DecisionMakerResult } from '../providers/types';
 import type { ThoughtSegment, Citation } from '$lib/core/thoughts/types';
 import { filterThoughtForDisplay } from '../utils/thought-filter';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
-
-/** Decision-maker has a verified, contactable email address. */
-function hasVerifiedEmail(
-	dm: ProcessedDecisionMaker
-): dm is ProcessedDecisionMaker & { email: string } {
-	return typeof dm.email === 'string' && dm.email.includes('@');
-}
+import { isUsableContactEmail, orderContactEmails } from '../contact-email';
+import { deriveContactRouteVerdict, tallyContactRoutes } from '../contact-route-verdict';
+import { classifySeatRoute, deriveRouteProvenance, deriveStanding } from '../seat-route';
+import { deriveDeliveryTier } from '../target-class';
+import { classifyGovernmentalAddress } from '../governmental-class';
 
 /**
  * Progressive reveal events emitted alongside ThoughtSegments.
@@ -80,11 +76,21 @@ interface VerificationEvent {
 	type: 'verification';
 	content: string;
 	timestamp: number;
-	metadata: { status: 'starting' | 'complete'; count?: number; verified?: number; dropped?: number; message: string };
+	metadata: {
+		status: 'starting' | 'complete';
+		count?: number;
+		verified?: number;
+		undeliverable?: number;
+		message: string;
+	};
 }
 
 /** Union of ThoughtSegment and progressive reveal events */
-export type SegmentOrRevealEvent = ThoughtSegment | IdentityFoundEvent | CandidateResolvedEvent | VerificationEvent;
+export type SegmentOrRevealEvent =
+	| ThoughtSegment
+	| IdentityFoundEvent
+	| CandidateResolvedEvent
+	| VerificationEvent;
 
 // ============================================================================
 // Agentic Tool Context — shared state for tool handlers during a session
@@ -158,8 +164,15 @@ export function extractContactHints(text: string): {
 	const emailRe = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
 	const phoneRe = /(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
 	const socialRe = /https?:\/\/(?:www\.)?(?:twitter|x|linkedin|facebook)\.com\/[^\s)"\]]+/gi;
+	const seenEmails = new Set<string>();
+	const emails = (text.match(emailRe) || []).filter((email) => {
+		const key = email.toLowerCase();
+		if (!isUsableContactEmail(email) || seenEmails.has(key)) return false;
+		seenEmails.add(key);
+		return true;
+	});
 	return {
-		emails: [...new Set(text.match(emailRe) || [])],
+		emails: orderContactEmails(text, emails),
 		phones: [...new Set(text.match(phoneRe) || [])],
 		socialUrls: [...new Set(text.match(socialRe) || [])].slice(0, 5)
 	};
@@ -184,7 +197,7 @@ export const geminiDocumentToolDeclaration = {
 export const searchWebToolDeclaration = {
 	name: 'search_web',
 	description: `Search the web for information about people, organizations, and contact details.
-Returns up to 25 search result metadata (title, URL, published date) per query.
+Returns up to 10 search result metadata (title, URL, published date) per query.
 No page content is returned — use read_page to get content from promising URLs.
 
 Best practices:
@@ -197,7 +210,8 @@ Best practices:
 		properties: {
 			query: {
 				type: 'string' as const,
-				description: 'Search query. Be specific: include org name, role, and "contact" or "email" for best results.'
+				description:
+					'Search query. Be specific: include org name, role, and "contact" or "email" for best results.'
 			}
 		},
 		required: ['query']
@@ -226,7 +240,8 @@ IMPORTANT: Email addresses you report MUST appear verbatim in the text returned 
 			},
 			maxCharacters: {
 				type: 'number' as const,
-				description: 'Maximum characters to return (default 12000, max 15000). Request more for pages likely rich in contact info.'
+				description:
+					'Maximum characters to return (default 12000, max 15000). Request more for pages likely rich in contact info.'
 			}
 		},
 		required: ['url']
@@ -313,13 +328,15 @@ async function handleSearchWebToolCall(
 					seenDomains.add(domain);
 					suggestedUrls.push(...suggestContactUrls(h.url));
 				}
-			} catch { /* skip malformed URLs */ }
+			} catch {
+				/* skip malformed URLs */
+			}
 		}
 
 		return {
 			success: true,
 			query,
-			results: hits.map(h => ({
+			results: hits.map((h) => ({
 				url: h.url,
 				title: h.title,
 				publishedDate: h.publishedDate,
@@ -370,9 +387,7 @@ async function handleReadPageToolCall(
 	const action = emitter.startAction('analyze', reason || `Reading: ${url}`);
 
 	// Legacy path: clamp maxCharacters (readPage now returns full text regardless)
-	const maxChars = requestedMax
-		? Math.min(Math.max(requestedMax, 1000), 15000)
-		: undefined;
+	const maxChars = requestedMax ? Math.min(Math.max(requestedMax, 1000), 15000) : undefined;
 
 	try {
 		const page = await readPage(url, maxChars ? { maxCharacters: maxChars } : undefined);
@@ -384,7 +399,8 @@ async function handleReadPageToolCall(
 				url,
 				title: '',
 				text: '',
-				error: 'Could not retrieve page content. The page may be behind authentication or temporarily unavailable.'
+				error:
+					'Could not retrieve page content. The page may be behind authentication or temporarily unavailable.'
 			};
 		}
 
@@ -458,9 +474,7 @@ export async function handleDocumentToolCall(
 			});
 		}
 
-		action.complete(
-			`Document analysis complete: ${result.document?.title || 'Untitled'}`
-		);
+		action.complete(`Document analysis complete: ${result.document?.title || 'Untitled'}`);
 
 		return result;
 	} catch (error) {
@@ -497,7 +511,9 @@ function emitDocumentCitations(
 		});
 	}
 
-	console.debug(`[decision-maker] Emitted ${citations.length} document citations with color: ${color}`);
+	console.debug(
+		`[decision-maker] Emitted ${citations.length} document citations with color: ${color}`
+	);
 }
 
 // ============================================================================
@@ -585,10 +601,7 @@ export async function resolveDecisionMakers(
 			...context,
 			streaming: {
 				onThought: (thought, phase) => {
-					const cleaned = filterThoughtForDisplay(
-						thought,
-						context.verbose ? 'verbose' : 'strict'
-					);
+					const cleaned = filterThoughtForDisplay(thought, context.verbose ? 'verbose' : 'strict');
 					if (cleaned) {
 						emitter.think(cleaned);
 					}
@@ -615,26 +628,16 @@ export async function resolveDecisionMakers(
 		const result = await decisionMakerRouter.resolve(enhancedContext);
 
 		// ========================================================================
-		// Filter — Only contactable decision-makers proceed
-		// ========================================================================
-
-		const totalResolved = result.decisionMakers.length;
-		result.decisionMakers = result.decisionMakers.filter(hasVerifiedEmail);
-		let droppedCount = totalResolved - result.decisionMakers.length;
-
-		if (droppedCount > 0) {
-			console.debug(
-				`[decision-maker] Filtered ${droppedCount} decision-maker(s) without verified email`
-			);
-		}
-
-		// ========================================================================
 		// Phase 3.5: Email Deliverability Verification
 		// ========================================================================
 
+		const mxUndeliverable = new Set<ProcessedDecisionMaker>();
 		if (result.decisionMakers.length > 0) {
 			const emailsToVerify = result.decisionMakers
-				.filter((dm): dm is typeof dm & { email: string } => typeof dm.email === 'string')
+				.filter(
+					(dm): dm is typeof dm & { email: string } =>
+						typeof dm.email === 'string' && dm.email.length > 0
+				)
 				.map((dm) => dm.email);
 
 			if (emailsToVerify.length > 0) {
@@ -642,13 +645,19 @@ export async function resolveDecisionMakers(
 					type: 'verification',
 					content: '',
 					timestamp: Date.now(),
-					metadata: { status: 'starting', count: emailsToVerify.length, message: `Verifying ${emailsToVerify.length} email address${emailsToVerify.length > 1 ? 'es' : ''}...` }
+					metadata: {
+						status: 'starting',
+						count: emailsToVerify.length,
+						message: `Verifying ${emailsToVerify.length} email address${emailsToVerify.length > 1 ? 'es' : ''}...`
+					}
 				});
 
 				try {
-					const verificationResults = await verifyEmailBatch(emailsToVerify);
+					const verificationResults = await verifyEmailBatch(emailsToVerify, {
+						maxDomains: DECISION_MAKER_PROVIDER_LIMITS.maxMxDomainsPerResolution
+					});
 
-					// Collect cache writeback entries for ALL verified emails (before filtering)
+					// Collect cache writeback entries before an undeliverable address is detached.
 					const cacheUpdates: Array<{
 						organization: string;
 						title: string;
@@ -657,6 +666,11 @@ export async function resolveDecisionMakers(
 					for (const dm of result.decisionMakers) {
 						if (!dm.email) continue;
 						const vr = verificationResults.get(dm.email);
+						// Never persist a non-observation: a DOH outage or a domain-ceiling
+						// skip means we were blocked from looking, not that the domain
+						// answered. Caching it would stamp `verifiedAt` on a fact we
+						// never established.
+						if (vr?.mxObserved === false) continue;
 						if (vr && dm.organization && dm.title) {
 							cacheUpdates.push({
 								organization: dm.organization,
@@ -666,20 +680,20 @@ export async function resolveDecisionMakers(
 						}
 					}
 
-					let droppedByVerification = 0;
-					result.decisionMakers = result.decisionMakers.filter((dm) => {
-						if (!dm.email) return true; // no email to verify, keep
+					let undeliverableCount = 0;
+					for (const dm of result.decisionMakers) {
+						if (!dm.email) continue;
 						const vr = verificationResults.get(dm.email);
 						if (vr && vr.verdict === 'undeliverable') {
-							droppedByVerification++;
-							return false;
+							mxUndeliverable.add(dm);
+							undeliverableCount++;
+							dm.email = undefined;
+							continue;
 						}
-						// Annotate survivors
 						if (vr) {
 							dm.emailVerified = vr.verdict as Exclude<EmailVerdict, 'undeliverable'>;
 						}
-						return true;
-					});
+					}
 
 					onSegment({
 						type: 'verification',
@@ -687,17 +701,19 @@ export async function resolveDecisionMakers(
 						timestamp: Date.now(),
 						metadata: {
 							status: 'complete',
-							verified: emailsToVerify.length - droppedByVerification,
-							dropped: droppedByVerification,
-							message: droppedByVerification > 0
-								? `Verified ${emailsToVerify.length - droppedByVerification} addresses, removed ${droppedByVerification} undeliverable`
-								: `All ${emailsToVerify.length} addresses verified`
+							verified: emailsToVerify.length - undeliverableCount,
+							undeliverable: undeliverableCount,
+							message:
+								undeliverableCount > 0
+									? `Checked ${emailsToVerify.length} addresses; ${undeliverableCount} could not receive mail`
+									: `Checked ${emailsToVerify.length} addresses; none were marked undeliverable by MX/DNS`
 						}
 					});
 
-					if (droppedByVerification > 0) {
-						droppedCount += droppedByVerification;
-						console.debug(`[decision-maker] Phase 3.5: Dropped ${droppedByVerification} undeliverable email(s)`);
+					if (undeliverableCount > 0) {
+						console.debug(
+							`[decision-maker] Phase 3.5: Detached ${undeliverableCount} undeliverable email(s)`
+						);
 					}
 
 					// Write verification status back to contact cache (awaited for ALS scope)
@@ -712,6 +728,41 @@ export async function resolveDecisionMakers(
 			}
 		}
 
+		const blockedHosts = new Set(
+			(Array.isArray(result.metadata?.blockedHosts) ? result.metadata.blockedHosts : [])
+				.filter((host): host is string => typeof host === 'string')
+				.map((host) => host.toLowerCase())
+		);
+		const readSources = new Set(
+			(Array.isArray(result.metadata?.readSources) ? result.metadata.readSources : []).filter(
+				(source): source is string => typeof source === 'string'
+			)
+		);
+		for (const dm of result.decisionMakers) {
+			dm.governmentalClass = classifyGovernmentalAddress(dm.email);
+			const delivery = deriveDeliveryTier({
+				email: dm.email,
+				candidateName: dm.name,
+				title: dm.title,
+				groundedThisRun: dm.publicEmailGrounding?.method === 'page-read',
+				groundingSourceUrl: dm.publicEmailGrounding?.source ?? dm.emailSource
+			});
+			dm.deliveryTier = delivery.deliveryTier;
+			if (delivery.seatRoute) dm.seatRoute = delivery.seatRoute;
+			else delete dm.seatRoute;
+			dm.contactRoute = deriveContactRouteVerdict({
+				hasEmail: typeof dm.email === 'string' && dm.email.includes('@'),
+				emailClaimStripped: dm.emailClaimStripped,
+				mxUndeliverable: mxUndeliverable.has(dm),
+				sourceUrl: dm.emailSource || dm.source,
+				blockedHosts,
+				readSources
+			});
+		}
+		const counts = tallyContactRoutes(result.decisionMakers.map((dm) => dm.contactRoute));
+		const contactable = counts.routed;
+		result.metadata = { ...result.metadata, contactRouteCounts: counts };
+
 		// ========================================================================
 		// Recommendation — Present findings
 		// ========================================================================
@@ -719,33 +770,32 @@ export async function resolveDecisionMakers(
 		emitter.startPhase('recommendation');
 
 		if (result.decisionMakers.length === 0) {
-			if (droppedCount > 0) {
-				emitter.think(
-					`Identified ${droppedCount} decision-maker${droppedCount > 1 ? 's' : ''}, ` +
-						'but none had publicly available email addresses. ' +
-						'You can add contacts manually on the next screen.',
-					{ emphasis: 'highlight' }
-				);
-			} else {
-				emitter.think(
-					'No decision-makers could be identified. ' +
-						'Try refining your search or providing more specific organizational details.',
-					{ emphasis: 'highlight' }
-				);
-			}
+			emitter.think(
+				'No decision-makers could be identified. ' +
+					'Try refining your search or providing more specific organizational details.',
+				{ emphasis: 'highlight' }
+			);
 		} else {
-			const countLabel = `${result.decisionMakers.length} decision-maker${result.decisionMakers.length > 1 ? 's' : ''}`;
-			if (droppedCount > 0) {
-				emitter.insight(
-					`Found ${countLabel} with verified contact info. ${droppedCount} more identified but excluded (no public email).`,
-					{ icon: '✅' }
-				);
-			} else {
-				emitter.insight(
-					`Found ${countLabel} with verified contact info.`,
-					{ icon: '✅' }
-				);
-			}
+			const total = result.decisionMakers.length;
+			const details = [
+				`Identified ${total} decision-maker${total === 1 ? '' : 's'}. ${contactable} ${contactable === 1 ? 'has' : 'have'} a public email route.`,
+				counts.ungrounded > 0
+					? `${counts.ungrounded} proposed address${counts.ungrounded === 1 ? '' : 'es'} did not appear in a page read this run.`
+					: '',
+				counts.undeliverable > 0
+					? `${counts.undeliverable} published address${counts.undeliverable === 1 ? '' : 'es'} could not receive mail according to MX/DNS.`
+					: '',
+				counts.blocked > 0
+					? `${counts.blocked} route${counts.blocked === 1 ? '' : 's'} could not be checked because retrieval from the source host was blocked.`
+					: '',
+				counts.absent > 0
+					? `${counts.absent} candidate source page${counts.absent === 1 ? ' was' : 's were'} read without finding an address.`
+					: '',
+				counts.unknown > 0
+					? `${counts.unknown} route${counts.unknown === 1 ? '' : 's'} could not be determined from this run.`
+					: ''
+			].filter(Boolean);
+			emitter.insight(details.join(' '), { icon: '📬' });
 
 			for (const dm of result.decisionMakers) {
 				const citations = [];
@@ -779,7 +829,10 @@ export async function resolveDecisionMakers(
 		// Phase 4: Accountability & Classification (non-fatal)
 		// ========================================================================
 
-		if (result.decisionMakers.length > 0) {
+		const routedDecisionMakers = result.decisionMakers.filter(
+			(dm) => dm.contactRoute?.status === 'routed'
+		);
+		if (routedDecisionMakers.length > 0) {
 			emitter.startPhase('accountability');
 			emitter.think('Generating accountability context...');
 
@@ -789,12 +842,13 @@ export async function resolveDecisionMakers(
 						subjectLine: context.subjectLine || '',
 						coreMessage: context.coreMessage || '',
 						topics: context.topics || [],
-						decisionMakers: result.decisionMakers.map((dm) => ({
+						decisionMakers: routedDecisionMakers.map((dm) => ({
 							name: dm.name,
 							title: dm.title,
 							organization: dm.organization || '',
 							reasoning: dm.reasoning || ''
-						}))
+						})),
+						signal: context.signal
 					},
 					emitter
 				);
@@ -810,9 +864,9 @@ export async function resolveDecisionMakers(
 					}
 				}
 
-				// Store personalPrompt on first DM (extracted by UI for compose pane placeholder)
-				if (result.decisionMakers[0] && accountabilityResult.personalPrompt) {
-					result.decisionMakers[0].personalPrompt = accountabilityResult.personalPrompt;
+				// Store personalPrompt on the first routed DM (extracted by UI for compose pane placeholder)
+				if (routedDecisionMakers[0] && accountabilityResult.personalPrompt) {
+					routedDecisionMakers[0].personalPrompt = accountabilityResult.personalPrompt;
 				}
 
 				// Sum Phase 4 token usage into pipeline total
@@ -826,26 +880,30 @@ export async function resolveDecisionMakers(
 				);
 			} catch (error) {
 				console.error('[decision-maker] Phase 4 failed (non-fatal):', error);
-				emitter.think(
-					'Accountability generation unavailable — proceeding without openers.',
-					{ emphasis: 'muted' }
-				);
+				emitter.think('Accountability generation unavailable — proceeding without openers.', {
+					emphasis: 'muted'
+				});
 			}
 
 			emitter.completePhase();
 		}
 
-		// Stash drop count for pipeline_stats observability
-		if (droppedCount > 0) {
-			result.metadata = { ...result.metadata, droppedEmailless: droppedCount };
+		for (const dm of result.decisionMakers) {
+			const seat = classifySeatRoute(dm.email, { candidateName: dm.name });
+			dm.standing = deriveStanding({ title: dm.title, roleCategory: dm.roleCategory });
+			dm.routeProvenance = deriveRouteProvenance({
+				seat,
+				emailGrounded: dm.emailGrounded,
+				emailSource: dm.emailSource,
+				contactRouteStatus: dm.contactRoute?.status
+			});
 		}
 
 		return result;
 	} catch (error) {
 		console.error('[decision-maker] Resolution failed:', error);
 
-		const errorMessage =
-			error instanceof Error ? error.message : 'An unexpected error occurred';
+		const errorMessage = error instanceof Error ? error.message : 'An unexpected error occurred';
 		emitter.think(`Error: ${errorMessage}`, { emphasis: 'highlight' });
 
 		throw error;
@@ -862,7 +920,9 @@ export async function resolveDecisionMakers(
  * @param mode - 'research' for agentic search tools, 'document' for document analysis
  * @returns Array of Gemini-compatible function declarations
  */
-export function getAgentToolDeclarations(mode: 'research' | 'search-only' | 'document' = 'document') {
+export function getAgentToolDeclarations(
+	mode: 'research' | 'search-only' | 'document' = 'document'
+) {
 	if (mode === 'search-only') {
 		return [searchWebToolDeclaration];
 	}

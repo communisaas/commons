@@ -70,6 +70,7 @@ function makePage(overrides: Partial<ExaPageContent> = {}): ExaPageContent {
 		title: 'Test Article',
 		text: 'Some default content.',
 		highlights: [],
+		recordBlocks: { state: 'blocked', why: 'test_fixture_has_no_raw_html' },
 		...overrides
 	};
 }

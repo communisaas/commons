@@ -11,7 +11,12 @@
  */
 
 import { z } from 'zod';
-import { parse as parsePartialJson } from 'best-effort-json-parser';
+import { disableErrorLogging, parse as parsePartialJson } from 'best-effort-json-parser';
+
+// The dependency's default logger includes the raw malformed input and parsed
+// fragments. Provider output can contain credentials or private user content,
+// so recovery must never let that diagnostic escape to application logs.
+disableErrorLogging();
 
 export interface TruncationRecoveryResult<T> {
 	/** The recovered data (may be partial) */
@@ -50,7 +55,9 @@ export function recoverTruncatedJson<T extends Record<string, unknown>>(
 		if (schema) {
 			const result = schema.safeParse(parsed);
 			if (!result.success) {
-				console.error('[truncation-recovery] Zod validation failed:', result.error.flatten());
+				console.error('[truncation-recovery] Structured validation failed:', {
+					issueCount: result.error.issues.length
+				});
 				// Fall through to recovery logic
 			} else {
 				return {

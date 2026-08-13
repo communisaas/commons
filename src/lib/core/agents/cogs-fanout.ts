@@ -6,25 +6,23 @@
  * Firecrawl page reads, then chunked Gemini synthesis. Phase 1 (role discovery)
  * is an unbounded LLM enumeration — a broad subject can return many roles, and
  * the fanout (and its cost) grows ~linearly with that count. Without a bound a
- * single authoring run could exceed the budgeted ~$0.22 ceiling.
+ * single authoring run could exceed the reviewed provider allowance.
  *
  * This guard caps the role count BEFORE the fanout begins, so the downstream
  * Exa/Firecrawl/Gemini work is deterministically bounded regardless of how many
  * roles Phase 1 enumerates. It lives in its own module (no Gemini/Exa imports)
  * so the bound is unit-testable.
  *
- * Budget arithmetic (canonical prices in llm-cost-protection.ts API_PRICING):
- * - Firecrawl reads are already capped at 20 (~$0.106 at $0.0053/read).
- * - Exa searches: ~1 identity search + ~1 contact search per role
- *   (~$0.007 each at $7/1K). At the cap below the Exa spend is bounded to
- *   2 * MAX_DECISION_MAKER_FANOUT searches.
- * - Gemini synthesis: chunked 3 identities/call, so calls scale with the cap.
- *
- * MAX_DECISION_MAKER_FANOUT = 12 keeps the worst-case external-API spend
- * (~12*2 Exa ≈ $0.17 + 20 Firecrawl ≈ $0.106, minus cache hits) within the same
- * order as the ~$0.22 budgeted ceiling while still surfacing a useful breadth of
- * decision-makers. Guided/explicitly-targeted roles are kept first so a precise
- * audience request is never truncated in favor of speculative breadth.
+ * Exact retry-aware arithmetic lives in provider-call-envelope.ts. At 12
+ * uncached roles it permits at most 72 Exa searches ($0.504 at $0.007), 24 Exa
+ * contents pages ($0.024), 24 Firecrawl credits, 13 Gemini calls, one Groq call,
+ * and an element-wise ceiling of 12 MX lookups across cache splits — MX is
+ * bounded by an enforced distinct-domain ceiling, not by contact count, since
+ * one DNS lookup serves every contact sharing a domain. No single execution
+ * exceeds the separately enumerated 146-call scalar ceiling. The
+ * shared UTC-month envelope is separately sized to keep
+ * every operation mix inside Exa/Firecrawl launch allowances; it is not a
+ * substitute for provider account Free-plan, billing-disabled, no-PAYG proof.
  */
 export const MAX_DECISION_MAKER_FANOUT = 12;
 

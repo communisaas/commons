@@ -68,6 +68,8 @@ export interface AccountabilityContext {
 		organization: string;
 		reasoning: string;
 	}>;
+	/** Abort in-flight provider work when the resolution owner cancels. */
+	signal?: AbortSignal;
 }
 
 // ============================================================================
@@ -124,10 +126,11 @@ export async function generateAccountabilityOpeners(
 	const result = await generateWithThoughts<AccountabilityLLMResponse>(
 		userPrompt,
 		{
+			stage: 'decision-accountability',
 			systemInstruction: systemPrompt,
 			temperature: 0.2,
 			thinkingLevel: 'medium',
-			maxOutputTokens: 16384
+			signal: context.signal
 		},
 		(thought) => {
 			const cleaned = cleanThoughtForDisplay(thought);
@@ -143,13 +146,11 @@ export async function generateAccountabilityOpeners(
 	);
 
 	if (!isSuccessfulExtraction(extraction) || !extraction.data?.openers?.length) {
-		console.error(
-			'[decision-maker-accountability] Phase 4: Failed to parse accountability response',
-			extraction.error
-		);
-		throw new Error(
-			`Accountability generation failed: ${extraction.error || 'empty response'}`
-		);
+		console.error('[decision-maker-accountability] Phase 4: Invalid structured response', {
+			hasExtraction: isSuccessfulExtraction(extraction),
+			openerCount: extraction.data?.openers?.length ?? 0
+		});
+		throw new Error('Accountability generation failed: invalid structured response');
 	}
 
 	const parsed = extraction.data;

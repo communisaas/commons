@@ -97,6 +97,84 @@ describe('ExaRateLimiter', () => {
 			expect(result.wasRateLimited).toBe(false);
 			expect(fn).toHaveBeenCalledTimes(1);
 		});
+
+		it('scrubs and bounds provider messages before returning or logging them', async () => {
+			const googleKey = `AIza${'a'.repeat(35)}`;
+			const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+			const fn = vi
+				.fn()
+				.mockRejectedValue(
+					new Error(`provider\r\n${googleKey}\u0000 ${'\ud83d\udea8'.repeat(10_000)}`)
+				);
+
+			const result = await limiter.execute(fn, 'test-context');
+			const logged = consoleSpy.mock.calls.flat().map(String).join(' ');
+
+			expect(new TextEncoder().encode(result.error ?? '').byteLength).toBeLessThanOrEqual(512);
+			expect(result.error).not.toContain(googleKey);
+			expect(result.error).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+			expect(logged).not.toContain(googleKey);
+			expect(logged).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+			consoleSpy.mockRestore();
+		});
+
+		it('marks status-less transport failures as completion-unknown', async () => {
+			const fn = vi.fn().mockRejectedValue(Object.assign(new Error('socket reset'), {
+				code: 'ECONNRESET'
+			}));
+
+			const result = await limiter.execute(fn, 'test-context');
+
+			expect(result).toMatchObject({
+				success: false,
+				attempts: 1,
+				completionUnknown: true,
+				reason: 'non_retryable'
+			});
+			expect(fn).toHaveBeenCalledTimes(1);
+		});
+
+		it('does not start another paid call when aborted during Retry-After backoff', async () => {
+			const controller = new AbortController();
+			const fn = vi.fn().mockRejectedValue(
+				Object.assign(new Error('limited'), {
+					status: 429,
+					headers: { 'retry-after': '30' }
+				})
+			);
+
+			const resultPromise = limiter.execute(fn, 'test-context', controller.signal);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(fn).toHaveBeenCalledTimes(1);
+			controller.abort();
+			await vi.runAllTimersAsync();
+			const result = await resultPromise;
+
+			expect(result.reason).toBe('aborted');
+			expect(result.attempts).toBe(1);
+			expect(fn).toHaveBeenCalledTimes(1);
+		});
+
+		it('honors Retry-After but caps it to the reviewed maximum delay', async () => {
+			const fn = vi
+				.fn()
+				.mockRejectedValueOnce(
+					Object.assign(new Error('limited'), {
+						status: 429,
+						headers: { 'retry-after': '3600' }
+					})
+				)
+				.mockResolvedValueOnce('recovered');
+
+			const resultPromise = limiter.execute(fn, 'test-context');
+			await vi.advanceTimersByTimeAsync(TEST_CONFIG.maxDelayMs - 1);
+			expect(fn).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1);
+			const result = await resultPromise;
+
+			expect(result.success).toBe(true);
+			expect(fn).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe('circuit breaker', () => {

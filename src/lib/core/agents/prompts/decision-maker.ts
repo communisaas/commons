@@ -15,6 +15,8 @@
  *   - Email verification: must find email verbatim in page content.
  */
 
+import type { Fact } from '$lib/core/fact';
+
 // ============================================================================
 // Phase 1: Role Discovery — Structural reasoning, no names
 // ============================================================================
@@ -67,9 +69,7 @@ export function buildRoleDiscoveryPrompt(
 	voiceSample?: string,
 	audienceGuidance?: string
 ): string {
-	const voiceBlock = voiceSample
-		? `\n\nVoice Sample (the human stakes):\n"${voiceSample}"\n`
-		: '';
+	const voiceBlock = voiceSample ? `\n\nVoice Sample (the human stakes):\n"${voiceSample}"\n` : '';
 
 	const guidanceBlock = audienceGuidance
 		? `\n\nAudience Guidance (from the author — incorporate and go beyond):\n"${audienceGuidance}"\n`
@@ -88,7 +88,14 @@ Return 8-10 positions (NOT people) with direct authority, gatekeeping power, coa
 // Domain Context Helpers — Observational patterns, NOT directives
 // ============================================================================
 
-type OrgType = 'government' | 'union' | 'think_tank' | 'corporate' | 'nonprofit' | 'media' | 'other';
+type OrgType =
+	| 'government'
+	| 'union'
+	| 'think_tank'
+	| 'corporate'
+	| 'nonprofit'
+	| 'media'
+	| 'other';
 
 export function detectOrgTypes(organizations: string[]): Set<OrgType> {
 	const types = new Set<OrgType>();
@@ -316,10 +323,7 @@ Return JSON directly — no markdown code blocks.`;
  * When identity is UNKNOWN, the mission expands: identify the person first,
  * then find their email. The agent gets a bigger budget for this (2 searches).
  */
-export function buildSingleContactPrompt(
-	identity: ResolvedIdentity,
-	reasoning: string
-): string {
+export function buildSingleContactPrompt(identity: ResolvedIdentity, reasoning: string): string {
 	if (identity.name === 'UNKNOWN') {
 		return `Identify who currently holds this position AND find their email address:
 
@@ -400,7 +404,13 @@ export function buildPageSelectionPrompt(
 	identitySearchResults: Array<{
 		identity: ResolvedIdentity;
 		reasoning: string;
-		hits: Array<{ url: string; title: string; publishedDate?: string; score?: number; url_hint: string }>;
+		hits: Array<{
+			url: string;
+			title: string;
+			publishedDate?: string;
+			score?: number;
+			url_hint: string;
+		}>;
 	}>
 ): string {
 	const sections = identitySearchResults
@@ -441,32 +451,36 @@ export const CONTACT_SYNTHESIS_PROMPT = `You are a contact extraction system. Gi
 
 ## Mission
 
-1. For each person in the "search hints" section, find the BEST AVAILABLE contact path from the provided page content. This means: personal email first, then department/board/office email, then general org email. Cross-reference across all pages — an email for person A may appear on a page originally selected for person B. **If a search hint has name "UNKNOWN", identify the current holder from page content and return their real full name in the output.** The name field must always contain the actual person's name, never "UNKNOWN", "Vacant", or any placeholder.
-2. ALSO extract other relevant decision-makers you discover in the page content who have direct authority, gatekeeping power, coalition leverage, or amplification reach over the issue described in the Issue Context section. When a page lists a board, committee, council, or staff directory, extract ALL members whose roles give them power over the issue — these are high-value discoveries.
+1. For each person in "search hints", find the BEST AVAILABLE published contact path: personal, then department/board/office, then general organization. Cross-reference all pages. If a hint says "UNKNOWN", identify the current holder and return their real full name; never output "UNKNOWN", "Vacant", or another placeholder. An email found on one person’s page may still be the best published office route for another person.
+2. ALSO extract relevant decision-makers found in page content whose authority, gatekeeping, coalition leverage, or amplification reach bears on the Issue Context. From boards, committees, councils, and staff directories, extract every member whose role gives them power over the issue.
 
 ## Rules
 
 1. Emails you report MUST appear VERBATIM in the provided page content or in the "Pre-extracted hints" section. Do NOT construct, guess, or infer email addresses.
-2. **CRITICAL — Maximize email coverage using the full contact hierarchy.** When no personal email exists, assign the most relevant organizational email available: department, division, board, committee, or general contact address. Any published email for a person's organization IS a valid contact path to reach them. The "Pre-extracted hints" section lists emails already regex-extracted from each page — treat these as verified present in the page text and USE THEM. Never return NO_EMAIL_FOUND when any email from the person's organization appears in the page content or hints.
+2. **CRITICAL — Use the full contact hierarchy and declare what the address reaches.** Assign the most specific published address available: personal, department, division, board, committee, or general organizational contact. The "Pre-extracted hints" section lists emails already regex-extracted from each page — treat these as verified present in the page text and USE THEM.
 3. For each person, cite the specific page URL where the email was found in email_source.
-4. Set email to "NO_EMAIL_FOUND" ONLY as an absolute last resort — when no email at all (personal, departmental, press, info, general) appears anywhere in the page content or hints for their organization. Capture alternatives (phone numbers, contact form URLs, social profiles) in contact_notes.
+4. Set email to "NO_EMAIL_FOUND" when Evidence Chain link 1 or link 2 is broken, or when no address at all appears anywhere in the page content or hints for their organization. Capture alternatives (phone numbers, contact form URLs, social profiles) in contact_notes.
 5. The reasoning field must be PERSON-SPECIFIC: explain why THIS individual has power over THIS issue — their authority, jurisdiction, decisions, or institutional leverage. Speak to their relationship with the issue, not to the sources you read. NEVER reference pages, page numbers, documents, or source artifacts in reasoning. 2-3 sentences.
-6. Cross-reference across ALL pages: an email relevant to person A may appear on a page attributed to person B. Scan every page for organizational emails that match any person's organization.
+6. Cross-reference across ALL pages: an email relevant to person A may appear on a page attributed to person B. Scan every page for organizational emails that match any person's organization. An address carried from one page to a person attributed on another page MUST use reaches: "general", never "person". A "person" value requires the address and the person's own name on the SAME page.
 7. Verify identity recency: note evidence from the page content that the person currently holds the stated position in recency_check.
-8. Prefer the most specific email available: personal > department/division > org-wide > press/info. But ANY level is better than NO_EMAIL_FOUND.
+8. Prefer the most specific published email available. A correctly labeled general address is more useful than an address falsely labeled as reaching a person, and both are more useful than nothing.
 9. For discovered contacts (not in the search hints): set discovered to true and provide issue-specific reasoning explaining why this person is relevant. When you find a directory, board, committee, or leadership page, extract members whose roles give them authority or influence over the issue.
+10. Record blocks are observations; all are office-scoped. Use "person" only when the SAME block and page publish it as that person's contact. Name:, honorifics, titles, token matches, or unrelated fields never suffice. Never pair across blocks.
 
 ## Evidence Chain
 
-A valid contact path requires three links. If any link is broken, the email is not usable:
+A valid contact path requires two gating links followed by one classification:
 
 1. **Current occupancy**: The page content contains evidence this person CURRENTLY holds this role. Not formerly held, not nominated for, not being recruited for — currently holds. If a page describes the position as vacant or shows a job posting for the role, that person-position link is broken.
 
 2. **Institutional provenance**: The email appears on a page published by the organization itself (staff directory, official website, press release) or in authoritative reporting about the organization (news coverage, government filings). An email that appears only on a third-party site that aggregates or infers contact information has no institutional backing — it may be outdated, pattern-generated, or belong to someone who no longer holds the role.
 
-3. **Person-email co-occurrence**: The email and the person's identity (name or specific role title) are connected on the same page in a way that establishes the email as a contact path for that person or their office. An email that merely exists on the same website — but on an unrelated page — is not a valid connection.
+3. **What the address reaches (a classification, not a gate)**: Report exactly one value:
+   - "person" — the address appears on the same page as the person's own name, positioned as their individual contact (for example, a staff-directory row, byline, or bio block). Leave reaches_label empty.
+   - "seat" — the address is published for a named office, department, committee, board, or function that this person's role sits inside (for example, "Office of the Superintendent", "Media Relations", or "Planning Department"). Set reaches_label to that label copied VERBATIM from the page. Do not paraphrase, invent, or translate it. If you cannot copy an exact label from the page, use "general", not "seat".
+   - "general" — a catch-all organizational address with no named office attached, or an address carried across from a different page.
 
-When a link is broken, return NO_EMAIL_FOUND for that person. A missing email is more useful than one that reaches the wrong person, bounces, or routes to a recruiter instead of a decision-maker.
+Only links 1 and 2 can break. If either breaks, return NO_EMAIL_FOUND for that person. Link 3 never breaks; it selects a value. Never report "person" merely because the person works at the organization that publishes the address: employment is not a contact channel. When in doubt, choose the weaker value.
 {DOMAIN_CONTEXT}
 Today's date: {CURRENT_DATE}
 
@@ -486,6 +500,8 @@ Return a JSON object matching this schema:
       "reasoning": "Person-specific justification (2-3 sentences)",
       "recency_check": "Evidence this person currently holds position",
       "contact_notes": "Alternative contacts if no email, or empty string",
+      "reaches": "person | seat | general",
+      "reaches_label": "verbatim office/function label when reaches is seat, else empty string",
       "discovered": false
     }
   ],
@@ -496,6 +512,46 @@ Include ALL people from the search hints, even those for whom no email was found
 For newly discovered contacts from the pages, set discovered to true.
 
 Return JSON directly — no markdown code blocks.`;
+
+export interface BoundedRecordBlockObservation {
+	records: string[];
+	truncated: boolean;
+}
+
+export type SynthesisRecordBlockFact = Fact<BoundedRecordBlockObservation>;
+
+const RECORD_BLOCK_HEADER =
+	'Record blocks (extractor observations — classify person vs office; never mix different records):';
+
+function renderFactReason(why: string): string {
+	return why
+		.replace(/[\u0000-\u001f\u007f-\u009f]+/gu, ' ')
+		.replace(/\s+/gu, ' ')
+		.trim()
+		.slice(0, 160);
+}
+
+/** Shared by the prompt and its byte-budgeting caller so Fact-state text is counted exactly. */
+export function renderRecordBlockSection(fact: SynthesisRecordBlockFact): string {
+	switch (fact.state) {
+		case 'present': {
+			const records =
+				fact.value.records.length > 0
+					? fact.value.records.map((record) => `  ${record}`).join('\n')
+					: '  (no eligible record completed inside the scanned prefix)';
+			const truncation = fact.value.truncated
+				? '\nRecord-block scan: PARTIAL — a configured bound was reached; never infer absence outside the scanned prefix.'
+				: '';
+			return `${RECORD_BLOCK_HEADER}\n${records}${truncation}\n`;
+		}
+		case 'absent':
+			return 'Record blocks: ABSENT — raw HTML was retrieved and fully scanned; no eligible record was published.\n';
+		case 'withheld':
+			return `Record blocks: WITHHELD — ${renderFactReason(fact.why) || 'policy withheld the observation'}.\n`;
+		case 'blocked':
+			return `Record blocks: BLOCKED — ${renderFactReason(fact.why) || 'raw HTML could not be inspected'}.\n`;
+	}
+}
 
 /**
  * Build user prompt for batch contact synthesis.
@@ -510,6 +566,7 @@ export function buildContactSynthesisPrompt(
 		url: string;
 		title: string;
 		text: string;
+		recordBlocks: SynthesisRecordBlockFact;
 		contactHints: { emails: string[]; phones: string[]; socialUrls: string[] };
 		attributedTo: number[];
 	}>,
@@ -542,10 +599,12 @@ Topics: ${issueContext.topics.join(', ')}
 	// Section 2: Page content
 	const pagesSection = pages
 		.map((page, i) => {
-			const attribution = page.attributedTo.map((idx) => {
-				const entry = identities[idx];
-				return entry ? entry.identity.name : `Identity ${idx}`;
-			}).join(', ');
+			const attribution = page.attributedTo
+				.map((idx) => {
+					const entry = identities[idx];
+					return entry ? entry.identity.name : `Identity ${idx}`;
+				})
+				.join(', ');
 
 			const hintsLines: string[] = [];
 			if (page.contactHints.emails.length > 0) {
@@ -557,14 +616,16 @@ Topics: ${issueContext.topics.join(', ')}
 			if (page.contactHints.socialUrls.length > 0) {
 				hintsLines.push(`  Social URLs: ${page.contactHints.socialUrls.join(', ')}`);
 			}
-			const hintsBlock = hintsLines.length > 0
-				? `Pre-extracted hints:\n${hintsLines.join('\n')}\n`
-				: 'Pre-extracted hints: (none)\n';
+			const hintsBlock =
+				hintsLines.length > 0
+					? `Pre-extracted hints:\n${hintsLines.join('\n')}\n`
+					: 'Pre-extracted hints: (none)\n';
+			const recordBlockSection = renderRecordBlockSection(page.recordBlocks);
 
 			return `### Page ${i + 1}: ${page.title}
 URL: ${page.url}
 Selected for: ${attribution}
-${hintsBlock}
+${hintsBlock}${recordBlockSection}
 Content:
 ${page.text}`;
 		})

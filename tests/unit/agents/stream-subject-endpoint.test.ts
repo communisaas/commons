@@ -66,12 +66,12 @@ import { POST } from '../../../src/routes/api/agents/stream-subject/+server';
 // HELPERS
 // =============================================================================
 
-function createMockEvent(body: unknown): any {
+function createMockEvent(body: unknown, authenticated = true): any {
 	return {
 		request: {
 			json: () => Promise.resolve(body)
 		},
-		locals: { session: { userId: 'test-user' } }
+		locals: { session: authenticated ? { userId: 'test-user' } : null }
 	};
 }
 
@@ -134,6 +134,16 @@ describe('POST /api/agents/stream-subject', () => {
 				{ type: 'complete', content: '' }
 			])
 		);
+	});
+
+	it('rejects an anonymous request before rate limiting, moderation, or Gemini', async () => {
+		const response = await POST(createMockEvent({ message: 'Spend provider work' }, false));
+
+		expect(response.status).toBe(401);
+		await expect(response.json()).resolves.toEqual({ error: 'Authentication required' });
+		expect(mockEnforceLLMRateLimit).not.toHaveBeenCalled();
+		expect(mockModeratePromptOnly).not.toHaveBeenCalled();
+		expect(mockGenerateStream).not.toHaveBeenCalled();
 	});
 
 	describe('Input Validation', () => {
@@ -203,7 +213,9 @@ describe('POST /api/agents/stream-subject', () => {
 			const event = createMockEvent({ message: testMessage });
 			await POST(event);
 
-			expect(mockModeratePromptOnly).toHaveBeenCalledWith(testMessage);
+			expect(mockModeratePromptOnly).toHaveBeenCalledWith(testMessage, undefined, {
+				signal: undefined
+			});
 		});
 
 		it('should proceed when content is safe', async () => {
@@ -241,9 +253,13 @@ describe('POST /api/agents/stream-subject', () => {
 			expect(mockGenerateStream).toHaveBeenCalledWith(
 				`Analyze this issue and generate a subject line:\n\n${testMessage}`,
 				{
-					systemInstruction: expect.stringContaining('test prompt'),
+					stage: 'subject-line',
+					systemInstruction: expect.stringMatching(
+						/test prompt[\s\S]*## RESPONSE SCHEMA[\s\S]*"type": "object"/
+					),
 					temperature: 0.4,
-					thinkingLevel: 'medium'
+					thinkingLevel: 'medium',
+					signal: undefined
 				}
 			);
 		});

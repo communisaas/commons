@@ -112,19 +112,63 @@ export function geminiStageEnvelope(stage: GeminiProviderStage): GeminiStageEnve
 /** Downstream target-resolution cardinality bounds used by the call proof. */
 export const DECISION_MAKER_PROVIDER_LIMITS = Object.freeze({
 	maxPagesTotal: 12,
+	maxSeatHopPages: 4,
 	maxPagesPerSynthesisChunk: 6,
 	maxPageBytesPerSynthesisChunk: 4_000,
-	maxCandidatesPerSynthesisChunk: 4,
+	maxRecordBlocksPerPage: 24,
+	maxRecordBlockBytes: 160,
+	maxCandidatesPerSynthesisChunk: 8,
 	synthesisChunkSize: 3,
-	maxContactHintEmailsPerPage: 4,
+	// MX verification bills per DOMAIN, not per ADDRESS: one DNS-over-HTTPS
+	// lookup covers every contact sharing a domain. This ceiling is *enforced*,
+	// not assumed — decision-maker.ts passes it as `verifyEmailBatch`'s
+	// `maxDomains`, which is what makes the `min()` in the dnsMx term below a
+	// bound rather than a hope.
+	maxMxDomainsPerResolution: 12,
+	// gemini-client.ts throws RangeError above the 64 KiB contact-synthesis
+	// envelope. The producer-level proof in contact-email.test.ts includes the
+	// real user prompt, system instruction, response schema, and every delimiter.
+	maxContactHintEmailsPerPage: 12,
+	maxContactHintBytesPerPage: 896,
+	maxEmailBytes: 254,
 	maxContactHintPhonesPerPage: 2,
 	maxContactHintSocialUrlsPerPage: 1,
-	maxEmailBytes: 320,
 	maxPhoneBytes: 64,
 	maxSocialUrlBytes: 512,
 	maxIssueCoreMessageBytes: 4_000,
 	maxIssueTopics: 5
 } as const);
+
+export function truncateUtf8(value: string, maxBytes: number): string {
+	const encoder = new TextEncoder();
+	if (encoder.encode(value).byteLength <= maxBytes) return value;
+	let result = '';
+	let bytes = 0;
+	for (const character of value) {
+		const characterBytes = encoder.encode(character).byteLength;
+		if (bytes + characterBytes > maxBytes) break;
+		result += character;
+		bytes += characterBytes;
+	}
+	return result;
+}
+
+export function boundContactHintEmails(emails: readonly string[]): string[] {
+	const encoder = new TextEncoder();
+	const bounded: string[] = [];
+	let totalBytes = 0;
+	for (const email of emails) {
+		if (bounded.length >= DECISION_MAKER_PROVIDER_LIMITS.maxContactHintEmailsPerPage) break;
+		const truncated = truncateUtf8(email, DECISION_MAKER_PROVIDER_LIMITS.maxEmailBytes);
+		const emailBytes = encoder.encode(truncated).byteLength;
+		if (totalBytes + emailBytes > DECISION_MAKER_PROVIDER_LIMITS.maxContactHintBytesPerPage) {
+			break;
+		}
+		bounded.push(truncated);
+		totalBytes += emailBytes;
+	}
+	return bounded;
+}
 
 /** External clients' independently tested attempt ceilings. */
 export const EXTERNAL_PROVIDER_ATTEMPT_LIMITS = Object.freeze({
@@ -160,13 +204,15 @@ export function decisionMakerProviderBundle(uncached: number): ProviderCallBundl
 	const cached = MAX_DECISION_MAKER_FANOUT - uncached;
 	const synthesisChunks = Math.ceil(uncached / DECISION_MAKER_PROVIDER_LIMITS.synthesisChunkSize);
 	const selectedPages = Math.min(uncached * 2, DECISION_MAKER_PROVIDER_LIMITS.maxPagesTotal);
+	const seatHopPages = Math.min(uncached, DECISION_MAKER_PROVIDER_LIMITS.maxSeatHopPages);
 	const maximumContacts =
 		cached + synthesisChunks * DECISION_MAKER_PROVIDER_LIMITS.maxCandidatesPerSynthesisChunk;
 
 	const exaSearch =
 		(MAX_DECISION_MAKER_FANOUT + uncached) * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.exaSearch;
-	const firecrawl = selectedPages * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.firecrawlScrape;
-	const exaContents = selectedPages * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.exaContents;
+	const firecrawl =
+		(selectedPages + seatHopPages) * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.firecrawlScrape;
+	const exaContents = (selectedPages + seatHopPages) * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.exaContents;
 	const gemini =
 		// Role discovery + identity extraction always run.
 		2 +
@@ -178,7 +224,9 @@ export function decisionMakerProviderBundle(uncached: number): ProviderCallBundl
 		(maximumContacts > 0 ? 1 : 0);
 
 	return Object.freeze({
-		dnsMx: maximumContacts * EXTERNAL_PROVIDER_ATTEMPT_LIMITS.mxLookup,
+		dnsMx:
+			Math.min(maximumContacts, DECISION_MAKER_PROVIDER_LIMITS.maxMxDomainsPerResolution) *
+			EXTERNAL_PROVIDER_ATTEMPT_LIMITS.mxLookup,
 		exaContents,
 		exaSearch,
 		firecrawl,
@@ -206,6 +254,15 @@ const decisionMakerBundles = Array.from({ length: MAX_DECISION_MAKER_FANOUT + 1 
  * need not occur in one execution: the scalar worst-total envelope above is
  * enumerated separately so a mixed-cache admission is bounded without
  * pretending all provider maxima coincide.
+ *
+ * With the enforced MX domain ceiling, `dnsMx` is constant at 12 for every
+ * `uncached` in 0..12 — the ceiling binds at every split, since `maximumContacts`
+ * is already 12 at `uncached = 0` and only grows. Every remaining provider peaks
+ * at `uncached = 12`, so the element-wise envelope now numerically equals the
+ * scalar worst-total at 146, where before it exceeded it (152 vs 150). Both
+ * remain separately enumerated: that agreement is a property of these particular
+ * constants, not a structural guarantee, and collapsing them would silently
+ * unbound a mixed-cache admission the moment a constant moves.
  */
 export const MAX_DECISION_MAKER_PROVIDER_BUNDLE: ProviderCallBundle = Object.freeze({
 	dnsMx: Math.max(...decisionMakerBundles.map((calls) => calls.dnsMx)),

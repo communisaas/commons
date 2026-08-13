@@ -21,7 +21,11 @@ import { z } from 'zod';
 import { generateWithThoughts } from '../gemini-client';
 import { MESSAGE_WRITER_PROMPT } from '../prompts/message-writer';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
-import { discoverSources, formatSourcesForPrompt } from './source-discovery';
+import { discoverSources } from './source-discovery';
+import {
+	prepareMessageSourceGround,
+	type ProviderVisibleSourceStage
+} from './message-source-ground';
 import type {
 	MessageResponse,
 	DecisionMaker,
@@ -78,9 +82,9 @@ const CoercedGeoScopeSchema = z.preprocess((val) => {
 }, GeoScopeSchema);
 
 const MessageResponseSchema = z.object({
-	message: z.string(),
-	sources: z.array(SourceSchema),
-	research_log: z.array(z.string()).optional(),
+	message: z.string().min(1).max(12_000),
+	sources: z.array(SourceSchema).max(6),
+	research_log: z.array(z.string().max(512)).max(12).optional(),
 	geographic_scope: CoercedGeoScopeSchema.default({ type: 'international' })
 });
 
@@ -134,6 +138,14 @@ export interface GenerateMessageOptions {
 	onPhase?: (phase: PipelinePhase, message: string) => void;
 	/** Callback when evaluated source ground becomes countable evidence */
 	onSourceEvidence?: (evidence: SourceEvidenceUpdate) => void;
+	/**
+	 * Classify the exact bounded indirect-source text before Gemini sees it.
+	 * Required even for cached source ground so persistence cannot bypass review.
+	 */
+	classifyProviderVisibleSources: (
+		providerVisibleText: string,
+		stage: ProviderVisibleSourceStage
+	) => Promise<void>;
 }
 
 const SOURCE_EVALUATION_FALLBACK_PREFIX = 'Evaluation unavailable';
@@ -144,6 +156,22 @@ function searchOnlySourceCount(sources: EvaluatedSource[]): number {
 			!source.incentive_position ||
 			source.credibility_rationale.startsWith(SOURCE_EVALUATION_FALLBACK_PREFIX)
 	).length;
+}
+
+function assertGeneratedCitationBoundary(message: string, sources: EvaluatedSource[]): void {
+	const allowedCitations = new Set(sources.map((source) => source.num));
+	for (const match of message.matchAll(/\[([^\]\n]{1,64})\]/g)) {
+		const contents = match[1].trim();
+		if (!/\d/.test(contents)) continue;
+		if (!/^\d+$/.test(contents) || !allowedCitations.has(Number(contents))) {
+			throw new Error('Message generation returned an invalid source citation. Please try again.');
+		}
+	}
+	// The UI attaches the server-owned source list. Raw links in prose bypass that
+	// identity boundary and could point at a model-minted or substituted URL.
+	if (/\b(?:https?:\/\/|www\.)\S+/iu.test(message)) {
+		throw new Error('Message generation returned an unverified source link. Please try again.');
+	}
 }
 
 // ============================================================================
@@ -189,6 +217,7 @@ export async function generateMessage(
 				title: dm.title,
 				organization: dm.organization
 			})),
+			classifyProviderVisibleSources: options.classifyProviderVisibleSources,
 			traceId: options.traceId,
 			onThought: onThought ? (thought) => onThought(thought, 'sources') : undefined,
 			onPhase: (phase, message) => {
@@ -228,15 +257,16 @@ export async function generateMessage(
 			discovered: sourceResult.discovered.length,
 			evaluated: sourceResult.evaluated.length,
 			failed: sourceResult.failed.length,
-			searchQueries: actualSearchQueries
+			searchQueryCount: actualSearchQueries.length
 		});
 
-		// Log failed sources for debugging
+		// URLs and provider diagnostics can contain user/provider-controlled data.
+		// Counts are sufficient for production diagnostics; bounded details remain
+		// available through the protected trace surface when explicitly enabled.
 		if (sourceResult.failed.length > 0) {
-			console.warn(
-				'[message-writer] Failed source validations:',
-				sourceResult.failed.map((f) => `${f.source.url}: ${f.error}`)
-			);
+			console.warn('[message-writer] Source validations failed:', {
+				count: sourceResult.failed.length
+			});
 		}
 
 		// Bridging thought
@@ -261,6 +291,18 @@ export async function generateMessage(
 		});
 	}
 
+	// Normalize, structurally quote, and globally bound every indirect source
+	// field. The classifier sees this exact string; no source-controlled overflow
+	// is appended to the provider prompt later.
+	const preparedSourceGround = prepareMessageSourceGround(verifiedSources);
+	verifiedSources = preparedSourceGround.sources;
+	if (verifiedSources.length > 0) {
+		await options.classifyProviderVisibleSources(
+			preparedSourceGround.providerVisibleText,
+			'message-write'
+		);
+	}
+
 	// ====================================================================
 	// Message generation stage with source ground
 	// ====================================================================
@@ -282,8 +324,8 @@ export async function generateMessage(
 	// Inject current date into system prompt
 	const systemPrompt = MESSAGE_WRITER_PROMPT.replace('{CURRENT_DATE}', currentDate);
 
-	// Format evaluated sources for the prompt
-	const sourcesBlock = formatSourcesForPrompt(verifiedSources);
+	// This is byte-for-byte the indirect-source surface classified above.
+	const sourcesBlock = preparedSourceGround.providerVisibleText;
 
 	// Build the voice block — this is the emotional core to mine
 	const voiceBlock =
@@ -322,7 +364,9 @@ Find the emotional truth in the input above. Build a message that:
 
 The stranger who shares this link should think "I need to send that too." Every sender should feel "this is exactly what I wanted to say."`;
 
-	console.debug('[message-writer] Message generation stage: Generating message with source ground...');
+	console.debug(
+		'[message-writer] Message generation stage: Generating message with source ground...'
+	);
 
 	const messageWriteStart = Date.now();
 	// Generate WITHOUT grounding — the source-ground pool is already bounded
@@ -332,11 +376,14 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const result = await generateWithThoughts<MessageResponse>(
 		prompt,
 		{
+			stage: 'message-write',
 			systemInstruction: systemPrompt,
 			temperature: 0.8,
 			thinkingLevel: 'high',
 			enableGrounding: false, // Disabled — using bounded source ground
-			maxOutputTokens: 65536
+			// Civic messages do not need a 65K-token tail. This cap still leaves ample
+			// room for high-level thinking plus the bounded response schema.
+			maxOutputTokens: 8192
 		},
 		onThought ? (thought) => onThought(thought, 'message') : undefined
 	);
@@ -368,28 +415,32 @@ The stranger who shares this link should think "I need to send that too." Every 
 	const extraction = extractJsonFromGroundingResponse<MessageResponse>(result.rawText || '');
 
 	if (!isSuccessfulExtraction(extraction)) {
-		// Log technical details for debugging (visible in browser console)
+		// Never emit model output excerpts: they can reproduce user content,
+		// indirect-source text, or provider-controlled diagnostics.
 		console.error('[message-writer] JSON extraction failed:', {
 			error: extraction.error,
-			rawTextLength: result.rawText?.length,
-			rawTextHead: result.rawText?.slice(0, 300),
-			rawTextTail: result.rawText?.slice(-200)
+			rawTextLength: result.rawText?.length
 		});
 		// User-friendly error - doesn't break their vibe
 		throw new Error('Message generation hit a snag. Please try again.');
 	}
 
-	console.debug('[message-writer] Extracted data keys:', Object.keys(extraction.data || {}));
+	console.debug('[message-writer] Extracted structured response:', {
+		fieldCount: Object.keys(extraction.data || {}).length
+	});
 
 	// Validate with Zod
 	const validationResult = MessageResponseSchema.safeParse(extraction.data);
 
 	if (!validationResult.success) {
-		// Log technical details for debugging
-		console.error('[message-writer] Invalid response structure:', validationResult.error.flatten());
+		console.error('[message-writer] Invalid structured response:', {
+			issueCount: validationResult.error.issues.length
+		});
 		// User-friendly error
 		throw new Error('Message generation hit a snag. Please try again.');
 	}
+
+	assertGeneratedCitationBoundary(validationResult.data.message, verifiedSources);
 
 	// CRITICAL: Replace generated sources with bounded source ground.
 	// The model may include source metadata in its output, but we trust only the

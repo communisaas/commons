@@ -83,11 +83,13 @@ export function extractJsonFromGroundingResponse<T>(
 		if (schema) {
 			const result = schema.safeParse(parsed);
 			if (!result.success) {
-				console.error('[grounding-json] Zod validation failed:', result.error.flatten());
+				console.error('[grounding-json] Structured validation failed:', {
+					issueCount: result.error.issues.length
+				});
 				return {
 					data: null,
 					success: false,
-					error: `Validation failed: ${result.error.errors[0]?.message || 'Invalid data structure'}`,
+					error: 'Validation failed: Invalid data structure',
 					cleanedText: cleaned
 				};
 			}
@@ -95,7 +97,7 @@ export function extractJsonFromGroundingResponse<T>(
 		}
 
 		return { data: parsed as T, success: true, cleanedText: cleaned };
-	} catch (firstError) {
+	} catch {
 		// Step 4: Try sanitizing common LLM JSON errors
 		try {
 			const sanitized = cleaned
@@ -110,11 +112,13 @@ export function extractJsonFromGroundingResponse<T>(
 			if (schema) {
 				const result = schema.safeParse(parsed);
 				if (!result.success) {
-					console.error('[grounding-json] Zod validation failed:', result.error.flatten());
+					console.error('[grounding-json] Structured validation failed:', {
+						issueCount: result.error.issues.length
+					});
 					return {
 						data: null,
 						success: false,
-						error: `Validation failed: ${result.error.errors[0]?.message || 'Invalid data structure'}`,
+						error: 'Validation failed: Invalid data structure',
 						cleanedText: sanitized
 					};
 				}
@@ -122,11 +126,11 @@ export function extractJsonFromGroundingResponse<T>(
 			}
 
 			return { data: parsed as T, success: true, cleanedText: sanitized };
-		} catch (secondError) {
+		} catch {
 			return {
 				data: null,
 				success: false,
-				error: `JSON parse failed: ${firstError instanceof Error ? firstError.message : String(firstError)}`,
+				error: 'JSON parse failed',
 				cleanedText: cleaned
 			};
 		}

@@ -10,7 +10,7 @@
  * - Stage 4: Chunked Contact Synthesis (N Gemini calls, 3 identities per chunk)
  *
  * Stage 4 uses generate() with responseSchema for guaranteed JSON structure.
- * Each chunk retries via generate()'s built-in 3x retry, then falls back to
+ * Each chunk has one explicitly classified transient retry, then falls back to
  * pre-extracted page email hints on failure. Partial success is preserved.
  *
  * Includes a ResolvedContact cache (14-day TTL) to skip repeat lookups.
@@ -36,13 +36,38 @@ import {
 	buildPageSelectionPrompt,
 	CONTACT_SYNTHESIS_PROMPT,
 	buildContactSynthesisPrompt,
+	renderRecordBlockSection,
 	detectOrgTypes,
-	generateDomainContext
+	generateDomainContext,
+	type SynthesisRecordBlockFact
 } from '../prompts/decision-maker';
 import { getCachedContacts, upsertResolvedContacts, normalizeOrgKey } from '../utils/contact-cache';
+import { resolveEmailReachesClaim } from '../utils/email-reaches';
 import { capFanout, MAX_DECISION_MAKER_FANOUT } from '../cogs-fanout';
+import {
+	boundContactHintEmails,
+	DECISION_MAKER_PROVIDER_LIMITS,
+	truncateUtf8
+} from '../provider-call-envelope';
+import { selectSeatHopTargets } from '../seat-hop';
 import { extractJsonFromGroundingResponse, isSuccessfulExtraction } from '../utils/grounding-json';
-import { searchWeb, readPage, prunePageContent, type ExaPageContent } from '../exa-search';
+import * as exaSearchModule from '../exa-search';
+import {
+	isUsableContactEmail,
+	searchWeb,
+	readPage,
+	prunePageContent,
+	providerUrlLogLabel,
+	type ExaPageContent
+} from '../exa-search';
+import {
+	pageRetrievalBlocked,
+	pageRetrievalOk,
+	type PageRetrievalOutcome
+} from '../retrieval-outcome';
+import { normalizeContactRouteSource } from '../contact-route-verdict';
+import { sanitizeProviderErrorMessage } from '../provider-error';
+import { deriveDeliveryTier } from '../target-class';
 import { classifyUrl, extractContactHints } from '../agents/decision-maker';
 import type { ProcessedDecisionMaker } from '$lib/types/template';
 import type {
@@ -51,6 +76,104 @@ import type {
 	DecisionMakerResult,
 	StreamingCallbacks
 } from './types';
+
+type ReadPageOutcome = (typeof import('../exa-search'))['readPageOutcome'];
+
+type PageObservationState = {
+	fetchedPages: Map<string, ExaPageContent>;
+	blockedHosts: Set<string>;
+	readSources: Set<string>;
+};
+
+function hostFromUrl(url: string): string | undefined {
+	try {
+		return new URL(url).hostname.toLowerCase() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function sourceSetHasHost(sources: ReadonlySet<string>, host: string): boolean {
+	for (const source of sources) {
+		if (hostFromUrl(source) === host) return true;
+	}
+	return false;
+}
+
+function rememberBlockedHost(state: PageObservationState, url: string): void {
+	const host = hostFromUrl(url);
+	if (host && !sourceSetHasHost(state.readSources, host)) state.blockedHosts.add(host);
+}
+
+function rememberReadSource(state: PageObservationState, url: string): void {
+	const source = normalizeContactRouteSource(url);
+	if (!source) return;
+	state.readSources.add(source);
+	const host = hostFromUrl(source);
+	if (host) state.blockedHosts.delete(host);
+}
+
+/**
+ * Records the real Stage-3 producer outcome. A blocked/absent outcome can never
+ * enter the byte-grounding corpus; only an ok page becomes a read source.
+ */
+export function recordContactPageOutcome(
+	requestedUrl: string,
+	outcome: PageRetrievalOutcome<ExaPageContent>,
+	state: PageObservationState
+): ExaPageContent | null {
+	if (outcome.outcome === 'blocked') {
+		rememberBlockedHost(state, requestedUrl);
+		return null;
+	}
+	if (outcome.outcome === 'absent') return null;
+
+	rememberReadSource(state, requestedUrl);
+	rememberReadSource(state, outcome.page.url);
+	state.fetchedPages.set(requestedUrl, outcome.page);
+	return outcome.page;
+}
+
+function boundedSynthesisRecordBlocks(
+	fact: ExaPageContent['recordBlocks']
+): SynthesisRecordBlockFact {
+	if (fact.state !== 'present') return fact;
+
+	const records = [
+		...fact.value.blocks.map(
+			(block) =>
+				`${block.address} | ${block.bindingScope} | ${block.names.join(', ') || '(office)'} | ${block.titleLine ?? ''}`
+		),
+		...fact.value.institutionBoundAddresses.map(
+			(address) => `${address} | institution | (office) |`
+		)
+	];
+	const retained = records
+		.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxRecordBlocksPerPage)
+		.map((record) => truncateUtf8(record, DECISION_MAKER_PROVIDER_LIMITS.maxRecordBlockBytes));
+
+	return {
+		state: 'present',
+		value: {
+			records: retained,
+			truncated:
+				fact.value.truncated ||
+				records.length > DECISION_MAKER_PROVIDER_LIMITS.maxRecordBlocksPerPage
+		}
+	};
+}
+
+// The production reader always exposes the Fact-backed outcome API. The legacy
+// fallback keeps provider adapters that only implement readPage conservative:
+// a null page is BLOCKED, never manufactured into an ABSENT observation.
+const readPageOutcome: ReadPageOutcome = Reflect.has(exaSearchModule, 'readPageOutcome')
+	? (Reflect.get(exaSearchModule, 'readPageOutcome') as ReadPageOutcome)
+	: async (url, options) => {
+			const page = await readPage(url, options);
+			return page
+				? pageRetrievalOk(page)
+				: pageRetrievalBlocked(url, 'transport', 'legacy_reader_returned_null');
+		};
 
 // ============================================================================
 // Internal Types
@@ -84,6 +207,10 @@ interface Candidate {
 	recency_check: string;
 	/** Alternative contact info when no email found */
 	contact_notes?: string;
+	/** Model-declared class of destination reached by the published address */
+	reaches?: string;
+	/** Verbatim office/function label supplied for a seat claim */
+	reaches_label?: string;
 	/** true if discovered from page content, not from the input identity list */
 	discovered?: boolean;
 	/** true if served from ResolvedContact cache — email already verified in prior run */
@@ -130,6 +257,8 @@ const CandidateSchema = z.object({
 	source_url: z.string().optional(),
 	recency_check: z.string(),
 	contact_notes: z.string().optional(),
+	reaches: z.string().optional(),
+	reaches_label: z.string().max(160).optional(),
 	discovered: z.boolean().optional()
 });
 
@@ -139,21 +268,74 @@ const PersonLookupResponseSchema = z.object({
 });
 
 const PageSelectionResponseSchema = z.object({
-	page_selections: z.array(
-		z.object({
-			identity_index: z.number(),
-			person_name: z.string(),
-			organization: z.string(),
-			selected_pages: z.array(
-				z.object({
-					url: z.string(),
-					reason: z.string(),
-					url_hint: z.string()
-				})
-			)
-		})
-	)
+	page_selections: z
+		.array(
+			z.object({
+				identity_index: z
+					.number()
+					.int()
+					.min(0)
+					.max(MAX_DECISION_MAKER_FANOUT - 1),
+				person_name: z.string().max(160),
+				organization: z.string().max(200),
+				selected_pages: z
+					.array(
+						z.object({
+							url: z.string().max(512),
+							reason: z.string().max(256),
+							url_hint: z.string().max(64)
+						})
+					)
+					.max(2)
+			})
+		)
+		.max(MAX_DECISION_MAKER_FANOUT)
 });
+
+/**
+ * A page-selection model may rank search hits, but it may not mint new paid
+ * destinations. Accept at most two exact, normalized Exa URLs per identity and
+ * cap the global unique-URL fanout before any Firecrawl call.
+ */
+export function allowlistedPageSelections(
+	pageSelections: PageSelectionResponse['page_selections'],
+	identitySearchResults: Array<{ hits: Array<{ url: string }> }>,
+	maxPages: number
+): Map<string, Set<number>> {
+	const selected = new Map<string, Set<number>>();
+	if (!Number.isSafeInteger(maxPages) || maxPages <= 0) return selected;
+
+	const allowedByIdentity = identitySearchResults.map(
+		(result) => new Set(result.hits.slice(0, 10).map((hit) => hit.url))
+	);
+	const acceptedByIdentity = new Map<number, number>();
+
+	for (const selection of pageSelections.slice(0, identitySearchResults.length)) {
+		const identityIndex = selection.identity_index;
+		if (
+			!Number.isSafeInteger(identityIndex) ||
+			identityIndex < 0 ||
+			identityIndex >= allowedByIdentity.length
+		) {
+			continue;
+		}
+		const allowed = allowedByIdentity[identityIndex];
+		for (const page of selection.selected_pages.slice(0, 2)) {
+			if ((acceptedByIdentity.get(identityIndex) ?? 0) >= 2) break;
+			if (!allowed.has(page.url)) continue;
+			if (!selected.has(page.url)) {
+				if (selected.size >= maxPages) continue;
+				selected.set(page.url, new Set());
+			}
+			const identities = selected.get(page.url)!;
+			if (identities.has(identityIndex)) continue;
+			identities.add(identityIndex);
+			acceptedByIdentity.set(identityIndex, (acceptedByIdentity.get(identityIndex) ?? 0) + 1);
+		}
+	}
+
+	return selected;
+}
 
 /**
  * Gemini-native responseSchema for Stage 4 synthesis.
@@ -176,6 +358,8 @@ const PERSON_LOOKUP_RESPONSE_SCHEMA = {
 					source_url: { type: 'string' as const },
 					recency_check: { type: 'string' as const },
 					contact_notes: { type: 'string' as const },
+					reaches: { type: 'string' as const },
+					reaches_label: { type: 'string' as const },
 					discovered: { type: 'boolean' as const }
 				},
 				required: ['name', 'title', 'organization', 'reasoning', 'email', 'recency_check']
@@ -249,8 +433,8 @@ async function resolveIdentitiesFromSearch(
 	});
 
 	// 1. Generate search queries — use Phase 1's search_query, fallback to position+org+year
-	const queries = roles.map(
-		(r) => r.search_query || `${r.position} ${r.organization} ${currentYear}`
+	const queries = roles.map((r) =>
+		(r.search_query || `${r.position} ${r.organization} ${currentYear}`).slice(0, 240)
 	);
 
 	console.debug(`[gemini-provider] Phase 2a: ${queries.length} parallel identity searches`);
@@ -258,7 +442,7 @@ async function resolveIdentitiesFromSearch(
 	// 2. Parallel Exa searches — rate limiter handles throttling
 	const searchResults = await Promise.allSettled(
 		queries.map((q, i) =>
-			searchWeb(q, { maxResults: 20 }).then((hits) => ({
+			searchWeb(q, { maxResults: 10, signal }).then((hits) => ({
 				role: roles[i],
 				hits
 			}))
@@ -268,11 +452,18 @@ async function resolveIdentitiesFromSearch(
 	// Pair each role with its results (empty array on failure)
 	const roleResults = searchResults.map((result, i) => {
 		if (result.status === 'fulfilled') {
-			return result.value;
+			return {
+				role: result.value.role,
+				hits: result.value.hits.slice(0, 10).map((hit) => ({
+					...hit,
+					title: hit.title.slice(0, 240),
+					url: hit.url.slice(0, 512)
+				}))
+			};
 		}
 		console.warn(
-			`[gemini-provider] Phase 2a search failed for "${roles[i].position}":`,
-			result.reason
+			`[gemini-provider] Phase 2a search failed for roleIndex=${i}:`,
+			sanitizeProviderErrorMessage(result.reason)
 		);
 		return {
 			role: roles[i],
@@ -308,10 +499,11 @@ async function resolveIdentitiesFromSearch(
 	const extractionResult = await generateWithThoughts<IdentityResolutionResponse>(
 		extractionPrompt,
 		{
+			stage: 'decision-identity-extraction',
 			systemInstruction: systemPrompt,
 			temperature: 0.1,
 			thinkingLevel: 'low',
-			maxOutputTokens: 16384
+			signal
 		},
 		streaming?.onThought ? (thought) => streaming.onThought!(thought, 'identity') : undefined
 	);
@@ -322,11 +514,14 @@ async function resolveIdentitiesFromSearch(
 	);
 
 	if (isSuccessfulExtraction(extraction) && extraction.data?.identities?.length > 0) {
-		const identities = normalizeIdentityNames(extraction.data.identities);
-		console.debug(
-			`[gemini-provider] Phase 2a extracted ${identities.length} identities:`,
-			identities.map((id) => `${id.name} (${id.title} at ${id.organization})`)
-		);
+		const extractedIdentities = extraction.data.identities;
+		const identities = normalizeAndCapIdentityFanout(extractedIdentities, roles.length);
+		if (identities.length < extractedIdentities.length) {
+			console.warn(
+				`[gemini-provider] COGS-fanout guard: capped ${extractedIdentities.length} extracted identities → ${identities.length} (max ${Math.min(roles.length, MAX_DECISION_MAKER_FANOUT)})`
+			);
+		}
+		console.debug(`[gemini-provider] Phase 2a extracted ${identities.length} identities`);
 		return { identities, tokenUsage: extractionResult.tokenUsage, exaSearchCount: queries.length };
 	}
 
@@ -371,14 +566,24 @@ export function isSentinelName(name: string): boolean {
 	return !normalized || normalized === 'unknown' || SENTINEL_NAMES.has(normalized);
 }
 
-/** Normalize extracted identities: coerce sentinel names to "UNKNOWN". */
-function normalizeIdentityNames(identities: ResolvedIdentity[]): ResolvedIdentity[] {
-	return identities.map((id) => {
+/**
+ * Normalize model-extracted identities and enforce the reviewed downstream
+ * fanout at the untrusted model-output boundary. Phase 1 roles are capped too,
+ * but the extraction model can return more rows than it received; allowing
+ * those rows through would escape the exact provider-call reservation.
+ */
+export function normalizeAndCapIdentityFanout(
+	identities: ResolvedIdentity[],
+	roleCount: number
+): ResolvedIdentity[] {
+	if (!Number.isSafeInteger(roleCount) || roleCount < 0) {
+		throw new RangeError('role count is outside the reviewed identity fanout');
+	}
+	const maxIdentities = Math.min(roleCount, MAX_DECISION_MAKER_FANOUT);
+	return identities.slice(0, maxIdentities).map((id) => {
 		if (isSentinelName(id.name)) {
 			if (id.name !== 'UNKNOWN') {
-				console.debug(
-					`[gemini-provider] Normalizing sentinel name "${id.name}" → "UNKNOWN" for ${id.title}`
-				);
+				console.debug('[gemini-provider] Normalizing model-provided sentinel identity to UNKNOWN');
 			}
 			return { ...id, name: 'UNKNOWN' };
 		}
@@ -499,6 +704,8 @@ async function huntContactsFanOutSynthesize(
 ): Promise<{
 	candidates: Candidate[];
 	fetchedPages: Map<string, ExaPageContent>;
+	blockedHosts: Set<string>;
+	readSources: Set<string>;
 	tokenUsage?: TokenUsage;
 	externalCounts: ExternalApiCounts;
 }> {
@@ -511,6 +718,9 @@ async function huntContactsFanOutSynthesize(
 	const tokenUsages: (TokenUsage | undefined)[] = [];
 	const extCounts = emptyExternalCounts();
 	const fetchedPages = new Map<string, ExaPageContent>();
+	const blockedHosts = new Set<string>();
+	const readSources = new Set<string>();
+	const pageObservationState = { fetchedPages, blockedHosts, readSources };
 
 	// Streaming thought helper
 	const onThought = streaming?.onThought
@@ -571,6 +781,8 @@ async function huntContactsFanOutSynthesize(
 		return {
 			candidates: cachedCandidates,
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: undefined,
 			externalCounts: extCounts
 		};
@@ -584,6 +796,8 @@ async function huntContactsFanOutSynthesize(
 		return {
 			candidates: cachedCandidates,
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: sumTokenUsage(...tokenUsages),
 			externalCounts: extCounts
 		};
@@ -646,10 +860,12 @@ Rules:
 	const planByIndex = new Map<number, QueryPlan>();
 	try {
 		const planResponse = await generate(planningUser, {
+			stage: 'decision-query-planning',
 			systemInstruction: planningSystem,
 			temperature: 0.3,
-			maxOutputTokens: 4096,
-			responseSchema: QUERY_PLAN_SCHEMA
+			thinkingLevel: 'low',
+			responseSchema: QUERY_PLAN_SCHEMA,
+			signal
 		});
 		tokenUsages.push(extractTokenUsage(planResponse));
 
@@ -674,19 +890,12 @@ Rules:
 		}
 
 		console.debug(
-			`[gemini-provider] Phase 2b: planned ${planByIndex.size}/${uncached.length} queries`,
-			Array.from(planByIndex.entries()).map(([idx, p]) => ({
-				idx,
-				identity: `${uncached[idx].identity.name} @ ${uncached[idx].identity.organization}`,
-				query: p.search_query,
-				domains: p.include_domains,
-				reasoning: p.reasoning
-			}))
+			`[gemini-provider] Phase 2b: planned ${planByIndex.size}/${uncached.length} queries`
 		);
 	} catch (err) {
 		console.warn(
-			'[gemini-provider] Phase 2b query planning failed, falling back to template queries',
-			err
+			'[gemini-provider] Phase 2b query planning failed, falling back to template queries:',
+			sanitizeProviderErrorMessage(err)
 		);
 	}
 
@@ -694,11 +903,12 @@ Rules:
 	const searchPlans = uncached.map((entry, i) => {
 		const plan = planByIndex.get(i);
 		if (plan) {
-			const includeDomains = plan.include_domains.filter(
-				(d) => typeof d === 'string' && d.trim().length > 0
-			);
+			const includeDomains = plan.include_domains
+				.filter((d) => typeof d === 'string' && d.trim().length > 0)
+				.slice(0, 5)
+				.map((domain) => domain.slice(0, 253));
 			return {
-				query: plan.search_query,
+				query: plan.search_query.slice(0, 120),
 				includeDomains: includeDomains.length > 0 ? includeDomains : undefined
 			};
 		}
@@ -713,7 +923,9 @@ Rules:
 		searchPlans.map((p) =>
 			searchWeb(
 				p.query,
-				p.includeDomains ? { maxResults: 25, includeDomains: p.includeDomains } : { maxResults: 25 }
+				p.includeDomains
+					? { maxResults: 10, includeDomains: p.includeDomains, signal }
+					: { maxResults: 10, signal }
 			)
 		)
 	);
@@ -734,13 +946,13 @@ Rules:
 		const rawHits = result.status === 'fulfilled' ? result.value : [];
 		if (result.status === 'rejected') {
 			console.warn(
-				`[gemini-provider] Stage 1 search failed for "${entry.identity.name}":`,
-				result.reason
+				`[gemini-provider] Stage 1 search failed for identityIndex=${i}:`,
+				sanitizeProviderErrorMessage(result.reason)
 			);
 		}
-		const hits = rawHits.map((h) => ({
-			url: h.url,
-			title: h.title,
+		const hits = rawHits.slice(0, 10).map((h) => ({
+			url: h.url.slice(0, 512),
+			title: h.title.slice(0, 240),
 			publishedDate: h.publishedDate,
 			score: h.score,
 			url_hint: classifyUrl(h.url)
@@ -769,12 +981,17 @@ Rules:
 		return {
 			candidates: cachedCandidates,
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: sumTokenUsage(...tokenUsages),
 			externalCounts: extCounts
 		};
 	}
 
-	const MAX_PAGES_TOTAL = Math.min(uncached.length * 3, 20);
+	const MAX_PAGES_TOTAL = Math.min(
+		uncached.length * 2,
+		DECISION_MAKER_PROVIDER_LIMITS.maxPagesTotal
+	);
 
 	const pageSelectionSystem = PAGE_SELECTION_PROMPT.replace(/{CURRENT_DATE}/g, currentDate).replace(
 		/{MAX_PAGES_TOTAL}/g,
@@ -789,10 +1006,11 @@ Rules:
 	const selectionResult = await generateWithThoughts<PageSelectionResponse>(
 		pageSelectionUser,
 		{
+			stage: 'decision-page-selection',
 			systemInstruction: pageSelectionSystem,
 			temperature: 0.1,
 			thinkingLevel: 'low',
-			maxOutputTokens: 8192
+			signal
 		},
 		onThought
 	);
@@ -810,14 +1028,15 @@ Rules:
 		isSuccessfulExtraction(selectionExtraction) &&
 		selectionExtraction.data?.page_selections?.length > 0
 	) {
-		// Parse successful — use Gemini's selections
-		for (const sel of selectionExtraction.data.page_selections) {
-			for (const page of sel.selected_pages) {
-				if (!urlToIdentities.has(page.url)) {
-					urlToIdentities.set(page.url, new Set());
-				}
-				urlToIdentities.get(page.url)!.add(sel.identity_index);
-			}
+		// Parse successful — Gemini may rank exact Exa hits but cannot mint a new
+		// destination or expand the reviewed per-identity/global fetch envelope.
+		const allowlisted = allowlistedPageSelections(
+			selectionExtraction.data.page_selections,
+			identitySearchResults,
+			MAX_PAGES_TOTAL
+		);
+		for (const [url, identityIndexes] of allowlisted) {
+			urlToIdentities.set(url, identityIndexes);
 		}
 		console.debug(`[gemini-provider] Stage 2: Gemini selected ${urlToIdentities.size} unique URLs`);
 	} else {
@@ -866,6 +1085,8 @@ Rules:
 		return {
 			candidates: cachedCandidates,
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: sumTokenUsage(...tokenUsages),
 			externalCounts: extCounts
 		};
@@ -876,7 +1097,9 @@ Rules:
 
 	// Full page content for grounding; prunePageContent() trims for Gemini.
 	extCounts.firecrawlReads += selectedUrls.length;
-	const pageReadResults = await Promise.allSettled(selectedUrls.map((url) => readPage(url)));
+	const pageReadResults = await Promise.allSettled(
+		selectedUrls.map((url) => readPageOutcome(url, { signal }))
+	);
 
 	// Build identity name list for contact-priority pruning
 	const identityNamesForPruning = uncached
@@ -887,6 +1110,7 @@ Rules:
 		url: string;
 		title: string;
 		text: string;
+		recordBlocks: ExaPageContent['recordBlocks'];
 		contactHints: { emails: string[]; phones: string[]; socialUrls: string[] };
 		attributedTo: number[];
 	}> = [];
@@ -896,18 +1120,28 @@ Rules:
 		const result = pageReadResults[i];
 
 		if (result.status === 'rejected') {
-			console.warn(`[gemini-provider] Stage 3: Page read failed for ${url}:`, result.reason);
+			recordContactPageOutcome(
+				url,
+				pageRetrievalBlocked(url, 'transport', 'page_read_rejected'),
+				pageObservationState
+			);
+			console.warn(`[gemini-provider] Stage 3: Page read failed for ${providerUrlLogLabel(url)}`);
 			continue;
 		}
 
-		const page = result.value;
-		if (!page || !page.text) {
-			console.debug(`[gemini-provider] Stage 3: No content for ${url}`);
+		const outcome = result.value;
+		const page = recordContactPageOutcome(url, outcome, pageObservationState);
+		if (outcome.outcome === 'blocked') {
+			console.debug(
+				`[gemini-provider] Stage 3: Retrieval blocked for ${providerUrlLogLabel(url)}${'signal' in outcome ? ` (vendor=${outcome.signal.vendor})` : ''}`
+			);
 			continue;
 		}
-
-		// Store FULL text in fetchedPages — grounding verifier checks against this
-		fetchedPages.set(url, page);
+		if (outcome.outcome === 'absent') {
+			console.debug(`[gemini-provider] Stage 3: No content for ${providerUrlLogLabel(url)}`);
+			continue;
+		}
+		if (!page) continue;
 
 		// Extract contact hints from full text (before pruning)
 		const contactHints = extractContactHints(page.text);
@@ -922,6 +1156,7 @@ Rules:
 			url: page.url,
 			title: page.title,
 			text: prunedText,
+			recordBlocks: page.recordBlocks,
 			contactHints,
 			attributedTo
 		});
@@ -932,18 +1167,88 @@ Rules:
 	);
 	onThought?.(`Retrieved ${pagesForSynthesis.length} pages. Analyzing contacts...`);
 
+	// Stage 3b: for identities still missing a usable email, follow at most one
+	// same-host link that was present in this run's retrieved link graph.
+	if (!signal?.aborted && pagesForSynthesis.length > 0) {
+		const linksByUrl = new Map<string, readonly string[]>();
+		for (const page of fetchedPages.values()) {
+			// Preserve R1's three link-graph facts: an absent field means no graph was
+			// produced, while a present empty array means it was produced with no links.
+			if (page.links !== undefined) linksByUrl.set(page.url, page.links);
+		}
+
+		const seatHopTargets = selectSeatHopTargets({
+			pages: pagesForSynthesis,
+			linksByUrl,
+			alreadyFetchedUrls: new Set(fetchedPages.keys()),
+			identityCount: uncached.length,
+			maxTargets: DECISION_MAKER_PROVIDER_LIMITS.maxSeatHopPages
+		});
+
+		if (seatHopTargets.length > 0) {
+			extCounts.firecrawlReads += seatHopTargets.length;
+			const seatHopReadResults = await Promise.allSettled(
+				seatHopTargets.map((target) => readPageOutcome(target.url, { signal }))
+			);
+
+			for (let i = 0; i < seatHopTargets.length; i++) {
+				const target = seatHopTargets[i];
+				const result = seatHopReadResults[i];
+				if (result.status === 'rejected') {
+					recordContactPageOutcome(
+						target.url,
+						pageRetrievalBlocked(target.url, 'transport', 'page_read_rejected'),
+						pageObservationState
+					);
+					console.warn(
+						`[gemini-provider] Stage 3b: Page read failed for ${providerUrlLogLabel(target.url)}`
+					);
+					continue;
+				}
+
+				const outcome = result.value;
+				const page = recordContactPageOutcome(target.url, outcome, pageObservationState);
+				if (outcome.outcome === 'blocked') {
+					console.debug(
+						`[gemini-provider] Stage 3b: Retrieval blocked for ${providerUrlLogLabel(target.url)}${'signal' in outcome ? ` (vendor=${outcome.signal.vendor})` : ''}`
+					);
+					continue;
+				}
+				if (outcome.outcome === 'absent') {
+					console.debug(
+						`[gemini-provider] Stage 3b: No content for ${providerUrlLogLabel(target.url)}`
+					);
+					continue;
+				}
+				if (!page) continue;
+				pagesForSynthesis.push({
+					url: page.url,
+					title: page.title,
+					text: prunePageContent(page.text, identityNamesForPruning),
+					recordBlocks: page.recordBlocks,
+					contactHints: extractContactHints(page.text),
+					attributedTo: target.identityIndexes
+				});
+			}
+		}
+	}
+
 	// If zero pages readable: return all uncached identities as no-email candidates
 	if (pagesForSynthesis.length === 0) {
 		console.warn('[gemini-provider] Stage 3: Zero pages readable — returning no-email candidates');
-		const noEmailCandidates: Candidate[] = uncached.map(({ identity, reasoning }) => ({
-			name: identity.name,
-			title: identity.title,
-			organization: identity.organization,
-			reasoning,
-			email: '',
-			recency_check: '',
-			contact_notes: 'No pages could be read — try again later.'
-		}));
+		const noEmailCandidates: Candidate[] = uncached.map(({ identity, reasoning }, index) => {
+			const sourceUrl = selectedUrls.find((url) => selectedUrlToIdentities.get(url)?.has(index));
+			return {
+				name: identity.name,
+				title: identity.title,
+				organization: identity.organization,
+				reasoning,
+				email: '',
+				...(sourceUrl ? { source_url: sourceUrl } : {}),
+				recency_check: '',
+				contact_notes: 'No pages could be read — try again later.'
+			};
+		});
 
 		if (onCandidateProcessed) {
 			for (const candidate of noEmailCandidates) {
@@ -954,6 +1259,8 @@ Rules:
 		return {
 			candidates: [...cachedCandidates, ...noEmailCandidates],
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: sumTokenUsage(...tokenUsages),
 			externalCounts: extCounts
 		};
@@ -967,12 +1274,14 @@ Rules:
 		return {
 			candidates: cachedCandidates,
 			fetchedPages,
+			blockedHosts,
+			readSources,
 			tokenUsage: sumTokenUsage(...tokenUsages),
 			externalCounts: extCounts
 		};
 	}
 
-	const SYNTHESIS_CHUNK_SIZE = 3;
+	const SYNTHESIS_CHUNK_SIZE = DECISION_MAKER_PROVIDER_LIMITS.synthesisChunkSize;
 	const domainContext = generateDomainContext(
 		detectOrgTypes(uncached.map((u) => u.identity.organization))
 	);
@@ -998,23 +1307,71 @@ Rules:
 		const globalStartIdx = chunkIdx * SYNTHESIS_CHUNK_SIZE;
 		const chunkGlobalIndices = chunk.map((_, i) => globalStartIdx + i);
 
-		const chunkPages = pagesForSynthesis
-			.filter(
-				(p) =>
-					p.attributedTo.length === 0 ||
-					p.attributedTo.some((idx) => chunkGlobalIndices.includes(idx))
-			)
-			.map((p) => ({
-				...p,
-				attributedTo: p.attributedTo
-					.filter((idx) => chunkGlobalIndices.includes(idx))
-					.map((idx) => idx - globalStartIdx)
-			}));
+		const attributedPages = pagesForSynthesis.filter(
+			(p) =>
+				p.attributedTo.length === 0 ||
+				p.attributedTo.some((idx) => chunkGlobalIndices.includes(idx))
+		);
+		const chunkPages = [
+			...attributedPages.filter((p) => p.contactHints.emails.some(isUsableContactEmail)),
+			...attributedPages.filter((p) => !p.contactHints.emails.some(isUsableContactEmail))
+		]
+			.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxPagesPerSynthesisChunk)
+			.map((p) => {
+				const recordBlocks = boundedSynthesisRecordBlocks(p.recordBlocks);
+				const recordSectionBytes = Math.min(
+					DECISION_MAKER_PROVIDER_LIMITS.maxPageBytesPerSynthesisChunk,
+					new TextEncoder().encode(renderRecordBlockSection(recordBlocks)).byteLength
+				);
+				return {
+					...p,
+					url: truncateUtf8(p.url, 512),
+					title: truncateUtf8(p.title, 240),
+					text: truncateUtf8(
+						p.text,
+						DECISION_MAKER_PROVIDER_LIMITS.maxPageBytesPerSynthesisChunk - recordSectionBytes
+					),
+					recordBlocks,
+					contactHints: {
+						emails: boundContactHintEmails(p.contactHints.emails),
+						phones: p.contactHints.phones
+							.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxContactHintPhonesPerPage)
+							.map((value) => truncateUtf8(value, DECISION_MAKER_PROVIDER_LIMITS.maxPhoneBytes)),
+						socialUrls: p.contactHints.socialUrls
+							.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxContactHintSocialUrlsPerPage)
+							.map((value) => truncateUtf8(value, DECISION_MAKER_PROVIDER_LIMITS.maxSocialUrlBytes))
+					},
+					attributedTo: p.attributedTo
+						.filter((idx) => chunkGlobalIndices.includes(idx))
+						.map((idx) => idx - globalStartIdx)
+				};
+			});
 
 		const synthesisUser = buildContactSynthesisPrompt(
-			chunk.map((u) => ({ identity: u.identity, reasoning: u.reasoning })),
+			chunk.map((u) => ({
+				identity: {
+					...u.identity,
+					name: truncateUtf8(u.identity.name, 256),
+					title: truncateUtf8(u.identity.title, 512),
+					organization: truncateUtf8(u.identity.organization, 512),
+					search_evidence: truncateUtf8(u.identity.search_evidence, 1_024)
+				},
+				reasoning: truncateUtf8(u.reasoning, 1_024)
+			})),
 			chunkPages,
 			issueContext
+				? {
+						...issueContext,
+						subjectLine: truncateUtf8(issueContext.subjectLine, 800),
+						coreMessage: truncateUtf8(
+							issueContext.coreMessage,
+							DECISION_MAKER_PROVIDER_LIMITS.maxIssueCoreMessageBytes
+						),
+						topics: issueContext.topics
+							.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxIssueTopics)
+							.map((topic) => truncateUtf8(topic, 256))
+					}
+				: undefined
 		);
 
 		return { chunk, chunkIdx, globalStartIdx, chunkPages, synthesisUser };
@@ -1038,11 +1395,12 @@ Rules:
 
 			try {
 				const response = await generate(synthesisUser, {
+					stage: 'decision-contact-synthesis',
 					systemInstruction: synthesisSystem,
 					temperature: 0.2,
-					maxOutputTokens: 32768,
 					thinkingLevel: 'low',
-					responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA
+					responseSchema: PERSON_LOOKUP_RESPONSE_SCHEMA,
+					signal
 				});
 				tokenUsages.push(extractTokenUsage(response));
 
@@ -1053,7 +1411,12 @@ Rules:
 					console.debug(
 						`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: synthesized ${parsed.decision_makers.length} candidates`
 					);
-					candidates = parsed.decision_makers;
+					candidates = parsed.decision_makers
+						.slice(0, DECISION_MAKER_PROVIDER_LIMITS.maxCandidatesPerSynthesisChunk)
+						.flatMap((candidate) => {
+							const validated = CandidateSchema.safeParse(candidate);
+							return validated.success ? [validated.data] : [];
+						});
 				} else {
 					console.debug(
 						`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: model returned 0 candidates`
@@ -1061,7 +1424,10 @@ Rules:
 					candidates = [];
 				}
 			} catch (err) {
-				console.warn(`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: generate() failed`, err);
+				console.warn(
+					`[gemini-provider] Stage 4 chunk ${chunkIdx + 1}: generate() failed:`,
+					sanitizeProviderErrorMessage(err)
+				);
 				candidates = chunk.map(({ identity, reasoning }, localIdx) => {
 					const globalIdx = globalStartIdx + localIdx;
 					return fallbackFromPageHints(identity, globalIdx, reasoning, pagesForSynthesis);
@@ -1081,9 +1447,7 @@ Rules:
 							u.identity.organization.toLowerCase() === candidate.organization.toLowerCase()
 					);
 					if (matchingInput && !isSentinelName(matchingInput.identity.name)) {
-						console.debug(
-							`[gemini-provider] Name backfill: "${candidate.name}" → "${matchingInput.identity.name}" for ${candidate.title}`
-						);
+						console.debug('[gemini-provider] Applied one candidate identity-name backfill');
 						candidate.name = matchingInput.identity.name;
 					}
 				}
@@ -1127,6 +1491,8 @@ Rules:
 	return {
 		candidates: allCandidates,
 		fetchedPages,
+		blockedHosts,
+		readSources,
 		tokenUsage: sumTokenUsage(...tokenUsages),
 		externalCounts: extCounts
 	};
@@ -1182,13 +1548,14 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			const roleResult = await generateWithThoughts<RoleDiscoveryResponse>(
 				rolePrompt,
 				{
+					stage: 'decision-role-discovery',
 					systemInstruction: ROLE_DISCOVERY_PROMPT,
 					// 0.7: Role discovery is creative-analytical — finding non-obvious power brokers
 					// requires exploring the model's full understanding of institutional structure.
 					// Factual grounding comes from Phase 2 search, not token suppression here.
 					temperature: 0.7,
 					thinkingLevel: 'medium',
-					maxOutputTokens: 65536
+					signal: context.signal
 				},
 				streaming?.onThought ? (thought) => streaming.onThought!(thought, 'discover') : undefined
 			);
@@ -1200,10 +1567,8 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			if (!isSuccessfulExtraction(extraction)) {
 				console.error('[gemini-provider] Phase 1 JSON extraction failed:', {
-					error: extraction.error,
-					rawTextLength: roleResult.rawText?.length,
-					rawTextHead: roleResult.rawText?.slice(0, 200),
-					rawTextTail: roleResult.rawText?.slice(-200)
+					error: sanitizeProviderErrorMessage(extraction.error),
+					rawTextLength: roleResult.rawText?.length ?? 0
 				});
 				throw new Error('Finding decision-makers hit a snag. Please try again.');
 			}
@@ -1223,8 +1588,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			console.debug('[gemini-provider] Phase 1 complete:', {
 				rolesFound: roles.length,
-				rolesDiscovered: discoveredRoles.length,
-				positions: roles.map((r) => `${r.position} at ${r.organization}`)
+				rolesDiscovered: discoveredRoles.length
 			});
 
 			if (roles.length === 0) {
@@ -1350,20 +1714,14 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					const processed = this.processOneCandidate(candidate, pages);
 					if (!processed) return;
 
-					// Strip ungrounded email for the streaming preview
-					const final =
-						processed.email && processed.emailGrounded !== true
-							? { ...processed, email: undefined, emailGrounded: undefined }
-							: processed;
-
 					streaming?.onCandidateResolved?.({
-						name: final.name,
-						title: final.title,
-						organization: final.organization,
-						email: final.email,
-						emailSource: final.emailSource,
-						reasoning: final.reasoning,
-						status: final.email ? 'resolved' : 'no-email',
+						name: processed.name,
+						title: processed.title,
+						organization: processed.organization,
+						email: processed.email,
+						emailSource: processed.emailSource,
+						reasoning: processed.reasoning,
+						status: processed.email ? 'resolved' : 'no-email',
 						discovered: candidate.discovered
 					});
 				}
@@ -1398,6 +1756,11 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					researchSummary:
 						data.research_summary ||
 						'No verifiable decision-makers found. The positions were identified but current holders could not be verified with recent sources.',
+					metadata: {
+						blockedHosts: [...contactResult.blockedHosts],
+						readSources: [...contactResult.readSources],
+						externalCounts: pipelineExtCounts
+					},
 					tokenUsage: sumTokenUsage(...tokenUsages)
 				};
 			}
@@ -1408,8 +1771,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				cacheHits: cachedContacts.filter((c) => c.email).length,
 				candidatesFound: data.decision_makers?.length || 0,
 				verified: processed.length,
-				withEmail: processed.filter((dm) => dm.email).length,
-				names: processed.map((dm) => dm.name)
+				withEmail: processed.filter((dm) => dm.email).length
 			});
 
 			// Email verification: check if email appears in page content (text + highlights).
@@ -1417,7 +1779,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			// plain text extraction misses. Unverified emails are stripped.
 			const withEmail = processed.filter((dm) => dm.email);
 			const withGroundedEmail = processed.filter((dm) => dm.emailGrounded === true);
-			const withUngroundedEmail = withEmail.filter((dm) => dm.emailGrounded === false);
+			const withUngroundedEmail = processed.filter((dm) => dm.emailClaimStripped === true);
 
 			console.debug(`[gemini-provider] Email grounding summary:`, {
 				total: processed.length,
@@ -1426,40 +1788,31 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				ungroundedEmails: withUngroundedEmail.length
 			});
 
-			// Strip emails not found in page content (text + highlights).
-			// Keep the candidate, just remove the unverified email.
-			const filtered = processed.map((dm) => {
-				if (dm.email && dm.emailGrounded !== true) {
-					console.debug(`[gemini-provider] Stripping ungrounded email for ${dm.name}: ${dm.email}`);
-					return { ...dm, email: undefined, emailGrounded: undefined };
-				}
-				return dm;
-			});
-
 			// Log shared emails for visibility but DO NOT strip them.
 			// Org-level emails (planning@, press@, info@) are often the ONLY contact
 			// path for board/committee members. Stripping them loses the contact entirely.
 			const emailCounts = new Map<string, number>();
-			for (const dm of filtered) {
+			for (const dm of processed) {
 				if (!dm.email) continue;
 				const lower = dm.email.toLowerCase();
 				emailCounts.set(lower, (emailCounts.get(lower) || 0) + 1);
 			}
-			for (const [email, count] of emailCounts) {
-				if (count > 1) {
-					console.debug(
-						`[gemini-provider] Shared email ${email} assigned to ${count} candidates (org-level contact path)`
-					);
-				}
+			const sharedEmailCounts = Array.from(emailCounts.values()).filter((count) => count > 1);
+			if (sharedEmailCounts.length > 0) {
+				console.debug('[gemini-provider] Shared org-level contact paths retained:', {
+					sharedEmailGroups: sharedEmailCounts.length,
+					candidateAssignments: sharedEmailCounts.reduce((sum, count) => sum + count, 0)
+				});
 			}
 
 			// Deduplicate candidates by name: when the same person appears for
 			// multiple positions (e.g., "President" and "Chair"), keep the entry
 			// with the best email coverage.
 			const seenNames = new Map<string, number>();
-			const deduped: typeof filtered = [];
+			const deduped: typeof processed = [];
+			let duplicateMerges = 0;
 
-			for (const dm of filtered) {
+			for (const dm of processed) {
 				const normalized = dm.name.toLowerCase().replace(/\s+/g, ' ').trim();
 				const existingIdx = seenNames.get(normalized);
 
@@ -1470,13 +1823,14 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					} else if (existing.email && dm.email && dm.emailGrounded && !existing.emailGrounded) {
 						deduped[existingIdx] = dm;
 					}
-					console.debug(
-						`[gemini-provider] Dedup: merged duplicate "${dm.name}" (title: "${dm.title}") into existing (title: "${existing.title}")`
-					);
+					duplicateMerges++;
 				} else {
 					seenNames.set(normalized, deduped.length);
 					deduped.push(dm);
 				}
+			}
+			if (duplicateMerges > 0) {
+				console.debug(`[gemini-provider] Dedup: merged ${duplicateMerges} duplicate candidates`);
 			}
 
 			const withVerifiedEmail = deduped.filter((dm) => dm.email);
@@ -1501,7 +1855,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 
 			// Cache write — fire-and-forget, never blocks the response
 			upsertResolvedContacts(contactsToCache).catch((err) =>
-				console.warn('[gemini-provider] Cache write failed:', err)
+				console.warn('[gemini-provider] Cache write failed:', sanitizeProviderErrorMessage(err))
 			);
 
 			streaming?.onPhase?.(
@@ -1509,7 +1863,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				deduped.length > 0
 					? withVerifiedEmail.length > 0
 						? `Found ${deduped.length} decision-makers (${withVerifiedEmail.length} with verified email)`
-						: `Found ${deduped.length} decision-makers — email addresses not found in public sources`
+						: `Found ${deduped.length} decision-makers — no contactable public email route was confirmed`
 					: `No decision-makers found`
 			);
 
@@ -1527,13 +1881,15 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					verified: deduped.length,
 					withVerifiedEmail: withVerifiedEmail.length,
 					emailsFilteredOut: withUngroundedEmail.length,
+					blockedHosts: [...contactResult.blockedHosts],
+					readSources: [...contactResult.readSources],
 					externalCounts: pipelineExtCounts
 				},
 				tokenUsage: sumTokenUsage(...tokenUsages)
 			};
 		} catch (error) {
-			// Never propagate raw errors to the user. Log fully, return empty results.
-			console.error('[gemini-provider] Resolution error:', error);
+			// Never propagate raw provider errors to either the user or durable logs.
+			console.error('[gemini-provider] Resolution error:', sanitizeProviderErrorMessage(error));
 
 			const latencyMs = Date.now() - startTime;
 			streaming?.onPhase?.('complete', 'Research encountered an issue — returning partial results');
@@ -1565,9 +1921,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 		return candidates
 			.filter((c) => {
 				if (isSentinelName(c.name || '')) {
-					console.debug(
-						`[gemini-provider] Dropping unnamed candidate: ${c.title} at ${c.organization}`
-					);
+					console.debug('[gemini-provider] Dropping one unnamed candidate');
 					return false;
 				}
 				return true;
@@ -1594,6 +1948,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 		let emailGrounded = false;
 		let emailSource: string | undefined;
 		let emailSourceTitle: string | undefined;
+		let groundedPageText: string | undefined;
 		let publiclyAttestableEmailGrounding = false;
 
 		// Cache hits were verified in a prior run — trust the stored email
@@ -1613,6 +1968,7 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 					publiclyAttestableEmailGrounding = true;
 					emailSource = sourcePage.url;
 					emailSourceTitle = sourcePage.title;
+					groundedPageText = sourcePage.text;
 				}
 			}
 
@@ -1623,20 +1979,13 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 						publiclyAttestableEmailGrounding = true;
 						emailSource = page.url;
 						emailSourceTitle = page.title;
+						groundedPageText = page.text;
 						break;
 					}
 				}
 			}
 
-			if (emailGrounded) {
-				console.debug(
-					`[gemini-provider] Email VERIFIED for ${candidate.name}: ${candidate.email} from ${emailSource}`
-				);
-			} else {
-				console.debug(
-					`[gemini-provider] Email NOT verified for ${candidate.name}: ${candidate.email} (not found in page content)`
-				);
-			}
+			console.debug(`[gemini-provider] Candidate email grounding check: grounded=${emailGrounded}`);
 		}
 
 		let verifiedPersonSource = '';
@@ -1675,7 +2024,22 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				(verifiedPersonSource ? 0.05 : 0)
 		);
 
-		return {
+		const emailReaches = hasEmail
+			? resolveEmailReachesClaim({
+					raw: candidate.reaches,
+					rawLabel: candidate.reaches_label,
+					groundedPageText
+				})
+			: undefined;
+		const delivery = deriveDeliveryTier({
+			email: hasEmail ? candidate.email : undefined,
+			candidateName: candidate.name,
+			title: candidate.title,
+			groundedThisRun: publiclyAttestableEmailGrounding,
+			groundingSourceUrl: emailSource
+		});
+
+		const processed: ProcessedDecisionMaker = {
 			name: candidate.name,
 			title: candidate.title,
 			organization: candidate.organization,
@@ -1688,6 +2052,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			emailGrounded: hasEmail ? emailGrounded : undefined,
 			emailSource: emailGrounded ? emailSource : undefined,
 			emailSourceTitle: emailGrounded ? emailSourceTitle : undefined,
+			deliveryTier: delivery.deliveryTier,
+			...(delivery.seatRoute ? { seatRoute: delivery.seatRoute } : {}),
+			emailReachesClaim: hasEmail ? emailReaches?.claim : undefined,
+			...(emailReaches?.label ? { emailReachesLabel: emailReaches.label } : {}),
 			...(publiclyAttestableEmailGrounding && emailSource
 				? {
 						publicEmailGrounding: {
@@ -1701,5 +2069,17 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			discovered: candidate.discovered || false,
 			confidence
 		};
+
+		if (processed.email && processed.emailGrounded !== true) {
+			console.debug('[gemini-provider] Stripping one ungrounded candidate email');
+			return {
+				...processed,
+				email: undefined,
+				emailGrounded: false,
+				emailClaimStripped: true
+			};
+		}
+
+		return processed;
 	}
 }
