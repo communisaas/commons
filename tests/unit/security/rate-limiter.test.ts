@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 // ---------------------------------------------------------------------------
 // Mock $env/dynamic/private (required by rate-limiter.ts)
@@ -125,6 +126,21 @@ describe('SlidingWindowRateLimiter', () => {
 			expect(r1.remaining).toBe(4);
 			expect(r2.remaining).toBe(3);
 			expect(r3.remaining).toBe(2);
+		});
+
+		it('should atomically admit only the configured maximum under concurrency', async () => {
+			const results = await Promise.all(
+				Array.from({ length: 20 }, () =>
+					limiter.check('user:concurrent', { maxRequests: 2, windowMs: 60000 })
+				)
+			);
+
+			expect(results.filter((result) => result.allowed)).toHaveLength(2);
+			expect(results.filter((result) => !result.allowed)).toHaveLength(18);
+			expect(results.filter((result) => result.allowed).map((result) => result.remaining)).toEqual([
+				1,
+				0
+			]);
 		});
 
 		it('should include reset timestamp', async () => {
@@ -430,6 +446,32 @@ describe('SlidingWindowRateLimiter', () => {
 	});
 });
 
+describe('Redis rate-limit reservations', () => {
+	it('uses one Lua transaction for prune, count, conditional admission, and expiry', () => {
+		const source = readFileSync('src/lib/core/security/rate-limiter.ts', 'utf8');
+		const redisStore = source.slice(
+			source.indexOf('class RedisStore'),
+			source.indexOf('const REDIS_RESERVE_SCRIPT')
+		);
+		const luaScript = source.slice(
+			source.indexOf('const REDIS_RESERVE_SCRIPT'),
+			source.indexOf('// Minimal Redis client interface')
+		);
+
+		expect(redisStore.match(/client\.eval\(/g)).toHaveLength(1);
+		expect(redisStore).not.toContain('client.zRemRangeByScore');
+		expect(redisStore).not.toContain('client.zRange');
+		expect(redisStore).not.toContain('client.zAdd');
+		expect(redisStore).not.toContain('client.expire');
+		expect(luaScript).toContain("redis.call('ZREMRANGEBYSCORE'");
+		expect(luaScript).toContain("redis.call('ZCARD'");
+		expect(luaScript).toContain("redis.call('ZADD'");
+		expect(luaScript).toContain("redis.call('PEXPIRE'");
+		expect(luaScript).toContain('if count < max_requests then');
+		expect(luaScript).toContain('return { allowed, count, oldest_timestamp }');
+	});
+});
+
 // =============================================================================
 // findRateLimitConfig — route matching
 // =============================================================================
@@ -566,6 +608,46 @@ describe('findRateLimitConfig', () => {
 		expect(config!.pattern).toBe('/api/location/');
 	});
 
+	it('should durably key position batch registration admission by user', () => {
+		const config = findRateLimitConfig('/api/positions/batch-register');
+		expect(config).toMatchObject({
+			pattern: '/api/positions/batch-register',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should rate-limit position mailto confirmations by user', () => {
+		const config = findRateLimitConfig('/api/positions/confirm-send');
+		expect(config).toMatchObject({
+			pattern: '/api/positions/confirm-send',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should rate-limit direct delivery recording by authenticated user', () => {
+		const config = findRateLimitConfig('/api/deliveries/record');
+		expect(config).toMatchObject({
+			pattern: '/api/deliveries/record',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should bound authenticated Shadow Atlas engagement replays by user', () => {
+		const config = findRateLimitConfig('/api/shadow-atlas/engagement');
+		expect(config).toEqual({
+			pattern: '/api/shadow-atlas/engagement',
+			maxRequests: 10,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
 	it('should match /api/email/ pattern for /api/email/confirm sub-route (first match wins)', () => {
 		// The /api/email/ rule comes before /api/email/confirm/ in the config array,
 		// so findRateLimitConfig returns the first match (order matters for specificity)
@@ -700,6 +782,36 @@ describe('ROUTE_RATE_LIMITS', () => {
 		expect(rule).toBeDefined();
 		expect(rule!.maxRequests).toBe(3);
 		expect(rule!.windowMs).toBe(60 * 60 * 1000);
+	});
+
+	it('should include the position batch write rule with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/positions/batch-register');
+		expect(rule).toEqual({
+			pattern: '/api/positions/batch-register',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should include the position mailto confirmation rule with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/positions/confirm-send');
+		expect(rule).toEqual({
+			pattern: '/api/positions/confirm-send',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
+	});
+
+	it('should include direct delivery recording with 5 req/min per user', () => {
+		const rule = ROUTE_RATE_LIMITS.find((r) => r.pattern === '/api/deliveries/record');
+		expect(rule).toEqual({
+			pattern: '/api/deliveries/record',
+			maxRequests: 5,
+			windowMs: 60 * 1000,
+			keyStrategy: 'user'
+		});
 	});
 
 	it('should include anti-astroturf template farming prevention', () => {

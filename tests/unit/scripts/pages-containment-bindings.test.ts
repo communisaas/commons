@@ -6,9 +6,13 @@ import {
 	verifyPagesContainmentBindings
 } from '../../../scripts/verify-pages-containment-bindings.mjs';
 
-function pagesProject(environment: 'preview' | 'production', overrides: Record<string, unknown> = {}) {
+function pagesProject(
+	environment: 'preview' | 'production',
+	overrides: Record<string, unknown> = {}
+) {
 	return {
 		result: {
+			canonical_deployment: { id: '11111111-1111-4111-8111-111111111111' },
 			deployment_configs: {
 				[environment]: {
 					env_vars: {
@@ -23,12 +27,29 @@ function pagesProject(environment: 'preview' | 'production', overrides: Record<s
 	};
 }
 
+function activeDeployment(providerCapability = false) {
+	return {
+		result: {
+			id: '11111111-1111-4111-8111-111111111111',
+			environment: 'production',
+			env_vars: {
+				INTERNAL_API_SECRET: { type: 'secret_text' },
+				...(providerCapability ? { GEMINI_API_KEY: { type: 'secret_text' } } : {})
+			}
+		}
+	};
+}
+
 describe('Pages containment binding proof', () => {
 	it.each(['preview', 'production'] as const)(
 		'accepts a binding-free %s config with secret-only authentication material',
 		(environment) => {
 			expect(
-				validatePagesContainmentBindings({ pagesProject: pagesProject(environment), environment })
+				validatePagesContainmentBindings({
+					activeDeployment: environment === 'production' ? activeDeployment() : undefined,
+					pagesProject: pagesProject(environment),
+					environment
+				})
 			).toEqual({
 				environment,
 				bindingCount: 0,
@@ -48,10 +69,31 @@ describe('Pages containment binding proof', () => {
 	])('rejects a retained %s capability', (_label, override) => {
 		expect(() =>
 			validatePagesContainmentBindings({
+				activeDeployment: activeDeployment(),
 				pagesProject: pagesProject('production', override),
 				environment: 'production'
 			})
 		).toThrow(/must have no/i);
+	});
+
+	it('rejects provider capability in either project defaults or the immutable canonical', () => {
+		const projectCapability = pagesProject('production', {
+			env_vars: { GEMINI_API_KEY: { type: 'secret_text' } }
+		});
+		expect(() =>
+			validatePagesContainmentBindings({
+				activeDeployment: activeDeployment(),
+				environment: 'production',
+				pagesProject: projectCapability
+			})
+		).toThrow(/provider capability GEMINI_API_KEY/i);
+		expect(() =>
+			validatePagesContainmentBindings({
+				activeDeployment: activeDeployment(true),
+				environment: 'production',
+				pagesProject: pagesProject('production')
+			})
+		).toThrow(/immutable containment.*GEMINI_API_KEY/i);
 	});
 
 	it('rejects retained plain-text environment variables', () => {
@@ -68,12 +110,20 @@ describe('Pages containment binding proof', () => {
 		).toThrow(/must not retain plain-text variable PUBLIC_CONVEX_URL/i);
 	});
 
-	it('fetches only the Pages project control-plane endpoint', async () => {
-		const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-			new Response(JSON.stringify(pagesProject('production')), {
-				status: 200,
-				headers: { 'content-type': 'application/json' }
-			})
+	it('fetches the project and exact immutable production deployment', async () => {
+		const fetchFn = vi.fn(
+			async (input: RequestInfo | URL, _init?: RequestInit) =>
+				new Response(
+					JSON.stringify(
+						String(input).includes('/deployments/')
+							? activeDeployment()
+							: pagesProject('production')
+					),
+					{
+						status: 200,
+						headers: { 'content-type': 'application/json' }
+					}
+				)
 		);
 		await expect(
 			verifyPagesContainmentBindings({
@@ -83,8 +133,11 @@ describe('Pages containment binding proof', () => {
 				fetchFn
 			})
 		).resolves.toMatchObject({ environment: 'production', bindingCount: 0 });
-		expect(fetchFn).toHaveBeenCalledTimes(1);
+		expect(fetchFn).toHaveBeenCalledTimes(2);
 		expect(String(fetchFn.mock.calls[0][0])).toMatch(/\/pages\/projects\/communique-site$/);
+		expect(String(fetchFn.mock.calls[1][0])).toContain(
+			'/deployments/11111111-1111-4111-8111-111111111111'
+		);
 		expect(fetchFn.mock.calls[0][1]?.redirect).toBe('error');
 	});
 

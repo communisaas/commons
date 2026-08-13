@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	PAGES_KV_NAMESPACE_IDS,
+	PAID_PROVIDER_OPERATOR_BINDING,
+	PAID_PROVIDER_RUNTIME_SECRET_BINDINGS,
 	PUBLIC_DISCOVERY_GATE_BINDING,
 	PUBLIC_DISCOVERY_GATE_CLASS,
 	PUBLIC_DISCOVERY_GATE_CONFIGURATIONS,
@@ -19,6 +21,7 @@ import {
 } from '../../../scripts/finalize-pages-release-artifact.mjs';
 
 const TRANSACTION_ID = '123456789-2';
+const PAGES_DEPLOYMENT_ID = '11111111-1111-4111-8111-111111111111';
 
 function validatePagesDurableObjectBinding(
 	input: Omit<Parameters<typeof validatePagesDurableObjectBindingRaw>[0], 'expectedTransactionId'>
@@ -90,6 +93,7 @@ function pagesProject({
 					env_vars: {
 						INTERNAL_API_SECRET: { type: 'secret_text' },
 						INTERNAL_API_SECRET_PREVIOUS: { type: 'secret_text' },
+						[PAID_PROVIDER_OPERATOR_BINDING]: { type: 'secret_text' },
 						PUBLIC_RELEASE_TRANSACTION_ID: {
 							type: 'plain_text',
 							value: TRANSACTION_ID
@@ -121,8 +125,25 @@ function pagesProject({
 	};
 }
 
+function pagesDeployment() {
+	return {
+		result: {
+			environment: 'production',
+			env_vars: {
+				...Object.fromEntries(
+					PAID_PROVIDER_RUNTIME_SECRET_BINDINGS.map((name) => [name, { type: 'secret_text' }])
+				),
+				[PAID_PROVIDER_OPERATOR_BINDING]: { type: 'secret_text' }
+			},
+			id: PAGES_DEPLOYMENT_ID
+		}
+	};
+}
+
 function proofInput(project = pagesProject()) {
 	return {
+		deploymentId: PAGES_DEPLOYMENT_ID,
+		pagesDeployment: pagesDeployment(),
 		workerSettingsByEnvironment: { production: workerSettings() },
 		workerSubdomainByEnvironment: { production: privateSubdomain },
 		pagesProject: project
@@ -133,9 +154,7 @@ describe('Pages external Durable Object binding proof', () => {
 	it('pins source and live Pages runtime compatibility to the trusted finalizer tuple', () => {
 		const source = readFileSync('wrangler.toml', 'utf8');
 		expect(source.match(/^compatibility_date\s*=/gmu)).toHaveLength(1);
-		expect(source).toContain(
-			`compatibility_date = "${PAGES_FINALIZER_COMPATIBILITY_DATE}"`
-		);
+		expect(source).toContain(`compatibility_date = "${PAGES_FINALIZER_COMPATIBILITY_DATE}"`);
 		expect(source.match(/^compatibility_flags\s*=/gmu)).toHaveLength(1);
 		expect(source).toContain(
 			`compatibility_flags = [${PAGES_FINALIZER_COMPATIBILITY_FLAGS.map((flag) => `"${flag}"`).join(', ')}]`
@@ -176,9 +195,7 @@ describe('Pages external Durable Object binding proof', () => {
 	});
 
 	it('accepts only the inert preview and exact production capability sets', () => {
-		expect(
-			validatePagesDurableObjectBinding({ ...proofInput(), environment: 'preview' })
-		).toEqual({
+		expect(validatePagesDurableObjectBinding({ ...proofInput(), environment: 'preview' })).toEqual({
 			environment: 'preview',
 			failOpen: false,
 			inert: true,
@@ -299,6 +316,55 @@ describe('Pages external Durable Object binding proof', () => {
 		expect(() =>
 			validatePagesDurableObjectBinding({ ...proofInput(control), environment: 'production' })
 		).toThrow(/must not receive release-control capability/i);
+	});
+
+	it('keeps provider keys out of project defaults and requires them on the exact immutable deployment', () => {
+		for (const binding of PAID_PROVIDER_RUNTIME_SECRET_BINDINGS) {
+			const projectLeak = pagesProject();
+			Object.assign(projectLeak.result.deployment_configs.production.env_vars, {
+				[binding]: { type: 'secret_text' }
+			});
+			expect(() =>
+				validatePagesDurableObjectBinding({
+					...proofInput(projectLeak),
+					environment: 'production'
+				})
+			).toThrow(new RegExp(`project defaults.*${binding}`, 'i'));
+
+			const missingDeploymentBinding = pagesDeployment();
+			Reflect.deleteProperty(missingDeploymentBinding.result.env_vars, binding);
+			expect(() =>
+				validatePagesDurableObjectBinding({
+					...proofInput(),
+					pagesDeployment: missingDeploymentBinding,
+					environment: 'production'
+				})
+			).toThrow(new RegExp(`paid-provider ${binding}.*encrypted(?: secret)?`, 'i'));
+
+			const plaintextDeploymentBinding = pagesDeployment();
+			Object.assign(plaintextDeploymentBinding.result.env_vars, {
+				[binding]: { type: 'plain_text', value: 'must-not-be-public' }
+			});
+			expect(() =>
+				validatePagesDurableObjectBinding({
+					...proofInput(),
+					pagesDeployment: plaintextDeploymentBinding,
+					environment: 'production'
+				})
+			).toThrow(new RegExp(`paid-provider ${binding}.*encrypted`, 'i'));
+		}
+
+		const missingProjectOperator = pagesProject();
+		Reflect.deleteProperty(
+			missingProjectOperator.result.deployment_configs.production.env_vars,
+			PAID_PROVIDER_OPERATOR_BINDING
+		);
+		expect(() =>
+			validatePagesDurableObjectBinding({
+				...proofInput(missingProjectOperator),
+				environment: 'production'
+			})
+		).toThrow(/operator allowlist.*encrypted/u);
 	});
 
 	it('rejects crossed production resources and role-shared namespaces', () => {

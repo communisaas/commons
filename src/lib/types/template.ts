@@ -1,11 +1,17 @@
 import type { TemplateScope } from './jurisdiction';
 import type { GeoScope, Source } from '$lib/core/agents/types';
+import type { InputWindow } from '$lib/core/agents/input-window';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
+import type { ContactRouteVerdict } from '$lib/core/agents/contact-route-verdict';
+import type {
+	RouteProvenance,
+	SeatRouteVerdict,
+	StandingVerdict
+} from '$lib/core/agents/seat-route';
+import type { DeliveryTier } from '$lib/core/agents/target-class';
+import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
 import type { TemplateDeliveryMethod } from '$convex/lib/templateDeliveryMethod';
-import {
-	parseRecipientConfigObject,
-	recipientRosterFromConfig
-} from '$convex/lib/recipientRoster';
+import { parseRecipientConfigObject, recipientRosterFromConfig } from '$convex/lib/recipientRoster';
 
 // ============================================================================
 // Power Landscape Types
@@ -285,11 +291,48 @@ export interface ProcessedDecisionMaker {
 	isAiResolved: boolean; // true = AI-resolved, false = manually added
 	recencyCheck?: string; // Explicit recency verification text
 	positionSourceDate?: string; // Date of verification source
+	/**
+	 * The published deadline for submitting input to this decision maker, as a
+	 * standalone fact. It is never folded into `confidence`, never scored, and
+	 * never inferred — only a deadline a publisher actually wrote, read back off
+	 * the page it was written on, may populate it. Absent means not resolved,
+	 * and renderers print that rather than hiding the row's clock.
+	 */
+	inputWindow?: InputWindow;
 	confidence?: number; // Confidence score 0.0-1.0 based on verification
 	// Email verification
 	emailGrounded?: boolean; // true = email found in grounded search results
 	emailSource?: string; // Specific URL where email was found (if grounded)
 	emailSourceTitle?: string; // Title of email source page
+	/**
+	 * Post-resolution registry observation derived only from the final address.
+	 * Optional during provider/manual construction; the resolution agent fills it
+	 * for every returned candidate before any safety policy may consume it.
+	 */
+	governmentalClass?: GovernmentalClass;
+	/** Server-derived from grounding evidence. Never trusted from client input. */
+	deliveryTier?: DeliveryTier;
+	seatRoute?: SeatRouteVerdict;
+	/** Typed reason this candidate does or does not carry a contact route.
+	 *  A category, never a score. Absent on manually added recipients. */
+	contactRoute?: ContactRouteVerdict;
+	/** What this route is to the decision, plus the basis for saying so.
+	 *  A category with a basis, never a score. */
+	standing?: StandingVerdict;
+	/** How the institution published this address, or the single reason none
+	 *  was found. Never combined with `standing`. */
+	routeProvenance?: RouteProvenance;
+	/** True when the provider proposed an address for this candidate and the
+	 *  address did not appear byte-for-byte in any page fetched this run. */
+	emailClaimStripped?: boolean;
+	/**
+	 * MODEL CLAIM about what the address reaches, not a verified fact. A 'person'
+	 * claim is uncorroborated and must never be rendered to a recipient or used as
+	 * authority to address a named individual.
+	 */
+	emailReachesClaim?: 'person' | 'seat' | 'general';
+	/** Verbatim office/function label, present only when the claim is 'seat' and the label byte-appeared in the grounding page. */
+	emailReachesLabel?: string;
 	/**
 	 * Server-only evidence that this run found the email verbatim in a page it
 	 * read. A cached contact may remain useful to the author, but it must not be
@@ -337,6 +380,10 @@ export interface CustomRecipient {
 // Citation source from message generation — one definition, shared with the
 // agent layer, re-exported here for the template-facing import sites.
 export type { Source } from '$lib/core/agents/types';
+
+// The published-deadline clock, defined once in the agent layer and re-exported
+// here for the template-facing import sites.
+export type { InputWindow } from '$lib/core/agents/input-window';
 
 // For UI components that only need a minimal user shape
 export type MinimalUser = { id: string; name: string };

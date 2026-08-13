@@ -129,6 +129,21 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 };
 
 const SESSION_COOKIE = 'auth-session';
+const SESSION_AUTHORITY_INDEPENDENT_OPERATIONAL_PATHS = new Set([
+	'/api/live',
+	'/api/health',
+	'/api/containment-readiness'
+]);
+
+/**
+ * These exact operational handlers do not consume application identity.
+ * Liveness is dependency-free; readiness authenticates its own operator
+ * capability before performing any intended dependency work. A browser cookie
+ * must therefore never add a session-authority query ahead of either handler.
+ */
+export function bypassSessionAuthorityForOperationalPath(pathname: string): boolean {
+	return SESSION_AUTHORITY_INDEPENDENT_OPERATIONAL_PATHS.has(pathname);
+}
 
 /**
  * Return the authenticated rate tier only to the dedicated API edge Worker.
@@ -200,8 +215,14 @@ export const handlePublicTemplateDetailCostShield: Handle = async ({ event, reso
 	return response;
 };
 
-const handleAuth: Handle = async ({ event, resolve }) => {
+export const handleAuth: Handle = async ({ event, resolve }) => {
 	if (event.locals.publicDiscoveryManifestRefreshAuthenticated) return resolve(event);
+	if (bypassSessionAuthorityForOperationalPath(event.url.pathname)) {
+		event.locals.user = null;
+		event.locals.session = null;
+		event.locals.convexToken = undefined;
+		return resolve(event);
+	}
 	try {
 		const requestNow = Date.now();
 		const cookieValue = event.cookies.get(SESSION_COOKIE);
@@ -531,7 +552,8 @@ import { sequence } from '@sveltejs/kit/hooks';
  *   - Retry-After: Seconds to wait (only on 429)
  *
  * DESIGN NOTES:
- *   - Runs FIRST in the sequence to reject abusive requests early
+ *   - Runs after authentication so user-keyed rules receive the verified user ID
+ *   - Dedicated public cost shields run before authentication where pre-I/O rejection is required
  *   - Applies to mutating methods by default (POST, PUT, PATCH, DELETE)
  *   - Routes with `includeGet: true` also rate-limit GET requests (e.g., metrics, confirmation)
  *   - Webhook paths are exempted (server-to-server, HMAC-authenticated)
@@ -564,12 +586,10 @@ const handleRateLimit: Handle = async ({ event, resolve }) => {
 	// Note: event.getClientAddress() respects X-Forwarded-For behind reverse proxies
 	const clientIP = event.getClientAddress();
 
-	// Get user ID if available and config requires user-based limiting
-	// Note: Session may not be available yet (rate limit runs before auth)
-	// For user-based limits, we need to peek at the session cookie
+	// Get the verified user ID populated by handleAuth when a rule is user-keyed.
+	// Requests without an accepted session deliberately fall back to their IP.
 	let userId: string | undefined;
 	if (config.keyStrategy === 'user') {
-		// Try to get user from locals (if auth already ran) or session cookie
 		userId = locals.session?.userId;
 
 		// If no user ID for a user-keyed limit, fall back to IP

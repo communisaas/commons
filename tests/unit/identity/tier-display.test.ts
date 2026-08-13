@@ -1,9 +1,9 @@
 /**
  * Tier-display single-source-of-truth helper.
  *
- * Each surface (AttestationFooter, emailService, /v/[hash]) previously
+ * Each surface (emailService, /v/[hash]) previously
  * owned its own tier copy and the copies drifted apart. formatTierDisplay
- * now produces a single payload all three surfaces consume. These tests
+ * now produces a single payload both surfaces consume. These tests
  * pin the epistemic-class boundaries — getting them wrong is exactly the
  * over-claim ("verified" used as a default) the helper exists to prevent.
  */

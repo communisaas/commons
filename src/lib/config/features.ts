@@ -132,7 +132,7 @@ export const FEATURES = {
 	 */
 	LEGISLATIVE_INTELLIGENCE_LIVE: false,
 
-	/** Accountability receipts: proof-weighted decision-maker tracking */
+	/** Accountability receipts: verified-action decision-maker tracking */
 	ACCOUNTABILITY: true,
 
 	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */

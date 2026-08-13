@@ -53,7 +53,6 @@ function makeReceipts(
 		pendingCount: 2,
 		responseLoggedCount: 3,
 		anchorFieldCount: 0,
-		proofWeightTotal: 24,
 		latestProofDeliveredAt: '2026-03-04T12:00:00.000Z',
 		sampleLimit: 200,
 		...overrides

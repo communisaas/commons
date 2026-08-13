@@ -12,8 +12,9 @@
  * @see https://console.groq.com/docs/content-moderation
  */
 
+import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
 import type { MLCommonsHazard, SafetyResult } from './types';
-import { HAZARD_DESCRIPTIONS, BLOCKING_HAZARDS } from './types';
+import { HAZARD_DESCRIPTIONS, blockingHazardsForTarget } from './types';
 import { GroqTransportError, requestGroqChatCompletion } from './groq-transport';
 import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
 
@@ -45,10 +46,13 @@ S14: Code interpreter abuse`;
  * - Llama Guard: "unsafe\nS1" or "unsafe\nS1,S2"
  * - gpt-oss-safeguard: "unsafe,S1" or "unsafe,S1,S5"
  *
- * PERMISSIVE POLICY: Only BLOCKING_HAZARDS (S1, S4) cause safe=false.
- * All other hazards are logged but content proceeds.
+ * Blocking hazards are resolved from the server-derived target class before
+ * parsing. All detected hazards remain visible in the result.
  */
-function parseResponse(response: string): {
+function parseResponse(
+	response: string,
+	blocking: MLCommonsHazard[]
+): {
 	safe: boolean;
 	hazards: MLCommonsHazard[];
 	blocking_hazards: MLCommonsHazard[];
@@ -70,10 +74,7 @@ function parseResponse(response: string): {
 			...new Set(hazardMatches.map((hazard) => hazard.toUpperCase() as MLCommonsHazard))
 		];
 
-		// Only BLOCKING_HAZARDS (S1, S4) cause rejection
-		const blocking_hazards = hazards.filter((h) =>
-			BLOCKING_HAZARDS.includes(h)
-		) as MLCommonsHazard[];
+		const blocking_hazards = hazards.filter((hazard) => blocking.includes(hazard));
 
 		// Safe if no blocking hazards detected (non-blocking hazards are allowed)
 		const safe = blocking_hazards.length === 0;
@@ -93,7 +94,7 @@ function parseResponse(response: string): {
  */
 export async function classifySafety(
 	content: string,
-	options: { signal?: AbortSignal } = {}
+	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
 ): Promise<SafetyResult> {
 	if (new TextEncoder().encode(content).byteLength > SAFETY_INPUT_MAX_BYTES) {
 		throw new RangeError(`Safety moderation input exceeds ${SAFETY_INPUT_MAX_BYTES} bytes`);
@@ -141,7 +142,8 @@ export async function classifySafety(
 	if (typeof modelResponse !== 'string' || modelResponse.length > 4_000) {
 		throw new Error('Safety classifier returned an invalid response');
 	}
-	const { safe, hazards, blocking_hazards } = parseResponse(modelResponse);
+	const blocking = blockingHazardsForTarget(options.targetClass);
+	const { safe, hazards, blocking_hazards } = parseResponse(modelResponse, blocking);
 
 	const latencyMs = Date.now() - startTime;
 
@@ -177,7 +179,7 @@ export async function classifySafety(
  */
 export async function classifySafetyBatch(
 	contents: string[],
-	options: { signal?: AbortSignal } = {}
+	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
 ): Promise<SafetyResult[]> {
 	const results: SafetyResult[] = [];
 

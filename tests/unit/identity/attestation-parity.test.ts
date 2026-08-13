@@ -37,20 +37,24 @@ const decodeBody = (url: string): string => {
 };
 
 describe('buildAttestation — the claim a tier is allowed to make', () => {
-	it('tier 0 (and null / undefined) claims nothing at all', () => {
-		for (const trustTier of [0, null, undefined]) {
+	it('every tier below 2 — 0, 1, null, undefined — claims nothing at all', () => {
+		for (const trustTier of [0, 1, null, undefined]) {
 			const a = buildAttestation({ trustTier, method: 'civic_api', districtCode: 'CA-12' });
-			expect(a.line).toBeNull();
-			expect(a.verifyLine).toBeNull();
-			expect(a.block).toBeNull();
+			expect(a.line, `tier ${trustTier}`).toBeNull();
+			expect(a.verifyLine, `tier ${trustTier}`).toBeNull();
+			expect(a.block, `tier ${trustTier}`).toBeNull();
 		}
 	});
 
-	it('tier 1 is a sender, not a constituent — and offers no verify URL', () => {
+	it('an authenticated account is not a verification claim — tier 1 composes nothing even holding a hash', () => {
+		// Tier 1 is email/OAuth possession: anti-sybil and cost control, a fact
+		// about an account rather than proof about a person. Carrying a credential
+		// hash does not promote it, and there is no phrase weak enough to say it
+		// honestly — the correct output is nothing.
 		const a = buildAttestation({ trustTier: 1, method: 'civic_api', credentialHash: HASH });
-		expect(a.line).toBe('Verified sender');
+		expect(a.line).toBeNull();
 		expect(a.verifyLine).toBeNull();
-		expect(a.block).toBe('Verified sender');
+		expect(a.block).toBeNull();
 	});
 
 	it('tier 2 + civic_api + district → the self-reported label with the district suffix', () => {
@@ -74,11 +78,17 @@ describe('buildAttestation — the claim a tier is allowed to make', () => {
 		for (const districtCode of [null, undefined, '']) {
 			const a = buildAttestation({ trustTier: 2, method: 'civic_api', districtCode });
 			expect(a.line).toBe('Self-reported constituent (Census geocoder)');
-			// no silent downgrade to the tier-1 phrasing…
-			expect(a.line).not.toBe('Verified sender');
-			// …and the only delta against the district-bearing line is the suffix.
+			// The only delta against the district-bearing line is the suffix.
 			expect(withDistrict.line?.startsWith(a.line as string)).toBe(true);
 		}
+	});
+
+	it('no sub-constituent phrasing may grow back — "Verified sender" is absent from the composer', () => {
+		// A sender who only proved email possession gets no line. The failure mode
+		// this pins is not a wrong value but a reintroduced branch: any phrase for
+		// tier 1 is a verification claim the sender cannot make, so the literal
+		// must not exist in the source at all.
+		expect(src('src/lib/core/identity/tier-display.ts')).not.toContain('Verified sender');
 	});
 
 	it('a tier-2 sender with no credential hash gets the label and no verify URL', () => {

@@ -16,6 +16,7 @@ export function processDecisionMakers(
 		emailSource?: string; // How email was verified
 		emailGrounded?: boolean;
 		emailSourceTitle?: string;
+		contactRoute?: ProcessedDecisionMaker['contactRoute'];
 		isAiResolved?: boolean;
 		accountabilityOpener?: string | null;
 		roleCategory?: ProcessedDecisionMaker['roleCategory'];

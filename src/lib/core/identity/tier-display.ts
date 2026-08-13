@@ -212,8 +212,14 @@ export interface Attestation {
  * read as a person mismatch.
  *
  * The district code is an OPTIONAL SUFFIX, never a gate: a tier-2 sender whose
- * district code has not loaded still reads the method label — never downgraded
- * to "Verified sender", and never upgraded past what the method proves.
+ * district code has not loaded still reads the method label, never upgraded past
+ * what the method proves.
+ *
+ * Below tier 2 there is nothing to claim. Tier 1 is email/OAuth possession — an
+ * anti-sybil and cost-control fact about an account, not civic proof about a
+ * person — so every tier below 2 composes to null. A hollow footer still reads
+ * to a recipient as a verification claim; an absent one honestly reads as
+ * absence.
  */
 export function buildAttestation(input: AttestationInput): Attestation {
 	const tier = input.trustTier ?? 0;
@@ -233,8 +239,6 @@ export function buildAttestation(input: AttestationInput): Attestation {
 		verifyLine = input.credentialHash
 			? `Confirm I'm a real constituent: https://commons.email/v/${input.credentialHash}`
 			: null;
-	} else if (tier >= 1) {
-		line = 'Verified sender';
 	}
 
 	const block = line === null ? null : [line, verifyLine].filter(Boolean).join('\n');

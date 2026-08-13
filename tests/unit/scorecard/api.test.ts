@@ -70,7 +70,6 @@ const mockSnapshot = {
 	responsiveness: 72.3,
 	alignment: 85.0,
 	composite: 77.4,
-	proofWeightTotal: 142.7,
 	deliveriesSent: 14,
 	deliveriesOpened: 9,
 	deliveriesVerified: 6,
@@ -104,7 +103,6 @@ describe('GET /api/dm/[id]/scorecard', () => {
 		expect(body.current.responsiveness).toBe(72.3);
 		expect(body.current.alignment).toBe(85.0);
 		expect(body.current.composite).toBe(77.4);
-		expect(body.current.proofWeightTotal).toBe(142.7);
 		expect(body.current.attestationHash).toBe('abc123def456');
 		expect(body.current.methodologyVersion).toBe(1);
 		expect(body.current.period.start).toBe('2026-03-01');

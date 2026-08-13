@@ -14,6 +14,7 @@ import { saveStudioProcessAsTemplateDraft } from '$lib/components/org/studio/stu
 import { generateDraftId, templateDraftStore } from '$lib/stores/templateDraft';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
 import type { Source, TemplateFormData } from '$lib/types/template';
+import { blocked } from '$lib/core/fact';
 import { validateTemplateInputBudgets } from '../../convex/lib/templateInputBudget';
 
 // The shared test setup stubs localStorage as a no-op; every assertion here is
@@ -69,6 +70,7 @@ function makeProcess(sources: Source[]): OrgProcess {
 		entries: [],
 		decisionMakers: [],
 		droppedEmailless: 0,
+		reachCensus: blocked('Fixture did not run resolution'),
 		resolutionStopReason: null,
 		resolutionStopDetail: null,
 		geographicScope: null,

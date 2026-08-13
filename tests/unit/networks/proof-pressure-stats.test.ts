@@ -48,19 +48,16 @@ describe('convex aggregates are compact and receipt-backed', () => {
 		expect(proofPressure).not.toContain(".query('supporters')");
 	});
 
-	it('sums each org\'s strongest receipt weight (split deliveries cannot inflate)', () => {
-		expect(coalitionMetrics).toContain(
-			'Math.max(pressure?.maxProofWeight ?? 0, receipt.proofWeight)'
-		);
+	it('sums verified action counts across orgs, never a composite score', () => {
+		expect(coalitionMetrics).toContain("finiteNonnegative(receipt.verifiedCount,");
 		expect(networks).toContain(
-			'(current?.combinedProofWeight ?? 0) + source.maxProofWeight'
+			'(current?.verifiedActionEvidence ?? 0) + source.verifiedActionEvidence'
 		);
 	});
 
-	it('exposes the cross-org evidence scalars', () => {
+	it('exposes the cross-org evidence counts', () => {
 		expect(networks).toContain('verifiedActionEvidence');
 		expect(networks).toContain('districtSignalCount');
-		expect(networks).toContain('combinedProofWeight');
 	});
 
 	it('caps the row limit', () => {

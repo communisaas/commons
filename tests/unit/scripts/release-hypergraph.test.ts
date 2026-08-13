@@ -66,19 +66,67 @@ describe('release hypergraph verifier', () => {
 
 	it('accepts the repository graph while preserving honest open gates', () => {
 		const result = validateReleaseHypergraphDocuments(currentGraph());
-		expect(result.nodes).toBeGreaterThan(20);
+		expect(result.nodes).toBe(51);
+		expect(result.foundationsImplemented).toBe(false);
 		expect(result.launchProofState).toBe('pending');
 		expect(result.containmentBootstrapSourceReady).toBe(true);
 	});
 
-	it('records executable proof for every implemented foundation and leaves detached authority open', () => {
+	it('pins every residual foundation to detached review, exact-SHA proof, and cost authority', () => {
+		const graph = currentGraph();
+		for (const id of ['FND-51', 'FND-52', 'FND-53', 'FND-54', 'FND-55']) {
+			expect(task(graph, id).acceptance.length).toBeGreaterThan(100);
+			for (const kind of ['blocks', 'requires'] as const) {
+				expect(graph.edges[kind].edges).toContainEqual(
+					expect.objectContaining({ source: id, target: 'FND-60' })
+				);
+				expect(graph.edges[kind].edges).toContainEqual(
+					expect.objectContaining({ source: id, target: 'PD-10' })
+				);
+			}
+		}
+		expect(task(graph, 'FND-54').acceptance).toContain('exactly the nine remaining Pages operations');
+		expect(task(graph, 'FND-54').acceptance).toContain('zero approved capabilities and zero findings');
+		expect(task(graph, 'FND-52').acceptance).toContain('applies that orgId as the vector-search filter');
+		expect(task(graph, 'FND-52').acceptance).toContain('A/B organization test');
+		expect(task(graph, 'FND-53').acceptance).toContain('/api/deliveries/record');
+		expect(task(graph, 'FND-53').acceptance).toContain('canonical pseudonym/template key');
+		expect(task(graph, 'FND-53').acceptance).toContain('indexed lifetime ceiling');
+		expect(task(graph, 'FND-40B').acceptance).not.toContain('semantic search');
+		expect(task(graph, 'FND-40B').acceptance).not.toContain('`template-search`');
+
+		const missingExactShaEdge = currentGraph();
+		missingExactShaEdge.edges.blocks.edges = missingExactShaEdge.edges.blocks.edges.filter(
+			(edge: { source: string; target: string }) =>
+				!(edge.source === 'FND-54' && edge.target === 'PD-10')
+		);
+		missingExactShaEdge.topology.statistics.blocks_edges -= 1;
+		expect(() => validateReleaseHypergraphDocuments(missingExactShaEdge)).toThrow(
+			/FND-54 must have a blocks edge to PD-10/
+		);
+
+		const missingCostEdge = currentGraph();
+		missingCostEdge.edges.requires.edges = missingCostEdge.edges.requires.edges.filter(
+			(edge: { source: string; target: string }) =>
+				!(edge.source === 'FND-54' && edge.target === 'FND-40B')
+		);
+		missingCostEdge.topology.statistics.requires_edges -= 1;
+		expect(() => validateReleaseHypergraphDocuments(missingCostEdge)).toThrow(
+			/Residual cost topology requires requires:FND-54:FND-40B/
+		);
+	});
+
+	it('records executable proof for ready foundations and leaves P1 residuals open', () => {
 		const graph = currentGraph();
 		const foundations = graph.tasks.tasks.filter(
 			(candidate: { id: string }) => candidate.id.startsWith('FND-') && candidate.id !== 'FND-60'
 		);
 		expect(
 			foundations.filter((candidate: { status: string }) => candidate.status !== 'ready')
-		).toEqual([]);
+		).toEqual([
+			expect.objectContaining({ id: 'FND-52', status: 'in_progress' }),
+			expect.objectContaining({ id: 'FND-53', status: 'in_progress' })
+		]);
 
 		for (const foundation of foundations.filter(
 			(candidate: { status: string }) => candidate.status === 'ready'
@@ -112,6 +160,8 @@ describe('release hypergraph verifier', () => {
 
 	it('rejects a ready exact-SHA gate without exact provenance proof', () => {
 		const graph = currentGraph();
+		task(graph, 'FND-52').status = 'ready';
+		task(graph, 'FND-53').status = 'ready';
 		task(graph, 'PD-10').status = 'ready';
 		task(graph, 'PD-10').proof = readyProof();
 		expect(() => validateReleaseHypergraphDocuments(graph)).toThrow(/PD-10.*dependency FND-60/);
@@ -198,13 +248,15 @@ describe('release hypergraph verifier', () => {
 				requireLaunchFoundationsReady: true
 			})
 		).toThrow(/forbidden: source cannot self-attest FND-60/);
-		expect(
+		expect(() =>
 			validateReleaseHypergraphDocuments(currentGraph(), {
 				requireLaunchFoundationsImplemented: true
-			}).foundationsImplemented
-		).toBe(true);
+			})
+		).toThrow(/FND-52 is not ready/);
 
 		const incompleteFoundationFixture = currentGraph();
+		task(incompleteFoundationFixture, 'FND-52').status = 'ready';
+		task(incompleteFoundationFixture, 'FND-53').status = 'ready';
 		task(incompleteFoundationFixture, 'FND-36').status = 'pending';
 		delete task(incompleteFoundationFixture, 'FND-36').proof;
 		expect(() =>

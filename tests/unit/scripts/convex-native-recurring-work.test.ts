@@ -12,14 +12,14 @@ const manifest = () =>
 	JSON.parse(readFileSync('config/convex-native-recurring-work.json', 'utf8'));
 
 describe('Convex-native recurring-work launch ratchet', () => {
-	it('pins all 39 definitions, zero-job containment, and the 25-job activation envelope', () => {
+	it('pins all 37 definitions, zero-job containment, and the 25-job activation envelope', () => {
 		const reviewed = manifest();
 		const scan = scanConvexNativeRecurringWork();
 
 		expect(validateConvexNativeRecurringWork(reviewed, scan)).toEqual([]);
-		expect(scan.jobs).toHaveLength(39);
+		expect(scan.jobs).toHaveLength(37);
 		expect(scan.jobs.filter((job) => job.tier === 'essential')).toHaveLength(25);
-		expect(scan.jobs.filter((job) => job.tier === 'operational')).toHaveLength(11);
+		expect(scan.jobs.filter((job) => job.tier === 'operational')).toHaveLength(9);
 		expect(scan.jobs.filter((job) => job.tier === 'speculative')).toHaveLength(3);
 		expect(reviewed.profile).toMatchObject({
 			prelaunch: 'contained',

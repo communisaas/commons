@@ -49,8 +49,22 @@ import {
 	type MessageGenerationPayload
 } from '$lib/utils/authoring-inputs';
 import { processDecisionMakers } from '$lib/utils/decision-maker-processing';
+import {
+	emptyContactRouteCounts,
+	type ContactRouteCounts,
+	type ContactRouteStatus
+} from '$lib/core/agents/contact-route-verdict';
+import { parseReachCensusFact } from '$lib/core/agents/reach-census';
 
 type ResolvedList = ResolvedDecisionMaker[];
+
+/**
+ * The org room a run is being driven from. Declared per run rather than carried
+ * on the intent, because the intent is persisted to device-local storage while
+ * this is only ever the live route's org. The server verifies membership before
+ * honoring it; declaring an org the caller cannot act for buys nothing.
+ */
+type AuthoringContext = { orgSlug: string };
 
 type MessageGenerationResult = {
 	message?: string;
@@ -84,12 +98,63 @@ type ResolutionStopBoundary = {
 	detail: string;
 };
 
-function buildResolutionStopBoundary(droppedTargetCount: number): ResolutionStopBoundary {
-	if (droppedTargetCount > 0) {
-		const noun = droppedTargetCount === 1 ? 'target' : 'targets';
+function contactRouteDetails(contactRouteCounts?: ContactRouteCounts): string[] {
+	const details: string[] = [];
+	if (contactRouteCounts?.undeliverable) {
+		details.push(
+			`${contactRouteCounts.undeliverable} had a public address that MX/DNS marked undeliverable`
+		);
+	}
+	if (contactRouteCounts?.ungrounded) {
+		details.push(
+			`${contactRouteCounts.ungrounded} proposed-address ${contactRouteCounts.ungrounded === 1 ? 'claim was' : 'claims were'} not verified in a page read this run`
+		);
+	}
+	if (contactRouteCounts?.blocked) {
+		details.push(
+			`${contactRouteCounts.blocked} could not be checked because source retrieval was blocked`
+		);
+	}
+	if (contactRouteCounts?.absent) {
+		details.push(
+			`${contactRouteCounts.absent} had no public email on the exact source page read this run`
+		);
+	}
+	if (contactRouteCounts?.unknown) {
+		details.push(
+			`${contactRouteCounts.unknown} remained unknown because no read or block observation supported a stronger finding`
+		);
+	}
+	return details;
+}
+
+function buildResolutionRouteDetail(
+	total: number,
+	contactable: number,
+	contactRouteCounts?: ContactRouteCounts
+): string | null {
+	const unrouted = Math.max(0, total - contactable);
+	if (unrouted === 0) return null;
+	const details = contactRouteDetails(contactRouteCounts);
+	const prefix = `${contactable} of ${total} identified ${total === 1 ? 'person has' : 'people have'} a contactable public email route.`;
+	return details.length > 0
+		? `${prefix} ${details.join('; ')}.`
+		: `${prefix} The remaining ${unrouted} ${unrouted === 1 ? 'route is' : 'routes are'} unknown.`;
+}
+
+function buildResolutionStopBoundary(
+	unroutedTargetCount: number,
+	contactRouteCounts?: ContactRouteCounts
+): ResolutionStopBoundary {
+	if (unroutedTargetCount > 0) {
+		const details = contactRouteDetails(contactRouteCounts);
+		const typedDetail =
+			details.length > 0
+				? details.join('; ')
+				: `${unroutedTargetCount} resolved ${unroutedTargetCount === 1 ? 'target had' : 'targets had'} an unknown contact route`;
 		return {
 			reason: 'no-public-email',
-			detail: `${droppedTargetCount} resolved ${noun} lacked usable public email or deliverability evidence; AUTHOR stayed closed.`
+			detail: `${typedDetail}; AUTHOR stayed closed.`
 		};
 	}
 
@@ -109,7 +174,8 @@ async function runResolve(
 	os: OrgOS,
 	id: string,
 	intent: AuthoringIntent,
-	signal: AbortSignal
+	signal: AbortSignal,
+	context?: AuthoringContext
 ): Promise<ResolvedList> {
 	os.setStage(id, 'resolve', 'Resolve');
 	os.setStatus(id, 'resolving');
@@ -126,6 +192,7 @@ async function runResolve(
 			core_message: intent.coreMessage,
 			topics,
 			audience_guidance: intent.audienceGuidance || undefined,
+			...(context ? { org_slug: context.orgSlug } : {}),
 			verbose: true
 		})
 	});
@@ -139,7 +206,8 @@ async function runResolve(
 	}
 
 	let decisionMakers: ResolvedList = [];
-	let droppedTargetCount = 0;
+	let unroutedTargetCount = 0;
+	let contactRouteCounts: ContactRouteCounts | undefined;
 
 	for await (const event of parseSSEStream<Record<string, unknown>>(res)) {
 		if (signal.aborted) return decisionMakers;
@@ -179,7 +247,7 @@ async function runResolve(
 						id,
 						'resolve',
 						`Resolved ${c.name}${c.title ? ` — ${c.title}` : ''}${
-							c.email ? ` (${c.email})` : ' (no public email)'
+							c.email ? ` (${c.email})` : ' (no contactable email yet)'
 						}`
 					);
 				}
@@ -193,21 +261,44 @@ async function runResolve(
 			case 'complete': {
 				const r = event.data as {
 					decision_makers?: unknown[];
-					pipeline_stats?: { total_resolved?: number; verified_emails?: number };
+					pipeline_stats?: {
+						total_resolved?: number;
+						contactable_targets?: number;
+						contact_routes?: unknown;
+						reach_census?: unknown;
+					};
 				};
-				decisionMakers = processDecisionMakers(
+				const resolvedDecisionMakers = processDecisionMakers(
 					(r.decision_makers || []) as Parameters<typeof processDecisionMakers>[0]
 				);
-				const total = r.pipeline_stats?.total_resolved ?? decisionMakers.length;
-				const dropped = Math.max(0, total - decisionMakers.length);
-				droppedTargetCount = dropped;
+				contactRouteCounts = contactRouteCountsFromEvent(r.pipeline_stats?.contact_routes);
+				const reachCensus = parseReachCensusFact(
+					r.pipeline_stats?.reach_census,
+					'Resolve completion did not include a well-formed reach census'
+				);
+				decisionMakers = resolvedDecisionMakers.filter((dm) => !!dm.email);
+				unroutedTargetCount = resolvedDecisionMakers.length - decisionMakers.length;
+				const reportedContactable = numberFromEvent(r.pipeline_stats?.contactable_targets);
+				if (reportedContactable !== null && reportedContactable !== decisionMakers.length) {
+					console.warn('[authoring-process] Contactable count disagreed with resolved payload', {
+						reported: reportedContactable,
+						observed: decisionMakers.length
+					});
+				}
 				const stopBoundary =
-					decisionMakers.length === 0 ? buildResolutionStopBoundary(droppedTargetCount) : null;
+					decisionMakers.length === 0
+						? buildResolutionStopBoundary(unroutedTargetCount, contactRouteCounts)
+						: null;
+				const routeDetail = buildResolutionRouteDetail(
+					resolvedDecisionMakers.length,
+					decisionMakers.length,
+					contactRouteCounts
+				);
 				os.updateProcess(id, (p) => {
 					p.decisionMakers = decisionMakers;
-					p.droppedEmailless = droppedTargetCount;
+					p.reachCensus = reachCensus;
 					p.resolutionStopReason = stopBoundary?.reason ?? null;
-					p.resolutionStopDetail = stopBoundary?.detail ?? null;
+					p.resolutionStopDetail = stopBoundary?.detail ?? routeDetail;
 				});
 				break;
 			}
@@ -219,9 +310,8 @@ async function runResolve(
 	}
 
 	if (decisionMakers.length === 0) {
-		const stopBoundary = buildResolutionStopBoundary(droppedTargetCount);
+		const stopBoundary = buildResolutionStopBoundary(unroutedTargetCount, contactRouteCounts);
 		os.updateProcess(id, (p) => {
-			p.droppedEmailless = droppedTargetCount;
 			p.resolutionStopReason = stopBoundary.reason;
 			p.resolutionStopDetail = stopBoundary.detail;
 		});
@@ -229,6 +319,19 @@ async function runResolve(
 	}
 
 	return decisionMakers;
+}
+
+function contactRouteCountsFromEvent(value: unknown): ContactRouteCounts | undefined {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+
+	const counts = emptyContactRouteCounts();
+	const statuses = Object.keys(counts) as ContactRouteStatus[];
+	for (const status of statuses) {
+		const count = numberFromEvent((value as Record<string, unknown>)[status]);
+		if (count === null) return undefined;
+		counts[status] = count;
+	}
+	return counts;
 }
 
 function buildMessagePayload(
@@ -558,7 +661,11 @@ async function runMessage(
  * The process's AbortController (held on the process record by spawnProcess) is
  * the single stop handle; `orgOS.stopProcess(id)` aborts it from anywhere.
  */
-export function startAuthoringProcess(os: OrgOS, intent: AuthoringIntent): string {
+export function startAuthoringProcess(
+	os: OrgOS,
+	intent: AuthoringIntent,
+	context?: AuthoringContext
+): string {
 	const proc = os.spawnProcess(intent);
 	const id = proc.id;
 	const signal = proc.abort?.signal ?? new AbortController().signal;
@@ -567,7 +674,7 @@ export function startAuthoringProcess(os: OrgOS, intent: AuthoringIntent): strin
 	// lifecycle. This is the OS process — it must outlive the STUDIO view.
 	void (async () => {
 		try {
-			const decisionMakers = await runResolve(os, id, intent, signal);
+			const decisionMakers = await runResolve(os, id, intent, signal, context);
 			if (signal.aborted) return;
 			await runMessage(os, id, intent, decisionMakers, signal);
 			if (signal.aborted) return;

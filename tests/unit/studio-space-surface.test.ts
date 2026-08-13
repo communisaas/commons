@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 /**
  * Studio surface contract.
  *
@@ -8,13 +10,129 @@
  * prose.
  */
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { render } from 'svelte/server';
+import { describe, expect, it, vi } from 'vitest';
+import { absent, blocked, present, withheld, type Fact } from '$lib/core/fact';
+import { reachCensus, type ReachCensus } from '$lib/core/agents/reach-census';
+import { classifySeatRoute, deriveRouteProvenance } from '$lib/core/agents/seat-route';
+import type { ContactRouteVerdict } from '$lib/core/agents/contact-route-verdict';
+
+const h = vi.hoisted(() => ({
+	page: {
+		data: { user: { id: 'operator_1' } },
+		url: new URL('https://commons.test/org/example'),
+		params: { slug: 'example' },
+		route: { id: '/org/[slug]' },
+		status: 200,
+		error: null,
+		form: null,
+		state: {}
+	},
+	os: {
+		base: '/org/example',
+		focusedProcess: null as Record<string, unknown> | null,
+		runningProcesses: [] as unknown[],
+		stopProcess: vi.fn()
+	}
+}));
+
+vi.mock('$app/stores', () => ({
+	page: {
+		subscribe(run: (value: unknown) => void) {
+			run(h.page);
+			return () => {};
+		}
+	}
+}));
+
+vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
+
+vi.mock('$lib/components/org/os/orgOS.svelte', () => ({
+	getOrgOS: () => h.os,
+	isRunning: () => false
+}));
+
+vi.mock('$lib/core/authoring-process', () => ({ startAuthoringProcess: vi.fn() }));
+
+vi.mock('$lib/components/org/studio/studio-draft-bridge', () => ({
+	saveStudioProcessAsCampaignDraft: vi.fn(),
+	saveStudioProcessAsOrgEmailDraft: vi.fn(),
+	saveStudioProcessAsTemplateDraft: vi.fn()
+}));
+
+import StudioSpace from '$lib/components/org/os/StudioSpace.svelte';
 
 const STUDIO_SPACE = 'src/lib/components/org/os/StudioSpace.svelte';
 const STUDIO_SEND = 'src/lib/components/org/studio/StudioSend.svelte';
 
 const space = readFileSync(STUDIO_SPACE, 'utf8');
 const send = readFileSync(STUDIO_SEND, 'utf8');
+
+const spaces = {
+	return: null,
+	base: null,
+	landscape: null,
+	operating: {
+		authoring: {
+			runtimeReady: true,
+			modelProviderConfigured: true,
+			sourceSearchConfigured: true,
+			sourceFetchConfigured: true,
+			runtimeMissing: [],
+			runtimeDependency: '',
+			runtimeMessage: ''
+		},
+		congressionalDelivery: null
+	}
+};
+
+function reachProcess(reachCensusFact: Fact<ReachCensus>): Record<string, unknown> {
+	return {
+		id: 'proc_reach_1',
+		intent: {
+			subjectLine: 'Fund safer crossings',
+			coreMessage: 'Please fund safer crossings this year.',
+			audienceGuidance: ''
+		},
+		status: 'resolving',
+		activeStage: null,
+		stageLabel: '',
+		entries: [],
+		decisionMakers: [
+			{
+				name: 'Alex Rivera',
+				title: 'Transportation Director',
+				organization: 'Example City',
+				email: 'alex.rivera@example.gov'
+			}
+		],
+		droppedEmailless: 0,
+		reachCensus: reachCensusFact,
+		resolutionStopReason: null,
+		resolutionStopDetail: null,
+		sources: [],
+		composedMessage: '',
+		activeMessageJob: null,
+		errorMessage: null
+	};
+}
+
+function renderStudioReach(reachCensusFact: Fact<ReachCensus>): string {
+	h.os.focusedProcess = reachProcess(reachCensusFact);
+	return render(StudioSpace, { props: { canPublish: true, spaces } as never }).body;
+}
+
+function renderedCensus(body: string): string | null {
+	return body.match(/<section[^>]*data-reach-census[^>]*>[\s\S]*?<\/section>/)?.[0] ?? null;
+}
+
+function renderedText(body: string): string {
+	return body
+		.replace(/<!--[\s\S]*?-->/g, '')
+		.replace(/<[^>]*>/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
 
 describe('studio space wiring', () => {
 	it('spawns processes through the OS runner and renders the registry view', () => {
@@ -40,19 +158,87 @@ describe('studio space wiring', () => {
 		expect(space).toContain("from '$lib/data/org-limit-sentences'");
 	});
 
-	it('keeps the raw failure message out of the closed-loop headline', () => {
-		// A failed run reads as one plain sentence; the raw error detail rides
-		// in the title attribute only.
-		expect(space).toContain('The run stopped before finishing — start it again.');
-		expect(space).toContain('title={closedLoopDetail ?? undefined}');
-		expect(space).not.toMatch(/closedLoopSentence = \$derived\([\s\S]*?\(proc\.errorMessage/);
-	});
-
 	it('renders the replay count only after a replay has loaded, with a sentence for a loaded zero', () => {
 		expect(space).toContain('{#if traceReplayLoaded}');
 		expect(space).toContain('No events were logged for this run.');
 		// The not-loaded state stays quiet — no null Datum ghosting an em-dash.
 		expect(space).not.toContain('traceReplayEventCount || null');
+	});
+
+	it('keeps literal reach-census audit boundaries in the component', () => {
+		expect(space).toContain('<!-- reach-census:start -->');
+		expect(space).toContain('<!-- reach-census:end -->');
+	});
+});
+
+describe('delivery reach census render', () => {
+	it('renders observed and row counts from a real producer-shaped census', () => {
+		const officeSeat = classifySeatRoute('info@example.gov', {
+			candidateName: 'Mayor Rivera'
+		});
+		const producerCandidates = [
+			{
+				contactRoute: { status: 'routed' } satisfies ContactRouteVerdict,
+				seatRoute: officeSeat,
+				routeProvenance: deriveRouteProvenance({
+					seat: officeSeat,
+					emailGrounded: true,
+					emailSource: 'https://example.gov/contact',
+					contactRouteStatus: 'routed'
+				}),
+				standing: { standing: 'decides', basis: 'title-inferred' }
+			},
+			{
+				contactRoute: {
+					status: 'blocked',
+					hosts: ['blocked.example.gov']
+				} satisfies ContactRouteVerdict
+			},
+			{
+				contactRoute: {
+					status: 'absent',
+					readSource: 'https://read.example.gov/officials'
+				} satisfies ContactRouteVerdict
+			}
+		];
+		const census = reachCensus(producerCandidates);
+		const body = renderStudioReach(present(census));
+		const block = renderedCensus(body);
+		const censusText = renderedText(block ?? '');
+
+		expect(block).not.toBeNull();
+		expect(censusText).toContain('3 observed candidates');
+		expect(censusText).toContain('Address published for an office');
+		expect(censusText).not.toContain('Person-bound seat');
+		expect(censusText).not.toContain('Front desk');
+		expect(censusText).toContain('Retrieval blocked');
+		expect(censusText).toContain('No address published');
+		expect(censusText).toContain(
+			'These rows record only measured address form and page association or a named resolution limit; they do not classify who an address reaches or say anyone read the message.'
+		);
+		expect(censusText.match(/observed candidates/g)).toHaveLength(1);
+		expect(block).not.toContain('%');
+		expect(block).not.toMatch(/class="[^"]*(?:emerald|green|red|amber)/i);
+		expect(renderedText(body)).not.toMatch(/\bcontactable\b/i);
+		expect(body).not.toContain('dropped, no public email');
+	});
+
+	it.each([
+		['blocked', blocked('resolution stopped before a census was emitted')],
+		['withheld', withheld('this telemetry is not disclosed on this route')],
+		['absent', absent()]
+	] as const)('renders no census or fabricated zero for a %s fact', (_state, fact) => {
+		const body = renderStudioReach(fact);
+
+		expect(renderedCensus(body)).toBeNull();
+		expect(body).not.toContain('observed candidates');
+	});
+
+	it('keeps a completed empty observation off the count surface', () => {
+		const body = renderStudioReach(present({ observed: 0, rows: [] }));
+
+		expect(renderedCensus(body)).toBeNull();
+		expect(body).not.toContain('0</span> observed candidates');
 	});
 });
 

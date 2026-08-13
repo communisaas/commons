@@ -224,6 +224,11 @@ declare global {
 				};
 				PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE?: DurableObjectNamespace;
 				CONVEX_WORK_BUDGET?: DurableObjectNamespace;
+				PAID_PROVIDER_OPERATOR_USER_IDS?: string;
+				EXA_API_KEY?: string;
+				FIRECRAWL_API_KEY?: string;
+				GEMINI_API_KEY?: string;
+				GROQ_API_KEY?: string;
 				PUBLIC_CONVEX_URL?: string;
 				PUBLIC_RELEASE_TRANSACTION_ID?: string;
 				INTERNAL_API_SECRET?: string;

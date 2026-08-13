@@ -108,15 +108,12 @@ describe('action-context segment filters', () => {
 			'onApply?: (filter: SegmentFilter, count: number, partial?: boolean) => void;'
 		);
 		expect(segmentBuilderSource).toContain(
-			'onApply?.(currentFilter, matchCount ?? 0, matchCountPartial);'
+			'onApply?.(snapshotFilter(currentFilter), matchCount, matchCountPartial);'
 		);
-		expect(segmentBuilderSource).toContain("data.partial ? 'at least ' : ''");
-		expect(segmentBuilderSource).toContain(
-			'Count hit the page cap; this is a lower bound, not a full cohort total.'
-		);
-		expect(segmentBuilderSource).toContain(
-			'action hit the page cap and can be rerun for the remaining matching rows'
-		);
-		expect(segmentBuilderSource).toContain('rerun it to continue through the remaining');
+		expect(segmentBuilderSource).toContain('countedFilterKey !== currentFilterKey');
+		expect(segmentBuilderSource).toContain('generation === countGeneration');
+		expect(segmentBuilderSource).toContain('filters: confirmation.filter');
+		expect(segmentBuilderSource).toContain('This organization has more than 400 supporters.');
+		expect(segmentBuilderSource).not.toContain('rerun it to continue through the remaining');
 	});
 });

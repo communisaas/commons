@@ -68,3 +68,38 @@ describe('false-claims guard', () => {
 		expect(packet).toMatch(/SHA-256 attestation/);
 	});
 });
+
+describe('empirical models stay on the paid org surface', () => {
+	it('no source file hand-types an empirical model value', () => {
+		// gds / ald / cai / temporalEntropy / burstVelocity are computed signals on a
+		// paying org's verification packet. They are org-visible only — never recipient,
+		// public, or marketing. A numeric literal means someone fabricated one to
+		// decorate a page, so any hand-typed value anywhere under src/ is forbidden.
+		expect(hits(/\b(gds|ald|cai|temporalEntropy|burstVelocity)\s*:\s*-?[0-9]/)).toEqual([]);
+	});
+
+	it('the anonymous /org landing page renders no packet', () => {
+		// /org is reachable without a session, so it may not carry a packet at all —
+		// not a computed one, and certainly not a hand-authored fake.
+		const landing = readFileSync(join(SRC, 'routes/org/+page.svelte'), 'utf8');
+		expect(landing).not.toContain('specimenPacket');
+		expect(landing).not.toContain('ca11Boundary');
+		expect(landing).not.toContain('components/org/VerificationPacket.svelte');
+		expect(landing).not.toContain('participation-depth');
+		expect(landing).not.toMatch(/\.specimen(__|[\s{,:])/);
+	});
+
+	it('the authenticated packet surfaces still render the real component', () => {
+		// Guard against satisfying the checks above by deleting the product. Both of
+		// these feed VerificationPacket a server-computed packet behind org membership;
+		// that is the sanctioned surface and it must keep compiling.
+		for (const rel of [
+			'lib/components/org/os/ReturnSpace.svelte',
+			'routes/org/[slug]/campaigns/[id]/+page.svelte'
+		]) {
+			expect(readFileSync(join(SRC, rel), 'utf8')).toContain(
+				'$lib/components/org/VerificationPacket.svelte'
+			);
+		}
+	});
+});

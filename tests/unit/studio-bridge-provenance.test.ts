@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { saveStudioProcessAsTemplateDraft } from '$lib/components/org/studio/studio-draft-bridge';
 import { templateDraftStore } from '$lib/stores/templateDraft';
 import type { OrgProcess, ResolvedDecisionMaker } from '$lib/components/org/os/orgOS.svelte';
+import { blocked } from '$lib/core/fact';
 
 // The shared test setup stubs localStorage as a no-op; these assertions read the
 // draft back out of storage, so install a working in-memory store for this suite.
@@ -63,6 +64,7 @@ function makeProcess(decisionMakers: ResolvedDecisionMaker[]): OrgProcess {
 		entries: [],
 		decisionMakers,
 		droppedEmailless: 0,
+		reachCensus: blocked('Fixture did not run resolution'),
 		resolutionStopReason: null,
 		resolutionStopDetail: null,
 		geographicScope: null,

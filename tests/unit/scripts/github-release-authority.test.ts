@@ -37,6 +37,7 @@ function branchPolicies(overrides: Record<string, unknown> = {}) {
 function pullRequestReviews(overrides: Record<string, unknown> = {}) {
 	return {
 		required_approving_review_count: 1,
+		require_code_owner_reviews: true,
 		dismiss_stale_reviews: true,
 		require_last_push_approval: true,
 		bypass_pull_request_allowances: { users: [], teams: [], apps: [] },
@@ -61,14 +62,16 @@ function branchProtection(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function valid(overrides: {
-	environmentName?: string;
-	environment?: unknown;
-	branchPolicies?: unknown;
-	branchProtection?: unknown;
-	protectedBranch?: unknown;
-	requiredStatusCheck?: unknown;
-} = {}) {
+function valid(
+	overrides: {
+		environmentName?: string;
+		environment?: unknown;
+		branchPolicies?: unknown;
+		branchProtection?: unknown;
+		protectedBranch?: unknown;
+		requiredStatusCheck?: unknown;
+	} = {}
+) {
 	return {
 		environmentName: overrides.environmentName ?? 'Production',
 		environment: overrides.environment ?? environment(),
@@ -97,6 +100,7 @@ describe('GitHub release authority verifier', () => {
 			requiredStatusChecks: ['test'],
 			requiredStatusCheckAppId: 15368,
 			requiredApprovals: 1,
+			codeOwnerApproval: true,
 			dismissStaleApprovals: true,
 			requireLastPushApproval: true,
 			pullRequestBypassActors: 0,
@@ -119,6 +123,24 @@ describe('GitHub release authority verifier', () => {
 			})
 		);
 		expect(result.requiredStatusChecks).toEqual(['test']);
+	});
+
+	it('accepts an additional uniquely app-bound independent review authority', () => {
+		const result = validateGitHubReleaseAuthority(
+			valid({
+				branchProtection: branchProtection({
+					required_status_checks: {
+						strict: true,
+						contexts: ['test', 'Commons Brutalist Launch Authority'],
+						checks: [
+							{ context: 'test', app_id: 15368 },
+							{ context: 'Commons Brutalist Launch Authority', app_id: 424242 }
+						]
+					}
+				})
+			})
+		);
+		expect(result.requiredStatusChecks).toEqual(['test', 'Commons Brutalist Launch Authority']);
 	});
 
 	it.each([
@@ -145,11 +167,7 @@ describe('GitHub release authority verifier', () => {
 	});
 
 	it.each([
-		[
-			'no reviewer rule',
-			[{ id: 2, type: 'branch_policy' }],
-			/exactly one required-reviewers/i
-		],
+		['no reviewer rule', [{ id: 2, type: 'branch_policy' }], /exactly one required-reviewers/i],
 		[
 			'multiple reviewer rules',
 			[
@@ -270,9 +288,7 @@ describe('GitHub release authority verifier', () => {
 		]
 	] as const)('rejects deployment policy drift: %s', (_label, env, policies, message) => {
 		expect(() =>
-			validateGitHubReleaseAuthority(
-				valid({ environment: env, branchPolicies: policies })
-			)
+			validateGitHubReleaseAuthority(valid({ environment: env, branchPolicies: policies }))
 		).toThrow(message);
 	});
 
@@ -297,7 +313,7 @@ describe('GitHub release authority verifier', () => {
 					checks: [{ context: 'test', app_id: 15368 }]
 				}
 			},
-			/legacy status contexts/i
+			/legacy context/i
 		],
 		[
 			'legacy context duplication',
@@ -313,7 +329,7 @@ describe('GitHub release authority verifier', () => {
 		[
 			'context-only unbound check',
 			{ required_status_checks: { strict: true, contexts: ['test'] } },
-			/exactly one app-bound/i
+			/app-bound status checks/i
 		],
 		[
 			'wrong app-bound check',
@@ -335,7 +351,7 @@ describe('GitHub release authority verifier', () => {
 					checks: [{ context: 'test', app_id: -1 }]
 				}
 			},
-			/GitHub Actions App/i
+			/identity is malformed/i
 		],
 		[
 			'null-app status check',
@@ -346,27 +362,36 @@ describe('GitHub release authority verifier', () => {
 					checks: [{ context: 'test', app_id: null }]
 				}
 			},
-			/GitHub Actions App/i
+			/identity is malformed/i
 		],
 		[
-			'extra required check',
+			'duplicate context across Apps',
 			{
 				required_status_checks: {
 					strict: true,
 					contexts: ['test'],
 					checks: [
 						{ context: 'test', app_id: 15368 },
-						{ context: 'lint', app_id: 15368 }
+						{ context: 'test', app_id: 424242 }
 					]
 				}
 			},
-			/exactly one app-bound/i
+			/contexts must be unique/i
 		],
 		['no reviews', { required_pull_request_reviews: null }, /approving pull-request review/i],
 		[
 			'zero approvals',
 			{ required_pull_request_reviews: { required_approving_review_count: 0 } },
 			/approving pull-request review/i
+		],
+		[
+			'no CODEOWNER approval',
+			{
+				required_pull_request_reviews: pullRequestReviews({
+					require_code_owner_reviews: false
+				})
+			},
+			/CODEOWNER/i
 		],
 		[
 			'retained stale approvals',
@@ -484,9 +509,7 @@ describe('GitHub release authority verifier', () => {
 		['branch deletion', { allow_deletions: { enabled: true } }, /disable deletion/i]
 	] as const)('rejects protected-main drift: %s', (_label, override, message) => {
 		expect(() =>
-			validateGitHubReleaseAuthority(
-				valid({ branchProtection: branchProtection(override) })
-			)
+			validateGitHubReleaseAuthority(valid({ branchProtection: branchProtection(override) }))
 		).toThrow(message);
 	});
 
@@ -519,12 +542,7 @@ describe('GitHub release authority verifier', () => {
 		});
 		expect(() => parseGitHubReleaseAuthorityArgs([])).toThrow(/Production or Staging/i);
 		expect(() =>
-			parseGitHubReleaseAuthorityArgs([
-				'--environment',
-				'Production',
-				'--environment',
-				'Staging'
-			])
+			parseGitHubReleaseAuthorityArgs(['--environment', 'Production', '--environment', 'Staging'])
 		).toThrow(/only once/i);
 	});
 });

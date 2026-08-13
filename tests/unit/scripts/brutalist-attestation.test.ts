@@ -521,6 +521,16 @@ describe('Brutalist launch review attestation v3', () => {
 		expect(ATTESTATION_RUNBOOK).toMatch(/HOME.*is \*\*not containment\*\*/);
 	});
 
+	it('forces the launch panel to review every residual cost and replay foundation', () => {
+		expect(ATTESTATION_RUNBOOK).toMatch(/`FND-51`\s+through `FND-55`/);
+		expect(ATTESTATION_RUNBOOK).toMatch(/submission creation.*before any context work/s);
+		expect(ATTESTATION_RUNBOOK).toMatch(/both batch and mailto position-delivery writers/);
+		expect(ATTESTATION_RUNBOOK).toMatch(/nine-operation provider policy/);
+		expect(ATTESTATION_RUNBOOK).toMatch(/recursive Convex scanner reports zero provider capabilities/);
+		expect(ATTESTATION_RUNBOOK).toMatch(/Shadow Atlas.*durable identity-scoped lease/s);
+		expect(ATTESTATION_RUNBOOK).toMatch(/Source tests do\s+not prove live Atlas availability/);
+	});
+
 	it('makes the MCP child environment full-repository and native-panel deterministic', () => {
 		const childEnvironment = buildBrutalistChildEnvironment({
 			agyBinary: '/pinned/agy',
@@ -1005,5 +1015,70 @@ describe('Brutalist launch review attestation v3', () => {
 		expect(() => verify(fixture, fixture.baseSha, fixture.proofCommitSha)).toThrow(
 			/exact current PR\/source head/
 		);
+	});
+
+	it('keeps the pull-request diagnostic base-owned and proof-ref immutable', () => {
+		const workflow = readFileSync('.github/workflows/brutalist-review.yml', 'utf8');
+		const expression = (value: string) => '$' + '{{ ' + value + ' }}';
+
+		expect(workflow).toContain('name: Brutalist Review (diagnostic)');
+		expect(workflow).toMatch(/^\s*pull_request_target:/m);
+		expect(workflow).toContain('types: [opened, synchronize, reopened, ready_for_review]');
+		expect(workflow).toContain('ref: ' + expression('github.event.pull_request.base.sha'));
+		expect(workflow).toContain('path: gate');
+		expect(workflow).toContain('persist-credentials: false');
+		expect(workflow).toContain(
+			'SOURCE_SHA: ' + expression('github.event.pull_request.head.sha')
+		);
+		expect(workflow).toContain(
+			'BASE_SHA: ' + expression('github.event.pull_request.base.sha')
+		);
+		expect(workflow).toContain('"+$BASE_SHA:refs/brutalist/fetched-base"');
+		expect(workflow).toContain(
+			"rev-parse --verify 'refs/brutalist/fetched-base^{commit}'"
+		);
+		expect(workflow).toContain('test "$resolved_base_sha" = "$BASE_SHA"');
+		expect(workflow).toContain(
+			'attestation_ref="refs/heads/brutalist-attestations/$SOURCE_SHA"'
+		);
+		expect(workflow).toContain('"+$attestation_ref:refs/brutalist/fetched-proof"');
+		expect(workflow).toContain(
+			"rev-parse --verify 'refs/brutalist/fetched-proof^{commit}'"
+		);
+		expect(workflow).toContain(
+			'echo "proof_commit_sha=$proof_commit_sha" >> "$GITHUB_OUTPUT"'
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_PROOF_COMMIT_SHA: ' +
+				expression('steps.fetch_inert_objects.outputs.proof_commit_sha')
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_EXPECTED_BASE_SHA: ' + expression('github.event.pull_request.base.sha')
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_EXPECTED_HEAD_SHA: ' + expression('github.event.pull_request.head.sha')
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_EXPECTED_REPOSITORY_ID: ' + expression('github.repository_id')
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_EXPECTED_REPOSITORY_SLUG: ' + expression('github.repository')
+		);
+		expect(workflow).toContain(
+			'BRUTALIST_REPOSITORY_GIT_DIR: ' +
+				expression('runner.temp') +
+				'/commons-candidate.git'
+		);
+		expect(workflow).toContain('run: node gate/scripts/verify-brutalist-attestation.mjs');
+		expect(workflow).toContain('ordinary Actions contexts can be spoofed');
+		expect(workflow).not.toContain('$' + '{{ secrets.');
+		expect(workflow).not.toMatch(/^\s+[a-z-]+:\s+write\s*$/m);
+		expect(workflow).not.toMatch(/npm install|curl\s/);
+		expect(workflow).not.toContain(
+			'ref: ' + expression('github.event.pull_request.head.sha')
+		);
+		expect(workflow).not.toContain('node scripts/verify-brutalist-attestation.mjs');
+		expect(workflow).not.toContain('BASE_REF:');
+		expect(workflow).not.toContain('refs/heads/$BASE_REF');
 	});
 });

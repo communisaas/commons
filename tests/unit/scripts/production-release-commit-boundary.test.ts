@@ -14,7 +14,9 @@ describe('production release commit boundary', () => {
 		expect(productionJob).toContain(
 			"needs.qualify-preview-generation.outputs.runtime_proved == 'true'"
 		);
-		expect(productionJob).toContain('verify-pages-durable-object-binding.mjs --environment production');
+		expect(productionJob).toContain('verify-pages-durable-object-binding.mjs');
+		expect(productionJob).toContain('--environment production');
+		expect(productionJob).toContain('--deployment-id "$PRODUCTION_PAGES_DEPLOYMENT_ID"');
 		expect(productionJob).toContain('--producer-posture bound');
 		expect(productionJob).toContain('--delivery-posture active');
 	});
@@ -23,9 +25,7 @@ describe('production release commit boundary', () => {
 		const retained = productionJob.indexOf(
 			'Prove retained production edge rollback capability before Q'
 		);
-		const hiddenLiveness = productionJob.indexOf(
-			"'https://pages-origin.commons.email/api/live'"
-		);
+		const hiddenLiveness = productionJob.indexOf("'https://pages-origin.commons.email/api/live'");
 		const seed = productionJob.indexOf('Seed global public-discovery manifest control state');
 		const graph = productionJob.indexOf('Prove exact immutable bundled graph surface');
 		const cron = productionJob.indexOf('Deploy public-discovery manifest cron control Worker');
@@ -34,9 +34,7 @@ describe('production release commit boundary', () => {
 		const commit = productionJob.indexOf(
 			'Commit production authority as the terminal authority mutation'
 		);
-		const finalize = productionJob.indexOf(
-			'qualify-public-discovery-generation.mjs finalize'
-		);
+		const finalize = productionJob.indexOf('qualify-public-discovery-generation.mjs finalize');
 		const originProof = productionJob.indexOf('Prove the exact committed production origin chain');
 		const livenessProof = productionJob.indexOf("'https://commons.email/api/live'");
 		const readinessProof = productionJob.indexOf('/api/health');
@@ -70,9 +68,7 @@ describe('production release commit boundary', () => {
 		);
 		expect(productionJob.slice(0, finalize)).not.toContain('https://commons.email/api/live');
 		expect(productionJob.slice(0, finalize)).not.toContain('https://commons.email/api/health');
-		expect(productionJob.slice(0, finalize)).not.toContain(
-			'prove-public-discovery-edge-cache.mjs'
-		);
+		expect(productionJob.slice(0, finalize)).not.toContain('prove-public-discovery-edge-cache.mjs');
 		expect(productionJob.slice(seed, graph)).toContain('--maximum-attempts 1');
 		expect(productionJob.slice(hiddenLiveness, seed)).toContain('.release.sha == $sha');
 		expect(productionJob.slice(hiddenLiveness, seed)).toContain(

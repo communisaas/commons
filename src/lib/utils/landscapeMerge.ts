@@ -28,7 +28,6 @@ export interface LandscapeMember {
   organization: string;
   accountabilityOpener: string | null;
   roleCategory: RoleCategory;
-  relevanceRank: number;
   publicActions: string[];
   source: 'template' | 'district';
   // Delivery routing
@@ -160,7 +159,6 @@ export function mergeLandscape(
       email: dm.email || null,
       accountabilityOpener: dm.accountabilityOpener || null,
       roleCategory: category,
-      relevanceRank: dm.relevanceRank || 99,
       publicActions: dm.publicActions || [],
       source: 'template',
       deliveryRoute: resolveDeliveryRoute({ email: dm.email }),
@@ -203,7 +201,6 @@ export function mergeLandscape(
       email: official.email || null,
       accountabilityOpener: null,
       roleCategory: 'votes',
-      relevanceRank: 50,
       publicActions: [],
       source: 'district',
       deliveryRoute,
@@ -225,7 +222,7 @@ export function mergeLandscape(
     .map(cat => ({
       category: cat,
       label: ROLE_LABELS[cat],
-      members: roleGroupMap.get(cat)!.sort((a, b) => a.relevanceRank - b.relevanceRank)
+      members: roleGroupMap.get(cat)!
     }));
 
   const districtGroup = districtMembers.length > 0

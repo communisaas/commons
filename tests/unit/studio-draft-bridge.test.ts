@@ -15,6 +15,7 @@ import {
 import { templateDraftStore } from '$lib/stores/templateDraft';
 import { orgEmailComposeDrafts, type OrgEmailComposeDraft } from '$lib/stores/orgDraftStore';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
+import { blocked } from '$lib/core/fact';
 
 const OPERATOR = 'operator-test';
 
@@ -71,6 +72,7 @@ function makeProcess(overrides: Partial<OrgProcess> = {}): OrgProcess {
 			}
 		],
 		droppedEmailless: 1,
+		reachCensus: blocked('Fixture did not run resolution'),
 		resolutionStopReason: null,
 		resolutionStopDetail: null,
 		geographicScope: {

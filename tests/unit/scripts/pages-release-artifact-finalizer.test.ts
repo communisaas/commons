@@ -403,7 +403,7 @@ describe('trusted Pages release-artifact finalizer', () => {
 			'\tasync connect() {\n\t\ttry {\n\t\t\tconst client = (await import("redis")).createClient({ url: this.redisUrl });\n\t\t\tclient.on("error", (err) => {\n\t\t\t\tconsole.error("[RateLimiter] Redis error:", err);\n\t\t\t\tcaptureWithContext(err, { action: "redis-rate-limiter" });\n\t\t\t});\n\t\t\tawait client.connect();\n\t\t\tconsole.debug("[RateLimiter] Redis connected for rate limiting");\n\t\t\tthis.client = client;\n\t\t\treturn this.client;\n\t\t} catch (error) {\n\t\t\tconsole.error("[RateLimiter] Failed to connect to Redis:", error);\n\t\t\tcaptureWithContext(error, { action: "redis-connect" });\n\t\t\tthrow error;\n\t\t}\n\t}';
 		writeFileSync(
 			join(input.buildRoot, 'output/server/chunks/rate-limiter.js'),
-			`${redisContract}\n\tasync getTimestamps() {}`
+			`${redisContract}\n\tasync reserve() {}`
 		);
 		writeFileSync(
 			join(
@@ -448,7 +448,7 @@ describe('trusted Pages release-artifact finalizer', () => {
 		).toThrow(/reviewed dynamic import site/);
 		writeFileSync(
 			join(input.buildRoot, 'output/server/chunks/rate-limiter.js'),
-			`${redisContract.replace('throw error;', 'return this.client;')}\n\tasync getTimestamps() {}`
+			`${redisContract.replace('throw error;', 'return this.client;')}\n\tasync reserve() {}`
 		);
 		expect(() =>
 			verifyOptionalDependencyStubSemantics(metafile, {

@@ -18,6 +18,7 @@ import {
 import { templateDraftStore } from '$lib/stores/templateDraft';
 import { createEmptyTemplateFormData } from '$lib/types/template';
 import type { OrgProcess } from '$lib/components/org/os/orgOS.svelte';
+import { blocked } from '$lib/core/fact';
 
 // The shared test setup stubs localStorage as a no-op; the handoff contract is
 // "draft survives the storage round-trip", so install a working in-memory
@@ -101,6 +102,7 @@ function makeProcess(overrides: Partial<OrgProcess> = {}): OrgProcess {
 			}
 		],
 		droppedEmailless: 1,
+		reachCensus: blocked('Fixture did not run resolution'),
 		resolutionStopReason: null,
 		resolutionStopDetail: null,
 		geographicScope: {

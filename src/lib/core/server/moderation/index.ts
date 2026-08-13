@@ -1,5 +1,5 @@
 /**
- * Unified Moderation Pipeline - Permissive Civic Platform
+ * Unified Moderation Pipeline - Target-Conditional Civic Platform
  *
  * Two-layer moderation optimized for multi-stakeholder civic engagement:
  *
@@ -10,14 +10,14 @@
  *
  * Layer 1: `openai/gpt-oss-safeguard-20b` (via GROQ) - REQUIRED unless explicitly skipped by a trusted caller
  *   - MLCommons S1-S14 hazard taxonomy
- *   - PERMISSIVE: Only S1 (threats) and S4 (CSAM) block content
- *   - Political speech, defamation claims, electoral opinions ALLOWED
+ *   - S1 (threats) and S4 (CSAM) always block content
+ *   - S5, S7, and S10 additionally block non-governmental and unknown targets
  *
- * Design principle: Be PERMISSIVE with user speech.
- * Platform serves ANY decision-maker (Congress, corporations, HOAs, etc.)
- * The real threat is prompt injection, not controversial opinions.
+ * The calibrated permissive policy requires a server-derived government
+ * registry verdict. Unknown target classes use the stricter policy.
  */
 
+import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
 import { classifySafety } from './llama-guard';
 import { detectPromptInjection } from './prompt-guard';
 import type {
@@ -30,7 +30,13 @@ import type {
 // Re-export types for external consumers
 export type { ModerationResult, SafetyResult, PromptGuardResult, TemplateModerationInput };
 export type { MLCommonsHazard } from './types';
-export { HAZARD_DESCRIPTIONS, BLOCKING_HAZARDS, NON_BLOCKING_HAZARDS } from './types';
+export {
+	HAZARD_DESCRIPTIONS,
+	BLOCKING_HAZARDS,
+	NON_BLOCKING_HAZARDS,
+	NON_GOVERNMENTAL_BLOCKING_HAZARDS,
+	blockingHazardsForTarget
+} from './types';
 export { classifySafety } from './llama-guard';
 export { detectPromptInjection, isPromptInjection } from './prompt-guard';
 
@@ -46,6 +52,8 @@ export interface ModerationOptions {
 	injectionThreshold?: number;
 	/** Abort both Groq calls when the owning request/job is cancelled. */
 	signal?: AbortSignal;
+	/** Server-derived government-registry verdict. Unknown stays strict. */
+	targetClass?: GovernmentalClass;
 }
 
 /**
@@ -76,7 +84,7 @@ export function buildTemplateModerationContent(input: TemplateModerationInput): 
  *
  * Pipeline order:
  * 1. Prompt injection detection (blocks agent manipulation)
- * 2. Content safety (only S1/S4 block - threats, CSAM)
+ * 2. Content safety (blocking policy resolved from the target class)
  *
  * @param template - Template content to moderate
  * @param options - Moderation options
@@ -122,18 +130,19 @@ export async function moderateTemplate(
 	}
 
 	// =========================================================================
-	// Layer 1: Content Safety (PERMISSIVE POLICY, FAIL-CLOSED AVAILABILITY)
-	// Only S1 (threats) and S4 (CSAM) actually block content
+	// Layer 1: Content Safety (TARGET-CONDITIONAL, FAIL-CLOSED AVAILABILITY)
 	// =========================================================================
 	let safety: SafetyResult | undefined;
 
 	if (!options.skipSafety) {
-		safety = await classifySafety(content, { signal: options.signal });
+		safety = await classifySafety(content, {
+			signal: options.signal,
+			targetClass: options.targetClass
+		});
 
-		// Only block on BLOCKING_HAZARDS (S1, S4)
 		if (!safety.safe) {
 			const latencyMs = Date.now() - startTime;
-			console.log('[moderation] Template REJECTED - illegal content detected:', {
+			console.log('[moderation] Template REJECTED - blocking content detected:', {
 				blocking_hazards: safety.blocking_hazards,
 				all_hazards: safety.hazards,
 				latencyMs
@@ -212,7 +221,7 @@ export async function moderatePromptOnly(
  */
 export async function moderatePersonalization(
 	text: string,
-	options: { signal?: AbortSignal } = {}
+	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
 ): Promise<ModerationResult> {
 	const startTime = Date.now();
 
@@ -247,7 +256,7 @@ export async function moderatePersonalization(
 		};
 	}
 
-	// Layer 1: Content safety (only S1/S4 block)
+	// Layer 1: Content safety under the resolved target policy
 	const safety = await classifySafety(text, options);
 
 	if (!safety.safe) {

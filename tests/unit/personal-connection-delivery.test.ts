@@ -12,7 +12,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { analyzeEmailFlow, assembleMailto, generateMailtoUrl } from '$lib/services/emailService';
+import {
+	analyzeEmailFlow,
+	assembleMailto,
+	buildSuppressionZone,
+	generateMailtoUrl
+} from '$lib/services/emailService';
 import { resolveTemplate } from '$lib/utils/templateResolver';
 import { moderatePersonalConnection } from '$lib/utils/personal-connection';
 import { buildAttestation, type VerificationMethod } from '$lib/core/identity/tier-display';
@@ -87,7 +92,10 @@ function detailPageSingleAssembly() {
 		subject: directTemplate.title,
 		zones: {
 			body: resolved.body.replace(/\[District\]/g, DISTRICT),
-			attestation
+			attestation,
+			// The route always names this zone; it is empty here because these
+			// fixtures mint no server-side do-not-contact URLs.
+			suppression: buildSuppressionZone([{ email: 'member@example.test' }])
 		}
 	});
 	if (!assembly.ok) throw new Error(assembly.message);
@@ -104,12 +112,15 @@ function detailPageBatchAssembly() {
 			credentialHash: null
 		}).block ?? undefined;
 
+	const recipients = ['one@example.test', 'two@example.test', 'three@example.test'];
 	const assembly = assembleMailto({
-		recipients: ['one@example.test', 'two@example.test', 'three@example.test'],
+		recipients,
 		subject: directTemplate.title,
 		zones: {
 			body: resolved.body.replace(/\[District\]/g, DISTRICT).trim(),
-			attestation
+			attestation,
+			// See above: named, and empty without minted URLs.
+			suppression: buildSuppressionZone(recipients.map((email) => ({ email })))
 		}
 	});
 	if (!assembly.ok) throw new Error(assembly.message);
@@ -385,8 +396,8 @@ describe('one substitution point', () => {
 		expect(batch).toBeGreaterThan(single);
 		expect(page.indexOf('assembleMailto({', batch + 1)).toBe(-1);
 
-		expect(zoneKeysAt(single)).toEqual(['body', 'attestation']);
-		expect(zoneKeysAt(batch)).toEqual(['body', 'attestation']);
+		expect(zoneKeysAt(single)).toEqual(['body', 'attestation', 'suppression']);
+		expect(zoneKeysAt(batch)).toEqual(['body', 'attestation', 'suppression']);
 	});
 
 	it('there is one moderation call site abstraction', () => {
