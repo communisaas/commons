@@ -1,13 +1,25 @@
-import { serverMutation } from '$lib/server/convex-work-budget';
-import { api } from '$lib/convex';
 import { verifyRecipientSuppressionToken } from '$lib/server/email/recipient-suppression';
-import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { PageServerLoad, Actions } from './$types';
 
-// Param-length caps keep the HMAC update off adversarial megabyte URLs. Both
-// values are fixed-width by construction — a 64-hex hash and a 64-hex token —
-// so 128 is generous slack.
+/**
+ * The legacy two-segment link, kept alive and stripped of authority.
+ *
+ * Links minted under the original scheme carry no slug, so this route cannot
+ * re-derive which published template the address came from — and without that it
+ * cannot re-read the artifact to recover the plaintext address, which is what
+ * mailing a confirmation challenge requires. It therefore does the only honest
+ * thing left: it confirms the link is genuine and hands the person an operator
+ * route. It performs NO write on any method.
+ *
+ * A link of this shape can only exist if it was minted at a real send. Whether
+ * any ever reached a production recipient is an operator question; if none did,
+ * this route should be deleted outright rather than kept as a courtesy.
+ *
+ * Param-length caps keep the HMAC update off adversarial megabyte URLs. Both
+ * values are fixed-width by construction — a 64-hex hash and a 64-hex token — so
+ * 128 is generous slack.
+ */
 function paramsInBounds(contactHash: string, token: string): boolean {
 	return contactHash.length <= 128 && token.length <= 128;
 }
@@ -20,7 +32,8 @@ function paramsInBounds(contactHash: string, token: string): boolean {
  * scanner silently and permanently delete an office address from every public
  * projection on the platform, with no person having decided anything.
  */
-export const load: PageServerLoad = async ({ params }) => {
+export const load: PageServerLoad = async ({ params, setHeaders }) => {
+	setHeaders({ 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer' });
 	const { contactHash, token } = params;
 
 	if (!paramsInBounds(contactHash, token)) {
@@ -51,14 +64,8 @@ export const actions: Actions = {
 			return { done: false, error: 'This link is not valid.' };
 		}
 
-		await serverMutation(api.email.suppressRecipientByRequest, {
-			_secret: getInternalSecret(),
-			contactHash,
-			// Random and non-identifying: it lets an operator see a burst of
-			// requests without learning anything about a person.
-			requestId: crypto.randomUUID()
-		});
-
-		return { done: true };
+		// No slug, so no artifact, so no address to mail a challenge to. The route
+		// out stays open, but through a person rather than a machine.
+		return { operator: true as const };
 	}
 };

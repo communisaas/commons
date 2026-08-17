@@ -18,7 +18,7 @@
  */
 
 import { buildSuppressionZone } from '$lib/services/emailService';
-import { absent, blocked, present, type Fact } from '$lib/core/fact';
+import { absent, blocked, present, withheld, type Fact } from '$lib/core/fact';
 
 export type DoNotContactLinks = Readonly<Record<string, string>>;
 
@@ -32,6 +32,33 @@ const LINKS_INCOMPLETE =
 	'A do-not-contact link could not be prepared for every recipient. Please try sending again.';
 const LINKS_ROSTER_TOO_LARGE =
 	'This message has too many recipients to prepare do-not-contact links safely.';
+
+/**
+ * The volume refusal, in the sender's words.
+ *
+ * It must be true about the mechanism: the count is kept per UTC calendar day,
+ * so the copy names that boundary rather than claiming a rolling 24 hours. It
+ * must not say "try again" — retrying does not help, and `LINKS_INCOMPLETE`
+ * would therefore be a lie here. It must not be punitive: the recipient still
+ * has every right to hear from this sender. And it must not claim the recipient
+ * has been protected from mail sent by other tooling, because they have not.
+ */
+function heldCopy(retryAfterSeconds: number | null, heldAddresses: readonly string[]): string {
+	const resetsAt =
+		retryAfterSeconds === null ? null : new Date(Date.now() + retryAfterSeconds * 1000);
+	const when =
+		resetsAt && Number.isFinite(resetsAt.getTime())
+			? ` — around ${resetsAt.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} your time`
+			: '';
+	const named = heldAddresses.join(', ');
+	return (
+		`The platform paused ${named} for this whole message because you have already prepared ` +
+		'today’s allowed volume to that recipient. ' +
+		'They still have every right to hear from you — this pause is about volume, not about ' +
+		`what you wrote. The count resets at the start of the next UTC day${when}. ` +
+		'It does not stop mail you send from your own email client.'
+	);
+}
 
 function normalizeRequestedAddresses(emails: readonly string[]): string[] {
 	const seen = new Set<string>();
@@ -57,33 +84,39 @@ export function describeDoNotContactFailure(fact: Fact<unknown>): string {
 }
 
 /**
- * Fetch suppression URLs for a published template's recipients.
+ * Fetch suppression URLs for the addresses one message actually carries.
  *
- * @param slug - Public template slug. The server derives the roster from it; the
- *   client cannot name an address the template does not already publish.
- * @param emails - Optional narrowing. Omit it when the composer resolves its own
- *   recipients and the whole published roster is wanted.
+ * @param slug - Public template slug. The server intersects the named addresses
+ *   with the roster this slug publishes; the client cannot name an address the
+ *   template does not already publish.
+ * @param emails - The addresses this message will be sent to. Required: a
+ *   request that names none mints none, so omitting them would silently produce
+ *   an empty map that reads as a complete roster.
  */
 export async function fetchDoNotContactUrls(
 	slug: string,
-	emails?: readonly string[]
+	emails: readonly string[]
 ): Promise<Fact<DoNotContactLinks>> {
-	const requested = emails ? normalizeRequestedAddresses(emails) : null;
-	if (requested?.length === 0) return absent();
+	const requested = normalizeRequestedAddresses(emails);
+	if (requested.length === 0) return absent();
 
 	const signal = AbortSignal.timeout(DO_NOT_CONTACT_LINK_TIMEOUT_MS);
 	try {
 		const response = await fetch('/api/do-not-contact/links', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(requested ? { slug, emails: requested } : { slug }),
+			body: JSON.stringify({ slug, emails: requested }),
 			signal
 		});
 		if (!response.ok) {
 			return blocked(response.status === 413 ? LINKS_ROSTER_TOO_LARGE : LINKS_UNAVAILABLE);
 		}
 
-		const result = (await response.json().catch(() => null)) as { links?: unknown } | null;
+		const result = (await response.json().catch(() => null)) as {
+			held?: unknown;
+			links?: unknown;
+			retryAfter?: unknown;
+		} | null;
 		const links = result?.links;
 		if (links === null || typeof links !== 'object' || Array.isArray(links)) {
 			return blocked(LINKS_UNAVAILABLE);
@@ -94,10 +127,28 @@ export async function fetchDoNotContactUrls(
 			if (typeof url === 'string' && url.length > 0) urls[email] = url;
 		}
 
+		// A volume refusal is WITHHELD, not absent: the link exists and was
+		// reachable, and policy declined to mint it again today. It is read before
+		// the incomplete-map check below so a held recipient never renders
+		// `LINKS_INCOMPLETE` — telling a sender to "try sending again" when nothing
+		// they do today will help would be a lie.
+		const held = Array.isArray(result?.held)
+			? result.held.filter(
+					(value): value is string => typeof value === 'string' && requested.includes(value)
+				)
+			: [];
+		if (held.length > 0) {
+			const retryAfter =
+				Number.isFinite(result?.retryAfter) && Number(result?.retryAfter) > 0
+					? Number(result?.retryAfter)
+					: null;
+			return withheld(heldCopy(retryAfter, held));
+		}
+
 		// A 200 can intentionally hide whether a named address is on the public
 		// roster. At the send seam, however, every actual recipient must have a URL.
 		// A partial map is therefore observed ABSENCE, never a complete present fact.
-		if (requested?.some((email) => !urls[email])) return absent();
+		if (requested.some((email) => !urls[email])) return absent();
 		return present(urls);
 	} catch {
 		return blocked(signal.aborted ? LINKS_TIMED_OUT : LINKS_UNAVAILABLE);

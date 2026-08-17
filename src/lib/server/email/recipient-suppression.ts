@@ -30,19 +30,28 @@ import { env } from '$env/dynamic/private';
  * pair, so the same address always gets the same link and the write is
  * idempotent.
  *
- * KNOWN ASYMMETRY — operator-ratifiable residual, stated rather than hidden.
- * RFC 8058 one-click assumes the link travelled TO the mailbox, so possession
- * of it implies control of it. Here the link rides a message the SENDER
- * composes and sends from their own mail client, which means the sender holds a
- * permanent, irreversible, global takedown link for that official BEFORE the
- * official does — and there is deliberately no re-subscribe, appeal, or
- * un-suppress path. One hostile sender can therefore permanently blank a
- * resolved recipient. The in-product mitigations are per-IP rate limiting on
- * both write entrances, a POST-only write (no GET mutation), and the fact that
- * producing the address at all requires an authenticated, LLM-rate-limited
- * resolution. Recovery is an operator repair of the `contactAuthorities` row;
- * it is out of product scope on purpose, because a self-serve un-suppress is a
- * strictly worse failure than an over-suppression.
+ * RETIRED ASYMMETRY — what these tokens are now, and what retired the residual.
+ * RFC 8058 one-click assumes the link travelled TO the mailbox, so possession of
+ * it implies control of it. That assumption never held here: the link rides a
+ * message the SENDER composes and sends from their own mail client, so the
+ * sender holds it before the recipient does. A token in this file therefore no
+ * longer authorizes anything. It is an INITIATION proof: it opens a page that
+ * ASKS, and the terminal write consumes a one-use nonce that was mailed to the
+ * address itself (`suppression-challenge.ts`). Possession of a link now buys the
+ * ability to make Commons send that mailbox one message, bounded per target in
+ * Convex — not the ability to blank it.
+ *
+ * The recorded rejection that survives unchanged, because it is still right:
+ * there is deliberately no re-subscribe, appeal, or un-suppress path. Recovery
+ * is an operator repair of the `contactAuthorities` row; it is out of product
+ * scope on purpose, because a self-serve un-suppress is a strictly worse failure
+ * than an over-suppression.
+ *
+ * Two spaces live here. `recipient-suppression:v1:` binds a contact hash alone;
+ * it is kept only so links already sitting in mailboxes still open a live page —
+ * demoted, not broken. `recipient-suppression-initiate:v2:` binds the public
+ * template slug as well, so the confirm handler can re-derive the address from
+ * the same published artifact the mint read instead of accepting one.
  */
 
 const MIN_SECRET_BYTES = 32;
@@ -52,6 +61,16 @@ const CONTACT_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
 /** Mandatory domain separation from every other HMAC key space in the tree. */
 const TOKEN_DOMAIN = 'recipient-suppression:v1:';
+
+/** The slug-bound initiation space. Separate domain, so a v1 token cannot open a v2 page. */
+const TOKEN_DOMAIN_INITIATE = 'recipient-suppression-initiate:v2:';
+
+/**
+ * Public template slugs, the same shape the public route accepts. Validated
+ * before the HMAC so an adversarial path segment never reaches a secret, and so
+ * a slug carrying `/` cannot forge a different URL shape.
+ */
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,127}$/;
 
 function activeSecret(): string {
 	const secret = env.RECIPIENT_SUPPRESSION_SECRET;
@@ -83,6 +102,39 @@ function computeToken(secret: string, contactHash: string): string {
 	return hmac.digest('hex');
 }
 
+function computeInitiationToken(secret: string, slug: string, contactHash: string): string {
+	const hmac = createHmac('sha256', secret);
+	hmac.update(`${TOKEN_DOMAIN_INITIATE}${slug}:${contactHash}`);
+	return hmac.digest('hex');
+}
+
+/**
+ * Compare a caller-supplied token against the active secret, then the optional
+ * rotation-window previous secret. One loop for both key spaces so a future
+ * space cannot accidentally ship without the rotation window or without the
+ * length guard.
+ */
+function matchesAnySecret(expected: (secret: string) => string, token: string): boolean {
+	const tokenBuf = Buffer.from(token, 'utf8');
+	const candidates: string[] = [activeSecret()];
+	const previous = previousSecret();
+	if (previous) candidates.push(previous);
+	for (const secret of candidates) {
+		const expectedBuf = Buffer.from(expected(secret), 'utf8');
+		// Length compared on the BUFFERS, not the strings: `timingSafeEqual`
+		// throws on a length mismatch and a non-ASCII token's byte length is not
+		// its character length.
+		if (expectedBuf.length !== tokenBuf.length) continue;
+		if (timingSafeEqual(tokenBuf, expectedBuf)) return true;
+	}
+	return false;
+}
+
+/** Whether a value is a well-formed public template slug for the initiation space. */
+export function isRecipientSuppressionSlug(value: unknown): value is string {
+	return typeof value === 'string' && SLUG_PATTERN.test(value);
+}
+
 /**
  * Whether a value is a well-formed global email hash. Every entrance checks
  * this before touching a secret, so an adversarial parameter never reaches the
@@ -105,34 +157,59 @@ export function generateRecipientSuppressionToken(contactHash: string): string {
 }
 
 /**
- * Build the full do-not-contact URL for a global email hash. Carries no
- * plaintext address by construction.
+ * Generate a slug-bound initiation token under the active secret. Throws on a
+ * malformed slug or hash — a caller minting a link for a non-slug has a bug.
  */
-export function buildRecipientSuppressionUrl(contactHash: string): string {
-	const token = generateRecipientSuppressionToken(contactHash);
-	const baseUrl = env.PUBLIC_BASE_URL || 'https://commons.email';
-	return `${baseUrl}/do-not-contact/${contactHash}/${token}`;
+export function generateRecipientSuppressionInitiationToken(
+	slug: string,
+	contactHash: string
+): string {
+	if (!isRecipientSuppressionSlug(slug)) {
+		throw new Error('RECIPIENT_SUPPRESSION_SLUG_INVALID');
+	}
+	if (!isRecipientContactHash(contactHash)) {
+		throw new Error('RECIPIENT_SUPPRESSION_CONTACT_HASH_INVALID');
+	}
+	return computeInitiationToken(activeSecret(), slug, contactHash);
 }
 
 /**
- * Verify a suppression token. Tries the active secret first, then the optional
- * rotation-window previous secret. Never throws on caller input: a malformed
- * hash or a wrong-length token is a `false`, because both arrive straight off a
- * URL an appliance may have mangled.
+ * Verify a slug-bound initiation token. Never throws on caller input, for the
+ * same reason the v1 verifier does not: both arrive straight off a URL an
+ * appliance may have mangled.
+ */
+export function verifyRecipientSuppressionInitiationToken(
+	slug: string,
+	contactHash: string,
+	token: string
+): boolean {
+	if (!isRecipientSuppressionSlug(slug)) return false;
+	if (!isRecipientContactHash(contactHash)) return false;
+	return matchesAnySecret((secret) => computeInitiationToken(secret, slug, contactHash), token);
+}
+
+/**
+ * Build the full do-not-contact URL for one published template and one global
+ * email hash. Carries no plaintext address by construction; the slug is the
+ * public page's own identifier, so it discloses nothing the page does not.
+ */
+export function buildRecipientSuppressionUrl(slug: string, contactHash: string): string {
+	const token = generateRecipientSuppressionInitiationToken(slug, contactHash);
+	const baseUrl = env.PUBLIC_BASE_URL || 'https://commons.email';
+	return `${baseUrl}/do-not-contact/${slug}/${contactHash}/${token}`;
+}
+
+/**
+ * Verify a v1 suppression token. Tries the active secret first, then the
+ * optional rotation-window previous secret. Never throws on caller input: a
+ * malformed hash or a wrong-length token is a `false`, because both arrive
+ * straight off a URL an appliance may have mangled.
+ *
+ * This is a legacy INITIATION acceptor, not an authority. Links minted under the
+ * v1 scheme are already in mailboxes; they still open a page, and that page —
+ * like every other entrance — can do nothing but ask.
  */
 export function verifyRecipientSuppressionToken(contactHash: string, token: string): boolean {
 	if (!isRecipientContactHash(contactHash)) return false;
-	const tokenBuf = Buffer.from(token, 'utf8');
-	const candidates: string[] = [activeSecret()];
-	const previous = previousSecret();
-	if (previous) candidates.push(previous);
-	for (const secret of candidates) {
-		const expectedBuf = Buffer.from(computeToken(secret, contactHash), 'utf8');
-		// Length compared on the BUFFERS, not the strings: `timingSafeEqual`
-		// throws on a length mismatch and a non-ASCII token's byte length is not
-		// its character length.
-		if (expectedBuf.length !== tokenBuf.length) continue;
-		if (timingSafeEqual(tokenBuf, expectedBuf)) return true;
-	}
-	return false;
+	return matchesAnySecret((secret) => computeToken(secret, contactHash), token);
 }

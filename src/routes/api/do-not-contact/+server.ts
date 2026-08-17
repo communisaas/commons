@@ -1,25 +1,31 @@
 /**
- * POST /api/do-not-contact — mailbox-addressed, machine-readable suppression.
+ * POST /api/do-not-contact — machine-readable acknowledgement, and nothing more.
+ *
+ * This endpoint used to perform the terminal, global, permanent suppression on
+ * possession of an HMAC token alone. It no longer performs any write. A
+ * suppression link rides a message the SENDER composed, so possession of one
+ * proves nothing about control of the mailbox it names; the authority now lives
+ * in a one-use nonce mailed TO the address, spent at
+ * `/do-not-contact/confirm/[nonce]`, which is the only entrance that reaches
+ * `api.email.suppressRecipientByRequest`.
  *
  * POST ONLY. There is no GET here and there must never be one: mail-security
- * appliances and inbox previewers fetch links before a human sees them, and a
- * GET-side write would let a scanner silently and permanently delete an office
- * address from every public projection on the platform.
+ * appliances and inbox previewers fetch links before a human sees them.
  *
- * Accepts `{ contactHash, token }` as JSON or as form data, so an RFC 8058
- * `List-Unsubscribe` / `List-Unsubscribe-Post: List-Unsubscribe=One-Click`
- * header pair can be pointed at this URL later without changing the contract.
+ * It still accepts `{ contactHash, token }` as JSON or as form data, and it
+ * still answers a single `200 {ok:true}` for a valid token, an invalid token, a
+ * malformed hash and an address nobody has ever heard of — anything else is an
+ * address-enumeration oracle. What it does NOT do is act on any of them.
  *
- * Always answers 200 with the same body. A valid write, an invalid token, a
- * malformed hash and an address nobody has ever heard of are indistinguishable
- * from the outside — anything else is an address-enumeration oracle.
+ * RFC 8058 one-click stays unwired on purpose. A `List-Unsubscribe-Post` header
+ * pointed here would promise a removal this route cannot make, and the header
+ * belongs on the challenge message — where the recipient's mailbox really is the
+ * caller — not on a message the sender composed. Wiring it here requires the
+ * slug-bound issuance the page action performs, not a reinstated write.
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from '$lib/server/convex-work-budget';
-import { api } from '$lib/convex';
 import { verifyRecipientSuppressionToken } from '$lib/server/email/recipient-suppression';
-import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import type { RequestHandler } from './$types';
 
@@ -50,15 +56,10 @@ export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 		token = readParam(form?.get('token'));
 	}
 
-	if (!verifyRecipientSuppressionToken(contactHash, token)) return json(ACCEPTED);
-
-	await serverMutation(api.email.suppressRecipientByRequest, {
-		_secret: getInternalSecret(),
-		contactHash,
-		// Random and non-identifying: an operator can see a burst of requests
-		// without learning anything about a person.
-		requestId: crypto.randomUUID()
-	});
+	// Verified and then deliberately dropped. Keeping the check costs nothing and
+	// keeps the shape of the contract honest for a future slug-bound issuance;
+	// acting on it is what made this route a global takedown for any holder.
+	verifyRecipientSuppressionToken(contactHash, token);
 
 	return json(ACCEPTED);
 };

@@ -1,13 +1,15 @@
 /**
- * POST /api/do-not-contact/links — the only way a suppression credential exists.
+ * POST /api/do-not-contact/links — the only way a suppression link exists.
  *
- * Two properties carry the endpoint. The roster is SERVER-derived, so naming an
- * address the template does not publish mints nothing — otherwise this route is a
- * takedown-link generator for any mailbox on earth. And every outcome is one
- * status, one body shape: a hit, a miss, an unknown slug and a congressional
- * template must be indistinguishable, or the route is an address-enumeration
- * oracle. The explicit exception is a roster above the reviewed ceiling, which
- * fails atomically instead of masquerading as a complete partial map.
+ * Three properties carry the endpoint. The roster is SERVER-derived, so naming
+ * an address the template does not publish mints nothing — otherwise this route
+ * is a takedown-link generator for any mailbox on earth. A body that names no
+ * address mints nothing at all, so one anonymous POST cannot harvest a whole
+ * roster. And every outcome is one status, one body shape: a hit, a miss, an
+ * unknown slug and a congressional template must be indistinguishable, or the
+ * route is an address-enumeration oracle. The explicit exception is an
+ * over-long request, which fails atomically at the parser instead of
+ * masquerading as a complete partial map.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +34,7 @@ vi.mock('$lib/core/security/rate-limiter', () => ({
 
 import { env } from '$env/dynamic/private';
 import { computeGlobalEmailHash } from '$lib/core/crypto/org-scoped-hash';
-import { verifyRecipientSuppressionToken } from '$lib/server/email/recipient-suppression';
+import { verifyRecipientSuppressionInitiationToken } from '$lib/server/email/recipient-suppression';
 import { POST } from '../../../src/routes/api/do-not-contact/links/+server';
 import {
 	DO_NOT_CONTACT_LINK_TIMEOUT_MS,
@@ -69,6 +71,9 @@ function event(body: unknown, { slug = SLUG }: { slug?: string } = {}) {
 		}),
 		url: new URL(`https://commons.email/s/${slug}`),
 		platform: undefined,
+		// The send surface composes for guests, so the unauthenticated shape is the
+		// one that must work; an authenticated caller is the narrower case.
+		locals: { user: null },
 		getClientAddress: () => '203.0.113.7'
 	} as never;
 }
@@ -102,24 +107,27 @@ describe('POST /api/do-not-contact/links', () => {
 		expect(minted).toEqual({});
 	});
 
-	it('returns the whole published roster when no addresses are named', async () => {
-		const minted = await links(await POST(event({ slug: SLUG })));
-		expect(Object.keys(minted).sort()).toEqual([ROSTER_B.toLowerCase(), ROSTER_A].sort());
+	it('mints nothing when no addresses are named', async () => {
+		// A caller who does not already know an address does not learn one here.
+		// The roster-wide branch was a whole published roster's worth of links for
+		// one anonymous POST, which is how a stranger harvested them in bulk.
+		const response = await POST(event({ slug: SLUG }));
+		expect(response.status).toBe(200);
+		expect(await links(response)).toEqual({});
 	});
 
-	it('rejects an oversized derived roster instead of returning a trimmed map', async () => {
-		mockGetCachedPublicTemplatePageArtifact.mockResolvedValueOnce(
-			artifact({
-				recipient_config: {
-					emails: Array.from({ length: 21 }, (_, index) => `recipient-${index}@agency.test`)
-				}
-			})
-		);
+	it('rejects an oversized named roster atomically, never as a trimmed map', async () => {
+		// The bounded-JSON parser refuses 21 array items before the handler sees a
+		// body, so the rejection is a 400 and nothing partial is emitted.
+		const oversized = Array.from({ length: 21 }, (_, index) => `recipient-${index}@agency.test`);
 
-		await expect(POST(event({ slug: SLUG }))).rejects.toMatchObject({
-			status: 413,
-			body: { message: 'Recipient roster exceeds the 20-address suppression-link limit' }
+		await expect(POST(event({ slug: SLUG, emails: oversized }))).rejects.toMatchObject({
+			status: 400,
+			body: { message: 'Request body contains too many array items' }
 		});
+		// Rejected before the published artifact is even read: nothing partial can
+		// have been minted, because the roster was never derived.
+		expect(mockGetCachedPublicTemplatePageArtifact).not.toHaveBeenCalled();
 	});
 
 	it('answers one body shape for a hit, a miss, an unknown slug and a congressional template', async () => {
@@ -134,26 +142,33 @@ describe('POST /api/do-not-contact/links', () => {
 		);
 		const congressional = await POST(event({ slug: SLUG, emails: [ROSTER_A] }));
 
+		// The property is that the four outcomes are INDISTINGUISHABLE, not that the
+		// body has one particular field: asserting the exact key list makes any
+		// added field look like a regression when the invariant is sameness.
+		const shapes: string[] = [];
 		for (const response of [hit, miss, unknown, congressional]) {
 			expect(response.status).toBe(200);
 			const parsed = (await response.clone().json()) as Record<string, unknown>;
-			expect(Object.keys(parsed)).toEqual(['links']);
+			expect(Object.keys(parsed)).toContain('links');
+			shapes.push(Object.keys(parsed).sort().join(','));
 		}
+		expect(new Set(shapes).size).toBe(1);
 		expect(await links(miss)).toEqual({});
 		expect(await links(unknown)).toEqual({});
 		expect(await links(congressional)).toEqual({});
 		expect(Object.keys(await links(hit))).toEqual([ROSTER_A]);
 	});
 
-	it('mints a URL that verifies under the address global email hash', async () => {
+	it('mints a slug-bound URL that verifies under the address global email hash', async () => {
 		const minted = await links(await POST(event({ slug: SLUG, emails: [ROSTER_A] })));
 		const contactHash = await computeGlobalEmailHash(ROSTER_A);
 		const url = minted[ROSTER_A];
+		const token = url.split('/').pop() as string;
 
-		expect(url).toBe(
-			`https://commons.email/do-not-contact/${contactHash}/${url.split('/').pop()}`
-		);
-		expect(verifyRecipientSuppressionToken(contactHash, url.split('/').pop() as string)).toBe(true);
+		expect(url).toBe(`https://commons.email/do-not-contact/${SLUG}/${contactHash}/${token}`);
+		expect(verifyRecipientSuppressionInitiationToken(SLUG, contactHash, token)).toBe(true);
+		// Bound to the template that published the address, not ambient.
+		expect(verifyRecipientSuppressionInitiationToken('other-slug', contactHash, token)).toBe(false);
 		// The plaintext address is not in the credential.
 		expect(url).not.toContain('@');
 	});

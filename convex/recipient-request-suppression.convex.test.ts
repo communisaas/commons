@@ -410,17 +410,36 @@ describe('the write endpoint is not an enumeration oracle', () => {
 			});
 		});
 
+		// Each call spends its own live challenge row — the write no longer fires on
+		// possession of a link. The oracle property being tested is unchanged: three
+		// mailboxes in three different states must be indistinguishable in the answer.
+		const seedChallenge = async (contactHash: string, tokenHash: string) => {
+			await t.run(async (ctx) => {
+				await ctx.db.insert('recipientSuppressionChallenges', {
+					contactHash,
+					slug: 'agency-roster',
+					tokenHash,
+					issuedAt: Date.now(),
+					expiresAt: Date.now() + 24 * 60 * 60 * 1000
+				});
+			});
+			return tokenHash;
+		};
+
 		const first = await t.mutation(api.email.suppressRecipientByRequest, {
 			_secret: SECRET,
-			contactHash: known
+			contactHash: known,
+			challengeNonceHash: await seedChallenge(known, '1'.repeat(64))
 		});
 		const second = await t.mutation(api.email.suppressRecipientByRequest, {
 			_secret: SECRET,
-			contactHash: known
+			contactHash: known,
+			challengeNonceHash: await seedChallenge(known, '2'.repeat(64))
 		});
 		const third = await t.mutation(api.email.suppressRecipientByRequest, {
 			_secret: SECRET,
-			contactHash: unknown
+			contactHash: unknown,
+			challengeNonceHash: await seedChallenge(unknown, '3'.repeat(64))
 		});
 
 		expect(first).toEqual({ suppressed: true });

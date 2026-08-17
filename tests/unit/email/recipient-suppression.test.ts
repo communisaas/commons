@@ -22,8 +22,10 @@ vi.mock('$env/dynamic/private', () => ({
 
 import {
 	buildRecipientSuppressionUrl,
+	generateRecipientSuppressionInitiationToken,
 	generateRecipientSuppressionToken,
 	isRecipientContactHash,
+	verifyRecipientSuppressionInitiationToken,
 	verifyRecipientSuppressionToken
 } from '$lib/server/email/recipient-suppression';
 import { generateUnsubscribeToken, verifyUnsubscribeToken } from '$lib/server/email/unsubscribe';
@@ -41,6 +43,8 @@ const ROTATED = 'test-suppression-rotated-' + 'b'.repeat(40);
 const RETIRED = 'test-suppression-retired-' + 'c'.repeat(40);
 const HASH_A = 'a1'.repeat(32);
 const HASH_B = 'b2'.repeat(32);
+const SLUG = 'clean-water';
+const OTHER_SLUG = 'clean-air';
 
 function setEnv(values: Record<string, string | undefined>): void {
 	const mutable = env as Record<string, string | undefined>;
@@ -95,7 +99,7 @@ describe('recipient suppression token', () => {
 		for (const bad of ['', 'not-a-hash', 'A1'.repeat(32), 'a1'.repeat(31), 'a1'.repeat(33)]) {
 			expect(isRecipientContactHash(bad)).toBe(false);
 			expect(() => generateRecipientSuppressionToken(bad)).toThrow();
-			expect(() => buildRecipientSuppressionUrl(bad)).toThrow();
+			expect(() => buildRecipientSuppressionUrl(SLUG, bad)).toThrow();
 			// Verification never throws on caller input — a mangled URL is a `false`.
 			expect(verifyRecipientSuppressionToken(bad, 'f'.repeat(64))).toBe(false);
 		}
@@ -127,11 +131,47 @@ describe('recipient suppression token', () => {
 	});
 
 	it('carries no plaintext address in the URL', () => {
-		const url = buildRecipientSuppressionUrl(HASH_A);
+		const url = buildRecipientSuppressionUrl(SLUG, HASH_A);
 		expect(url).toBe(
-			`https://commons.email/do-not-contact/${HASH_A}/${generateRecipientSuppressionToken(HASH_A)}`
+			`https://commons.email/do-not-contact/${SLUG}/${HASH_A}/${generateRecipientSuppressionInitiationToken(
+				SLUG,
+				HASH_A
+			)}`
 		);
 		expect(url).not.toContain('@');
+	});
+});
+
+describe('the slug-bound initiation space', () => {
+	it('round-trips and stays bound to one slug and one hash', () => {
+		const token = generateRecipientSuppressionInitiationToken(SLUG, HASH_A);
+		expect(verifyRecipientSuppressionInitiationToken(SLUG, HASH_A, token)).toBe(true);
+		expect(verifyRecipientSuppressionInitiationToken(OTHER_SLUG, HASH_A, token)).toBe(false);
+		expect(verifyRecipientSuppressionInitiationToken(SLUG, HASH_B, token)).toBe(false);
+	});
+
+	it('is domain-separated from the v1 space in both directions', () => {
+		const v1 = generateRecipientSuppressionToken(HASH_A);
+		const v2 = generateRecipientSuppressionInitiationToken(SLUG, HASH_A);
+		expect(v1).not.toBe(v2);
+		expect(verifyRecipientSuppressionInitiationToken(SLUG, HASH_A, v1)).toBe(false);
+		expect(verifyRecipientSuppressionToken(HASH_A, v2)).toBe(false);
+	});
+
+	it('refuses a slug that could forge a different URL shape', () => {
+		for (const bad of ['', '../evil', 'a/b', 'UPPER', 'a'.repeat(200)]) {
+			expect(() => generateRecipientSuppressionInitiationToken(bad, HASH_A)).toThrow();
+			expect(verifyRecipientSuppressionInitiationToken(bad, HASH_A, 'f'.repeat(64))).toBe(false);
+		}
+	});
+
+	it('survives a rotation window like the v1 space does', () => {
+		const underActive = generateRecipientSuppressionInitiationToken(SLUG, HASH_A);
+		setEnv({
+			RECIPIENT_SUPPRESSION_SECRET: ROTATED,
+			RECIPIENT_SUPPRESSION_SECRET_PREVIOUS: ACTIVE
+		});
+		expect(verifyRecipientSuppressionInitiationToken(SLUG, HASH_A, underActive)).toBe(true);
 	});
 });
 
