@@ -103,3 +103,4 @@ infra/lambda/*/.svelte-kit/
 # Wrangler local platform-proxy secrets (dev only, never committed)
 .dev.vars
 .dev.vars.*
+.codex/
