@@ -798,6 +798,28 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 		/ctx\.db\.patch\(\s*receipt\._id/,
 	'legislation.ts:importRepresentatives:unresolved-patch-target:dm._id':
 		/ctx\.db\.patch\(dm\._id/,
+	// A provider payment must carry a valid proof before any subscription row is
+	// credited; an invalid proof throws before the patch is reached.
+	'subscriptions.ts:creditAgenticProviderPayment:unresolved-patch-target:sub._id':
+		/AGENTIC_PROVIDER_PAYMENT_PROOF_INVALID/,
+	// Shadow-atlas registration dispatch is server-only and keyed on the caller's
+	// own userId, which the internal secret authorizes.
+	'users.ts:beginShadowAtlasRegistrationDispatch:unresolved-patch-target:args.userId':
+		/requireInternalSecret/,
+	// The tree-1 commit is compare-and-swap: a changed identity or a stale
+	// operation state throws before either target is patched.
+	'users.ts:commitShadowAtlasTree1Operation:unresolved-patch-target:args.userId':
+		/SHADOW_ATLAS_TREE1_COMMIT_CAS_MISMATCH/,
+	'users.ts:commitShadowAtlasTree1Operation:unresolved-patch-target:registration._id':
+		/SHADOW_ATLAS_TREE1_COMMIT_CAS_MISMATCH/,
+	'users.ts:markShadowAtlasRegistrationOperationAmbiguous:unresolved-patch-target:args.userId':
+		/requireInternalSecret/,
+	// Repair refuses an out-of-range timestamp before touching the row.
+	'users.ts:repairShadowAtlasRegistrationOperation:unresolved-patch-target:args.userId':
+		/SHADOW_ATLAS_TREE1_REPAIR_TIMESTAMP_INVALID/,
+	// Only bills with no owning org are deletable, inside one bounded page.
+	'legislation.ts:pruneBillsBatch:unresolved-delete-target:bill._id':
+		/bill\.orgId == null/,
 	'legislation.ts:pruneDependentTableBatch:unresolved-delete-target:row._id':
 		/PRUNE_ALL_DEPENDENT_TABLES\.includes/,
 	'legislation.ts:pruneDependentTableBatch:unresolved-patch-target:row._id':
@@ -1025,6 +1047,84 @@ const SAFE_DYNAMIC_CONTRACT: Record<string, RegExp> = {
 };
 
 describe('public-discovery source writer contract', () => {
+	it('requires server authorization before every versioned discovery snapshot database read', () => {
+		const templatesSource = source('templates.ts');
+		for (const exportName of [
+			'publicDiscoveryManifest',
+			'publicDiscoveryList',
+			'publicDiscoveryRelations'
+		]) {
+			const start = templatesSource.indexOf(`export const ${exportName} = query({`);
+			expect(start, `${exportName} must remain a public server-gated query`).toBeGreaterThanOrEqual(0);
+			const nextExport = templatesSource.indexOf('\nexport const ', start + 1);
+			const boundary = templatesSource.slice(
+				start,
+				nextExport === -1 ? templatesSource.length : nextExport
+			);
+			expect(boundary, `${exportName} must require a non-optional server secret`).toMatch(
+				/_secret:\s*v\.string\(\)/
+			);
+			const authorizationAt = boundary.indexOf('requireInternalSecret(args._secret)');
+			// The bounded read moved behind a named reader when the manifest gained its
+			// compact authority projection, so `ctx.db` is no longer the only honest
+			// shape. What must not change is that the gate PRECEDES whichever read runs.
+			const readMarkers = ['ctx.db', 'AuthorityRow(ctx)', 'Row(ctx)', 'Rows(ctx)'];
+			const databaseReadAt = readMarkers
+				.map((marker) => boundary.indexOf(marker))
+				.filter((at) => at >= 0)
+				.sort((a, b) => a - b)[0] ?? -1;
+			expect(authorizationAt, `${exportName} lost its server-secret gate`).toBeGreaterThanOrEqual(0);
+			expect(databaseReadAt, `${exportName} must retain its bounded database read`).toBeGreaterThanOrEqual(
+				0
+			);
+			expect(
+				authorizationAt,
+				`${exportName} must reject an unauthorized caller before database access`
+			).toBeLessThan(databaseReadAt);
+		}
+	});
+
+	it('keeps legacy rollback aliases on compact snapshot rows without source-corpus scans', () => {
+		const templatesSource = source('templates.ts');
+		for (const [exportName, snapshotTable] of [
+			['listPublic', 'publicTemplateSnapshots'],
+			['relatednessEdges', 'templateRelationSnapshots'],
+			['conceptRelations', 'templateRelationSnapshots']
+		] as const) {
+			const start = templatesSource.indexOf(`export const ${exportName} = query({`);
+			expect(start, `${exportName} must remain available to the rollback artifact`).toBeGreaterThanOrEqual(
+				0
+			);
+			const nextExport = templatesSource.indexOf('\nexport const ', start + 1);
+			const boundary = templatesSource.slice(
+				start,
+				nextExport === -1 ? templatesSource.length : nextExport
+			);
+			// CONTRACT CHANGED, deliberately. These aliases were left ungated so a
+			// pre-cutover Pages artifact could still read during the 48-hour rollback
+			// bridge. Pre-launch there is no such artifact to roll back to, so the
+			// bridge protects nothing, while an ungated query is an unauthenticated
+			// Convex read and therefore a cost surface. The alias keeps its legacy
+			// ARGUMENT shape — `excludeCwc` is untouched, so an old caller still
+			// type-checks — and gains the same server gate every other reader has.
+			// Retire this assertion, not the gate, if a rollback target ever exists.
+			expect(boundary, `${exportName} must keep its legacy excludeCwc shape`).toMatch(
+				/excludeCwc:\s*v\.optional\(v\.boolean\(\)\)/
+			);
+			expect(boundary, `${exportName} must be server-gated like every other reader`).toMatch(
+				/requireInternalSecret\(/
+			);
+			// Quote-agnostic: the source is prettier-formatted with single quotes, and
+			// which quote character the table name wears is not the contract.
+			expect(boundary, `${exportName} must read only ${snapshotTable}`).toMatch(
+				new RegExp(`\\.query\\(['"]${snapshotTable}['"]\\)`)
+			);
+			expect(boundary, `${exportName} must never scan source templates`).not.toMatch(
+				/\.query\(['"]templates['"]\)/
+			);
+		}
+	});
+
 	const allBoundaries = listConvexSources().flatMap(({ file, src }) => boundaries(file, src));
 	const boundaryByKey = new Map(allBoundaries.map((boundary) => [`${boundary.file}:${boundary.name}`, boundary]));
 

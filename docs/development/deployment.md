@@ -636,7 +636,9 @@ npx convex run observability:launchProjectionStatus '{}' --env-file .env.product
 
 # 3. Materialize public discovery before the frontend consumer receives traffic.
 npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
-npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
+# Run with PUBLIC_CONVEX_URL and INTERNAL_API_SECRET loaded into the process
+# environment. Never place the discovery secret in CLI JSON or shell history.
+npm run verify:public-discovery-readiness
 
 # 4. Push the exact frontend SHA only after the hardened workflow is on main.
 git push origin "$RELEASE_SHA":refs/heads/production
@@ -752,6 +754,11 @@ requires every listed compact-plane migration, so never rebuild or upload Pages 
 these steps. For a genuinely empty installation, complete and activate every
 empty compact plane before running seed actions; seed writers require the same
 cutover state.
+
+On the first cutover, keep the snapshot-only legacy query aliases for at least
+48 hours and through two successful daily producer cycles. After both
+conditions pass, make this frontend SHA the rollback floor and retire the
+aliases before database access in a follow-up backend deploy.
 
 For the first cutover that introduces `topicEmbeddingsUpdatedAt` only, run the
 bounded legacy marker migration after the Convex deploy and before any paid

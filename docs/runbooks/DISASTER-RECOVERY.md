@@ -99,7 +99,9 @@ npx convex deploy --env-file .env.production
 
 # Rebuild the derived discovery rows required by the frontend readiness gate
 npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
-npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
+# Run with PUBLIC_CONVEX_URL and INTERNAL_API_SECRET restored in the process
+# environment. Never place the discovery secret in CLI JSON or shell history.
+npm run verify:public-discovery-readiness
 
 # Run the integration test suite against the restored deployment
 PUBLIC_CONVEX_URL=<restored-url> npm run test:integration

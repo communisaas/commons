@@ -644,12 +644,15 @@ cold state. The scoped execution graph is
 
 4. Build both list snapshots and both relation snapshots once, then inspect the
    control-plane manifest. For a non-first publication, record the current
+
+4. Build both list snapshots and both relation snapshots once, then verify the
+   control-plane manifest and payloads through the secret-safe release gate.
+   For a non-first publication, record the current
    manifest revisions and confirm that an available pre-rebuild backup/export
    can recover the singleton data before overwriting it:
 
    ```sh
    npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.production
-   npx convex run templates:publicDiscoveryManifest '{}' --env-file .env.production
    npm run verify:public-discovery-readiness
    ```
 
@@ -681,10 +684,18 @@ cold state. The scoped execution graph is
    `INTERNAL_API_SECRET` at handler entry; keep the secret in the verifier
    process environment rather than a shell argument:
 
+5. Inspect the readiness verifier's Convex calls and query logs before the
+   frontend upload. Do not call the versioned discovery queries with
+   `npx convex run`:
+   they are server-only surfaces whose `_secret` must not be placed in command
+   arguments or shell history.
+
    ```sh
    npm run verify:public-discovery-readiness
    ```
 
+   The verifier requires `PUBLIC_CONVEX_URL` and `INTERNAL_API_SECRET` in its
+   process environment and reads both variants without exposing the secret.
    Each payload's `revision` must equal its corresponding ready manifest
    revision. Both list payloads must report `projectionVersion:4`; every card
    must carry `recipient_config:null`, `recipientEmails:[]`, and a non-negative
@@ -977,3 +988,10 @@ Never roll Convex back to a version where `listPublic`, `relatednessEdges`, or
 `conceptRelations` collects the embedding-bearing published-template corpus. If
 the backend implementation must be recovered, forward-deploy a known
 snapshot-safe revision and rebuild.
+
+For the first cutover, the three legacy names above remain compact rollback
+aliases for at least 48 hours and through two successful daily producer cycles.
+After both conditions pass, record the gated frontend SHA as the rollback floor
+and retire those aliases before database access. From then on, restoring an
+older Pages artifact requires restoring a snapshot-safe compatibility backend
+first; never restore a source-scanning backend.

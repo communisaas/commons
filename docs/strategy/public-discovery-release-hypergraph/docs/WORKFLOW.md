@@ -769,8 +769,11 @@ logically bad rebuild succeeds.
 
 ```sh
 npx convex run --env-file .env.production templates:rebuildHomepageSnapshots '{}'
-npx convex run --env-file .env.production templates:publicDiscoveryManifest '{}'
+npm run verify:public-discovery-readiness
 ```
+
+Run the verifier with `PUBLIC_CONVEX_URL` and `INTERNAL_API_SECRET` loaded into
+its process environment. Never put `_secret` in CLI JSON or shell history.
 
 The rebuild is a go only when:
 
@@ -806,6 +809,15 @@ the verifier process:
 ```sh
 npm run verify:public-discovery-readiness
 ```
+
+Use the readiness verifier above and inspect its Convex calls in the logs before
+frontend upload. Do not call the versioned discovery queries through
+`npx convex run`; they require a server secret that must not appear in process
+arguments. Discovery requests must read only
+`publicDiscoveryManifest`, `publicTemplateSnapshots`, or
+`templateRelationSnapshots`; they must not collect the embedding-bearing
+`templates` corpus. Each one-read payload's `revision` must equal its
+corresponding ready manifest revision.
 
 The verifier brackets both list and relation variants with two manifest reads
 and then reads the private producer state. Authorized snapshot reads must touch
@@ -952,6 +964,14 @@ tokens, late transform, hidden domains, protected credentials, live topology/
 denial/candidate/cache proofs, and production Convex quota reactivation are
 present. Repository tests do not authorize deployment.
 
+For the first cutover, keep `listPublic`, `relatednessEdges`, and
+`conceptRelations` as compact rollback aliases for at least 48 hours and through
+two successful daily producer cycles. They read only indexed snapshot rows;
+they never scan source templates. Once both conditions pass, record this
+frontend SHA as the rollback floor and retire the three aliases before database
+access in a follow-up backend deploy. Until then, a Pages rollback may use only
+the snapshot-safe backend from this release or newer.
+
 ## 4. Warm, smoke, and observe
 
 ```sh
@@ -1041,6 +1061,14 @@ seconds of outer eligibility put the conservative writer-to-last-old-HTML
 failure bound strictly below 57 minutes. Neither path requires a purge secret or API
 call. An urgent explicit namespace cutover may also bump
 `CACHE_SCHEMA_VERSION` before redeploying Pages.
+
+During the 48-hour/two-cycle bridge, roll back the Pages deployment first and
+keep the snapshot-safe Convex producer in place. After the bridge aliases are
+retired, the gated consumer SHA is the rollback floor; an older Pages rollback
+must first restore a snapshot-safe compatibility backend. If snapshot content
+is wrong, repair the source/code, rerun the atomic
+rebuild, and warm the new revision. An urgent explicit namespace cutover may
+also bump `CACHE_SCHEMA_VERSION` before redeploying Pages.
 
 Never roll Convex back to the pre-fix functions that scan all published
 templates. If backend code must be recovered, forward-deploy a known

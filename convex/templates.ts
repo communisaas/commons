@@ -1975,9 +1975,9 @@ export const publicDiscoveryManifestAuthorityOperatorStatus = internalQuery({
  * closed. A successful empty-corpus rebuild remains `ready:true`, revision 1.
  */
 export const publicDiscoveryManifest = query({
-	args: { _secret: v.optional(v.string()) },
+	args: { _secret: v.string() },
 	handler: async (ctx, args) => {
-		requireInternalSecret(args._secret ?? '');
+		requireInternalSecret(args._secret);
 		const authority = await getPublicDiscoveryManifestAuthorityRow(ctx);
 		if (!authority) throw new Error(PUBLIC_DISCOVERY_MANIFEST_AUTHORITY_NOT_READY);
 		return toPublicDiscoveryManifestPayloadFromAuthority(authority);
@@ -2496,9 +2496,9 @@ export const listPublic = query({
  * empty-corpus snapshot without adding a redundant manifest read here.
  */
 export const publicDiscoveryList = query({
-	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	args: { _secret: v.string(), excludeCwc: v.optional(v.boolean()) },
 	handler: async (ctx, args) => {
-		requireInternalSecret(args._secret ?? '');
+		requireInternalSecret(args._secret);
 		const key: PublicTemplateSnapshotKey = args.excludeCwc ? 'excludeCwc' : 'all';
 		const snapshot = await ctx.db
 			.query('publicTemplateSnapshots')
@@ -3219,9 +3219,9 @@ export const conceptRelations = query({
  * concept data can never come from different cache generations.
  */
 export const publicDiscoveryRelations = query({
-	args: { _secret: v.optional(v.string()), excludeCwc: v.optional(v.boolean()) },
+	args: { _secret: v.string(), excludeCwc: v.optional(v.boolean()) },
 	handler: async (ctx, args) => {
-		requireInternalSecret(args._secret ?? '');
+		requireInternalSecret(args._secret);
 		const key = relationSnapshotKey(args.excludeCwc);
 		const snapshot = await ctx.db
 			.query('templateRelationSnapshots')
