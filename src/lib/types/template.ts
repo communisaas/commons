@@ -22,7 +22,7 @@ export type RoleCategory = 'votes' | 'executes' | 'shapes' | 'funds' | 'oversees
 
 /** Server-issued proof that a grounded agent result may cross the anonymous detail boundary. */
 export interface PublicRecipientProvenance {
-	version: 1;
+	version: 4;
 	expiresAt: number;
 	signature: string;
 }

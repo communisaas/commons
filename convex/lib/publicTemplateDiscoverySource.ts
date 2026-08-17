@@ -782,6 +782,12 @@ function readPublicRecipientConfig(value: unknown): PublicTemplateDetailRecipien
 				}
 				decisionMaker[field] = candidate[field];
 			}
+			// A per-recipient `reaches: 'seat'` judgment used to cross here, re-derived
+			// against the literal. It is gone: nothing downstream read it, and the
+			// `hasOnlyKeys` allowlist above no longer names it — so a stored row that
+			// still carries the key now refuses the WHOLE detail rather than
+			// publishing it. That is the strict direction, and it is the only
+			// direction this allowlist is allowed to move.
 			return decisionMaker;
 		});
 	}

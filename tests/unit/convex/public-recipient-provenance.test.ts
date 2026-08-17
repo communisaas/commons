@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
 	PUBLIC_RECIPIENT_PROVENANCE_TTL_MS,
+	PUBLIC_RECIPIENT_PROVENANCE_VERSION,
 	issuePublicRecipientProvenance,
 	normalizePublicRecipientProvenanceClaims,
 	verifyPublicRecipientProvenance
@@ -31,16 +32,14 @@ function groundedRecipient() {
 	};
 }
 
-async function attestedRecipient(secret = ACTIVE_SECRET) {
-	const recipient = groundedRecipient();
-	const publicRecipientProvenance = await issuePublicRecipientProvenance(
-		recipient,
-		USER_ID,
-		secret,
-		NOW
-	);
+async function attestRow(row: Record<string, unknown>, secret = ACTIVE_SECRET) {
+	const publicRecipientProvenance = await issuePublicRecipientProvenance(row, USER_ID, secret, NOW);
 	expect(publicRecipientProvenance).not.toBeNull();
-	return { ...recipient, publicRecipientProvenance: publicRecipientProvenance! };
+	return { ...row, publicRecipientProvenance: publicRecipientProvenance! };
+}
+
+async function attestedRecipient(secret = ACTIVE_SECRET) {
+	return attestRow(groundedRecipient(), secret);
 }
 
 describe('public recipient provenance', () => {
@@ -205,6 +204,79 @@ describe('public recipient provenance', () => {
 			NOW
 		);
 		expect(claims?.emailSource).toBe(emailSource);
+	});
+
+	describe('the attestation is a closed shape', () => {
+		it.each([
+			['a reach term this issuer no longer writes', { reaches: 'seat' }],
+			['a label this issuer no longer writes', { reachesLabel: 'Office of the County Clerk' }],
+			['a term this issuer has never written', { seatRoute: true }]
+		])('refuses an attestation with %s stapled onto it', async (_name, stapled) => {
+			// The key ALLOWLIST, not a check on any named key: an attestation whose key
+			// set is not a subset of what the issuer emits is refused whatever the extra
+			// key is called. Stripping it instead would MAC cleanly while handing the
+			// reader an object saying more than the issuer asserted.
+			//
+			// `reaches` is in this table for a reason: a per-recipient seat judgment was
+			// signed into this preimage for a while and has been removed, so a stored
+			// attestation minted under that shape must now be REFUSED rather than
+			// silently verified against the narrower preimage it no longer matches.
+			const attested = await attestedRecipient();
+			expect(
+				await verifyPublicRecipientProvenance(
+					{
+						...attested,
+						publicRecipientProvenance: { ...attested.publicRecipientProvenance, ...stapled }
+					},
+					USER_ID,
+					[ACTIVE_SECRET],
+					NOW
+				)
+			).toBeNull();
+		});
+
+		it('reads nothing off the row — only the attestation decides', async () => {
+			// The producer still mints `emailReachesClaim` / `emailReachesLabel` on the
+			// row. Neither is signed, published or read by any policy, so an author who
+			// edits them changes nothing about what verifies.
+			const attested = await attestedRecipient();
+			const verified = await verifyPublicRecipientProvenance(
+				{ ...attested, emailReachesClaim: 'seat', emailReachesLabel: 'Office of the Mayor' },
+				USER_ID,
+				[ACTIVE_SECRET],
+				NOW
+			);
+			expect(verified).not.toBeNull();
+			expect(verified).not.toHaveProperty('reaches');
+			expect(verified).not.toHaveProperty('reachesLabel');
+			expect(JSON.stringify(attested.publicRecipientProvenance)).not.toContain('Office of the');
+		});
+
+		it('refuses a predecessor-version attestation on the version check, before any MAC work', async () => {
+			// Back at 2, and PROVEN back rather than renamed: `canonicalPayload`'s
+			// element list is byte-identical to the v2 shape this constant last named.
+			expect(PUBLIC_RECIPIENT_PROVENANCE_VERSION).toBe(2);
+			const attested = await attestedRecipient();
+			const verifySpy = vi.spyOn(crypto.subtle, 'verify');
+			try {
+				for (const version of [3, 4]) {
+					expect(
+						await verifyPublicRecipientProvenance(
+							{
+								...attested,
+								publicRecipientProvenance: { ...attested.publicRecipientProvenance, version }
+							},
+							USER_ID,
+							[ACTIVE_SECRET],
+							NOW
+						)
+					).toBeNull();
+				}
+				expect(verifySpy).not.toHaveBeenCalled();
+			} finally {
+				verifySpy.mockRestore();
+			}
+		});
 	});
 
 	it('refuses stale cache hits and unbound grounding markers', async () => {
