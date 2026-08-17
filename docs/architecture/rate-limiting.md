@@ -43,6 +43,7 @@ Sliding window log algorithm applied per route. Executes in the `handleRateLimit
 | `/api/wallet/connect` | 5/min | 60s | User | Wallet binding |
 | `/api/wallet/near/sponsor` | 10/min | 60s | User | Meta-transaction relay |
 | `/api/wallet/balance` | 30/min | 60s | IP | Balance endpoint |
+| `/api/do-not-contact/links` | 10/min | 60s | IP | Suppression-link mint floor — enforced in the handler, not in `hooks.server.ts`. The per-TARGET bound on the same route is a different axis; see [Per-recipient velocity](#per-recipient-velocity). |
 
 **Exempt paths** (operational or separately authenticated): `/api/health`,
 `/api/live`, `/api/cron/`
@@ -100,12 +101,26 @@ before provider work.
 
 Trust tiers: guest (no session), authenticated (logged in), verified (trust_tier ≥ 2, address attested).
 
-The platform ceiling is 1,000 weighted units/day and 2,400/UTC month across
-production and preview. Ordinary users share operation-specific pools and a
-750-unit daily / 1,800-unit monthly public tranche, so a decision-maker flood
-cannot starve every other feature. The remaining 250 daily / 600 monthly
-units are available only to an exact server-derived operator allowlist and stay
-inside—not above—the hard platform cap. Payment never increases these limits.
+The platform ceiling is 1,000 weighted units/day and 2,632/UTC month across
+production and preview. The monthly figure is not a preference: it is the
+largest value the Exa free monthly credit funds under the `exa_monthly_headroom`
+invariant (`src/lib/server/paid-provider-budget-policy.ts`), binding on
+`decision-makers`. 2,633 fails that invariant at module load.
+
+Ordinary users share operation-specific pools and a 750-unit daily public
+tranche plus a monthly public **band**: 1,800 units guaranteed (the floor, and
+what is enforced with no override written) up to 2,184 (the operator ceiling), so
+a decision-maker flood cannot starve every other feature. An operator moves the
+pool inside that band at runtime — through the admitting Durable Object's
+`/pool-provider` path, reachable only from server code holding the binding, and
+gated by the same server-derived operator allowlist — with no code change and no
+redeploy. At the ceiling that is eight complete free journeys a month rather than
+six; it is not unlimited, and the wall is the Exa free monthly credit.
+
+The remaining 250 daily / 448 monthly units (the remainder at the ceiling) are
+available only to an exact server-derived operator allowlist and stay inside—not
+above—the hard platform cap. Payment never increases these limits. The override
+accepts no payment, plan, or subscription input of any kind.
 
 Every public admission performs at most eight SQLite row reads and writes. At
 the 1,000-admission worst case that is 8,000 writes/day; combined with the
@@ -114,6 +129,135 @@ Pages-to-Convex coordinator's 81,920-row ceiling, it remains below Cloudflare's
 both realms, so a deploy, preview hostname, or new isolate cannot mint capacity.
 
 > **Note:** Earlier revisions of this doc published a 10–30× higher quota table. The numbers above are the actual enforced limits. If you see older documents citing "15/hr" or "30/day verified" for any of these operations, treat those as stale.
+
+---
+
+## Per-recipient velocity
+
+**Implementation**: `src/lib/server/recipient-velocity-policy.ts`,
+`src/lib/server/recipient-velocity-client.ts`,
+`workers/convex-work-budget.ts` (`/reserve-recipient`, `/status-recipient`),
+`src/routes/api/do-not-contact/links/+server.ts`.
+**Attack coverage**: `tests/unit/security/recipient-velocity-brigade.attack.test.ts`.
+
+Every limit in the table above is keyed per-IP or per-user
+(`src/lib/core/security/rate-limiter.ts:64` — `keyStrategy: 'ip' | 'user'`).
+None of them bounds how many messages one *mailbox receives*. This section is
+the only per-TARGET axis in the tree.
+
+| Axis | Limit | Window | Key | Applies to |
+|---|---|---|---|---|
+| Suppression-link reservation | 3, plus at most 1 exact recovery response per reservation | UTC calendar day; recovery window 60s | SHA-256(`user:<id>` or `ip:<addr>`) × `computeGlobalEmailHash(address)` | Natural-person mailboxes only |
+
+The three count is the admission ceiling. A reservation may return its same
+deterministic link once inside 60 seconds so a lost response is recoverable. That
+replay is bound to the exact source × target × template scope and persisted; a
+different template consumes a new slot, and a second replay does too. Thus even
+an adversarial no-delay loop has a finite ceiling of six link-bearing responses,
+not the unbounded responses an ordinary time-only idempotency check would grant.
+
+Non-congressional sends are client-assembled `mailto:`, so
+`POST /api/do-not-contact/links` is the only server call that ever sees the
+target address — and a send aborts when its suppression fact is not `present`.
+That makes it the one seam where a per-recipient bound can exist at all, and it
+costs no provider call, no Convex function, and no new binding.
+
+**Who is bounded.** `classifyGovernmentalAddress(...).governmental === true` →
+never, including a named official in that restricted registry.
+`classifySeatRoute(...)?.form === 'person-form'` → bounded outside those
+registries. `seat` → never.
+Anything indeterminate or malformed → **bounded**, because missing evidence must
+never widen a quota. The congressional relay returns before any of this:
+petitioning an office is not harassment and is not throttled.
+
+**Store.** The SQLite-backed `commons-convex-work-budget` Durable Object, on its
+own object id (`recipient-velocity-v1`) so recipient admissions never serialize
+behind paid-provider ones. In-memory counters are not an option here: "Per-isolate
+memory state was rejected as load-bearing in prod because CF Workers spawn many
+isolates and memory counters drift" (Storage, above). Redis was dropped
+2026-05-16. Four tables: `recipient_velocity` (the bound),
+`recipient_velocity_observed` (measurement, read by no admission), and
+`recipient_velocity_mint` (the echo ledger, below), plus
+`recipient_velocity_replay` (the exact-scope, bounded recovery ledger). Rows are keyed by hash — no
+mailbox and no IP is ever stored or transmitted in plaintext. One Durable Object
+request per send, batched across that send's whole roster, and at most three row
+writes per granted address; rows are keyed by UTC day and are not swept, so the
+store grows with distinct (source, target) pairs per day.
+
+**Failure posture: this governor fails OPEN, and that diverges deliberately.**
+Paid-provider work fails CLOSED (see LLM Cost Protection, above) because a
+missed refusal there spends real money. Here, a missing binding, a timeout
+(750ms), protocol drift, or a malformed response mints the links and records the
+verdict as `unmeasured` — never as "within budget". Failing closed would turn any
+Durable Object hiccup into a platform-wide gag on every private-mailbox send,
+while granting an attacker nothing: anyone willing to open their own mail client
+never touches this endpoint at all. The per-IP limiter in the route table stays
+as the degraded floor.
+
+**The echo ledger, and the disclosure it closes.** A refusal names the address
+back to the caller only where that source has already minted for it *on this
+template today*; an earlier 200 had already disclosed that the template publishes
+that address, so the refusal adds nothing. A hold with no such prior mint emits
+no entry at all and is indistinguishable from a roster miss. The cost is named,
+not hidden: a sender who spent their quota on template A and then opens template
+B sees the generic "could not be prepared for every recipient" message rather
+than the honest volume copy.
+
+### What this does NOT close
+
+- **The multi-source brigade is counted, not blocked.** 200 senders from 200
+  addresses each get their links. The observation row reads 200/200 and nothing
+  refuses them. `/status-recipient` is currently an internal Durable Object
+  protocol path exercised by the attack harness; no SvelteKit operator route is
+  wired yet, so production operators cannot honestly be told that this is a
+  dashboard or supported read surface.
+- **Recovery responses add bounded reach.** Each of the three reservations may
+  recover its deterministic link once within 60 seconds. A hostile rapid loop
+  can therefore observe at most six link-bearing responses. Distinguishing a
+  genuinely lost response from a caller who received it is impossible at this
+  HTTP seam; the persisted one-replay cap makes that ambiguity finite.
+- **Mixed-recipient sends pause as a whole.** An institutional address is never
+  charged or held, but if the same browser-composed message also contains a held
+  natural-person mailbox, the shared suppression fact is `withheld` and the
+  whole message pauses. The sender-facing copy names the held mailbox; no
+  recipient is silently dropped.
+- **The `mailto` lane is bypassable in principle.** Anyone with their own
+  mailto/SMTP tooling never calls this endpoint. This bounds *the platform as an
+  instrument* — the share flow where thousands of ordinary participants click
+  through the UI, which is the mode that actually produces a pile-on. No comment,
+  doc line, or user-facing string may claim otherwise.
+- **Shared-NAT collateral.** An office behind one IP shares one anonymous source
+  key and can exhaust one target's three mints between them. Mitigated by
+  preferring `user:<id>` where a session exists, by the narrowness of the scope
+  (one mailbox, one day), and by honest copy. Accepted; the alternative is a
+  global ceiling, which is worse — see below.
+- **Nothing here suppresses anything.** The post-hoc `do-not-contact` opt-out is
+  untouched, and a recipient's suppression link stays mintable by every sender
+  who has not exhausted their own quota against that one mailbox.
+
+### Open founder decision — `RECIPIENT_VELOCITY_GLOBAL_CEILING`
+
+It ships as `null` and a test asserts it is still `null`, so nobody sets it
+silently in code.
+
+| Setting | What it would do | Evidence needed before choosing it |
+|---|---|---|
+| `null` (current) | Counts distinct sources and reservations but never refuses a new source globally | Current safe default while source identity is forgeable |
+| Non-null, no identity floor | Stops new sources after the target-wide count reaches the number; burner IPs can weaponize it to silence others | Evidence that source keys resist cheap rotation and that false-positive censorship is acceptable |
+| Non-null, verified-constituency floor | Lets proven constituents pass after the ceiling while refusing others | A founder decision that verification may become a speech precondition, plus measured exclusion/error rates |
+
+> At what global volume to one private mailbox does the platform stop assisting
+> *new* senders, and what must a sender show to keep sending past it — nothing, an
+> account, `trust_tier >= 2`, or a proven district constituency?
+>
+> - Ceiling with no identity floor → weaponizable: burner IPs burn the target's
+>   budget and silence the honest constituents behind them.
+> - Ceiling gated on verified constituency → not weaponizable, but it makes
+>   *verification a precondition of speech* above the threshold, which inverts the
+>   product's stated posture that verification is demand-pull, and it excludes
+>   people who cannot verify.
+>
+> Both are policy. The counter exists so the decision can be made on numbers.
 
 ---
 
