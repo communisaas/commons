@@ -34,6 +34,10 @@ function recipientBody(url: string): string {
 // Test-owned literals. SENDER_VISIBLE is the letter the preview shows: the body
 // with the typed characters standing where the author put the placeholder.
 const TYPED = 'My son waited eleven months for a hearing aid.';
+// The slug the gate forwards as a POINTER: the server dereferences it into the
+// published artifact and derives the recipient audience itself. It is never an
+// assertion by this caller about who the recipient is.
+const MODERATED_SLUG = 'hearing-aid-waitlist';
 const BODY = 'Dear official,\n\n[Personal Connection]\n\nPlease act.\n\n[Name]';
 const SENDER_VISIBLE =
 	'Dear official,\n\nMy son waited eleven months for a hearing aid.\n\nPlease act.';
@@ -284,7 +288,7 @@ describe('unapproved words never reach a mailto', () => {
 			new Response(JSON.stringify({ error: 'Authentication required' }), { status: 401 })
 		);
 
-		const result = await moderatePersonalConnection(TYPED);
+		const result = await moderatePersonalConnection(TYPED, MODERATED_SLUG);
 		expect(result.approved).toBe(false);
 		expect(result.approved === false && result.reason.length).toBeGreaterThan(0);
 	});
@@ -294,7 +298,7 @@ describe('unapproved words never reach a mailto', () => {
 			new Response(JSON.stringify({ summary: 'Flagged for review' }), { status: 200 })
 		);
 
-		const result = await moderatePersonalConnection(TYPED);
+		const result = await moderatePersonalConnection(TYPED, MODERATED_SLUG);
 		expect(result.approved).toBe(false);
 		expect(result.approved === false && result.reason).toBe('Flagged for review');
 	});
@@ -304,21 +308,75 @@ describe('unapproved words never reach a mailto', () => {
 			throw new Error('network down');
 		});
 
-		const result = await moderatePersonalConnection(TYPED);
+		const result = await moderatePersonalConnection(TYPED, MODERATED_SLUG);
 		expect(result.approved).toBe(false);
 	});
 
-	it('approves an explicit approval', async () => {
+	it('approves an explicit approval, and the verdict names the bytes it approved', async () => {
 		stubFetch(async () => new Response(JSON.stringify({ approved: true }), { status: 200 }));
 
-		expect(await moderatePersonalConnection(TYPED)).toEqual({ approved: true });
+		const result = await moderatePersonalConnection(TYPED, MODERATED_SLUG);
+		expect(result.approved).toBe(true);
+		// A verdict that names no bytes is authority for anything typed later. The
+		// capsule is the whole point: it must carry exactly what was submitted.
+		expect(result.approved === true && result.reviewed.text).toBe(TYPED);
+	});
+
+	it('carries the SUBMITTED string byte-for-byte, surrounding whitespace included', async () => {
+		// The wire carries the trimmed text — that is what the provider sees and what
+		// the digest covers. What gets ASSEMBLED has always been the raw field value,
+		// so the capsule must carry the raw one or every send with a trailing newline
+		// silently changes shape.
+		const PADDED = `\n  ${TYPED}  \n`;
+		const fetchMock = stubFetch(
+			async () => new Response(JSON.stringify({ approved: true }), { status: 200 })
+		);
+
+		const result = await moderatePersonalConnection(PADDED, MODERATED_SLUG);
+		expect(result.approved).toBe(true);
+		expect(result.approved === true && result.reviewed.text).toBe(PADDED);
+
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		expect(JSON.parse(String(init.body)).text).toBe(TYPED);
+	});
+
+	it('forwards the slug pointer so the server can derive the audience itself', async () => {
+		const fetchMock = stubFetch(async () =>
+			new Response(JSON.stringify({ approved: true }), { status: 200 })
+		);
+
+		await moderatePersonalConnection(TYPED, MODERATED_SLUG);
+
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		const sent = JSON.parse(String(init.body));
+		expect(sent).toEqual({ text: TYPED, slug: MODERATED_SLUG });
+	});
+
+	it('sends no slug at all rather than an empty one when the template has none', async () => {
+		const fetchMock = stubFetch(async () =>
+			new Response(JSON.stringify({ approved: true }), { status: 200 })
+		);
+
+		await moderatePersonalConnection(TYPED, undefined);
+
+		const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		const sent = JSON.parse(String(init.body));
+		expect(sent).toEqual({ text: TYPED });
 	});
 
 	it('spends no request on text that does not exist', async () => {
 		const fetchMock = stubFetch(async () => new Response('{}', { status: 200 }));
 
-		expect(await moderatePersonalConnection('')).toEqual({ approved: true });
-		expect(await moderatePersonalConnection('   \n\t ')).toEqual({ approved: true });
+		const empty = await moderatePersonalConnection('', MODERATED_SLUG);
+		expect(empty.approved).toBe(true);
+		expect(empty.approved === true && empty.reviewed.text).toBe('');
+
+		// Whitespace-only still mints over the SUBMITTED string, not the trim: the
+		// drift check compares against the live field, which still holds the spaces.
+		const blank = await moderatePersonalConnection('   \n\t ', MODERATED_SLUG);
+		expect(blank.approved).toBe(true);
+		expect(blank.approved === true && blank.reviewed.text).toBe('   \n\t ');
+
 		expect(fetchMock).toHaveBeenCalledTimes(0);
 	});
 });
@@ -367,7 +425,11 @@ describe('one substitution point', () => {
 	it('the detail page names the text and lets the resolver place it', () => {
 		const page = src('src/routes/s/[slug]/+page.svelte');
 
-		expect(page).toContain('personalConnection: personalConnectionValue');
+		// The name the lanes hand to the resolver is now the REVIEWED capsule, not a
+		// second read of the mutable field — same claim as before (the page names
+		// the text and places nothing itself), pinned to the byte-bound source.
+		expect(page).toContain('personalConnection: moderation.reviewed.text');
+		expect(page).not.toContain('personalConnection: personalConnectionValue');
 		expect(page).toContain('await moderatePersonalConnection(');
 		expect(page).not.toContain('templateWithPC');
 		expect(page).not.toContain('import ActionBar');
