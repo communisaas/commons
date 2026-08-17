@@ -7,14 +7,11 @@
 	import { describeContactRoute } from '$lib/core/agents/contact-route-verdict';
 	import { orderTargetsForDisplay, routeEvidenceFor } from '$lib/core/agents/target-order';
 	import { describeMeasuredRoute } from '$lib/core/agents/reach-census';
-
-	// The locale is pinned rather than ambient on purpose: `new Intl.Collator(undefined, …)`
-	// resolves against the host's locale, which is the SSR machine on the server render and
-	// the reader's browser on hydration — the same list would be ordered two different ways
-	// across that boundary. 'en' makes server and client agree byte-for-byte.
-	const ORG_NAME_COLLATOR = new Intl.Collator('en', { sensitivity: 'base', numeric: true });
-	const ORG_ORDER_BASIS = 'Organizations are listed alphabetically. This is not a ranking.';
-	const UNRESOLVED_ORG_LABEL = 'Organization not resolved';
+	import {
+		ORG_ORDER_BASIS,
+		UNRESOLVED_ORG_LABEL,
+		compareOrgLabels
+	} from '$lib/core/agents/org-order';
 
 	interface Props {
 		decisionMakers: ProcessedDecisionMaker[];
@@ -94,22 +91,7 @@
 		// would quietly sink exactly the rows a person most needs to judge. It is deliberately
 		// not spelled out or imported here so a grep for it over this file stays empty.
 		// Nothing counted, inferred, or scored may order these cards.
-		return Array.from(groups.values()).sort((a, b) => {
-			// Unresolved organizations sort last as a block: an empty name is the least
-			// identified institution and must not be handed the top of the screen, which is
-			// where a bare locale compare would put it.
-			const aEmpty = a.org.trim() === '';
-			const bEmpty = b.org.trim() === '';
-			if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
-			const byName = ORG_NAME_COLLATOR.compare(a.org, b.org);
-			if (byName !== 0) return byName;
-			// `sensitivity: 'base'` returns 0 for distinct names that fold together
-			// ('Cafe Board' vs 'Café Board' — two distinct groups, since the group key is
-			// organization.toLowerCase().trim()). Without this tiebreak, sort stability would
-			// silently leave them in the model's emission order while the caption claims
-			// alphabetical, so the raw-string comparison is load-bearing, not cosmetic.
-			return a.org < b.org ? -1 : a.org > b.org ? 1 : 0;
-		});
+		return Array.from(groups.values()).sort((a, b) => compareOrgLabels(a.org, b.org));
 	});
 
 	// The same pure derivation that produced the order produces the sentence, keyed

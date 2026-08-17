@@ -14,7 +14,11 @@
 		type MailtoAssembly
 	} from '$lib/services/emailService';
 	import { resolveTemplate } from '$lib/utils/templateResolver';
-	import { moderatePersonalConnection } from '$lib/utils/personal-connection';
+	import {
+		isCurrent,
+		moderatePersonalConnection,
+		SENDER_TEXT_CHANGED_REASON
+	} from '$lib/utils/personal-connection';
 	import {
 		buildDoNotContactZone,
 		describeDoNotContactFailure
@@ -463,17 +467,30 @@
 
 		if (sendModerating) return;
 		sendModerating = true;
-		const moderation = await moderatePersonalConnection(personalConnectionValue);
+		// One read of the mutable field per send, taken here and named. Everything
+		// downstream works from the verdict this produces, never from the field.
+		const submittedText = personalConnectionValue;
+		// The modal resolves its own recipients downstream, so this lane cannot name
+		// the addressed set and takes the strict policy rather than guessing one.
+		const moderation = await moderatePersonalConnection(submittedText, template.slug, undefined);
 		sendModerating = false;
 		if (!moderation.approved) {
 			sendBlocked = moderation.reason;
+			return;
+		}
+		// The field is mutable and the await is a window. If it moved, the verdict
+		// in hand is about bytes nobody intends to send any more — refuse and say
+		// so, rather than delivering words the sender already replaced.
+		if (!isCurrent(moderation.reviewed, personalConnectionValue)) {
+			sendBlocked = SENDER_TEXT_CHANGED_REASON;
 			return;
 		}
 
 		modalActions.openModal('template-modal', 'template_modal', {
 			template,
 			user: modalUser,
-			personalConnection: personalConnectionValue
+			// The reviewed bytes, never a re-read of the live field.
+			personalConnection: moderation.reviewed.text
 		});
 	}
 
@@ -617,6 +634,9 @@
 		// Resolve any pending send confirmation first (defense-in-depth — the peak's
 		// modal backdrop + focus trap already block interaction with the cards behind).
 		if (sendConfirmation) return;
+		// One read of the mutable field per send, taken at entry. The bytes that get
+		// moderated and the bytes that get assembled are then the same read.
+		const submittedText = personalConnectionValue;
 		if (member.deliveryRoute === 'cwc') {
 			// Congressional officials: route through existing CWC modal infrastructure
 			// TemplateModal handles tier-based routing (mailto for T1-2, ZKP for T3+)
@@ -627,12 +647,18 @@
 			if (sendModerating) return;
 			sendModerating = true;
 			const [moderation, suppression] = await Promise.all([
-				moderatePersonalConnection(personalConnectionValue),
+				moderatePersonalConnection(submittedText, template.slug, [member.email]),
 				buildDoNotContactZone(template.slug, [member.email])
 			]);
 			sendModerating = false;
 			if (!moderation.approved) {
 				sendBlocked = moderation.reason;
+				return;
+			}
+			// Before anything is marked in flight, counted, or handed to the OS: the
+			// reviewed bytes must still be the bytes on screen.
+			if (!isCurrent(moderation.reviewed, personalConnectionValue)) {
+				sendBlocked = SENDER_TEXT_CHANGED_REASON;
 				return;
 			}
 			if (suppression.state !== 'present') {
@@ -654,9 +680,10 @@
 				}).block ?? undefined;
 
 			// The resolver places the sender's words at the author's placeholder — this
-			// lane names the text and nothing more.
+			// lane names the text and nothing more. The bytes come from the verdict,
+			// so what is composed is exactly what moderation saw.
 			const resolved = resolveTemplate(template, data.user ?? null, {
-				personalConnection: personalConnectionValue
+				personalConnection: moderation.reviewed.text
 			});
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName);
 
@@ -704,6 +731,9 @@
 
 	async function handleBatchRegister(memberIds: string[]) {
 		sendBlocked = null;
+		// One read of the mutable field per send, taken at entry. The bytes that get
+		// moderated and the bytes that get assembled are then the same read.
+		const submittedText = personalConnectionValue;
 		if (sendConfirmation) return; // resolve the pending send peak first
 		if (batchRegistrationState === 'registering') return;
 		// The in-flight marker is claimed BEFORE the moderation round trip: a second
@@ -722,6 +752,30 @@
 		// A no-email selection has no mailbox that needs a link, so it performs no
 		// suppression request. Otherwise start it alongside moderation.
 		const emailMembers = members.filter((m) => m.email && m.deliveryRoute === 'email');
+		// Nothing here can be addressed by mailto, so there is nothing to send. Say so
+		// BEFORE the moderation round trip: moderatePersonalConnection is a metered
+		// call, and spending it only to fall through to an idle reset is a silent
+		// no-op with a delay attached. The routes named are the ones actually present.
+		if (emailMembers.length === 0) {
+			const routeLabels: Record<string, string> = {
+				cwc: 'congressional office',
+				email: 'email',
+				form: 'contact form',
+				phone_only: 'phone',
+				recorded: 'position on record only'
+			};
+			const present = [...new Set(members.map((m) => m.deliveryRoute))].map(
+				(route) => routeLabels[route] ?? route
+			);
+			sendBlocked =
+				members.length === 0
+					? 'No recipients were selected, so nothing was sent.'
+					: `None of these ${members.length} can be reached by email from here${
+							present.length > 0 ? ` — their routes are: ${present.join(', ')}` : ''
+						}. Nothing was sent. Use each person's card to reach them individually.`;
+			batchRegistrationState = 'idle';
+			return;
+		}
 		const suppressionPromise =
 			emailMembers.length > 0
 				? buildDoNotContactZone(
@@ -730,11 +784,22 @@
 					)
 				: Promise.resolve(absent());
 		const [moderation, suppression] = await Promise.all([
-			moderatePersonalConnection(personalConnectionValue),
+			moderatePersonalConnection(
+				submittedText,
+				template.slug,
+				emailMembers.map((m) => m.email!)
+			),
 			suppressionPromise
 		]);
 		if (!moderation.approved) {
 			sendBlocked = moderation.reason;
+			batchRegistrationState = 'idle';
+			return;
+		}
+		// Same guard as the single lane, and it must release the in-flight marker
+		// this function claimed at entry — every other refusal here does.
+		if (!isCurrent(moderation.reviewed, personalConnectionValue)) {
+			sendBlocked = SENDER_TEXT_CHANGED_REASON;
 			batchRegistrationState = 'idle';
 			return;
 		}
@@ -758,8 +823,9 @@
 					credentialHash: data.user?.credentialHash ?? null
 				}).block ?? undefined;
 
+			// The reviewed bytes, never a re-read of the live field.
 			const resolved = resolveTemplate(template, data.user ?? null, {
-				personalConnection: personalConnectionValue
+				personalConnection: moderation.reviewed.text
 			});
 			const resolvedBody = resolved.body.replace(/\[District\]/g, districtName).trim();
 

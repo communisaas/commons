@@ -145,7 +145,16 @@ export default defineConfig({
 			// tests/unit/send-evidence-honesty.test.ts.
 			'tests/unit/components/send-handoff-honesty.test.ts',
 			'tests/unit/components/free-lane-exhaustion-copy.test.ts',
+			// Mounts the stranger's `/s/[slug]` send surface to prove an empty shared
+			// pool renders as the shared pool, not "temporarily unavailable".
+			// Components-lane only.
+			'tests/unit/components/stranger-pool-exhaustion-copy.test.ts',
 			'tests/unit/components/decision-maker-results-delivery-tier.test.ts',
+			// Mounts PowerLandscape for the per-row route sentence. Components-lane only.
+			'tests/unit/components/landscape-card-measured-route.test.ts',
+			// Mounts PowerLandscape and TemplatePreview with a stranger's props to prove the
+			// batch promise equals the addressable set. Components-lane only.
+			'tests/unit/components/arrival-reach-honesty.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

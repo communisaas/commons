@@ -86,7 +86,13 @@
 		// The sender's own words pass the shared send-time gate before anything else
 		// runs. Same gate, same failure policy, as every other send lane.
 		isModerating = true;
-		const moderation = await moderatePersonalConnection(personalConnectionValue);
+		// This lane hands off before recipients are resolved, so it names no
+		// addressed set and takes the strict policy rather than guessing one.
+		const moderation = await moderatePersonalConnection(
+			personalConnectionValue,
+			template.slug,
+			undefined
+		);
 		isModerating = false;
 		if (!moderation.approved) {
 			moderationError = moderation.reason;
