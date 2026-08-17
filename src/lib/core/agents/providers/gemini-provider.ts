@@ -2028,7 +2028,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 			? resolveEmailReachesClaim({
 					raw: candidate.reaches,
 					rawLabel: candidate.reaches_label,
-					groundedPageText
+					groundedPageText,
+					// Same condition that emits `publicEmailGrounding` below: a seat
+					// claim may not outlive the basis that grounds it.
+					hasPublicGroundingBasis: publiclyAttestableEmailGrounding && !!emailSource
 				})
 			: undefined;
 		const delivery = deriveDeliveryTier({
@@ -2076,7 +2079,10 @@ export class GeminiDecisionMakerProvider implements DecisionMakerProvider {
 				...processed,
 				email: undefined,
 				emailGrounded: false,
-				emailClaimStripped: true
+				emailClaimStripped: true,
+				// A claim about an address cannot outlive the address.
+				emailReachesClaim: undefined,
+				emailReachesLabel: undefined
 			};
 		}
 

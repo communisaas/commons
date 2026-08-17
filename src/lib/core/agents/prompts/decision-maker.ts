@@ -88,6 +88,29 @@ Return 8-10 positions (NOT people) with direct authority, gatekeeping power, coa
 // Domain Context Helpers — Observational patterns, NOT directives
 // ============================================================================
 
+/**
+ * NOT A POLICY WORD LIST. Recorded here with the measurement, so the next reader
+ * counts the tree's policy lexicons correctly and does not add this one to them.
+ *
+ * `detectOrgTypes` is six regexes over a model-supplied organization NAME with an
+ * `other` catch-all and no natural-person member. It decides no audience, no
+ * hazard set and no publication: its only consumers are `generateDomainContext`
+ * and `generateDomainHintForOrg`, and the output of both is PROMPT TEXT —
+ * substituted into `{DOMAIN_CONTEXT}` before a retrieval call and nothing else.
+ *
+ * MEASURED cost of a misclassification: `nonprofit` and `other` emit no
+ * observation at all (`generateDomainContext` has no branch for either), so the
+ * misreadings that look worst — "St Mary's Health" → other, "Dr Jane Goodall" →
+ * other — cost literally zero bytes of prompt. The worst case ANYWHERE is one
+ * paragraph of retrieval hint aimed at the wrong kind of contact page, which the
+ * model is told to treat as context and not constraint.
+ *
+ * KEEP. Widening or narrowing it changes what a retrieval prompt suggests, never
+ * what a policy concludes, so it sits outside the "delete every word list that
+ * decides the audience" mandate. The lists that DO decide are
+ * `CLOSED_SEAT_LOCAL_PARTS`, `ROLE_LABEL_STOPWORDS`, `PUBLIC_ROLE_LOCAL_PARTS`
+ * and `CONSUMER_MAILBOX_DOMAINS`.
+ */
 type OrgType =
 	| 'government'
 	| 'union'

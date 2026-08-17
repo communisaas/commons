@@ -1626,6 +1626,65 @@ describe('GeminiDecisionMakerProvider', () => {
 		});
 	});
 
+	describe('processOneCandidate — reach claim and its basis', () => {
+		function processOneCandidate(
+			candidate: Record<string, unknown>,
+			pages: Array<{ url: string; title: string; text: string }>
+		) {
+			return (provider as any).processOneCandidate(candidate, pages);
+		}
+
+		const clerkPage = {
+			url: 'https://county.example/clerk',
+			title: 'Office of the County Clerk',
+			text: 'Office of the County Clerk\nRecords requests: clerk@county.example'
+		};
+
+		const seatCandidate = {
+			name: 'County Clerk',
+			title: 'Clerk',
+			organization: 'Example County',
+			reasoning: 'Custodian of the record.',
+			email: 'clerk@county.example',
+			email_source: 'https://county.example/clerk',
+			reaches: 'seat',
+			reaches_label: 'Office of the County Clerk'
+		};
+
+		it('emits a seat claim only alongside the grounding basis that supports it', () => {
+			const result = processOneCandidate(seatCandidate, [clerkPage]);
+
+			expect(result.emailReachesClaim).toBe('seat');
+			expect(result.emailReachesLabel).toBe('Office of the County Clerk');
+			expect(result.publicEmailGrounding).toEqual({
+				version: 1,
+				method: 'page-read',
+				source: 'https://county.example/clerk'
+			});
+		});
+
+		it('never emits a seat claim for a cache hit, which read no page this run', () => {
+			const result = processOneCandidate({ ...seatCandidate, cacheHit: true }, []);
+
+			expect(result.emailGrounded).toBe(true);
+			expect(result.emailReachesClaim).toBe('general');
+			expect(result.emailReachesLabel).toBeUndefined();
+			expect(result.publicEmailGrounding).toBeUndefined();
+		});
+
+		it('drops the claim and its label when the email itself is stripped', () => {
+			const result = processOneCandidate(
+				{ ...seatCandidate, email: 'fabricated@county.example', reaches: 'person' },
+				[clerkPage]
+			);
+
+			expect(result.emailClaimStripped).toBe(true);
+			expect(result.email).toBeUndefined();
+			expect(result.emailReachesClaim).toBeUndefined();
+			expect(result.emailReachesLabel).toBeUndefined();
+		});
+	});
+
 	describe('processDecisionMakers — filtering', () => {
 		function processDecisionMakers(
 			candidates: Array<Record<string, unknown>>,
