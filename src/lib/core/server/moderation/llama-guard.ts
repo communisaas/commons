@@ -12,9 +12,9 @@
  * @see https://console.groq.com/docs/content-moderation
  */
 
-import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
 import type { MLCommonsHazard, SafetyResult } from './types';
-import { HAZARD_DESCRIPTIONS, blockingHazardsForTarget } from './types';
+import { HAZARD_DESCRIPTIONS, PERSON_BLOCKING_HAZARDS } from './types';
+import { blockingHazardsForAudience, type AudienceVerdict } from './audience';
 import { GroqTransportError, requestGroqChatCompletion } from './groq-transport';
 import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
 
@@ -46,7 +46,7 @@ S14: Code interpreter abuse`;
  * - Llama Guard: "unsafe\nS1" or "unsafe\nS1,S2"
  * - gpt-oss-safeguard: "unsafe,S1" or "unsafe,S1,S5"
  *
- * Blocking hazards are resolved from the server-derived target class before
+ * Blocking hazards are resolved from the server-derived audience verdict before
  * parsing. All detected hazards remain visible in the result.
  */
 function parseResponse(
@@ -94,7 +94,7 @@ function parseResponse(
  */
 export async function classifySafety(
 	content: string,
-	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
 ): Promise<SafetyResult> {
 	if (new TextEncoder().encode(content).byteLength > SAFETY_INPUT_MAX_BYTES) {
 		throw new RangeError(`Safety moderation input exceeds ${SAFETY_INPUT_MAX_BYTES} bytes`);
@@ -142,7 +142,10 @@ export async function classifySafety(
 	if (typeof modelResponse !== 'string' || modelResponse.length > 4_000) {
 		throw new Error('Safety classifier returned an invalid response');
 	}
-	const blocking = blockingHazardsForTarget(options.targetClass);
+	// An absent audience is not a permissive audience: no verdict resolves strict.
+	const blocking = options.audience
+		? blockingHazardsForAudience(options.audience)
+		: PERSON_BLOCKING_HAZARDS;
 	const { safe, hazards, blocking_hazards } = parseResponse(modelResponse, blocking);
 
 	const latencyMs = Date.now() - startTime;
@@ -179,7 +182,7 @@ export async function classifySafety(
  */
 export async function classifySafetyBatch(
 	contents: string[],
-	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
 ): Promise<SafetyResult[]> {
 	const results: SafetyResult[] = [];
 

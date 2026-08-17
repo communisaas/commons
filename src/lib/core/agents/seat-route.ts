@@ -81,6 +81,65 @@ function closedReadonlySet<T>(values: Iterable<T>): ReadonlySet<T> {
 
 export const SEAT_LOCAL_PARTS: ReadonlySet<string> = closedReadonlySet(CLOSED_SEAT_LOCAL_PARTS);
 
+/**
+ * Words that carry no identity on their own — the connective tissue of a desk
+ * label ("Office of the Mayor", "Department of Public Works"). Stripped before
+ * asking whether a published name is a person or a role.
+ */
+const ROLE_LABEL_STOPWORDS: ReadonlySet<string> = closedReadonlySet([
+	'of', 'the', 'and', 'for', 'to', 'at', 'a', 'an',
+	'office', 'department', 'dept', 'division', 'bureau', 'agency', 'commission',
+	'committee', 'team', 'group', 'desk', 'services', 'service', 'relations',
+	'affairs', 'general', 'public', 'chief', 'deputy', 'assistant', 'acting'
+]);
+
+/**
+ * Is this published name a ROLE LABEL rather than a human name?
+ *
+ * The public projection requires a name beside every published address, so an
+ * institution labels its own switchboard: `board@` publishes "Board of
+ * Directors", `mayor@` publishes "Office of the Mayor". Read literally that is a
+ * name token matching the local part — the exact signature of a natural person
+ * at their own mailbox (`jane.smith@` / "Jane Smith"). It is the opposite: a desk
+ * labelled with its own function is the STRONGEST evidence the route is a seat.
+ *
+ * A label qualifies only when every identity-bearing token is itself a seat word
+ * or connective. One token that is neither — a surname, a given name — means a
+ * human is named here and the label is not trusted.
+ *
+ * RESIDUAL, deliberately not closed here, and the reason is written below the
+ * signature rather than here because it is a property of the code and not of
+ * the intent. The lexicon spells its compounds closed (`investorrelations`,
+ * `boardofdirectors`, `publicaffairs`, `cityclerk`, `patientexperience`), so a
+ * label published as separate words loses them to the stopword filter and reads
+ * as a human: "Investor Relations" leaves `investor`, "City Clerk" leaves
+ * `city` and `clerk`. Those labels decline, and declining costs reach.
+ *
+ * Closing that gap needs a name-side vocabulary keyed on the spaced spelling —
+ * a second closed set that preserves the word boundary — NOT a join of the
+ * label's tokens into local-part space. The join was attempted and measured to
+ * promote natural people; see the note in the function body.
+ */
+export function nameIsRoleLabel(candidateName: string | undefined): boolean {
+	const raw = candidateName?.normalize('NFKC').toLowerCase().match(/[a-z]+/g) ?? [];
+	// NO REJOIN. Rejoining a published name's tokens into this list was tried and
+	// measured to promote a natural person: `nameIsRoleLabel('Medi A')` returns
+	// true under a stopword-guarded join, because `a` is a connective and
+	// `medi`+`a` spells the lexicon member `media`. The unguarded form is worse —
+	// it promotes `le.gal@univ.fr` "Le Gal" to a seat on `legal`.
+	//
+	// The list is not disagreeing with its tokenizer. It serves TWO inputs with
+	// two different tokenizations: a local part (`patientrelations@` — one token,
+	// where the compounds are live and correct) and a published NAME ("Patient
+	// Relations" — two tokens). Joining name tokens into local-part space is
+	// exactly what lets a person's name concatenate into a role word. Closing
+	// that needs a separate name-side vocabulary, which is a second word list
+	// and the treadmill this program set out to leave.
+	const tokens = raw.filter((token) => !ROLE_LABEL_STOPWORDS.has(token));
+	if (tokens.length === 0) return false;
+	return tokens.every((token) => SEAT_LOCAL_PARTS.has(token));
+}
+
 export type SeatRouteForm = 'seat' | 'person-form' | 'indeterminate';
 
 export type SeatRouteVerdict = {
@@ -132,7 +191,12 @@ export function classifySeatRoute(
 		(token) => token.length >= 3 && (localPartTokens.has(token) || token === localPart)
 	);
 
-	if (nameTokenMatch) {
+	// A role label is not a person. `board@` published as "Board of Directors"
+	// matches its own local part, which is the desk naming itself — not a human
+	// standing behind it. Asking the lexicon FIRST here is what keeps the
+	// institutional lane reachable at all: the public projection requires a name
+	// on every published address, so every switchboard carries one.
+	if (nameTokenMatch && !nameIsRoleLabel(opts.candidateName ?? undefined)) {
 		return { form: 'person-form', localPart, nameTokenMatch, lexiconHit: null };
 	}
 

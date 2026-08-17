@@ -467,7 +467,11 @@ describe('target ordering', () => {
 				'seatRouteModule.classifySeatRoute',
 				'seatRouteModule.compareTargetOrder',
 				'seatRouteModule.deriveRouteProvenance',
-				'seatRouteModule.deriveStanding'
+				'seatRouteModule.deriveStanding',
+				// `(name: string | undefined) => boolean` — reads a published label and
+				// nothing else. It cannot see standing or provenance, so it cannot
+				// combine them, which is the property this list exists to hold.
+				'seatRouteModule.nameIsRoleLabel'
 			].sort()
 		);
 	});

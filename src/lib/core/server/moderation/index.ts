@@ -1,5 +1,5 @@
 /**
- * Unified Moderation Pipeline - Target-Conditional Civic Platform
+ * Unified Moderation Pipeline - Audience-Conditional Civic Platform
  *
  * Two-layer moderation optimized for multi-stakeholder civic engagement:
  *
@@ -11,13 +11,13 @@
  * Layer 1: `openai/gpt-oss-safeguard-20b` (via GROQ) - REQUIRED unless explicitly skipped by a trusted caller
  *   - MLCommons S1-S14 hazard taxonomy
  *   - S1 (threats) and S4 (CSAM) always block content
- *   - S5, S7, and S10 additionally block non-governmental and unknown targets
+ *   - S5, S7, and S10 additionally block a person-form or unevaluable audience
  *
- * The calibrated permissive policy requires a server-derived government
- * registry verdict. Unknown target classes use the stricter policy.
+ * The calibrated permissive policy requires a server-derived `institutional`
+ * audience verdict (`./audience.ts`). No verdict is the stricter policy.
  */
 
-import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
+import type { AudienceVerdict } from './audience';
 import { classifySafety } from './llama-guard';
 import { detectPromptInjection } from './prompt-guard';
 import type {
@@ -34,9 +34,15 @@ export {
 	HAZARD_DESCRIPTIONS,
 	BLOCKING_HAZARDS,
 	NON_BLOCKING_HAZARDS,
-	NON_GOVERNMENTAL_BLOCKING_HAZARDS,
-	blockingHazardsForTarget
+	PERSON_BLOCKING_HAZARDS
 } from './types';
+export {
+	AUDIENCE_ROSTER_MAX,
+	blockingHazardsForAudience,
+	deriveAudience,
+	publishedRosterRoutes
+} from './audience';
+export type { AudienceForm, AudienceRoute, AudienceVerdict } from './audience';
 export { classifySafety } from './llama-guard';
 export { detectPromptInjection, isPromptInjection } from './prompt-guard';
 
@@ -52,8 +58,8 @@ export interface ModerationOptions {
 	injectionThreshold?: number;
 	/** Abort both Groq calls when the owning request/job is cancelled. */
 	signal?: AbortSignal;
-	/** Server-derived government-registry verdict. Unknown stays strict. */
-	targetClass?: GovernmentalClass;
+	/** Server-derived audience verdict. Absent stays strict. */
+	audience?: AudienceVerdict;
 }
 
 /**
@@ -84,7 +90,7 @@ export function buildTemplateModerationContent(input: TemplateModerationInput): 
  *
  * Pipeline order:
  * 1. Prompt injection detection (blocks agent manipulation)
- * 2. Content safety (blocking policy resolved from the target class)
+ * 2. Content safety (blocking policy resolved from the audience verdict)
  *
  * @param template - Template content to moderate
  * @param options - Moderation options
@@ -130,14 +136,14 @@ export async function moderateTemplate(
 	}
 
 	// =========================================================================
-	// Layer 1: Content Safety (TARGET-CONDITIONAL, FAIL-CLOSED AVAILABILITY)
+	// Layer 1: Content Safety (AUDIENCE-CONDITIONAL, FAIL-CLOSED AVAILABILITY)
 	// =========================================================================
 	let safety: SafetyResult | undefined;
 
 	if (!options.skipSafety) {
 		safety = await classifySafety(content, {
 			signal: options.signal,
-			targetClass: options.targetClass
+			audience: options.audience
 		});
 
 		if (!safety.safe) {
@@ -221,7 +227,7 @@ export async function moderatePromptOnly(
  */
 export async function moderatePersonalization(
 	text: string,
-	options: { signal?: AbortSignal; targetClass?: GovernmentalClass } = {}
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
 ): Promise<ModerationResult> {
 	const startTime = Date.now();
 
@@ -256,7 +262,7 @@ export async function moderatePersonalization(
 		};
 	}
 
-	// Layer 1: Content safety under the resolved target policy
+	// Layer 1: Content safety under the resolved audience policy
 	const safety = await classifySafety(text, options);
 
 	if (!safety.safe) {

@@ -107,7 +107,7 @@ function observeAddress(email: string | undefined): AddressObservation {
 	return normalized ? present(normalized) : absent();
 }
 
-function emailDomain(email: string): string | undefined {
+export function emailDomain(email: string): string | undefined {
 	if (email.length > 320 || /\s/.test(email)) return undefined;
 
 	const firstAt = email.indexOf('@');

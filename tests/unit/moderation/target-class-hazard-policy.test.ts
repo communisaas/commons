@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
+import type { AudienceForm, AudienceVerdict } from '$lib/core/server/moderation/audience';
 
 vi.mock('$env/dynamic/private', () => ({
 	env: { GROQ_API_KEY: 'test-groq-key' }
@@ -7,23 +7,42 @@ vi.mock('$env/dynamic/private', () => ({
 
 import {
 	BLOCKING_HAZARDS,
-	NON_GOVERNMENTAL_BLOCKING_HAZARDS,
-	blockingHazardsForTarget,
+	PERSON_BLOCKING_HAZARDS,
+	blockingHazardsForAudience,
 	classifySafety,
 	moderatePersonalization,
 	moderateTemplate
 } from '$lib/core/server/moderation';
 
-const GOVERNMENTAL_TARGET = {
-	governmental: true,
-	basis: 'us-federal-registry',
-	registryDomain: 'gov'
-} satisfies GovernmentalClass;
+const INSTITUTIONAL_AUDIENCE = {
+	form: 'institutional',
+	basis: 'government-registry',
+	routes: 1
+} satisfies AudienceVerdict;
 
-const NON_GOVERNMENTAL_TARGETS = [
-	{ governmental: false, reason: 'not-a-government-registry' },
-	{ governmental: false, reason: 'no-address' }
-] satisfies GovernmentalClass[];
+const STRICT_AUDIENCES = [
+	{ form: 'person-form', basis: 'name-token-match', routes: 1 },
+	{ form: 'unevaluable', reason: 'indeterminate-route', routes: 1 },
+	{ form: 'unevaluable', reason: 'no-roster', routes: 0 }
+] satisfies AudienceVerdict[];
+
+/** Every branch of the union, so a new form cannot skip the S1 floor. */
+const ALL_FORMS = ['institutional', 'person-form', 'unevaluable'] as const;
+
+function verdictFor(form: AudienceForm): AudienceVerdict {
+	switch (form) {
+		case 'institutional':
+			return INSTITUTIONAL_AUDIENCE;
+		case 'person-form':
+			return { form, basis: 'name-token-match', routes: 1 };
+		case 'unevaluable':
+			return { form, reason: 'no-roster', routes: 0 };
+		default: {
+			const unreachable: never = form;
+			throw new Error(`unhandled audience form ${String(unreachable)}`);
+		}
+	}
+}
 
 function completion(content: string): Response {
 	return new Response(JSON.stringify({ choices: [{ message: { content } }] }), {
@@ -34,53 +53,55 @@ function completion(content: string): Response {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe('target-class hazard policy', () => {
-	it('keeps the calibrated S1/S4 set for a measured governmental registry target', () => {
-		expect(blockingHazardsForTarget(GOVERNMENTAL_TARGET)).toEqual(['S1', 'S4']);
+describe('audience hazard policy', () => {
+	it('keeps the calibrated S1/S4 set for a measured institutional audience', () => {
+		expect(blockingHazardsForAudience(INSTITUTIONAL_AUDIENCE)).toEqual(['S1', 'S4']);
 		expect(BLOCKING_HAZARDS).toEqual(['S1', 'S4']);
 	});
 
-	it.each(NON_GOVERNMENTAL_TARGETS)(
-		'blocks S5, S7, and S10 for non-governmental class $reason',
-		(targetClass) => {
-			expect(blockingHazardsForTarget(targetClass)).toEqual(
-				expect.arrayContaining(['S1', 'S4', 'S5', 'S7', 'S10'])
-			);
-		}
-	);
-
-	it('fails closed to S5, S7, and S10 when the target class is unknown', () => {
-		expect(blockingHazardsForTarget(undefined)).toEqual(
-			expect.arrayContaining(['S5', 'S7', 'S10'])
+	it.each(STRICT_AUDIENCES)('blocks S5, S7, and S10 for audience form $form', (audience) => {
+		expect(blockingHazardsForAudience(audience)).toEqual(
+			expect.arrayContaining(['S1', 'S4', 'S5', 'S7', 'S10'])
 		);
-		expect(NON_GOVERNMENTAL_BLOCKING_HAZARDS).toEqual(['S1', 'S4', 'S5', 'S7', 'S10']);
 	});
 
-	it('allows S5 only for a measured governmental target', async () => {
+	it('fails closed to S5, S7, and S10 when no audience was resolved', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completion('unsafe,S5'));
+
+		await expect(classifySafety('Claim about a private employee')).resolves.toMatchObject({
+			safe: false,
+			blocking_hazards: ['S5']
+		});
+		expect(PERSON_BLOCKING_HAZARDS).toEqual(['S1', 'S4', 'S5', 'S7', 'S10']);
+	});
+
+	it('allows S5 only for a measured institutional audience', async () => {
 		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completion('unsafe,S5'));
 
 		await expect(
-			classifySafety('Criticism of public conduct', { targetClass: GOVERNMENTAL_TARGET })
+			classifySafety('Criticism of public conduct', { audience: INSTITUTIONAL_AUDIENCE })
 		).resolves.toMatchObject({ safe: true, hazards: ['S5'], blocking_hazards: [] });
-		await expect(classifySafety('Claim about a private employee')).resolves.toMatchObject({
+		await expect(
+			classifySafety('Claim about a private employee', { audience: STRICT_AUDIENCES[0] })
+		).resolves.toMatchObject({
 			safe: false,
 			hazards: ['S5'],
 			blocking_hazards: ['S5']
 		});
 	});
 
-	it('never loosens S1 for any target class', async () => {
+	it('never loosens S1 for any audience form', async () => {
 		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completion('unsafe,S1'));
 
-		for (const targetClass of [GOVERNMENTAL_TARGET, ...NON_GOVERNMENTAL_TARGETS, undefined]) {
-			await expect(classifySafety('Threat', { targetClass })).resolves.toMatchObject({
+		for (const audience of [...ALL_FORMS.map(verdictFor), undefined]) {
+			await expect(classifySafety('Threat', { audience })).resolves.toMatchObject({
 				safe: false,
 				blocking_hazards: ['S1']
 			});
 		}
 	});
 
-	it('threads the measured class through template moderation', async () => {
+	it('threads the measured audience through template moderation', async () => {
 		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completion('unsafe,S5'));
 
 		const result = await moderateTemplate(
@@ -90,19 +111,35 @@ describe('target-class hazard policy', () => {
 				preview: 'Ask for an investigation',
 				message_body: 'The official concealed the report'
 			},
-			{ skipPromptGuard: true, targetClass: GOVERNMENTAL_TARGET }
+			{ skipPromptGuard: true, audience: INSTITUTIONAL_AUDIENCE }
 		);
 
 		expect(result).toMatchObject({ approved: true, safety: { safe: true, hazards: ['S5'] } });
 	});
 
-	it('threads the measured class through personalization moderation', async () => {
+	it('keeps template moderation strict when no caller supplies an audience', async () => {
+		vi.spyOn(globalThis, 'fetch').mockImplementation(async () => completion('unsafe,S5'));
+
+		const result = await moderateTemplate(
+			{
+				title: 'Public conduct',
+				description: 'Criticism of a private employee',
+				preview: 'Ask for an investigation',
+				message_body: 'The nurse concealed the report'
+			},
+			{ skipPromptGuard: true }
+		);
+
+		expect(result).toMatchObject({ approved: false, rejection_reason: 'safety_violation' });
+	});
+
+	it('threads the measured audience through personalization moderation', async () => {
 		vi.spyOn(globalThis, 'fetch')
 			.mockResolvedValueOnce(completion('0.1'))
 			.mockResolvedValueOnce(completion('unsafe,S5'));
 
 		const result = await moderatePersonalization('The official concealed the report', {
-			targetClass: GOVERNMENTAL_TARGET
+			audience: INSTITUTIONAL_AUDIENCE
 		});
 
 		expect(result).toMatchObject({ approved: true, safety: { safe: true, hazards: ['S5'] } });
