@@ -20,9 +20,24 @@ import {
 export const PAID_PROVIDER_BUDGET_PROTOCOL = '1' as const;
 export const PAID_PROVIDER_BUDGET_AUTHORITY_ID = 'shared-paid-provider-01' as const;
 export const PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS = 1_000 as const;
-export const PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS = 2_400 as const;
+export const PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS = 2_632 as const;
 export const PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS = 750 as const;
+/**
+ * The guaranteed baseline of the shared free monthly pool — the FLOOR of the
+ * operator band. Nothing that read this constant before regresses: with no
+ * override written, this is still exactly what the admitting Durable Object
+ * spends.
+ */
 export const PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS = 1_800 as const;
+/**
+ * The highest value an operator may move the shared pool to at runtime. It is
+ * not a second budget: `GLOBAL_MONTHLY - CEILING` is still the protected
+ * operator remainder (448 = two demonstrations), and `exa_monthly_headroom`
+ * proves `GLOBAL_MONTHLY` itself is funded by the Exa free monthly credit. So
+ * every value the operator can reach is one the existing invariants already
+ * cleared, which is strictly stronger than checking a single literal.
+ */
+export const PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING = 2_184 as const;
 export const EXA_FREE_MONTHLY_CREDIT_MICROUSD = 10_000_000 as const;
 export const EXA_SEARCH_MICROUSD = 7_000 as const;
 export const EXA_CONTENTS_PAGE_MICROUSD = 1_000 as const;
@@ -111,6 +126,12 @@ type OperationDocument = {
 	providerCallBundle: Partial<ProviderCallBundle>;
 	publicDailyUnits: number;
 	publicMonthlyUnits: number;
+	/**
+	 * True where this operation's monthly sub-cap IS the shared pool rather than a
+	 * deliberate fraction of it. Only these operations follow an operator override;
+	 * a sub-capped operation stays where it was declared.
+	 */
+	publicMonthlyTracksPool?: boolean;
 	hourlyReservations: Record<PaidProviderTrustTier, number>;
 };
 
@@ -123,6 +144,7 @@ type PolicyDocument = {
 		globalMonthlyUnits: number;
 		publicDailyUnits: number;
 		publicMonthlyUnits: number;
+		publicMonthlyUnitsOperatorCeiling: number;
 		actorDailyReservations: Record<PaidProviderTrustTier, number>;
 		actorMonthlyPublicUnits: Record<'authenticated' | 'verified', number>;
 	};
@@ -239,12 +261,25 @@ function validatePolicy(): void {
 		'public_monthly_units'
 	);
 	invariant(
+		policy.caps.publicMonthlyUnitsOperatorCeiling ===
+			PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING,
+		'public_monthly_operator_ceiling'
+	);
+	invariant(
+		PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING >=
+			PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+		'public_monthly_band_order'
+	);
+	invariant(
 		PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS <= PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS,
 		'cap_order'
 	);
+	// Binds the CEILING, not today's value: the operator reserve must survive every
+	// value the runtime override can reach, not just the floor it starts at.
 	invariant(
 		PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS < PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS &&
-			PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS < PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS,
+			PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING <
+				PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS,
 		'operator_reserve'
 	);
 	// One protected launch demonstration can complete subject selection, target
@@ -255,7 +290,8 @@ function validatePolicy(): void {
 		'operator_demo_daily_reserve'
 	);
 	invariant(
-		PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS >=
+		PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS -
+			PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING >=
 			2 * 224,
 		'operator_demo_monthly_reserve'
 	);
@@ -295,6 +331,9 @@ function validatePolicy(): void {
 			share >= journeyUnits + JOURNEY_RETRY_HEADROOM_UNITS,
 			`actor_monthly_journey_floor_${tier}`
 		);
+		// Binds the FLOOR deliberately. An actor's share must fit inside the
+		// guaranteed baseline; a share that only fits because an operator raised
+		// optional headroom would evaporate the moment the override came back down.
 		invariant(
 			share <= PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
 			`actor_monthly_pool_ceiling_${tier}`
@@ -359,11 +398,32 @@ function validatePolicy(): void {
 				entry.publicDailyUnits <= PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS,
 			`public_daily_${operation}`
 		);
+		// An operation that tracks the pool may be declared up to the ceiling,
+		// because that is the highest value the pool itself can reach. One that does
+		// not track stays bounded by the floor — it is deliberately sub-capped and
+		// no override moves it.
+		const tracksPool = entry.publicMonthlyTracksPool === true;
 		invariant(
 			positiveInteger(entry.publicMonthlyUnits) &&
 				entry.publicMonthlyUnits >= entry.publicDailyUnits &&
-				entry.publicMonthlyUnits <= PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+				entry.publicMonthlyUnits <=
+					(tracksPool
+						? PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING
+						: PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS),
 			`public_monthly_${operation}`
+		);
+		// The loosened bound above is only safe because tracking is not a free
+		// annotation: an operation tracks the pool if and only if its declared
+		// monthly cap IS the pool. A flag and a sub-cap that disagree is a policy
+		// defect, caught at module load rather than at admission.
+		invariant(
+			tracksPool === (entry.publicMonthlyUnits === policy.caps.publicMonthlyUnits),
+			`public_monthly_tracks_pool_${operation}`
+		);
+		invariant(
+			entry.publicMonthlyTracksPool === undefined ||
+				typeof entry.publicMonthlyTracksPool === 'boolean',
+			`public_monthly_tracks_pool_type_${operation}`
 		);
 		for (const tier of PAID_PROVIDER_TRUST_TIERS) {
 			invariant(positiveInteger(entry.hourlyReservations[tier]), `hourly_${operation}_${tier}`);
@@ -472,8 +532,26 @@ export type PaidProviderBudgetPolicy = Readonly<{
 	operation: string;
 	publicDailyUnits: number;
 	publicMonthlyUnits: number;
+	/** True where this operation's monthly cap follows an operator pool override. */
+	publicMonthlyTracksPool: boolean;
 	weightUnits: number;
 }>;
+
+export type PaidProviderPublicMonthlyBand = Readonly<{ ceiling: number; floor: number }>;
+
+/**
+ * The band a runtime pool override must stay inside. The floor is what the
+ * platform guarantees with no override written at all; the ceiling is the
+ * highest value `validatePolicy()` has already proven fundable. Returned as a
+ * band rather than a scalar so no caller can mistake "what it is right now" for
+ * "what it may be".
+ */
+export function paidProviderPublicMonthlyBand(): PaidProviderPublicMonthlyBand {
+	return Object.freeze({
+		ceiling: PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_OPERATOR_CEILING,
+		floor: PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS
+	});
+}
 
 export type MarketedCapacityShortfall = Readonly<{
 	exaMicrousd: number;
@@ -557,14 +635,14 @@ export function paidProviderBudgetPolicyFor(
 	if (!positiveInteger(hourlyReservations) || !positiveInteger(actorDailyReservations)) return null;
 	return Object.freeze({
 		actorDailyReservations,
-		actorMonthlyPublicUnits:
-			tier === 'operator' ? null : policy.caps.actorMonthlyPublicUnits[tier],
+		actorMonthlyPublicUnits: tier === 'operator' ? null : policy.caps.actorMonthlyPublicUnits[tier],
 		hourlyReservations,
 		maxProviderCallsPerReservation: entry.maxProviderCallsPerReservation,
 		providerCallBundle: normalizedProviderBundle(entry.providerCallBundle),
 		operation,
 		publicDailyUnits: entry.publicDailyUnits,
 		publicMonthlyUnits: entry.publicMonthlyUnits,
+		publicMonthlyTracksPool: entry.publicMonthlyTracksPool === true,
 		weightUnits: entry.weightUnits
 	});
 }

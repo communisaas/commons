@@ -4,9 +4,10 @@
 	"authorityId": "shared-paid-provider-01",
 	"caps": {
 		"globalDailyUnits": 1000,
-		"globalMonthlyUnits": 2400,
+		"globalMonthlyUnits": 2632,
 		"publicDailyUnits": 750,
 		"publicMonthlyUnits": 1800,
+		"publicMonthlyUnitsOperatorCeiling": 2184,
 		"actorDailyReservations": {
 			"authenticated": 10,
 			"verified": 15,
@@ -24,6 +25,7 @@
 			"providerCallBundle": { "gemini": 1, "groq": 1 },
 			"publicDailyUnits": 200,
 			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
 			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
 		},
 		"decision-makers": {
@@ -39,6 +41,7 @@
 			},
 			"publicDailyUnits": 600,
 			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
 			"hourlyReservations": { "authenticated": 2, "verified": 3, "operator": 3 }
 		},
 		"message-generation": {
@@ -53,6 +56,7 @@
 			},
 			"publicDailyUnits": 300,
 			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
 			"hourlyReservations": { "authenticated": 3, "verified": 5, "operator": 5 }
 		},
 		"embeddings": {
@@ -61,6 +65,7 @@
 			"providerCallBundle": { "gemini": 1 },
 			"publicDailyUnits": 200,
 			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
 			"hourlyReservations": { "authenticated": 20, "verified": 20, "operator": 20 }
 		},
 		"moderation-personalization": {

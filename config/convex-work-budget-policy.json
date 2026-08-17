@@ -369,6 +369,10 @@
 			"kind": "query",
 			"class": "point"
 		},
+		"email:issueRecipientSuppressionChallenge": {
+			"kind": "mutation",
+			"class": "mutation"
+		},
 		"email:listBlasts": {
 			"kind": "query",
 			"class": "collection"

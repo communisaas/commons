@@ -2565,35 +2565,144 @@ export const createBounceReport = mutation({
 	}
 });
 
+/** A challenge is good for a day; mirrors `CHALLENGE_TTL_MS` on the SvelteKit side. */
+const RECIPIENT_SUPPRESSION_CHALLENGE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 /**
- * Suppress an email contact because the mailbox asked to be left alone.
- *
- * Internal-only: the caller-supplied hash makes this a probe oracle otherwise.
- * SvelteKit's do-not-contact route verifies the mailbox-addressed HMAC token and
- * rate-limits the request before invoking.
- *
- * The response is byte-identical for a hash that is known, unknown, or already
- * suppressed. Nothing here may reveal whether an address was ever resolved,
- * appears in a template, or already asked once — a differing status, body, or
- * error shape would turn this endpoint into an address-enumeration oracle.
+ * Challenge issuances per contact hash per day. The bound is per TARGET rather
+ * than per caller because the caller is anonymous by design and the thing being
+ * rationed is mail arriving at one mailbox. It lives here, in a durable row,
+ * because the request-layer rate limiter is per-isolate memory: a per-hash key
+ * there would be fiction the moment a second isolate served the request.
  */
-export const suppressRecipientByRequest = mutation({
-	args: { _secret: v.string(), contactHash: v.string(), requestId: v.optional(v.string()) },
-	handler: async (ctx, { _secret, contactHash, requestId }) => {
+const RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW = 3;
+
+const PUBLIC_TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
+/**
+ * Record that a mailbox-control challenge was mailed to an address.
+ *
+ * Only `sha256(nonce)` arrives here; the nonce itself exists in the target
+ * mailbox and nowhere else, so this table is useless to anyone who reads it.
+ *
+ * `{ issued: false }` when the target is over its daily cap, and nothing is
+ * inserted. The caller renders identical copy either way, so the return value
+ * never becomes an oracle about whether an address is real or already asked.
+ */
+export const issueRecipientSuppressionChallenge = mutation({
+	args: {
+		_secret: v.string(),
+		contactHash: v.string(),
+		slug: v.string(),
+		tokenHash: v.string(),
+		issuedAt: v.number(),
+		expiresAt: v.number(),
+		requestId: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, contactHash, slug, tokenHash, issuedAt, expiresAt, requestId }) => {
 		requireInternalSecret(_secret);
 		if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		if (!EMAIL_HASH_RE.test(tokenHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_HASH_INVALID');
+		}
+		if (!PUBLIC_TEMPLATE_SLUG_RE.test(slug)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_SLUG_INVALID');
+		}
 		if (requestId !== undefined && !RECIPIENT_SUPPRESSION_REQUEST_ID_RE.test(requestId)) {
 			throw new Error('RECIPIENT_SUPPRESSION_REQUEST_ID_INVALID');
 		}
-		await applyRecipientRequestSuppressionAuthority(ctx, {
+
+		const windowStart = issuedAt - RECIPIENT_SUPPRESSION_CHALLENGE_WINDOW_MS;
+		const recent = await ctx.db
+			.query('recipientSuppressionChallenges')
+			.withIndex('by_contactHash_issuedAt', (q) =>
+				q.eq('contactHash', contactHash).gt('issuedAt', windowStart)
+			)
+			.take(RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW);
+		if (recent.length >= RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW) {
+			return { issued: false as const };
+		}
+
+		await ctx.db.insert('recipientSuppressionChallenges', {
 			contactHash,
+			slug,
+			tokenHash,
+			issuedAt,
+			expiresAt,
+			...(requestId ? { requestId } : {})
+		});
+		return { issued: true as const };
+	}
+});
+
+/**
+ * Suppress an email contact because the mailbox itself asked to be left alone.
+ *
+ * Internal-only, and gated on a challenge row. The authority is `challengeNonceHash`
+ * — the hash of a one-use nonce that was mailed TO the address — not possession
+ * of a link, which the sender of a message holds before its recipient does. The
+ * mailbox being suppressed is read OFF THE ROW, so nothing a caller supplies
+ * decides whose address is removed; an optional `contactHash` is accepted only
+ * so a caller that knows which mailbox it means can be held to it.
+ *
+ * The row is marked consumed and the authority written in the same transaction,
+ * so a replayed nonce is refused by construction rather than by a time-of-check
+ * window.
+ *
+ * For a live challenge the response is byte-identical for a hash that is known,
+ * unknown, or already suppressed. Nothing here may reveal whether an address was
+ * ever resolved, appears in a template, or already asked once — a differing
+ * status, body, or error shape would turn this endpoint into an
+ * address-enumeration oracle. The challenge-state errors are the deliberate
+ * exception: they are keyed to the caller's own nonce, which the caller already
+ * holds, and to no address.
+ */
+export const suppressRecipientByRequest = mutation({
+	args: {
+		_secret: v.string(),
+		challengeNonceHash: v.string(),
+		contactHash: v.optional(v.string()),
+		requestId: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, challengeNonceHash, contactHash, requestId }) => {
+		requireInternalSecret(_secret);
+		if (contactHash !== undefined && !EMAIL_HASH_RE.test(contactHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		}
+		if (!EMAIL_HASH_RE.test(challengeNonceHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_HASH_INVALID');
+		}
+		if (requestId !== undefined && !RECIPIENT_SUPPRESSION_REQUEST_ID_RE.test(requestId)) {
+			throw new Error('RECIPIENT_SUPPRESSION_REQUEST_ID_INVALID');
+		}
+
+		const now = Date.now();
+		const challenge = await ctx.db
+			.query('recipientSuppressionChallenges')
+			.withIndex('by_tokenHash', (q) => q.eq('tokenHash', challengeNonceHash))
+			.first();
+		if (!challenge) throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_NOT_FOUND');
+		if (challenge.expiresAt <= now) throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_EXPIRED');
+		if (challenge.consumedAt !== undefined) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_CONSUMED');
+		}
+		if (contactHash !== undefined && contactHash !== challenge.contactHash) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_MISMATCH');
+		}
+
+		// Consume first, in the same transaction as the write below. A replay
+		// cannot observe an unconsumed row and a half-applied suppression.
+		await ctx.db.patch(challenge._id, { consumedAt: now });
+
+		await applyRecipientRequestSuppressionAuthority(ctx, {
+			contactHash: challenge.contactHash,
 			sourceEventId: requestId,
-			now: Date.now()
+			now
 		});
 		// A suppression that only affects future work is not a route off the
 		// platform: already-published projections have to be rebuilt filtered.
 		await ctx.scheduler.runAfter(0, reprojectSuppressedRecipientTemplatesRef, {
-			contactHash,
+			contactHash: challenge.contactHash,
 			cursor: null
 		});
 		return { suppressed: true as const };

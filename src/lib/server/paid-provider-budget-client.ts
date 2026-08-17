@@ -8,12 +8,12 @@ import {
 	PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS,
 	PAID_PROVIDER_BUDGET_PROTOCOL,
 	PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS,
-	PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
 	EXA_PAID_ORG_MONTHLY_CEILING_REASON,
 	FIRECRAWL_PAID_ORG_MONTHLY_CEILING_REASON,
 	budgetScopeForReason,
 	paidProviderBudgetOperationNames,
 	paidProviderBudgetPolicyFor,
+	paidProviderPublicMonthlyBand,
 	type PaidProviderBudgetScope,
 	type PaidProviderTrustTier
 } from '$lib/server/paid-provider-budget-policy';
@@ -22,6 +22,7 @@ export const PAID_PROVIDER_BUDGET_PROTOCOL_HEADER = 'x-paid-provider-budget-prot
 export const PAID_PROVIDER_BUDGET_TIMEOUT_MS = 750 as const;
 const RESERVATION_URL = 'https://convex-work-budget.internal/reserve-provider';
 const STATUS_URL = 'https://convex-work-budget.internal/status-provider';
+const POOL_URL = 'https://convex-work-budget.internal/pool-provider';
 const STATUS_MAXIMUM_BYTES = 16 * 1024;
 
 type ProviderBudgetEvent = Pick<RequestEvent, 'platform'>;
@@ -60,10 +61,41 @@ type PaidProviderBudgetOperatorReserve = Readonly<{
 	used: number;
 }>;
 
+/**
+ * The shared free monthly pool, reported as a band plus where inside it the
+ * operator has put it. `overrideSetAt: null` means nobody has moved it — a
+ * distinguishable fact, not a zero.
+ */
+export type PaidProviderPublicPool = Readonly<{
+	ceiling: number;
+	effective: number;
+	floor: number;
+	overrideSetAt: number | null;
+}>;
+
+export type PaidProviderPoolOverrideVerdict =
+	| Readonly<{
+			accepted: true;
+			ceiling: number;
+			effective: number;
+			floor: number;
+			overrideSetAt: number;
+			previousEffective: number;
+	  }>
+	| Readonly<{
+			accepted: false;
+			ceiling: number;
+			effective: number;
+			floor: number;
+			overrideSetAt: number | null;
+			reason: string;
+	  }>;
+
 export type PaidProviderBudgetStatus = Readonly<{
 	schema: 1;
 	realm: ConvexWorkBudgetRealm;
 	observedAt: number;
+	pool: PaidProviderPublicPool;
 	global: Readonly<{ daily: PaidProviderBudgetBalance; monthly: PaidProviderBudgetBalance }>;
 	public: Readonly<{ daily: PaidProviderBudgetBalance; monthly: PaidProviderBudgetBalance }>;
 	operatorReserve: Readonly<{
@@ -174,6 +206,37 @@ function parseOperatorReserve(
 	return reserve as PaidProviderBudgetOperatorReserve;
 }
 
+/**
+ * The band is deploy-declared, so a reported band that disagrees with it is not
+ * a pool this process can reason about. An `effective` above the floor with no
+ * recorded moment is refused for the same reason: it would be an unmeasured
+ * value wearing a measurement's clothes.
+ */
+function parsePool(value: unknown): PaidProviderPublicPool | null {
+	const pool = record(value);
+	if (!pool || !exactKeys(pool, ['ceiling', 'effective', 'floor', 'overrideSetAt'])) return null;
+	const band = paidProviderPublicMonthlyBand();
+	const { ceiling, effective, floor, overrideSetAt } = pool;
+	if (
+		floor !== band.floor ||
+		ceiling !== band.ceiling ||
+		!Number.isSafeInteger(effective) ||
+		Number(effective) < band.floor ||
+		Number(effective) > band.ceiling ||
+		(overrideSetAt !== null &&
+			(!Number.isSafeInteger(overrideSetAt) || Number(overrideSetAt) <= 0)) ||
+		(overrideSetAt === null && Number(effective) !== band.floor)
+	) {
+		return null;
+	}
+	return {
+		ceiling: band.ceiling,
+		effective: Number(effective),
+		floor: band.floor,
+		overrideSetAt: overrideSetAt === null ? null : Number(overrideSetAt)
+	};
+}
+
 function parsePaidProviderBudgetStatus(
 	value: unknown,
 	expectedRealm: ConvexWorkBudgetRealm
@@ -187,6 +250,7 @@ function parsePaidProviderBudgetStatus(
 			'observedAt',
 			'operations',
 			'operatorReserve',
+			'pool',
 			'public',
 			'realm',
 			'schema'
@@ -198,6 +262,8 @@ function parsePaidProviderBudgetStatus(
 	) {
 		return null;
 	}
+	const pool = parsePool(status.pool);
+	if (!pool) return null;
 	const global = record(status.global);
 	const publicBudget = record(status.public);
 	const actor = record(status.actor);
@@ -217,10 +283,8 @@ function parsePaidProviderBudgetStatus(
 	const globalDaily = parseBalance(global.daily, PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS);
 	const globalMonthly = parseBalance(global.monthly, PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS);
 	const publicDaily = parseBalance(publicBudget.daily, PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS);
-	const publicMonthly = parseBalance(
-		publicBudget.monthly,
-		PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS
-	);
+	// The pool the DO is actually spending, not the floor it starts from.
+	const publicMonthly = parseBalance(publicBudget.monthly, pool.effective);
 	if (!globalDaily || !globalMonthly || !publicDaily || !publicMonthly) return null;
 	if (
 		publicDaily.used > globalDaily.used ||
@@ -259,7 +323,7 @@ function parsePaidProviderBudgetStatus(
 		const operationPublicDaily = parseBalance(operationStatus.publicDaily, policy.publicDailyUnits);
 		const operationPublicMonthly = parseBalance(
 			operationStatus.publicMonthly,
-			policy.publicMonthlyUnits
+			policy.publicMonthlyTracksPool ? pool.effective : policy.publicMonthlyUnits
 		);
 		if (
 			!actorHourly ||
@@ -291,8 +355,7 @@ function parsePaidProviderBudgetStatus(
 	});
 	const operatorMonthly = parseOperatorReserve(reserve.monthly, {
 		available: globalMonthly.remaining,
-		protectedLimit:
-			PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+		protectedLimit: PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - pool.effective,
 		resetAt: globalMonthly.resetAt,
 		used: operatorMonthlyUsed
 	});
@@ -302,6 +365,7 @@ function parsePaidProviderBudgetStatus(
 		schema: 1,
 		realm: expectedRealm,
 		observedAt: Number(status.observedAt),
+		pool,
 		global: { daily: globalDaily, monthly: globalMonthly },
 		public: { daily: publicDaily, monthly: publicMonthly },
 		operatorReserve: { daily: operatorDaily, monthly: operatorMonthly },
@@ -490,6 +554,118 @@ export async function reservePaidProviderBudget(input: {
 		reason: 'AI capacity limit reached. Please try again after the reset time.',
 		budgetScope: budgetScopeForReason(budgetReason)
 	});
+}
+
+function parsePoolVerdict(value: unknown): PaidProviderPoolOverrideVerdict | null {
+	const verdict = record(value);
+	if (!verdict || verdict.schema !== 1) return null;
+	const band = paidProviderPublicMonthlyBand();
+	const { accepted, ceiling, effective, floor, overrideSetAt } = verdict;
+	if (
+		floor !== band.floor ||
+		ceiling !== band.ceiling ||
+		!Number.isSafeInteger(effective) ||
+		Number(effective) < band.floor ||
+		Number(effective) > band.ceiling
+	) {
+		return null;
+	}
+	if (accepted === true) {
+		if (
+			!exactKeys(verdict, [
+				'accepted',
+				'ceiling',
+				'effective',
+				'floor',
+				'overrideSetAt',
+				'previousEffective',
+				'schema'
+			]) ||
+			!Number.isSafeInteger(overrideSetAt) ||
+			Number(overrideSetAt) <= 0 ||
+			!Number.isSafeInteger(verdict.previousEffective)
+		) {
+			return null;
+		}
+		return Object.freeze({
+			accepted: true,
+			ceiling: band.ceiling,
+			effective: Number(effective),
+			floor: band.floor,
+			overrideSetAt: Number(overrideSetAt),
+			previousEffective: Number(verdict.previousEffective)
+		});
+	}
+	if (
+		accepted !== false ||
+		!exactKeys(verdict, [
+			'accepted',
+			'ceiling',
+			'effective',
+			'floor',
+			'overrideSetAt',
+			'reason',
+			'schema'
+		]) ||
+		typeof verdict.reason !== 'string' ||
+		!/^[a-z][a-z0-9-]{0,63}$/.test(verdict.reason) ||
+		(overrideSetAt !== null && (!Number.isSafeInteger(overrideSetAt) || Number(overrideSetAt) <= 0))
+	) {
+		return null;
+	}
+	return Object.freeze({
+		accepted: false,
+		ceiling: band.ceiling,
+		effective: Number(effective),
+		floor: band.floor,
+		overrideSetAt: overrideSetAt === null ? null : Number(overrideSetAt),
+		reason: verdict.reason
+	});
+}
+
+/**
+ * Move the shared free monthly pool inside its declared band, at runtime, with
+ * no redeploy. Reachable only from server code holding the Durable Object
+ * binding; the caller is responsible for the operator gate, and this function
+ * accepts no payment, plan, or subscription input of any kind.
+ *
+ * Returns the authority's own verdict — never a bare boolean — or `null` when
+ * the binding is absent or the DO could not be reached, which is "unknown", not
+ * "refused".
+ */
+export async function writePaidProviderPublicPoolOverride(input: {
+	event: ProviderBudgetEvent;
+	units: number;
+	timeoutMs?: number;
+}): Promise<PaidProviderPoolOverrideVerdict | null> {
+	const namespace = input.event.platform?.env?.CONVEX_WORK_BUDGET;
+	if (!namespace || typeof input.units !== 'number' || !Number.isFinite(input.units)) return null;
+	try {
+		const id = namespace.idFromName(paidProviderBudgetCoordinatorName());
+		const response = await namespace.get(id).fetch(
+			new Request(POOL_URL, {
+				body: JSON.stringify({ publicMonthlyUnits: input.units }),
+				headers: {
+					'content-type': 'application/json',
+					[PAID_PROVIDER_BUDGET_PROTOCOL_HEADER]: PAID_PROVIDER_BUDGET_PROTOCOL
+				},
+				method: 'POST',
+				signal: AbortSignal.timeout(input.timeoutMs ?? PAID_PROVIDER_BUDGET_TIMEOUT_MS)
+			})
+		);
+		if (
+			(response.status !== 200 && response.status !== 400) ||
+			response.headers.get(PAID_PROVIDER_BUDGET_PROTOCOL_HEADER) !==
+				PAID_PROVIDER_BUDGET_PROTOCOL ||
+			!response.headers.get('content-type')?.toLowerCase().startsWith('application/json')
+		) {
+			await response.body?.cancel().catch(() => undefined);
+			return null;
+		}
+		return parsePoolVerdict(await boundedResponseJson(response));
+	} catch {
+		return null;
+	}
 }
 
 export async function readPaidProviderBudgetStatus(input: {

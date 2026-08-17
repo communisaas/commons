@@ -15,7 +15,8 @@ import {
 	marketedCapacityShortfall,
 	paidOrgProviderMonthlyCeilings,
 	paidProviderBudgetOperationNames,
-	paidProviderBudgetPolicyFor
+	paidProviderBudgetPolicyFor,
+	paidProviderPublicMonthlyBand
 } from '../../../src/lib/server/paid-provider-budget-policy';
 import {
 	CONVEX_WORK_BUDGET_CLASS_UNITS,
@@ -70,21 +71,27 @@ describe('paid provider budget policy', () => {
 
 	it('sets a hard shared launch ceiling across every authenticated actor and realm', () => {
 		expect(PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS).toBe(1_000);
-		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS).toBe(2_400);
+		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS).toBe(2_632);
 		expect(PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS).toBe(750);
+		// Still the floor of the operator band, and still what the DO spends with no
+		// override written.
 		expect(PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS).toBe(1_800);
+		expect(paidProviderPublicMonthlyBand()).toEqual({ ceiling: 2_184, floor: 1_800 });
 		// The two numbers bound to provider spend. Dividing the free lane into
 		// per-actor shares must never move either of them.
 		expect(policy.caps.globalDailyUnits).toBe(1_000);
-		expect(policy.caps.globalMonthlyUnits).toBe(2_400);
+		expect(policy.caps.globalMonthlyUnits).toBe(2_632);
+		expect(policy.caps.publicMonthlyUnitsOperatorCeiling).toBe(2_184);
 		expect(PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS).toBeLessThan(
 			PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS
 		);
 		expect(
 			PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_DAILY_UNITS
 		).toBeGreaterThanOrEqual(224);
+		// The reserve is measured against the CEILING, so it survives every value an
+		// operator override can reach — not just today's floor.
 		expect(
-			PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS
+			PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - paidProviderPublicMonthlyBand().ceiling
 		).toBeGreaterThanOrEqual(2 * 224);
 	});
 
@@ -187,12 +194,14 @@ describe('paid provider budget policy', () => {
 			paidProviderBudgetPolicyFor('message-generation', 'operator')!.providerCallBundle
 		).toMatchObject({ exaSearch: 9, exaContents: 12, firecrawl: 12 });
 		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS * maxExaMicrousdPerUnit).toBeCloseTo(
-			7_749_397.590361446
+			8_498_506.024096385
 		);
 		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS * maxExaMicrousdPerUnit).toBeLessThanOrEqual(
 			EXA_FREE_MONTHLY_CREDIT_MICROUSD * 0.85
 		);
-		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS * maxFirecrawlCreditsPerUnit).toBe(576);
+		expect(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS * maxFirecrawlCreditsPerUnit).toBeCloseTo(
+			631.68
+		);
 		expect(
 			PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS * maxFirecrawlCreditsPerUnit
 		).toBeLessThanOrEqual(FIRECRAWL_FREE_MONTHLY_CREDITS * 0.8);

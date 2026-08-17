@@ -1418,6 +1418,26 @@ export default defineSchema({
 		updatedAt: v.number()
 	}).index('by_channel_contactHash_scopeOrgId', ['channel', 'contactHash', 'scopeOrgId']),
 
+	// Proof that the mailbox itself asked, not merely that someone holds a link
+	// addressed to it. A suppression URL rides a message the SENDER composes, so
+	// possession of it proves nothing about control of the mailbox; the terminal
+	// write therefore consumes a row here, and a row is only created by mailing a
+	// random nonce TO the address. Only `sha256(nonce)` is stored — the nonce is
+	// the credential and it lives in exactly one place, the recipient's inbox.
+	// `consumedAt` is set in the same transaction as the authority write, so a
+	// replay is refused by construction rather than by a time-of-check window.
+	recipientSuppressionChallenges: defineTable({
+		contactHash: v.string(),
+		slug: v.string(),
+		tokenHash: v.string(),
+		issuedAt: v.number(),
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		requestId: v.optional(v.string())
+	})
+		.index('by_tokenHash', ['tokenHash'])
+		.index('by_contactHash_issuedAt', ['contactHash', 'issuedAt']),
+
 	// One OCC-serialized logical clock for contact admission. Bulk dispatchers
 	// capture the epoch while materializing a cohort and require the same value
 	// at the final carrier boundary; any intervening STOP/START/bounce/complaint

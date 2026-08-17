@@ -14,7 +14,7 @@
 		"explicitly-io-free": 0,
 		"pre-io-tombstone": 26,
 		"server-hmac": 5,
-		"server-secret": 194
+		"server-secret": 195
 	},
 	"browserDirectAuthenticatedResiduals": [
 		{
@@ -918,6 +918,14 @@
 			"kind": "query",
 			"authority": "authenticated-role",
 			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:issueRecipientSuppressionChallenge",
+			"source": "convex/email.ts",
+			"exportName": "issueRecipientSuppressionChallenge",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
 		},
 		{
 			"runtimeName": "email:listBlasts",

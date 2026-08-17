@@ -5,7 +5,8 @@ import {
 	paidProviderBudgetCoordinatorName,
 	paidProviderMonthlyCeilingWasReached,
 	readPaidProviderBudgetStatus,
-	reservePaidProviderBudget
+	reservePaidProviderBudget,
+	writePaidProviderPublicPoolOverride
 } from '../../../src/lib/server/paid-provider-budget-client';
 import {
 	EXA_PAID_ORG_MONTHLY_CEILING_REASON,
@@ -16,7 +17,8 @@ import {
 	PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
 	budgetScopeForReason,
 	paidProviderBudgetOperationNames,
-	paidProviderBudgetPolicyFor
+	paidProviderBudgetPolicyFor,
+	paidProviderPublicMonthlyBand
 } from '../../../src/lib/server/paid-provider-budget-policy';
 
 function eventWithStub(fetch: (request: Request) => Promise<Response> | Response) {
@@ -58,6 +60,14 @@ function validStatus() {
 		schema: 1,
 		realm: 'production',
 		observedAt: Date.UTC(2026, 6, 20, 12, 30),
+		// The shared pool as a band with where inside it the operator has put it.
+		// Nobody has moved it here, so `overrideSetAt` is null.
+		pool: {
+			ceiling: paidProviderPublicMonthlyBand().ceiling,
+			effective: paidProviderPublicMonthlyBand().floor,
+			floor: paidProviderPublicMonthlyBand().floor,
+			overrideSetAt: null
+		},
 		global: {
 			daily: balance(PAID_PROVIDER_BUDGET_GLOBAL_DAILY_UNITS, 400, dailyResetAt),
 			monthly: balance(PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS, 800, monthlyResetAt)
@@ -75,9 +85,11 @@ function validStatus() {
 				used: 100
 			},
 			monthly: {
-				available: 1_600,
-				protectedLimit: 600,
-				protectedRemaining: 400,
+				available: PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - 800,
+				protectedLimit:
+					PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS,
+				protectedRemaining:
+					PAID_PROVIDER_BUDGET_GLOBAL_MONTHLY_UNITS - PAID_PROVIDER_BUDGET_PUBLIC_MONTHLY_UNITS - 200,
 				resetAt: monthlyResetAt,
 				used: 200
 			}
@@ -431,5 +443,74 @@ describe('paid provider budget client', () => {
 				})
 			).resolves.toBeNull();
 		}
+	});
+
+	it('carries an operator pool override to the authority and returns its verdict, not a boolean', async () => {
+		let captured: Request | undefined;
+		const runtime = eventWithStub((request) => {
+			captured = request;
+			return Response.json(
+				{
+					accepted: true,
+					ceiling: 2_184,
+					effective: 2_184,
+					floor: 1_800,
+					overrideSetAt: Date.UTC(2026, 6, 20, 12, 30),
+					previousEffective: 1_800,
+					schema: 1
+				},
+				{ headers: { 'x-paid-provider-budget-protocol': '1' } }
+			);
+		});
+
+		const verdict = await writePaidProviderPublicPoolOverride({ event: runtime.event, units: 2_184 });
+
+		expect(verdict).toEqual({
+			accepted: true,
+			ceiling: 2_184,
+			effective: 2_184,
+			floor: 1_800,
+			overrideSetAt: Date.UTC(2026, 6, 20, 12, 30),
+			previousEffective: 1_800
+		});
+		expect(captured?.url).toBe('https://convex-work-budget.internal/pool-provider');
+		// The write carries a capacity number and nothing else — no actor, no plan,
+		// no payment. Capacity is not purchasable.
+		expect(JSON.parse(await captured!.clone().text())).toEqual({ publicMonthlyUnits: 2_184 });
+	});
+
+	it('returns a refusal as a reasoned verdict, and an unreachable authority as unknown', async () => {
+		const refused = eventWithStub(() =>
+			Response.json(
+				{
+					accepted: false,
+					ceiling: 2_184,
+					effective: 1_800,
+					floor: 1_800,
+					overrideSetAt: null,
+					reason: 'pool-override-out-of-band',
+					schema: 1
+				},
+				{ status: 400, headers: { 'x-paid-provider-budget-protocol': '1' } }
+			)
+		);
+		await expect(
+			writePaidProviderPublicPoolOverride({ event: refused.event, units: 9_999 })
+		).resolves.toMatchObject({ accepted: false, reason: 'pool-override-out-of-band' });
+
+		// A band the caller cannot recognise, a wrong protocol, and a missing
+		// binding are all "unknown" — never a silent success.
+		const drifted = eventWithStub(() =>
+			Response.json(
+				{ accepted: true, ceiling: 5_000, effective: 5_000, floor: 1_800, overrideSetAt: 1, previousEffective: 1_800, schema: 1 },
+				{ headers: { 'x-paid-provider-budget-protocol': '1' } }
+			)
+		);
+		await expect(
+			writePaidProviderPublicPoolOverride({ event: drifted.event, units: 2_000 })
+		).resolves.toBeNull();
+		await expect(
+			writePaidProviderPublicPoolOverride({ event: { platform: undefined } as never, units: 2_000 })
+		).resolves.toBeNull();
 	});
 });

@@ -18,154 +18,14 @@ import {
 	paidProviderBudgetOperationNames,
 	paidProviderBudgetPolicyFor
 } from '../../../src/lib/server/paid-provider-budget-policy';
-import { ConvexWorkBudget } from '../../../workers/convex-work-budget';
-
-type Period = { cap: number; key: string; used: number };
-type ProviderPeriod = Period & { kind: 'daily' | 'hourly' | 'monthly' };
-type Row = Record<string, ArrayBuffer | number | string | null>;
-
-class FakeSql {
-	generation: string | null = null;
-	readonly periods = new Map<string, Period>();
-	readonly providerPeriods = new Map<string, ProviderPeriod>();
-	readonly queries: string[] = [];
-
-	exec<Result extends Row>(query: string, ...bindings: (number | string)[]) {
-		this.queries.push(query);
-		let rows: Row[] = [];
-		if (query.startsWith('CREATE TABLE')) {
-			rows = [];
-		} else if (query.startsWith('INSERT OR IGNORE INTO work_budget_metadata')) {
-			this.generation ??= String(bindings[0]);
-		} else if (query.startsWith('SELECT singleton_key')) {
-			rows = this.generation
-				? [{ coordinator_generation: this.generation, singleton_key: 1 }]
-				: [];
-		} else if (query.startsWith('SELECT kind, period_key')) {
-			const period = this.providerPeriods.get(String(bindings[0]));
-			rows = period
-				? [
-						{
-							kind: period.kind,
-							cap_units: period.cap,
-							period_key: period.key,
-							used_units: period.used
-						}
-					]
-				: [];
-		} else if (query.startsWith('SELECT period_key')) {
-			const period = this.periods.get(String(bindings[0]));
-			rows = period
-				? [{ cap_units: period.cap, period_key: period.key, used_units: period.used }]
-				: [];
-		} else if (query.startsWith('INSERT INTO work_budget_period')) {
-			this.periods.set(String(bindings[0]), {
-				key: String(bindings[1]),
-				used: Number(bindings[2]),
-				cap: Number(bindings[3])
-			});
-		} else if (query.startsWith('INSERT INTO provider_budget_period')) {
-			this.providerPeriods.set(String(bindings[0]), {
-				kind: String(bindings[1]) as ProviderPeriod['kind'],
-				key: String(bindings[2]),
-				used: Number(bindings[3]),
-				cap: Number(bindings[4])
-			});
-		} else {
-			throw new Error(`Unexpected SQL: ${query}`);
-		}
-		return { toArray: () => rows as Result[] };
-	}
-}
-
-function providerRequest(
-	actorHash = 'a'.repeat(64),
-	operation = 'decision-makers',
-	tier: 'authenticated' | 'verified' | 'operator' = 'authenticated',
-	overrides: RequestInit = {},
-	realm: 'preview' | 'production' = 'production'
-) {
-	return new Request('https://convex-work-budget.internal/reserve-provider', {
-		body: JSON.stringify({ actorHash, operation, realm, tier }),
-		headers: {
-			'content-type': 'application/json',
-			'x-paid-provider-budget-protocol': '1'
-		},
-		method: 'POST',
-		...overrides
-	});
-}
-
-function paidOrgProviderRequest(
-	actorHash: string,
-	orgHash: string,
-	balanceUnits = 830,
-	periodStart = Date.UTC(2026, 6, 1),
-	periodEnd = Date.UTC(2026, 7, 1)
-) {
-	return new Request('https://convex-work-budget.internal/reserve-provider', {
-		body: JSON.stringify({
-			actorHash,
-			operation: 'decision-makers',
-			paidOrg: { orgHash, balanceUnits, periodStart, periodEnd },
-			realm: 'production',
-			tier: 'authenticated'
-		}),
-		headers: {
-			'content-type': 'application/json',
-			'x-paid-provider-budget-protocol': '1'
-		},
-		method: 'POST'
-	});
-}
-
-function providerStatusRequest(
-	actorHash = 'a'.repeat(64),
-	overrides: RequestInit = {},
-	realm: 'preview' | 'production' = 'production'
-) {
-	return new Request('https://convex-work-budget.internal/status-provider', {
-		body: JSON.stringify({ actorHash, realm }),
-		headers: {
-			'content-type': 'application/json',
-			'x-paid-provider-budget-protocol': '1'
-		},
-		method: 'POST',
-		...overrides
-	});
-}
-
-function setup(persistedGeneration?: string) {
-	const sql = new FakeSql();
-	if (persistedGeneration) sql.generation = persistedGeneration;
-	let initialized = Promise.resolve();
-	const transactionSync = vi.fn(<T>(callback: () => T) => callback());
-	const state = {
-		blockConcurrencyWhile(callback: () => Promise<void>) {
-			initialized = callback();
-		},
-		storage: { sql, transactionSync }
-	};
-	const budget = new ConvexWorkBudget(state as never);
-	return { budget, initialized: () => initialized, sql, transactionSync };
-}
-
-function request(
-	operation = 'organizations:slugExists',
-	kind: 'action' | 'mutation' | 'query' = 'query',
-	overrides: RequestInit = {},
-	realm: 'preview' | 'production' = 'production'
-) {
-	return new Request('https://convex-work-budget.internal/reserve', {
-		body: JSON.stringify({ kind, operation, realm }),
-		headers: {
-			'content-type': 'application/json',
-			'x-convex-work-budget-protocol': '4'
-		},
-		method: 'POST',
-		...overrides
-	});
-}
+import {
+	FakeSql,
+	paidOrgProviderRequest,
+	providerRequest,
+	providerStatusRequest,
+	request,
+	setup
+} from './convex-work-budget-harness';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -546,12 +406,16 @@ describe('SQLite paid-provider budget', () => {
 			realm: 'production',
 			global: {
 				daily: { limit: 1000, used: 400, remaining: 600 },
-				monthly: { limit: 2400, used: 800, remaining: 1600 }
+				monthly: { limit: 2632, used: 800, remaining: 1832 }
 			},
 			public: {
 				daily: { limit: 750, used: 300, remaining: 450 },
 				monthly: { limit: 1800, used: 600, remaining: 1200 }
 			},
+			// The pool is reported as a band with where inside it the operator has
+			// put it — never a bare scalar. Nobody has moved it here, so
+			// `overrideSetAt` is null: a distinguishable fact, not a zero.
+			pool: { ceiling: 2184, effective: 1800, floor: 1800, overrideSetAt: null },
 			operatorReserve: {
 				daily: {
 					available: 600,
@@ -560,9 +424,9 @@ describe('SQLite paid-provider budget', () => {
 					used: 100
 				},
 				monthly: {
-					available: 1600,
-					protectedLimit: 600,
-					protectedRemaining: 400,
+					available: 1832,
+					protectedLimit: 832,
+					protectedRemaining: 632,
 					used: 200
 				}
 			},
