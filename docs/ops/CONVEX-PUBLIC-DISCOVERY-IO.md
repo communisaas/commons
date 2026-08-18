@@ -507,6 +507,12 @@ minutes. Continuation and retry cannot restart the 45-minute clock.
 
 ## Production activation
 
+> The full migration/activation chain is NOT maintained here. Its ordering and
+> stop-conditions live in `docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md` "Step 4b" and
+> its commands in `docs/development/deployment.md`. What follows is the
+> incident-specific sequencing this recovery adds on top of that chain — the
+> first-cutover marker migration and the pause/reactivate ordering.
+
 Order matters. First publish the zero-I/O Cloudflare containment artifact; only
 then perform the paused Convex recovery below. After queue-safe reactivation,
 deploy and populate the Convex snapshots before releasing the **normal**

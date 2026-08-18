@@ -103,6 +103,13 @@ npx convex run templates:rebuildHomepageSnapshots '{}' --env-file .env.productio
 # environment. Never place the discovery secret in CLI JSON or shell history.
 npm run verify:public-discovery-readiness
 
+# Rebuilding snapshots is NOT activation. The discovery source plane, the list
+# projection and the manifest authority each need their migration run and their
+# activation confirmed, or every public reader fails closed and the site serves
+# its shell with no data. Follow the ordering and stop-conditions in
+# docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md "Step 4b", whose command chain lives in
+# docs/development/deployment.md. Do not restate them here; they drift.
+
 # Run the integration test suite against the restored deployment
 PUBLIC_CONVEX_URL=<restored-url> npm run test:integration
 ```

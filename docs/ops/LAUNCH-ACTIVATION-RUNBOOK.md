@@ -608,6 +608,66 @@ npx convex function-spec --env-file .env.production | grep -c 'metering'
 
 Expected: a count greater than 0 (the `metering.*` function identifiers are listed).
 
+## Step 4b — B1c: migrate and ACTIVATE the discovery source plane
+
+```text
++------------------------------------------------------------------------------+
+| THE STEP THAT WAS MISSING. Deploying Convex ships the readers; it does NOT   |
+| build the projections they read. Every public discovery reader FAILS CLOSED  |
+| until activation — by design, not by fault. Skip this and the site serves    |
+| its shell with no data, /api/templates returns 500, and /api/health reports  |
+| convex:false while the Convex deployment itself answers 200. That exact      |
+| state was observed on prod, and it is what steps 4 and 5 alone produce.      |
++------------------------------------------------------------------------------+
+```
+
+Run the canonical command chain in
+[`docs/development/deployment.md` § migrations](../development/deployment.md) — it is the
+single maintained copy and is not restated here. This step owns the ORDERING and the GATES;
+that document owns the commands.
+
+Order, and why it is this order:
+
+1. `migratePublicDiscoveryManifestAuthority`, then poll
+   `publicDiscoveryManifestAuthorityOperatorStatus`. The manifest authority is what every
+   other reader resolves its revision against, so nothing downstream is meaningful until it
+   is ready.
+2. `migratePublicDiscoverySourcePage` in a loop, polling `publicDiscoverySourceMigrationStatus`
+   until `status` is `"migrated"`. **The first response does not prove completion** — these
+   are self-paging jobs that return before they finish.
+3. `activatePublicDiscoverySourcePlane`, then re-poll to `"ready"`.
+4. `templateListProjectionMigrationStatus` → `activateTemplateListProjection` → re-poll
+   `"ready"`.
+
+Gates — every one is a stop condition, not a warning:
+
+- `publicDiscoverySourceMigrationStatus` must reach `status: "migrated"` with `rejected: 0`
+  and `sourcesWritten == eligible`. A non-zero `rejected` means rows the reader will refuse;
+  activating over them ships a partial corpus.
+- `status: "blocked"` is a STOP. Diagnose the coded row or page-budget failure and use
+  `{"restart":true}` only after correcting it. Do not re-run the migration hoping it clears.
+- A row is not eligible for activation unless **both** projections validate — the
+  at-most-16-KiB public card and the separate at-most-48-KiB detail/send row. The detail
+  reader never falls back to the canonical embedding-bearing template.
+- `templateListProjectionMigrationStatus` must reach `"migrated"` with `failureCode` and
+  `failureTemplateId` null and `scanned == projected`, then `"ready"` after activation.
+
+Never pass `_secret` to these through `npx convex run` arguments: they are server-only
+surfaces and the value would land in process arguments and shell history. The migration and
+status functions above are internal and take no secret; the versioned discovery queries do,
+and are not called by hand.
+
+Verify — the deployed function set actually contains the activation machinery:
+
+```bash
+npx convex function-spec --env-file .env.production \
+  | grep -cE 'publicDiscoverySourceMigrationStatus|activatePublicDiscoverySourcePlane|publicDiscoveryManifestAuthorityStatus'
+```
+
+Expected: `3`. A `0` means the deploy in step 4 did not land — on 2026-08-18 prod carried
+744 functions against 907 in the branch, with none of this machinery present, and that is
+precisely the shape of a deploy that never reached prod.
+
 ## Step 5 — CF Pages deploy (promote `production`) — B3 ordering constraint
 
 ```text
