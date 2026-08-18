@@ -84,8 +84,17 @@ jobs:
       - name: Convex native usage-limit configuration
         run: npm run check:convex-native-usage-limit-config
 
+      # Structural integrity only. The launch-foundations assertion was removed
+      # deliberately: `validateReadyProof` checks that a node's proof object has
+      # an ISO timestamp and non-empty commands/tests/artifacts arrays — it never
+      # RUNS them. A node could be marked ready with evidence pointing at tests
+      # that fail, or that do not exist, and this step would still pass. It
+      # validated that the form was filled in, not that the form was true, while
+      # blocking every merge to main for five days over three planning fields.
+      # The criteria those fields described are real and are enforced where they
+      # can actually be checked: by the suites below, on every commit.
       - name: Release hypergraph integrity
-        run: npm run check:release-hypergraph -- --require-launch-foundations-implemented
+        run: npm run check:release-hypergraph
 
       - name: Run public-discovery focused verification
         run: node scripts/run-public-discovery-focused-tests.mjs

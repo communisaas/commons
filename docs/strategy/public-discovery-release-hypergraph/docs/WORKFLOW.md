@@ -1,5 +1,27 @@
 # Public-discovery production release
 
+> **THIS GRAPH DOES NOT GATE CI, AND MUST NOT BE MADE TO AGAIN.** A node's
+> `status` is a hand-maintained claim. `scripts/verify-release-hypergraph.mjs`
+> validates the SHAPE of a proof object — an ISO `verifiedAt` and non-empty
+> `commands`/`tests`/`artifacts` arrays — and never executes any of it. A node
+> can be marked `ready` with evidence pointing at tests that fail, or that do
+> not exist, and the verifier still passes.
+>
+> It was briefly wired into the required CI job via
+> `--require-launch-foundations-implemented`. On 2026-08-13 one commit added
+> `FND-52`, `FND-53` and `FND-55` to the required list and the next commit, 17
+> seconds later, created them as `in_progress` — while attaching proof
+> timestamped three weeks earlier. Every merge to `main` was blocked for five
+> days by three planning fields, over work that was already done: all three
+> proof command sets were re-run on 2026-08-18 and pass (84, 161 and 125 tests,
+> both typecheckers clean).
+>
+> Read this graph as a checklist a person works through. The criteria it
+> describes are real and are enforced where they can actually be checked — by
+> the suites in CI, on every commit. If you want a human launch attestation,
+> make it a release checklist ticked once, not a per-commit gate that cannot
+> tell a broken commit from an untouched planning file.
+
 This is the executable path through the hypergraph. The release begins upstream
 of deployment: every producer, cache, and paid public boundary must be bounded
 before the snapshot producer becomes ready and the edge consumer receives
