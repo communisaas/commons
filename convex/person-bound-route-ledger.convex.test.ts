@@ -308,6 +308,9 @@ describe('person-bound route ledger', () => {
 				};
 				const decision = await admitPersonBoundRoute(ctx, input);
 				expect(decision).toEqual({ decision: 'send', email: input.personEmail });
+				// Narrow before reading `email`: the refused branch of
+				// `PersonBoundRouteDecision` carries a reason and no address.
+				if (decision.decision !== 'send') throw new Error('expected a send decision');
 				await recordPersonBoundRoute(ctx, { ...input, decidedEmail: decision.email });
 			}
 
