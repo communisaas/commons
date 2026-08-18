@@ -10,7 +10,16 @@ import {
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+// This suite runs the real finalizer, which bundles an actual Svelte sibling
+// closure — measured at 10-28s per case. The global budget in vitest.config.ts
+// is 10s locally and 15s in CI, so every one of these timed out rather than
+// failed. It went unnoticed because the CI step ahead of this one had been
+// failing for five days, so the job never reached it. Bundling cost is real
+// work, not a hang: give it headroom here rather than loosening the global
+// budget that every other suite is held to.
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
 import {
 	PAGES_FINALIZATION_RECORD,
 	PAGES_WORKER_PLATFORM_GZIP_LIMIT_BYTES,
@@ -275,7 +284,9 @@ describe('trusted Pages release-artifact finalizer', () => {
 				readFileSync(join(replica.artifactRoot, PAGES_FINALIZATION_RECORD), 'utf8')
 			);
 		},
-		30_000
+		// Two independent finalizations to compare bytes, so roughly double the
+		// single-run cost. Measured at ~34s; 30s was under the floor.
+		180_000
 	);
 
 	it('ignores the stock candidate entry and never embeds the trusted edge authority', () => {

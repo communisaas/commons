@@ -311,7 +311,16 @@ describe('SSR-only public discovery query boundary', () => {
 			() => t.query(api.templates.publicDiscoveryRelations, {})
 		];
 		for (const call of unauthorizedCalls) {
-			await expect(call()).rejects.toThrow('Unauthorized');
+			// Two refusal shapes, both correct, and the test is about the DENIAL —
+			// not which layer produced it. The three versioned discovery queries now
+			// declare `_secret: v.string()` non-optionally, so an omitted secret is
+			// refused by the ARGUMENT VALIDATOR before the handler runs at all. That
+			// is strictly earlier than the handler's `Unauthorized`, which is what
+			// this test's own name asks for: denial before any singleton state is
+			// touched. The remaining legacy aliases still refuse in-handler.
+			await expect(call()).rejects.toThrow(
+				/Unauthorized|Missing required field `_secret`/
+			);
 		}
 
 		// The authorized call reaches the deliberately invalid duplicate range,

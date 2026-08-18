@@ -125,7 +125,11 @@ describe('release hypergraph verifier', () => {
 			foundations.filter((candidate: { status: string }) => candidate.status !== 'ready')
 		).toEqual([
 			expect.objectContaining({ id: 'FND-52', status: 'in_progress' }),
-			expect.objectContaining({ id: 'FND-53', status: 'in_progress' })
+			expect.objectContaining({ id: 'FND-53', status: 'in_progress' }),
+			// FND-55 joined this residual set on 2026-08-13, in the same commit pair
+			// that added all three to the CI required list and created them as
+			// in_progress. This assertion was not updated with it.
+			expect.objectContaining({ id: 'FND-55', status: 'in_progress' })
 		]);
 
 		for (const foundation of foundations.filter(
@@ -160,8 +164,12 @@ describe('release hypergraph verifier', () => {
 
 	it('rejects a ready exact-SHA gate without exact provenance proof', () => {
 		const graph = currentGraph();
+		// Clear every in_progress residual so the assertion below isolates FND-60 as
+		// the blocker it is about. Leaving FND-55 open made this throw name FND-55
+		// instead, which is a true message about the wrong dependency.
 		task(graph, 'FND-52').status = 'ready';
 		task(graph, 'FND-53').status = 'ready';
+		task(graph, 'FND-55').status = 'ready';
 		task(graph, 'PD-10').status = 'ready';
 		task(graph, 'PD-10').proof = readyProof();
 		expect(() => validateReleaseHypergraphDocuments(graph)).toThrow(/PD-10.*dependency FND-60/);

@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { GET } from '../../../src/routes/api/release-candidate/+server';
 
-const sourceSha = '0'.repeat(40);
+// The handler compares against the SHA baked in at build time. `vitest.config.ts`
+// resolves that from `process.env.VITE_RELEASE_SHA` when it is a valid 40-hex
+// value and falls back to forty zeroes otherwise — so hardcoding the fallback
+// made this suite pass in CI and fail on any machine whose `.env.local` carries
+// a real release SHA. Read the same value the config baked in.
+const sourceSha = (import.meta.env.VITE_RELEASE_SHA as string | undefined) ?? '0'.repeat(40);
 const transactionId = '123456789-7';
 
 afterEach(() => {
