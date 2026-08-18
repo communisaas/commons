@@ -18,8 +18,17 @@
     "forceConsistentCasingInFileNames": true,
     "module": "ESNext",
     "isolatedModules": true,
-    "noEmit": true
+    "noEmit": true,
+    /* `lib/districtHash.ts` reads `process.env` at call time (empty at module
+     * scope on Workers). Node types were previously pulled in transitively by a
+     * test that is now excluded. */
+    "types": ["node"]
   },
   "include": ["./**/*"],
-  "exclude": ["./_generated"]
+  /* `credential-receipt-terminal-state.convex.test.ts` imports a SvelteKit route
+   * to prove an end-to-end boundary. Resolving `$lib` and a route's generated
+   * `./$types` here would drag SvelteKit-only virtual modules ($env/dynamic/*)
+   * into this project, which cannot resolve outside a Vite build. It is a test,
+   * not a deployed function; vitest typechecks and runs it. */
+  "exclude": ["./_generated", "./credential-receipt-terminal-state.convex.test.ts"]
 }

@@ -20,7 +20,7 @@ function templateValue(slug: string): TemplateValue {
 		description: 'Recipient metrics fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Body',
 		deliveryConfig: {},
@@ -53,7 +53,7 @@ function messageValue(
 		sentAt: index + 1,
 		officeRead: false,
 		officeResponded: false,
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		deliveryStatus
 	};
 }

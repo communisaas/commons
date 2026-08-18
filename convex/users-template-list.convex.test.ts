@@ -65,7 +65,7 @@ function templateValue(index: number, userId: Id<'users'>) {
 		domain: 'civic',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		deliveryConfig: {},

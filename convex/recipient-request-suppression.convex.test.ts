@@ -124,7 +124,7 @@ async function seedTemplate(
 			domain: 'housing',
 			topics: ['housing'],
 			type: 'email',
-			deliveryMethod: 'email',
+			deliveryMethod: 'email' as const,
 			preview: 'Preview',
 			messageBody: 'Message',
 			deliveryConfig: {},

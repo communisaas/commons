@@ -19,7 +19,7 @@ function missingTemplateValue(slug: string, overrides: Partial<TemplateValue> = 
 		description: 'Fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Body',
 		deliveryConfig: {},
@@ -100,7 +100,7 @@ async function seedTemplates(t: ReturnType<typeof harness>, missing: number, com
 				description: 'Bounded embedding repair fixture',
 				topics: ['repair'],
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				preview: 'Preview',
 				messageBody: 'Body',
 				deliveryConfig: {},
@@ -206,7 +206,7 @@ describe('bounded embedding backfill discovery', () => {
 			cwcId: await ctx.db.insert(
 				'templates',
 				missingTemplateValue('published-cwc-tags', {
-					deliveryMethod: 'cwc',
+					deliveryMethod: 'cwc' as const,
 					topics: ['district access']
 				})
 			)
@@ -376,7 +376,7 @@ describe('bounded embedding backfill discovery', () => {
 				// Legacy/shared activity timestamp must not satisfy the topic marker.
 				embeddingsUpdatedAt: 1_800_000_000_000,
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				preview: 'Preview',
 				messageBody: 'Body',
 				deliveryConfig: {},
@@ -413,7 +413,7 @@ describe('bounded embedding backfill discovery', () => {
 					topicEmbedding,
 					embeddingsUpdatedAt: 1_800_000_000_000 + index,
 					type: 'email',
-					deliveryMethod: 'email',
+					deliveryMethod: 'email' as const,
 					preview: 'Preview',
 					messageBody: 'Body',
 					deliveryConfig: {},
@@ -463,7 +463,7 @@ describe('bounded embedding backfill discovery', () => {
 						topicEmbedding: vector,
 						embeddingsUpdatedAt: 1_800_000_000_000 + index,
 						type: 'email',
-						deliveryMethod: 'email',
+						deliveryMethod: 'email' as const,
 						preview: 'Preview',
 						messageBody: 'x'.repeat(900_000),
 						deliveryConfig: {},
@@ -614,7 +614,7 @@ describe('bounded embedding backfill discovery', () => {
 				description: 'Fixture',
 				topics: [],
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				preview: 'Preview',
 				messageBody: 'Body',
 				deliveryConfig: {},
@@ -1000,7 +1000,7 @@ describe('bounded embedding backfill discovery', () => {
 				messageBody: 'Body',
 				preview: 'Preview',
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				domain: 'civic',
 				topics: [],
 				contentHash: 'self-approved-hash',

@@ -91,7 +91,7 @@ describe('campaign launch authorization and attribution invariants', () => {
 				title: 'Settlement template',
 				description: 'Campaign settlement authorization fixture',
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				preview: 'Preview',
 				messageBody: 'Message',
 				deliveryConfig: {},

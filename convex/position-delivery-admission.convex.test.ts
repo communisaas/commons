@@ -19,7 +19,7 @@ function templateValue(slug: string): TemplateValue {
 		description: 'Position delivery admission fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Body',
 		deliveryConfig: {},
@@ -117,12 +117,12 @@ describe('position registration delivery admission', () => {
 			{
 				name: '  Rep. Jos\u00e9   Smith ',
 				email: ' REP@EXAMPLE.COM ',
-				deliveryMethod: 'email'
+				deliveryMethod: 'email' as const
 			},
 			{
 				name: 'rep jose smith',
 				email: 'rep@example.com',
-				deliveryMethod: 'email'
+				deliveryMethod: 'email' as const
 			}
 		];
 
@@ -142,7 +142,7 @@ describe('position registration delivery admission', () => {
 			expect(rows[0]).toMatchObject({
 				recipientName: 'Rep. Jos\u00e9 Smith',
 				recipientKey: 'rep-jose-smith',
-				deliveryMethod: 'email'
+				deliveryMethod: 'email' as const
 			});
 			await expect(
 				ctx.db
@@ -436,7 +436,7 @@ describe('position registration delivery admission', () => {
 					registrationId,
 					Array.from({ length: 20 }, (_, index) => ({
 						name: `Recipient ${index}`,
-						deliveryMethod: 'email',
+						deliveryMethod: 'email' as const,
 						encryptedRecipientEmail: envelope,
 						encryptedRecipientName: envelope
 					}))
@@ -448,7 +448,7 @@ describe('position registration delivery admission', () => {
 			t.mutation(
 				api.positions.batchRegisterDeliveries,
 				args(registrationId, [
-					{ name: 'Recipient', email: 'not-an-email', deliveryMethod: 'email' }
+					{ name: 'Recipient', email: 'not-an-email', deliveryMethod: 'email' as const }
 				])
 			)
 		).rejects.toThrow('POSITION_DELIVERY_RECIPIENT_EMAIL_INVALID');
@@ -471,7 +471,7 @@ describe('position registration delivery admission', () => {
 		const registrationId = await registration(t, identityCommitment);
 		const emptyEnvelopeRecipients = Array.from({ length: 20 }, (_, index) => ({
 			name: `Recipient ${index}`,
-			deliveryMethod: 'email',
+			deliveryMethod: 'email' as const,
 			encryptedRecipientEmail: '',
 			encryptedRecipientName: ''
 		}));

@@ -45,7 +45,7 @@ function templateValue(index: number, userId: Id<'users'>) {
 		description: 'Bounded author fan-out fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		deliveryConfig: {},

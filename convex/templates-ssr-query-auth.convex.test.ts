@@ -81,7 +81,7 @@ function templateValue(slug: string, status: string, isPublic: boolean) {
 		description: 'Visibility fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		deliveryConfig: {},
@@ -303,12 +303,17 @@ describe('SSR-only public discovery query boundary', () => {
 		const unauthorizedCalls = [
 			() => t.query(api.templates.getBySlug, { slug: 'anything' }),
 			() => t.query(api.templates.getBySlugPublic, { slug: 'anything' }),
-			() => t.query(api.templates.publicDiscoveryManifest, {}),
-			() => t.query(api.templates.listPublic, {}),
-			() => t.query(api.templates.publicDiscoveryList, {}),
+			// The three versioned queries now declare `_secret: v.string()`
+			// non-optionally, so the unauthorized call this test exists to prove is
+			// refused is no longer expressible in a typed call. Constructing it
+			// deliberately is the point: the cast asserts nothing about the runtime,
+			// which must still reject every one of these.
+			() => t.query(api.templates.publicDiscoveryManifest, {} as never),
+			() => t.query(api.templates.listPublic, {} as never),
+			() => t.query(api.templates.publicDiscoveryList, {} as never),
 			() => t.query(api.templates.relatednessEdges, {}),
 			() => t.query(api.templates.conceptRelations, {}),
-			() => t.query(api.templates.publicDiscoveryRelations, {})
+			() => t.query(api.templates.publicDiscoveryRelations, {} as never)
 		];
 		for (const call of unauthorizedCalls) {
 			// Two refusal shapes, both correct, and the test is about the DENIAL —
@@ -512,7 +517,7 @@ describe('SSR-only public discovery query boundary', () => {
 				description: 'Visibility fixture',
 				domain: '',
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				subject: 'legacy-recipient-detail',
 				message_body: 'Message',
 				sources: [],
@@ -657,7 +662,7 @@ describe('SSR-only public discovery query boundary', () => {
 				description: 'Purpose-bound projection',
 				domain: 'civic',
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				subject: 'Compact detail',
 				message_body: 'Message',
 				sources: [],

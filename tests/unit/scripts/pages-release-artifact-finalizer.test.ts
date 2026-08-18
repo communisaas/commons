@@ -201,7 +201,8 @@ describe('trusted Pages release-artifact finalizer', () => {
 		expect(() => readFileSync(join(input.artifactRoot, 'cloudflare-tmp/manifest.js'))).toThrow();
 			expect(validateFinalizedPagesWorker(input.artifactRoot)).toEqual(result);
 		},
-		20_000
+		// Bundling a real Svelte closure; measured ~24s. 20s was under the floor.
+		180_000
 	);
 
 	it('binds the exact trusted runtime source closure and rejects missing or drifted T inputs', () => {

@@ -36,7 +36,7 @@ async function fixture(t: Harness) {
 			title: 'Debate read boundary',
 			description: 'A bounded debate fixture',
 			type: 'email',
-			deliveryMethod: 'email',
+			deliveryMethod: 'email' as const,
 			preview: 'Preview',
 			messageBody: 'Message body',
 			deliveryConfig: {},

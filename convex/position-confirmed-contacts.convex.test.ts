@@ -21,7 +21,7 @@ function templateValue(slug: string, overrides: Partial<TemplateValue> = {}): Te
 		description: 'Confirmed contact fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Body',
 		deliveryConfig: {},
@@ -78,7 +78,7 @@ describe('viewer-confirmed direct contacts', () => {
 	it('returns what the writer wrote, as the writer wrote it', async () => {
 		const t = convexTest({ schema, modules });
 		const templateId = await template(t, 'confirmed-roundtrip');
-		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' }]);
+		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' as const }]);
 
 		const rows = await t.query(api.positions.listViewerConfirmedContacts, readArgs(templateId));
 		expect(rows).toHaveLength(1);
@@ -90,7 +90,7 @@ describe('viewer-confirmed direct contacts', () => {
 	it('never shows one viewer another viewer history', async () => {
 		const t = convexTest({ schema, modules });
 		const templateId = await template(t, 'confirmed-isolation');
-		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' }]);
+		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' as const }]);
 
 		await expect(
 			t.query(
@@ -103,7 +103,7 @@ describe('viewer-confirmed direct contacts', () => {
 	it('returns only the three fields the page renders', async () => {
 		const t = convexTest({ schema, modules });
 		const templateId = await template(t, 'confirmed-projection');
-		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' }]);
+		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' as const }]);
 
 		const rows = await t.query(api.positions.listViewerConfirmedContacts, readArgs(templateId));
 		expect(Object.keys(rows[0]).sort()).toEqual(['confirmedAt', 'deliveryStatus', 'recipientName']);
@@ -112,7 +112,7 @@ describe('viewer-confirmed direct contacts', () => {
 	it('excludes the reserved mailto-confirmation system identity', async () => {
 		const t = convexTest({ schema, modules });
 		const templateId = await template(t, 'confirmed-system-key');
-		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' }]);
+		await record(t, templateId, [{ name: 'Rep. Jane Doe', deliveryMethod: 'email' as const }]);
 		await t.run((ctx) =>
 			ctx.db.insert('positionDeliveries', {
 				pseudonymousId: PSEUDONYMOUS_ID,
@@ -137,7 +137,7 @@ describe('viewer-confirmed direct contacts', () => {
 				templateId,
 				recipientName: 'Rep. Legacy Row',
 				recipientKey: 'rep-legacy-row',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				deliveryStatus: 'pending'
 			})
 		);
@@ -157,7 +157,7 @@ describe('viewer-confirmed direct contacts', () => {
 					templateId,
 					recipientName: `Recipient ${index}`,
 					recipientKey: `recipient-${index}`,
-					deliveryMethod: 'email',
+					deliveryMethod: 'email' as const,
 					deliveryStatus: 'user_confirmed'
 				});
 			}

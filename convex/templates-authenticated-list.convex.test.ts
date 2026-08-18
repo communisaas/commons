@@ -89,7 +89,7 @@ function templateValue(index: number, userId: Id<'users'>, orgId: Id<'organizati
 		domain: 'civic',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		deliveryConfig: {},

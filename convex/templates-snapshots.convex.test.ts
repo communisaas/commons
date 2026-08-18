@@ -178,7 +178,7 @@ function templateValue(index: number, overrides: Partial<TemplateValue> = {}): T
 		description: `Description ${index}`,
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: `Preview ${index}`,
 		messageBody: `Message ${index}`,
 		deliveryConfig: {},
@@ -207,7 +207,7 @@ function storedPublicCard(id: string, overrides: Record<string, unknown> = {}) {
 		domain: 'civic',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		subject: `Title ${id}`,
 		message_body: 'Body',
 		preview: 'Preview',
@@ -340,7 +340,7 @@ async function createPublicTemplate(t: Harness, index: number): Promise<Id<'temp
 		messageBody: 'Body',
 		preview: 'Preview',
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		domain: 'civic',
 		topics: [],
 		contentHash: `occ-publication-${index}`,
@@ -2005,7 +2005,7 @@ describe('templates materialized public snapshots', () => {
 				messageBody: 'Body',
 				preview: 'Preview',
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				domain: 'civic',
 				topics: [],
 				contentHash: 'public-creation-invalidates-discovery',
@@ -2714,7 +2714,7 @@ describe('templates materialized public snapshots', () => {
 				await ctx.db.insert(
 					'templates',
 					templateValue(8_000 + index, {
-						deliveryMethod: 'cwc'
+						deliveryMethod: 'cwc' as const
 					})
 				);
 			}

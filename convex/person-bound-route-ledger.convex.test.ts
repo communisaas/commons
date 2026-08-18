@@ -345,6 +345,9 @@ describe('person-bound route ledger', () => {
 				decision: 'send',
 				email: afterWindow.personEmail
 			});
+			// Narrow before reading `email`: the refused branch of
+			// `PersonBoundRouteDecision` carries a reason and no address.
+			if (rolledDecision.decision !== 'send') throw new Error('expected a send decision');
 			await recordPersonBoundRoute(ctx, {
 				...afterWindow,
 				decidedEmail: rolledDecision.email

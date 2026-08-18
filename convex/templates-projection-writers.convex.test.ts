@@ -45,7 +45,7 @@ describe('template compact-projection writers', () => {
 				domain: 'old-domain',
 				topics: ['old-topic'],
 				type: 'email',
-				deliveryMethod: 'cwc',
+				deliveryMethod: 'cwc' as const,
 				preview: 'Preview',
 				messageBody: 'Message',
 				deliveryConfig: {},

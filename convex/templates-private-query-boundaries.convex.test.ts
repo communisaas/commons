@@ -55,7 +55,7 @@ function templateValue(userId: Id<'users'>, suffix: string) {
 		category: 'General',
 		topics: ['efficiency'],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		sources: ['source'],

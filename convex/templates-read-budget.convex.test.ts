@@ -102,7 +102,7 @@ async function seedHeavyTemplates(t: Harness, count: number): Promise<void> {
 				description: 'Embedding-heavy regression fixture',
 				topics: [`topic-${index}`],
 				type: 'email',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				preview: 'Preview',
 				messageBody: 'Message body',
 				deliveryConfig: {},
@@ -171,7 +171,7 @@ describe('public template query read budgets', () => {
 				.withIndex('by_status_isPublic', (q) => q.eq('status', 'published').eq('isPublic', true))
 				.first();
 			expect(cwcTemplate).not.toBeNull();
-			await ctx.db.patch(cwcTemplate!._id, { deliveryMethod: 'cwc' });
+			await ctx.db.patch(cwcTemplate!._id, { deliveryMethod: 'cwc' as const });
 		});
 		await prepareDiscoveryRollout(t);
 

@@ -17,7 +17,7 @@ function templateValue(index: number, overrides: Partial<TemplateValue> = {}): T
 		description: 'Cursor paging fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Message',
 		deliveryConfig: {},

@@ -20,7 +20,7 @@ function templateValue(slug: string, overrides: Partial<TemplateValue> = {}): Te
 		description: 'Direct delivery admission fixture',
 		topics: [],
 		type: 'email',
-		deliveryMethod: 'email',
+		deliveryMethod: 'email' as const,
 		preview: 'Preview',
 		messageBody: 'Body',
 		deliveryConfig: {},
@@ -88,8 +88,8 @@ describe('direct delivery durable admission and lifetime history', () => {
 		const t = convexTest({ schema, modules });
 		const templateId = await template(t, 'direct-canonical');
 		const recipients = [
-			{ name: '  Rep. Jos\u00e9   Smith ', deliveryMethod: 'email' },
-			{ name: 'rep jose smith', deliveryMethod: 'email' }
+			{ name: '  Rep. Jos\u00e9   Smith ', deliveryMethod: 'email' as const },
+			{ name: 'rep jose smith', deliveryMethod: 'email' as const }
 		];
 
 		await expect(
@@ -105,7 +105,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 			pseudonymousId: PSEUDONYMOUS_ID,
 			recipientName: 'Rep. Jos\u00e9 Smith',
 			recipientKey: 'rep-jose-smith',
-			deliveryMethod: 'email'
+			deliveryMethod: 'email' as const
 		});
 		expect(rows[0]).not.toHaveProperty('recipientEmail');
 	});
@@ -163,7 +163,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 		const templateId = await template(t, 'direct-lifetime-cap');
 		const recipients = Array.from({ length: 20 }, (_, index) => ({
 			name: `Recipient ${index}`,
-			deliveryMethod: 'email'
+			deliveryMethod: 'email' as const
 		}));
 
 		await expect(
@@ -172,13 +172,13 @@ describe('direct delivery durable admission and lifetime history', () => {
 		await expect(
 			t.mutation(
 				api.positions.recordDirectDeliveries,
-				args(templateId, [{ name: ' recipient 0 ', deliveryMethod: 'email' }])
+				args(templateId, [{ name: ' recipient 0 ', deliveryMethod: 'email' as const }])
 			)
 		).resolves.toEqual({ created: 0, existing: 1, duplicates: 0 });
 		await expect(
 			t.mutation(
 				api.positions.recordDirectDeliveries,
-				args(templateId, [{ name: 'Twenty first recipient', deliveryMethod: 'email' }])
+				args(templateId, [{ name: 'Twenty first recipient', deliveryMethod: 'email' as const }])
 			)
 		).rejects.toThrow('DIRECT_DELIVERY_LIFETIME_CAP_EXCEEDED');
 		expect(await directRows(t, templateId)).toHaveLength(20);
@@ -193,7 +193,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 				templateId,
 				recipientName: 'Rep. Jos\u00e9 Smith',
 				recipientKey: 'rep-jos-smith',
-				deliveryMethod: 'email',
+				deliveryMethod: 'email' as const,
 				deliveryStatus: 'pending'
 			})
 		);
@@ -201,7 +201,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 		await expect(
 			t.mutation(
 				api.positions.recordDirectDeliveries,
-				args(templateId, [{ name: 'rep jose smith', deliveryMethod: 'email' }])
+				args(templateId, [{ name: 'rep jose smith', deliveryMethod: 'email' as const }])
 			)
 		).resolves.toEqual({ created: 0, existing: 1, duplicates: 0 });
 		expect(await directRows(t, templateId)).toHaveLength(1);
@@ -274,7 +274,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 		await expect(
 			t.mutation(
 				api.positions.recordDirectDeliveries,
-				args(templateId, [{ name: 'Recipient', deliveryMethod: 'email' }], 'A'.repeat(64))
+				args(templateId, [{ name: 'Recipient', deliveryMethod: 'email' as const }], 'A'.repeat(64))
 			)
 		).rejects.toThrow('DIRECT_DELIVERY_PSEUDONYM_INVALID');
 		await t.run(async (ctx) => {
@@ -293,7 +293,7 @@ describe('direct delivery durable admission and lifetime history', () => {
 				api.positions.recordDirectDeliveries,
 				args(
 					templateId,
-					[{ name: 'Recipient', deliveryMethod: 'email' }],
+					[{ name: 'Recipient', deliveryMethod: 'email' as const }],
 					PSEUDONYMOUS_ID,
 					oversizedSecret
 				)
