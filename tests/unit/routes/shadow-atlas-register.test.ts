@@ -18,9 +18,9 @@ const {
 			reserveShadowAtlasRegistrationOperation: 'users.tree1Reserve'
 		}
 	},
-	mockBegin: vi.fn(() => ({ started: true, status: 'dispatching' })),
-	mockCommit: vi.fn(() => ({ status: 'committed' })),
-	mockMarkAmbiguous: vi.fn(() => ({ recorded: true, status: 'ambiguous' })),
+	mockBegin: vi.fn((_args: unknown) => ({ started: true, status: 'dispatching' })),
+	mockCommit: vi.fn((_args: unknown) => ({ status: 'committed' })),
+	mockMarkAmbiguous: vi.fn((_args: unknown) => ({ recorded: true, status: 'ambiguous' })),
 	mockRegister: vi.fn(),
 	mockReplace: vi.fn(),
 	mockReserve: vi.fn(),

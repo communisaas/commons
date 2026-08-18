@@ -1588,7 +1588,7 @@ async function directPublicTemplatesWhenUnshielded(error: unknown, excludeCwc: b
 
 export async function getCachedPublicTemplates(context: PublicQueryContext, excludeCwc: boolean) {
 	const logicalKey = `templates:exclude-cwc=${excludeCwc ? '1' : '0'}`;
-	let manifestAuthority: PublicDiscoveryManifestAuthority;
+	let manifestAuthority: CachedPublicDiscoveryManifest;
 	try {
 		manifestAuthority = await getCachedPublicDiscoveryManifestAuthority(context);
 	} catch (error) {

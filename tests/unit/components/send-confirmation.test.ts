@@ -70,10 +70,23 @@ describe('SendConfirmation wiring — /s/[slug] honesty + lifecycle', () => {
 		);
 	});
 
-	it('keeps mailto sending while the paused recording endpoint receives no recipient PII', () => {
-		expect(slug).toContain('window.location.href = result.url');
-		expect(slug).toContain('window.location.href = url');
-		expect(slug).not.toContain("fetch('/api/deliveries/record'");
+	it('keeps mailto sending while the recording endpoint receives no recipient PII', () => {
+		// Both send lanes launch through the ASSEMBLED url — `result.url`/`url` were
+		// renamed to `assembly.url` when the page's send lanes were made to agree
+		// with what it displays. Assert the count so a lane cannot quietly lose its
+		// launch and still satisfy a `toContain`.
+		expect(slug.match(/window\.location\.href = assembly\.url/g) ?? []).toHaveLength(2);
+		// The recording endpoint is LIVE again. It was paused for launch containment
+		// "while durable bounded admission is being hardened"; that hardening landed,
+		// so asserting the call's absence now pins a stub rather than a boundary.
+		// What must still hold — and what this now checks directly — is the PII
+		// boundary: only the canonical public name and the delivery method are
+		// posted. The recipient email stays in the local mailto flow and never
+		// enters the tracking request or Convex delivery history.
+		expect(slug).toContain("fetch('/api/deliveries/record'");
+		expect(slug).toMatch(
+			/sendConfirmation\.recipients\.map\(\(\{\s*name,\s*deliveryMethod\s*\}\)/
+		);
 	});
 
 	it('guards a concurrent send while a peak is pending', () => {
