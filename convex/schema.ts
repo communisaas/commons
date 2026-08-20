@@ -220,6 +220,9 @@ export default defineSchema({
 		scanComplete: v.boolean(),
 		scanned: v.number(),
 		written: v.number(),
+		// Scanned users that could not be projected YET. See the deferral note in
+		// convex/sessionAuthority.ts: exactness is `scanned === written + deferred`.
+		deferred: v.optional(v.number()),
 		failureCode: v.optional(v.string()),
 		failureUserId: v.optional(v.id('users')),
 		startedAt: v.number(),

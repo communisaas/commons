@@ -483,7 +483,8 @@ async function readDiscoveryProducerStatus(ctx: QueryCtx) {
 				sessionAuthorityMigration.scanComplete === true &&
 				sessionAuthorityMigration.cursor === undefined &&
 				sessionAuthorityMigration.failureCode === undefined &&
-				sessionAuthorityMigration.scanned === sessionAuthorityMigration.written,
+				sessionAuthorityMigration.scanned ===
+					sessionAuthorityMigration.written + (sessionAuthorityMigration.deferred ?? 0),
 			sessionAuthorityMigration?.failureCode
 		),
 		campaignReadModel: launchPlane(

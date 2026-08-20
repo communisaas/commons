@@ -97,6 +97,7 @@ export const migrationStatus = internalQuery({
 					scanComplete: migration.scanComplete,
 					scanned: migration.scanned,
 					written: migration.written,
+					deferred: migration.deferred ?? 0,
 					failureCode: migration.failureCode ?? null,
 					failureUserId: migration.failureUserId ?? null,
 					startedAt: migration.startedAt,
@@ -116,10 +117,11 @@ export const readiness = query({
 			ready:
 				migration?.status === 'ready' &&
 				migration.scanComplete === true &&
-				migration.scanned === migration.written,
+				migration.scanned === migration.written + (migration.deferred ?? 0),
 			status: migration?.status ?? ('not-started' as const),
 			scanned: migration?.scanned ?? 0,
 			written: migration?.written ?? 0,
+			deferred: migration?.deferred ?? 0,
 			failureCode: migration?.failureCode ?? null
 		};
 	}
@@ -142,6 +144,7 @@ export const migrateSessionAuthorities = internalMutation({
 		let cursor: string | undefined;
 		let scanned: number;
 		let written: number;
+		let deferred: number;
 
 		if (args.runToken !== undefined) {
 			if (!migration || migration.status !== 'running' || migration.runToken !== args.runToken) {
@@ -151,6 +154,7 @@ export const migrateSessionAuthorities = internalMutation({
 			cursor = migration.cursor;
 			scanned = migration.scanned;
 			written = migration.written;
+			deferred = migration.deferred ?? 0;
 		} else if (!args.restart && migration?.status === 'ready') {
 			return {
 				status: 'already-ready' as const,
@@ -184,6 +188,7 @@ export const migrateSessionAuthorities = internalMutation({
 			cursor = undefined;
 			scanned = 0;
 			written = 0;
+			deferred = 0;
 			const now = Date.now();
 			const initial = {
 				key: 'v1' as const,
@@ -193,6 +198,7 @@ export const migrateSessionAuthorities = internalMutation({
 				scanComplete: false,
 				scanned,
 				written,
+				deferred,
 				failureCode: undefined,
 				failureUserId: undefined,
 				startedAt: now,
@@ -227,7 +233,26 @@ export const migrateSessionAuthorities = internalMutation({
 			return { status: 'blocked' as const, runToken, failureCode };
 		}
 
+		let deferredInPage = 0;
 		for (const user of page.page) {
+			// A user with no email cannot be projected, and that is a normal
+			// self-healing state rather than a corruption. `authOps` patches
+			// `email`, `emailHash` and `custodyMode` on the next sign-in
+			// (convex/authOps.ts), so BOTH kinds of row that reach here are
+			// benign: a client-custody account whose address is sealed to the
+			// client and who has not signed in since, and a stale seed row that
+			// never will. Neither has a session to authorize, so neither needs an
+			// authority row until it logs in — at which point the auth path mints
+			// one. Defer them: counted, not written, exactness preserved by
+			// `scanned === written + deferred`.
+			//
+			// Do NOT relax `projectSessionAuthority` to admit an empty email. Its
+			// refusal is the anti-sybil invariant, and every OTHER projection
+			// error below is still fatal, because those ARE corruptions.
+			if (!user.email || user.email.trim().length === 0) {
+				deferredInPage += 1;
+				continue;
+			}
 			try {
 				projectSessionAuthority(user);
 				await syncSessionAuthority(ctx, user._id);
@@ -249,7 +274,8 @@ export const migrateSessionAuthorities = internalMutation({
 		}
 
 		scanned += page.page.length;
-		written += page.page.length;
+		written += page.page.length - deferredInPage;
+		deferred += deferredInPage;
 		const completedAt = page.isDone ? Date.now() : undefined;
 		await ctx.db.patch(migration._id, {
 			status: page.isDone ? 'migrated' : 'running',
@@ -257,6 +283,7 @@ export const migrateSessionAuthorities = internalMutation({
 			scanComplete: page.isDone,
 			scanned,
 			written,
+			deferred,
 			failureCode: undefined,
 			failureUserId: undefined,
 			completedAt,
@@ -285,7 +312,7 @@ export const activateSessionAuthorities = internalMutation({
 			!migration ||
 			migration.status !== 'migrated' ||
 			!migration.scanComplete ||
-			migration.scanned !== migration.written
+			migration.scanned !== migration.written + (migration.deferred ?? 0)
 		) {
 			throw new ConvexError({
 				code: 'SESSION_AUTHORITY_MIGRATION_INCOMPLETE',
@@ -296,7 +323,8 @@ export const activateSessionAuthorities = internalMutation({
 		return {
 			status: 'ready' as const,
 			scanned: migration.scanned,
-			written: migration.written
+			written: migration.written,
+			deferred: migration.deferred ?? 0
 		};
 	}
 });

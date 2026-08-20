@@ -5,6 +5,8 @@ const authOps = readFileSync('convex/authOps.ts', 'utf8');
 const users = readFileSync('convex/users.ts', 'utf8');
 const seed = readFileSync('convex/seed.ts', 'utf8');
 const hooks = readFileSync('src/hooks.server.ts', 'utf8');
+const migration = readFileSync('convex/sessionAuthority.ts', 'utf8');
+const projection = readFileSync('convex/lib/sessionAuthority.ts', 'utf8');
 
 function exportedFunction(source: string, name: string, nextName?: string): string {
 	const start = source.indexOf(`export const ${name} =`);
@@ -52,6 +54,29 @@ describe('session authority writer contract', () => {
 		expect(exportedFunction(users, 'recomputeAllReputationTiers')).not.toContain(
 			'syncSessionAuthority'
 		);
+	});
+
+	it('defers a user it cannot project yet instead of blocking the whole plane', () => {
+		// A row with no plaintext email is self-healing, not corrupt: `authOps`
+		// patches email/emailHash/custodyMode at the next sign-in. Blocking the
+		// plane on one stopped production at 17/20 for a client-custody account
+		// and three stale seed rows, none of which had a session to authorize.
+		const run = exportedFunction(migration, 'migrateSessionAuthorities', 'activateSessionAuthorities');
+		expect(run).toMatch(/if \(!user\.email \|\| user\.email\.trim\(\)\.length === 0\) \{\s*\n\s*deferredInPage \+= 1;\s*\n\s*continue;/);
+		// Deferral must not become a way to skip a REAL corruption: every other
+		// projection error still blocks.
+		expect(run).toContain("status: 'blocked'");
+		// And exactness still has to balance — a deferred row is counted, not lost.
+		expect(run).toContain('written += page.page.length - deferredInPage;');
+		expect(run).toContain('deferred += deferredInPage;');
+	});
+
+	it('keeps the empty-email refusal in the projection itself', () => {
+		// The deferral above is the MIGRATION's tolerance. The projection must
+		// keep refusing, because that refusal is the anti-sybil invariant.
+		expect(projection).toContain("requiredBoundedString('email', user.email, 320)");
+		const activate = exportedFunction(migration, 'activateSessionAuthorities');
+		expect(activate).toContain('migration.scanned !== migration.written + (migration.deferred ?? 0)');
 	});
 
 	it('routes the request boundary through the compact query and an explicit request clock', () => {
