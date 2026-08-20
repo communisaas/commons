@@ -15,7 +15,11 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from 15. Installing the release-gate Wrangler means the Pages
+    # finalizer suite now actually RUNS instead of failing in milliseconds
+    # against a missing directory, and it does ~8 minutes of real bundling.
+    # The job used to fit in 15 only because that work never happened.
+    timeout-minutes: 35
     outputs:
       coverage-comment-artifact-id: ${{ steps.upload-coverage-comment.outputs.artifact-id }}
 
@@ -116,7 +120,8 @@ jobs:
 
       - name: Run tests with coverage
         run: npm run test:coverage
-        timeout-minutes: 10
+        # Was 10, which no longer covers the finalizer suite's real bundling cost.
+        timeout-minutes: 25
 
       - name: Component test lane
         run: npm run test:components
