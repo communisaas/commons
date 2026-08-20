@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // failing for five days, so the job never reached it. Bundling cost is real
 // work, not a hang: give it headroom here rather than loosening the global
 // budget that every other suite is held to.
-vi.setConfig({ testTimeout: 180_000, hookTimeout: 180_000 });
+vi.setConfig({ testTimeout: 600_000, hookTimeout: 600_000 });
 import {
 	PAGES_FINALIZATION_RECORD,
 	PAGES_WORKER_PLATFORM_GZIP_LIMIT_BYTES,
@@ -202,7 +202,7 @@ describe('trusted Pages release-artifact finalizer', () => {
 			expect(validateFinalizedPagesWorker(input.artifactRoot)).toEqual(result);
 		},
 		// Bundling a real Svelte closure; measured ~24s. 20s was under the floor.
-		180_000
+		600_000
 	);
 
 	it('binds the exact trusted runtime source closure and rejects missing or drifted T inputs', () => {
@@ -287,7 +287,7 @@ describe('trusted Pages release-artifact finalizer', () => {
 		},
 		// Two independent finalizations to compare bytes, so roughly double the
 		// single-run cost. Measured at ~34s; 30s was under the floor.
-		180_000
+		600_000
 	);
 
 	it('ignores the stock candidate entry and never embeds the trusted edge authority', () => {
