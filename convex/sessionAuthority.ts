@@ -298,6 +298,7 @@ export const migrateSessionAuthorities = internalMutation({
 			runToken,
 			scanned,
 			written,
+			deferred,
 			continueCursor: page.isDone ? null : page.continueCursor
 		};
 	}

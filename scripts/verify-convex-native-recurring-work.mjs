@@ -73,6 +73,9 @@ export function scanConvexNativeRecurringWork({ cronPath = CRONS_PATH } = {}) {
 		true,
 		ts.ScriptKind.TS
 	);
+	// Cadences expressed as imported constants resolve to their integer value
+	// before any text comparison or envelope arithmetic below.
+	const constants = numericImportConstants(source, cronPath);
 	/** @type {CronJob[]} */
 	const jobs = [];
 	/** @type {string[]} */
@@ -104,7 +107,7 @@ export function scanConvexNativeRecurringWork({ cronPath = CRONS_PATH } = {}) {
 					name,
 					tier,
 					method: node.expression.name.text,
-					schedule: scheduleNode.getText(sourceFile),
+					schedule: substituteConstants(scheduleNode.getText(sourceFile), constants),
 					handler: handlerNode.getText(sourceFile),
 					codeTombstoned:
 						ANALYTICS_TOMBSTONES.has(name) &&
@@ -118,6 +121,50 @@ export function scanConvexNativeRecurringWork({ cronPath = CRONS_PATH } = {}) {
 	}
 	visit(sourceFile);
 	return { source, sourceFile, jobs, errors };
+}
+
+/**
+ * Resolve `{ minutes: SOME_CONSTANT }` back to `{ minutes: 15 }`.
+ *
+ * This ratchet reads cron cadences as TEXT, so a cadence expressed as an
+ * imported constant reads as an unsupported schedule and the daily-envelope
+ * arithmetic below cannot run at all. Moving a cadence into a named constant is
+ * the right change -- convex/lib/contactAuthority.ts derives its overdue alarm
+ * from the recovery interval precisely so the two cannot drift -- so resolve
+ * the identifier here rather than forcing the literal back into crons.ts.
+ *
+ * Only integer `export const NAME = <digits>;` in modules crons.ts actually
+ * imports is resolved. Anything else stays unresolved and still fails loudly.
+ *
+ * @param {string} source convex/crons.ts text
+ * @param {string} cronsPath absolute path to convex/crons.ts
+ * @returns {Map<string, string>}
+ */
+function numericImportConstants(source, cronsPath) {
+	/** @type {Map<string, string>} */
+	const resolved = new Map();
+	const importRe = /import\s*\{([^}]*)\}\s*from\s*'(\.\/[^']+)'/g;
+	for (const match of source.matchAll(importRe)) {
+		const specifier = match[2];
+		const absolute = path.resolve(path.dirname(cronsPath), `${specifier}.ts`);
+		if (!fs.existsSync(absolute)) continue;
+		const moduleSource = fs.readFileSync(absolute, 'utf8');
+		for (const name of match[1].split(',').map((entry) => entry.trim()).filter(Boolean)) {
+			const constRe = new RegExp(`export const ${name}\\s*=\\s*(\\d+)\\s*;`);
+			const value = constRe.exec(moduleSource);
+			if (value) resolved.set(name, value[1]);
+		}
+	}
+	return resolved;
+}
+
+/** @param {string} schedule @param {Map<string, string>} constants @returns {string} */
+function substituteConstants(schedule, constants) {
+	let out = schedule;
+	for (const [name, value] of constants) {
+		out = out.replaceAll(name, value);
+	}
+	return out;
 }
 
 /** @param {{method: string, schedule: string, name: string}} job */

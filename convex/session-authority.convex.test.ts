@@ -91,9 +91,19 @@ describe('compact session authority plane', () => {
 		});
 	});
 
-	it('fails the authority plane closed on an email-less user instead of minting a partial row', async () => {
+	it('defers an email-less user without minting a partial row', async () => {
+		// CONTRACT CHANGED. This case used to demand the whole plane block, which
+		// was the only way to guarantee no partial row got minted. Deferral is a
+		// third option that keeps that guarantee and does not halt the plane, and
+		// it is the honest one: authOps repairs an email-less user at the next
+		// sign-in, so the row is pre-heal, not corrupt, and it has no session to
+		// authorize in the meantime. Blocking on one stopped production at 17/20
+		// over a client-custody account and three stale seed rows.
+		//
+		// The invariant the original case actually protected -- never mint a
+		// partial authority row -- is asserted unchanged at the end.
 		const t = convexTest({ schema, modules });
-		const userId = await t.run(async (ctx) => {
+		await t.run(async (ctx) => {
 			const { email: _unused, ...emailless } = userValue(0);
 			const insertedUserId = await ctx.db.insert('users', emailless);
 			await ctx.db.insert('sessions', {
@@ -107,9 +117,34 @@ describe('compact session authority plane', () => {
 			t.mutation(internal.sessionAuthority.migrateSessionAuthorities, {
 				scheduleContinuation: false
 			})
+		).resolves.toMatchObject({ status: 'migrated', scanned: 1, written: 0, deferred: 1 });
+
+		// Deferred rows are counted, so the plane can still reach ready without
+		// pretending the user was written.
+		await expect(
+			t.mutation(internal.sessionAuthority.activateSessionAuthorities, {})
+		).resolves.toMatchObject({ status: 'ready', scanned: 1, written: 0, deferred: 1 });
+
+		await t.run(async (ctx) => {
+			expect(await ctx.db.query('userSessionAuthorities').collect()).toEqual([]);
+		});
+	});
+
+	it('still blocks the plane on a user that is invalid rather than incomplete', async () => {
+		// Deferral must not become a way to walk past a real corruption. Only an
+		// absent email defers; every other projection failure is still terminal.
+		const t = convexTest({ schema, modules });
+		const userId = await t.run(async (ctx) =>
+			ctx.db.insert('users', { ...userValue(0), email: `${'e'.repeat(400)}@example.org` })
+		);
+
+		await expect(
+			t.mutation(internal.sessionAuthority.migrateSessionAuthorities, {
+				scheduleContinuation: false
+			})
 		).resolves.toMatchObject({
 			status: 'blocked',
-			failureCode: 'SESSION_AUTHORITY_INVALID:email:required',
+			failureCode: 'SESSION_AUTHORITY_INVALID:email:bytes',
 			failureUserId: userId
 		});
 
