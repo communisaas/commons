@@ -473,6 +473,22 @@ describe('/api/health', () => {
 		const previousCreation = 'health-session-creation-previous-32-byte-pad';
 		const previousCookie = 'health-cookie-signing-previous-32-byte-pad';
 
+		// The handler resolves each secret as `env?.X ?? process.env.X`, which is
+		// the deliberate Workers pattern — platform.env first, process.env as the
+		// lazy fallback. So dropping a key from the platform env alone does NOT
+		// make it missing: ci.yml exports all four session secrets to the test
+		// job, the fallback found one, and this case returned 200 in CI while
+		// passing locally. Silence BOTH sources, or the test is not testing
+		// absence.
+		for (const key of [
+			'SESSION_CREATION_SECRET',
+			'SESSION_CREATION_SECRET_PREVIOUS',
+			'SESSION_COOKIE_SIGNING_SECRET',
+			'SESSION_COOKIE_SIGNING_SECRET_PREVIOUS'
+		]) {
+			vi.stubEnv(key, undefined as unknown as string);
+		}
+
 		for (const env of [
 			{ ...HEALTH_ENV, SESSION_COOKIE_SIGNING_SECRET: undefined },
 			{
@@ -507,6 +523,7 @@ describe('/api/health', () => {
 				sessionCookieAuthority: { status: 'down', keysIsolated: false }
 			});
 		}
+		vi.unstubAllEnvs();
 	});
 
 	it('accepts only one exact lowercase Git SHA as artifact identity', () => {

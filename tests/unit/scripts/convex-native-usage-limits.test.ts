@@ -601,6 +601,21 @@ describe('Convex native and shared-team actual-I/O release proof', () => {
 });
 
 describe('operator-local exhaustive Convex dashboard capture', () => {
+	// captureConvexTeamUsageAttestation refuses to run when process.env.CI is
+	// 'true' — broad dashboard access is operator-local only, and that guard has
+	// its own test below. Every OTHER case here exercises the operator path, so
+	// it must run as an operator would: with CI unset. Without this the happy
+	// path tripped the guard and failed in CI while passing on every laptop.
+	let ciBeforeSuite: string | undefined;
+	beforeAll(() => {
+		ciBeforeSuite = process.env.CI;
+		delete process.env.CI;
+	});
+	afterAll(() => {
+		if (ciBeforeSuite === undefined) delete process.env.CI;
+		else process.env.CI = ciBeforeSuite;
+	});
+
 	it('uses the official authority endpoints twice, reconciles exact query rows, and never persists the token', async () => {
 		const fetchFn = dashboardFetch();
 		const attestation = await captureConvexTeamUsageAttestation({
