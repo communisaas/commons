@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import {
+	CONTACT_FANOUT_OVERDUE_MS,
+	CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES
+} from '../../../convex/lib/contactAuthority';
 
 const source = (path: string) => readFileSync(resolve(process.cwd(), path), 'utf8');
 const authority = source('convex/lib/contactAuthority.ts');
@@ -10,6 +14,7 @@ const supporters = source('convex/supporters.ts');
 const http = source('convex/http.ts');
 const schema = source('convex/schema.ts');
 const observability = source('convex/observability.ts');
+const cronSource = source('convex/crons.ts');
 
 function exportedSection(moduleSource: string, name: string): string {
 	const start = moduleSource.indexOf(`export const ${name}`);
@@ -91,5 +96,26 @@ describe('contact authority static launch contract', () => {
 		expect(readiness).toContain('CONTACT_FANOUT_OVERDUE_MS');
 		expect(readiness).toContain("q.eq('status', 'failed')");
 		expect(readiness).toContain("q.eq('status', 'pending')");
+	});
+
+	it('never lets the overdue alarm fire faster than its only responder', () => {
+		// The alarm has exactly one responder — the orphan-recovery cron — so a
+		// threshold below that cadence reports a queue as overdue, and the plane
+		// as un-ready, during an entirely healthy wait. These were independent
+		// literals once (5 minutes against a 15-minute cron) and drifted to a 3x
+		// mismatch. Derivation is the fix; this test is what keeps it derived.
+		expect(authority).toContain(
+			'export const CONTACT_FANOUT_OVERDUE_MS = 2 * CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES * 60 * 1000;'
+		);
+		// The cron must read the shared constant rather than re-inline a number.
+		expect(cronSource).toContain(
+			"import { CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES } from './lib/contactAuthority';"
+		);
+		expect(
+			cronSource.match(/\{ minutes: CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES \}/g)
+		).toHaveLength(2);
+		expect(CONTACT_FANOUT_OVERDUE_MS).toBeGreaterThan(
+			CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES * 60 * 1000
+		);
 	});
 });

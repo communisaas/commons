@@ -73,6 +73,7 @@
 import { cronJobs, makeFunctionReference, type FunctionReference } from 'convex/server';
 import { internal } from './_generated/api';
 import { ANALYTICS_CONTRIBUTION_AUTHORITY_READY } from './lib/analyticsPrivacyGate';
+import { CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES } from './lib/contactAuthority';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -174,16 +175,26 @@ if (enabled('essential')) {
 }
 
 // Provider ingress schedules the first contact fanout page transactionally and
-// each page schedules its successor. This 15-minute cadence is only the bounded
+// each page schedules its successor. This cadence is only the bounded
 // orphan-recovery net: STOP/email authority takes effect synchronously even if
 // the denormalized supporter projection is temporarily behind. The wide
 // backstop avoids 1,440 empty action/query pairs per backend and day; the
 // sibling audit resumes a migration whose native continuation was lost.
+//
+// The interval is CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES, and the overdue
+// alarm in contactFanoutReadiness is derived from it, so widening one widens
+// the other. Do not re-inline the literal here: when the two were independent
+// numbers the alarm fired at a third of the interval it depended on.
 if (enabled('essential')) {
-	crons.interval('drain-contact-authority-fanout', { minutes: 15 }, drainContactFanoutQueueRef, {});
+	crons.interval(
+		'drain-contact-authority-fanout',
+		{ minutes: CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES },
+		drainContactFanoutQueueRef,
+		{}
+	);
 	crons.interval(
 		'resume-contact-authority-migration',
-		{ minutes: 15 },
+		{ minutes: CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES },
 		runContactAuthorityMigrationPageRef,
 		{}
 	);

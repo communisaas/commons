@@ -10,7 +10,34 @@ export const CONTACT_FANOUT_PAGE_MAX_BYTES = 256 * 1024;
 export const CONTACT_FANOUT_CURSOR_MAX_BYTES = 2_048;
 export const CONTACT_FANOUT_PAYLOAD_MAX_BYTES = 4 * 1024;
 export const CONTACT_FANOUT_MAX_ATTEMPTS = 6;
-export const CONTACT_FANOUT_OVERDUE_MS = 5 * 60 * 1000;
+/**
+ * Cadence of the orphan-recovery cron in convex/crons.ts. Ingress and each
+ * completed page schedule the next drain at `runAfter(0)`, so this is NOT the
+ * drive path — it is the net that catches a continuation chain broken by a
+ * terminal throw or a deploy landing mid-chain. It is deliberately wide: a
+ * one-minute poll would cost ~1,440 empty invocations per backend per day.
+ *
+ * `crons.ts` reads this constant rather than repeating the literal, because the
+ * threshold below is derived from it and the two must not drift apart.
+ */
+export const CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES = 15;
+
+/**
+ * When `contactFanoutReadiness` calls the oldest pending job overdue.
+ *
+ * This is an alarm, and the recovery cron is the only responder, so the alarm
+ * must not fire faster than the responder can answer. At the previous 5 minutes
+ * it did exactly that: the cron fires on its own phase, so a job created just
+ * after one firing waits up to a full interval for the next — and the readout
+ * would have called the queue overdue, and the whole plane un-ready, for ten
+ * minutes of an entirely healthy wait.
+ *
+ * Two intervals is the honest bound: it is the earliest point at which the net
+ * has demonstrably had a turn and the job is STILL pending, with a second
+ * interval of margin so a drain that merely straddles a boundary does not flap
+ * the alarm. Widen the cron and this widens with it.
+ */
+export const CONTACT_FANOUT_OVERDUE_MS = 2 * CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES * 60 * 1000;
 export const CONTACT_AUTHORITY_MIGRATION_PAGE_SIZE = 100;
 export const CONTACT_AUTHORITY_MIGRATION_PAGE_MAX_BYTES = 512 * 1024;
 

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES } from '../../../convex/lib/contactAuthority';
 import ts from 'typescript';
 
 const source = readFileSync(resolve(process.cwd(), 'convex/crons.ts'), 'utf8');
@@ -95,10 +96,16 @@ describe('public discovery cron contract', () => {
 		for (const job of ['drain-contact-authority-fanout', 'resume-contact-authority-migration']) {
 			const start = essentialSection.indexOf(job);
 			expect(start, job).toBeGreaterThanOrEqual(0);
+			// The cadence is now a shared constant, because the overdue alarm in
+			// contactFanoutReadiness is derived from it. Assert the reference here
+			// and the VALUE where it is defined — inlining 15 again would let the
+			// alarm and its only responder drift apart, which is how they ended up
+			// 3x mismatched.
 			expect(essentialSection.slice(start, start + 220), `${job} recovery cadence`).toContain(
-				'{ minutes: 15 }'
+				'{ minutes: CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES }'
 			);
 		}
 		expect(essentialSection).not.toContain('{ minutes: 1 }');
+		expect(CONTACT_FANOUT_RECOVERY_INTERVAL_MINUTES).toBe(15);
 	});
 });
