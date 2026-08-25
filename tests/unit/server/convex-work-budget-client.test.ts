@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -40,6 +41,32 @@ function setup(
 }
 
 describe('Pages Convex work-budget client', () => {
+	it('names which precondition refused instead of one opaque unavailable', () => {
+		// Seven paths returned an identical 503. The first real end-to-end run of
+		// the release pipeline hit one of them and there was no way to tell a
+		// missing binding from an unregistered operation from a dead stub, on a
+		// deployed Worker, without redeploying it to find out.
+		const client = readFileSync('src/lib/server/convex-work-budget-client.ts', 'utf8');
+		for (const reason of [
+			'policy-unreviewed',
+			'realm-unresolved',
+			'coordinator-unresolved',
+			'binding-absent',
+			'coordinator-unreachable',
+			'protocol-mismatch',
+			'observation-unreadable',
+			'retry-after-invalid',
+			'unexpected-status'
+		]) {
+			expect(client, reason).toContain(`unavailable('${reason}')`);
+		}
+		// No caller may reintroduce a reasonless rejection.
+		expect(client).not.toMatch(/unavailable\(\)/);
+		// And the reason has to survive into the response, or it is unobservable.
+		const response = readFileSync('src/lib/server/convex-work-budget-response.ts', 'utf8');
+		expect(response).toContain('...(rejection.reason ? { reason: rejection.reason } : {})');
+	});
+
 	it('reserves exactly once before each actual executor call', async () => {
 		const runtime = setup();
 		const order: string[] = [];

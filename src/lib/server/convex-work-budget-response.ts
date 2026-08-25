@@ -35,6 +35,9 @@ export function convexWorkBudgetRejectionResponse(
 			? null
 			: JSON.stringify({
 					code: rejection.code,
+					// Names WHICH precondition refused. Without it every one of the
+					// seven unavailable paths is the same opaque 503.
+					...(rejection.reason ? { reason: rejection.reason } : {}),
 					error:
 						rejection.status === 429
 							? 'Convex work budget exhausted'

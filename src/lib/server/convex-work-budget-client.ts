@@ -40,8 +40,31 @@ export type ConvexWorkBudgetObservation = Readonly<{
 	monthlyResetAtSeconds: number;
 }>;
 
+/**
+ * Which precondition refused. Seven distinct paths returned an identical 503
+ * with no way to tell them apart, and the pipeline that depends on them had
+ * never run end to end -- so the first real execution produced a generic
+ * "unavailable" that named a missing binding, an unregistered operation, a
+ * dead stub and a protocol mismatch with exactly the same three words.
+ *
+ * These are internal precondition names, not user or account state, and the
+ * routes that surface them are already secret-gated. Cheap to emit, and the
+ * alternative is bisecting a deployed Worker by redeploying it.
+ */
+export type ConvexWorkBudgetUnavailableReason =
+	| 'policy-unreviewed'
+	| 'realm-unresolved'
+	| 'coordinator-unresolved'
+	| 'binding-absent'
+	| 'coordinator-unreachable'
+	| 'protocol-mismatch'
+	| 'observation-unreadable'
+	| 'retry-after-invalid'
+	| 'unexpected-status';
+
 export type ConvexWorkBudgetRejection = Readonly<{
 	code: 'CONVEX_WORK_BUDGET_EXHAUSTED' | 'CONVEX_WORK_BUDGET_UNAVAILABLE';
+	reason?: ConvexWorkBudgetUnavailableReason;
 	observation?: ConvexWorkBudgetObservation;
 	retryAfterSeconds: number;
 	status: 429 | 503;
@@ -57,10 +80,14 @@ export class ConvexWorkBudgetError extends Error {
 	}
 }
 
-function unavailable(retryAfterSeconds = 60): ConvexWorkBudgetError {
+function unavailable(
+	reason: ConvexWorkBudgetUnavailableReason,
+	retryAfterSeconds = 60
+): ConvexWorkBudgetError {
 	return new ConvexWorkBudgetError(
 		Object.freeze({
 			code: 'CONVEX_WORK_BUDGET_UNAVAILABLE',
+			reason,
 			retryAfterSeconds,
 			status: 503
 		})
@@ -179,7 +206,7 @@ export async function reserveConvexWorkForEvent(input: {
 }): Promise<void> {
 	const { event, kind, localBypass, operation } = input;
 	const reviewed = convexWorkBudgetPolicyFor(operation, kind);
-	if (!reviewed) rememberRejection(event, unavailable());
+	if (!reviewed) rememberRejection(event, unavailable('policy-unreviewed'));
 	const realm = convexWorkBudgetRealmForConvexUrl(event.platform?.env?.PUBLIC_CONVEX_URL);
 	const coordinatorName = convexWorkBudgetCoordinatorNameForGeneration(
 		CONVEX_WORK_BUDGET_COORDINATOR_GENERATION
@@ -190,7 +217,11 @@ export async function reserveConvexWorkForEvent(input: {
 	// builds resolve `localBypass` to false and always fall through to enforce,
 	// including a dev build aimed at a real deployment.
 	if (localBypass && (!realm || !namespace)) return;
-	if (!realm || !coordinatorName || !namespace) rememberRejection(event, unavailable());
+	// Split, because "one of these three" was the single least useful thing this
+	// function could have said about why a deployed build refused to do any work.
+	if (!realm) rememberRejection(event, unavailable('realm-unresolved'));
+	if (!coordinatorName) rememberRejection(event, unavailable('coordinator-unresolved'));
+	if (!namespace) rememberRejection(event, unavailable('binding-absent'));
 
 	let response: Response;
 	try {
@@ -208,20 +239,20 @@ export async function reserveConvexWorkForEvent(input: {
 			})
 		);
 	} catch {
-		rememberRejection(event, unavailable());
+		rememberRejection(event, unavailable('coordinator-unreachable'));
 	}
 
 	if (response.headers.get(CONVEX_WORK_BUDGET_PROTOCOL_HEADER) !== CONVEX_WORK_BUDGET_PROTOCOL) {
-		rememberRejection(event, unavailable());
+		rememberRejection(event, unavailable('protocol-mismatch'));
 	}
 	const observation = parseObservation(response.headers);
-	if (!observation) rememberRejection(event, unavailable());
+	if (!observation) rememberRejection(event, unavailable('observation-unreadable'));
 	recordObservation(event.locals, observation);
 
 	if (response.status === 200) return;
 	if (response.status === 429) {
 		const retryAfterSeconds = positiveSafeInteger(response.headers.get('retry-after'));
-		if (retryAfterSeconds === null) rememberRejection(event, unavailable());
+		if (retryAfterSeconds === null) rememberRejection(event, unavailable('retry-after-invalid'));
 		rememberRejection(
 			event,
 			new ConvexWorkBudgetError(
@@ -234,7 +265,7 @@ export async function reserveConvexWorkForEvent(input: {
 			)
 		);
 	}
-	rememberRejection(event, unavailable());
+	rememberRejection(event, unavailable('unexpected-status'));
 }
 
 export async function executeBudgetedConvexOperationForEvent<Result>(input: {
