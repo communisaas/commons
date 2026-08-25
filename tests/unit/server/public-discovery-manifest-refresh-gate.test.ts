@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { CONVEX_WORK_BUDGET_MAXIMUM_CONTINUATION_ADMISSIONS_PER_REALM_DAY } from '../../../src/lib/server/convex-work-budget-policy';
@@ -676,6 +677,29 @@ async function reserveAttemptCount(
 afterEach(() => vi.restoreAllMocks());
 
 describe('SQLite public-discovery manifest refresh gate protocol v3', () => {
+	it('arms release authority in the same object the refresh path reads', () => {
+		// These were different objects. RELEASE_AUTHORITY_CONFIGURATIONS stores a
+		// bare origin, because that is what env.RELEASE_AUTHORITY_REALM is checked
+		// against, and the control path passed it straight to idFromName. Every
+		// Pages-side caller addresses the gate as `backend=<origin>`
+		// (public-discovery-manifest-refresh-hook.ts:216), so an armed release
+		// landed in a neighbouring instance and could never authorize a refresh:
+		// arm returned 200 with status "provisional" and the seed still answered
+		// "gate unavailable", with nothing in either response naming the split.
+		//
+		// Config identity and instance identity are different things. Only the
+		// latter goes to idFromName, and this pins that they agree.
+		const worker = readFileSync('workers/public-discovery-manifest-refresh-gate.ts', 'utf8');
+		expect(worker).toContain('function gateInstanceName(realm: string): string {');
+		expect(worker).toContain('return `backend=${realm.toLowerCase()}`;');
+		expect(worker).toContain('namespace.idFromName(gateInstanceName(configuration.realm))');
+		// No caller may reach idFromName with an unprefixed realm again.
+		expect(worker).not.toMatch(/idFromName\(configuration\.realm\)/);
+
+		const hook = readFileSync('src/lib/server/public-discovery-manifest-refresh-hook.ts', 'utf8');
+		expect(hook).toContain('return `backend=${url.origin.toLowerCase()}`;');
+	});
+
 	it('migrates a legacy authority row to deny-once and never repeats the destructive migration', async () => {
 		const storage = state();
 		storage.sql.authorityColumns = [
@@ -1304,7 +1328,12 @@ describe('SQLite public-discovery manifest refresh gate protocol v3', () => {
 			environment as never
 		);
 		expect(armed.status).toBe(200);
-		expect(idFromName).toHaveBeenCalledWith('https://quirky-chinchilla-352.convex.cloud');
+		// The instance name, not the config realm. These differ, and asserting the
+		// config realm here is what kept an armed release landing in a neighbouring
+		// object that no refresh ever reads.
+		expect(idFromName).toHaveBeenCalledWith(
+			'backend=https://quirky-chinchilla-352.convex.cloud'
+		);
 		expect(get).toHaveBeenCalledTimes(2);
 		expect((storage.sql.releaseAuthority as ReleaseAuthority | undefined)?.status).toBe(
 			'provisional'
@@ -1338,7 +1367,9 @@ describe('SQLite public-discovery manifest refresh gate protocol v3', () => {
 		);
 
 		expect(response.status).toBe(200);
-		expect(idFromName).toHaveBeenCalledWith(releaseAuthorityEnvironment.RELEASE_AUTHORITY_REALM);
+		expect(idFromName).toHaveBeenCalledWith(
+			`backend=${releaseAuthorityEnvironment.RELEASE_AUTHORITY_REALM.toLowerCase()}`
+		);
 		expect(new URL(fetch.mock.calls[0]?.[0].url).pathname).toBe(
 			PUBLIC_DISCOVERY_BOOTSTRAP_CONTROL_PATH
 		);

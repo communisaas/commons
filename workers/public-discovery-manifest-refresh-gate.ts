@@ -234,6 +234,25 @@ const RELEASE_AUTHORITY_CONFIGURATIONS = Object.freeze({
 	})
 });
 
+/**
+ * The Durable Object instance name for a backend realm.
+ *
+ * Every Pages-side caller addresses the gate as `backend=<origin>`
+ * (public-discovery-manifest-refresh-hook.ts:216), while
+ * RELEASE_AUTHORITY_CONFIGURATIONS stores the bare origin because that is also
+ * what env.RELEASE_AUTHORITY_REALM is checked against. Passing the bare origin
+ * to idFromName therefore armed release authority in a DIFFERENT object than
+ * the one the refresh path consults, so an armed release could never authorize
+ * a refresh -- the seed returned "gate unavailable" with a valid, unexpired,
+ * provisional authority sitting in the neighbouring instance.
+ *
+ * Config identity and instance identity are different things; only the latter
+ * goes to idFromName.
+ */
+function gateInstanceName(realm: string): string {
+	return `backend=${realm.toLowerCase()}`;
+}
+
 function checkedReleaseAuthorityConfiguration(env: ReleaseAuthorityEnvironment | undefined): {
 	host: keyof typeof RELEASE_AUTHORITY_CONFIGURATIONS;
 	phase: 'activate-preview' | 'activate-production';
@@ -2731,7 +2750,7 @@ export default {
 
 		try {
 			const namespace = env.PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE;
-			const stub = namespace.get(namespace.idFromName(configuration.realm));
+			const stub = namespace.get(namespace.idFromName(gateInstanceName(configuration.realm)));
 			return await stub.fetch(
 				new Request(`https://public-discovery-manifest-refresh-gate.internal${url.pathname}`, {
 					body: source,
