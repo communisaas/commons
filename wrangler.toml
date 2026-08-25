@@ -21,6 +21,14 @@ VITE_ATLAS_BASE_URL = "https://atlas.commons.email/v20260704"
 # updated together at each publish — see docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md).
 EXPECTED_CELL_MAP_ROOT = "0x14a6fc8eb8f8643bf420290e9d65059006b194ee335ab1cc1664838e5bc56cd3"
 EXPECTED_CELL_MAP_DEPTH = "22"
+# TRUSTED_RELEASE_EDGE: set to "1" ONLY when the trusted release edge worker
+# owns commons.email and this project has moved to pages-origin.commons.email.
+# It arms the request-time origin-authority contract, which refuses any request
+# the edge did not stamp. Setting it before that edge exists 421s every visitor
+# including the homepage, because no request can satisfy a contract whose only
+# possible signer is not deployed. Unset until then; authority headers are
+# scrubbed either way. See src/lib/server/production-host-authority.ts.
+# TRUSTED_RELEASE_EDGE = "1"
 # IDENTITY_SIGNING_KEY = "set in Cloudflare dashboard (openssl rand -hex 32)"
 
 # Contract addresses (override for mainnet deployment):

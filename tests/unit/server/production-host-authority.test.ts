@@ -80,6 +80,7 @@ function input(
 		isSubRequest = false,
 		method = 'GET',
 		platformTransaction = releaseTransactionId,
+		trustedEdge = true,
 		resolveImplementation
 	}: {
 		authorityStatus?: 'absent' | 'committed' | 'contained' | 'provisional' | 'qualified';
@@ -87,6 +88,7 @@ function input(
 		isSubRequest?: boolean;
 		method?: string;
 		platformTransaction?: string;
+		trustedEdge?: boolean;
 		resolveImplementation?: (event: Parameters<Handle>[0]['event']) => Promise<Response>;
 	} = {}
 ) {
@@ -111,6 +113,13 @@ function input(
 				locals: {},
 				platform: {
 					env: {
+						// This suite is about the ENFORCED topology: the trusted edge owns
+						// commons.email and this worker answers on pages-origin. Enforcement
+						// now follows that topology rather than being unconditional, so the
+						// fixture has to declare it. The unenforced path -- no edge deployed,
+						// serve directly, headers still scrubbed -- is covered separately
+						// below, because it is the state production is actually in.
+						...(trustedEdge ? { TRUSTED_RELEASE_EDGE: '1' } : {}),
 						PUBLIC_CONVEX_URL: productionBackend,
 						...(authority
 							? { PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE: authority.namespace }
@@ -153,6 +162,73 @@ describe('production hidden-origin host authority', () => {
 		expect((await createProductionHostAuthorityHandle()(request.value)).status).toBe(204);
 		expect(resolvedOrigin).toBe('https://commons.email');
 		expect(request.resolve).toHaveBeenCalledOnce();
+	});
+
+	it('serves the canonical host directly when no trusted edge is deployed', async () => {
+		// The state production is in. commons.email answered 421 on EVERY path,
+		// homepage included, because this contract was enforced with no edge in
+		// front to satisfy it -- no request could have. Enforcement now follows the
+		// topology, so an unstamped visitor is served instead of refused.
+		let resolvedOrigin: string | null = null;
+		const request = input('https://commons.email/s/example?view=summary', {
+			trustedEdge: false,
+			headers: {
+				[ACCESS_ASSERTION_HEADER]: null,
+				[CANDIDATE_ORIGIN_HOST_HEADER]: null,
+				[EDGE_PUBLIC_HOST_HEADER]: null,
+				[EDGE_RELEASE_SHA_HEADER]: null,
+				[EDGE_RELEASE_TRANSACTION_HEADER]: null,
+				cookie: 'auth-session=public-application-cookie'
+			},
+			resolveImplementation: async (event) => {
+				resolvedOrigin = event.url.origin;
+				return new Response(null, { status: 204 });
+			}
+		});
+
+		expect((await createProductionHostAuthorityHandle()(request.value)).status).toBe(204);
+		expect(resolvedOrigin).toBe('https://commons.email');
+	});
+
+	it('still scrubs forged authority headers when no trusted edge is deployed', async () => {
+		// Fail-open on the CONTRACT must not mean fail-open on the capabilities it
+		// carries. A client that stamps the edge's own headers must not have them
+		// reach application code, or serving directly would hand every visitor the
+		// ability to forge exactly what the edge is supposed to prove.
+		const request = input('https://commons.email/s/example', {
+			trustedEdge: false,
+			resolveImplementation: async (event) => {
+				for (const header of [
+					ACCESS_ASSERTION_HEADER,
+					CANDIDATE_ORIGIN_HOST_HEADER,
+					EDGE_PUBLIC_HOST_HEADER,
+					EDGE_RELEASE_SHA_HEADER,
+					EDGE_RELEASE_TRANSACTION_HEADER
+				]) {
+					expect(event.request.headers.get(header), header).toBeNull();
+				}
+				return new Response(null, { status: 204 });
+			}
+		});
+
+		expect((await createProductionHostAuthorityHandle()(request.value)).status).toBe(204);
+	});
+
+	it('re-arms the contract the moment the edge is declared', async () => {
+		// Same unstamped request, edge declared: refused. This is the whole point
+		// of keying enforcement to the topology -- deploying the edge and setting
+		// TRUSTED_RELEASE_EDGE restores the boundary with no code change.
+		const request = input('https://commons.email/s/example', {
+			trustedEdge: true,
+			headers: {
+				[ACCESS_ASSERTION_HEADER]: null,
+				[CANDIDATE_ORIGIN_HOST_HEADER]: null,
+				[EDGE_PUBLIC_HOST_HEADER]: null,
+				[EDGE_RELEASE_SHA_HEADER]: null,
+				[EDGE_RELEASE_TRANSACTION_HEADER]: null
+			}
+		});
+		expect((await createProductionHostAuthorityHandle()(request.value)).status).toBe(421);
 	});
 
 	it('mutates the framework URL in place for cookie, redirect, and CSRF semantics', async () => {

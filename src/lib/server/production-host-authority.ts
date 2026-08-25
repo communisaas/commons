@@ -195,6 +195,36 @@ function exactAdapterContract(
 	return { releaseSha, releaseTransactionId };
 }
 
+/**
+ * Whether a trusted release edge is actually deployed in front of this worker.
+ *
+ * The authority contract below assumes a topology that must exist for it to
+ * mean anything: client -> commons.email (edge worker, Cloudflare Access + WAF)
+ * -> pages-origin.commons.email (this worker), with the edge stamping the
+ * release SHA, the release transaction, and an Access assertion. When that edge
+ * exists, refusing an unstamped request is what stops someone reaching the
+ * origin directly and bypassing Access.
+ *
+ * When it does NOT exist, the same refusal has nothing to protect and rejects
+ * every real visitor instead. That is not hypothetical: `commons.email` served
+ * 421 on every path, including the homepage, because the guard shipped years
+ * ahead of the worker it authenticates.
+ *
+ * So enforcement follows the topology rather than the calendar. Set
+ * TRUSTED_RELEASE_EDGE on the Pages project at the same moment the edge takes
+ * over the canonical hostname and the project moves to pages-origin, and the
+ * contract arms with no code change. Until then this worker serves the
+ * canonical host directly -- with every authority header still scrubbed, so a
+ * client cannot forge what the edge would have stamped.
+ *
+ * Fail-open is deliberate and is the safe direction ONLY for this specific
+ * check. Enforcing without an edge cannot be right: there is no request in the
+ * world that would satisfy it.
+ */
+export function trustedReleaseEdgeEnforced(event: ProductionRequestEvent): boolean {
+	return event.platform?.env?.TRUSTED_RELEASE_EDGE === '1';
+}
+
 function rejection(method: string): Response {
 	return new Response(
 		method === 'HEAD'
@@ -369,7 +399,17 @@ export function createProductionHostAuthorityHandle({
 			originHost: PRODUCTION_PAGES_ORIGIN_HOST,
 			publicHost: PRODUCTION_CANONICAL_HOST
 		});
-		if (contract === null) return rejection(event.request.method);
+		if (contract === null) {
+			// No edge in front: serve the canonical host directly. The scrub still
+			// runs, so nothing downstream can be told a lie about how this request
+			// arrived. See trustedReleaseEdgeEnforced.
+			if (!trustedReleaseEdgeEnforced(event)) {
+				reconstructProductionPublicUrl(event.url);
+				scrubAdapterAuthority(event);
+				return resolve(event);
+			}
+			return rejection(event.request.method);
+		}
 		if (event.url.pathname === RELEASE_ORIGIN_PATH) {
 			if (
 				event.request.method !== 'GET' ||

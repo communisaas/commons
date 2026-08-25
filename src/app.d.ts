@@ -231,6 +231,9 @@ declare global {
 				GROQ_API_KEY?: string;
 				PUBLIC_CONVEX_URL?: string;
 				PUBLIC_RELEASE_TRANSACTION_ID?: string;
+				// "1" only once the trusted release edge owns commons.email and this
+				// project has moved to pages-origin. See trustedReleaseEdgeEnforced.
+				TRUSTED_RELEASE_EDGE?: string;
 				INTERNAL_API_SECRET?: string;
 				INTERNAL_API_SECRET_PREVIOUS?: string;
 				DISCOVERY_MANIFEST_REFRESH_SECRET?: string;
