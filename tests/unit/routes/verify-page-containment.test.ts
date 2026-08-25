@@ -29,6 +29,13 @@ import VerifyPage from '../../../src/routes/v/[hash]/+page.svelte';
 import { load } from '../../../src/routes/v/[hash]/+page.server';
 
 interface CredentialFixture {
+	// users.resolveCredentialHash returns `status`, and the loader copies it to
+	// data.record.status (v/[hash]/+page.server.ts:204). The verification claim
+	// picks its wording from record.status === 'active', so a fixture without it
+	// silently rendered every claim in the past tense -- "When this record was
+	// issued, the sender had..." -- and each test looking for the present-tense
+	// sentence failed on copy that was never wrong.
+	status: 'active' | 'revoked' | 'expired';
 	trustTier: number;
 	verificationMethod: string;
 	congressionalDistrict: string | null;
@@ -49,6 +56,7 @@ interface CredentialFixture {
 }
 
 const CREDENTIAL: CredentialFixture = {
+	status: 'active',
 	trustTier: 2,
 	verificationMethod: 'civic_api',
 	congressionalDistrict: 'MN-08',

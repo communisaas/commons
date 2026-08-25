@@ -110,6 +110,10 @@ export default defineConfig({
 			// `mount(...)` is not available on the server-side render path that
 			// runs under the current vitest jsdom + MSW config.
 			'tests/unit/components/GroundCard.test.ts',
+			// Both mount real components and hit the same `mount(...)` failure here.
+			// They pass in the components lane, which resolves the browser build.
+			'tests/unit/components/send-text-swap-race.test.ts',
+			'tests/unit/components/zzz-integrated-repro.test.ts',
 			// Behavioral first-paint test for the Datum spring primitive —
 			// needs the components-lane browser runtime to mount.
 			'tests/unit/components/datum-first-paint.test.ts',

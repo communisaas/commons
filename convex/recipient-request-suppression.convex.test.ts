@@ -46,8 +46,15 @@ const NOW = Date.parse('2026-07-19T12:00:00.000Z');
 const PROVENANCE_TTL_MS = 24 * 60 * 60 * 1000;
 type Harness = TestConvex<typeof schema>;
 
-const ADDRESS_ONE = 'first-official@agency.example.test';
-const ADDRESS_TWO = 'second-official@agency.example.test';
+// Role-form local parts, because the public detail projection admits an address
+// to publication only when it is one (publicTemplateDiscoverySource.ts:444
+// -> isPublicRoleFormAddress). These were 'first-official' and
+// 'second-official', which that lexicon does not contain, so the projection
+// dropped BOTH -- including the address this suite needs to survive -- and the
+// suppression assertions failed for a reason that had nothing to do with
+// suppression.
+const ADDRESS_ONE = 'clerk@agency.example.test';
+const ADDRESS_TWO = 'records@agency.example.test';
 
 beforeEach(() => {
 	vi.stubEnv('INTERNAL_API_SECRET', SECRET);

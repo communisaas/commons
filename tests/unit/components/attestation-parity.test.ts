@@ -122,6 +122,24 @@ vi.mock('$app/navigation', () => ({
 // `generateMailtoUrl` and `analyzeEmailFlow` are the surface under test and stay
 // real. Only the hand-off to the mail client is stubbed, so the modal's delayed
 // launch cannot ask jsdom to navigate while an assertion is still waiting.
+// This fixture declares direct recipients, and TemplateModal refuses to build a
+// mailto until the do-not-contact links resolve to a PRESENT fact
+// (TemplateModal.svelte:475) -- it sets an error state and returns instead.
+// That call is real network work, so every case here waited the full five
+// seconds for a mailto that was never going to be built. The failure was
+// invisible because the component lane runs after the unit lane, which had been
+// red for other reasons.
+vi.mock('$lib/utils/do-not-contact-links', async (importOriginal) => {
+	const actual = await importOriginal<Record<string, unknown>>();
+	return {
+		...actual,
+		fetchDoNotContactUrls: async () => ({
+			state: 'present' as const,
+			value: { 'rep@example.test': 'https://example.test/do-not-contact' }
+		})
+	};
+});
+
 vi.mock('$lib/services/emailService', async (importOriginal) => ({
 	...(await importOriginal<typeof import('$lib/services/emailService')>()),
 	launchEmail: vi.fn()

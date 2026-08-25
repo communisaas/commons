@@ -1,3 +1,10 @@
+// The modal's send path touches IndexedDB in more places than the credential
+// store -- constituent address retrieval and session-credential cleanup both do
+// -- and in a lane without it every one of those throws and the path never
+// reaches a mailto. A repro file whose environment cannot run the code path
+// reproduces nothing, so this lane gets the same polyfill the identity suites
+// already use.
+import 'fake-indexeddb/auto';
 /** TEMPORARY integrated-review reproduction harness. Delete after running. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/svelte';
@@ -51,6 +58,42 @@ vi.mock('$app/stores', () => {
 	};
 	return { page: pageStore, navigating, updated, getStores: () => ({ page: pageStore, navigating, updated }) };
 });
+
+// h.walletHash was declared in the harness and never consumed by anything, so
+// the wallet branch below was unreachable and C1b tried to reach it with a
+// doMock issued AFTER render -- which cannot affect an already-resolved module
+// graph. TemplateModal dynamic-imports this module (TemplateModal.svelte:457),
+// so mocking it here is what makes the handle real.
+// A template with direct recipients cannot produce a mailto until the
+// do-not-contact links resolve to a PRESENT fact -- TemplateModal.svelte:475
+// sets an error state and returns otherwise. That call is network work, so in
+// this lane it never resolved and every direct-recipient case timed out with no
+// modal state at all, which is what made C1b look like a wallet-hash problem.
+vi.mock('$lib/utils/do-not-contact-links', async (importOriginal) => {
+	const actual = await importOriginal<Record<string, unknown>>();
+	return {
+		...actual,
+		fetchDoNotContactUrls: async () => ({
+			state: 'present' as const,
+			value: { 'rep@example.test': 'https://example.test/do-not-contact' }
+		})
+	};
+});
+
+vi.mock('$lib/core/identity/credential-store', () => ({
+	getCredential: async () =>
+		h.walletHash.value === null
+			? null
+			: {
+					userId: 'u1',
+					type: 'district_residency',
+					credential: {},
+					issuedAt: new Date(0).toISOString(),
+					expiresAt: new Date(0).toISOString(),
+					credentialHash: h.walletHash.value
+				},
+	storeCredential: async () => {}
+}));
 
 vi.mock('$app/navigation', () => ({
 	goto: vi.fn(), invalidate: vi.fn(), invalidateAll: vi.fn(), preloadData: vi.fn(),
@@ -107,8 +150,13 @@ describe('REPRO', () => {
 		seed({ ...tier2User });
 	});
 
-	it('C1a: the components lane has no indexedDB, so the wallet branch is unreachable in tests', async () => {
-		expect(typeof indexedDB).toBe('undefined');
+	it('C1a: the lane now has indexedDB, and reports no credential until one is held', async () => {
+		// This case used to assert `typeof indexedDB === 'undefined'` and call the
+		// wallet branch unreachable. That was true and it made the rest of the file
+		// untestable, so the polyfill is imported at the top and the branch is
+		// driven by h.walletHash. With the handle unset the answer is still null --
+		// the same answer an empty real store gives.
+		expect(typeof indexedDB).not.toBe('undefined');
 		const { getCredential } = await import('$lib/core/identity/credential-store');
 		await expect(getCredential('u1', 'district_residency')).resolves.toBeNull();
 	});
@@ -128,23 +176,13 @@ describe('REPRO', () => {
 		const href = container.querySelector('a[href^="/v/"]')?.getAttribute('href');
 		expect(href).toBe(`/v/${SERVER_HASH}`);
 
-		// Simulate a browser that DOES have a wallet credential, with a different hash.
-		vi.doMock('$lib/core/identity/credential-store', () => ({
-			getCredential: async () => ({
-				userId: 'u1', type: 'district_residency', credential: {},
-				issuedAt: new Date().toISOString(),
-				expiresAt: new Date(Date.now() - 1000).toISOString(), // EXPIRED
-				credentialHash: WALLET_HASH
-			})
-		}));
-		vi.resetModules();
+		// A browser that DOES hold a wallet credential, with a different hash.
+		h.walletHash.value = WALLET_HASH;
 
 		const body = await bodyFromModal(emailTemplate, h.page.data.user);
 		expect(body).toBeTruthy();
-		console.log('C1b BODY >>>', JSON.stringify(body));
 		expect(body).toContain(WALLET_HASH);
 		expect(body).not.toContain(SERVER_HASH);
-		vi.doUnmock('$lib/core/identity/credential-store');
 	});
 
 	it('C2a: tier-1 signed-in sender on a cwc template — modal never leaves loading', async () => {

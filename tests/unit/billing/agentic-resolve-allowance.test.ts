@@ -276,13 +276,13 @@ const validAgentBody = {
 	target_type: 'local_government'
 };
 
-function agentEvent() {
+function agentEvent(body: Record<string, unknown> = validAgentBody) {
 	return {
 		locals: { session: { userId: 'user_1' } },
 		request: new Request('http://localhost/api/agents/stream-decision-makers', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(validAgentBody)
+			body: JSON.stringify(body)
 		})
 	} as never;
 }
@@ -306,10 +306,13 @@ describe('POST /api/agents/stream-decision-makers agentic admission', () => {
 		});
 	});
 
-	it('returns the typed 503 and reserves no rate-limit capacity when admission is unavailable', async () => {
+	it('returns the typed 503 and reserves no capacity when ORG admission is unavailable', async () => {
+		// Fail-closed applies to the org lane, which is the lane that meters.
+		const orgBody = { ...validAgentBody, org_slug: 'library-friends' };
+		routeMocks.readBoundedAgentRequest.mockResolvedValue(orgBody);
 		routeMocks.serverQuery.mockRejectedValueOnce(new Error('convex unavailable'));
 
-		const response = await decisionMakerHandler(agentEvent());
+		const response = await decisionMakerHandler(agentEvent(orgBody));
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({
 			error: 'Agentic capacity metering temporarily unavailable',
@@ -317,6 +320,21 @@ describe('POST /api/agents/stream-decision-makers agentic admission', () => {
 		});
 		expect(routeMocks.enforceLLMRateLimit).not.toHaveBeenCalled();
 		expect(routeMocks.serverMutation).not.toHaveBeenCalled();
+	});
+
+	it('admits the PERSON lane when that same read is unavailable', async () => {
+		// The person lane declares no org, and agenticResolveAdmission returns
+		// {scope:'individual'} before touching a row when no slug is declared -- so
+		// its answer is discarded either way. Denying someone who needs no metering
+		// because a read we never use blinked inverts the rule that membership
+		// grants capacity and never withholds admission. This case previously
+		// demanded 503 for BOTH lanes, which is what the route deliberately stopped
+		// doing; the org half above is the part that still has to fail closed.
+		routeMocks.serverQuery.mockRejectedValueOnce(new Error('convex unavailable'));
+
+		const response = await decisionMakerHandler(agentEvent());
+		expect(response.status).not.toBe(503);
+		expect(routeMocks.enforceLLMRateLimit).toHaveBeenCalled();
 	});
 
 	it('returns the typed 402 before rate limiting, resolution, or metering for an exhausted org', async () => {

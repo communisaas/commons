@@ -98,13 +98,13 @@ const requestBody = {
 
 const repoSource = (path: string) => readFileSync(join(process.cwd(), path), 'utf8');
 
-function agentEvent() {
+function agentEvent(body: Record<string, unknown> = requestBody) {
 	return {
 		locals: { session: { userId: 'user_1' } },
 		request: new Request('http://localhost/api/agents/stream-decision-makers', {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify(requestBody)
+			body: JSON.stringify(body)
 		})
 	} as never;
 }
@@ -257,9 +257,16 @@ describe('resolve failure observability', () => {
 	});
 
 	it('captures an admission-read failure with no provider claim', async () => {
+		// The org lane, because that is the lane whose admission failure is still
+		// terminal. The route now admits the PERSON lane through the same failure
+		// on purpose -- it discards the admission answer when no org is declared --
+		// so asserting the 503 and the capture together requires declaring an org.
+		// The capture itself is lane-independent: it runs before the lane check.
+		const orgBody = { ...requestBody, org_slug: 'library-friends' };
+		routeMocks.readBoundedAgentRequest.mockResolvedValue(orgBody);
 		routeMocks.serverQuery.mockRejectedValueOnce(new Error('Convex transport unavailable'));
 
-		const response = await decisionMakerHandler(agentEvent());
+		const response = await decisionMakerHandler(agentEvent(orgBody));
 		expect(response.status).toBe(503);
 		expect(capturedSentryEvents).toHaveLength(1);
 		expect(capturedSentryEvents[0].context).toMatchObject({
