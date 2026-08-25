@@ -48,6 +48,12 @@ jobs:
     env:
       DEPLOY_BRANCH: ${{ inputs.branch }}
       DEPLOY_REF: ${{ inputs.ref || inputs.branch }}
+      # The manifest refresh writer refuses to mint a gate grant unless
+      # platform.env.PUBLIC_RELEASE_TRANSACTION_ID matches
+      # ^[1-9][0-9]*-[1-9][0-9]*$ (public-discovery-manifest-refresh-hook.ts).
+      # Unset, every refresh 503s, R2 manifest state stays unseeded, and
+      # /api/templates serves STATE_NOT_SEEDED on a live site.
+      PUBLIC_RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
       contents: read
     steps:
@@ -147,6 +153,7 @@ jobs:
             EXPECTED_CELL_MAP_ROOT: process.env.EXPECTED_CELL_MAP_ROOT,
             EXPECTED_CELL_MAP_DEPTH: process.env.EXPECTED_CELL_MAP_DEPTH,
             PUBLIC_CONVEX_URL: process.env.PUBLIC_CONVEX_URL,
+            PUBLIC_RELEASE_TRANSACTION_ID: process.env.PUBLIC_RELEASE_TRANSACTION_ID,
           };
 
           for (const [key, value] of Object.entries(updates)) {
@@ -188,7 +195,7 @@ jobs:
 
       - name: Validate Wrangler Shadow Atlas vars
         run: |
-          for key in ATLAS_BASE_URL VITE_ATLAS_BASE_URL EXPECTED_CELL_MAP_ROOT EXPECTED_CELL_MAP_DEPTH; do
+          for key in ATLAS_BASE_URL VITE_ATLAS_BASE_URL EXPECTED_CELL_MAP_ROOT EXPECTED_CELL_MAP_DEPTH PUBLIC_RELEASE_TRANSACTION_ID; do
             if ! grep -q "^${key} = " wrangler.toml; then
               echo "::error::wrangler.toml is missing ${key} after sync."
               exit 1
@@ -213,39 +220,6 @@ jobs:
             main) echo "DEPLOY_PUBLIC_URL=https://main.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
             *) echo "DEPLOY_PUBLIC_URL=https://${DEPLOY_BRANCH}.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
           esac
-
-      - name: Publish this run's release transaction identity
-        # The manifest refresh writer refuses to mint a gate grant unless
-        # platform.env.PUBLIC_RELEASE_TRANSACTION_ID matches ^[1-9][0-9]*-[1-9][0-9]*$
-        # (public-discovery-manifest-refresh-hook.ts). Pages snapshots env vars
-        # when a deployment is created, so this must be patched onto the project
-        # BEFORE wrangler runs -- otherwise the deployment carries the previous
-        # run's identity and public discovery serves 503 STATE_NOT_SEEDED.
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
-          CF_PAGES_PROJECT: communique-site
-          RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euo pipefail
-          case "$DEPLOY_BRANCH" in
-            production) config=production ;;
-            *) config=preview ;;
-          esac
-          payload=$(jq -n --arg id "$RELEASE_TRANSACTION_ID" --arg cfg "$config" \
-            '{deployment_configs: {($cfg): {env_vars: {PUBLIC_RELEASE_TRANSACTION_ID: {type: "plain_text", value: $id}}}}}')
-          response=$(curl -fsS -X PATCH \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}" \
-            --data-binary "$payload")
-          if ! printf '%s' "$response" | jq -e '.success == true' >/dev/null; then
-            echo "::error::Failed to publish PUBLIC_RELEASE_TRANSACTION_ID."
-            printf '%s\n' "$response" | head -c 2000
-            exit 1
-          fi
-          echo "RELEASE_TRANSACTION_ID=$RELEASE_TRANSACTION_ID" >> "$GITHUB_ENV"
-          echo "Published release transaction $RELEASE_TRANSACTION_ID to ${config}."
 
       - name: Deploy
         run: |
