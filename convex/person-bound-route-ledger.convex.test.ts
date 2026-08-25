@@ -6,6 +6,7 @@ import { convexTest, type TestConvex } from 'convex-test';
 import { api } from './_generated/api';
 import { emptyCampaignReadModel } from './lib/campaignReadModel';
 import { readContactAuthorityEpoch } from './lib/contactAuthority';
+import { emailReservationIdentity } from './lib/planUsageReservations';
 import {
 	admitPersonBoundRoute,
 	isPersonBoundTargetClass,
@@ -470,12 +471,33 @@ describe('person-bound route ledger', () => {
 				.take(2);
 			const bindings = await ctx.db.query('personBoundRouteBindings').take(2);
 			const sends = await ctx.db.query('personBoundRouteSends').take(2);
-			const orgBReservations = await ctx.db
-				.query('planUsageReservations')
-				.withIndex('by_orgId_status_periodStart', (q) =>
-					q.eq('orgId', fixture.orgB.orgId).eq('status', 'active')
+			// One reservation per orgB DELIVERY, looked up by the identity the send
+			// path actually writes (campaigns.ts:2823 -- sourceId is String(deliveryId),
+			// so the pairing is per delivery, not per campaign).
+			//
+			// This used to filter by status === 'active', which made the count depend
+			// on whether reconciliation had already run: campaigns.ts:3185 reconciles
+			// on firstConfirmedSend and moves the row off 'active'. That is an
+			// intermediate state this test never pins, and it read as 2 locally and 1
+			// in CI, deterministically, on a claim that has nothing to do with
+			// reconciliation timing. Asserting the pairing itself is both stable and
+			// strictly stronger -- the status filter never checked WHICH delivery
+			// reserved.
+			const orgBReservations = (
+				await Promise.all(
+					[...fallbackDeliveries, ...officeDeliveries].map((delivery) =>
+						ctx.db
+							.query('planUsageReservations')
+							.withIndex('by_identity', (q) =>
+								q.eq(
+									'reservationIdentity',
+									emailReservationIdentity('campaignDelivery', String(delivery._id))
+								)
+							)
+							.unique()
+					)
 				)
-				.take(10);
+			).filter((row) => row !== null);
 			return {
 				firstDeliveries,
 				fallbackDeliveries,
@@ -494,7 +516,13 @@ describe('person-bound route ledger', () => {
 		expect(rows.officeDeliveries).toHaveLength(1);
 		expect(rows.bindings).toHaveLength(1);
 		expect(rows.sends).toHaveLength(1);
+		// Both orgB deliveries reserved, and each row belongs to its own delivery.
 		expect(rows.orgBReservations).toHaveLength(2);
+		expect(rows.orgBReservations.map((row) => row?.orgId)).toEqual([
+			fixture.orgB.orgId,
+			fixture.orgB.orgId
+		]);
+		expect(new Set(rows.orgBReservations.map((row) => row?.reservationIdentity)).size).toBe(2);
 	});
 
 	it('does not change contact-authority epoch during a complete admit and record cycle', async () => {
