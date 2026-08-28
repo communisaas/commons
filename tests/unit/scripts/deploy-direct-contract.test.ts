@@ -31,6 +31,16 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 			expect(build, `build job must not see ${secret}`).not.toContain(secret);
 		}
 		expect(JSON.stringify(wf.jobs.deploy)).toContain('CLOUDFLARE_API_TOKEN');
+
+		// The deploy job does install app dependencies — wrangler bundles the
+		// Worker there and must resolve every import. The property that survives
+		// is that no dependency's install-time code runs beside the credential,
+		// so the flag is the boundary and must not be dropped.
+		const install = wf.jobs.deploy.steps.find((step) =>
+			String(step.run ?? '').includes('npm ci')
+		);
+		expect(install, 'deploy installs dependencies for bundling').toBeTruthy();
+		expect(String(install?.run)).toContain('--ignore-scripts');
 	});
 
 	it('extracts the artifact where the verification looks for it', () => {

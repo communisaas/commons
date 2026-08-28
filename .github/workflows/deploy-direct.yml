@@ -405,6 +405,21 @@ jobs:
           cache: npm
           cache-dependency-path: 'gate/.github/release-gate/package-lock.json'
 
+      - name: Install application dependencies for bundling, without lifecycle scripts
+        # wrangler bundles the Worker at DEPLOY time, so it must resolve every
+        # npm import the build produced — `ethers`, `zod`, and 362 others. The
+        # credential-free build job cannot hand those over: node_modules is not
+        # an artifact, and a prebundled worker would need the release finalizer
+        # this workflow does not run.
+        #
+        # `--ignore-scripts` is what keeps the boundary meaningful. The isolation
+        # that matters is that no dependency's install-time code EXECUTES beside
+        # the Cloudflare token; esbuild reads and bundles these files, it does not
+        # run them. That is weaker than never having the files present, and it is
+        # stated plainly rather than described as full isolation.
+        run: npm ci --ignore-scripts
+        working-directory: gate
+
       - name: Install trusted deployment tooling without lifecycle scripts
         run: npm ci --ignore-scripts --prefix gate/.github/release-gate
 
