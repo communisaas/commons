@@ -33,6 +33,15 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 		expect(JSON.stringify(wf.jobs.deploy)).toContain('CLOUDFLARE_API_TOKEN');
 	});
 
+	it('extracts the artifact where the verification looks for it', () => {
+		// download-artifact nests contents in a per-artifact subdirectory unless
+		// told otherwise, which made every path in the verification step resolve
+		// to nothing and fail silently under `set -e`. The id binding must stay —
+		// it ties the download to this run's build rather than to a reusable name.
+		expect(raw).toContain('artifact-ids: ${{ needs.build.outputs.artifact_id }}');
+		expect(raw).toContain('merge-multiple: true');
+	});
+
 	it('publishes the trusted wrangler config, never the artifact’s copy', () => {
 		// Cloudflare treats wrangler.toml as the whole project configuration —
 		// bindings, compatibility flags, every var. Shipping the build job's copy

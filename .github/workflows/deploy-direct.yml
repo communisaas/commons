@@ -397,8 +397,14 @@ jobs:
       - name: Download built Pages release
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          # Bind to the id this run's build produced, not to a name another run
+          # could also have used.
           artifact-ids: ${{ needs.build.outputs.artifact_id }}
           path: ${{ env.ARTIFACT_ROOT }}
+          # Without this, download-artifact extracts into a subdirectory named
+          # after the artifact, so every path the verification below checks
+          # points at nothing and the step fails under `set -e` with no message.
+          merge-multiple: true
 
       - name: Verify release artifact identity and public config
         run: |
