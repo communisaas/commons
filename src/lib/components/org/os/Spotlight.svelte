@@ -19,29 +19,12 @@
 	  a real loaded count, and a note is the plain-language limit sentence that
 	  bounds the action it links to.
 -->
-<script lang="ts" module>
-	import type { SpaceId } from './orgOS.svelte';
-
-	export interface SpotlightDestination {
-		id: string;
-		label: string;
-		/** Group header — the workspace it belongs to, "Workspaces", or "Substrate". */
-		group: string;
-		kind: 'space' | 'route';
-		spaceId?: SpaceId;
-		href?: string;
-		/** Real loaded count, when the destination carries one. Null = unread. */
-		count?: number | null;
-		/** One plain-language limit sentence, for a bounded action. */
-		note?: string;
-	}
-</script>
-
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import { TIMING, EASING } from '$lib/design/motion';
 	import { getOrgOS, pathForSpace, rankSpotlightMatches, rendersSpaceForUrl } from './orgOS.svelte';
+	import type { SpotlightDestination } from './navigationTypes';
 
 	let {
 		destinations,

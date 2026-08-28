@@ -45,6 +45,7 @@ export const ERROR_CODES = {
 
 	// Billing errors
 	TEMPLATE_QUOTA_EXCEEDED: 'TEMPLATE_QUOTA_EXCEEDED',
+	AUTHORING_IN_PROGRESS: 'AUTHORING_IN_PROGRESS',
 	// Individual (person-layer) AI-authoring cap — distinct from the org
 	// TEMPLATE_QUOTA so the client can surface the Voice/Advocate upgrade card.
 	AUTHORING_QUOTA_EXCEEDED: 'AUTHORING_QUOTA_EXCEEDED',
@@ -77,6 +78,8 @@ export const ERROR_MESSAGES = {
 	[ERROR_CODES.MODERATION_FAILED]: 'Content moderation failed',
 
 	[ERROR_CODES.TEMPLATE_QUOTA_EXCEEDED]: 'Monthly template quota exceeded. Please upgrade your plan.',
+	[ERROR_CODES.AUTHORING_IN_PROGRESS]:
+		'An identical template or link is already being checked. Please try again shortly.',
 	[ERROR_CODES.AUTHORING_QUOTA_EXCEEDED]:
 		"You've reached your monthly AI-authoring limit. Upgrade to Voice or Advocate for higher-volume authoring.",
 

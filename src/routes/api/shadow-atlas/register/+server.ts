@@ -10,7 +10,7 @@
  * 2. Validate OAuth session
  * 3. Look up User.identity_commitment (NUL-001: required for nullifier binding)
  * 4. Call voter-protocol Shadow Atlas POST /v1/register with { leaf }
- * 5. Store registration metadata in Postgres (identity commitment, leafIndex, proof)
+ * 5. Commit registration metadata to Convex with exact operation coordinates
  * 6. Return Tree 1 Merkle proof + identity commitment to client
  *
  * PRIVACY: This endpoint does NOT receive or store:
@@ -24,45 +24,107 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler, RequestEvent } from './$types';
 import { registerLeaf, replaceLeaf, type RegistrationResult } from '$lib/core/shadow-atlas/client';
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { BoundedJsonRequestError, readBoundedJsonRequest } from '$lib/server/bounded-json-request';
+import {
+	SHADOW_ATLAS_REGISTRATION_RETRY_TTL_SECONDS,
+	encodeShadowAtlasRegistrationRetry,
+	shadowAtlasRegistrationRetryKey,
+	type ShadowAtlasRegistrationRetry
+} from '$lib/server/shadow-atlas-registration-retry';
+
+const REGISTER_REQUEST_MAX_BYTES = 1024;
+const REGISTER_LEAF_MAX_CHARS = 80;
+
+type ReservedOperation = {
+	identityCommitment: string;
+	operation: 'register' | 'replace';
+	generation: number;
+	leafDigest: string;
+	idempotencyKey: string;
+	priorLeafIndex?: number;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function canonicalTree1Leaf(value: string): string | null {
+	if (!/^(?:0x)?[0-9a-fA-F]{1,64}$/u.test(value)) return null;
+	try {
+		const field = BigInt(value.startsWith('0x') ? value : `0x${value}`);
+		if (field === 0n || field >= BN254_MODULUS) return null;
+		return `0x${field.toString(16).padStart(64, '0')}`;
+	} catch {
+		return null;
+	}
+}
+
+async function tree1LeafDigest(leaf: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(leaf));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function operationCoordinates(userId: Id<'users'>, reservation: ReservedOperation) {
+	return {
+		userId,
+		identityCommitment: reservation.identityCommitment,
+		operation: reservation.operation,
+		generation: reservation.generation,
+		leafDigest: reservation.leafDigest,
+		idempotencyKey: reservation.idempotencyKey,
+		...(reservation.priorLeafIndex === undefined
+			? {}
+			: { priorLeafIndex: reservation.priorLeafIndex })
+	};
+}
+
+function pathIndices(leafIndex: number, depth: number): number[] {
+	return Array.from({ length: depth }, (_, index) => Math.floor(leafIndex / 2 ** index) % 2);
+}
 
 /**
- * Queue a failed Postgres write for retry via KV.
- * Called when Shadow Atlas tree mutation succeeds but Postgres write fails.
+ * Queue a failed Convex commit for retry via KV.
+ * Called when Shadow Atlas tree mutation succeeds but the Convex commit fails.
  * The reconciliation endpoint processes these entries.
  */
 async function queueRegistrationRetry(
 	event: RequestEvent,
-	data: {
-		userId: string;
-		identityCommitment: string;
-		verificationMethod: string;
-		atlasResult: RegistrationResult;
-		isReplace?: boolean;
-	}
+	data: Omit<ShadowAtlasRegistrationRetry, 'version' | 'queuedAt'>
 ): Promise<void> {
 	try {
 		const kv = event.platform?.env?.REGISTRATION_RETRY_KV;
 		if (!kv) {
-			console.error('[Registration Retry] REGISTRATION_RETRY_KV not available — cannot queue retry');
+			console.error(
+				'[Registration Retry] REGISTRATION_RETRY_KV not available — cannot queue retry'
+			);
 			return;
 		}
-		const key = `retry:${data.userId}:${Date.now()}`;
-		await kv.put(key, JSON.stringify({
+		const retry: ShadowAtlasRegistrationRetry = {
+			version: 2,
 			...data,
-			queuedAt: new Date().toISOString(),
-		}), {
-			expirationTtl: 3600, // 1 hour TTL — auto-cleanup
-		});
+			queuedAt: Date.now()
+		};
+		const key = shadowAtlasRegistrationRetryKey(retry);
+		await kv.put(
+			key,
+			encodeShadowAtlasRegistrationRetry(retry),
+			{
+				expirationTtl: SHADOW_ATLAS_REGISTRATION_RETRY_TTL_SECONDS
+			}
+		);
 		console.warn('[Registration Retry] Queued for retry in KV', {
 			key,
 			userId: data.userId,
 			leafIndex: data.atlasResult.leafIndex,
+			generation: data.generation,
+			operation: data.operation
 		});
 	} catch (kvError) {
 		// KV also failed — log for manual operator intervention.
@@ -70,7 +132,7 @@ async function queueRegistrationRetry(
 		console.error('[CRITICAL] KV queue also failed — manual intervention required', {
 			userId: data.userId,
 			leafIndex: data.atlasResult.leafIndex,
-			kvError,
+			kvError
 		});
 	}
 }
@@ -80,212 +142,181 @@ export const POST: RequestHandler = async (event) => {
 	try {
 		const session = locals.session;
 
-		if (!session) {
+		if (!session?.userId) {
 			return json({ error: 'Unauthorized' }, { status: 401 });
 		}
 
-		// NUL-001: Look up canonical identity commitment (set during verification).
-		// Required for nullifier binding — prevents Sybil via re-registration.
-		const user = await serverQuery(api.users.getIdentityForAtlas, {
-			userId: session.userId as Id<'users'>,
+		let body: unknown;
+		try {
+			body = await readBoundedJsonRequest(request, REGISTER_REQUEST_MAX_BYTES, {
+				maxArrayItems: 0,
+				maxDepth: 1,
+				maxNodes: 3,
+				maxObjectKeys: 2,
+				maxStringBytes: REGISTER_LEAF_MAX_CHARS
+			});
+		} catch (cause) {
+			if (cause instanceof BoundedJsonRequestError) {
+				return json({ error: cause.message }, { status: cause.status });
+			}
+			return json({ error: 'Invalid request body' }, { status: 400 });
+		}
+		if (
+			!isRecord(body) ||
+			Object.keys(body).some((key) => key !== 'leaf' && key !== 'replace') ||
+			typeof body.leaf !== 'string' ||
+			body.leaf.length > REGISTER_LEAF_MAX_CHARS ||
+			(body.replace !== undefined && typeof body.replace !== 'boolean')
+		) {
+			return json({ error: 'Expected only leaf and optional boolean replace' }, { status: 400 });
+		}
+		const leaf = canonicalTree1Leaf(body.leaf);
+		if (!leaf) {
+			return json({ error: 'Invalid BN254 leaf' }, { status: 400 });
+		}
+
+		const userId = session.userId as Id<'users'>;
+		const leafDigest = await tree1LeafDigest(leaf);
+		const reservation = await serverMutation(api.users.reserveShadowAtlasRegistrationOperation, {
+			_secret: getInternalSecret(),
+			userId,
+			leafDigest,
+			requestedReplace: body.replace === true,
+			idempotencyKey: crypto.randomUUID()
 		});
 
-		if (!user?.identityCommitment) {
+		if (reservation.kind === 'cached') {
+			const proof = reservation.registration;
+			return json({
+				leafIndex: proof.leafIndex,
+				userRoot: proof.merkleRoot,
+				userPath: proof.merklePath,
+				pathIndices: pathIndices(proof.leafIndex, proof.merklePath.length),
+				alreadyRegistered: true,
+				identityCommitment: reservation.identityCommitment,
+				authorityLevel: reservation.authorityLevel
+			});
+		}
+		if (reservation.kind === 'in_flight') {
+			return json(
+				{
+					error: 'Registration operation already reserved',
+					code:
+						reservation.status === 'ambiguous'
+							? 'SHADOW_ATLAS_TREE1_OUTCOME_AMBIGUOUS'
+							: 'SHADOW_ATLAS_TREE1_OPERATION_IN_FLIGHT',
+					retry: false
+				},
+				{ status: 409 }
+			);
+		}
+
+		const coordinates = operationCoordinates(userId, reservation);
+		const dispatch = await serverMutation(api.users.beginShadowAtlasRegistrationDispatch, {
+			_secret: getInternalSecret(),
+			...coordinates
+		});
+		if (!dispatch.started) {
+			return json(
+				{
+					error: 'Registration dispatch already claimed',
+					code: 'SHADOW_ATLAS_TREE1_OPERATION_IN_FLIGHT',
+					retry: false
+				},
+				{ status: 409 }
+			);
+		}
+		let atlasResult: RegistrationResult;
+		try {
+			atlasResult =
+				reservation.operation === 'replace'
+					? await replaceLeaf(leaf, reservation.priorLeafIndex!, {
+							idempotencyKey: reservation.idempotencyKey
+						})
+					: await registerLeaf(leaf, {
+							attestationHash: reservation.identityCommitment,
+							idempotencyKey: reservation.idempotencyKey
+						});
+		} catch (externalError) {
+			console.error('[Shadow Atlas] Tree-1 external outcome is ambiguous', {
+				userId: session.userId,
+				operation: reservation.operation,
+				generation: reservation.generation,
+				error: externalError instanceof Error ? externalError.message : String(externalError)
+			});
+			try {
+				await serverMutation(api.users.markShadowAtlasRegistrationOperationAmbiguous, {
+					_secret: getInternalSecret(),
+					...coordinates,
+					failureCode: 'SHADOW_ATLAS_EXTERNAL_OUTCOME_UNKNOWN'
+				});
+			} catch (markError) {
+				console.error('[CRITICAL] Failed to mark Tree-1 reservation ambiguous', markError);
+			}
+			return json({ error: 'Registration service unavailable', retry: false }, { status: 503 });
+		}
+
+		try {
+			await serverMutation(api.users.commitShadowAtlasRegistrationOperation, {
+				_secret: getInternalSecret(),
+				...coordinates,
+				leafIndex: atlasResult.leafIndex,
+				merkleRoot: atlasResult.userRoot,
+				merklePath: atlasResult.userPath
+			});
+		} catch (dbError) {
+			console.error('[CRITICAL] Convex commit failed after Tree-1 external success', {
+				userId: session.userId,
+				operation: reservation.operation,
+				generation: reservation.generation,
+				leafIndex: atlasResult.leafIndex,
+				error: dbError
+			});
+			await queueRegistrationRetry(event, {
+				userId: session.userId,
+				identityCommitment: reservation.identityCommitment,
+				operation: reservation.operation,
+				generation: reservation.generation,
+				leafDigest: reservation.leafDigest,
+				idempotencyKey: reservation.idempotencyKey,
+				...(reservation.priorLeafIndex === undefined
+					? {}
+					: { priorLeafIndex: reservation.priorLeafIndex }),
+				atlasResult: {
+					leafIndex: atlasResult.leafIndex,
+					userRoot: atlasResult.userRoot,
+					userPath: atlasResult.userPath
+				}
+			});
+			return json({ error: 'Registration service unavailable', retry: false }, { status: 503 });
+		}
+
+		return json({
+			leafIndex: atlasResult.leafIndex,
+			userRoot: atlasResult.userRoot,
+			userPath: atlasResult.userPath,
+			pathIndices: atlasResult.pathIndices,
+			identityCommitment: reservation.identityCommitment,
+			authorityLevel: reservation.authorityLevel,
+			...(atlasResult.receipt ? { receipt: atlasResult.receipt } : {})
+		});
+	} catch (error) {
+		console.error('[Shadow Atlas] Registration error:', error);
+		const message = error instanceof Error ? error.message : String(error);
+		if (message.includes('SHADOW_ATLAS_TREE1_IDENTITY_REQUIRED')) {
 			return json(
 				{ error: 'Identity verification required before Shadow Atlas registration' },
 				{ status: 403 }
 			);
 		}
-
-		const identityCommitment = user.identityCommitment;
-
-		const body = await request.json();
-		const { leaf, replace: isReplace } = body;
-
-		// Validate leaf is present and hex-formatted.
-		// cap length before BigInt parse — BN254 elements are
-		// 32 bytes = 64 hex chars + optional 0x prefix; cap at 80 to allow some
-		// slack while preventing megabyte payloads from burning BigInt parse cycles.
-		if (!leaf || typeof leaf !== 'string' || leaf.length > 80) {
-			return json(
-				{ error: 'Missing or oversized leaf (hex-encoded field element ≤80 chars)' },
-				{ status: 400 }
-			);
+		if (
+			message.includes('SHADOW_ATLAS_TREE1_OPERATION_CONFLICT') ||
+			message.includes('SHADOW_ATLAS_TREE1_REGISTRATION_MULTIPLICITY') ||
+			message.includes('SHADOW_ATLAS_TREE1_COMMITTED_STATE_CORRUPT') ||
+			message.includes('SHADOW_ATLAS_TREE1_IDENTITY_REPLACEMENT_REQUIRED')
+		) {
+			return json({ error: 'Registration state requires review', retry: false }, { status: 409 });
 		}
-
-		if (!/^(0x)?[0-9a-fA-F]+$/.test(leaf)) {
-			return json(
-				{ error: 'Invalid leaf format: must be hex-encoded' },
-				{ status: 400 }
-			);
-		}
-
-		// Validate leaf is within BN254 field
-		try {
-			const leafBigint = BigInt(leaf.startsWith('0x') ? leaf : '0x' + leaf);
-			if (leafBigint === 0n) {
-				return json({ error: 'Zero leaf not allowed' }, { status: 400 });
-			}
-			if (leafBigint >= BN254_MODULUS) {
-				return json({ error: 'Leaf exceeds BN254 field modulus' }, { status: 400 });
-			}
-		} catch {
-			return json({ error: 'Invalid leaf value' }, { status: 400 });
-		}
-
-		// Check if user is already registered
-		const existingRegistration = await serverQuery(api.users.getShadowAtlasRegistration, {
-			userId: session.userId as Id<'users'>,
-		});
-
-		if (existingRegistration) {
-			// Recovery mode: replace leaf with fresh credential
-			if (isReplace === true) {
-				const replaceIdempotencyKey = crypto.randomUUID();
-				let replacementResult;
-				try {
-					replacementResult = await replaceLeaf(leaf, existingRegistration.leafIndex, { idempotencyKey: replaceIdempotencyKey });
-				} catch (error) {
-					const msg = error instanceof Error ? error.message : String(error);
-					console.error('[Shadow Atlas] Registration service failed:', msg);
-					return json(
-						{ error: 'Registration service unavailable' },
-						{ status: 503 }
-					);
-				}
-
-				// Update Convex record with new leaf data
-				// NOTE: pathIndices not stored — derived from leafIndex on read
-				try {
-					await serverMutation(api.users.updateShadowAtlasRegistration, {
-						userId: session.userId as Id<'users'>,
-						identityCommitment,
-						leafIndex: replacementResult.leafIndex,
-						merkleRoot: replacementResult.userRoot,
-						merklePath: replacementResult.userPath,
-					});
-				} catch (dbError) {
-					// CRITICAL: Shadow Atlas tree was mutated but DB failed.
-					// Queue for retry via KV — reconciliation job will repair.
-					console.error('[CRITICAL] DB update failed after Shadow Atlas replacement', {
-						userId: session.userId,
-						oldIndex: existingRegistration.leafIndex,
-						newIndex: replacementResult.leafIndex,
-						idempotencyKey: replaceIdempotencyKey,
-						error: dbError,
-					});
-					await queueRegistrationRetry(event, {
-						userId: session.userId,
-						identityCommitment,
-						verificationMethod: user.verificationMethod || 'unknown',
-						atlasResult: replacementResult,
-						isReplace: true,
-					});
-					return json(
-						{ error: 'Registration service unavailable' },
-						{ status: 503 }
-					);
-				}
-
-				return json({
-					leafIndex: replacementResult.leafIndex,
-					userRoot: replacementResult.userRoot,
-					userPath: replacementResult.userPath,
-					pathIndices: replacementResult.pathIndices,
-					identityCommitment,
-					authorityLevel: user.authorityLevel ?? 1,
-				});
-			}
-
-			// Normal already-registered: return cached proof
-			const depth = (existingRegistration.merklePath as string[]).length;
-			const pathIndices = Array.from({ length: depth }, (_, i) =>
-				(existingRegistration.leafIndex >> i) & 1,
-			);
-
-			return json({
-				leafIndex: existingRegistration.leafIndex,
-				userRoot: existingRegistration.merkleRoot,
-				userPath: existingRegistration.merklePath as string[],
-				pathIndices,
-				alreadyRegistered: true,
-				identityCommitment,
-				authorityLevel: user.authorityLevel ?? 1,
-			});
-		}
-
-		// Use identity_commitment as attestation hash.
-		// This binds the tree insertion to a real identity verification event.
-		// If the operator fabricates registrations, they won't have valid attestation hashes.
-		const attestationHash = identityCommitment;
-
-		// Generate idempotency key — safe to retry the same atlas call on failure.
-		// Shadow Atlas caches by this key (1hr TTL), returning the same result
-		// without re-mutating the tree.
-		const idempotencyKey = crypto.randomUUID();
-
-		// Call Shadow Atlas registration API
-		let registrationResult;
-		try {
-			registrationResult = await registerLeaf(leaf, { attestationHash, idempotencyKey });
-		} catch (error) {
-			const msg = error instanceof Error ? error.message : String(error);
-			console.error('[Shadow Atlas] Registration service failed:', msg);
-			return json(
-				{ error: 'Registration service unavailable' },
-				{ status: 503 }
-			);
-		}
-
-		// Store registration metadata in Convex
-		// NOTE: We store the leaf hash (not private inputs) and the Merkle proof
-		try {
-			await serverMutation(api.users.createShadowAtlasRegistration, {
-				userId: session.userId as Id<'users'>,
-				identityCommitment, // NUL-001: canonical commitment from verification
-				leafIndex: registrationResult.leafIndex,
-				merkleRoot: registrationResult.userRoot,
-				merklePath: registrationResult.userPath,
-				verificationMethod: user.verificationMethod || 'unknown', // BR6-005: use actual method, not hardcoded
-				verificationId: session.userId, // Link to auth session
-			});
-		} catch (dbError) {
-			// CRITICAL: Shadow Atlas tree was mutated but DB write failed.
-			// Queue the atlas response in KV for retry — the idempotency key
-			// means the client can safely retry, but we also need to persist the
-			// atlas response so the reconciliation job can repair the mismatch.
-			console.error('[CRITICAL] DB create failed after Shadow Atlas registration', {
-				userId: session.userId,
-				leafIndex: registrationResult.leafIndex,
-				idempotencyKey,
-				error: dbError,
-			});
-			await queueRegistrationRetry(event, {
-				userId: session.userId,
-				identityCommitment,
-				verificationMethod: user.verificationMethod || 'unknown',
-				atlasResult: registrationResult,
-			});
-			return json(
-				{ error: 'Registration service unavailable' },
-				{ status: 503 }
-			);
-		}
-
-		return json({
-			leafIndex: registrationResult.leafIndex,
-			userRoot: registrationResult.userRoot,
-			userPath: registrationResult.userPath,
-			pathIndices: registrationResult.pathIndices,
-			identityCommitment,
-			authorityLevel: user.authorityLevel ?? 1,
-			receipt: registrationResult.receipt, // Signed registration receipt
-		});
-	} catch (error) {
-		console.error('[Shadow Atlas] Registration error:', error);
-		return json(
-			{ error: 'Internal server error' },
-			{ status: 500 }
-		);
+		return json({ error: 'Internal server error' }, { status: 500 });
 	}
 };

@@ -142,7 +142,9 @@ Testing strategy for zero-knowledge proof generation and verification.
 
 ### 15. [VECTOR_SEARCH_GUIDE.md](VECTOR_SEARCH_GUIDE.md) - Convex Vector Search Guide
 
-Convex `.vectorIndex(...)` setup, embedding generation with Gemini `text-embedding-004` (768 dims), similarity search patterns.
+Optional Convex `.vectorIndex(...)` setup, explicitly budgeted Gemini
+`gemini-embedding-001` generation (768 dims), and similarity-search patterns.
+The launch template-search request path remains keyword-only.
 
 ---
 

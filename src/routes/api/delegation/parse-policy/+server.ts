@@ -2,6 +2,10 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { parsePolicy } from '$lib/server/delegation/parse-policy';
 import { FEATURES } from '$lib/config/features';
+import { BoundedJsonRequestError, readBoundedJsonRequest } from '$lib/server/bounded-json-request';
+import { enforceLLMRateLimit, rateLimitResponse } from '$lib/server/llm-cost-protection';
+
+const MAX_POLICY_REQUEST_BYTES = 8 * 1024;
 
 /**
  * POST /api/delegation/parse-policy
@@ -12,7 +16,8 @@ import { FEATURES } from '$lib/config/features';
  * Body: { policyText: string }
  * Returns: { scope, issueFilter, orgFilter, maxActionsPerDay, requireReviewAbove }
  */
-export const POST: RequestHandler = async ({ request, locals }) => {
+export const POST: RequestHandler = async (event) => {
+	const { request, locals } = event;
 	if (!FEATURES.DELEGATION) throw error(404, 'Not found');
 	const session = locals.session;
 	if (!session?.userId) {
@@ -24,8 +29,23 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		throw error(403, 'Trust Tier 3+ required for delegation');
 	}
 
-	const body = await request.json();
-	const { policyText } = body;
+	let body: unknown;
+	try {
+		body = await readBoundedJsonRequest(request, MAX_POLICY_REQUEST_BYTES, {
+			maxArrayItems: 1,
+			maxDepth: 2,
+			maxNodes: 4,
+			maxObjectKeys: 2,
+			maxStringBytes: 5_000
+		});
+	} catch (cause) {
+		if (cause instanceof BoundedJsonRequestError) throw error(cause.status, cause.message);
+		throw error(400, 'Invalid request body');
+	}
+	const policyText =
+		body !== null && typeof body === 'object' && !Array.isArray(body)
+			? (body as Record<string, unknown>).policyText
+			: undefined;
 
 	if (!policyText || typeof policyText !== 'string' || policyText.trim().length < 5) {
 		throw error(400, 'Policy text must be at least 5 characters');
@@ -33,6 +53,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	if (policyText.length > 5000) {
 		throw error(400, 'Policy text must not exceed 5000 characters');
 	}
+
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'delegation-policy');
+	if (!rateLimitCheck.allowed) return rateLimitResponse(rateLimitCheck);
 
 	try {
 		const parsed = await parsePolicy(policyText.trim());

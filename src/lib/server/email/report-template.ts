@@ -1,4 +1,5 @@
 import type { VerificationPacket } from '$lib/types/verification-packet';
+import { canonicalReportPreimage } from '$convex/lib/campaignProofPacket';
 import { escapeHtml } from './escape';
 
 interface ReportContext {
@@ -79,57 +80,22 @@ function ratioBar(
 	return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-radius:2px;overflow:hidden;"><tr>${cells}</tr></table>`;
 }
 
-// Canonical preimage for the attestation hash. Includes the substrate fields a
-// staffer reads in the email so any silent change shifts the hash. Domain-
-// prefixed (`voter-protocol-report-v1`) so future preimage changes cut a clean
-// version line. The verificationUrl is intentionally NOT in the preimage —
-// it is environment-coupled (PUBLIC_BASE_URL differs per deployment) and
-// would make staging vs prod hashes diverge for the same data; we use the
-// deployment-agnostic `campaignId` instead.
 export function canonicalPreimage(ctx: ReportContext): string {
 	const { campaignId, campaignTitle, orgName, packet } = ctx;
 	const { verified, districtCount, authorship, dateRange, identityBreakdown, geography, debate } =
 		packet;
-	const ib = identityBreakdown
-		? `${identityBreakdown.govId}|${identityBreakdown.addressVerified}|${identityBreakdown.emailOnly}`
-		: '';
-	// Sort by count desc (matches the visible bar-chart ordering) with hash
-	// ascending as tiebreaker (deterministic when counts tie). Without this
-	// alignment a malicious input could permute the visible chart away from
-	// the hashed ordering while the hash held  — see hash-ordering note.
-	const geo = (geography ?? [])
-		.slice()
-		.sort((a, b) =>
-			b.count !== a.count ? b.count - a.count : a.hash.localeCompare(b.hash),
-		)
-		.map((g) => `${g.hash}=${g.count}`)
-		.join(',');
-	// Debate field — only contributes to the preimage when present, otherwise
-	// emits an empty string so pre-debate campaigns keep their existing hash
-	// stable.
-	const debatePreimage = debate
-		? [
-				debate.marketPosition,
-				debate.totalStake,
-				debate.topArgumentScore,
-				debate.aiPanelConsensus === null ? '' : String(debate.aiPanelConsensus),
-				debate.participantCount === null ? '' : String(debate.participantCount),
-				debate.resolutionHash ?? ''
-			].join('|')
-		: '';
-	return [
-		'voter-protocol-report-v1',
-		`campaign:${campaignId}`,
+	return canonicalReportPreimage({
+		campaignId,
 		campaignTitle,
 		orgName,
-		String(verified),
-		String(districtCount),
-		ib,
-		`${authorship.individual}|${authorship.shared}|${authorship.explicit ? 1 : 0}`,
-		`${dateRange.earliest}|${dateRange.latest}|${dateRange.spanDays}`,
-		geo,
-		debatePreimage
-	].join('\n---\n');
+		verified,
+		districtCount,
+		authorship,
+		dateRange,
+		identityBreakdown,
+		geography,
+		debate
+	});
 }
 
 async function sha256Hex(input: string): Promise<string> {

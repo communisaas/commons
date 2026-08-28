@@ -6,12 +6,13 @@
 	import { browser } from '$app/environment';
 	import '../app.css';
 	import { setupConvex } from 'convex-sveltekit';
-	import { PUBLIC_CONVEX_URL } from '$env/static/public';
+	import { env as publicEnv } from '$env/dynamic/public';
 	import { syncDecryptedUser } from '$lib/stores/decryptedUser.svelte';
 
-	// Initialize Convex context for convexQuery/convexForm/convexLoad in child components.
-	if (PUBLIC_CONVEX_URL) {
-		setupConvex(PUBLIC_CONVEX_URL);
+	// Bind the exact artifact's client to the current deployment realm rather
+	// than baking the production Convex URL into its browser chunks.
+	if (publicEnv.PUBLIC_CONVEX_URL) {
+		setupConvex(publicEnv.PUBLIC_CONVEX_URL);
 	}
 	import Footer from '$lib/components/layout/Footer.svelte';
 	import HeaderSystem from '$lib/components/layout/HeaderSystem.svelte';
@@ -19,10 +20,11 @@
 	import CredentialExpiryNudge from '$lib/components/identity/CredentialExpiryNudge.svelte';
 	import ErrorBoundary from '$lib/components/error/ErrorBoundary.svelte';
 	import ToastContainer from '$lib/components/ui/ToastContainer.svelte';
+	import { toast } from '$lib/stores/toast.svelte';
 	import ModalRegistry from '$lib/components/modals/ModalRegistry.svelte';
 	import { modalActions } from '$lib/stores/modalSystem.svelte';
 	import { walletState } from '$lib/stores/walletState.svelte';
-	import { analyzeEmailFlow, launchEmail } from '$lib/services/emailService';
+	import { analyzeEmailFlow } from '$lib/services/emailService';
 	import { toEmailServiceUser } from '$lib/types/user';
 	import type { HeaderUser, HeaderTemplate, TemplateUseEvent } from '$lib/types/any-replacements';
 	import type { SessionCredentialForPolicy } from '$lib/core/identity/credential-policy';
@@ -43,7 +45,9 @@
 	const isProfilePage = $derived($page.url?.pathname?.startsWith('/profile') ?? false);
 	const isHomepage = $derived($page.url?.pathname === '/');
 	const isTemplatePage = $derived($page.route?.id === '/s/[slug]');
-	const isOrgPage = $derived(($page.url?.pathname === '/org' || $page.url?.pathname?.startsWith('/org/')) ?? false);
+	const isOrgPage = $derived(
+		($page.url?.pathname === '/org' || $page.url?.pathname?.startsWith('/org/')) ?? false
+	);
 	const isEmbedPage = $derived($page.url?.pathname?.startsWith('/embed/') ?? false);
 	const isCampaignPage = $derived($page.url?.pathname?.startsWith('/c/') ?? false);
 	const isVerificationPage = $derived($page.url?.pathname?.startsWith('/v/') ?? false);
@@ -73,9 +77,7 @@
 		const userId = (data.user as Record<string, unknown> | null)?.id as string | undefined;
 		let cancelled = false;
 		(async () => {
-			const { templateDraftStore, deriveOwnerHash } = await import(
-				'$lib/stores/templateDraft'
-			);
+			const { templateDraftStore, deriveOwnerHash } = await import('$lib/stores/templateDraft');
 			if (cancelled) return;
 			if (!userId) {
 				templateDraftStore.setOwner(null);
@@ -94,11 +96,15 @@
 	$effect(() => {
 		const u = data.user as Record<string, unknown> | null;
 		if (!browser) return;
-		syncDecryptedUser(u ? {
-			id: u.id as string,
-			email: u.email as string | null,
-			name: u.name as string | null,
-		} : null);
+		syncDecryptedUser(
+			u
+				? {
+						id: u.id as string,
+						email: u.email as string | null,
+						name: u.name as string | null
+					}
+				: null
+		);
 	});
 
 	// ── Session credential for CredentialExpiryNudge (async, client-only) ──
@@ -112,28 +118,39 @@
 		}
 
 		let cancelled = false;
-		import('$lib/core/identity/session-credentials').then(async ({ getSessionCredential }) => {
-			const cred = await getSessionCredential(userId);
-			if (cancelled) return;
-			layoutCredential = cred ? {
-				userId: cred.userId,
-				createdAt: cred.createdAt,
-				expiresAt: cred.expiresAt,
-				congressionalDistrict: cred.congressionalDistrict
-			} : null;
-		}).catch(() => {
-			if (!cancelled) layoutCredential = null;
-		});
+		import('$lib/core/identity/session-credentials')
+			.then(async ({ getSessionCredential }) => {
+				const cred = await getSessionCredential(userId);
+				if (cancelled) return;
+				layoutCredential = cred
+					? {
+							userId: cred.userId,
+							createdAt: cred.createdAt,
+							expiresAt: cred.expiresAt,
+							congressionalDistrict: cred.congressionalDistrict
+						}
+					: null;
+			})
+			.catch(() => {
+				if (!cancelled) layoutCredential = null;
+			});
 
-		return () => { cancelled = true; };
+		return () => {
+			cancelled = true;
+		};
 	});
 
 	// Handle template use from header/bottom bar
 	function handleTemplateUse(__event: TemplateUseEvent): void {
 		const { template } = __event;
 
-		const layoutTrustTier = (data.user as Record<string, unknown> | null)?.trust_tier as number ?? 0;
-		const flow = analyzeEmailFlow(template, toEmailServiceUser(data.user as Record<string, unknown> | null), { trustTier: layoutTrustTier });
+		const layoutTrustTier =
+			((data.user as Record<string, unknown> | null)?.trust_tier as number) ?? 0;
+		const flow = analyzeEmailFlow(
+			template,
+			toEmailServiceUser(data.user as Record<string, unknown> | null),
+			{ trustTier: layoutTrustTier }
+		);
 
 		if (flow.nextAction === 'auth') {
 			// Navigate to auth or show modal
@@ -143,13 +160,16 @@
 			// For now, redirect to auth flow which will handle address collection
 			window.location.href = `/auth/google?returnTo=${encodeURIComponent($page.url.pathname)}`;
 		} else if (flow.nextAction === 'email' && flow.mailtoUrl) {
-			if (data.user) {
-				// Show template modal for authenticated users
-				modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
-			} else {
-				// Direct mailto launch for guests
-				launchEmail(flow.mailtoUrl);
-			}
+			// One send surface for everyone. The guest fork used to fire a bare mailto
+			// with nothing watching it and no receipt, while every other guest surface
+			// opened this same modal; the modal handles guests on its own guest arms.
+			// This path carries no personal connection, so there is no sender text here
+			// for `laneCarriesSenderText` to have to protect.
+			modalActions.openModal('template-modal', 'template_modal', { template, user: data.user });
+		} else {
+			// No URL to hand over. Without this the button is simply inert and the
+			// reader is told nothing at all.
+			toast.error(flow.error?.message ?? 'This message could not be prepared for your email app.');
 		}
 	}
 </script>
@@ -163,17 +183,20 @@
 	{#if !isOrgPage}
 		<!-- HeaderSystem handles context-aware header rendering -->
 		<!-- HeaderTemplate is a structural subset of Template — handler only reads common fields at runtime -->
-		<HeaderSystem user={data.user as HeaderUser | null} template={(data as Record<string, unknown>).template as HeaderTemplate | null} onTemplateUse={handleTemplateUse} />
+		<HeaderSystem
+			user={data.user as HeaderUser | null}
+			template={(data as Record<string, unknown>).template as HeaderTemplate | null}
+			onTemplateUse={handleTemplateUse}
+		/>
 
 		<!-- Credential expiry nudge: fixed banner below header, shows when credential nears expiration -->
-		<CredentialExpiryNudge
-			credential={layoutCredential}
-			onReverify={() => goto('/profile')}
-		/>
+		<CredentialExpiryNudge credential={layoutCredential} onReverify={() => goto('/profile')} />
 	{/if}
 
 	{#if (data.user as Record<string, unknown> | null)?.id === 'user-seed-1'}
-		<div class="pointer-events-none fixed top-0 left-0 right-0 z-[9999] bg-amber-500/10 text-amber-200 text-center text-xs py-1 font-mono tracking-wide">
+		<div
+			class="pointer-events-none fixed top-0 right-0 left-0 z-[9999] bg-amber-500/10 py-1 text-center font-mono text-xs tracking-wide text-amber-200"
+		>
 			DEMO MODE — commons.email
 		</div>
 	{/if}
@@ -190,23 +213,38 @@
 			<Footer />
 		</div>
 	{:else if isHomepage}
-		<!-- Homepage: No wrapper padding - page manages its own spacing for sticky behavior -->
+		<!-- Homepage: no wrapper padding, the page manages its own spacing for
+		     sticky behaviour. The footer still renders: the disclosure it carries
+		     has to be reachable from the front door, which is the one page a
+		     stranger is guaranteed to see. The page's own `creation-footer` is
+		     part of the composer, not site chrome, and carries no legal link. -->
 		<div class="relative min-h-screen">
 			<ErrorBoundary fallback="detailed" showRetry={true}>
 				{@render children()}
 			</ErrorBoundary>
+			<Footer />
 		</div>
 	{:else if isVerificationPage}
-		<!-- Verification certificate: standalone, no wrapper padding, no footer -->
+		<!-- Verification certificate: standalone, no wrapper padding. The footer
+		     is the exception to that standalone framing, and deliberately: this is
+		     the page an outside party lands on to check someone else's claim, so
+		     it is where knowing how their data is handled matters most. -->
 		<div class="pt-[48px]">
 			<ErrorBoundary fallback="detailed" showRetry={true}>
 				{@render children()}
 			</ErrorBoundary>
+			<Footer />
 		</div>
 	{:else}
 		<!-- Other pages: Header padding for fixed IdentityStrip -->
 		<div class="relative min-h-screen pt-[48px]">
-			<div class="p-6 md:p-10" class:pb-24={isTemplatePage} class:sm:pb-10={isTemplatePage} class:max-w-7xl={isTemplatePage} class:mx-auto={isTemplatePage}>
+			<div
+				class="p-6 md:p-10"
+				class:pb-24={isTemplatePage}
+				class:sm:pb-10={isTemplatePage}
+				class:max-w-7xl={isTemplatePage}
+				class:mx-auto={isTemplatePage}
+			>
 				<ErrorBoundary fallback="detailed" showRetry={true}>
 					{@render children()}
 				</ErrorBoundary>
@@ -219,4 +257,3 @@
 	<ToastContainer />
 	<ModalRegistry />
 {/if}
-

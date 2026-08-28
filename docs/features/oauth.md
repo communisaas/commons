@@ -5,7 +5,7 @@
 > ⚠️ **2026-04-23 audit — specific corrections applied inline, but note:**
 >
 > - **Session expiry is conditional, not always 90 days.** Social-funnel
->   routes (`template-modal`, `/s/`) get 90-day sessions; all other flows
+>   routes (`/s/`, `auth=required`) get 90-day sessions; all other flows
 >   get **30 days** (`src/lib/core/auth/oauth-callback-handler.ts:~302`).
 >   The ASCII diagram below is accurate only for the funnel path.
 > - **`oauth-security.ts` no longer exists** as a separate file; content

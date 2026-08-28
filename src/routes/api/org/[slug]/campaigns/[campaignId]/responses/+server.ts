@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -39,7 +39,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	const result = await serverMutation(api.campaigns.recordResponse, {
 		slug: params.slug,
 		campaignId: params.campaignId as Id<'campaigns'>,
-		deliveryId,
+		deliveryId: deliveryId as Id<'campaignDeliveries'>,
 		// type validated against the same allowlist the Convex args
 		// union enforces; cast at the boundary.
 		type: type as 'replied' | 'meeting_requested' | 'vote_cast' | 'public_statement',

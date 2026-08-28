@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
 import type { RequestHandler } from './$types';
-import { serverAction } from 'convex-sveltekit';
+import { serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 

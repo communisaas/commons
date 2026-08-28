@@ -14,6 +14,16 @@ export function processDecisionMakers(
 		sourceUrl?: string; // Agent returns camelCase
 		source_url?: string; // Legacy snake_case support
 		emailSource?: string; // How email was verified
+		emailGrounded?: boolean;
+		emailSourceTitle?: string;
+		contactRoute?: ProcessedDecisionMaker['contactRoute'];
+		isAiResolved?: boolean;
+		accountabilityOpener?: string | null;
+		roleCategory?: ProcessedDecisionMaker['roleCategory'];
+		relevanceRank?: number;
+		publicActions?: string[];
+		personalPrompt?: string | null;
+		publicRecipientProvenance?: ProcessedDecisionMaker['publicRecipientProvenance'];
 		recencyCheck?: string; // Verification text
 		metadata?: { positionSourceDate?: string }; // Structure from agent
 	}>
@@ -23,7 +33,8 @@ export function processDecisionMakers(
 		const reasoningText =
 			dm.reasoning || (dm.provenance ? extractReasoning(dm.provenance) : 'No reasoning provided');
 		// Support both camelCase (agent output) and snake_case (legacy)
-		const sourceUrl = dm.sourceUrl || dm.source_url || (dm.provenance ? extractSource(dm.provenance) : undefined);
+		const sourceUrl =
+			dm.sourceUrl || dm.source_url || (dm.provenance ? extractSource(dm.provenance) : undefined);
 
 		return {
 			...dm,
@@ -86,7 +97,7 @@ export function extractSource(provenance: string | undefined): string | undefine
 /**
  * Convert decision-makers to recipient emails for template
  */
-export function extractRecipientEmails(
+export function collectRecipientEmails(
 	decisionMakers: ProcessedDecisionMaker[] | undefined,
 	customRecipients: CustomRecipient[] | undefined,
 	includesCongress: boolean

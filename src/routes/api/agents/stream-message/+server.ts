@@ -25,6 +25,7 @@ import {
 	type PipelinePhase,
 	type SourceEvidenceUpdate
 } from '$lib/core/agents/agents/message-writer';
+import type { ProviderVisibleSourceStage } from '$lib/core/agents/agents/message-source-ground';
 import { filterThoughtForDisplay } from '$lib/core/agents/utils/thought-filter';
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
 import {
@@ -35,15 +36,21 @@ import {
 	logLLMOperation,
 	computeCostUsd
 } from '$lib/server/llm-cost-protection';
-import type { DecisionMaker } from '$lib/core/agents';
-import { moderatePromptOnly } from '$lib/core/server/moderation';
+import { classifySafety, moderatePromptOnly } from '$lib/core/server/moderation';
 import { getMessageGenerationReadiness } from '$lib/server/agents/message-generation-readiness';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { EvaluatedSource } from '$lib/core/agents/types';
 import { encryptMessageJobResult } from '$lib/server/message-job-encryption';
 import { traceStart, traceEnd, traceEvent } from '$lib/server/agent-trace';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import {
+	agentPromptGuardContent,
+	readBoundedAgentRequest
+} from '$lib/server/agent-request-envelope';
+import { computeSourceCacheInputHash } from '$lib/server/source-cache-key';
 
 const TRACE_ENDPOINT = 'message-generation';
 
@@ -61,132 +68,94 @@ function truncatedStack(err: unknown): string | undefined {
 const SOURCE_CACHE_TTL_MS = 72 * 60 * 60 * 1000;
 /** Short recovery window: enough for tab hibernation, not a long-lived draft archive. */
 const MESSAGE_JOB_TTL_MS = 2 * 60 * 60 * 1000;
-const SHA256_HEX_RE = /^[a-f0-9]{64}$/;
 
-interface RequestBody {
-	subject_line: string;
-	core_message: string;
-	topics: string[];
-	decision_makers: DecisionMaker[];
-	voice_sample?: string;
-	raw_input?: string;
-	template_id?: string;
-	job_id?: string;
-	input_hash?: string;
-	recovery_public_key_jwk?: JsonWebKey;
-	geographic_scope?: {
-		type: 'international' | 'nationwide' | 'subnational';
-		country?: string;
-		subdivision?: string;
-		locality?: string;
-	};
-	/**
-	 * Transparency level for streamed reasoning. STUDIO sets this true to
-	 * surface real planning thoughts (light filter); the public citizen flow
-	 * omits it and keeps the strict filter. Reasoning is never fabricated in
-	 * either mode — only the suppression threshold differs.
-	 */
-	verbose?: boolean;
+function isFreshSourceCacheTimestamp(value: unknown, now: number): value is number {
+	return (
+		typeof value === 'number' &&
+		Number.isSafeInteger(value) &&
+		value >= 0 &&
+		value <= now &&
+		now - value < SOURCE_CACHE_TTL_MS
+	);
 }
 
-function isRecoveryPublicKeyJwk(value: unknown): value is JsonWebKey {
-	if (!value || typeof value !== 'object') return false;
-	const key = value as JsonWebKey;
-	return key.kty === 'RSA' && typeof key.n === 'string' && typeof key.e === 'string';
+type MessageJob = {
+	jobId: string;
+	inputHash: string;
+	status: string;
+	encryptedResult?: unknown;
+	errorMessage?: string | null;
+};
+
+function replayMessageJob(job: MessageJob, userId: string): Response {
+	const traceId = crypto.randomUUID();
+	const { stream, emitter } = createSSEStream({
+		traceId,
+		endpoint: TRACE_ENDPOINT,
+		userId
+	});
+
+	emitter.send('job', {
+		jobId: job.jobId,
+		inputHash: job.inputHash,
+		status: job.status,
+		traceId
+	});
+
+	if (job.status === 'completed') {
+		emitter.send('job-complete', { job: { ...job, traceId } });
+	} else if (job.status === 'pending' || job.status === 'running') {
+		emitter.send('job-running', { job: { ...job, traceId } });
+	} else {
+		emitter.error(job.errorMessage || 'Message generation job is not recoverable');
+	}
+	emitter.close();
+
+	return new Response(stream, { headers: SSE_HEADERS });
+}
+
+async function failMessageJob(job: MessageJob | null, errorCode: string, errorMessage: string) {
+	if (!job) return;
+	await serverMutation(api.messageJobs.fail, {
+		jobId: job.jobId,
+		errorCode,
+		errorMessage
+	}).catch((error: unknown) => {
+		console.warn('[stream-message] Message job preflight failure could not be persisted:', error);
+	});
 }
 
 export const POST: RequestHandler = async (event) => {
-	// Paid individuals (Voice/Advocate) are not hard-blocked by the free
-	// daily-global abuse breaker on the message-generation step — their monthly
-	// authored cap is the real bound. The daily-global key is shared across every
-	// LLM op, so an authoring run (decision-makers + message-generation) must
-	// elevate the ceiling on BOTH steps or the paying user is still blocked here.
-	// Best-effort: a lookup failure falls back to the free ceiling, never elevates.
-	let paidIndividual = false;
-	if (event.locals.session?.userId) {
-		try {
-			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
-		} catch (err) {
-			console.warn('[stream-message] paid-individual lookup failed, using free ceiling:', err);
-		}
-	}
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'stream-message');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
+	const body = requestEnvelope;
 
-	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation', { paidIndividual });
-	if (!rateLimitCheck.allowed) {
-		return rateLimitResponse(rateLimitCheck);
-	}
-	const userContext = getUserContext(event);
-	const startTime = Date.now();
-
-	// Auth check
-	const session = event.locals.session;
-	if (!session?.userId) {
-		return new Response(JSON.stringify({ error: 'Authentication required' }), {
-			status: 401,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	// Parse request body
-	let body: RequestBody;
-	try {
-		body = (await event.request.json()) as RequestBody;
-	} catch {
-		return new Response(JSON.stringify({ error: 'Invalid request body' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	// Validate required fields
-	if (!body.subject_line || !body.core_message) {
-		return new Response(JSON.stringify({ error: 'Subject line and core message are required' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-	// parity: bound input lengths before Gemini billing path.
-	// Subject lines are short (200); core_message + voice_sample + raw_input are
-	// the long-form fields; topic strings are short tags. Total payload could
-	// otherwise exceed Gemini's context window expensively.
-	if (
-		body.subject_line.length > 200 ||
-		body.core_message.length > 16_000 ||
-		(body.voice_sample && body.voice_sample.length > 16_000) ||
-		(body.raw_input && body.raw_input.length > 16_000) ||
-		(Array.isArray(body.topics) &&
-			(body.topics.length > 20 || body.topics.some((t) => typeof t !== 'string' || t.length > 64)))
-	) {
-		return new Response(JSON.stringify({ error: 'Input field exceeds maximum length' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
+	const session = event.locals.session!;
 
 	const usesRecoverableJob = Boolean(
 		body.job_id || body.input_hash || body.recovery_public_key_jwk
 	);
-	if (usesRecoverableJob && (!body.job_id || !body.input_hash || !body.recovery_public_key_jwk)) {
-		return new Response(
-			JSON.stringify({
-				error: 'job_id, input_hash, and recovery_public_key_jwk are required together'
-			}),
-			{
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
-			}
-		);
-	}
+	let messageJob: MessageJob | null = null;
+
+	// The authenticated Convex mutation is the concurrency gate. It atomically
+	// creates the caller-owned job or returns the existing caller-owned job.
+	// Replays stop here, before any paid-provider admission or moderation call.
 	if (usesRecoverableJob) {
-		if (body.job_id!.length > 128 || !SHA256_HEX_RE.test(body.input_hash!)) {
-			return new Response(JSON.stringify({ error: 'Invalid message generation job handle' }), {
-				status: 400,
-				headers: { 'Content-Type': 'application/json' }
+		try {
+			const start = await serverMutation(api.messageJobs.startOrGet, {
+				jobId: body.job_id!,
+				inputHash: body.input_hash!,
+				recoveryPublicKeyJwk: body.recovery_public_key_jwk!,
+				expiresAt: Date.now() + MESSAGE_JOB_TTL_MS
 			});
-		}
-		if (!isRecoveryPublicKeyJwk(body.recovery_public_key_jwk)) {
-			return new Response(JSON.stringify({ error: 'Invalid recovery public key' }), {
-				status: 400,
+			messageJob = start.job;
+			if (!start.created) return replayMessageJob(messageJob, session.userId);
+		} catch (jobError) {
+			console.error('[stream-message] Message job start failed:', jobError);
+			return new Response(JSON.stringify({ error: 'Could not start message generation job' }), {
+				status: 500,
 				headers: { 'Content-Type': 'application/json' }
 			});
 		}
@@ -198,6 +167,11 @@ export const POST: RequestHandler = async (event) => {
 		FIRECRAWL_API_KEY: process.env.FIRECRAWL_API_KEY
 	});
 	if (!runtimeReadiness.ready) {
+		await failMessageJob(
+			messageJob,
+			'MESSAGE_GENERATION_RUNTIME_NOT_CONFIGURED',
+			runtimeReadiness.message
+		);
 		return new Response(
 			JSON.stringify({
 				error: runtimeReadiness.message,
@@ -211,6 +185,18 @@ export const POST: RequestHandler = async (event) => {
 			}
 		);
 	}
+
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'message-generation');
+	if (!rateLimitCheck.allowed) {
+		await failMessageJob(
+			messageJob,
+			'MESSAGE_GENERATION_ADMISSION_DENIED',
+			rateLimitCheck.reason || 'Message generation admission denied'
+		);
+		return rateLimitResponse(rateLimitCheck);
+	}
+	const userContext = getUserContext(event);
+	const startTime = Date.now();
 
 	const traceId = crypto.randomUUID();
 
@@ -254,17 +240,42 @@ export const POST: RequestHandler = async (event) => {
 	// Content includes AI-refined text (core_message, voice_sample) which can contain
 	// meta-phrasing like "The user is demanding..." that triggers false positives.
 	// Raw input was already checked at subject-line step; use 0.8 threshold here.
-	const contentToCheck = [
-		body.subject_line,
-		body.core_message,
-		...(body.topics || []),
-		body.voice_sample,
-		body.raw_input
-	]
-		.filter(Boolean)
-		.join('\n');
+	const contentToCheck = agentPromptGuardContent('stream-message', body);
 
-	const injectionCheck = await moderatePromptOnly(contentToCheck, 0.8);
+	let injectionCheck: Awaited<ReturnType<typeof moderatePromptOnly>>;
+	try {
+		injectionCheck = await moderatePromptOnly(contentToCheck, 0.8, {
+			signal: event.request.signal
+		});
+	} catch (error) {
+		console.error('[stream-message] Prompt-injection moderation unavailable:', error);
+		traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+			phase: 'prompt-injection-moderation',
+			code: 'MODERATION_UNAVAILABLE',
+			errorName: error instanceof Error ? error.name : 'unknown',
+			errorMessage: error instanceof Error ? error.message : String(error),
+			stack: truncatedStack(error)
+		});
+		traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
+			finalPhase: 'prompt-injection-moderation',
+			errorCode: 'MODERATION_UNAVAILABLE'
+		});
+		await failMessageJob(
+			messageJob,
+			'MODERATION_UNAVAILABLE',
+			'Content moderation is temporarily unavailable'
+		);
+		return new Response(
+			JSON.stringify({
+				error: 'Content moderation is temporarily unavailable',
+				code: 'moderation_unavailable'
+			}),
+			{
+				status: 503,
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
+	}
 
 	traceEvent(traceId, TRACE_ENDPOINT, 'prompt-injection', {
 		score: injectionCheck.score,
@@ -289,6 +300,11 @@ export const POST: RequestHandler = async (event) => {
 			finalPhase: 'prompt-injection',
 			errorCode: 'PROMPT_INJECTION_DETECTED'
 		});
+		await failMessageJob(
+			messageJob,
+			'PROMPT_INJECTION_DETECTED',
+			'Content flagged by safety filter'
+		);
 
 		return new Response(
 			JSON.stringify({
@@ -308,49 +324,13 @@ export const POST: RequestHandler = async (event) => {
 		decisionMakerCount: body.decision_makers?.length || 0
 	});
 
-	let messageJob: {
-		jobId: string;
-		inputHash: string;
-		status: string;
-		encryptedResult?: unknown;
-		errorMessage?: string | null;
-	} | null = null;
-	let messageJobCreated = false;
-
-	if (usesRecoverableJob) {
-		try {
-			const start = await serverMutation(api.messageJobs.startOrGet, {
-				jobId: body.job_id!,
-				inputHash: body.input_hash!,
-				recoveryPublicKeyJwk: body.recovery_public_key_jwk!,
-				expiresAt: Date.now() + MESSAGE_JOB_TTL_MS
-			});
-			messageJob = start.job;
-			messageJobCreated = start.created;
-		} catch (jobError) {
-			console.error('[stream-message] Message job start failed:', jobError);
-			traceEvent(traceId, TRACE_ENDPOINT, 'error', {
-				phase: 'message-job-start',
-				errorName: jobError instanceof Error ? jobError.name : 'unknown',
-				errorMessage: jobError instanceof Error ? jobError.message : String(jobError),
-				stack: truncatedStack(jobError)
-			});
-			traceEnd(traceId, TRACE_ENDPOINT, false, Date.now() - startTime, {
-				finalPhase: 'message-job-start'
-			});
-			return new Response(JSON.stringify({ error: 'Could not start message generation job' }), {
-				status: 500,
-				headers: { 'Content-Type': 'application/json' }
-			});
-		}
-	}
-
 	// Create SSE stream
 	const { stream, emitter } = createSSEStream({
 		traceId,
 		endpoint: 'message-generation',
 		userId: session.userId
 	});
+	const waitUntil = event.platform?.context?.waitUntil?.bind(event.platform.context);
 
 	// Run generation in background. When Cloudflare exposes waitUntil, keep the
 	// job alive long enough to persist an encrypted recovery envelope even if the
@@ -369,21 +349,6 @@ export const POST: RequestHandler = async (event) => {
 					traceId
 				});
 
-				if (!messageJobCreated) {
-					if (messageJob.status === 'completed') {
-						emitter.send('job-complete', { job: { ...messageJob, traceId } });
-						streamSuccess = true;
-						return;
-					}
-					if (messageJob.status === 'pending' || messageJob.status === 'running') {
-						emitter.send('job-running', { job: { ...messageJob, traceId } });
-						streamSuccess = true;
-						return;
-					}
-					emitter.error(messageJob.errorMessage || 'Message generation job is not recoverable');
-					return;
-				}
-
 				await serverMutation(api.messageJobs.markRunning, {
 					jobId: messageJob.jobId,
 					phase: 'sources'
@@ -395,24 +360,42 @@ export const POST: RequestHandler = async (event) => {
 			// ================================================================
 			let cacheHit = false;
 			let verifiedSources: EvaluatedSource[] | undefined;
+			let sourceCacheInputHash: string | null = null;
 
 			if (body.template_id) {
 				try {
+					sourceCacheInputHash = await computeSourceCacheInputHash({
+						subjectLine: body.subject_line,
+						coreMessage: body.core_message,
+						topics: body.topics || [],
+						geographicScope: body.geographic_scope,
+						decisionMakers: body.decision_makers || []
+					});
+				} catch (cacheKeyError) {
+					// A cache-key failure must lose the optimization, never the message.
+					console.warn('[stream-message] Source cache key failed:', cacheKeyError);
+				}
+
+				try {
 					const template = await serverQuery(api.templates.getSourceCache, {
+						_secret: getInternalSecret(),
+						userId: session.userId as Id<'users'>,
 						templateId: body.template_id as Id<'templates'>
 					});
 
+					const cacheCheckedAt = Date.now();
 					if (
+						sourceCacheInputHash &&
 						template?.cachedSources &&
-						template.sourcesCachedAt &&
-						Date.now() - template.sourcesCachedAt < SOURCE_CACHE_TTL_MS
+						isFreshSourceCacheTimestamp(template.sourcesCachedAt, cacheCheckedAt) &&
+						template.sourceCacheInputHash === sourceCacheInputHash
 					) {
 						cacheHit = true;
 						verifiedSources = template.cachedSources as unknown as EvaluatedSource[];
 						console.log('[stream-message] Source cache hit:', {
 							templateId: body.template_id,
 							sourceCount: verifiedSources.length,
-							cachedAge: Math.round((Date.now() - template.sourcesCachedAt) / 60000) + 'min'
+							cachedAge: Math.round((cacheCheckedAt - template.sourcesCachedAt) / 60000) + 'min'
 						});
 					}
 				} catch (cacheErr) {
@@ -468,6 +451,27 @@ export const POST: RequestHandler = async (event) => {
 				geographicScope: body.geographic_scope,
 				verifiedSources,
 				traceId,
+				classifyProviderVisibleSources: async (
+					providerVisibleText: string,
+					stage: ProviderVisibleSourceStage
+				) => {
+					// This is the exact, globally bounded source schema later placed in
+					// Gemini's prompt. It shares the request's one provider reservation;
+					// cached source ground takes the same fail-closed path as fresh reads.
+					const indirectInjectionCheck = await moderatePromptOnly(providerVisibleText, 0.8, {
+						signal: event.request.signal
+					});
+					traceEvent(traceId, TRACE_ENDPOINT, 'indirect-prompt-injection', {
+						stage,
+						score: indirectInjectionCheck.score,
+						threshold: indirectInjectionCheck.threshold,
+						safe: indirectInjectionCheck.safe,
+						contentLength: providerVisibleText.length
+					});
+					if (!indirectInjectionCheck.safe) {
+						throw new Error('A retrieved source failed safety review');
+					}
+				},
 				onThought: (thought: string, phase?: PipelinePhase) => {
 					const cleaned = filterThoughtForDisplay(thought, body.verbose ? 'verbose' : 'strict');
 					if (cleaned) {
@@ -495,6 +499,49 @@ export const POST: RequestHandler = async (event) => {
 			const { tokenUsage, externalCounts, ...clientResult } = result;
 			resultTokenUsage = tokenUsage;
 			resultExternalCounts = externalCounts;
+
+			// This adds one Groq safeguard call per generated message. It is authorized
+			// because the drafted body is the delivery surface and must fail closed before
+			// encrypted persistence or client delivery. Request recipients are caller
+			// controlled, so this boundary intentionally uses the strict unknown policy.
+			let draftedMessageSafety: Awaited<ReturnType<typeof classifySafety>>;
+			try {
+				draftedMessageSafety = await classifySafety(
+					[body.subject_line, result.message].join('\n\n'),
+					{ signal: event.request.signal }
+				);
+			} catch (error) {
+				console.error('[stream-message] Drafted-message moderation unavailable:', error);
+				traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+					phase: 'drafted-message-moderation',
+					code: 'MODERATION_UNAVAILABLE',
+					errorName: error instanceof Error ? error.name : 'unknown',
+					errorMessage: error instanceof Error ? error.message : String(error),
+					stack: truncatedStack(error)
+				});
+				await failMessageJob(
+					messageJob,
+					'MODERATION_UNAVAILABLE',
+					'Content moderation is temporarily unavailable'
+				);
+				emitter.error('Content moderation is temporarily unavailable');
+				return;
+			}
+
+			if (!draftedMessageSafety.safe) {
+				traceEvent(traceId, TRACE_ENDPOINT, 'error', {
+					phase: 'drafted-message-moderation',
+					code: 'CONTENT_FLAGGED',
+					hazards: draftedMessageSafety.blocking_hazards
+				});
+				await failMessageJob(
+					messageJob,
+					'CONTENT_FLAGGED',
+					'The drafted message was blocked by the safety filter'
+				);
+				emitter.error('The drafted message was blocked by the safety filter');
+				return;
+			}
 
 			if (messageJob && body.recovery_public_key_jwk && body.input_hash) {
 				try {
@@ -524,22 +571,35 @@ export const POST: RequestHandler = async (event) => {
 			streamSuccess = true;
 
 			// ================================================================
-			// Template source cache: write (fire-and-forget)
+			// Template source cache: write (lifetime-bound, response-independent)
 			// Cache miss + template_id + non-empty sources → write cache
 			// ================================================================
 			if (
 				body.template_id &&
 				!cacheHit &&
 				result.evaluatedSources &&
-				result.evaluatedSources.length > 0
+				result.evaluatedSources.length > 0 &&
+				sourceCacheInputHash
 			) {
-				serverMutation(api.templates.updateSourceCache, {
+				const sourceCacheWrite = serverMutation(api.templates.updateSourceCache, {
+					_secret: getInternalSecret(),
+					userId: session.userId as Id<'users'>,
 					templateId: body.template_id as Id<'templates'>,
 					cachedSources: result.evaluatedSources,
-					sourcesCachedAt: Date.now()
+					sourcesCachedAt: Date.now(),
+					sourceCacheInputHash
 				}).catch((err: unknown) => {
 					console.warn('[stream-message] Source cache write failed:', err);
 				});
+
+				// A floating mutation may be cancelled as soon as the SSE stream closes.
+				// Cloudflare tracks this cache write independently so the completed client
+				// response stays fast. Non-Cloudflare runtimes await it as the safe fallback.
+				if (waitUntil) {
+					waitUntil(sourceCacheWrite);
+				} else {
+					await sourceCacheWrite;
+				}
 			}
 
 			console.log('[stream-message] Two-phase generation complete:', {
@@ -573,8 +633,7 @@ export const POST: RequestHandler = async (event) => {
 			}
 			emitter.error(error instanceof Error ? error.message : 'Generation failed');
 		} finally {
-			// trace.end MUST fire on every exit from generationTask — success,
-			// error, or short-circuit return from the recoverable-job branch.
+			// trace.end MUST fire on every exit from generationTask — success or error.
 			// logLLMOperation also fires traceCompletion for the cost record;
 			// the two events coexist (different eventTypes). Hoist costUsd to
 			// the top-level column so `recentByEndpoint` summaries surface it
@@ -611,7 +670,6 @@ export const POST: RequestHandler = async (event) => {
 		}
 	})();
 
-	const waitUntil = event.platform?.context?.waitUntil?.bind(event.platform.context);
 	if (waitUntil) {
 		waitUntil(generationTask);
 	} else {

@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { onMount, onDestroy, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { page } from '$app/stores';
 	import { Building2, Users, Mail, Megaphone, ArrowRight, ArrowLeft, X } from '@lucide/svelte';
 	import type { TemplateCreationContext, TemplateFormData, Template } from '$lib/types/template';
+	import { createEmptyTemplateFormData } from '$lib/types/template';
+	import { templateDeliveryMethodForChannel } from '$convex/lib/templateDeliveryMethod';
 	import { templateDraftStore, generateDraftId, formatTimeAgo } from '$lib/stores/templateDraft';
 	import { appendReferences } from '$lib/utils/message-processing';
-	import { extractRecipientEmails } from '$lib/utils/decision-maker-processing';
+	import { collectRecipientEmails } from '$lib/utils/decision-maker-processing';
 	import UnifiedObjectiveEntry from './creator/UnifiedObjectiveEntry.svelte';
 	import DecisionMakerResolver from './creator/DecisionMakerResolver.svelte';
 	import MessageGenerationResolver from './creator/MessageGenerationResolver.svelte';
+	import AuthGateOverlay from './creator/AuthGateOverlay.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	const labels = getJurisdictionLabels();
@@ -60,6 +64,11 @@
 	let publishError = $state<string | null>(null);
 	let localPublishing = $state(false);
 	let isPublishing = $derived(isSubmitting || localPublishing);
+
+	// Honest "no logged-in user" check — null user = guest per +layout.server.ts.
+	const isGuest = $derived(!$page.data.user);
+	// Publishing requires an account; the gate replaces the step content in place.
+	let showPublishAuthGate = $state(false);
 
 	// Draft cleanup mode: 'save' = preserve on close, 'delete' = clean up (save succeeded)
 	let draftCleanupMode: 'save' | 'delete' = 'save';
@@ -133,37 +142,7 @@
 	}
 
 	let formData: TemplateFormData = $state(
-		_loadedDraft
-			? _backfillDraftData(_loadedDraft)
-			: {
-					objective: {
-						rawInput: _initialText,
-						title: '',
-						description: '',
-						domain: '',
-						slug: '',
-						topics: [],
-						voiceSample: '',
-						aiGenerated: false
-					},
-					audience: {
-						decisionMakers: [],
-						recipientEmails: [],
-						includesCongress: false,
-						customRecipients: []
-					},
-					content: {
-						preview: '',
-						variables: [],
-						sources: [],
-						researchLog: [],
-						geographicScope: null,
-						aiGenerated: false,
-						edited: false,
-						draftOrigin: null
-					},
-					review: {}
-				}
+		_loadedDraft ? _backfillDraftData(_loadedDraft) : createEmptyTemplateFormData(_initialText)
 	);
 
 	// Derived: has content worth saving (for ambient indicator)
@@ -180,7 +159,8 @@
 			if (!data.title.trim()) errors.push('Title is required');
 			if (!data.description?.trim()) errors.push('Core message is required');
 			if (!data.slug?.trim()) errors.push('Template link is required');
-			else if (slugReady === false) errors.push('Template link is unavailable — choose a different link');
+			else if (slugReady === false)
+				errors.push('Template link is unavailable — choose a different link');
 			// slugReady === null (still checking) is allowed — server validates uniqueness at save time
 			return errors;
 		},
@@ -282,7 +262,7 @@
 
 		// Re-extract recipient emails from source data (handles stale draft restoration)
 		// This ensures emails are current even if draft had missing/stale recipientEmails
-		formData.audience.recipientEmails = extractRecipientEmails(
+		formData.audience.recipientEmails = collectRecipientEmails(
 			formData.audience.decisionMakers,
 			formData.audience.customRecipients,
 			formData.audience.includesCongress
@@ -305,6 +285,15 @@
 			return;
 		}
 
+		// Publishing requires an account. Gate here — before the draft is marked for
+		// deletion — so the finished work is persisted and resumed across the OAuth
+		// round trip instead of being discarded by onDestroy on the way out.
+		if (isGuest) {
+			localPublishing = false;
+			showPublishAuthGate = true;
+			return;
+		}
+
 		// Append References section to message body (at bottom for trust without interrupting flow)
 		const messageWithReferences =
 			formData.content.sources && formData.content.sources.length > 0
@@ -318,11 +307,9 @@
 			domain: formData.objective.domain,
 			topics: formData.objective.topics || [],
 			type: context.channelId === 'certified' ? 'certified' : 'direct',
-			deliveryMethod: context.channelId === 'certified'
-				? 'certified'
-				: formData.audience.includesCongress
-					? 'cwc'
-					: 'email',
+			deliveryMethod: templateDeliveryMethodForChannel(context.channelId, {
+				includesCongress: formData.audience.includesCongress
+			}),
 			subject: formData.objective.title || `Regarding: ${formData.objective.title}`,
 			message_body: messageWithReferences, // Message with References appended
 			sources: formData.content.sources || [], // Persist sources for provenance
@@ -523,7 +510,7 @@
 	<!-- Progress bar -->
 	<div class="h-1 bg-slate-100">
 		<div
-			class="h-full bg-participation-primary-600 transition-all duration-300"
+			class="bg-participation-primary-600 h-full transition-all duration-300"
 			style="width: {progress}%"
 		></div>
 	</div>
@@ -535,7 +522,7 @@
 				<div class="flex items-center gap-1.5 md:gap-3">
 					{#snippet iconSnippet()}
 						{@const IconComponent = stepInfo[currentStep].icon}
-						<IconComponent class="h-4 w-4 text-participation-primary-600 md:h-5 md:w-5" />
+						<IconComponent class="text-participation-primary-600 h-4 w-4 md:h-5 md:w-5" />
 					{/snippet}
 					{@render iconSnippet()}
 					<h2 class="text-base font-semibold text-slate-900 md:text-xl">
@@ -551,9 +538,7 @@
 							class="inline-flex items-center gap-1 rounded-full border border-amber-200
 							       bg-amber-50 px-1.5 py-0.5 text-xs text-amber-600 md:px-2"
 						>
-							<div
-								class="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
-							></div>
+							<div class="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"></div>
 							<span class="hidden sm:inline">saving...</span>
 						</div>
 					{:else if lastSaved}
@@ -562,9 +547,7 @@
 							class="inline-flex items-center gap-1 rounded-full border border-emerald-200
 							       bg-emerald-50 px-1.5 py-0.5 text-xs text-emerald-600 md:px-2"
 						>
-							<div
-								class="h-1.5 w-1.5 rounded-full bg-emerald-500"
-							></div>
+							<div class="h-1.5 w-1.5 rounded-full bg-emerald-500"></div>
 							<span class="hidden sm:inline">saved {formatTimeAgo(lastSaved).toLowerCase()}</span>
 							<span class="sm:hidden">saved</span>
 						</div>
@@ -574,9 +557,7 @@
 							class="inline-flex items-center gap-1 rounded-full border border-slate-200
 							       bg-slate-50 px-1.5 py-0.5 text-xs text-slate-500 md:px-2"
 						>
-							<div
-								class="h-1.5 w-1.5 rounded-full bg-slate-400"
-							></div>
+							<div class="h-1.5 w-1.5 rounded-full bg-slate-400"></div>
 							<span class="hidden sm:inline">draft</span>
 						</div>
 					{/if}
@@ -616,7 +597,17 @@
 	<div class="relative flex-1">
 		<div class="p-4 md:p-6" transition:fade={{ duration: 150 }}>
 			{#if currentStep === 'objective'}
-				<UnifiedObjectiveEntry bind:data={formData.objective} {context} onAccept={handleNext} bind:pendingSuggestion initialSuggestion={restoredSuggestion} bind:slugReady />
+				<UnifiedObjectiveEntry
+					bind:data={formData.objective}
+					{context}
+					onAccept={handleNext}
+					bind:pendingSuggestion
+					initialSuggestion={restoredSuggestion}
+					bind:slugReady
+					{draftId}
+					onSaveDraft={() =>
+						templateDraftStore.saveDraft(draftId, formData, currentStep, pendingSuggestion)}
+				/>
 			{:else if currentStep === 'audience'}
 				<DecisionMakerResolver
 					bind:formData
@@ -637,6 +628,19 @@
 				/>
 			{/if}
 		</div>
+
+		{#if showPublishAuthGate}
+			<AuthGateOverlay
+				title="Sign in to publish"
+				description="Free account to publish — your draft is saved"
+				subjectLine={formData.objective.title}
+				coreMessage={formData.objective.description}
+				{draftId}
+				onSaveDraft={() =>
+					templateDraftStore.saveDraft(draftId, formData, currentStep, pendingSuggestion)}
+				onback={() => (showPublishAuthGate = false)}
+			/>
+		{/if}
 	</div>
 
 	<!-- Navigation (hidden for audience and content steps - they handle their own nav) -->
@@ -653,7 +657,7 @@
 				</button>
 
 				<button
-					class="flex items-center gap-1.5 rounded bg-participation-primary-600 px-3 py-2 text-sm text-white hover:bg-participation-primary-700 disabled:opacity-50 md:gap-2 md:px-4 md:py-2 md:text-base"
+					class="bg-participation-primary-600 hover:bg-participation-primary-700 flex items-center gap-1.5 rounded px-3 py-2 text-sm text-white disabled:opacity-50 md:gap-2 md:px-4 md:py-2 md:text-base"
 					onclick={handleNext}
 					disabled={!isCurrentStepValid || isSubmitting || isTransitioning}
 				>
@@ -694,7 +698,7 @@
 						Start Fresh
 					</button>
 					<button
-						class="rounded bg-participation-primary-600 px-4 py-2 text-sm text-white hover:bg-participation-primary-700"
+						class="bg-participation-primary-600 hover:bg-participation-primary-700 rounded px-4 py-2 text-sm text-white"
 						onclick={recoverDraft}
 					>
 						Recover Draft

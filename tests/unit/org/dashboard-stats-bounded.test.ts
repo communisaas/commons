@@ -8,8 +8,8 @@
  *     the O(1) org.supporterStats counters,
  *   - reads the engagement-tier histogram from the O(1) monotonic
  *     org.actionTierCounts counter (engagementTier is immutable post-creation),
- *   - computes districtVerified via the SHARED bounded scan (computeDistrictVerified,
- *     capped at 10K) — the same path getDistrictVerifiedCount uses,
+ *   - reads districtVerified from the independently readiness-gated v2
+ *     supporter-audience scalar (covered by supporter-audience.convex.test.ts),
  *   - computes growth via two BOUNDED sentAt range reads (computeGrowthWindow),
  *     one week's volume each, never the lifetime table.
  *
@@ -20,13 +20,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-	computeDistrictVerified,
-	computeGrowthWindow,
-	DISTRICT_SCAN_CAP,
-	GROWTH_WEEK_CAP,
-	WEEK_MS
-} from '../../../convex/_dashboardStats';
+import { computeGrowthWindow, GROWTH_WEEK_CAP, WEEK_MS } from '../../../convex/_dashboardStats';
 
 type Row = { supporterId?: string; districtHash?: string; verified?: boolean; sentAt?: number };
 
@@ -95,52 +89,7 @@ function fakeCtx(select: (r: Recorded, rows: Row[]) => Row[], rows: Row[]) {
 	};
 }
 
-const ORG = 'org_1' as unknown as Parameters<typeof computeDistrictVerified>[1];
-
-describe('computeDistrictVerified (shared bounded scan)', () => {
-	it('counts distinct supporters with a districtHash, bounded by take(CAP+1)', async () => {
-		const rows: Row[] = [
-			{ supporterId: 'a', districtHash: 'd1' },
-			{ supporterId: 'a', districtHash: 'd2' }, // same supporter, two districts → 1
-			{ supporterId: 'b', districtHash: 'd1' },
-			{ supporterId: 'c' }, // no districtHash → not counted
-			{ districtHash: 'd3' } // no supporterId → not counted
-		];
-		const { ctx, calls } = fakeCtx((_r, rs) => rs, rows);
-		const r = await computeDistrictVerified(ctx, ORG);
-		expect(r.districtVerified).toBe(2);
-		expect(r.truncated).toBe(false);
-		expect(r.scanLimit).toBe(DISTRICT_SCAN_CAP);
-		// Index + bound invariants: by_orgId_verified, desc, take(CAP+1).
-		expect(calls).toHaveLength(1);
-		expect(calls[0].index).toBe('by_orgId_verified');
-		expect(calls[0].eqs.orgId).toBe(ORG);
-		expect(calls[0].ordered).toBe('desc');
-		expect(calls[0].takeN).toBe(DISTRICT_SCAN_CAP + 1);
-	});
-
-	it('flags truncated when the scan saturates the cap (count is a floor)', async () => {
-		const rows: Row[] = Array.from({ length: DISTRICT_SCAN_CAP + 500 }, (_, i) => ({
-			supporterId: `s${i}`,
-			districtHash: `d${i}`
-		}));
-		const { ctx } = fakeCtx((_r, rs) => rs, rows);
-		const r = await computeDistrictVerified(ctx, ORG);
-		expect(r.truncated).toBe(true);
-		expect(r.districtVerified).toBe(DISTRICT_SCAN_CAP);
-	});
-
-	it('an org exactly at the cap is complete, not truncated', async () => {
-		const rows: Row[] = Array.from({ length: DISTRICT_SCAN_CAP }, (_, i) => ({
-			supporterId: `s${i}`,
-			districtHash: `d${i}`
-		}));
-		const { ctx } = fakeCtx((_r, rs) => rs, rows);
-		const r = await computeDistrictVerified(ctx, ORG);
-		expect(r.truncated).toBe(false);
-		expect(r.districtVerified).toBe(DISTRICT_SCAN_CAP);
-	});
-});
+const ORG = 'org_1' as unknown as Parameters<typeof computeGrowthWindow>[1];
 
 describe('computeGrowthWindow (two bounded sentAt range reads)', () => {
 	const NOW = 1_000_000_000_000;

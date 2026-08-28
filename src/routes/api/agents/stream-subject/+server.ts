@@ -15,7 +15,7 @@
  * Solution: Use generateStreamWithThoughts which doesn't use responseMimeType
  * and parses JSON manually, allowing thoughts to flow through.
  *
- * Rate Limiting: 5/hour for guests, 15/hour for authenticated, 30/hour for verified.
+ * Authentication required. Rate limiting: 5/hour authenticated and verified.
  */
 
 import type { RequestHandler } from './$types';
@@ -23,7 +23,6 @@ import { generateStreamWithThoughts } from '$lib/core/agents/gemini-client';
 import { SUBJECT_LINE_PROMPT } from '$lib/core/agents/prompts/subject-line';
 import { SUBJECT_LINE_SCHEMA } from '$lib/core/agents/schemas';
 import { buildClarificationPrompt } from '$lib/core/agents/agents/subject-line';
-import type { ConversationContext } from '$lib/core/agents/types';
 import { cleanThoughtForDisplay } from '$lib/core/agents/utils/thought-filter';
 import type { SubjectLineResponseWithClarification, TokenUsage } from '$lib/core/agents/types';
 import { createSSEStream, SSE_HEADERS } from '$lib/server/sse-stream';
@@ -35,17 +34,23 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-
-interface RequestBody {
-	message: string;
-	conversationContext?: ConversationContext;
-}
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import {
+	agentPromptGuardContent,
+	readBoundedAgentRequest
+} from '$lib/server/agent-request-envelope';
 
 type SubjectLineStreamResponse = SubjectLineResponseWithClarification & {
 	domain?: string;
 };
 
 export const POST: RequestHandler = async (event) => {
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'stream-subject');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
+	const body = requestEnvelope;
+
 	const rateLimitCheck = await enforceLLMRateLimit(event, 'subject-line');
 	if (!rateLimitCheck.allowed) {
 		return rateLimitResponse(rateLimitCheck);
@@ -54,30 +59,6 @@ export const POST: RequestHandler = async (event) => {
 	const startTime = Date.now();
 	const traceId = crypto.randomUUID();
 
-	let body: RequestBody;
-	try {
-		body = (await event.request.json()) as RequestBody;
-	} catch {
-		return new Response(JSON.stringify({ error: 'Invalid request body' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	if (!body.message?.trim()) {
-		return new Response(JSON.stringify({ error: 'Message is required' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-	// parity with /api/agents/generate-subject + embeddings/generate.
-	if (body.message.length > 16_000) {
-		return new Response(
-			JSON.stringify({ error: 'Message too long (max 16,000 characters)' }),
-			{ status: 400, headers: { 'Content-Type': 'application/json' } },
-		);
-	}
-
 	console.log('[stream-subject] trace:', {
 		traceId,
 		userId: userContext.userId,
@@ -85,14 +66,21 @@ export const POST: RequestHandler = async (event) => {
 	});
 
 	// Prompt injection detection
-	const injectionCheck = await moderatePromptOnly(body.message);
+	const injectionCheck = await moderatePromptOnly(
+		agentPromptGuardContent('stream-subject', body),
+		undefined,
+		{ signal: event.request.signal }
+	);
 	if (!injectionCheck.safe) {
 		console.log('[stream-subject] Prompt injection detected:', {
 			score: injectionCheck.score.toFixed(4),
 			threshold: injectionCheck.threshold
 		});
 		return new Response(
-			JSON.stringify({ error: 'Content flagged by safety filter', code: 'PROMPT_INJECTION_DETECTED' }),
+			JSON.stringify({
+				error: 'Content flagged by safety filter',
+				code: 'PROMPT_INJECTION_DETECTED'
+			}),
 			{
 				status: 403,
 				headers: { 'Content-Type': 'application/json' }
@@ -111,10 +99,12 @@ export const POST: RequestHandler = async (event) => {
 		day: 'numeric'
 	});
 	const currentYear = String(new Date().getFullYear());
-	const systemPrompt = SUBJECT_LINE_PROMPT.replace('{CURRENT_DATE}', currentDate).replace(
-		'{CURRENT_YEAR}',
-		currentYear
-	) + `\n\n## RESPONSE SCHEMA\n\nYour JSON output MUST conform to this exact structure:\n${JSON.stringify(SUBJECT_LINE_SCHEMA, null, 2)}`;
+	const systemPrompt =
+		SUBJECT_LINE_PROMPT.replace('{CURRENT_DATE}', currentDate).replace(
+			'{CURRENT_YEAR}',
+			currentYear
+		) +
+		`\n\n## RESPONSE SCHEMA\n\nYour JSON output MUST conform to this exact structure:\n${JSON.stringify(SUBJECT_LINE_SCHEMA, null, 2)}`;
 
 	const { stream, emitter } = createSSEStream({
 		traceId,
@@ -128,9 +118,11 @@ export const POST: RequestHandler = async (event) => {
 
 		try {
 			const generator = generateStreamWithThoughts<SubjectLineStreamResponse>(prompt, {
+				stage: 'subject-line',
 				systemInstruction: systemPrompt,
 				temperature: 0.4,
-				thinkingLevel: 'medium'
+				thinkingLevel: 'medium',
+				signal: event.request.signal
 			});
 
 			let iterResult = await generator.next();
@@ -217,7 +209,12 @@ export const POST: RequestHandler = async (event) => {
 		}
 	})().catch((err) => {
 		console.error('[stream-subject] Unhandled IIFE error:', err);
-		try { emitter.error('Internal error'); emitter.close(); } catch { /* already closed */ }
+		try {
+			emitter.error('Internal error');
+			emitter.close();
+		} catch {
+			/* already closed */
+		}
 	});
 
 	const headers = new Headers(SSE_HEADERS);

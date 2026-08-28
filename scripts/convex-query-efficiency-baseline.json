@@ -1,0 +1,12 @@
+{
+	"version": 1,
+	"description": "Exact baseline for syntactic hazards in exported public Convex queries. Counts may only change with a reviewed baseline update.",
+	"entries": {
+		"convex/passkeys.ts::getAuthMaterialByEmail": {
+			"rules": { "dateNow": 1 },
+			"owner": "@ejmockler",
+			"expires": "2027-01-31",
+			"reason": "Passkey authentication must reject expired challenges against the current clock; the lookup is exact-indexed and constant-cardinality."
+		}
+	}
+}

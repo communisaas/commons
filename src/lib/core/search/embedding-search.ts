@@ -1,9 +1,9 @@
 /**
- * Client-Side Embedding Search — Server-Delegated
+ * Legacy Search Adapter — Server-Delegated
  *
- * Delegates semantic search to `/api/templates/search` which runs a
- * Convex `.vectorIndex(...)` query + quality boost. This unifies the search
- * pipeline so client and server use the same ranking logic.
+ * Delegates to `/api/templates/search`, whose launch implementation is a
+ * provider-free compact Convex text-index query. The historical class name is
+ * preserved for callers; it no longer implies per-request embedding work.
  *
  * The class interface is preserved for backward compatibility with
  * TemplateRanker and createSemanticSearch().
@@ -25,7 +25,7 @@ interface ServerSearchResult {
 
 interface ServerSearchResponse {
 	templates: ServerSearchResult[];
-	method: 'semantic' | 'keyword';
+	method: 'keyword';
 }
 
 export class EmbeddingSearch {
@@ -38,23 +38,21 @@ export class EmbeddingSearch {
 	}
 
 	/**
-	 * Generate embedding for search query via server endpoint.
+	 * Preserve the historical metadata hook without generating an embedding.
 	 * Kept for backward compatibility with TemplateRanker.rankWithMetadata().
-	 * Returns empty array since server handles embedding internally.
+	 * Returns an empty array because launch search is keyword-only.
 	 */
 	async generateQueryEmbedding(query: string): Promise<number[]> {
 		if (!query || query.trim().length === 0) {
 			throw new Error('Query cannot be empty');
 		}
 
-		// The server search endpoint generates embeddings internally.
-		// Return empty array — callers use this only for metadata, not computation.
+		// Launch search is keyword-only. Callers use this value only as metadata.
 		return [];
 	}
 
 	/**
-	 * Search templates via server-side semantic search endpoint.
-	 * Server runs a Convex `.vectorIndex(...)` cosine search + quality boost + 0.40 floor.
+	 * Search templates through the bounded server-side keyword endpoint.
 	 */
 	async search(query: SearchQuery): Promise<Array<TemplateWithEmbedding & { similarity: number }>> {
 		const startTime = performance.now();
@@ -108,7 +106,9 @@ export class EmbeddingSearch {
 		}
 
 		const endTime = performance.now();
-		console.debug(`[embedding-search] Server search completed in ${(endTime - startTime).toFixed(2)}ms`);
+		console.debug(
+			`[embedding-search] Server search completed in ${(endTime - startTime).toFixed(2)}ms`
+		);
 
 		return results;
 	}

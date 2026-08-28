@@ -9,14 +9,20 @@
  * See vitest.config.ts resolve.alias for the wiring.
  */
 
-export function captureWithContext(_error: unknown, _context?: Record<string, unknown>): void {
-	// noop in tests
-}
+export type CapturedSentryEvent = Readonly<{
+	error: unknown;
+	context?: Readonly<Record<string, unknown>>;
+}>;
 
-export function captureMessageWithContext(
-	_message: string,
-	_level?: string,
-	_context?: Record<string, unknown>
+export const capturedSentryEvents: CapturedSentryEvent[] = [];
+
+export const resetCapturedSentryEvents = (): void => {
+	capturedSentryEvents.length = 0;
+};
+
+export function captureWithContext(
+	error: unknown,
+	context?: Readonly<Record<string, unknown>>
 ): void {
-	// noop in tests
+	capturedSentryEvents.push({ error, context });
 }

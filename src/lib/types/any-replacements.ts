@@ -120,12 +120,6 @@ export interface GeolocationData {
 // TEMPLATE AND SUBMISSION TYPES
 // =============================================================================
 
-export interface RecipientConfig {
-	type: 'representatives' | 'senators' | 'house' | 'custom';
-	targets?: string[];
-	[key: string]: unknown;
-}
-
 export interface DeliveryConfig {
 	method: 'cwc' | 'email' | 'direct';
 	options?: Record<string, unknown>;
@@ -302,7 +296,14 @@ export interface UserOrgMembership {
 	orgName: string;
 	orgAvatar: string | null;
 	role: string; // 'owner' | 'editor' | 'member'
-	activeCampaignCount: number;
+	/** Null until the write-maintained counter migration is ready. */
+	activeCampaignCount: number | null;
+}
+
+export interface UserOrgMembershipOverflow {
+	hasMore: boolean;
+	cursor: string | null;
+	limit: number;
 }
 
 export interface HeaderUser {
@@ -328,6 +329,7 @@ export interface HeaderUser {
 	near_derived_scroll_address?: string | null;
 	// Org layer bridge — identity-integrated org membership
 	orgMemberships?: UserOrgMembership[];
+	orgMembershipsOverflow?: UserOrgMembershipOverflow;
 }
 
 // UI Component types

@@ -15,14 +15,11 @@ export * from './analytics';
 // Core Domain Types
 export * from './template';
 export {
-	// RecipientConfig intentionally excluded — exported from './template' instead
 	type DeliveryConfig,
 	type CwcConfig,
 	type TemplateMetrics,
 	type TypedTemplate,
-	isValidRecipientConfig,
 	isValidDeliveryConfig,
-	extractRecipientEmails,
 	extractDeliveryConfig,
 	extractTemplateMetrics
 } from './templateConfig';

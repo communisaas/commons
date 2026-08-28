@@ -778,6 +778,24 @@
 								</option>
 							{/each}
 						</select>
+						{#if data.templatePagination.nextPageUrl || !data.templatePagination.isFirstPage}
+							<p class="text-text-quaternary mt-2 text-xs">
+								Showing up to 50 templates at a time. The campaign's current template remains
+								available on every page.
+								{#if !data.templatePagination.isFirstPage}
+									<a
+										class="text-teal-400 hover:underline"
+										href={data.templatePagination.firstPageUrl}>Newest page</a
+									>
+								{/if}
+								{#if data.templatePagination.nextPageUrl}
+									<a
+										class="ml-2 text-teal-400 hover:underline"
+										href={data.templatePagination.nextPageUrl}>Older templates</a
+									>
+								{/if}
+							</p>
+						{/if}
 					</div>
 
 					<!-- Geographic targeting -->

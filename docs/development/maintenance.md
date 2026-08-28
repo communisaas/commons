@@ -5,7 +5,7 @@
 - **Database:** Convex-only. Active seed is `npm run seed` → `npx convex run seed:seedAll`. Schema is `convex/schema.ts`.
 - **Backups:** `npx convex export` / Convex dashboard for DR. Pinning-provider migration (Storacha sunset 2026-05-31) is an additional DR task — see `docs/runbooks/DISASTER-RECOVERY.md`.
 - **Crons:** All ~15 jobs live in `convex/crons.ts` (Convex native scheduler). No HTTP `/api/cron/*` endpoints, no external cron services.
-- **Deploy:** Frontend via `npm run build && wrangler pages deploy .svelte-kit/cloudflare`. Backend via `npx convex deploy --env-file .env.production` (the `-y` flag silently no-ops for prod — always pass `--env-file`).
+- **Deploy:** Frontend uploads are allowed only through the gated `.github/workflows/deploy.yml` workflow; direct `wrangler pages deploy` bypasses release safeguards and is prohibited. Backend via `npx convex deploy --env-file .env.production` (the `-y` flag silently no-ops for prod — always pass `--env-file`).
 - **Feature flags:** `FEATURES.CONGRESSIONAL=false`, `PASSKEY=false`, `DELEGATION=false`, `ENGAGEMENT_METRICS=false`; `DEBATE=true`.
 
 ## Development Discipline
@@ -62,7 +62,8 @@ npm run preview  # Manual verification of build
 **Database Layer:**
 
 - Convex (cloud-managed). Schema declared in `convex/schema.ts`.
-- Vector search via Convex `.vectorIndex(...)` with Gemini `text-embedding-004` (768 dims).
+- Optional stored-vector workflows via Convex `.vectorIndex(...)` with Gemini
+  `gemini-embedding-001` (768 dims); launch template search is keyword-only.
 - Schema changes applied by `npx convex dev` / `npx convex deploy --env-file .env.production`. No migration files.
 - Types generated automatically by the Convex CLI into `convex/_generated/`.
 

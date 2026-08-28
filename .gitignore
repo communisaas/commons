@@ -54,6 +54,9 @@ test-execution-summary.md
 *.tmp
 *.temp
 *.log
+convex-project-policy*.json
+convex-team-quota*.json
+convex-team-quota*.sig
 
 # Cruft prevention
 project.inlang/
@@ -96,3 +99,8 @@ tests/e2e/.auth/
 
 # Nested SvelteKit generated artifacts (infra/lambda hosts a SvelteKit app)
 infra/lambda/*/.svelte-kit/
+
+# Wrangler local platform-proxy secrets (dev only, never committed)
+.dev.vars
+.dev.vars.*
+.codex/

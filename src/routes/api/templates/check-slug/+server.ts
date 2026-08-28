@@ -1,77 +1,65 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	MAX_TEMPLATE_SLUG_CODE_POINTS,
+	isCanonicalTemplateSlug
+} from '$convex/lib/templateInputBudget';
 
-// Helper to generate creative variations
-function generateSuggestions(baseSlug: string, title: string): string[] {
-	const variations: string[] = [];
+const MAX_SLUG_LOOKUPS = 6;
 
-	// Action-oriented prefixes
-	const actionPrefixes = ['act', 'support', 'defend', 'protect', 'save', 'help'];
-	const randomPrefix = actionPrefixes[Math.floor(Math.random() * actionPrefixes.length)];
-	variations.push(`${randomPrefix}-${baseSlug}`);
-
-	// Year suffix
-	const year = new Date().getFullYear();
-	variations.push(`${baseSlug}-${year}`);
-
-	// Shortened version if multi-word
+/** Generate at most five bounded advisory alternatives; create remains the uniqueness authority. */
+function generateSuggestions(baseSlug: string): string[] {
+	const candidates = [
+		`act-${baseSlug}`,
+		`support-${baseSlug}`,
+		`${baseSlug}-${new Date().getFullYear()}`
+	];
 	const words = baseSlug.split('-');
-	if (words.length > 3) {
-		variations.push(words.slice(0, 3).join('-'));
+	if (words.length > 3) candidates.push(words.slice(0, 3).join('-'));
+	if (words.length > 1) candidates.push(`${words.map((word) => word[0]).join('')}-template`);
+
+	// Deterministic suffixes keep the batch bounded and make request behavior
+	// testable; availability remains only a hint until the atomic create mutation.
+	for (let suffix = 2; candidates.length < 8; suffix += 1) {
+		candidates.push(`${baseSlug}-${suffix}`);
 	}
 
-	// Acronym version if multi-word
-	if (words.length > 1) {
-		const acronym = words.map((w) => w[0]).join('');
-		variations.push(`${acronym}-template`);
-	}
-
-	// Add random suffix if we need more suggestions
-	while (variations.length < 5) {
-		const randomNum = Math.floor(Math.random() * 1000);
-		variations.push(`${baseSlug}-${randomNum}`);
-	}
-
-	return variations.slice(0, 5);
-}
-
-// Check slug availability via Convex
-async function getAvailableSuggestions(suggestions: string[]): Promise<string[]> {
-	const available: string[] = [];
-
-	for (const slug of suggestions) {
-		const existing = await serverQuery(api.templates.getBySlug, { slug });
-		if (!existing) {
-			available.push(slug);
-		}
-		if (available.length >= 3) break;
-	}
-
-	return available;
+	return [...new Set(candidates)].filter(isCanonicalTemplateSlug).slice(0, MAX_SLUG_LOOKUPS - 1);
 }
 
 export const GET: RequestHandler = async ({ url }) => {
-	const slug = url.searchParams.get('slug');
-	const title = url.searchParams.get('title') || '';
-
-	if (!slug) {
+	const slug = url.searchParams.get('slug') ?? '';
+	if (!isCanonicalTemplateSlug(slug)) {
 		return json(
 			{
 				success: false,
-				error: 'Slug parameter is required'
+				error: `Slug must be lowercase letters, numbers, and hyphens (${MAX_TEMPLATE_SLUG_CODE_POINTS} characters max)`
 			},
-			{ status: 400 }
+			{ status: 400, headers: { 'Cache-Control': 'no-store' } }
 		);
 	}
 
-	const template = await serverQuery(api.templates.getBySlug, { slug });
-	const available = !template;
-	let suggestions: string[] = [];
-	if (!available) {
-		const candidateSuggestions = generateSuggestions(slug, title);
-		suggestions = await getAvailableSuggestions(candidateSuggestions);
+	const candidates = generateSuggestions(slug);
+	const slugs = [slug, ...candidates];
+	const exists = await serverQuery(api.templates.templateSlugsExist, {
+		_secret: getInternalSecret(),
+		slugs
+	});
+	if (!Array.isArray(exists) || exists.length !== slugs.length) {
+		throw new Error('TEMPLATE_SLUG_EXISTENCE_CONTRACT_INVALID');
 	}
-	return json({ success: true, data: { available, suggestions } });
+
+	return json(
+		{
+			success: true,
+			data: {
+				available: exists[0] === false,
+				suggestions: candidates.filter((_, index) => exists[index + 1] === false).slice(0, 3)
+			}
+		},
+		{ headers: { 'Cache-Control': 'no-store' } }
+	);
 };

@@ -3,10 +3,329 @@
  * Used by: src/routes/s/[slug]/+page.server.ts (Power Landscape)
  */
 
-import { query, mutation, internalQuery } from "./_generated/server";
-import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
-import { requireInternalSecret } from "./_internalAuth";
+import { query, mutation, internalQuery, type MutationCtx } from './_generated/server';
+import { v } from 'convex/values';
+import type { Id } from './_generated/dataModel';
+import { requireInternalSecret } from './_internalAuth';
+import {
+	RECIPIENT_METRICS_VERSION,
+	applyPositionRegistrationMetric,
+	assertPositionDistrictCode,
+	readPositionMetrics,
+	requireRecipientMetricsWritable
+} from './lib/recipientMetrics';
+
+const DIRECT_DELIVERY_RECIPIENT_MAX = 20;
+const DIRECT_DELIVERY_INPUT_MAX_BYTES = 64 * 1024;
+const DIRECT_DELIVERY_ADMISSION_WINDOW_MS = 60 * 1_000;
+const DIRECT_DELIVERY_ADMISSION_MAX_REQUESTS = 5;
+const DIRECT_DELIVERY_PSEUDONYMOUS_ID = /^[0-9a-f]{64}$/u;
+const DIRECT_DELIVERY_NAME_MAX_CHARS = 200;
+const DIRECT_DELIVERY_METHOD_MAX_CHARS = 32;
+const DIRECT_DELIVERY_ENVELOPE_MAX_CHARS = 2_048;
+const DIRECT_DELIVERY_METHODS = new Set(['cwc', 'email', 'recorded']);
+const REGISTRATION_DELIVERY_ADMISSION_WINDOW_MS = 60 * 1_000;
+const REGISTRATION_DELIVERY_ADMISSION_MAX_REQUESTS = 5;
+const POSITION_DELIVERY_IDENTITY_MAX_CHARS = 512;
+const POSITION_DELIVERY_EMAIL_MAX_CHARS = 254;
+const POSITION_DELIVERY_HASH_MAX_CHARS = 128;
+const POSITION_DELIVERY_RECIPIENT_KEY_MAX_CHARS = 256;
+const POSITION_DELIVERY_REGISTRATION_MAX_RECIPIENTS = 20;
+// eslint-disable-next-line no-control-regex
+const POSITION_DELIVERY_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+// eslint-disable-next-line no-control-regex
+const POSITION_DELIVERY_EMAIL_SHAPE = /^[^\s@\u0000-\u001f\u007f]+@[^\s@\u0000-\u001f\u007f]+$/u;
+const MAILTO_CONFIRMATION_RECIPIENT_NAME = 'Commons mailto confirmation';
+// `:` cannot be produced by canonicalPositionRecipientKey, so a caller-supplied
+// human recipient name can never alias the reserved system event identity.
+const MAILTO_CONFIRMATION_RECIPIENT_KEY = 'system:mailto-confirmation:v1';
+const positionDeliveryEncoder = new TextEncoder();
+
+type PositionDeliveryRecipientInput = {
+	name: string;
+	email?: string;
+	deliveryMethod: string;
+	encryptedRecipientEmail?: string;
+	recipientEmailHash?: string;
+	encryptedRecipientName?: string;
+};
+
+type NormalizedPositionDeliveryRecipient = PositionDeliveryRecipientInput & {
+	recipientKey: string;
+};
+
+type RegistrationLinkedDelivery = {
+	recipientName: string;
+	recipientKey: string;
+	deliveryMethod: string;
+	deliveryStatus: string;
+	deliveredAt?: number;
+	encryptedRecipientEmail?: string;
+	recipientEmailHash?: string;
+	encryptedRecipientName?: string;
+};
+
+function positionDeliveryBytes(value: unknown): number {
+	let serialized: string | undefined;
+	try {
+		serialized = JSON.stringify(value);
+	} catch {
+		throw new Error('POSITION_DELIVERY_INPUT_INVALID');
+	}
+	if (serialized === undefined) throw new Error('POSITION_DELIVERY_INPUT_INVALID');
+	return positionDeliveryEncoder.encode(serialized).byteLength;
+}
+
+function normalizePositionDeliveryName(value: string): string {
+	const name = value.normalize('NFKC').trim().replace(/\s+/gu, ' ');
+	if (
+		name.length === 0 ||
+		name.length > DIRECT_DELIVERY_NAME_MAX_CHARS ||
+		positionDeliveryEncoder.encode(name).byteLength > 512 ||
+		POSITION_DELIVERY_CONTROL_CHARACTERS.test(name)
+	) {
+		throw new Error('POSITION_DELIVERY_RECIPIENT_NAME_INVALID');
+	}
+	return name;
+}
+
+function canonicalPositionRecipientKey(name: string): string {
+	const key = name
+		.normalize('NFKD')
+		.replace(/\p{M}+/gu, '')
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, '-')
+		.replace(/^-+|-+$/gu, '');
+	if (key.length === 0 || key.length > POSITION_DELIVERY_RECIPIENT_KEY_MAX_CHARS) {
+		throw new Error('POSITION_DELIVERY_RECIPIENT_KEY_INVALID');
+	}
+	return key;
+}
+
+function normalizePositionDeliveryEmail(value: string | undefined): string | undefined {
+	if (value === undefined) return undefined;
+	const email = value.normalize('NFKC').trim().toLowerCase();
+	if (
+		email.length === 0 ||
+		email.length > POSITION_DELIVERY_EMAIL_MAX_CHARS ||
+		!POSITION_DELIVERY_EMAIL_SHAPE.test(email)
+	) {
+		throw new Error('POSITION_DELIVERY_RECIPIENT_EMAIL_INVALID');
+	}
+	return email;
+}
+
+function assertPositionDeliveryIdentity(identityCommitment: string): void {
+	if (
+		identityCommitment.length === 0 ||
+		identityCommitment.length > POSITION_DELIVERY_IDENTITY_MAX_CHARS ||
+		identityCommitment.trim() !== identityCommitment ||
+		POSITION_DELIVERY_CONTROL_CHARACTERS.test(identityCommitment)
+	) {
+		throw new Error('POSITION_DELIVERY_IDENTITY_INVALID');
+	}
+}
+
+function normalizePositionDeliveryRecipients(recipients: PositionDeliveryRecipientInput[]): {
+	recipients: NormalizedPositionDeliveryRecipient[];
+	duplicates: number;
+} {
+	if (recipients.length < 1 || recipients.length > DIRECT_DELIVERY_RECIPIENT_MAX) {
+		throw new Error('POSITION_DELIVERY_RECIPIENT_LIMIT_EXCEEDED');
+	}
+	if (positionDeliveryBytes(recipients) > DIRECT_DELIVERY_INPUT_MAX_BYTES) {
+		throw new Error('POSITION_DELIVERY_INPUT_TOO_LARGE');
+	}
+
+	const byKey = new Map<string, NormalizedPositionDeliveryRecipient & { fingerprint: string }>();
+	for (const recipient of recipients) {
+		const name = normalizePositionDeliveryName(recipient.name);
+		if (
+			!recipient.deliveryMethod ||
+			recipient.deliveryMethod.length > DIRECT_DELIVERY_METHOD_MAX_CHARS ||
+			!DIRECT_DELIVERY_METHODS.has(recipient.deliveryMethod)
+		) {
+			throw new Error('POSITION_DELIVERY_METHOD_INVALID');
+		}
+		const email = normalizePositionDeliveryEmail(recipient.email);
+		for (const value of [recipient.encryptedRecipientEmail, recipient.encryptedRecipientName]) {
+			if (
+				value !== undefined &&
+				(value.length === 0 ||
+					value.length > DIRECT_DELIVERY_ENVELOPE_MAX_CHARS ||
+					positionDeliveryEncoder.encode(value).byteLength > DIRECT_DELIVERY_ENVELOPE_MAX_CHARS ||
+					POSITION_DELIVERY_CONTROL_CHARACTERS.test(value))
+			) {
+				throw new Error('POSITION_DELIVERY_ENVELOPE_TOO_LARGE');
+			}
+		}
+		if (
+			recipient.recipientEmailHash !== undefined &&
+			(recipient.recipientEmailHash.length === 0 ||
+				recipient.recipientEmailHash.length > POSITION_DELIVERY_HASH_MAX_CHARS ||
+				POSITION_DELIVERY_CONTROL_CHARACTERS.test(recipient.recipientEmailHash))
+		) {
+			throw new Error('POSITION_DELIVERY_RECIPIENT_HASH_INVALID');
+		}
+
+		const recipientKey = canonicalPositionRecipientKey(name);
+		const normalized = {
+			name,
+			...(email ? { email } : {}),
+			deliveryMethod: recipient.deliveryMethod,
+			...(recipient.encryptedRecipientEmail
+				? { encryptedRecipientEmail: recipient.encryptedRecipientEmail }
+				: {}),
+			...(recipient.recipientEmailHash ? { recipientEmailHash: recipient.recipientEmailHash } : {}),
+			...(recipient.encryptedRecipientName
+				? { encryptedRecipientName: recipient.encryptedRecipientName }
+				: {}),
+			recipientKey
+		};
+		const fingerprint = JSON.stringify([
+			normalized.email ?? '',
+			normalized.deliveryMethod,
+			normalized.encryptedRecipientEmail ?? '',
+			normalized.recipientEmailHash ?? '',
+			normalized.encryptedRecipientName ?? ''
+		]);
+		const existing = byKey.get(recipientKey);
+		if (existing) {
+			if (existing.fingerprint !== fingerprint) {
+				throw new Error('POSITION_DELIVERY_RECIPIENT_KEY_COLLISION');
+			}
+			continue;
+		}
+		byKey.set(recipientKey, { ...normalized, fingerprint });
+	}
+
+	return {
+		recipients: [...byKey.values()].map(({ fingerprint: _fingerprint, ...recipient }) => recipient),
+		duplicates: recipients.length - byKey.size
+	};
+}
+
+async function reserveRegistrationDeliveryAdmission(
+	ctx: MutationCtx,
+	identityCommitment: string
+): Promise<void> {
+	const now = Date.now();
+	const windowStart =
+		Math.floor(now / REGISTRATION_DELIVERY_ADMISSION_WINDOW_MS) *
+		REGISTRATION_DELIVERY_ADMISSION_WINDOW_MS;
+	const identityDigest = await crypto.subtle.digest(
+		'SHA-256',
+		positionDeliveryEncoder.encode(identityCommitment)
+	);
+	const key = `positions.registrationLinkedDeliveries:${Array.from(
+		new Uint8Array(identityDigest),
+		(byte) => byte.toString(16).padStart(2, '0')
+	).join('')}`;
+	const rows = await ctx.db
+		.query('rateLimits')
+		.withIndex('by_key_windowStart', (q) => q.eq('key', key).eq('windowStart', windowStart))
+		.take(2);
+	if (rows.length > 1) throw new Error('POSITION_DELIVERY_ADMISSION_MULTIPLICITY');
+	const bucket = rows[0];
+	const count = bucket?.count ?? 0;
+	if (count >= REGISTRATION_DELIVERY_ADMISSION_MAX_REQUESTS) {
+		throw new Error('POSITION_DELIVERY_RATE_LIMITED');
+	}
+	if (bucket) {
+		await ctx.db.patch(bucket._id, { count: count + 1, updatedAt: now });
+	} else {
+		await ctx.db.insert('rateLimits', {
+			key,
+			windowStart,
+			count: 1,
+			updatedAt: now
+		});
+	}
+}
+
+function existingRegistrationRecipientKey(row: {
+	_id: Id<'positionDeliveries'>;
+	recipientName: string;
+	recipientKey?: string;
+	deliveryMethod: string;
+}): string {
+	// Legacy mailto rows used a template title (or a fallback) as recipientName.
+	// Their event identity is the deterministic mailto confirmation, not that title.
+	if (row.deliveryMethod === 'mailto_confirmed') return MAILTO_CONFIRMATION_RECIPIENT_KEY;
+	try {
+		return canonicalPositionRecipientKey(normalizePositionDeliveryName(row.recipientName));
+	} catch {
+		// A malformed legacy row must retain a distinct identity rather than being
+		// silently merged with a new canonical recipient.
+		return row.recipientKey ?? `legacy-${row._id}`;
+	}
+}
+
+/**
+ * The sole append boundary for every delivery linked to a stance registration.
+ * The bounded indexed read owns canonical idempotency and the lifetime ceiling;
+ * the shared durable admission bucket owns replay across every caller.
+ */
+async function appendRegistrationLinkedDeliveries(
+	ctx: MutationCtx,
+	args: {
+		registrationId: Id<'positionRegistrations'>;
+		identityCommitment: string;
+		deliveries: readonly RegistrationLinkedDelivery[];
+	}
+): Promise<{ created: number; existing: number }> {
+	const existingRows = await ctx.db
+		.query('positionDeliveries')
+		.withIndex('by_registrationId', (q) => q.eq('registrationId', args.registrationId))
+		.take(POSITION_DELIVERY_REGISTRATION_MAX_RECIPIENTS + 1);
+	if (existingRows.length > POSITION_DELIVERY_REGISTRATION_MAX_RECIPIENTS) {
+		throw new Error('POSITION_DELIVERY_CARDINALITY_REPAIR_REQUIRED');
+	}
+
+	const existingKeys = new Set<string>();
+	for (const row of existingRows) {
+		const recipientKey = existingRegistrationRecipientKey(row);
+		if (existingKeys.has(recipientKey)) {
+			throw new Error('POSITION_DELIVERY_IDENTITY_MULTIPLICITY');
+		}
+		existingKeys.add(recipientKey);
+	}
+
+	const candidateKeys = new Set<string>();
+	for (const delivery of args.deliveries) {
+		if (candidateKeys.has(delivery.recipientKey)) {
+			throw new Error('POSITION_DELIVERY_CANDIDATE_MULTIPLICITY');
+		}
+		candidateKeys.add(delivery.recipientKey);
+	}
+	const pending = args.deliveries.filter((delivery) => !existingKeys.has(delivery.recipientKey));
+	if (existingRows.length + pending.length > POSITION_DELIVERY_REGISTRATION_MAX_RECIPIENTS) {
+		throw new Error('POSITION_DELIVERY_REGISTRATION_CAP_EXCEEDED');
+	}
+
+	// This is intentionally after all expected rejection branches. A successful
+	// reservation and its delivery inserts commit atomically in the same mutation.
+	await reserveRegistrationDeliveryAdmission(ctx, args.identityCommitment);
+	for (const delivery of pending) {
+		await ctx.db.insert('positionDeliveries', {
+			registrationId: args.registrationId,
+			recipientName: delivery.recipientName,
+			recipientKey: delivery.recipientKey,
+			deliveryMethod: delivery.deliveryMethod,
+			deliveryStatus: delivery.deliveryStatus,
+			...(delivery.deliveredAt !== undefined ? { deliveredAt: delivery.deliveredAt } : {}),
+			...(delivery.encryptedRecipientEmail
+				? { encryptedRecipientEmail: delivery.encryptedRecipientEmail }
+				: {}),
+			...(delivery.recipientEmailHash ? { recipientEmailHash: delivery.recipientEmailHash } : {}),
+			...(delivery.encryptedRecipientName
+				? { encryptedRecipientName: delivery.encryptedRecipientName }
+				: {})
+		});
+	}
+
+	return { created: pending.length, existing: args.deliveries.length - pending.length };
+}
 
 /**
  * Get aggregate position counts for a template. K-floor at 5 on stance counts,
@@ -15,81 +334,101 @@ import { requireInternalSecret } from "./_internalAuth";
  * intentionally visible.
  */
 export const getCounts = query({
-  args: { templateId: v.id("templates") },
-  handler: async (ctx, { templateId }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
+	args: { _secret: v.string(), templateId: v.id('templates') },
+	handler: async (ctx, { _secret, templateId }) => {
+		requireInternalSecret(_secret);
+		return (await readPositionMetrics(ctx, { templateId })).counts;
+	}
+});
 
-    let support = 0;
-    let oppose = 0;
-    const districtSet = new Set<string>();
+/** One compact recipient-page read replaces the former duplicate raw scans. */
+export const getMetrics = query({
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return {
+			counts: metrics.counts,
+			engagement: metrics.hasPositions ? metrics.engagement : null
+		};
+	}
+});
 
-    for (const r of registrations) {
-      if (r.stance === "support") support++;
-      else if (r.stance === "oppose") oppose++;
-      if (r.districtCode) districtSet.add(r.districtCode);
-    }
-
-    return {
-      support: support < 5 ? null : support,
-      oppose: oppose < 5 ? null : oppose,
-      districts: districtSet.size < 3 ? null : districtSet.size,
-    };
-  },
+/** Exact viewer-district overlay for the producer-published public base. */
+export const getViewerDistrictMetric = query({
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.string()
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const districtCode = assertPositionDistrictCode(userDistrictCode);
+		if (!districtCode) throw new Error('POSITION_DISTRICT_CODE_INVALID');
+		const row = await ctx.db
+			.query('templatePositionDistrictMetrics')
+			.withIndex('by_templateId_districtCode', (q) =>
+				q.eq('templateId', templateId).eq('districtCode', districtCode)
+			)
+			.unique();
+		const total = (row?.support ?? 0) + (row?.oppose ?? 0);
+		if (!row || total < 5) return null;
+		return {
+			district_code: districtCode,
+			support: row.support,
+			oppose: row.oppose,
+			total,
+			support_percent: Math.round((row.support / total) * 100),
+			is_user_district: true
+		};
+	}
 });
 
 /**
  * Get a user's existing position on a template (by identity commitment).
  */
 export const getExisting = query({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment }) => {
-    requireInternalSecret(_secret);
-    const reg = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string()
+	},
+	handler: async (ctx, { _secret, templateId, identityCommitment }) => {
+		requireInternalSecret(_secret);
+		const reg = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    if (!reg) return null;
+		if (!reg) return null;
 
-    return {
-      _id: reg._id,
-      stance: reg.stance,
-    };
-  },
+		return {
+			_id: reg._id,
+			stance: reg.stance
+		};
+	}
 });
 
 /**
  * Get position deliveries for a registration.
  */
 export const getDeliveries = internalQuery({
-  args: {
-    registrationId: v.id("positionRegistrations"),
-    deliveryMethod: v.optional(v.string()),
-  },
-  handler: async (ctx, { registrationId, deliveryMethod }) => {
-    let deliveries = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_registrationId", (idx) => idx.eq("registrationId", registrationId))
-      .collect();
-
-    if (deliveryMethod) {
-      deliveries = deliveries.filter((d) => d.deliveryMethod === deliveryMethod);
-    }
-
-    return deliveries.map((d) => ({
-      recipientName: d.recipientName,
-      recipientKey: d.recipientKey ?? null,
-    }));
-  },
+	args: {
+		registrationId: v.id('positionRegistrations'),
+		deliveryMethod: v.optional(v.string())
+	},
+	handler: async () => {
+		throw new Error('POSITION_DELIVERY_HISTORY_RETIRED');
+	}
 });
 
 /**
@@ -102,55 +441,15 @@ export const getDeliveries = internalQuery({
  * when DEBATE market mechanics apply.
  */
 export const getUserDeliveries = internalQuery({
-  args: {
-    templateId: v.id("templates"),
-    pseudonymousId: v.string(),
-    identityCommitment: v.optional(v.string()),
-    deliveryMethod: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, pseudonymousId, identityCommitment, deliveryMethod }) => {
-    // Direct (stance-agnostic) deliveries, keyed on pseudonymousId
-    const direct = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_templateId_pseudonymousId", (idx) =>
-        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
-      )
-      .collect();
-
-    // Stance-linked deliveries: look up via user's registration for this template.
-    // Only runs when identityCommitment is provided (tier-3+ users with ZK identity).
-    let linked: typeof direct = [];
-    if (identityCommitment) {
-      const reg = await ctx.db
-        .query("positionRegistrations")
-        .withIndex("by_templateId_identityCommitment", (idx) =>
-          idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-        )
-        .first();
-      if (reg) {
-        linked = await ctx.db
-          .query("positionDeliveries")
-          .withIndex("by_registrationId", (idx) => idx.eq("registrationId", reg._id))
-          .collect();
-      }
-    }
-
-    const all = [...direct, ...linked];
-    const filtered = deliveryMethod
-      ? all.filter((d) => d.deliveryMethod === deliveryMethod)
-      : all;
-
-    // Dedupe by recipientKey (new-path records always have a key; old-path may not)
-    const seen = new Set<string>();
-    const out: Array<{ recipientName: string; recipientKey: string | null }> = [];
-    for (const d of filtered) {
-      const key = d.recipientKey ?? d.recipientName;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({ recipientName: d.recipientName, recipientKey: d.recipientKey ?? null });
-    }
-    return out;
-  },
+	args: {
+		templateId: v.id('templates'),
+		pseudonymousId: v.string(),
+		identityCommitment: v.optional(v.string()),
+		deliveryMethod: v.optional(v.string())
+	},
+	handler: async () => {
+		throw new Error('POSITION_USER_DELIVERY_HISTORY_RETIRED');
+	}
 });
 
 /**
@@ -158,211 +457,382 @@ export const getUserDeliveries = internalQuery({
  * Returns per-district action counts grouped by district code.
  */
 export const getEngagementByDistrict = query({
-  args: {
-    templateId: v.id("templates"),
-    userDistrictCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, userDistrictCode }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
-
-    // Group by district: track support/oppose separately
-    const byDistrict: Record<string, { support: number; oppose: number }> = {};
-    let totalSupport = 0;
-    let totalOppose = 0;
-
-    for (const r of registrations) {
-      if (r.districtCode) {
-        if (!byDistrict[r.districtCode]) {
-          byDistrict[r.districtCode] = { support: 0, oppose: 0 };
-        }
-        if (r.stance === "support") {
-          byDistrict[r.districtCode].support++;
-          totalSupport++;
-        } else {
-          byDistrict[r.districtCode].oppose++;
-          totalOppose++;
-        }
-      }
-    }
-
-    // K-floor at 5 on per-district totals: sub-K cohort sizes would name a
-    // specific resident. Above the floor, counts are exact — per-district
-    // engagement is the staffer-facing signal that drives this view.
-    const districts = Object.entries(byDistrict)
-      .map(([code, counts]) => ({
-        code,
-        support: counts.support,
-        oppose: counts.oppose,
-        total: counts.support + counts.oppose,
-      }))
-      .filter((d) => d.total >= 5)
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 20)
-      .map((d) => ({
-        district_code: d.code,
-        support: d.support,
-        oppose: d.oppose,
-        total: d.total,
-        support_percent: d.total > 0 ? Math.round((d.support / d.total) * 100) : 0,
-        is_user_district: d.code === userDistrictCode,
-      }));
-
-    return {
-      template_id: templateId,
-      districts,
-      aggregate: {
-        total_districts: Object.keys(byDistrict).length < 3 ? null : Object.keys(byDistrict).length,
-        total_positions: registrations.length < 5 ? null : registrations.length,
-        total_support: totalSupport < 5 ? null : totalSupport,
-        total_oppose: totalOppose < 5 ? null : totalOppose,
-      },
-    };
-  },
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return metrics.hasPositions ? metrics.engagement : null;
+	}
 });
 
 /**
  * Register a position (upsert). Returns existing if duplicate.
  */
 export const register = mutation({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-    stance: v.string(),
-    districtCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
-    requireInternalSecret(_secret);
-    // Check template exists
-    const template = await ctx.db.get(templateId);
-    if (!template) throw new Error("Template not found");
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string(),
+		stance: v.string(),
+		districtCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, identityCommitment, stance, districtCode }) => {
+		requireInternalSecret(_secret);
+		if (stance !== 'support' && stance !== 'oppose') {
+			throw new Error('POSITION_STANCE_INVALID');
+		}
+		const normalizedDistrictCode = assertPositionDistrictCode(districtCode);
+		await requireRecipientMetricsWritable(ctx);
+		// Check template exists
+		const template = await ctx.db.get(templateId);
+		if (!template) throw new Error('Template not found');
 
-    // Check for existing registration (upsert)
-    const existing = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+		// Check for existing registration (upsert)
+		const existing = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    if (existing) {
-      return { _id: existing._id, isNew: false };
-    }
+		if (existing) {
+			return { _id: existing._id, isNew: false };
+		}
 
-    const id = await ctx.db.insert("positionRegistrations", {
-      templateId,
-      identityCommitment,
-      stance,
-      districtCode: districtCode ?? undefined,
-      registeredAt: Date.now(),
-    });
+		const id = await ctx.db.insert('positionRegistrations', {
+			templateId,
+			identityCommitment,
+			stance,
+			districtCode: normalizedDistrictCode,
+			registeredAt: Date.now(),
+			recipientMetricsVersion: RECIPIENT_METRICS_VERSION
+		});
+		await applyPositionRegistrationMetric(ctx, {
+			templateId,
+			stance,
+			districtCode: normalizedDistrictCode
+		});
 
-    return { _id: id, isNew: true };
-  },
+		return { _id: id, isNew: true };
+	}
 });
 
 /**
- * Confirm a mailto send — upserts position + creates delivery record.
+ * Confirm a mailto send — upserts the position and idempotently registers one delivery.
  */
 export const confirmMailtoSend = mutation({
-  args: {
-    _secret: v.string(),
-    templateId: v.id("templates"),
-    identityCommitment: v.string(),
-    districtCode: v.optional(v.string()),
-    templateTitle: v.optional(v.string()),
-  },
-  handler: async (ctx, { _secret, templateId, identityCommitment, districtCode, templateTitle }) => {
-    requireInternalSecret(_secret);
-    // Upsert position (support implied by sending)
-    const existing = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId_identityCommitment", (idx) =>
-        idx.eq("templateId", templateId).eq("identityCommitment", identityCommitment),
-      )
-      .first();
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		identityCommitment: v.string(),
+		districtCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, identityCommitment, districtCode }) => {
+		requireInternalSecret(_secret);
+		assertPositionDeliveryIdentity(identityCommitment);
+		const normalizedDistrictCode = assertPositionDistrictCode(districtCode);
+		await requireRecipientMetricsWritable(ctx);
+		// Upsert position (support implied by sending)
+		const existing = await ctx.db
+			.query('positionRegistrations')
+			.withIndex('by_templateId_identityCommitment', (idx) =>
+				idx.eq('templateId', templateId).eq('identityCommitment', identityCommitment)
+			)
+			.first();
 
-    let registrationId: Id<"positionRegistrations">;
-    let isNewPosition = false;
-    if (existing) {
-      registrationId = existing._id;
-    } else {
-      registrationId = await ctx.db.insert("positionRegistrations", {
-        templateId,
-        identityCommitment,
-        stance: "support",
-        districtCode: districtCode ?? undefined,
-        registeredAt: Date.now(),
-      });
-      isNewPosition = true;
-    }
+		let registrationId: Id<'positionRegistrations'>;
+		let isNewPosition = false;
+		if (existing) {
+			registrationId = existing._id;
+		} else {
+			registrationId = await ctx.db.insert('positionRegistrations', {
+				templateId,
+				identityCommitment,
+				stance: 'support',
+				districtCode: normalizedDistrictCode,
+				registeredAt: Date.now(),
+				recipientMetricsVersion: RECIPIENT_METRICS_VERSION
+			});
+			await applyPositionRegistrationMetric(ctx, {
+				templateId,
+				stance: 'support',
+				districtCode: normalizedDistrictCode
+			});
+			isNewPosition = true;
+		}
 
-    // Create delivery record
-    await ctx.db.insert("positionDeliveries", {
-      registrationId,
-      recipientName: templateTitle ?? "mailto recipient",
-      deliveryMethod: "mailto_confirmed",
-      deliveryStatus: "user_confirmed",
-      deliveredAt: Date.now(),
-    });
+		const delivery = await appendRegistrationLinkedDeliveries(ctx, {
+			registrationId,
+			identityCommitment,
+			deliveries: [
+				{
+					recipientName: MAILTO_CONFIRMATION_RECIPIENT_NAME,
+					recipientKey: MAILTO_CONFIRMATION_RECIPIENT_KEY,
+					deliveryMethod: 'mailto_confirmed',
+					deliveryStatus: 'user_confirmed',
+					deliveredAt: Date.now()
+				}
+			]
+		});
 
-    return { registrationId, isNewPosition };
-  },
+		return { registrationId, isNewPosition, ...delivery };
+	}
 });
 
 /**
  * Batch-create delivery records for a position registration.
  */
 export const batchRegisterDeliveries = mutation({
-  args: {
-    _secret: v.string(),
-    registrationId: v.id("positionRegistrations"),
-    identityCommitment: v.string(),
-    recipients: v.array(v.object({
-      name: v.string(),
-      email: v.optional(v.string()),
-      deliveryMethod: v.string(),
-      // Optional pre-encrypted fields (caller encrypts before calling)
-      encryptedRecipientEmail: v.optional(v.string()),
-      recipientEmailHash: v.optional(v.string()),
-      encryptedRecipientName: v.optional(v.string()),
-    })),
-  },
-  handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
-    requireInternalSecret(_secret);
-    // Verify registration exists and belongs to caller
-    const reg = await ctx.db.get(registrationId);
-    if (!reg || reg.identityCommitment !== identityCommitment) {
-      throw new Error("Registration not found");
-    }
+	args: {
+		_secret: v.string(),
+		registrationId: v.id('positionRegistrations'),
+		identityCommitment: v.string(),
+		recipients: v.array(
+			v.object({
+				name: v.string(),
+				email: v.optional(v.string()),
+				deliveryMethod: v.string(),
+				// Optional pre-encrypted fields (caller encrypts before calling)
+				encryptedRecipientEmail: v.optional(v.string()),
+				recipientEmailHash: v.optional(v.string()),
+				encryptedRecipientName: v.optional(v.string())
+			})
+		)
+	},
+	handler: async (ctx, { _secret, registrationId, identityCommitment, recipients }) => {
+		requireInternalSecret(_secret);
+		if (
+			positionDeliveryBytes({ _secret, registrationId, identityCommitment, recipients }) >
+			DIRECT_DELIVERY_INPUT_MAX_BYTES
+		) {
+			throw new Error('POSITION_DELIVERY_INPUT_TOO_LARGE');
+		}
+		assertPositionDeliveryIdentity(identityCommitment);
+		const normalized = normalizePositionDeliveryRecipients(recipients);
 
-    let created = 0;
-    for (const r of recipients) {
-      // Schema requires `recipientName`; an unguarded `doc as any` cast
-      // would mask the missing required field and the mutation would
-      // be rejected by Convex's runtime validator.
-      await ctx.db.insert("positionDeliveries", {
-        registrationId,
-        recipientName: r.name,
-        recipientKey: slugify(r.name),
-        deliveryMethod: r.deliveryMethod,
-        deliveryStatus: "pending",
-        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
-        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
-        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
-      });
-      created++;
-    }
+		// Verify registration exists and belongs to caller
+		const reg = await ctx.db.get(registrationId);
+		if (!reg || reg.identityCommitment !== identityCommitment) {
+			throw new Error('Registration not found');
+		}
+		const delivery = await appendRegistrationLinkedDeliveries(ctx, {
+			registrationId,
+			identityCommitment,
+			deliveries: normalized.recipients.map((recipient) => ({
+				recipientName: recipient.name,
+				recipientKey: recipient.recipientKey,
+				deliveryMethod: recipient.deliveryMethod,
+				deliveryStatus: 'pending',
+				...(recipient.encryptedRecipientEmail
+					? { encryptedRecipientEmail: recipient.encryptedRecipientEmail }
+					: {}),
+				...(recipient.recipientEmailHash
+					? { recipientEmailHash: recipient.recipientEmailHash }
+					: {}),
+				...(recipient.encryptedRecipientName
+					? { encryptedRecipientName: recipient.encryptedRecipientName }
+					: {})
+			}))
+		});
 
-    return { created };
-  },
+		return {
+			...delivery,
+			duplicates: normalized.duplicates
+		};
+	}
 });
 
-function slugify(s: string): string {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+function canonicalDirectPseudonymousId(value: string): string {
+	const canonical = value.normalize('NFKC').trim().toLowerCase();
+	// The only producer is HMAC-SHA256. Reject aliases rather than silently
+	// creating a second history/admission identity for the same actor.
+	if (canonical !== value || !DIRECT_DELIVERY_PSEUDONYMOUS_ID.test(canonical)) {
+		throw new Error('DIRECT_DELIVERY_PSEUDONYM_INVALID');
+	}
+	return canonical;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', positionDeliveryEncoder.encode(value));
+	return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+type DirectDeliveryCandidate = {
+	recipient: NormalizedPositionDeliveryRecipient;
+	recipientKey: string;
+	aliases: readonly string[];
+};
+
+function normalizeDirectDeliveryCandidates(
+	recipients: readonly NormalizedPositionDeliveryRecipient[]
+): DirectDeliveryCandidate[] {
+	const candidates: DirectDeliveryCandidate[] = [];
+	const candidateKeys = new Set<string>();
+
+	for (const recipient of recipients) {
+		const recipientKey = canonicalPositionRecipientKey(recipient.name);
+		if (candidateKeys.has(recipientKey)) {
+			throw new Error('DIRECT_DELIVERY_RECIPIENT_IDENTITY_COLLISION');
+		}
+		candidateKeys.add(recipientKey);
+		candidates.push({
+			recipient,
+			recipientKey,
+			aliases: [recipientKey]
+		});
+	}
+
+	return candidates;
+}
+
+function existingDirectDeliveryAliases(row: {
+	_id: Id<'positionDeliveries'>;
+	recipientName: string;
+	recipientKey?: string;
+}): string[] {
+	let nameKey: string;
+	try {
+		nameKey = canonicalPositionRecipientKey(normalizePositionDeliveryName(row.recipientName));
+	} catch {
+		throw new Error('DIRECT_DELIVERY_IDENTITY_REPAIR_REQUIRED');
+	}
+	const aliases = new Set<string>([nameKey]);
+	if (row.recipientKey !== undefined) {
+		if (
+			row.recipientKey.length === 0 ||
+			row.recipientKey.length > POSITION_DELIVERY_RECIPIENT_KEY_MAX_CHARS ||
+			POSITION_DELIVERY_CONTROL_CHARACTERS.test(row.recipientKey)
+		) {
+			throw new Error('DIRECT_DELIVERY_IDENTITY_REPAIR_REQUIRED');
+		}
+		aliases.add(row.recipientKey);
+	}
+	return [...aliases];
+}
+
+async function reserveDirectDeliveryAdmission(
+	ctx: MutationCtx,
+	pseudonymousId: string,
+	templateId: Id<'templates'>
+): Promise<void> {
+	const now = Date.now();
+	const windowStart =
+		Math.floor(now / DIRECT_DELIVERY_ADMISSION_WINDOW_MS) * DIRECT_DELIVERY_ADMISSION_WINDOW_MS;
+	// Hash the pair so the general rate-limit table never becomes a second
+	// plaintext pseudonymous-identity index.
+	const pairDigest = await sha256Hex(`${pseudonymousId}\u0000${templateId}`);
+	const key = `positions.directDeliveries:v1:${pairDigest}`;
+	const rows = await ctx.db
+		.query('rateLimits')
+		.withIndex('by_key_windowStart', (q) => q.eq('key', key).eq('windowStart', windowStart))
+		.take(2);
+	if (rows.length > 1) throw new Error('DIRECT_DELIVERY_ADMISSION_MULTIPLICITY');
+	const bucket = rows[0];
+	const count = bucket?.count ?? 0;
+	if (count >= DIRECT_DELIVERY_ADMISSION_MAX_REQUESTS) {
+		throw new Error('DIRECT_DELIVERY_RATE_LIMITED');
+	}
+	if (bucket) {
+		await ctx.db.patch(bucket._id, { count: count + 1, updatedAt: now });
+	} else {
+		await ctx.db.insert('rateLimits', {
+			key,
+			windowStart,
+			count: 1,
+			updatedAt: now
+		});
+	}
+}
+
+/**
+ * The sole append boundary for direct delivery history. One bounded indexed
+ * read owns both legacy-aware identity collision detection and the lifetime
+ * ceiling. Convex transaction retries serialize concurrent writers across the
+ * indexed range and the durable admission bucket.
+ *
+ * Rows land as `user_confirmed`, not `pending`. The only caller of this lane is
+ * `recordDirectDeliveries`, and its only client is the explicit human confirm in
+ * `confirmSendContacted()` on the recipient page — the person says they wrote.
+ * Nothing downstream ever observes the send, so there is no later transition
+ * out of `pending` and a `pending` row here would be a status that no writer
+ * could ever advance. `user_confirmed` names exactly what happened: a person's
+ * own assertion, never a receipt. The registration-linked lane at
+ * `batchRegisterDeliveries` keeps `pending` — that one is gated on an
+ * identity_commitment and is a different history.
+ */
+async function appendDirectDeliveries(
+	ctx: MutationCtx,
+	args: {
+		pseudonymousId: string;
+		templateId: Id<'templates'>;
+		candidates: readonly DirectDeliveryCandidate[];
+	}
+): Promise<{ created: number; existing: number }> {
+	const existingRows = await ctx.db
+		.query('positionDeliveries')
+		.withIndex('by_templateId_pseudonymousId', (q) =>
+			q.eq('templateId', args.templateId).eq('pseudonymousId', args.pseudonymousId)
+		)
+		.take(DIRECT_DELIVERY_RECIPIENT_MAX + 1);
+	if (existingRows.length > DIRECT_DELIVERY_RECIPIENT_MAX) {
+		throw new Error('DIRECT_DELIVERY_CARDINALITY_REPAIR_REQUIRED');
+	}
+
+	const existingAliasOwners = new Map<string, Id<'positionDeliveries'>>();
+	for (const row of existingRows) {
+		for (const alias of existingDirectDeliveryAliases(row)) {
+			const owner = existingAliasOwners.get(alias);
+			if (owner !== undefined && owner !== row._id) {
+				throw new Error('DIRECT_DELIVERY_IDENTITY_MULTIPLICITY');
+			}
+			existingAliasOwners.set(alias, row._id);
+		}
+	}
+
+	const pending: DirectDeliveryCandidate[] = [];
+	let existing = 0;
+	for (const candidate of args.candidates) {
+		const owners = new Set(
+			candidate.aliases
+				.map((alias) => existingAliasOwners.get(alias))
+				.filter((owner): owner is Id<'positionDeliveries'> => owner !== undefined)
+		);
+		if (owners.size > 1) throw new Error('DIRECT_DELIVERY_IDENTITY_MULTIPLICITY');
+		if (owners.size === 1) {
+			existing += 1;
+		} else {
+			pending.push(candidate);
+		}
+	}
+	if (existingRows.length + pending.length > DIRECT_DELIVERY_RECIPIENT_MAX) {
+		throw new Error('DIRECT_DELIVERY_LIFETIME_CAP_EXCEEDED');
+	}
+
+	// Expected input/history rejection occurs before admission. Every accepted
+	// call, including a pure replay, consumes one durable request reservation.
+	await reserveDirectDeliveryAdmission(ctx, args.pseudonymousId, args.templateId);
+	const now = Date.now();
+	for (const candidate of pending) {
+		const recipient = candidate.recipient;
+		await ctx.db.insert('positionDeliveries', {
+			pseudonymousId: args.pseudonymousId,
+			templateId: args.templateId,
+			recipientKey: candidate.recipientKey,
+			recipientName: recipient.name,
+			deliveryMethod: recipient.deliveryMethod,
+			deliveryStatus: 'user_confirmed',
+			deliveredAt: now
+		});
+	}
+
+	return { created: pending.length, existing };
 }
 
 /**
@@ -385,131 +855,97 @@ function slugify(s: string): string {
  * recipientKey) tuple, no duplicate is created.
  */
 export const recordDirectDeliveries = mutation({
-  args: {
-    _secret: v.string(),
-    pseudonymousId: v.string(),
-    templateId: v.id("templates"),
-    districtCode: v.optional(v.string()),
-    recipients: v.array(v.object({
-      name: v.string(),
-      email: v.optional(v.string()),
-      deliveryMethod: v.string(),
-      // Optional pre-encrypted fields (caller encrypts before calling)
-      encryptedRecipientEmail: v.optional(v.string()),
-      recipientEmailHash: v.optional(v.string()),
-      encryptedRecipientName: v.optional(v.string()),
-    })),
-  },
-  handler: async (ctx, { _secret, pseudonymousId, templateId, districtCode, recipients }) => {
-    requireInternalSecret(_secret);
-    const now = Date.now();
-    // Pre-fetch the user's existing deliveries for this template to deduplicate
-    const existing = await ctx.db
-      .query("positionDeliveries")
-      .withIndex("by_templateId_pseudonymousId", (idx) =>
-        idx.eq("templateId", templateId).eq("pseudonymousId", pseudonymousId),
-      )
-      .collect();
-    const existingKeys = new Set(existing.map((d) => d.recipientKey).filter(Boolean));
+	args: {
+		_secret: v.string(),
+		pseudonymousId: v.string(),
+		templateId: v.id('templates'),
+		recipients: v.array(
+			v.object({
+				name: v.string(),
+				deliveryMethod: v.string()
+			})
+		)
+	},
+	handler: async (ctx, { _secret, pseudonymousId, templateId, recipients }) => {
+		requireInternalSecret(_secret);
+		const canonicalPseudonymousId = canonicalDirectPseudonymousId(pseudonymousId);
+		if (
+			positionDeliveryBytes({ _secret, pseudonymousId, templateId, recipients }) >
+			DIRECT_DELIVERY_INPUT_MAX_BYTES
+		) {
+			throw new Error('DIRECT_DELIVERY_INPUT_TOO_LARGE');
+		}
+		const normalized = normalizePositionDeliveryRecipients(recipients);
+		const candidates = normalizeDirectDeliveryCandidates(normalized.recipients);
+		const template = await ctx.db.get(templateId);
+		if (!template || template.status !== 'published' || template.isPublic !== true) {
+			throw new Error('DIRECT_DELIVERY_TEMPLATE_INELIGIBLE');
+		}
+		const delivery = await appendDirectDeliveries(ctx, {
+			pseudonymousId: canonicalPseudonymousId,
+			templateId,
+			candidates
+		});
 
-    let created = 0;
-    for (const r of recipients) {
-      const recipientKey = slugify(r.name);
-      if (existingKeys.has(recipientKey)) continue;
-
-      await ctx.db.insert("positionDeliveries", {
-        pseudonymousId,
-        templateId,
-        recipientKey,
-        recipientName: r.name,
-        deliveryMethod: r.deliveryMethod,
-        deliveryStatus: "pending",
-        deliveredAt: now,
-        ...(districtCode ? { districtCode } : {}),
-        ...(r.encryptedRecipientEmail ? { encryptedRecipientEmail: r.encryptedRecipientEmail } : {}),
-        ...(r.recipientEmailHash ? { recipientEmailHash: r.recipientEmailHash } : {}),
-        ...(r.encryptedRecipientName ? { encryptedRecipientName: r.encryptedRecipientName } : {}),
-      });
-      existingKeys.add(recipientKey);
-      created++;
-    }
-
-    return { created };
-  },
+		return { ...delivery, duplicates: normalized.duplicates };
+	}
 });
 
 /**
  * Get full engagement by district with privacy threshold.
  */
 export const getFullEngagementByDistrict = query({
-  args: {
-    templateId: v.id("templates"),
-    userDistrictCode: v.optional(v.string()),
-  },
-  handler: async (ctx, { templateId, userDistrictCode }) => {
-    const registrations = await ctx.db
-      .query("positionRegistrations")
-      .withIndex("by_templateId", (idx) => idx.eq("templateId", templateId))
-      .collect();
+	args: {
+		_secret: v.string(),
+		templateId: v.id('templates'),
+		userDistrictCode: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, templateId, userDistrictCode }) => {
+		requireInternalSecret(_secret);
+		const metrics = await readPositionMetrics(ctx, {
+			templateId,
+			viewerDistrictCode: userDistrictCode
+		});
+		return metrics.hasPositions ? metrics.engagement : null;
+	}
+});
 
-    if (registrations.length === 0) return null;
+/**
+ * The viewer's own direct-delivery history for one template.
+ *
+ * Reads exactly the rows this viewer wrote through `recordDirectDeliveries`,
+ * through the same (templateId, pseudonymousId) index and under the same
+ * lifetime ceiling the writer enforces, so the read can never out-run the
+ * write. `deliveryStatus` is returned VERBATIM: this query does not filter,
+ * collapse, or reinterpret it — the caller decides what a status means.
+ *
+ * The reserved mailto-confirmation identity is a system event, not a person the
+ * viewer wrote to, so it is excluded. Nothing location-derived, nothing
+ * contactable, and no pseudonym echo crosses this boundary: only the recipient
+ * name the viewer already sees on the page, the status, and when it landed.
+ */
+export const listViewerConfirmedContacts = query({
+	args: {
+		_secret: v.string(),
+		pseudonymousId: v.string(),
+		templateId: v.id('templates')
+	},
+	handler: async (ctx, { _secret, pseudonymousId, templateId }) => {
+		requireInternalSecret(_secret);
+		const canonicalPseudonymousId = canonicalDirectPseudonymousId(pseudonymousId);
+		const rows = await ctx.db
+			.query('positionDeliveries')
+			.withIndex('by_templateId_pseudonymousId', (q) =>
+				q.eq('templateId', templateId).eq('pseudonymousId', canonicalPseudonymousId)
+			)
+			.take(DIRECT_DELIVERY_RECIPIENT_MAX);
 
-    const byDistrict = new Map<string, { support: number; oppose: number }>();
-    for (const r of registrations) {
-      if (r.districtCode) {
-        const entry = byDistrict.get(r.districtCode) ?? { support: 0, oppose: 0 };
-        if (r.stance === "support") entry.support++;
-        else if (r.stance === "oppose") entry.oppose++;
-        byDistrict.set(r.districtCode, entry);
-      }
-    }
-
-    let totalPositions = 0;
-    let totalSupport = 0;
-    let totalOppose = 0;
-
-    const districts: Array<{
-      district_code: string;
-      support: number;
-      oppose: number;
-      total: number;
-      support_percent: number;
-      is_user_district: boolean;
-    }> = [];
-
-    for (const [code, counts] of byDistrict) {
-      const total = counts.support + counts.oppose;
-      totalPositions += total;
-      totalSupport += counts.support;
-      totalOppose += counts.oppose;
-
-      // K-floor at 5 on per-district totals: sub-K cohorts name a specific
-      // resident. Above the floor, exact counts power the engagement view.
-      if (total >= 5) {
-        districts.push({
-          district_code: code,
-          support: counts.support,
-          oppose: counts.oppose,
-          total,
-          support_percent: total > 0 ? Math.round((counts.support / total) * 100) : 0,
-          is_user_district: code === userDistrictCode,
-        });
-      }
-    }
-
-    districts.sort((a, b) => b.total - a.total);
-
-    if (districts.length === 0 && totalPositions === 0) return null;
-
-    return {
-      template_id: templateId,
-      districts,
-      aggregate: {
-        total_districts: byDistrict.size < 3 ? null : byDistrict.size,
-        total_positions: totalPositions < 5 ? null : totalPositions,
-        total_support: totalSupport < 5 ? null : totalSupport,
-        total_oppose: totalOppose < 5 ? null : totalOppose,
-      },
-    };
-  },
+		return rows
+			.filter((row) => row.recipientKey !== MAILTO_CONFIRMATION_RECIPIENT_KEY)
+			.map((row) => ({
+				recipientName: row.recipientName,
+				deliveryStatus: row.deliveryStatus,
+				confirmedAt: row.deliveredAt ?? row._creationTime
+			}));
+	}
 });

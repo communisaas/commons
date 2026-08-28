@@ -23,9 +23,11 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-	FREE_INDIVIDUAL_TEMPLATES_PER_MONTH,
-	INDIVIDUAL_AUTHORED_PER_MONTH,
-	authoredLimitForPlan,
+	FREE_INDIVIDUAL_AUTHORED_PER_MONTH,
+	INDIVIDUAL_PLAN_LIMITS,
+	authoredLimitForPlan
+} from '$convex/lib/planLimits';
+import {
 	startOfMonthUTC,
 	nextMonthResetDate,
 	decideIndividualAuthoring
@@ -34,24 +36,24 @@ import {
 const JAN_15 = Date.UTC(2026, 0, 15, 12, 0, 0); // mid-January 2026
 const DEC_20 = Date.UTC(2026, 11, 20, 12, 0, 0); // mid-December (year-rollover case)
 
-describe('FREE_INDIVIDUAL_TEMPLATES_PER_MONTH', () => {
+describe('FREE_INDIVIDUAL_AUTHORED_PER_MONTH', () => {
 	it('is 3 (the free floor)', () => {
-		expect(FREE_INDIVIDUAL_TEMPLATES_PER_MONTH).toBe(3);
+		expect(FREE_INDIVIDUAL_AUTHORED_PER_MONTH).toBe(3);
 	});
 });
 
-describe('INDIVIDUAL_AUTHORED_PER_MONTH (the dynamic limit map)', () => {
+describe('INDIVIDUAL_PLAN_LIMITS (the dynamic limit table)', () => {
 	it('Voice = 20, Advocate = 75', () => {
-		expect(INDIVIDUAL_AUTHORED_PER_MONTH.voice).toBe(20);
-		expect(INDIVIDUAL_AUTHORED_PER_MONTH.advocate).toBe(75);
+		expect(INDIVIDUAL_PLAN_LIMITS.voice.authoredPerMonth).toBe(20);
+		expect(INDIVIDUAL_PLAN_LIMITS.advocate.authoredPerMonth).toBe(75);
 	});
 
 	it('holds ONLY individual slugs — no org slug leaks in', () => {
-		const slugs = Object.keys(INDIVIDUAL_AUTHORED_PER_MONTH).sort();
+		const slugs = Object.keys(INDIVIDUAL_PLAN_LIMITS).sort();
 		expect(slugs).toEqual(['advocate', 'voice']);
 		// Org plan slugs must be absent so the individual cap can never honor them.
 		for (const org of ['inactive', 'starter', 'organization', 'coalition']) {
-			expect(INDIVIDUAL_AUTHORED_PER_MONTH[org]).toBeUndefined();
+			expect(INDIVIDUAL_PLAN_LIMITS[org]).toBeUndefined();
 		}
 	});
 });
@@ -68,7 +70,7 @@ describe('authoredLimitForPlan (resolves the effective monthly limit)', () => {
 	});
 
 	it('an ORG plan slug NEVER unlocks org volume — resolves to the free floor', () => {
-		// Cross-contamination guard (issue 6): the individual cap must never honor
+		// Cross-contamination guard: the individual cap must never honor
 		// an org plan. starter/organization/coalition all resolve to floor 3.
 		expect(authoredLimitForPlan('starter')).toBe(3);
 		expect(authoredLimitForPlan('organization')).toBe(3);

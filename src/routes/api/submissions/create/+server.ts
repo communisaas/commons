@@ -1,10 +1,11 @@
 // CONVEX: Keep SvelteKit — credential TTL validation, proof validation, blockchain verification (verifyOnChain)
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverAction, serverQuery } from 'convex-sveltekit';
+import { serverAction, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from '$convex/_policy';
+import { reputationStateForActionCount } from '$convex/lib/reputationTier';
 import {
 	isCredentialValidForAction,
 	formatValidationError,
@@ -13,6 +14,12 @@ import {
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
 import { buildActionDomain } from '$lib/core/zkp/action-domain-builder';
 import { FEATURES } from '$lib/config/features';
+import { LANE_CARRIES_SENDER_TEXT, type SendLane } from '$lib/services/send-lane';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	BoundedJsonRequestError,
+	readBoundedJsonRequest
+} from '$lib/server/bounded-json-request';
 
 /**
  * Server-held session constant. The client's submitted sessionId must match
@@ -83,7 +90,61 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			return json(formatValidationError(validation), { status: 403 });
 		}
 
-		const body = await request.json();
+		let body: Record<string, any>;
+		try {
+			const candidate = await readBoundedJsonRequest(request, 256 * 1024, {
+				maxArrayItems: 64,
+				maxDepth: 5,
+				maxNodes: 256,
+				maxObjectKeys: 32,
+				maxStringBytes: 131_074
+			});
+			if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) {
+				throw new BoundedJsonRequestError('Request body must be a JSON object');
+			}
+			body = candidate as Record<string, any>;
+		} catch (cause) {
+			if (cause instanceof BoundedJsonRequestError) {
+				throw error(cause.status, cause.message);
+			}
+			throw cause;
+		}
+		// This endpoint IS the zero-knowledge congressional lane — it accepts a proof,
+		// so the lane is a property of the route, not something to infer from the
+		// caller. Deriving it from a user would make this guard depend on how the
+		// resolver reads that user, which is not a dependency a fail-closed boundary
+		// should have. Naming it keeps the refusal below speaking the same vocabulary
+		// as the surfaces that suppress the sender-text affordance client-side, and
+		// Convex re-asserts the template really is a deliverable CWC template.
+		const lane: SendLane = 'cwc_zkp';
+
+		// Every key this route reads — the same names the destructure below binds.
+		// The refusal is a strict parse, not a denylist of message-shaped names: a
+		// denylist is beaten by renaming the field, so it would only look like a
+		// boundary. Unconditional on purpose — if `LANE_CARRIES_SENDER_TEXT` ever
+		// flips for this lane, a carrier has to be built here deliberately, rather
+		// than appearing because a guard switched itself off.
+		const ACCEPTED_SUBMISSION_FIELDS = [
+			'templateId',
+			'proof',
+			'publicInputs',
+			'nullifier',
+			'encryptedWitness',
+			'witnessNonce',
+			'ephemeralPublicKey',
+			'teeKeyId',
+			'idempotencyKey',
+			'sessionId',
+			'recipientSubdivision'
+		];
+		if (Object.keys(body).some((key) => !ACCEPTED_SUBMISSION_FIELDS.includes(key))) {
+			throw error(
+				400,
+				`The ${lane} lane carries a proof, not a message: it cannot deliver sender-typed text. ` +
+					`This endpoint accepts only ${ACCEPTED_SUBMISSION_FIELDS.join(', ')}.`
+			);
+		}
+
 		const {
 			templateId,
 			proof,
@@ -256,23 +317,13 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 		// Engagement-tier cross-check. The circuit emits the user's claimed
 		// engagement tier in publicInputs[30] (0-4). The server derives the
-		// same tier from users.actionCount via the same threshold table the
-		// nightly cron uses. A drift of more than 1 tier is the gap between
-		// "honest off-by-one because the cron hasn't run today" and "the
-		// circuit is lying about how active this user is." Reject with HTTP
-		// 422 on the latter; tolerate the former.
+		// same tier from users.actionCount via the shared canonical thresholds.
+		// A proof can be generated immediately before another OCC-serialized
+		// action crosses one adjacent threshold, so tolerate one tier of proof
+		// freshness drift and reject anything larger.
 		const claimedEngagementTier = Number(rawInputsArray[30] ?? 0);
 		const userActionCount = await serverQuery(api.users.getMyActionCount, {});
-		const serverEngagementTier =
-			userActionCount >= 500
-				? 4
-				: userActionCount >= 100
-					? 3
-					: userActionCount >= 25
-						? 2
-						: userActionCount >= 5
-							? 1
-							: 0;
+		const serverEngagementTier = reputationStateForActionCount(userActionCount).engagementTier;
 		if (Math.abs(claimedEngagementTier - serverEngagementTier) > 1) {
 			return json(
 				{
@@ -317,8 +368,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		if (rawInputsArray.length === 33) {
 			const claimedRoot = rawInputsArray[32] as string;
 			const [convexRoot, haltStatus] = await Promise.all([
-				serverQuery(api.revocations.getRevocationRoot, {}),
-				serverQuery(api.revocations.getRevocationHaltStatus, {})
+				serverQuery(api.revocations.getRevocationRoot, { _secret: getInternalSecret() }),
+				serverQuery(api.revocations.getRevocationHaltStatus, {
+					_secret: getInternalSecret()
+				})
 			]);
 			if ((haltStatus as { halted?: boolean })?.halted === true) {
 				return json(
@@ -375,7 +428,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// the client-submitted payload) prevents a malicious client from
 		// supplying a fake commitment to forge a new nullifier scope.
 		const credData = await serverQuery(api.users.getActiveCredentialDistrictCommitment, {
-			userId: locals.user.id as Id<'users'>
+			_secret: getInternalSecret(),
+			userId: locals.user.id as Id<'users'>,
+			asOf: Date.now()
 		});
 		if (!credData?.districtCommitment) {
 			return json(
@@ -444,9 +499,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		//      userRoot, cellMapRoot, districts, engagementRoot,
 		//      engagementTier, revocation* (V2). Passing through is the
 		//      only safe form when we don't enumerate the contract.
-		const normalizedPublicInputs: Record<string, unknown> = Array.isArray(
-			publicInputs
-		)
+		const normalizedPublicInputs: Record<string, unknown> = Array.isArray(publicInputs)
 			? {
 					publicInputsArray: normalizedInputsArray,
 					nullifier: canonicalNullifier,
@@ -461,6 +514,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// Use Convex action — handles atomic insert, idempotency, nullifier dedup,
 		// and schedules background tasks (delivery, engagement)
 		const result = await serverAction(api.submissions.create, {
+			_secret: getInternalSecret(),
 			templateId,
 			proof,
 			publicInputs: normalizedPublicInputs,

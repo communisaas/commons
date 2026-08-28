@@ -1,6 +1,17 @@
 import type { TemplateScope } from './jurisdiction';
-import type { GeoScope } from '$lib/core/agents/types';
+import type { GeoScope, Source } from '$lib/core/agents/types';
+import type { InputWindow } from '$lib/core/agents/input-window';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
+import type { ContactRouteVerdict } from '$lib/core/agents/contact-route-verdict';
+import type {
+	RouteProvenance,
+	SeatRouteVerdict,
+	StandingVerdict
+} from '$lib/core/agents/seat-route';
+import type { DeliveryTier } from '$lib/core/agents/target-class';
+import type { GovernmentalClass } from '$lib/core/agents/governmental-class';
+import type { TemplateDeliveryMethod } from '$convex/lib/templateDeliveryMethod';
+import { parseRecipientConfigObject, recipientRosterFromConfig } from '$convex/lib/recipientRoster';
 
 // ============================================================================
 // Power Landscape Types
@@ -9,11 +20,11 @@ import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 /** Functional role a decision-maker plays in the decision */
 export type RoleCategory = 'votes' | 'executes' | 'shapes' | 'funds' | 'oversees';
 
-/** Group of decision-makers sharing the same functional role */
-export interface RoleGroup {
-	category: RoleCategory;
-	label: string; // "VOTE ON IT", "EXECUTE IT", etc.
-	memberIndices: number[]; // indices into decision_makers array
+/** Server-issued proof that a grounded agent result may cross the anonymous detail boundary. */
+export interface PublicRecipientProvenance {
+	version: 4;
+	expiresAt: number;
+	signature: string;
 }
 
 /**
@@ -31,6 +42,7 @@ export interface EmailFlowTemplate {
 	subject?: string | null;
 	recipient_config?: unknown;
 	recipientEmails?: string[];
+	recipient_count?: number;
 }
 
 /** Lightweight debate summary for card-level rendering (browse page) */
@@ -52,7 +64,7 @@ export interface Template {
 	domainHue?: number; // LLM-assigned hue angle (0-360) for domain color encoding
 	topics?: string[]; // Topic tags — specific facets of the grievance (1-5 lowercase strings)
 	type: string;
-	deliveryMethod: 'email' | 'email_attested' | 'certified' | 'direct' | 'cwc';
+	deliveryMethod: TemplateDeliveryMethod;
 	subject?: string | null;
 	message_body: string;
 	sources?: Source[]; // Citation sources from message generation agent
@@ -60,12 +72,15 @@ export interface Template {
 	delivery_config: unknown; // Json field in database
 	cwc_config?: unknown | null; // Json? field in database - was missing
 	recipient_config: unknown; // Json field in database
+	recipient_count?: number; // Anonymous-safe target cardinality; no addresses or raw config
 
 	// === ORG ENDORSEMENT (Perceptual Bridge) ===
 	// When present, the template has organizational backing — institutional provenance
 	endorsingOrg?: { name: string; slug: string; avatar: string | null } | null;
 	// Coalition endorsements — multiple orgs can endorse the same template
 	endorsingOrgs?: Array<{ name: string; slug: string; avatar: string | null }>;
+	// Authoritative total; endorsingOrgs is only a bounded newest-first sample.
+	endorsementCount?: number;
 
 	// === PERCEPTUAL ENCODING PROPERTIES ===
 	// Visual weight encoding (0-1 scale for card size transformation)
@@ -92,6 +107,8 @@ export interface Template {
 	// (capped at 500 in storage; consumers truncate), tier breakdown 0-5.
 	daily_arrivals?: number[];
 	district_counts?: Array<{ code: string; count: number }>;
+	district_counts_suppressed_districts?: number;
+	district_counts_suppressed_count?: number;
 	tier_counts?: number[];
 
 	// Geographic scope (populated by scope-filtering; computed, not stored on the template row)
@@ -115,7 +132,9 @@ export interface Template {
 	// Entity name (for corporate/institutional targets)
 	target_entity?: string | null;
 	preview: string;
-	recipientEmails?: string[]; // Computed field - use extractRecipientEmails(recipient_config) instead
+	// Anonymous discovery projections return an empty compatibility array;
+	// explicit, uncached detail/send projections may populate it.
+	recipientEmails?: string[];
 
 	// === MERGED VERIFICATION FIELDS (Phase 4 consolidation) ===
 	// Verification status & process
@@ -152,7 +171,7 @@ export interface Template {
 }
 
 export interface TemplateCreationContext {
-	channelId: 'certified' | 'direct' | 'cwc' | 'email_attested';
+	channelId: 'direct' | 'certified' | 'cwc';
 	channelTitle: string;
 	isCongressional?: boolean;
 	features?: Array<{
@@ -170,6 +189,10 @@ export interface TemplateDraftOrigin {
 	createdAt: number;
 	effect: string;
 	sourceRef: string;
+	/** Human-readable geographic scope the handing-off process resolved. */
+	scopeLabel?: string;
+	/** The process's stated basis for that scope; absent when none was resolved. */
+	scopeBasis?: string;
 }
 
 export interface TemplateFormData {
@@ -217,6 +240,43 @@ export interface TemplateFormData {
 }
 
 /**
+ * The single source of blank-form defaults. Both the citizen creator's fresh
+ * draft and the Studio handoff build on this object, so "unset" provably means
+ * the same values on both surfaces. Returns a fresh object on every call.
+ */
+export function createEmptyTemplateFormData(rawInput = ''): TemplateFormData {
+	return {
+		objective: {
+			rawInput,
+			title: '',
+			description: '',
+			domain: '',
+			slug: '',
+			topics: [],
+			voiceSample: '',
+			aiGenerated: false
+		},
+		audience: {
+			decisionMakers: [],
+			recipientEmails: [],
+			includesCongress: false,
+			customRecipients: []
+		},
+		content: {
+			preview: '',
+			variables: [],
+			sources: [],
+			researchLog: [],
+			geographicScope: null,
+			aiGenerated: false,
+			edited: false,
+			draftOrigin: null
+		},
+		review: {}
+	};
+}
+
+/**
  * Processed decision-maker with extracted provenance data
  */
 export interface ProcessedDecisionMaker {
@@ -231,11 +291,58 @@ export interface ProcessedDecisionMaker {
 	isAiResolved: boolean; // true = AI-resolved, false = manually added
 	recencyCheck?: string; // Explicit recency verification text
 	positionSourceDate?: string; // Date of verification source
+	/**
+	 * The published deadline for submitting input to this decision maker, as a
+	 * standalone fact. It is never folded into `confidence`, never scored, and
+	 * never inferred — only a deadline a publisher actually wrote, read back off
+	 * the page it was written on, may populate it. Absent means not resolved,
+	 * and renderers print that rather than hiding the row's clock.
+	 */
+	inputWindow?: InputWindow;
 	confidence?: number; // Confidence score 0.0-1.0 based on verification
 	// Email verification
 	emailGrounded?: boolean; // true = email found in grounded search results
 	emailSource?: string; // Specific URL where email was found (if grounded)
 	emailSourceTitle?: string; // Title of email source page
+	/**
+	 * Post-resolution registry observation derived only from the final address.
+	 * Optional during provider/manual construction; the resolution agent fills it
+	 * for every returned candidate before any safety policy may consume it.
+	 */
+	governmentalClass?: GovernmentalClass;
+	/** Server-derived from grounding evidence. Never trusted from client input. */
+	deliveryTier?: DeliveryTier;
+	seatRoute?: SeatRouteVerdict;
+	/** Typed reason this candidate does or does not carry a contact route.
+	 *  A category, never a score. Absent on manually added recipients. */
+	contactRoute?: ContactRouteVerdict;
+	/** What this route is to the decision, plus the basis for saying so.
+	 *  A category with a basis, never a score. */
+	standing?: StandingVerdict;
+	/** How the institution published this address, or the single reason none
+	 *  was found. Never combined with `standing`. */
+	routeProvenance?: RouteProvenance;
+	/** True when the provider proposed an address for this candidate and the
+	 *  address did not appear byte-for-byte in any page fetched this run. */
+	emailClaimStripped?: boolean;
+	/**
+	 * MODEL CLAIM about what the address reaches, not a verified fact. A 'person'
+	 * claim is uncorroborated and must never be rendered to a recipient or used as
+	 * authority to address a named individual.
+	 */
+	emailReachesClaim?: 'person' | 'seat' | 'general';
+	/** Verbatim office/function label, present only when the claim is 'seat' and the label byte-appeared in the grounding page. */
+	emailReachesLabel?: string;
+	/**
+	 * Server-only evidence that this run found the email verbatim in a page it
+	 * read. A cached contact may remain useful to the author, but it must not be
+	 * granted an anonymous-public recipient attestation from legacy cache state.
+	 */
+	publicEmailGrounding?: {
+		version: 1;
+		method: 'page-read';
+		source: string;
+	};
 	/** Free-form notes about alternative contact paths discovered by the agent */
 	contactNotes?: string;
 	/** true if discovered from page content rather than the initial identity list */
@@ -252,6 +359,8 @@ export interface ProcessedDecisionMaker {
 	publicActions?: string[];
 	/** Issue-specific prompt for compose Zone 2 */
 	personalPrompt?: string | null;
+	/** Author-bound, purpose-bound proof for anonymous public recipient projection. */
+	publicRecipientProvenance?: PublicRecipientProvenance;
 
 	// === Email Deliverability Verification ===
 	/** Email verification status from MX check */
@@ -268,70 +377,13 @@ export interface CustomRecipient {
 	organization?: string;
 }
 
-/**
- * Source reference from message generation agent
- */
-export interface Source {
-	num: number; // Citation number [1], [2], etc.
-	title: string; // Source title
-	url: string; // Source URL
-	type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other'; // Source type
-	credibility_rationale?: string; // Present when source evaluation produced rationale
-	incentive_position?: 'adversarial' | 'neutral' | 'aligned'; // Evaluation posture
-	source_order?: 'primary' | 'secondary' | 'opinion'; // Evaluation source-order class
-}
+// Citation source from message generation — one definition, shared with the
+// agent layer, re-exported here for the template-facing import sites.
+export type { Source } from '$lib/core/agents/types';
 
-// ============================================================================
-// RecipientConfig — Typed wrapper for Template.recipient_config JSON field
-// ============================================================================
-
-/** Typed representation of the `recipient_config` JSON blob on a Template. */
-export interface RecipientConfig {
-	decisionMakers?: ProcessedDecisionMaker[];
-	roleGroups?: RoleGroup[];
-	personalPrompt?: string;
-	recipientEmails?: string[];
-	includesCongress?: boolean;
-	customRecipients?: Array<{ name: string; email: string; title?: string; organization?: string }>;
-}
-
-/** Parse an unknown recipient_config value into a typed RecipientConfig (graceful fallback). */
-export function parseRecipientConfig(value: unknown): RecipientConfig {
-	if (value && typeof value === 'object' && !Array.isArray(value)) {
-		return value as RecipientConfig;
-	}
-	return {};
-}
-
-// ============================================================================
-// Multi-Target Delivery Types (Hackathon Implementation)
-// ============================================================================
-
-/**
- * Template recipient configuration for multi-target delivery
- * Templates can target Congress + external decision-makers in one action
- */
-export interface TemplateRecipientConfig {
-	type: 'multi-target';
-	recipients: TemplateRecipient[];
-}
-
-/**
- * Individual recipient in a multi-target template
- */
-export interface TemplateRecipient {
-	type: 'congressional' | 'email';
-
-	// Congressional recipients
-	chamber?: 'house' | 'senate'; // undefined = both
-	selection?: 'user_district' | 'all_congress' | 'specific_members';
-	specific_bioguide_ids?: string[]; // For targeting specific members
-
-	// Email recipients
-	email?: string;
-	name?: string; // Display name for UI
-	organization?: string; // For context
-}
+// The published-deadline clock, defined once in the agent layer and re-exported
+// here for the template-facing import sites.
+export type { InputWindow } from '$lib/core/agents/input-window';
 
 // For UI components that only need a minimal user shape
 export type MinimalUser = { id: string; name: string };
@@ -348,21 +400,6 @@ export type MinimalUser = { id: string; name: string };
 export type PowerReach = 'district-based' | 'location-specific' | 'universal';
 
 /**
- * Decision-maker identity (recognition > categorization)
- * Names are faster to recognize than roles or categories
- */
-export interface DecisionMaker {
-	/** Full name: "Mayor London Breed" */
-	name: string;
-	/** Short display name: "Mayor Breed" */
-	shortName?: string;
-	/** Role fallback: "Mayor" (if name unavailable) */
-	role?: string;
-	/** Organization context: "City of San Francisco" */
-	organization?: string;
-}
-
-/**
  * Geographic location for spatial grounding
  * Users think spatially, not taxonomically
  */
@@ -373,13 +410,49 @@ export interface RecipientLocation {
 	jurisdiction?: string;
 }
 
-/** Recipient config shape used by the display/card layer. */
-export interface DisplayRecipientConfig {
-	reach: PowerReach;
-	decisionMakers?: DecisionMaker[];
-	location?: RecipientLocation;
+/**
+ * A decision-maker as it appears inside a persisted `recipient_config`.
+ * Agent-resolved rows carry the full ProcessedDecisionMaker field set;
+ * hand-authored rows carry only identity plus a human role label.
+ * `name` is the only field guaranteed present.
+ */
+export type RecipientConfigDecisionMaker = Partial<ProcessedDecisionMaker> & {
+	name: string;
+	/** Human-readable position label used by hand-authored rows ("Mayor"). */
+	role?: string;
+	/** Short display name used by hand-authored rows ("Breed"). */
+	shortName?: string;
+};
+
+/** The `recipient_config` JSON blob persisted on a template. */
+export interface RecipientConfig {
+	reach?: PowerReach;
+	decisionMakers?: RecipientConfigDecisionMaker[];
 	emails?: string[];
 	cwcRouting?: boolean;
+	chambers?: Array<'house' | 'senate'>;
+	location?: RecipientLocation;
+}
+
+/**
+ * Parse an unknown `recipient_config` value — a stored object or a JSON string —
+ * into the typed blob. Anything unparseable yields an empty config.
+ */
+export function parseRecipientConfig(value: unknown): RecipientConfig {
+	return parseRecipientConfigObject(value) as RecipientConfig;
+}
+
+/**
+ * Addresses a persisted `recipient_config` reaches: the union across
+ * `recipients`, `decisionMakers`, `customRecipients`, `emails` and
+ * `recipientEmails` plus a top-level `email`, trimmed, empties dropped,
+ * deduplicated, in first-seen order.
+ *
+ * The same arithmetic that produces the recipient count a sender is shown, so
+ * the mailto `To:` line can never be narrower than the advertised number.
+ */
+export function recipientEmailsFromConfig(value: unknown): string[] {
+	return recipientRosterFromConfig(value);
 }
 
 /**
@@ -408,35 +481,35 @@ export interface PowerLevelTarget {
  */
 export type TargetPresentation =
 	| {
-		/** Single power level */
-		type: 'district-based' | 'location-specific' | 'universal';
-		/** Primary text: "Your 3 representatives" or "Mayor Breed, SFMTA Board" */
-		primary: string;
-		/** Secondary text: "+2 more" (if truncated) */
-		secondary?: string | null;
-		/** Icon name for peripheral category hint */
-		icon: 'Capitol' | 'Building' | 'Users' | 'Mail';
-		/** Visual emphasis for color coding */
-		emphasis: 'federal' | 'state' | 'local' | 'neutral';
-		/** Coordination context: "CA-11" or "San Francisco" */
-		coordinationContext?: string;
-	}
+			/** Single power level */
+			type: 'district-based' | 'location-specific' | 'universal';
+			/** Primary text: "Your 3 representatives" or "Mayor Breed, SFMTA Board" */
+			primary: string;
+			/** Secondary text: "+2 more" (if truncated) */
+			secondary?: string | null;
+			/** Icon name for peripheral category hint */
+			icon: 'Capitol' | 'Building' | 'Users' | 'Mail';
+			/** Visual emphasis for color coding */
+			emphasis: 'federal' | 'state' | 'local' | 'neutral';
+			/** Coordination context: "CA-11" or "San Francisco" */
+			coordinationContext?: string;
+	  }
 	| {
-		/** Multi-stakeholder coordination across power levels */
-		type: 'multi-level';
-		/** Array of power levels (federal, state, local, etc.) */
-		targets: PowerLevelTarget[];
-		/** Coordination context: "CA-11" or "San Francisco" */
-		coordinationContext?: string;
-		/** Primary text for first target (for compatibility) */
-		primary?: string;
-		/** Secondary text (for compatibility) */
-		secondary?: string | null;
-		/** Icon for first target (for compatibility) */
-		icon?: 'Capitol' | 'Building' | 'Users' | 'Mail';
-		/** Emphasis for first target (for compatibility) */
-		emphasis?: 'federal' | 'state' | 'local' | 'neutral';
-	};
+			/** Multi-stakeholder coordination across power levels */
+			type: 'multi-level';
+			/** Array of power levels (federal, state, local, etc.) */
+			targets: PowerLevelTarget[];
+			/** Coordination context: "CA-11" or "San Francisco" */
+			coordinationContext?: string;
+			/** Primary text for first target (for compatibility) */
+			primary?: string;
+			/** Secondary text (for compatibility) */
+			secondary?: string | null;
+			/** Icon for first target (for compatibility) */
+			icon?: 'Capitol' | 'Building' | 'Users' | 'Mail';
+			/** Emphasis for first target (for compatibility) */
+			emphasis?: 'federal' | 'state' | 'local' | 'neutral';
+	  };
 
 // ============================================================================
 // Progressive Template Sections (2025-01-12)

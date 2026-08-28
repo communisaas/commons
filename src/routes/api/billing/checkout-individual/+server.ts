@@ -15,7 +15,7 @@
 import { json, error } from '@sveltejs/kit';
 import { getStripe } from '$lib/server/billing/stripe';
 import { INDIVIDUAL_PLANS, INDIVIDUAL_PLAN_ORDER } from '$lib/server/billing/plans';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 

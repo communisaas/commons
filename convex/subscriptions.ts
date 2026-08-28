@@ -1,166 +1,321 @@
 /**
  * Subscription/billing CRUD — queries, mutations, and the Stripe webhook action.
  *
- * Plan definitions are inlined here to avoid importing SvelteKit server code.
- * These must stay in sync with src/lib/server/billing/plans.ts.
+ * Plan definitions come from ./lib/planLimits — the one table both this Convex
+ * boundary and the SvelteKit boundary read. Nothing here restates a limit.
  */
 
-import { query, mutation, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { internal } from "./_generated/api";
-import { v } from "convex/values";
-import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from "./_validators";
-import { effectivelyActive } from "./_brandingGate";
-import { requireAuth, requireOrgRole } from "./_authHelpers";
-import { requireInternalSecret } from "./_internalAuth";
-import type { Id, Doc } from "./_generated/dataModel";
-import type { QueryCtx, MutationCtx } from "./_generated/server";
+import {
+	query,
+	mutation,
+	internalAction,
+	internalMutation,
+	internalQuery
+} from './_generated/server';
+import { internal } from './_generated/api';
+import { makeFunctionReference, type FunctionReference } from 'convex/server';
+import { v } from 'convex/values';
+import { subscriptionPlan, subscriptionStatus, subscriptionPaymentMethod } from './_validators';
+import { requireAuth, requireOrgRole } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
+import type { Id, Doc } from './_generated/dataModel';
+import type { QueryCtx } from './_generated/server';
+import {
+	enqueuePlanUsageRepair,
+	isPlanUsageMigrationReady,
+	PLAN_USAGE_MIGRATION_KEY,
+	projectedPlanUsageForPeriod,
+	snapshotPlanUsageBaselines,
+	type ProjectedPlanUsage
+} from './lib/planUsage';
 
-// Plan limits — mirrored from src/lib/server/billing/plans.ts (MUST stay in sync)
-export const PLANS: Record<
-  string,
-  {
-    priceCents: number;
-    maxSeats: number;
-    maxTemplatesMonth: number;
-    maxVerifiedActions: number;
-    maxEmails: number;
-    maxSms: number;
-  }
-> = {
-  // Gated floor for orgs with no active subscription — author a campaign or
-  // two (2 templates), zero delivery, owner-only. Not a marketed tier.
-  inactive: { priceCents: 0, maxSeats: 1, maxTemplatesMonth: 2, maxVerifiedActions: 0, maxEmails: 0, maxSms: 0 },
-  starter: { priceCents: 1_000, maxSeats: 5, maxTemplatesMonth: 100, maxVerifiedActions: 1_000, maxEmails: 20_000, maxSms: 1_000 },
-  organization: { priceCents: 7_500, maxSeats: 10, maxTemplatesMonth: 500, maxVerifiedActions: 5_000, maxEmails: 100_000, maxSms: 10_000 },
-  coalition: { priceCents: 20_000, maxSeats: 25, maxTemplatesMonth: 1_000, maxVerifiedActions: 10_000, maxEmails: 250_000, maxSms: 50_000 },
-};
+// Plan tables — the org table and the person-layer table, both read straight
+// from the shared source. They are DELIBERATELY SEPARATE: individual plans carry
+// no org quotas (no maxEmails / maxSms / maxSeats / maxTemplatesMonth), so an
+// individual sub never syncs org limits. The org `checkPlanLimits` path reads
+// PLANS (keyed on orgId); the individual authoring cap (templates.ts) reads the
+// per-plan authored limit. Neither scope can read the other's plans.
+import {
+	ORG_PLAN_LIMITS as PLANS,
+	INDIVIDUAL_PLAN_LIMITS as INDIVIDUAL_PLANS,
+	agenticProviderCapacityForPayment
+} from './lib/planLimits';
 
-// Individual (person-layer) paid authoring tiers — mirrored from
-// src/lib/server/billing/plans.ts INDIVIDUAL_PLANS (MUST stay in sync).
-// DELIBERATELY SEPARATE from org PLANS above: individual plans carry ONLY
-// `priceCents` + `authoredPerMonth`. They have NO org quotas (no maxEmails /
-// maxSms / maxSeats / maxTemplatesMonth) — an individual sub never syncs org
-// limits. The org `checkPlanLimits` path reads PLANS (keyed on orgId); the
-// individual authoring cap (templates.ts) reads the per-plan authored limit. The
-// two maps never overlap, so neither scope can read the other's plans.
-const INDIVIDUAL_PLANS: Record<string, { priceCents: number; authoredPerMonth: number }> = {
-  voice: { priceCents: 700, authoredPerMonth: 20 },
-  advocate: { priceCents: 2_000, authoredPerMonth: 75 },
-};
+const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+const expirePastDueGraceRef = makeFunctionReference<'mutation'>(
+	'subscriptions:expirePastDueGrace'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ subscriptionId: Id<'subscriptions'>; expectedPastDueSince: number },
+	unknown
+>;
+const continuePastDueGraceSweepRef = makeFunctionReference<'mutation'>(
+	'subscriptions:sweepPastDueGrace'
+) as unknown as FunctionReference<'mutation', 'internal', { cursor?: string }, unknown>;
+const continueSubscriptionAuthorityAuditRef = makeFunctionReference<'mutation'>(
+	'subscriptions:auditSubscriptionAuthority'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ cursor?: string; retryBlocked?: boolean },
+	unknown
+>;
+const continueOrgLimitsBackfillRef = makeFunctionReference<'mutation'>(
+	'subscriptions:backfillOrgLimits'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ cursor?: string; scanned?: number; updated?: number },
+	unknown
+>;
+const continueCampaignActionOrgBackfillRef = makeFunctionReference<'mutation'>(
+	'subscriptions:backfillCampaignActionOrgIds'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ cursor?: string; scanned?: number; updated?: number },
+	unknown
+>;
 
-/**
- * Verified actions within the current billing period — scale-safe.
- *
- * The naive implementation collected every verified campaignAction and filtered
- * by sentAt in memory; that throws past the per-query document cap and
- * hard-locks the org on EVERY submit once it has >16K verified actions.
- *
- * Instead: period_count = verifiedActionsLifetime - verifiedActionsPeriodBaseline,
- * where the baseline is snapshotted at period rollover. Both are O(1) reads off
- * the org row. The baseline carries `baselineAt` = the periodStart it belongs
- * to, so we only trust the O(1) path when it matches the period we're metering.
- *
- * Self-heal (no write — this runs in a query): if the baseline is missing or
- * belongs to a DIFFERENT period (a late/missed Stripe webhook, or an inactive
- * org's calendar-month rollover that has no webhook), count THIS period's verified
- * actions via the `by_orgId_verified_sentAt` range index — bounded to one
- * period's volume, never the lifetime table, so it can never throw the cap.
- *
- * Fail-safe: the range count is itself bounded (take(cap + 1)); if it
- * saturates, return the cap rather than a wrong low number — enforcement
- * over-counts (stricter) rather than under-counts when uncertain.
- */
-// INVARIANT: this cap MUST stay strictly above the largest maxVerifiedActions /
-// maxEmails / maxSms across PLANS (currently 10K / 250K-ish are below... see note).
-// When a period scan saturates, the count is clamped to the cap; enforcement
-// (`usage >= limit`) then still trips ONLY because the cap exceeds every plan
-// limit it gates. For verified actions the max plan limit is 10K < 16K cap, so a
-// saturated clamp (16K) still blocks. If a plan limit ever rises above a cap,
-// raise the cap in lockstep or the clamp would UNDER-enforce.
-export const VERIFIED_ACTION_PERIOD_SCAN_CAP = 16_000;
-// Blasts are one row per send (not per recipient), so a period rarely holds many;
-// the cap is a doc-cap backstop. On saturation blastSentThisPeriod fails safe by
-// returning MAX_SAFE_INTEGER (blocks) rather than clamping a recipient SUM low.
-const BLAST_SCAN_CAP = 16_000;
+const SUBSCRIPTION_AUTHORITY_KEY = 'subscription-authority-v1' as const;
+const SUBSCRIPTION_AUTHORITY_PAGE = 50;
 
-async function verifiedActionsThisPeriod(
-  ctx: QueryCtx,
-  org: Doc<"organizations">,
-  periodStart: number,
-): Promise<number> {
-  const baselineAt = org.verifiedActionsPeriodBaselineAt;
+type StripeBillingPeriodSeconds = Readonly<{ start: number; end: number }>;
 
-  // Trust the O(1) lifetime-minus-baseline path only when the snapshot belongs
-  // to exactly the period we're metering. For a paid org the read's periodStart
-  // is the same `currentPeriodStart` the webhook snapshotted, so they match.
-  if (baselineAt !== undefined && baselineAt === periodStart) {
-    const lifetime = org.verifiedActionsLifetime ?? 0;
-    const baseline = org.verifiedActionsPeriodBaseline ?? 0;
-    return Math.max(0, lifetime - baseline);
-  }
+function record(value: unknown): Record<string, unknown> | null {
+	return value !== null && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
 
-  // Self-heal: baseline missing or for a different period. Count this period's
-  // verified actions via the sentAt range index — bounded, never unbounded.
-  const rows = await ctx.db
-    .query("campaignActions")
-    .withIndex("by_orgId_verified_sentAt", (idx) =>
-      idx.eq("orgId", org._id).eq("verified", true).gte("sentAt", periodStart),
-    )
-    .take(VERIFIED_ACTION_PERIOD_SCAN_CAP + 1);
-  // Exclude congressional rows: congressional deliveries are person-layer civic
-  // actions, NOT org-metered usage — the lifetime path skips them via
-  // createCampaignAction's metersOrgQuota:false, and this self-heal path (the one
-  // inactive/unsubscribed orgs always hit, since they have no Stripe baseline)
-  // MUST exclude them too or congressional traffic leaks back into metered usage.
-  const metered = rows.filter((r) => r.channel !== "congressional");
-  // If the period's own metered volume exceeds the cap, clamp to the cap. Below
-  // the cap this is the true count; above it the clamp is a floor that STILL
-  // trips enforcement because the cap exceeds every plan's maxVerifiedActions
-  // (see the cap INVARIANT above) — not because it "over-counts".
-  return Math.min(metered.length, VERIFIED_ACTION_PERIOD_SCAN_CAP);
+function stripeBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const period = record(value);
+	if (
+		!period ||
+		!Number.isSafeInteger(period.start) ||
+		!Number.isSafeInteger(period.end) ||
+		Number(period.start) < 0 ||
+		Number(period.end) <= Number(period.start)
+	) {
+		return null;
+	}
+	return { start: Number(period.start), end: Number(period.end) };
+}
+
+function oneStripeBillingPeriod(
+	periods: readonly (StripeBillingPeriodSeconds | null)[]
+): StripeBillingPeriodSeconds | null {
+	if (periods.length === 0 || periods.some((period) => period === null)) return null;
+	const unique = new Map<string, StripeBillingPeriodSeconds>();
+	for (const period of periods as readonly StripeBillingPeriodSeconds[]) {
+		unique.set(`${period.start}:${period.end}`, period);
+	}
+	return unique.size === 1 ? [...unique.values()][0]! : null;
 }
 
 /**
- * Sum send volume from a blast table's "sent" rows within the billing period.
- *
- * Previously this `.collect()`-ed the org's ENTIRE blast history then filtered
- * `sentAt >= periodStart` in memory — one row per blast, so a long-lived org
- * with thousands of historical blasts re-scans them all on every limit check
- * (the same unbounded-collect cliff fixed for verified actions). The range
- * index `by_orgId_sentAt` bounds the read to the current period's blasts.
- *
- * `sentAt` is set only when status === 'sent', so a `gte(periodStart)` range
- * skips never-sent (undefined-sentAt) rows; we still guard on status === 'sent'
- * because a future status (e.g. a partially-sent state) could carry a sentAt.
+ * Dahlia moved subscription periods onto subscription items. Commons supports
+ * one service window per subscription, so multiple distinct item windows are
+ * unrepresentable and must fail closed instead of choosing one accidentally.
  */
-async function blastSentThisPeriod(
-  ctx: QueryCtx,
-  orgId: Id<"organizations">,
-  periodStart: number,
-  table: "emailBlasts" | "smsBlasts",
-): Promise<number> {
-  const blasts = await ctx.db
-    .query(table)
-    .withIndex("by_orgId_sentAt", (idx) =>
-      idx.eq("orgId", orgId).gte("sentAt", periodStart),
-    )
-    .take(BLAST_SCAN_CAP + 1);
-  // Hard-bounded like the verified-action scan — a `.collect()` here would
-  // re-introduce the doc-cap throw if a single period somehow holds >16K blasts.
-  // If the period saturates the cap, fail SAFE for a send-volume limit: return a
-  // value that always trips the limit (block) rather than a low number that would
-  // under-enforce. (One row per blast, so this is only reachable pathologically.)
-  if (blasts.length > BLAST_SCAN_CAP) return Number.MAX_SAFE_INTEGER;
-  let sent = 0;
-  for (const blast of blasts) {
-    if (blast.status !== "sent") continue;
-    // emailBlasts tally `totalSent`; smsBlasts tally `sentCount`.
-    sent +=
-      (blast as { totalSent?: number; sentCount?: number }).totalSent ??
-      (blast as { totalSent?: number; sentCount?: number }).sentCount ??
-      0;
-  }
-  return sent;
+export function stripeSubscriptionBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const subscription = record(value);
+	const items = record(subscription?.items)?.data;
+	if (!Array.isArray(items)) return null;
+	return oneStripeBillingPeriod(
+		items.map((item) => {
+			const row = record(item);
+			return stripeBillingPeriod({
+				start: row?.current_period_start,
+				end: row?.current_period_end
+			});
+		})
+	);
+}
+
+/**
+ * Invoice headers are degenerate on the first subscription invoice. The
+ * service window lives on its subscription line item, which is therefore the
+ * canonical payment coordinate. Header periods are a legacy fallback only
+ * when Stripe supplied no subscription lines at all.
+ */
+export function stripeInvoiceBillingPeriod(value: unknown): StripeBillingPeriodSeconds | null {
+	const invoice = record(value);
+	const lines = record(invoice?.lines)?.data;
+	const subscriptionLines = Array.isArray(lines)
+		? lines.filter((line) => {
+				const row = record(line);
+				const parent = record(row?.parent);
+				return (
+					parent?.type === 'subscription_item_details' ||
+					parent?.subscription_item_details !== undefined ||
+					row?.subscription !== undefined
+				);
+			})
+		: [];
+	if (subscriptionLines.length > 0) {
+		return oneStripeBillingPeriod(
+			subscriptionLines.map((line) => stripeBillingPeriod(record(line)?.period))
+		);
+	}
+	return stripeBillingPeriod({ start: invoice?.period_start, end: invoice?.period_end });
+}
+
+export async function uniqueSubscriptionForOrg(
+	ctx: { db: QueryCtx['db'] },
+	orgId: Id<'organizations'>
+): Promise<Doc<'subscriptions'> | null> {
+	const rows = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_orgId', (q) => q.eq('orgId', orgId))
+		.take(2);
+	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	return rows[0] ?? null;
+}
+
+async function uniqueSubscriptionForUser(
+	ctx: { db: QueryCtx['db'] },
+	userId: Id<'users'>
+): Promise<Doc<'subscriptions'> | null> {
+	const rows = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_userId', (q) => q.eq('userId', userId))
+		.take(2);
+	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	return rows[0] ?? null;
+}
+
+async function uniqueSubscriptionForStripeId(
+	ctx: { db: QueryCtx['db'] },
+	stripeSubscriptionId: string
+): Promise<Doc<'subscriptions'> | null> {
+	const rows = await ctx.db
+		.query('subscriptions')
+		.withIndex('by_stripeSubscriptionId', (q) => q.eq('stripeSubscriptionId', stripeSubscriptionId))
+		.take(2);
+	if (rows.length > 1) throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED');
+	return rows[0] ?? null;
+}
+
+function assertSubscriptionPlanScope(
+	owner: { orgId?: Id<'organizations'>; userId?: Id<'users'> },
+	plan: string
+): void {
+	if ((owner.orgId === undefined) === (owner.userId === undefined)) {
+		throw new Error('SUBSCRIPTION_OWNER_XOR_REQUIRED');
+	}
+	if (
+		owner.orgId !== undefined ? PLANS[plan] === undefined : INDIVIDUAL_PLANS[plan] === undefined
+	) {
+		throw new Error('SUBSCRIPTION_PLAN_SCOPE_INVALID');
+	}
+}
+
+/** Query-safe entitlement state. A scheduled mutation transitions expired
+ * past-due grace to canceled, which invalidates cached/reactive queries. */
+export function durablyActive(sub: Doc<'subscriptions'> | null): boolean {
+	if (sub?.status === 'active' || sub?.status === 'trialing') return true;
+	return (
+		sub?.status === 'past_due' &&
+		Number.isSafeInteger(sub.pastDueSince) &&
+		(sub.pastDueSince ?? -1) >= 0
+	);
+}
+
+export function durablePlanUsagePeriodStart(
+	org: Doc<'organizations'>,
+	sub: Doc<'subscriptions'> | null,
+	paid: boolean
+): number {
+	if (paid) {
+		if (!Number.isSafeInteger(sub?.currentPeriodStart) || (sub?.currentPeriodStart ?? -1) < 0) {
+			throw new Error('PLAN_USAGE_INVALID:periodStart');
+		}
+		return sub!.currentPeriodStart;
+	}
+	// Inactive organizations cannot deliver (all metered limits are zero). Use
+	// the last durably published repair coordinate; the hourly rollover mutation
+	// advances it and invalidates this query without a Date.now cache hazard.
+	const periodStart =
+		org.sentEmailPeriodBaselineAt ??
+		org.verifiedActionsPeriodBaselineAt ??
+		org.smsSentPeriodBaselineAt ??
+		org.emailReservationPeriodStart ??
+		0;
+	if (!Number.isSafeInteger(periodStart) || periodStart < 0) {
+		throw new Error('PLAN_USAGE_INVALID:periodStart');
+	}
+	return periodStart;
+}
+
+type UsageProjectionResult = {
+	ready: boolean;
+	failureCode: string | null;
+	repairRequired: boolean;
+	repairStatus: 'not_requested' | 'pending' | 'running' | 'ready' | 'blocked';
+	usage: ProjectedPlanUsage;
+};
+
+export async function readProjectedPlanUsage(
+	ctx: { db: QueryCtx['db'] },
+	org: Doc<'organizations'>,
+	periodStart: number,
+	limits: { maxVerifiedActions: number; maxEmails: number; maxSms: number }
+): Promise<UsageProjectionResult> {
+	const [migration, repair] = await Promise.all([
+		ctx.db
+			.query('planUsageMigrations')
+			.withIndex('by_key', (q) => q.eq('key', PLAN_USAGE_MIGRATION_KEY))
+			.unique(),
+		ctx.db
+			.query('planUsageRepairs')
+			.withIndex('by_orgId', (q) => q.eq('orgId', org._id))
+			.unique()
+	]);
+	if (!isPlanUsageMigrationReady(migration)) {
+		return {
+			ready: false,
+			failureCode: migration?.failureCode ?? 'PLAN_USAGE_MIGRATION_NOT_READY',
+			repairRequired: false,
+			repairStatus: repair?.status ?? 'not_requested',
+			usage: {
+				verifiedActions: limits.maxVerifiedActions,
+				emailsSent: limits.maxEmails,
+				emailsReserved: 0,
+				smsSent: limits.maxSms
+			}
+		};
+	}
+	try {
+		return {
+			ready: true,
+			failureCode: null,
+			repairRequired: false,
+			repairStatus: repair?.status ?? 'not_requested',
+			usage: projectedPlanUsageForPeriod(org, periodStart)
+		};
+	} catch (error) {
+		const repairForPeriod = repair?.periodStart === periodStart ? repair : null;
+		const repairStatus = repairForPeriod?.status ?? 'not_requested';
+		return {
+			ready: false,
+			failureCode:
+				repairForPeriod?.status === 'blocked'
+					? (repairForPeriod.failureCode ?? 'PLAN_USAGE_REPAIR_BLOCKED')
+					: error instanceof Error
+						? error.message.slice(0, 256)
+						: 'PLAN_USAGE_NOT_READY',
+			repairRequired: repairForPeriod === null || repairStatus === 'ready',
+			repairStatus,
+			usage: {
+				verifiedActions: limits.maxVerifiedActions,
+				emailsSent: limits.maxEmails,
+				emailsReserved: 0,
+				smsSent: limits.maxSms
+			}
+		};
+	}
 }
 
 // =============================================================================
@@ -171,33 +326,30 @@ async function blastSentThisPeriod(
  * Get subscription for an org.
  */
 export const getByOrg = query({
-  args: {
-    orgSlug: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .first();
+		const sub = await uniqueSubscriptionForOrg(ctx, org._id);
 
-    if (!sub) return null;
+		if (!sub) return null;
 
-    return {
-      _id: sub._id,
-      _creationTime: sub._creationTime,
-      plan: sub.plan,
-      planDescription: sub.planDescription ?? null,
-      priceCents: sub.priceCents,
-      status: sub.status,
-      currentPeriodStart: sub.currentPeriodStart,
-      currentPeriodEnd: sub.currentPeriodEnd,
-      paymentMethod: sub.paymentMethod,
-      stripeSubscriptionId: sub.stripeSubscriptionId ?? null,
-      updatedAt: sub.updatedAt,
-    };
-  },
+		return {
+			_id: sub._id,
+			_creationTime: sub._creationTime,
+			plan: sub.plan,
+			planDescription: sub.planDescription ?? null,
+			priceCents: sub.priceCents,
+			status: sub.status,
+			currentPeriodStart: sub.currentPeriodStart,
+			currentPeriodEnd: sub.currentPeriodEnd,
+			paymentMethod: sub.paymentMethod,
+			stripeSubscriptionId: sub.stripeSubscriptionId ?? null,
+			updatedAt: sub.updatedAt
+		};
+	}
 });
 
 /**
@@ -208,29 +360,26 @@ export const getByOrg = query({
  * No production callers exist.
  */
 export const getByUser = query({
-  args: {},
-  handler: async (ctx) => {
-    const { userId } = await requireAuth(ctx);
+	args: {},
+	handler: async (ctx) => {
+		const { userId } = await requireAuth(ctx);
 
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
-      .first();
+		const sub = await uniqueSubscriptionForUser(ctx, userId);
 
-    if (!sub) return null;
+		if (!sub) return null;
 
-    return {
-      _id: sub._id,
-      _creationTime: sub._creationTime,
-      plan: sub.plan,
-      priceCents: sub.priceCents,
-      status: sub.status,
-      currentPeriodStart: sub.currentPeriodStart,
-      currentPeriodEnd: sub.currentPeriodEnd,
-      paymentMethod: sub.paymentMethod,
-      updatedAt: sub.updatedAt,
-    };
-  },
+		return {
+			_id: sub._id,
+			_creationTime: sub._creationTime,
+			plan: sub.plan,
+			priceCents: sub.priceCents,
+			status: sub.status,
+			currentPeriodStart: sub.currentPeriodStart,
+			currentPeriodEnd: sub.currentPeriodEnd,
+			paymentMethod: sub.paymentMethod,
+			updatedAt: sub.updatedAt
+		};
+	}
 });
 
 /**
@@ -242,25 +391,26 @@ export const getByUser = query({
  * downgrade checkout. User-scoped only — never touches org state.
  */
 export const getMyBillingContext = query({
-  args: {},
-  handler: async (ctx) => {
-    const { userId } = await requireAuth(ctx);
-    const user = await ctx.db.get(userId);
+	args: {},
+	handler: async (ctx) => {
+		const { userId } = await requireAuth(ctx);
+		const user = await ctx.db.get(userId);
 
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
-      .first();
+		const sub = await uniqueSubscriptionForUser(ctx, userId);
 
-    return {
-      userId,
-      email: user?.email ?? null,
-      stripeCustomerId: user?.stripeCustomerId ?? null,
-      subscription: sub
-        ? { plan: sub.plan, status: sub.status, stripeSubscriptionId: sub.stripeSubscriptionId ?? null }
-        : null,
-    };
-  },
+		return {
+			userId,
+			email: user?.email ?? null,
+			stripeCustomerId: user?.stripeCustomerId ?? null,
+			subscription: sub
+				? {
+						plan: sub.plan,
+						status: sub.status,
+						stripeSubscriptionId: sub.stripeSubscriptionId ?? null
+					}
+				: null
+		};
+	}
 });
 
 /**
@@ -271,19 +421,16 @@ export const getMyBillingContext = query({
  * Returns false for org plans / no sub.
  */
 export const hasActivePaidIndividual = query({
-  args: {},
-  handler: async (ctx) => {
-    const { userId } = await requireAuth(ctx);
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
-      .first();
-    if (!sub) return false;
-    if (!INDIVIDUAL_PLANS[sub.plan]) return false; // org plan / unknown → not paid individual
+	args: {},
+	handler: async (ctx) => {
+		const { userId } = await requireAuth(ctx);
+		const sub = await uniqueSubscriptionForUser(ctx, userId);
+		if (!sub) return false;
+		if (!INDIVIDUAL_PLANS[sub.plan]) return false; // org plan / unknown → not paid individual
 
-    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
-    return effectivelyActive(sub, Date.now());
-  },
+		// Paid access incl. the 7-day past_due grace and trialing — single predicate.
+		return durablyActive(sub);
+	}
 });
 
 /**
@@ -291,89 +438,72 @@ export const hasActivePaidIndividual = query({
  * route creates it. Auth-gated to the caller's own row.
  */
 export const updateMyStripeCustomerId = mutation({
-  args: { stripeCustomerId: v.string() },
-  handler: async (ctx, args) => {
-    const { userId } = await requireAuth(ctx);
-    await ctx.db.patch(userId, { stripeCustomerId: args.stripeCustomerId });
-    return { success: true };
-  },
+	args: { stripeCustomerId: v.string() },
+	handler: async (ctx, args) => {
+		const { userId } = await requireAuth(ctx);
+		await ctx.db.patch(userId, { stripeCustomerId: args.stripeCustomerId });
+		return { success: true };
+	}
 });
 
 /**
  * Check org's plan limits and current usage within the billing period.
  *
- * Usage is computed at query time (not from denormalized counters) for
- * verifiedActions. Email/SMS use denormalized org counters.
+ * All metered usage is read from exact lifetime-minus-period-baseline scalars.
+ * A missing/stale projection fails closed with a repair code; source history is
+ * rebuilt only by bounded background workers, never in this request query.
  * Period: subscription's currentPeriodStart, or calendar month for inactive orgs.
  */
 export const checkPlanLimits = query({
-  args: {
-    orgSlug: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const { org } = await requireOrgRole(ctx, args.orgSlug, "member");
+	args: {
+		orgSlug: v.string()
+	},
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .first();
+		const sub = await uniqueSubscriptionForOrg(ctx, org._id);
 
-    // Grace period: past_due orgs retain paid access for 7 days
-    // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
-    // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
-    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
-    // Branding deliberately uses the no-grace effectivePlan instead.
-    const isPaidWithGrace = effectivelyActive(sub, Date.now());
-    const plan = isPaidWithGrace ? (sub?.plan ?? "inactive") : "inactive";
-    const limits = PLANS[plan] ?? PLANS.inactive;
+		// Grace period: past_due orgs retain paid access for 7 days
+		// Grace period: past_due orgs retain paid access for 7 days from initial delinquency
+		// Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
+		// Paid access incl. the 7-day past_due grace and trialing — single predicate.
+		// Branding deliberately uses the no-grace effectivePlan instead.
+		const isPaidWithGrace = durablyActive(sub);
+		const plan = isPaidWithGrace ? (sub?.plan ?? 'inactive') : 'inactive';
+		const limits = PLANS[plan] ?? PLANS.inactive;
 
-    // Determine billing period start
-    // For paid/grace orgs: subscription's currentPeriodStart
-    // For inactive (unsubscribed) orgs: start of current calendar month (UTC)
-    let periodStart: number;
-    if (isPaidWithGrace && sub?.currentPeriodStart) {
-      periodStart = sub.currentPeriodStart;
-    } else {
-      const now = new Date();
-      periodStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-    }
+		// Determine billing period start
+		// For paid/grace orgs: subscription's currentPeriodStart
+		// For inactive (unsubscribed) orgs: start of current calendar month (UTC)
+		const periodStart = durablePlanUsagePeriodStart(org, sub, isPaidWithGrace);
 
-    // === Period-scoped usage aggregation ===
-    // Email/SMS usage is computed at query time within the billing period window.
-    //
-    // Verified actions use a monotonic lifetime tally minus a per-period
-    // baseline (snapshotted at rollover) — O(1), never-reset-safe, and it never
-    // scans the whole verified-action table (which throws past the document cap
-    // and hard-locks the org on every submit at scale). NOT a per-period
-    // denormalized counter — the baseline only ever moves forward, so there is
-    // no never-reset bug.
-    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
+		const usageProjection = await readProjectedPlanUsage(ctx, org, periodStart, limits);
 
-    // Emails + SMS: aggregate from completed blasts within the billing period
-    // via the bounded sentAt range index (no full-history collect).
-    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
-    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
-
-    return {
-      plan,
-      status: sub?.status ?? "none",
-      periodStart,
-      limits: {
-        maxSeats: limits.maxSeats,
-        maxTemplatesMonth: limits.maxTemplatesMonth,
-        maxVerifiedActions: limits.maxVerifiedActions,
-        maxEmails: limits.maxEmails,
-        maxSms: limits.maxSms,
-      },
-      current: {
-        seats: org.memberCount ?? 0,
-        supporterCount: org.supporterCount ?? 0,
-        verifiedActions,
-        emailsSent,
-        smsSent,
-      },
-    };
-  },
+		return {
+			plan,
+			status: sub?.status ?? 'none',
+			periodStart,
+			usageReady: usageProjection.ready,
+			usageFailureCode: usageProjection.failureCode,
+			usageRepairRequired: usageProjection.repairRequired,
+			usageRepairStatus: usageProjection.repairStatus,
+			limits: {
+				maxSeats: limits.maxSeats,
+				maxTemplatesMonth: limits.maxTemplatesMonth,
+				maxVerifiedActions: limits.maxVerifiedActions,
+				maxEmails: limits.maxEmails,
+				maxSms: limits.maxSms
+			},
+			current: {
+				seats: org.memberCount ?? 0,
+				supporterCount: org.supporterCount ?? 0,
+				verifiedActions: usageProjection.usage.verifiedActions,
+				emailsSent: usageProjection.usage.emailsSent,
+				emailsReserved: usageProjection.usage.emailsReserved,
+				smsSent: usageProjection.usage.smsSent
+			}
+		};
+	}
 });
 
 /**
@@ -381,61 +511,51 @@ export const checkPlanLimits = query({
  * Used by API v1 usage endpoint where orgId comes from API key auth.
  */
 export const checkPlanLimitsByOrgId = internalQuery({
-  args: {
-    orgId: v.id("organizations"),
-  },
-  handler: async (ctx, args) => {
-    const org = await ctx.db.get(args.orgId);
-    if (!org) return null;
+	args: {
+		orgId: v.id('organizations')
+	},
+	handler: async (ctx, args) => {
+		const org = await ctx.db.get(args.orgId);
+		if (!org) return null;
 
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .first();
+		const sub = await uniqueSubscriptionForOrg(ctx, org._id);
 
-    // Grace period: past_due orgs retain paid access for 7 days from initial delinquency
-    // Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
-    // Paid access incl. the 7-day past_due grace and trialing — single predicate.
-    const isPaidWithGrace = effectivelyActive(sub, Date.now());
-    const plan = isPaidWithGrace ? (sub?.plan ?? "inactive") : "inactive";
-    const limits = PLANS[plan] ?? PLANS.inactive;
+		// Grace period: past_due orgs retain paid access for 7 days from initial delinquency
+		// Uses dedicated pastDueSince field (not updatedAt, which resets on every mutation)
+		// Paid access incl. the 7-day past_due grace and trialing — single predicate.
+		const isPaidWithGrace = durablyActive(sub);
+		const plan = isPaidWithGrace ? (sub?.plan ?? 'inactive') : 'inactive';
+		const limits = PLANS[plan] ?? PLANS.inactive;
 
-    let periodStart: number;
-    if (isPaidWithGrace && sub?.currentPeriodStart) {
-      periodStart = sub.currentPeriodStart;
-    } else {
-      const now = new Date();
-      periodStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-    }
+		const periodStart = durablePlanUsagePeriodStart(org, sub, isPaidWithGrace);
 
-    // Verified actions: lifetime-minus-baseline (mirrors checkPlanLimits) —
-    // O(1), never-reset-safe, no full verified-action scan.
-    const verifiedActions = await verifiedActionsThisPeriod(ctx, org, periodStart);
+		const usageProjection = await readProjectedPlanUsage(ctx, org, periodStart, limits);
 
-    // Bounded sentAt range reads (mirrors checkPlanLimits) — no full-history collect.
-    const emailsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "emailBlasts");
-    const smsSent = await blastSentThisPeriod(ctx, org._id, periodStart, "smsBlasts");
-
-    return {
-      plan,
-      status: sub?.status ?? "none",
-      periodStart,
-      limits: {
-        maxSeats: limits.maxSeats,
-        maxTemplatesMonth: limits.maxTemplatesMonth,
-        maxVerifiedActions: limits.maxVerifiedActions,
-        maxEmails: limits.maxEmails,
-        maxSms: limits.maxSms,
-      },
-      current: {
-        seats: org.memberCount ?? 0,
-        supporterCount: org.supporterCount ?? 0,
-        verifiedActions,
-        emailsSent,
-        smsSent,
-      },
-    };
-  },
+		return {
+			plan,
+			status: sub?.status ?? 'none',
+			periodStart,
+			usageReady: usageProjection.ready,
+			usageFailureCode: usageProjection.failureCode,
+			usageRepairRequired: usageProjection.repairRequired,
+			usageRepairStatus: usageProjection.repairStatus,
+			limits: {
+				maxSeats: limits.maxSeats,
+				maxTemplatesMonth: limits.maxTemplatesMonth,
+				maxVerifiedActions: limits.maxVerifiedActions,
+				maxEmails: limits.maxEmails,
+				maxSms: limits.maxSms
+			},
+			current: {
+				seats: org.memberCount ?? 0,
+				supporterCount: org.supporterCount ?? 0,
+				verifiedActions: usageProjection.usage.verifiedActions,
+				emailsSent: usageProjection.usage.emailsSent,
+				emailsReserved: usageProjection.usage.emailsReserved,
+				smsSent: usageProjection.usage.smsSent
+			}
+		};
+	}
 });
 
 /**
@@ -445,31 +565,57 @@ export const checkPlanLimitsByOrgId = internalQuery({
  * full trust and pre-validate the orgId before calling.
  */
 type PlanLimitsResult = {
-  plan: string;
-  status: string;
-  periodStart: number;
-  limits: {
-    maxSeats: number;
-    maxTemplatesMonth: number;
-    maxVerifiedActions: number;
-    maxEmails: number;
-    maxSms: number;
-  };
-  current: {
-    seats: number;
-    supporterCount: number;
-    verifiedActions: number;
-    emailsSent: number;
-    smsSent: number;
-  };
+	plan: string;
+	status: string;
+	periodStart: number;
+	usageReady: boolean;
+	usageFailureCode: string | null;
+	usageRepairRequired: boolean;
+	usageRepairStatus: 'not_requested' | 'pending' | 'running' | 'ready' | 'blocked';
+	limits: {
+		maxSeats: number;
+		maxTemplatesMonth: number;
+		maxVerifiedActions: number;
+		maxEmails: number;
+		maxSms: number;
+	};
+	current: {
+		seats: number;
+		supporterCount: number;
+		verifiedActions: number;
+		emailsSent: number;
+		emailsReserved: number;
+		smsSent: number;
+	};
 } | null;
 
 export const checkPlanLimitsByOrgIdForCaller = query({
-  args: { _secret: v.string(), orgId: v.id("organizations") },
-  handler: async (ctx, { _secret, orgId }): Promise<PlanLimitsResult> => {
-    requireInternalSecret(_secret);
-    return await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, { orgId });
-  },
+	args: { _secret: v.string(), orgId: v.id('organizations') },
+	handler: async (ctx, { _secret, orgId }): Promise<PlanLimitsResult> => {
+		requireInternalSecret(_secret);
+		return await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, { orgId });
+	}
+});
+
+/**
+ * Authenticated enqueue boundary for a coded not-ready plan check. The worker
+ * is idempotent and source-paged; this mutation never scans usage history.
+ */
+export const requestPlanUsageRepair = mutation({
+	args: { orgSlug: v.string() },
+	handler: async (ctx, args) => {
+		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
+		return await enqueuePlanUsageRepair(ctx, org._id);
+	}
+});
+
+/** Secret-gated equivalent used by the API-v1 usage adapter. */
+export const requestPlanUsageRepairByOrgIdForCaller = mutation({
+	args: { _secret: v.string(), orgId: v.id('organizations') },
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+		return await enqueuePlanUsageRepair(ctx, args.orgId);
+	}
 });
 
 // =============================================================================
@@ -480,130 +626,98 @@ export const checkPlanLimitsByOrgIdForCaller = query({
  * Create a subscription record (typically called from Stripe webhook).
  */
 export const create = internalMutation({
-  args: {
-    orgId: v.optional(v.id("organizations")),
-    userId: v.optional(v.id("users")),
-    plan: subscriptionPlan,
-    priceCents: v.number(),
-    status: subscriptionStatus,
-    paymentMethod: subscriptionPaymentMethod,
-    stripeSubscriptionId: v.optional(v.string()),
-    currentPeriodStart: v.number(),
-    currentPeriodEnd: v.number(),
-  },
-  handler: async (ctx, args) => {
-    if (!args.orgId && !args.userId) {
-      throw new Error("Either orgId or userId is required");
-    }
+	args: {
+		orgId: v.optional(v.id('organizations')),
+		userId: v.optional(v.id('users')),
+		plan: subscriptionPlan,
+		priceCents: v.number(),
+		status: subscriptionStatus,
+		paymentMethod: subscriptionPaymentMethod,
+		stripeSubscriptionId: v.optional(v.string()),
+		currentPeriodStart: v.number(),
+		currentPeriodEnd: v.number()
+	},
+	handler: async (ctx, args) => {
+		if ((args.orgId === undefined) === (args.userId === undefined)) {
+			throw new Error('SUBSCRIPTION_OWNER_XOR_REQUIRED');
+		}
+		if (args.orgId) {
+			if (!(await ctx.db.get(args.orgId))) throw new Error('SUBSCRIPTION_ORGANIZATION_MISSING');
+			if (INDIVIDUAL_PLANS[args.plan]) throw new Error('SUBSCRIPTION_PLAN_SCOPE_INVALID');
+			if (await uniqueSubscriptionForOrg(ctx, args.orgId)) {
+				throw new Error('SUBSCRIPTION_OWNER_ALREADY_BOUND');
+			}
+		} else if (args.userId) {
+			if (!(await ctx.db.get(args.userId))) throw new Error('SUBSCRIPTION_USER_MISSING');
+			if (!INDIVIDUAL_PLANS[args.plan]) throw new Error('SUBSCRIPTION_PLAN_SCOPE_INVALID');
+			if (await uniqueSubscriptionForUser(ctx, args.userId)) {
+				throw new Error('SUBSCRIPTION_OWNER_ALREADY_BOUND');
+			}
+		}
+		if (
+			args.stripeSubscriptionId &&
+			(await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId))
+		) {
+			throw new Error('SUBSCRIPTION_STRIPE_ID_ALREADY_BOUND');
+		}
 
-    return await ctx.db.insert("subscriptions", {
-      orgId: args.orgId,
-      userId: args.userId,
-      plan: args.plan,
-      priceCents: args.priceCents,
-      status: args.status,
-      paymentMethod: args.paymentMethod,
-      stripeSubscriptionId: args.stripeSubscriptionId,
-      currentPeriodStart: args.currentPeriodStart,
-      currentPeriodEnd: args.currentPeriodEnd,
-      updatedAt: Date.now(),
-    });
-  },
+		return await ctx.db.insert('subscriptions', {
+			orgId: args.orgId,
+			userId: args.userId,
+			plan: args.plan,
+			priceCents: args.priceCents,
+			status: args.status,
+			paymentMethod: args.paymentMethod,
+			stripeSubscriptionId: args.stripeSubscriptionId,
+			currentPeriodStart: args.currentPeriodStart,
+			currentPeriodEnd: args.currentPeriodEnd,
+			updatedAt: Date.now()
+		});
+	}
 });
 
 /**
  * Update a subscription (status, period, plan changes).
  */
 export const update = internalMutation({
-  args: {
-    subscriptionId: v.id("subscriptions"),
-    plan: v.optional(v.string()),
-    priceCents: v.optional(v.number()),
-    status: v.optional(v.string()),
-    currentPeriodStart: v.optional(v.number()),
-    currentPeriodEnd: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    const sub = await ctx.db.get(args.subscriptionId);
-    if (!sub) throw new Error("Subscription not found");
+	args: {
+		subscriptionId: v.id('subscriptions'),
+		plan: v.optional(subscriptionPlan),
+		priceCents: v.optional(v.number()),
+		status: v.optional(subscriptionStatus),
+		currentPeriodStart: v.optional(v.number()),
+		currentPeriodEnd: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const sub = await ctx.db.get(args.subscriptionId);
+		if (!sub) throw new Error('Subscription not found');
+		if (args.plan !== undefined) assertSubscriptionPlanScope(sub, args.plan);
 
-    const patch: Record<string, unknown> = { updatedAt: Date.now() };
-    if (args.plan !== undefined) patch.plan = args.plan;
-    if (args.priceCents !== undefined) patch.priceCents = args.priceCents;
-    if (args.status !== undefined) patch.status = args.status;
-    if (args.currentPeriodStart !== undefined)
-      patch.currentPeriodStart = args.currentPeriodStart;
-    if (args.currentPeriodEnd !== undefined)
-      patch.currentPeriodEnd = args.currentPeriodEnd;
+		const patch: Record<string, unknown> = { updatedAt: Date.now() };
+		if (args.plan !== undefined) patch.plan = args.plan;
+		if (args.priceCents !== undefined) patch.priceCents = args.priceCents;
+		if (args.status !== undefined) patch.status = args.status;
+		if (args.currentPeriodStart !== undefined) patch.currentPeriodStart = args.currentPeriodStart;
+		if (args.currentPeriodEnd !== undefined) patch.currentPeriodEnd = args.currentPeriodEnd;
 
-    await ctx.db.patch(args.subscriptionId, patch);
-    return { success: true };
-  },
+		await ctx.db.patch(args.subscriptionId, patch);
+		return { success: true };
+	}
 });
 
 /**
  * Cancel a subscription.
  */
 export const cancel = mutation({
-  args: {
-    subscriptionId: v.id("subscriptions"),
-  },
-  handler: async (ctx, args) => {
-    const sub = await ctx.db.get(args.subscriptionId);
-    if (!sub) throw new Error("Subscription not found");
-
-    // Verify ownership: require owner role if org-scoped, or auth if user-scoped
-    if (sub.orgId) {
-      const org = await ctx.db.get(sub.orgId);
-      if (!org) throw new Error("Organization not found");
-      await requireOrgRole(ctx, org.slug, "owner");
-    } else {
-      const { userId } = await requireAuth(ctx);
-      if (sub.userId !== userId) throw new Error("Not authorized");
-    }
-
-    // refuse to direct-cancel a Stripe-managed subscription.
-    // Production cancellation flow is via Stripe billing portal → webhook
-    // `customer.subscription.deleted` → `updateByStripeId(status='canceled')`.
-    // Direct-canceling here would desync Stripe (still billing) from Convex
-    // (says canceled). Allow direct cancel only for non-Stripe subs (legacy /
-    // crypto-paid / never-Stripe paths).
-    if (sub.stripeSubscriptionId) {
-      throw new Error(
-        "Cancel via the Stripe billing portal — direct cancellation would desync billing state",
-      );
-    }
-
-    if (sub.orgId) {
-      // ORG sub: drop to the org gated floor ('inactive' is org-shaped —
-      // delivery 0, maxTemplatesMonth 2) and reset org limits.
-      await ctx.db.patch(args.subscriptionId, {
-        status: "canceled",
-        plan: "inactive",
-        updatedAt: Date.now(),
-      });
-      const floorLimits = PLANS.inactive;
-      await ctx.db.patch(sub.orgId, {
-        maxSeats: floorLimits.maxSeats,
-        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
-        updatedAt: Date.now(),
-      });
-    } else {
-      // INDIVIDUAL sub: 'inactive' is the ORG floor (delivery 0 / no authored
-      // limit) — it would be a semantic mismatch on a user row. The individual
-      // free floor is "no active sub → 3 authored/mo", which the authoring cap
-      // derives from a non-active status. So we mark the sub canceled and LEAVE
-      // the individual plan slug intact: the cap reads the plan only when the
-      // status is effectively active, so a canceled individual sub resolves to
-      // the free floor (3) without writing the org-shaped 'inactive' value.
-      await ctx.db.patch(args.subscriptionId, {
-        status: "canceled",
-        updatedAt: Date.now(),
-      });
-    }
-
-    return { success: true };
-  },
+	args: {
+		subscriptionId: v.id('subscriptions')
+	},
+	handler: async () => {
+		// Billing cancellation is exclusively Stripe portal -> signed webhook.
+		// The historical direct mutation had no caller and had to read an
+		// attacker-selected subscription before it could determine authority.
+		throw new Error('SUBSCRIPTION_DIRECT_CANCEL_RETIRED');
+	}
 });
 
 // =============================================================================
@@ -615,188 +729,209 @@ export const cancel = mutation({
  * Signature verification happens in the httpAction before calling this.
  */
 export const processStripeWebhook = internalAction({
-  args: {
-    eventType: v.string(),
-    data: v.any(),
-  },
-  handler: async (ctx, args) => {
-    const { eventType, data } = args;
+	args: {
+		eventType: v.string(),
+		data: v.any()
+	},
+	handler: async (ctx, args) => {
+		const { eventType, data } = args;
 
-    switch (eventType) {
-      case "checkout.session.completed": {
-        const session = data;
-        if (session.mode !== "subscription" || !session.subscription) break;
+		switch (eventType) {
+			case 'checkout.session.completed': {
+				const session = data;
+				if (session.mode !== 'subscription' || !session.subscription) break;
 
-        const plan = session.metadata?.plan;
-        const orgId = session.metadata?.orgId;
-        const userId = session.metadata?.userId;
+				const plan = session.metadata?.plan;
+				const orgId = session.metadata?.orgId;
+				const userId = session.metadata?.userId;
 
-        // Use session.created (Stripe timestamp in seconds) for period start.
-        // The subsequent subscription.updated event will correct to exact Stripe periods.
-        const periodStartMs = (session.created ?? Math.floor(Date.now() / 1000)) * 1000;
+				// Use session.created (Stripe timestamp in seconds) for period start.
+				// The subsequent subscription.updated event will correct to exact Stripe periods.
+				const periodStartMs = (session.created ?? Math.floor(Date.now() / 1000)) * 1000;
 
-        // INDIVIDUAL (person-layer) checkout: metadata.userId + an individual
-        // plan. User-scoped upsert, NO org-limit sync.
-        if (userId && plan && INDIVIDUAL_PLANS[plan]) {
-          await ctx.runMutation(internal.subscriptions.upsertIndividualFromStripe, {
-            userId,
-            plan,
-            priceCents: INDIVIDUAL_PLANS[plan].priceCents,
-            status: "active",
-            stripeSubscriptionId: session.subscription,
-            currentPeriodStart: periodStartMs,
-            currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000,
-          });
-          break;
-        }
+				// INDIVIDUAL (person-layer) checkout: metadata.userId + an individual
+				// plan. User-scoped upsert, NO org-limit sync.
+				if (userId && plan && INDIVIDUAL_PLANS[plan]) {
+					await ctx.runMutation(internal.subscriptions.upsertIndividualFromStripe, {
+						userId,
+						plan,
+						priceCents: INDIVIDUAL_PLANS[plan].priceCents,
+						status: 'active',
+						stripeSubscriptionId: session.subscription,
+						currentPeriodStart: periodStartMs,
+						currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000
+					});
+					break;
+				}
 
-        // ORG checkout: metadata.orgId + a marketed org plan. Syncs org limits.
-        if (orgId && plan && PLANS[plan]) {
-          await ctx.runMutation(internal.subscriptions.upsertFromStripe, {
-            orgId,
-            plan,
-            priceCents: PLANS[plan].priceCents,
-            status: "active",
-            stripeSubscriptionId: session.subscription,
-            currentPeriodStart: periodStartMs,
-            currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000,
-          });
-        }
-        break;
-      }
+				// ORG checkout: metadata.orgId + a marketed org plan. Syncs org limits.
+				if (orgId && plan && PLANS[plan]) {
+					await ctx.runMutation(internal.subscriptions.upsertFromStripe, {
+						orgId,
+						plan,
+						priceCents: PLANS[plan].priceCents,
+						status: 'active',
+						stripeSubscriptionId: session.subscription,
+						currentPeriodStart: periodStartMs,
+						currentPeriodEnd: periodStartMs + 30 * 24 * 60 * 60 * 1000
+					});
+				}
+				break;
+			}
 
-      case "customer.subscription.updated": {
-        const sub = data;
-        // cancel_at_period_end means "still active until period end, then cancel"
-        // — the org retains paid access until current_period_end
-        const effectiveStatus = mapStripeStatus(sub.status);
+			case 'customer.subscription.created':
+			case 'customer.subscription.updated': {
+				const sub = data;
+				// cancel_at_period_end means "still active until period end, then cancel"
+				// — the org retains paid access until current_period_end
+				const effectiveStatus = mapStripeStatus(sub.status);
 
-        // Extract plan from price lookup_key or metadata
-        const priceItem = Array.isArray(sub.items?.data) ? sub.items.data[0] : null;
-        const plan = priceItem?.price?.lookup_key ?? sub.metadata?.plan ?? undefined;
-        const priceCents = priceItem?.price?.unit_amount ?? undefined;
+				// Extract plan from price lookup_key or metadata
+				const priceItem = Array.isArray(sub.items?.data) ? sub.items.data[0] : null;
+				const plan = priceItem?.price?.lookup_key ?? sub.metadata?.plan ?? undefined;
+				const priceCents = priceItem?.price?.unit_amount ?? undefined;
 
-        // Use Stripe's actual period timestamps (seconds → ms)
-        const periodStart = sub.current_period_start
-          ? sub.current_period_start * 1000
-          : undefined;
-        const periodEnd = sub.current_period_end
-          ? sub.current_period_end * 1000
-          : undefined;
+				// Dahlia's authoritative period lives on the subscription item. A
+				// successful invoice later writes this same coordinate transactionally
+				// with its provider-capacity balance.
+				const billingPeriod = stripeSubscriptionBillingPeriod(sub);
+				const periodStart = billingPeriod ? billingPeriod.start * 1_000 : undefined;
+				const periodEnd = billingPeriod ? billingPeriod.end * 1_000 : undefined;
 
-        // Accept BOTH org and individual plan slugs as valid plan changes (e.g.
-        // a Stripe-portal voice→advocate switch). Only request org-limit sync
-        // for ORG plans; individual plans never sync org limits — and
-        // updateByStripeId additionally gates the sync on `sub.orgId`, so even
-        // if requested it cannot touch a user-scoped sub.
-        const isOrgPlan = !!(plan && PLANS[plan]);
-        const isIndividualPlan = !!(plan && INDIVIDUAL_PLANS[plan]);
-        const validPlan = isOrgPlan || isIndividualPlan;
+				// Accept BOTH org and individual plan slugs as valid plan changes (e.g.
+				// a Stripe-portal voice→advocate switch). Only request org-limit sync
+				// for ORG plans; individual plans never sync org limits — and
+				// updateByStripeId additionally gates the sync on `sub.orgId`, so even
+				// if requested it cannot touch a user-scoped sub.
+				const isOrgPlan = !!(plan && PLANS[plan]);
+				const isIndividualPlan = !!(plan && INDIVIDUAL_PLANS[plan]);
+				const validPlan = isOrgPlan || isIndividualPlan;
 
-        await ctx.runMutation(internal.subscriptions.updateByStripeId, {
-          stripeSubscriptionId: sub.id,
-          status: effectiveStatus,
-          plan: validPlan ? plan : undefined,
-          priceCents,
-          currentPeriodStart: periodStart,
-          currentPeriodEnd: periodEnd,
-          syncOrgLimits: isOrgPlan ? true : undefined,
-        });
-        break;
-      }
+				await ctx.runMutation(internal.subscriptions.updateByStripeId, {
+					stripeSubscriptionId: sub.id,
+					status: effectiveStatus,
+					plan: validPlan ? plan : undefined,
+					priceCents,
+					currentPeriodStart: periodStart,
+					currentPeriodEnd: periodEnd,
+					billingPeriodSource: billingPeriod ? 'stripe_subscription_item' : undefined,
+					syncOrgLimits: isOrgPlan ? true : undefined
+				});
+				break;
+			}
 
-      case "customer.subscription.deleted": {
-        const sub = data;
-        await ctx.runMutation(internal.subscriptions.updateByStripeId, {
-          stripeSubscriptionId: sub.id,
-          status: "canceled",
-          resetOrgLimits: true,
-        });
-        break;
-      }
+			case 'customer.subscription.deleted': {
+				const sub = data;
+				await ctx.runMutation(internal.subscriptions.updateByStripeId, {
+					stripeSubscriptionId: sub.id,
+					status: 'canceled',
+					resetOrgLimits: true
+				});
+				break;
+			}
 
-      case "invoice.payment_failed": {
-        const invoice = data;
-        const subId = invoice.parent?.subscription_details?.subscription;
-        if (!subId) break;
-        const stripeSubId = typeof subId === "string" ? subId : subId.id;
+			case 'invoice.payment_failed': {
+				const invoice = data;
+				const subId = invoice.parent?.subscription_details?.subscription;
+				if (!subId) break;
+				const stripeSubId = typeof subId === 'string' ? subId : subId.id;
 
-        await ctx.runMutation(internal.subscriptions.updateByStripeId, {
-          stripeSubscriptionId: stripeSubId,
-          status: "past_due",
-          setPastDueSince: true, // Only sets if not already past_due
-        });
-        break;
-      }
+				await ctx.runMutation(internal.subscriptions.updateByStripeId, {
+					stripeSubscriptionId: stripeSubId,
+					status: 'past_due',
+					setPastDueSince: true // Only sets if not already past_due
+				});
+				break;
+			}
 
-      case "invoice.payment_succeeded": {
-        // Clear past_due status when payment retry succeeds.
-        // Guard: only transition past_due → active, not canceled → active.
-        const invoice = data;
-        const subId = invoice.parent?.subscription_details?.subscription;
-        if (!subId) break;
-        const stripeSubId = typeof subId === "string" ? subId : subId.id;
+			case 'invoice.payment_succeeded': {
+				// This signed Stripe event is the sole authority that mints paid
+				// provider capacity. Subscription status and plan price are not proof
+				// of money received; the invoice id makes retries idempotent.
+				const invoice = data;
+				const subId = invoice.parent?.subscription_details?.subscription;
+				if (!subId) break;
+				const stripeSubId = typeof subId === 'string' ? subId : subId.id;
 
-        // Read current status to guard the transition
-        const currentSub = await ctx.runQuery(internal.subscriptions.getByStripeId, {
-          stripeSubscriptionId: stripeSubId,
-        });
-        if (currentSub?.status === "past_due") {
-          await ctx.runMutation(internal.subscriptions.updateByStripeId, {
-            stripeSubscriptionId: stripeSubId,
-            status: "active",
-          });
-        }
-        break;
-      }
+				// Preserve the pre-existing delinquency recovery even if the separate
+				// capacity proof below is malformed. Convex actions do not roll back a
+				// completed mutation when a later step throws.
+				const currentSub = await ctx.runQuery(internal.subscriptions.getByStripeId, {
+					stripeSubscriptionId: stripeSubId
+				});
+				if (currentSub?.status === 'past_due') {
+					await ctx.runMutation(internal.subscriptions.updateByStripeId, {
+						stripeSubscriptionId: stripeSubId,
+						status: 'active'
+					});
+				}
 
-      // Subscription schedules: handle portal-initiated plan changes
-      // When a user downgrades via the Stripe portal, Stripe creates a schedule
-      // that takes effect at the end of the current billing period.
-      case "subscription_schedule.completed": {
-        // Schedule completed — the plan change has taken effect.
-        // Stripe will also fire subscription.updated, which handles the actual
-        // plan/limit sync. This handler just logs for observability.
-        console.log("[subscriptions] Subscription schedule completed:", data.id);
-        break;
-      }
+				const billingPeriod = stripeInvoiceBillingPeriod(invoice);
+				if (
+					typeof invoice.id !== 'string' ||
+					!Number.isSafeInteger(invoice.amount_paid) ||
+					billingPeriod === null
+				) {
+					throw new Error('AGENTIC_PROVIDER_PAYMENT_PROOF_INVALID');
+				}
 
-      case "subscription_schedule.canceled": {
-        // User canceled the scheduled change (e.g., changed their mind about downgrading)
-        console.log("[subscriptions] Subscription schedule canceled:", data.id);
-        break;
-      }
+				await ctx.runMutation(internal.subscriptions.creditAgenticProviderPayment, {
+					stripeSubscriptionId: stripeSubId,
+					paymentId: invoice.id,
+					amountPaidCents: invoice.amount_paid,
+					billingPeriodStart: billingPeriod.start * 1_000,
+					billingPeriodEnd: billingPeriod.end * 1_000
+				});
+				break;
+			}
 
-      case "subscription_schedule.released": {
-        // Schedule released — subscription returns to normal management
-        console.log("[subscriptions] Subscription schedule released:", data.id);
-        break;
-      }
-    }
+			// Subscription schedules: handle portal-initiated plan changes
+			// When a user downgrades via the Stripe portal, Stripe creates a schedule
+			// that takes effect at the end of the current billing period.
+			case 'subscription_schedule.completed': {
+				// Schedule completed — the plan change has taken effect.
+				// Stripe will also fire subscription.updated, which handles the actual
+				// plan/limit sync. This handler just logs for observability.
+				console.log('[subscriptions] Subscription schedule completed:', data.id);
+				break;
+			}
 
-    return { ok: true };
-  },
+			case 'subscription_schedule.canceled': {
+				// User canceled the scheduled change (e.g., changed their mind about downgrading)
+				console.log('[subscriptions] Subscription schedule canceled:', data.id);
+				break;
+			}
+
+			case 'subscription_schedule.released': {
+				// Schedule released — subscription returns to normal management
+				console.log('[subscriptions] Subscription schedule released:', data.id);
+				break;
+			}
+		}
+
+		return { ok: true };
+	}
 });
 
-function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "trialing" {
-  switch (status) {
-    case "active":
-      return "active";
-    case "past_due":
-      return "past_due";
-    case "canceled":
-      return "canceled";
-    case "trialing":
-      return "trialing";
-    case "incomplete":
-    case "incomplete_expired":
-    case "unpaid":
-    case "paused":
-      return "past_due"; // Non-active statuses should not grant full access
-    default:
-      console.warn(`[subscriptions] Unknown Stripe status: ${status}, treating as past_due`);
-      return "past_due";
-  }
+function mapStripeStatus(status: string): 'active' | 'past_due' | 'canceled' | 'trialing' {
+	switch (status) {
+		case 'active':
+			return 'active';
+		case 'past_due':
+			return 'past_due';
+		case 'canceled':
+			return 'canceled';
+		case 'trialing':
+			return 'trialing';
+		case 'incomplete':
+		case 'incomplete_expired':
+		case 'unpaid':
+		case 'paused':
+			return 'past_due'; // Non-active statuses should not grant full access
+		default:
+			console.warn(`[subscriptions] Unknown Stripe status: ${status}, treating as past_due`);
+			return 'past_due';
+	}
 }
 
 // =============================================================================
@@ -804,101 +939,99 @@ function mapStripeStatus(status: string): "active" | "past_due" | "canceled" | "
 // =============================================================================
 
 /**
- * Snapshot the verified-action period baseline at billing-period rollover.
- *
- * Sets baseline = the org's current monotonic lifetime tally and records which
- * period the baseline belongs to (baselineAt = periodStart). The billing read
- * then computes period_count = lifetime - baseline in O(1), no scan.
- *
- * Idempotent + monotonic: only advances the baseline when `periodStart` is
- * newer than the recorded baselineAt, so a duplicate or out-of-order Stripe
- * webhook can't rewind it (which would over-count the period). A snapshot for
- * the SAME period start is a no-op. The baseline only ever moves forward.
- */
-async function snapshotVerifiedActionBaseline(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  periodStart: number,
-): Promise<void> {
-  const org = await ctx.db.get(orgId);
-  if (!org) return;
-  const existingAt = org.verifiedActionsPeriodBaselineAt ?? 0;
-  if (periodStart <= existingAt) return; // same/older period — no rewind
-  await ctx.db.patch(orgId, {
-    verifiedActionsPeriodBaseline: org.verifiedActionsLifetime ?? 0,
-    verifiedActionsPeriodBaselineAt: periodStart,
-  });
-}
-
-/**
  * Upsert a subscription from Stripe checkout completion.
  */
 export const upsertFromStripe = internalMutation({
-  args: {
-    orgId: v.string(),
-    plan: subscriptionPlan,
-    priceCents: v.number(),
-    status: subscriptionStatus,
-    stripeSubscriptionId: v.string(),
-    currentPeriodStart: v.number(),
-    currentPeriodEnd: v.number(),
-  },
-  handler: async (ctx, args) => {
-    // orgId from Stripe metadata is the Convex document ID
-    const orgId = args.orgId as Id<"organizations">;
-    const org = await ctx.db.get(orgId);
+	args: {
+		orgId: v.string(),
+		plan: subscriptionPlan,
+		priceCents: v.number(),
+		status: subscriptionStatus,
+		stripeSubscriptionId: v.string(),
+		currentPeriodStart: v.number(),
+		currentPeriodEnd: v.number()
+	},
+	handler: async (ctx, args) => {
+		// orgId from Stripe metadata is the Convex document ID
+		const orgId = args.orgId as Id<'organizations'>;
+		const org = await ctx.db.get(orgId);
 
-    if (!org) {
-      console.warn(`[subscriptions] Org not found for Stripe webhook: ${args.orgId}`);
-      return;
-    }
+		if (!org) {
+			console.warn(`[subscriptions] Org not found for Stripe webhook: ${args.orgId}`);
+			return;
+		}
+		assertSubscriptionPlanScope({ orgId: org._id }, args.plan);
 
-    // Check for existing subscription
-    const existing = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-      .first();
+		// Check for existing subscription
+		const existing = await uniqueSubscriptionForOrg(ctx, org._id);
+		const stripeBinding = await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
+		if (
+			stripeBinding &&
+			(stripeBinding._id !== existing?._id ||
+				stripeBinding.orgId !== org._id ||
+				stripeBinding.userId !== undefined)
+		) {
+			throw new Error('SUBSCRIPTION_STRIPE_OWNER_MISMATCH');
+		}
 
-    const now = Date.now();
+		const now = Date.now();
 
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        plan: args.plan,
-        priceCents: args.priceCents,
-        status: args.status,
-        stripeSubscriptionId: args.stripeSubscriptionId,
-        currentPeriodStart: args.currentPeriodStart,
-        currentPeriodEnd: args.currentPeriodEnd,
-        updatedAt: now,
-      });
-    } else {
-      await ctx.db.insert("subscriptions", {
-        orgId: org._id,
-        plan: args.plan,
-        priceCents: args.priceCents,
-        status: args.status,
-        paymentMethod: "stripe",
-        stripeSubscriptionId: args.stripeSubscriptionId,
-        currentPeriodStart: args.currentPeriodStart,
-        currentPeriodEnd: args.currentPeriodEnd,
-        updatedAt: now,
-      });
-    }
+		if (existing) {
+			const sameStripeSubscription = existing.stripeSubscriptionId === args.stripeSubscriptionId;
+			await ctx.db.patch(existing._id, {
+				plan: args.plan,
+				priceCents: args.priceCents,
+				status: args.status,
+				stripeSubscriptionId: args.stripeSubscriptionId,
+				// Checkout knows only session.created. Once this exact Stripe
+				// subscription has a coordinate, only subscription items or a settled
+				// invoice may replace it; a delayed checkout cannot reintroduce the
+				// synthetic window after capacity was minted.
+				...(sameStripeSubscription
+					? {}
+					: {
+							currentPeriodStart: args.currentPeriodStart,
+							currentPeriodEnd: args.currentPeriodEnd,
+							billingPeriodSource: 'checkout_approximate' as const
+						}),
+				updatedAt: now
+			});
+		} else {
+			await ctx.db.insert('subscriptions', {
+				orgId: org._id,
+				plan: args.plan,
+				priceCents: args.priceCents,
+				status: args.status,
+				paymentMethod: 'stripe',
+				stripeSubscriptionId: args.stripeSubscriptionId,
+				currentPeriodStart: args.currentPeriodStart,
+				currentPeriodEnd: args.currentPeriodEnd,
+				billingPeriodSource: 'checkout_approximate',
+				updatedAt: now
+			});
+		}
 
-    // Sync org limits to match new plan
-    const planDef = PLANS[args.plan];
-    if (planDef) {
-      await ctx.db.patch(org._id, {
-        maxSeats: planDef.maxSeats,
-        maxTemplatesMonth: planDef.maxTemplatesMonth,
-        updatedAt: now,
-      });
-    }
+		// Sync org limits to match new plan
+		const planDef = PLANS[args.plan];
+		if (planDef) {
+			await ctx.db.patch(org._id, {
+				maxSeats: planDef.maxSeats,
+				maxTemplatesMonth: planDef.maxTemplatesMonth,
+				updatedAt: now
+			});
+		}
 
-    // Snapshot the verified-action billing baseline for the new period so the
-    // metering read is O(1) (no scan) for this paid org going forward.
-    await snapshotVerifiedActionBaseline(ctx, org._id, args.currentPeriodStart);
-  },
+		// Enqueue an exact period projection. The worker reconstructs from the
+		// authoritative period start, so a delayed webhook cannot erase sends that
+		// already happened in this period.
+		await snapshotPlanUsageBaselines(
+			ctx,
+			org._id,
+			existing?.stripeSubscriptionId === args.stripeSubscriptionId
+				? existing.currentPeriodStart
+				: args.currentPeriodStart
+		);
+	}
 });
 
 /**
@@ -910,104 +1043,142 @@ export const upsertFromStripe = internalMutation({
  * allowance; nothing else is unlocked.
  */
 export const upsertIndividualFromStripe = internalMutation({
-  args: {
-    userId: v.string(),
-    plan: subscriptionPlan,
-    priceCents: v.number(),
-    status: subscriptionStatus,
-    stripeSubscriptionId: v.string(),
-    currentPeriodStart: v.number(),
-    currentPeriodEnd: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const userId = args.userId as Id<"users">;
-    const user = await ctx.db.get(userId);
-    if (!user) {
-      console.warn(`[subscriptions] User not found for Stripe webhook: ${args.userId}`);
-      return;
-    }
-    // Guard: only individual plans may be written to a user-scoped sub. An org
-    // plan slug arriving on a userId checkout is a metadata mismatch — refuse it
-    // rather than silently granting org-shaped state to an individual row.
-    if (!INDIVIDUAL_PLANS[args.plan]) {
-      console.warn(`[subscriptions] Non-individual plan "${args.plan}" on user checkout — ignoring`);
-      return;
-    }
+	args: {
+		userId: v.string(),
+		plan: subscriptionPlan,
+		priceCents: v.number(),
+		status: subscriptionStatus,
+		stripeSubscriptionId: v.string(),
+		currentPeriodStart: v.number(),
+		currentPeriodEnd: v.number()
+	},
+	handler: async (ctx, args) => {
+		const userId = args.userId as Id<'users'>;
+		const user = await ctx.db.get(userId);
+		if (!user) {
+			console.warn(`[subscriptions] User not found for Stripe webhook: ${args.userId}`);
+			return;
+		}
+		// Guard: only individual plans may be written to a user-scoped sub. An org
+		// plan slug arriving on a userId checkout is a metadata mismatch — refuse it
+		// rather than silently granting org-shaped state to an individual row.
+		if (!INDIVIDUAL_PLANS[args.plan]) {
+			console.warn(
+				`[subscriptions] Non-individual plan "${args.plan}" on user checkout — ignoring`
+			);
+			return;
+		}
 
-    const existing = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_userId", (idx) => idx.eq("userId", userId))
-      .first();
+		const existing = await uniqueSubscriptionForUser(ctx, userId);
+		const stripeBinding = await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
+		if (
+			stripeBinding &&
+			(stripeBinding._id !== existing?._id ||
+				stripeBinding.userId !== userId ||
+				stripeBinding.orgId !== undefined)
+		) {
+			throw new Error('SUBSCRIPTION_STRIPE_OWNER_MISMATCH');
+		}
 
-    const now = Date.now();
+		const now = Date.now();
 
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        plan: args.plan,
-        priceCents: args.priceCents,
-        status: args.status,
-        stripeSubscriptionId: args.stripeSubscriptionId,
-        currentPeriodStart: args.currentPeriodStart,
-        currentPeriodEnd: args.currentPeriodEnd,
-        updatedAt: now,
-      });
-    } else {
-      await ctx.db.insert("subscriptions", {
-        userId,
-        plan: args.plan,
-        priceCents: args.priceCents,
-        status: args.status,
-        paymentMethod: "stripe",
-        stripeSubscriptionId: args.stripeSubscriptionId,
-        currentPeriodStart: args.currentPeriodStart,
-        currentPeriodEnd: args.currentPeriodEnd,
-        updatedAt: now,
-      });
-    }
-    // NOTE: no org-limit sync, no verified-action baseline. Individual subs buy
-    // ONLY authoring volume (read off this row by the templates.ts cap).
-  },
+		if (existing) {
+			const sameStripeSubscription = existing.stripeSubscriptionId === args.stripeSubscriptionId;
+			await ctx.db.patch(existing._id, {
+				plan: args.plan,
+				priceCents: args.priceCents,
+				status: args.status,
+				stripeSubscriptionId: args.stripeSubscriptionId,
+				...(sameStripeSubscription
+					? {}
+					: {
+							currentPeriodStart: args.currentPeriodStart,
+							currentPeriodEnd: args.currentPeriodEnd,
+							billingPeriodSource: 'checkout_approximate' as const
+						}),
+				updatedAt: now
+			});
+		} else {
+			await ctx.db.insert('subscriptions', {
+				userId,
+				plan: args.plan,
+				priceCents: args.priceCents,
+				status: args.status,
+				paymentMethod: 'stripe',
+				stripeSubscriptionId: args.stripeSubscriptionId,
+				currentPeriodStart: args.currentPeriodStart,
+				currentPeriodEnd: args.currentPeriodEnd,
+				billingPeriodSource: 'checkout_approximate',
+				updatedAt: now
+			});
+		}
+		// NOTE: no org-limit sync, no verified-action baseline. Individual subs buy
+		// ONLY authoring volume (read off this row by the templates.ts cap).
+	}
 });
 
 /**
  * One-time backfill: re-sync all org limits from their current subscription plan.
- * Fixes orgs created with wrong defaults (maxSeats:10, maxTemplatesMonth:50)
- * or provisioned via drifted Convex PLANS mirror.
+ * Fixes orgs created with the pre-plan org defaults, or provisioned before the
+ * plan table was shared.
  * Safe to run multiple times (idempotent).
  */
 export const backfillOrgLimits = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const orgs = await ctx.db.query("organizations").collect();
-    let updated = 0;
+	args: {
+		cursor: v.optional(v.string()),
+		scanned: v.optional(v.number()),
+		updated: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const page = await ctx.db
+			.query('organizations')
+			.order('asc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 25,
+				maximumRowsRead: 26,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') throw new Error('ORG_LIMIT_BACKFILL_PAGE_TOO_LARGE');
+		let updated = args.updated ?? 0;
 
-    for (const org of orgs) {
-      // Find active subscription for this org
-      const sub = await ctx.db
-        .query("subscriptions")
-        .withIndex("by_orgId", (idx) => idx.eq("orgId", org._id))
-        .first();
+		for (const org of page.page) {
+			// Find active subscription for this org
+			const sub = await uniqueSubscriptionForOrg(ctx, org._id);
 
-      const plan = sub?.status === "active" ? sub.plan : "inactive";
-      const planDef = PLANS[plan] ?? PLANS.inactive;
+			const plan = sub?.status === 'active' ? sub.plan : 'inactive';
+			const planDef = PLANS[plan] ?? PLANS.inactive;
 
-      // Only patch if limits differ from canonical values
-      if (
-        org.maxSeats !== planDef.maxSeats ||
-        org.maxTemplatesMonth !== planDef.maxTemplatesMonth
-      ) {
-        await ctx.db.patch(org._id, {
-          maxSeats: planDef.maxSeats,
-          maxTemplatesMonth: planDef.maxTemplatesMonth,
-          updatedAt: Date.now(),
-        });
-        updated++;
-      }
-    }
+			// Only patch if limits differ from canonical values
+			if (
+				org.maxSeats !== planDef.maxSeats ||
+				org.maxTemplatesMonth !== planDef.maxTemplatesMonth
+			) {
+				await ctx.db.patch(org._id, {
+					maxSeats: planDef.maxSeats,
+					maxTemplatesMonth: planDef.maxTemplatesMonth,
+					updatedAt: Date.now()
+				});
+				updated++;
+			}
+		}
 
-    console.log(`[backfillOrgLimits] Updated ${updated}/${orgs.length} orgs`);
-    return { updated, total: orgs.length };
-  },
+		const scanned = (args.scanned ?? 0) + page.page.length;
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, continueOrgLimitsBackfillRef, {
+				cursor: page.continueCursor,
+				scanned,
+				updated
+			});
+		} else {
+			console.log(`[backfillOrgLimits] Updated ${updated}/${scanned} orgs`);
+		}
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			updated,
+			total: scanned
+		};
+	}
 });
 
 /**
@@ -1016,31 +1187,59 @@ export const backfillOrgLimits = internalMutation({
  * Safe to run multiple times (skips actions that already have orgId).
  */
 export const backfillCampaignActionOrgIds = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const actions = await ctx.db.query("campaignActions").collect();
-    let updated = 0;
-    const campaignCache = new Map<string, Id<"organizations"> | undefined>();
+	args: {
+		cursor: v.optional(v.string()),
+		scanned: v.optional(v.number()),
+		updated: v.optional(v.number())
+	},
+	handler: async (ctx, args) => {
+		const page = await ctx.db
+			.query('campaignActions')
+			.order('asc')
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 100,
+				maximumRowsRead: 101,
+				maximumBytesRead: 1024 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('CAMPAIGN_ACTION_ORG_BACKFILL_PAGE_TOO_LARGE');
+		}
+		let updated = args.updated ?? 0;
+		const campaignCache = new Map<string, Id<'organizations'> | undefined>();
 
-    for (const action of actions) {
-      if (action.orgId) continue; // Already has orgId
+		for (const action of page.page) {
+			if (action.orgId) continue; // Already has orgId
 
-      let orgId = campaignCache.get(action.campaignId);
-      if (orgId === undefined) {
-        const campaign = await ctx.db.get(action.campaignId);
-        orgId = campaign?.orgId ?? undefined;
-        campaignCache.set(action.campaignId, orgId);
-      }
+			let orgId = campaignCache.get(action.campaignId);
+			if (orgId === undefined) {
+				const campaign = await ctx.db.get(action.campaignId);
+				orgId = campaign?.orgId ?? undefined;
+				campaignCache.set(action.campaignId, orgId);
+			}
 
-      if (orgId) {
-        await ctx.db.patch(action._id, { orgId });
-        updated++;
-      }
-    }
+			if (orgId) {
+				await ctx.db.patch(action._id, { orgId });
+				updated++;
+			}
+		}
 
-    console.log(`[backfillCampaignActionOrgIds] Updated ${updated}/${actions.length} actions`);
-    return { updated, total: actions.length };
-  },
+		const scanned = (args.scanned ?? 0) + page.page.length;
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, continueCampaignActionOrgBackfillRef, {
+				cursor: page.continueCursor,
+				scanned,
+				updated
+			});
+		} else {
+			console.log(`[backfillCampaignActionOrgIds] Updated ${updated}/${scanned} actions`);
+		}
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			updated,
+			total: scanned
+		};
+	}
 });
 
 /**
@@ -1048,100 +1247,468 @@ export const backfillCampaignActionOrgIds = internalMutation({
  * Used for guarded status transitions (e.g., payment_succeeded only clears past_due).
  */
 export const getByStripeId = internalQuery({
-  args: { stripeSubscriptionId: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("subscriptions")
-      .withIndex("by_stripeSubscriptionId", (idx) =>
-        idx.eq("stripeSubscriptionId", args.stripeSubscriptionId),
-      )
-      .first();
-  },
+	args: { stripeSubscriptionId: v.string() },
+	handler: async (ctx, args) => {
+		return await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
+	}
+});
+
+/**
+ * Convert one settled Stripe invoice into an additive, per-org provider
+ * balance. Both the receipt dedupe row and aggregate balance update commit in
+ * the same Convex mutation transaction.
+ */
+export const creditAgenticProviderPayment = internalMutation({
+	args: {
+		stripeSubscriptionId: v.string(),
+		paymentId: v.string(),
+		amountPaidCents: v.number(),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number()
+	},
+	handler: async (ctx, args) => {
+		if (
+			args.paymentId.length < 1 ||
+			args.paymentId.length > 255 ||
+			!Number.isSafeInteger(args.amountPaidCents) ||
+			args.amountPaidCents < 0 ||
+			!Number.isSafeInteger(args.billingPeriodStart) ||
+			!Number.isSafeInteger(args.billingPeriodEnd) ||
+			args.billingPeriodStart < 0 ||
+			args.billingPeriodEnd <= args.billingPeriodStart ||
+			args.billingPeriodEnd - args.billingPeriodStart > 370 * 24 * 60 * 60 * 1_000
+		) {
+			throw new Error('AGENTIC_PROVIDER_PAYMENT_PROOF_INVALID');
+		}
+
+		const duplicate = await ctx.db
+			.query('agenticProviderReceipts')
+			.withIndex('by_paymentId', (q) => q.eq('paymentId', args.paymentId))
+			.unique();
+		if (duplicate) {
+			if (
+				duplicate.amountPaidCents !== args.amountPaidCents ||
+				duplicate.billingPeriodStart !== args.billingPeriodStart ||
+				duplicate.billingPeriodEnd !== args.billingPeriodEnd
+			) {
+				throw new Error('AGENTIC_PROVIDER_PAYMENT_ID_COLLISION');
+			}
+			return { credited: false as const, balanceUnits: duplicate.balanceUnits };
+		}
+
+		const sub = await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
+		if (!sub) throw new Error('AGENTIC_PROVIDER_SUBSCRIPTION_MISSING');
+		if (
+			!sub.orgId ||
+			sub.userId ||
+			sub.paymentMethod !== 'stripe' ||
+			!PLANS[sub.plan] ||
+			sub.plan === 'inactive'
+		) {
+			return { credited: false as const, balanceUnits: 0 };
+		}
+		const capacity = agenticProviderCapacityForPayment(args.amountPaidCents);
+		const rows = await ctx.db
+			.query('agenticProviderBalances')
+			.withIndex('by_orgId_period', (q) =>
+				q.eq('orgId', sub.orgId!).eq('billingPeriodStart', args.billingPeriodStart)
+			)
+			.take(2);
+		if (rows.length > 1) throw new Error('AGENTIC_PROVIDER_BALANCE_CARDINALITY_INVALID');
+		const existing = rows[0];
+		if (
+			existing &&
+			(existing.subscriptionId !== sub._id || existing.billingPeriodEnd !== args.billingPeriodEnd)
+		) {
+			throw new Error('AGENTIC_PROVIDER_BALANCE_COORDINATE_INVALID');
+		}
+		const balanceUnits = (existing?.balanceUnits ?? 0) + capacity.balanceUnits;
+		const amountPaidCents = (existing?.amountPaidCents ?? 0) + args.amountPaidCents;
+		if (!Number.isSafeInteger(balanceUnits) || !Number.isSafeInteger(amountPaidCents)) {
+			throw new Error('AGENTIC_PROVIDER_BALANCE_OVERFLOW');
+		}
+		const now = Date.now();
+		// The successful invoice line is the period authority for both readers and
+		// spend. Updating the subscription and its balance inside this mutation
+		// makes mismatched coordinates impossible to commit at the payment seam.
+		await ctx.db.patch(sub._id, {
+			currentPeriodStart: args.billingPeriodStart,
+			currentPeriodEnd: args.billingPeriodEnd,
+			billingPeriodSource: 'settled_invoice',
+			updatedAt: now
+		});
+		if (existing) {
+			await ctx.db.patch(existing._id, { balanceUnits, amountPaidCents, updatedAt: now });
+		} else {
+			await ctx.db.insert('agenticProviderBalances', {
+				orgId: sub.orgId,
+				subscriptionId: sub._id,
+				billingPeriodStart: args.billingPeriodStart,
+				billingPeriodEnd: args.billingPeriodEnd,
+				balanceUnits,
+				amountPaidCents,
+				updatedAt: now
+			});
+		}
+		await ctx.db.insert('agenticProviderReceipts', {
+			paymentId: args.paymentId,
+			orgId: sub.orgId,
+			subscriptionId: sub._id,
+			billingPeriodStart: args.billingPeriodStart,
+			billingPeriodEnd: args.billingPeriodEnd,
+			amountPaidCents: args.amountPaidCents,
+			balanceUnits: capacity.balanceUnits,
+			createdAt: now
+		});
+		await snapshotPlanUsageBaselines(ctx, sub.orgId, args.billingPeriodStart);
+		return { credited: true as const, balanceUnits };
+	}
 });
 
 /**
  * Update subscription by Stripe subscription ID.
  */
 export const updateByStripeId = internalMutation({
-  args: {
-    stripeSubscriptionId: v.string(),
-    status: subscriptionStatus,
-    plan: v.optional(subscriptionPlan),
-    priceCents: v.optional(v.number()),
-    currentPeriodStart: v.optional(v.number()),
-    currentPeriodEnd: v.optional(v.number()),
-    resetOrgLimits: v.optional(v.boolean()),
-    syncOrgLimits: v.optional(v.boolean()),
-    setPastDueSince: v.optional(v.boolean()),
-  },
-  handler: async (ctx, args) => {
-    const sub = await ctx.db
-      .query("subscriptions")
-      .withIndex("by_stripeSubscriptionId", (idx) =>
-        idx.eq("stripeSubscriptionId", args.stripeSubscriptionId),
-      )
-      .first();
+	args: {
+		stripeSubscriptionId: v.string(),
+		status: subscriptionStatus,
+		plan: v.optional(subscriptionPlan),
+		priceCents: v.optional(v.number()),
+		currentPeriodStart: v.optional(v.number()),
+		currentPeriodEnd: v.optional(v.number()),
+		billingPeriodSource: v.optional(v.literal('stripe_subscription_item')),
+		resetOrgLimits: v.optional(v.boolean()),
+		syncOrgLimits: v.optional(v.boolean()),
+		setPastDueSince: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const sub = await uniqueSubscriptionForStripeId(ctx, args.stripeSubscriptionId);
 
-    if (!sub) {
-      throw new Error(
-        `[subscriptions] No subscription found for Stripe ID: ${args.stripeSubscriptionId}. ` +
-        `Stripe will retry this event.`,
-      );
-    }
+		if (!sub) {
+			throw new Error(
+				`[subscriptions] No subscription found for Stripe ID: ${args.stripeSubscriptionId}. ` +
+					`Stripe will retry this event.`
+			);
+		}
+		if (args.plan !== undefined) assertSubscriptionPlanScope(sub, args.plan);
 
-    const now = Date.now();
-    const patch: Record<string, unknown> = {
-      status: args.status,
-      updatedAt: now,
-    };
-    if (args.plan !== undefined) patch.plan = args.plan;
-    if (args.priceCents !== undefined) patch.priceCents = args.priceCents;
-    if (args.currentPeriodStart !== undefined) {
-      patch.currentPeriodStart = args.currentPeriodStart;
-    }
-    if (args.currentPeriodEnd !== undefined) {
-      patch.currentPeriodEnd = args.currentPeriodEnd;
-    }
+		const now = Date.now();
+		const patch: Record<string, unknown> = {
+			status: args.status,
+			updatedAt: now
+		};
+		if (args.plan !== undefined) patch.plan = args.plan;
+		if (args.priceCents !== undefined) patch.priceCents = args.priceCents;
+		const stalePeriod =
+			args.currentPeriodStart !== undefined &&
+			sub.currentPeriodStart !== undefined &&
+			args.currentPeriodStart < sub.currentPeriodStart &&
+			sub.billingPeriodSource !== 'checkout_approximate';
+		if (args.currentPeriodStart !== undefined && !stalePeriod) {
+			patch.currentPeriodStart = args.currentPeriodStart;
+		}
+		if (args.currentPeriodEnd !== undefined && !stalePeriod) {
+			patch.currentPeriodEnd = args.currentPeriodEnd;
+		}
+		if (args.billingPeriodSource !== undefined && !stalePeriod) {
+			patch.billingPeriodSource = args.billingPeriodSource;
+		}
 
-    // pastDueSince: set only on first transition to past_due (not on retries)
-    if (args.setPastDueSince && sub.status !== "past_due") {
-      patch.pastDueSince = now;
-    }
-    // Clear pastDueSince when transitioning back to active
-    if (args.status === "active" && sub.pastDueSince) {
-      patch.pastDueSince = null;
-    }
+		// pastDueSince: set only on first transition to past_due (or repair a
+		// malformed legacy row missing the durable grace coordinate).
+		if (args.setPastDueSince && (sub.status !== 'past_due' || sub.pastDueSince === undefined)) {
+			patch.pastDueSince = now;
+			patch.pastDueExpiryScheduledAt = now + PAST_DUE_GRACE_MS;
+			await ctx.scheduler.runAt(now + PAST_DUE_GRACE_MS, expirePastDueGraceRef, {
+				subscriptionId: sub._id,
+				expectedPastDueSince: now
+			});
+		}
+		// Clear pastDueSince when transitioning back to active
+		if (args.status === 'active' && sub.pastDueSince !== undefined) {
+			patch.pastDueSince = undefined;
+			patch.pastDueExpiryScheduledAt = undefined;
+		}
 
-    await ctx.db.patch(sub._id, patch);
+		await ctx.db.patch(sub._id, patch);
 
-    // Sync org limits to match plan on upgrade/change
-    if (args.syncOrgLimits && args.plan && sub.orgId) {
-      const planDef = PLANS[args.plan];
-      if (planDef) {
-        await ctx.db.patch(sub.orgId, {
-          maxSeats: planDef.maxSeats,
-          maxTemplatesMonth: planDef.maxTemplatesMonth,
-          updatedAt: now,
-        });
-      }
-    }
+		// Sync org limits to match plan on upgrade/change
+		if (args.syncOrgLimits && args.plan && sub.orgId) {
+			const planDef = PLANS[args.plan];
+			if (planDef) {
+				await ctx.db.patch(sub.orgId, {
+					maxSeats: planDef.maxSeats,
+					maxTemplatesMonth: planDef.maxTemplatesMonth,
+					updatedAt: now
+				});
+			}
+		}
 
-    // Reset org limits to the gated inactive floor on cancellation
-    if (args.resetOrgLimits && sub.orgId) {
-      const floorLimits = PLANS.inactive;
-      await ctx.db.patch(sub.orgId, {
-        maxSeats: floorLimits.maxSeats,
-        maxTemplatesMonth: floorLimits.maxTemplatesMonth,
-        updatedAt: now,
-      });
-    }
+		// Reset org limits to the gated inactive floor on cancellation
+		if (args.resetOrgLimits && sub.orgId) {
+			const floorLimits = PLANS.inactive;
+			await ctx.db.patch(sub.orgId, {
+				maxSeats: floorLimits.maxSeats,
+				maxTemplatesMonth: floorLimits.maxTemplatesMonth,
+				updatedAt: now
+			});
+		}
 
-    // When Stripe advances the billing period (customer.subscription.updated
-    // carries the new current_period_start), snapshot the verified-action
-    // baseline so the metering read resets to 0 for the new period. The helper
-    // is monotonic — it ignores a stale/duplicate period start.
-    if (args.currentPeriodStart !== undefined && sub.orgId) {
-      await snapshotVerifiedActionBaseline(ctx, sub.orgId, args.currentPeriodStart);
-    }
-  },
+		// Any org status transition can change the authoritative metering period
+		// (paid Stripe period vs inactive UTC month). Coalesce an exact repair in
+		// the same transaction. A stale out-of-order period is ignored above and
+		// the current period remains the repair authority.
+		if (sub.orgId) {
+			await snapshotPlanUsageBaselines(
+				ctx,
+				sub.orgId,
+				stalePeriod
+					? (sub.currentPeriodStart ?? now)
+					: (args.currentPeriodStart ?? sub.currentPeriodStart ?? now)
+			);
+		}
+	}
+});
+
+/** Durable grace expiry. Query entitlement reads only row state; this scheduled
+ * mutation changes that state at the deadline and invalidates cached/reactive
+ * results without relying on Date.now inside a public query. */
+export const expirePastDueGrace = internalMutation({
+	args: {
+		subscriptionId: v.id('subscriptions'),
+		expectedPastDueSince: v.number()
+	},
+	handler: async (ctx, args) => {
+		const sub = await ctx.db.get(args.subscriptionId);
+		if (!sub || sub.status !== 'past_due' || sub.pastDueSince !== args.expectedPastDueSince) {
+			return { status: 'superseded' as const };
+		}
+		const expiresAt = args.expectedPastDueSince + PAST_DUE_GRACE_MS;
+		if (Date.now() < expiresAt) {
+			await ctx.scheduler.runAt(expiresAt, expirePastDueGraceRef, args);
+			return { status: 'rescheduled' as const };
+		}
+		const now = Date.now();
+		await ctx.db.patch(sub._id, {
+			status: 'canceled',
+			pastDueSince: undefined,
+			pastDueExpiryScheduledAt: undefined,
+			updatedAt: now
+		});
+		if (sub.orgId) {
+			await ctx.db.patch(sub.orgId, {
+				maxSeats: PLANS.inactive.maxSeats,
+				maxTemplatesMonth: PLANS.inactive.maxTemplatesMonth,
+				updatedAt: now
+			});
+			await snapshotPlanUsageBaselines(ctx, sub.orgId, now);
+		}
+		return { status: 'expired' as const };
+	}
+});
+
+/** Bounded durable backstop/adoption for legacy past_due rows. */
+export const sweepPastDueGrace = internalMutation({
+	args: { cursor: v.optional(v.string()) },
+	handler: async (ctx, args) => {
+		if (args.cursor && args.cursor.length > 2_048) {
+			throw new Error('SUBSCRIPTION_GRACE_CURSOR_INVALID');
+		}
+		const page = await ctx.db
+			.query('subscriptions')
+			.withIndex('by_status_pastDueSince', (q) => q.eq('status', 'past_due'))
+			.paginate({
+				cursor: args.cursor ?? null,
+				numItems: 25,
+				maximumRowsRead: 26,
+				maximumBytesRead: 512 * 1024
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('SUBSCRIPTION_GRACE_PAGE_TOO_LARGE');
+		}
+		const now = Date.now();
+		let adopted = 0;
+		let expired = 0;
+		for (const sub of page.page) {
+			const pastDueSince =
+				Number.isSafeInteger(sub.pastDueSince) && (sub.pastDueSince ?? -1) >= 0
+					? sub.pastDueSince!
+					: now;
+			const expiresAt = pastDueSince + PAST_DUE_GRACE_MS;
+			if (expiresAt <= now) {
+				await ctx.db.patch(sub._id, {
+					status: 'canceled',
+					pastDueSince: undefined,
+					pastDueExpiryScheduledAt: undefined,
+					updatedAt: now
+				});
+				if (sub.orgId) {
+					await ctx.db.patch(sub.orgId, {
+						maxSeats: PLANS.inactive.maxSeats,
+						maxTemplatesMonth: PLANS.inactive.maxTemplatesMonth,
+						updatedAt: now
+					});
+					await snapshotPlanUsageBaselines(ctx, sub.orgId, now);
+				}
+				expired += 1;
+				continue;
+			}
+			if (sub.pastDueSince !== pastDueSince || sub.pastDueExpiryScheduledAt !== expiresAt) {
+				await ctx.db.patch(sub._id, {
+					pastDueSince,
+					pastDueExpiryScheduledAt: expiresAt,
+					updatedAt: now
+				});
+				await ctx.scheduler.runAt(expiresAt, expirePastDueGraceRef, {
+					subscriptionId: sub._id,
+					expectedPastDueSince: pastDueSince
+				});
+				adopted += 1;
+			}
+		}
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, continuePastDueGraceSweepRef, {
+				cursor: page.continueCursor
+			});
+		}
+		return {
+			status: page.isDone ? ('complete' as const) : ('running' as const),
+			scanned: page.page.length,
+			adopted,
+			expired
+		};
+	}
+});
+
+/** Bounded pre-activation proof of exact subscription ownership/cardinality. */
+export const auditSubscriptionAuthority = internalMutation({
+	args: { cursor: v.optional(v.string()), retryBlocked: v.optional(v.boolean()) },
+	handler: async (ctx, args) => {
+		let audit = await ctx.db
+			.query('subscriptionAuthorityMigrations')
+			.withIndex('by_key', (q) => q.eq('key', SUBSCRIPTION_AUTHORITY_KEY))
+			.unique();
+		const now = Date.now();
+		if (!audit) {
+			const id = await ctx.db.insert('subscriptionAuthorityMigrations', {
+				key: SUBSCRIPTION_AUTHORITY_KEY,
+				status: 'running',
+				scanned: 0,
+				startedAt: now,
+				updatedAt: now
+			});
+			audit = (await ctx.db.get(id))!;
+		}
+		if (audit.status === 'ready') return { status: 'ready' as const, scanned: audit.scanned };
+		if (audit.status === 'blocked' && !args.retryBlocked) {
+			return {
+				status: 'blocked' as const,
+				scanned: audit.scanned,
+				failureCode: audit.failureCode ?? null
+			};
+		}
+		if (args.cursor !== undefined && args.cursor !== audit.cursor) {
+			return { status: 'superseded' as const, scanned: audit.scanned };
+		}
+		try {
+			const page = await ctx.db
+				.query('subscriptions')
+				.order('asc')
+				.paginate({
+					cursor: audit.status === 'blocked' ? null : (audit.cursor ?? null),
+					numItems: SUBSCRIPTION_AUTHORITY_PAGE,
+					maximumRowsRead: SUBSCRIPTION_AUTHORITY_PAGE + 1,
+					maximumBytesRead: 1024 * 1024
+				});
+			if (page.pageStatus === 'SplitRequired') {
+				throw new Error('SUBSCRIPTION_AUTHORITY_PAGE_TOO_LARGE');
+			}
+			for (const sub of page.page) {
+				if ((sub.orgId === undefined) === (sub.userId === undefined)) {
+					throw new Error(`SUBSCRIPTION_OWNER_XOR_INVALID:${String(sub._id)}`);
+				}
+				if (
+					(sub.orgId !== undefined && INDIVIDUAL_PLANS[sub.plan] !== undefined) ||
+					(sub.userId !== undefined && INDIVIDUAL_PLANS[sub.plan] === undefined)
+				) {
+					throw new Error(`SUBSCRIPTION_PLAN_SCOPE_INVALID:${String(sub._id)}`);
+				}
+				const ownerRows = sub.orgId
+					? await ctx.db
+							.query('subscriptions')
+							.withIndex('by_orgId', (q) => q.eq('orgId', sub.orgId))
+							.take(2)
+					: await ctx.db
+							.query('subscriptions')
+							.withIndex('by_userId', (q) => q.eq('userId', sub.userId))
+							.take(2);
+				if (ownerRows.length !== 1 || ownerRows[0]!._id !== sub._id) {
+					throw new Error(`SUBSCRIPTION_OWNER_CARDINALITY_INVALID:${String(sub._id)}`);
+				}
+				if (sub.stripeSubscriptionId) {
+					const stripeRows = await ctx.db
+						.query('subscriptions')
+						.withIndex('by_stripeSubscriptionId', (q) =>
+							q.eq('stripeSubscriptionId', sub.stripeSubscriptionId)
+						)
+						.take(2);
+					if (stripeRows.length !== 1 || stripeRows[0]!._id !== sub._id) {
+						throw new Error(`SUBSCRIPTION_STRIPE_CARDINALITY_INVALID:${String(sub._id)}`);
+					}
+				}
+				if (
+					sub.status === 'past_due' &&
+					(!Number.isSafeInteger(sub.pastDueSince) ||
+						(sub.pastDueSince ?? -1) < 0 ||
+						!Number.isSafeInteger(sub.pastDueExpiryScheduledAt) ||
+						sub.pastDueExpiryScheduledAt !== sub.pastDueSince! + PAST_DUE_GRACE_MS)
+				) {
+					throw new Error(`SUBSCRIPTION_PAST_DUE_COORDINATE_MISSING:${String(sub._id)}`);
+				}
+			}
+			const scanned = (audit.status === 'blocked' ? 0 : audit.scanned) + page.page.length;
+			if (page.isDone) {
+				await ctx.db.patch(audit._id, {
+					status: 'ready',
+					cursor: undefined,
+					scanned,
+					failureCode: undefined,
+					failureSourceId: undefined,
+					completedAt: now,
+					updatedAt: now
+				});
+				return { status: 'ready' as const, scanned };
+			}
+			await ctx.db.patch(audit._id, {
+				status: 'running',
+				cursor: page.continueCursor,
+				scanned,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				updatedAt: now
+			});
+			await ctx.scheduler.runAfter(0, continueSubscriptionAuthorityAuditRef, {
+				cursor: page.continueCursor
+			});
+			return { status: 'running' as const, scanned };
+		} catch (error) {
+			const code = error instanceof Error ? error.message.slice(0, 256) : 'UNKNOWN';
+			await ctx.db.patch(audit._id, {
+				status: 'blocked',
+				failureCode: code,
+				failureSourceId: code.includes(':') ? code.split(':').at(-1)?.slice(0, 256) : undefined,
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const, scanned: audit.scanned, failureCode: code };
+		}
+	}
+});
+
+export const subscriptionAuthorityStatus = internalQuery({
+	args: {},
+	handler: async (ctx) =>
+		await ctx.db
+			.query('subscriptionAuthorityMigrations')
+			.withIndex('by_key', (q) => q.eq('key', SUBSCRIPTION_AUTHORITY_KEY))
+			.unique()
 });

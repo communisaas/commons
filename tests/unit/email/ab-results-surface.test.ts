@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const emailSource = readFileSync('convex/email.ts', 'utf8');
+const winnerCandidateSource = readFileSync('convex/lib/emailAbWinnerCandidate.ts', 'utf8');
 const detailServerSource = readFileSync(
 	'src/routes/org/[slug]/emails/[blastId]/+page.server.ts',
 	'utf8'
@@ -21,7 +22,10 @@ describe('A/B test evidence surface', () => {
 		expect(emailSource).toContain('export const getAbTestGroup = query');
 		expect(emailSource).toMatch(/requireOrgRole\(ctx, args\.orgSlug, ['"]member['"]\)/);
 		expect(emailSource).toContain('!blast.isAbTest');
-		expect(emailSource).toMatch(/\.withIndex\(['"]by_abParentId['"]/);
+		expect(emailSource).toContain(".withIndex('by_orgId_abParentId'");
+		expect(emailSource).toContain('.take(MAX_AB_GROUP_BLASTS + 1)');
+		expect(emailSource).toContain('EMAIL_AB_GROUP_CARDINALITY_REPAIR_REQUIRED');
+		expect(emailSource).not.toMatch(/\.withIndex\(['"]by_abParentId['"]/);
 		expect(emailSource).toContain('sibling.orgId === org._id && sibling.isAbTest');
 	});
 
@@ -70,9 +74,17 @@ describe('A/B test evidence surface', () => {
 	});
 
 	it('uses supported winner metrics and duration instead of a hardcoded picker window', () => {
-		expect(emailSource).toContain('totalClicked: b.totalClicked');
+		const candidateStart = emailSource.indexOf('export const _findAbCandidates = internalQuery');
+		const candidateEnd = emailSource.indexOf('\nexport const ', candidateStart + 1);
+		const candidateQuery = emailSource.slice(candidateStart, candidateEnd);
+		expect(candidateQuery).toContain("query('emailAbWinnerCandidates')");
+		expect(candidateQuery).not.toContain("query('emailBlasts')");
+		expect(candidateQuery).toContain('.take(AB_WINNER_CANDIDATE_READ_MAX)');
+		expect(candidateQuery).toContain('totalClicked: candidate.totalClicked');
 		expect(emailSource).toContain('readSupportedAbWinnerMetric(rawWinnerMetric)');
-		expect(emailSource).toContain('rawConfig?.testDurationMs');
+		expect(winnerCandidateSource).toContain('raw.testDurationMs');
+		expect(winnerCandidateSource).toContain('AB_WINNER_DEFAULT_TIMEOUT_MS');
+		expect(winnerCandidateSource).toContain('testDurationMs: settings.testDurationMs');
 		expect(emailSource).toContain('winnerBlastId: String(args.winnerId)');
 		expect(emailSource).toContain('Selected variant is not the recorded winner');
 		expect(emailSource).not.toContain('const TIMEOUT_MS = 48 * 60 * 60 * 1000');

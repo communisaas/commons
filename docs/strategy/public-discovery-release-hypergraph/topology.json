@@ -1,0 +1,45 @@
+{
+	"version": "1.1.0",
+  "name": "public-discovery-release-hypergraph",
+  "scope": "Foundational launch hardening plus the production release path for bounded Convex discovery, session authority, recipient/campaign/debate/accountability aggregates, compact authenticated navigation, public API reads and authority, webhook egress, communication audiences, durable email quota and carrier evidence, global contact consent and SMS claims, differentially private analytics, bounded migration/operator maintenance, coalition/representative browsing, plan accounting, anonymous catalogs, operational probes, native actual-I/O limits plus globally coordinated Pages-to-Convex, paid-provider, and Queue projected budgets, complete trusted SvelteKit server-execution closure, capability-inert Pages preview configuration, phase-scoped signed account-wide Free evidence, an exhaustively contained Cloudflare Pages deployment surface, separate trusted public edges, Access-protected hidden Pages origins, a signed and independently recoverable cold-corpus bootstrap, terminal release authority, a post-authority anonymous landing cache, direct submission server authority, bounded server-mediated segment/import/rescore work, durable position-delivery and Shadow Atlas replay admission, and provider-free compact keyword search.",
+  "invariant": "Every producer, session authority, projection, aggregate, shared layout, API credential and endpoint, webhook, outbound audience and carrier claim, quota reservation, contact authority, analytics contribution and privacy budget, migration and operator job, explicit browse surface, plan counter, public artifact, cache, readiness probe, Pages-to-Convex dispatch, Queue handoff, Pages deployment artifact, Access boundary, trusted edge, release-authority state, and cost boundary has an explicit byte, CPU, cardinality, identity, privacy, freshness, linearization, migration, exposure, evidence, and recovery bound before the snapshot-safe Convex producer is deployed; production handoff is Q then trusted edge T then terminal C followed by exact uncached release-origin proof authenticated by a distinct production-only capability that T strips before origin forwarding, pending state never replaces active or retained C, the trusted edge alone owns the landing cache after C and Access with a zero-purge outer-entry bound of 60 seconds fresh plus 300 seconds stale-while-revalidate and unusable at 360 seconds, strict manifest-publication-to-last-old-HTML convergence below 420 seconds, and bounded isolate-local match, origin, write, pending, and 1 MiB L1 lanes, Cache API ordering is not claimed across isolates and origin-start timestamps cap each entry's replay at 360 seconds, publication coordinates remain monotonic across retry/rearm, phase receipts never substitute for post-mutation live proof, paired rollback restores Pages before T without rewinding the terminal ledger and repeats the proof with the retained-window capability, and recovery never restores an embedding-heavy, history-scanning, wide-auth, globally uncapped, ambiguous-resend, privacy-claiming-without-authority, stale-public-artifact, direct-submission bypass, one-admission bulk loop, duplicate position/Atlas write, Convex paid-provider egress, or other abuse-amplifying path.",
+  "node_types": [
+    {
+      "id": "gate",
+      "description": "A release condition that must be proven before downstream work starts."
+    },
+    {
+      "id": "action",
+      "description": "A bounded operator or automation action."
+    },
+    {
+      "id": "rollback",
+      "description": "A recovery action that preserves the bounded-read invariant."
+    }
+  ],
+  "edge_types": [
+    {
+      "id": "blocks",
+      "description": "The source must close successfully before the target starts."
+    },
+    {
+      "id": "requires",
+      "description": "The target depends on evidence produced by the source."
+    },
+    {
+      "id": "rollback",
+      "description": "A failure at the source activates the target recovery action."
+    }
+  ],
+  "statuses": ["in_progress", "pending", "blocked_external", "ready", "operator_gate", "recovery_only"],
+	"statistics": {
+		"nodes": 51,
+		"release_nodes": 48,
+		"rollback_nodes": 3,
+		"blocks_edges": 60,
+		"requires_edges": 74,
+		"rollback_edges": 9
+	},
+  "entrypoint": "docs/WORKFLOW.md",
+  "created_at": "2026-07-16"
+}

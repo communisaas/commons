@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Template } from '$lib/types/template';
+	import type { Template, RecipientConfigDecisionMaker } from '$lib/types/template';
 	import {
 		ClipboardCopy,
 		ClipboardCheck,
@@ -13,41 +13,14 @@
 	import TemplateTips from '../TemplateTips.svelte';
 	import MessagePreview from '../MessagePreview.svelte';
 	import ShareButton from '$lib/components/ui/ShareButton.svelte';
-	import { extractRecipientEmails } from '$lib/types/templateConfig';
-	import { deriveTargetPresentation, parseRecipientConfig } from '$lib/utils/deriveTargetPresentation';
+	import { parseRecipientConfig, recipientEmailsFromConfig } from '$lib/types/template';
+	import { deriveTargetPresentation } from '$lib/utils/deriveTargetPresentation';
 	import { fade, slide } from 'svelte/transition';
 	import { coordinated } from '$lib/utils/timerCoordinator';
 	import SourceCard from '$lib/components/template/creator/SourceCard.svelte';
 	import ResearchLog from '$lib/components/template/creator/ResearchLog.svelte';
 	import { hasCitations } from '$lib/utils/message-processing';
-
-	type PreviewDecisionMaker = {
-		name: string;
-		/** The human-readable position/title — what the reader recognises as the person's
-		 *  power ("Secretary of Transportation", "Mayor", "City Council Member"). The seed
-		 *  carries this as `role`; older data may use `title`. */
-		role?: string;
-		title?: string;
-		organization?: string;
-		/** Internal power-type taxonomy (votes / executes / shapes / funds / oversees).
-		 *  NOT shown to visitors — it reads as jargon; the human `role` is shown instead. */
-		roleCategory?: string;
-		// === "Why we reach them" — populated by the agent decision-maker-resolution
-		// pipeline, EMPTY in hand-authored seeds. These are runtime-present on
-		// recipient_config (listPublic ships it raw); the type just makes them visible. ===
-		/** Specific votes / decisions / statements — the receipts (the reveal body). */
-		publicActions?: string[];
-		/** Verification provenance. */
-		provenance?: string;
-		source?: string;
-		source_url?: string;
-		recencyCheck?: string;
-		positionSourceDate?: string;
-		isAiResolved?: boolean;
-		emailVerified?: 'deliverable' | 'risky';
-		emailGrounded?: boolean;
-		emailSource?: string;
-	};
+	import { buildAttestation } from '$lib/core/identity/tier-display';
 
 	let {
 		template,
@@ -67,7 +40,14 @@
 		template: Template;
 		inModal: boolean;
 		context?: 'list' | 'page' | 'modal';
-		user: { id: string; name: string | null; trust_tier?: number; district_code?: string; credentialHash?: string | null } | null;
+		user: {
+			id: string;
+			name: string | null;
+			trust_tier?: number;
+			district_code?: string;
+			verification_method?: string | null;
+			credentialHash?: string | null;
+		} | null;
 		onScroll: (isAtBottom: boolean, scrollProgress?: number) => void;
 		personalConnectionValue: string;
 		onScrollStateChange?: (scrollState: unknown) => void;
@@ -79,15 +59,25 @@
 		onVerifyIdentity?: () => void;
 	} = $props();
 
-	// Proof footer: what verification the message carries
+	// Proof footer: what verification the message carries. The sender reads the
+	// SAME string the recipient will receive — one composer owns it, so the
+	// preview can never name a class wider than the method proves.
 	const trustTier = $derived(user?.trust_tier ?? 0);
-	const proofLocation = $derived(trustTier >= 2 && user?.district_code ? user.district_code : null);
-	const proofLabel = $derived.by(() => {
-		if (trustTier >= 2) return 'Verified resident';
-		if (trustTier >= 1) return 'Verified sender';
-		return null;
-	});
-	const hasGovId = $derived(trustTier >= 3);
+	const attestation = $derived(
+		buildAttestation({
+			trustTier: user?.trust_tier,
+			method: user?.verification_method ?? null,
+			districtCode: user?.district_code ?? null,
+			credentialHash: user?.credentialHash ?? null
+		})
+	);
+	// The message body renderer declares a non-nullable verification_method, while
+	// the field arrives nullable from the server. Normalize at that boundary
+	// instead of widening a component this concern does not own.
+	const previewUser = $derived(
+		user ? { ...user, verification_method: user.verification_method ?? undefined } : user
+	);
+
 	// The verify URL must point at a resolvable record. Only the user's active
 	// district credentialHash resolves at /v/[hash]; a truncated user id 404s.
 	// Null when unverified → no link is rendered (see {#if proofHash}).
@@ -99,12 +89,16 @@
 	const showProofFooter = $derived(
 		context === 'page' &&
 			!!user &&
-			(!!proofLabel || !!proofHash || (trustTier >= 2 && trustTier < 3 && !!onVerifyIdentity))
+			(!!attestation.line ||
+				!!proofHash ||
+				(trustTier >= 2 && trustTier < 3 && !!onVerifyIdentity))
 	);
 
-	const recipients = $derived(extractRecipientEmails(template?.recipient_config));
+	const recipients = $derived(recipientEmailsFromConfig(template?.recipient_config));
 	const recipientConfig = $derived(parseRecipientConfig(template?.recipient_config));
-	const decisionMakers = $derived<PreviewDecisionMaker[]>(recipientConfig?.decisionMakers ?? []);
+	const decisionMakers = $derived<RecipientConfigDecisionMaker[]>(
+		recipientConfig?.decisionMakers ?? []
+	);
 
 	// When all DMs share the same org, hoist it to the header instead of repeating per-row
 	const sharedOrg = $derived.by(() => {
@@ -135,8 +129,8 @@
 	// becomes a toggle when it has a WHY body (the honest-absent gate); seed rows, which
 	// carry no why-fields, stay byte-identical to a plain identity row.
 	let expandedWhyKey = $state<string | null>(null);
-	const dmKey = (dm: PreviewDecisionMaker) => dm.name + (dm.role ?? dm.title ?? '');
-	const dmHasWhy = (dm: PreviewDecisionMaker) => !!dm.publicActions?.length;
+	const dmKey = (dm: RecipientConfigDecisionMaker) => dm.name + (dm.role ?? dm.title ?? '');
+	const dmHasWhy = (dm: RecipientConfigDecisionMaker) => !!dm.publicActions?.length;
 	function toggleWhy(key: string, headerEl?: HTMLElement) {
 		const opening = expandedWhyKey !== key;
 		expandedWhyKey = opening ? key : null;
@@ -213,12 +207,14 @@
 </script>
 
 {#if debateResolution}
-	<div class="mb-3 rounded border px-3 py-2 text-sm
+	<div
+		class="mb-3 rounded border px-3 py-2 text-sm
 		{debateResolution.winningStance === 'SUPPORT'
 			? 'border-emerald-200/60 bg-emerald-50/50 text-emerald-700'
 			: debateResolution.winningStance === 'OPPOSE'
 				? 'border-red-200/60 bg-red-50/50 text-red-700'
-				: 'border-amber-200/60 bg-amber-50/50 text-amber-700'}">
+				: 'border-amber-200/60 bg-amber-50/50 text-amber-700'}"
+	>
 		{#if debateResolution.winningStance === 'SUPPORT'}
 			<span class="font-medium">Deliberation-validated framing</span>
 			<span class="opacity-70"> · {debateResolution.participants} participants</span>
@@ -251,13 +247,13 @@
 			onclick={() => (rosterOpen = !rosterOpen)}
 		>
 			{#if targetInfo.icon === 'Capitol'}
-				<Landmark class="h-4 w-4 shrink-0 card-icon" />
+				<Landmark class="card-icon h-4 w-4 shrink-0" />
 			{:else if targetInfo.icon === 'Building'}
-				<Building2 class="h-4 w-4 shrink-0 card-icon" />
+				<Building2 class="card-icon h-4 w-4 shrink-0" />
 			{:else if targetInfo.icon === 'Users'}
-				<Users class="h-4 w-4 shrink-0 card-icon-muted" />
+				<Users class="card-icon-muted h-4 w-4 shrink-0" />
 			{:else}
-				<Mail class="h-4 w-4 shrink-0 card-icon-muted" />
+				<Mail class="card-icon-muted h-4 w-4 shrink-0" />
 			{/if}
 			<span class="reach-primary card-label">{targetInfo.primary}</span>
 			{#if targetInfo.secondary}
@@ -334,8 +330,8 @@
 															target="_blank"
 															rel="noopener noreferrer">{host}</a
 														>{/if}
-													{#if dm.positionSourceDate}<span class="cite-sep"></span><span class="cite-anchor"
-															>{dm.positionSourceDate}</span
+													{#if dm.positionSourceDate}<span class="cite-sep"></span><span
+															class="cite-anchor">{dm.positionSourceDate}</span
 														>{/if}
 													{#if !dm.isAiResolved && !host && !dm.positionSourceDate && dm.provenance}{dm.provenance}{/if}
 												</p>
@@ -362,7 +358,11 @@
 					</ul>
 					<div class="reach-actions">
 						{#if decisionMakers.length > ROSTER_CAP}
-							<button type="button" class="reach-more" onclick={() => (showAllRoster = !showAllRoster)}>
+							<button
+								type="button"
+								class="reach-more"
+								onclick={() => (showAllRoster = !showAllRoster)}
+							>
 								{showAllRoster ? 'Show fewer' : `Show all ${decisionMakers.length}`}
 							</button>
 						{/if}
@@ -374,7 +374,9 @@
 								aria-label="Copy all recipient emails to clipboard"
 							>
 								{#if copied}
-									<div in:fade={{ duration: 200 }}><ClipboardCheck class="h-4 w-4 text-emerald-500" /></div>
+									<div in:fade={{ duration: 200 }}>
+										<ClipboardCheck class="h-4 w-4 text-emerald-500" />
+									</div>
 								{:else}
 									<div in:fade={{ duration: 200 }}><ClipboardCopy class="h-4 w-4" /></div>
 								{/if}
@@ -395,7 +397,9 @@
 							aria-label="Copy all recipient emails to clipboard"
 						>
 							{#if copied}
-								<div in:fade={{ duration: 200 }}><ClipboardCheck class="h-4 w-4 text-emerald-500" /></div>
+								<div in:fade={{ duration: 200 }}>
+									<ClipboardCheck class="h-4 w-4 text-emerald-500" />
+								</div>
 							{:else}
 								<div in:fade={{ duration: 200 }}><ClipboardCopy class="h-4 w-4" /></div>
 							{/if}
@@ -407,7 +411,6 @@
 	</div>
 {/if}
 
-
 <div
 	class={inModal
 		? 'min-h-0 flex-1 touch-pan-y overflow-hidden'
@@ -416,7 +419,7 @@
 	<MessagePreview
 		preview={template.message_body}
 		{template}
-		{user}
+		user={previewUser}
 		{context}
 		{onScroll}
 		onscrollStateChange={onScrollStateChange}
@@ -426,7 +429,9 @@
 				personalConnectionValue = e.value ?? '';
 			}
 		}}
-		initialVariableValues={personalConnectionValue ? { 'Personal Connection': personalConnectionValue } : {}}
+		initialVariableValues={personalConnectionValue
+			? { 'Personal Connection': personalConnectionValue }
+			: {}}
 		{expandToContent}
 	/>
 
@@ -435,7 +440,7 @@
 		<div class="mt-5 space-y-2">
 			<div class="flex items-center gap-1.5">
 				<BookOpen class="h-4 w-4 text-slate-400" />
-				<h4 class="text-xs font-medium uppercase tracking-wider text-slate-400">
+				<h4 class="text-xs font-medium tracking-wider text-slate-400 uppercase">
 					Sources ({template.sources?.length || 0})
 				</h4>
 			</div>
@@ -458,18 +463,14 @@
 	<!-- Proof footer: attestation carried by the message -->
 	{#if showProofFooter}
 		<div class="proof-footer mt-8">
-			<div class="h-px bg-slate-300/50 mb-4"></div>
+			<div class="mb-4 h-px bg-slate-300/50"></div>
 			<div class="flex items-baseline gap-1.5 text-[13px]">
-				{#if proofLabel}
-					<span class="font-medium text-emerald-700">{proofLabel}</span>
-					{#if proofLocation}
-						<span class="text-slate-300">·</span>
-						<span class="text-slate-600">{proofLocation}</span>
-					{/if}
-					{#if hasGovId}
-						<span class="text-slate-300">·</span>
-						<span class="text-slate-500">Gov ID</span>
-					{/if}
+				<!-- One line, one composer: the district and the government-credential
+				     fact are already inside the label the recipient receives. -->
+				{#if attestation.line}
+					<span class="font-medium text-emerald-700" data-testid="attestation-line"
+						>{attestation.line}</span
+					>
 				{/if}
 			</div>
 			{#if proofHash}
@@ -477,7 +478,7 @@
 				     elided so the 64-char hash doesn't sprawl the proof footer. -->
 				<a
 					href="/v/{proofHash}"
-					class="mt-0.5 block font-mono text-xs text-slate-400 hover:text-slate-600 transition-colors"
+					class="mt-0.5 block font-mono text-xs text-slate-400 transition-colors hover:text-slate-600"
 				>
 					commons.email/v/{proofHash.slice(0, 8)}&hellip;
 				</a>
@@ -490,7 +491,7 @@
 			{#if trustTier >= 2 && trustTier < 3 && onVerifyIdentity}
 				<button
 					onclick={onVerifyIdentity}
-					class="mt-3 min-h-[44px] flex items-center text-[13px] text-emerald-600 hover:text-emerald-700 transition-colors"
+					class="mt-3 flex min-h-[44px] items-center text-[13px] text-emerald-600 transition-colors hover:text-emerald-700"
 				>
 					Add government ID for unforgeable proof →
 				</button>

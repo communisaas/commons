@@ -33,11 +33,10 @@
 
 import { getFullCellDataFromBrowser } from '$lib/core/shadow-atlas/browser-client';
 import { poseidon2Sponge24 } from '$lib/core/crypto/poseidon';
-import {
-	getExpectedCellMapRoot,
-	getExpectedCellMapDepth
-} from '$lib/core/shadow-atlas/ipfs-store';
+import { getExpectedCellMapRoot, getExpectedCellMapDepth } from '$lib/core/shadow-atlas/ipfs-store';
 import { verifyCellMapMembership } from '$lib/core/shadow-atlas/cell-authenticity';
+import { decodeBN254HexToSubstrate, US_SLOT_NAMES } from '$lib/core/shadow-atlas/district-format';
+import { SERVED_SLOT_SET } from '$lib/core/shadow-atlas/coverage';
 
 interface VerifyCommitmentArgs {
 	lat: number;
@@ -51,9 +50,16 @@ interface VerifyCommitmentArgs {
 	timeoutMs?: number;
 }
 
+export interface DerivedContainmentEntry {
+	slot: number;
+	districtType: string;
+	districtId: string;
+}
+
 interface VerifyCommitmentResult {
 	matches: boolean;
 	expectedCommitment: string;
+	containment: DerivedContainmentEntry[];
 }
 
 /**
@@ -106,9 +112,7 @@ export async function verifyDistrictCommitment(
 	}
 
 	if (!cellData) {
-		throw new Error(
-			'COMMITMENT_VERIFY_IPFS_UNAVAILABLE: cell data fetch returned null'
-		);
+		throw new Error('COMMITMENT_VERIFY_IPFS_UNAVAILABLE: cell data fetch returned null');
 	}
 	if (!Array.isArray(cellData.districts) || cellData.districts.length !== 24) {
 		throw new Error(
@@ -125,8 +129,7 @@ export async function verifyDistrictCommitment(
 	const expectedRoot = getExpectedCellMapRoot();
 	const expectedDepth = getExpectedCellMapDepth();
 	const isProduction =
-		typeof globalThis.process !== 'undefined' &&
-		globalThis.process.env?.NODE_ENV === 'production';
+		typeof globalThis.process !== 'undefined' && globalThis.process.env?.NODE_ENV === 'production';
 	const allowUnpinned =
 		typeof globalThis.process !== 'undefined' &&
 		globalThis.process.env?.ATLAS_AUTHENTICITY_ALLOW_UNPINNED === '1';
@@ -202,9 +205,7 @@ export async function verifyDistrictCommitment(
 		try {
 			return BigInt(args.clientCommitment);
 		} catch {
-			throw new Error(
-				'COMMITMENT_AUTHENTICITY_MISMATCH: clientCommitment is not valid hex'
-			);
+			throw new Error('COMMITMENT_AUTHENTICITY_MISMATCH: clientCommitment is not valid hex');
 		}
 	})();
 
@@ -228,5 +229,17 @@ export async function verifyDistrictCommitment(
 		);
 	}
 
-	return { matches: true, expectedCommitment };
+	const containment: DerivedContainmentEntry[] = [];
+	for (let slot = 0; slot < cellData.districts.length; slot += 1) {
+		if (!SERVED_SLOT_SET.has(slot)) continue;
+		const decoded = decodeBN254HexToSubstrate(cellData.districts[slot]);
+		if (/^0x/i.test(decoded) || !/^[a-z]+-[0-9A-Za-z]+$/.test(decoded)) continue;
+		containment.push({
+			slot,
+			districtType: US_SLOT_NAMES[slot].jurisdiction,
+			districtId: decoded
+		});
+	}
+
+	return { matches: true, expectedCommitment, containment };
 }

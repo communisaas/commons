@@ -64,7 +64,28 @@ describe('computeSupporterStats — create deltas', () => {
 		expect(s.emailSubscribedConsentEvidence).toBe(1);
 		expect(s.smsConsentEvidence).toBe(1);
 		expect(s.smsSubscribedConsentEvidence).toBe(1);
+		// A hash proves a phone exists, but only the encrypted value can be
+		// decrypted for carrier delivery. Keep the exact dispatch intersection
+		// distinct from the broader phone/subscription counters.
+		expect(s.smsDispatchEligible).toBe(0);
 		expect(s.sourceCounts.csv).toBe(1);
+	});
+
+	it('counts only subscribed supporters with decryptable phones as SMS-dispatch eligible', () => {
+		expect(
+			computeSupporterStats(
+				undefined,
+				null,
+				subscribed({ smsStatus: 'subscribed', encryptedPhone: 'ciphertext' })
+			).smsDispatchEligible
+		).toBe(1);
+		expect(
+			computeSupporterStats(
+				undefined,
+				null,
+				subscribed({ smsStatus: 'subscribed', phoneHash: 'hash-only' })
+			).smsDispatchEligible
+		).toBe(0);
 	});
 
 	it('identityVerified requires BOTH identityCommitment and verified', () => {
@@ -120,6 +141,27 @@ describe('computeSupporterStats — transitions', () => {
 		s = computeSupporterStats(s, r1, { ...r1, smsStatus: 'subscribed' });
 		expect(s.smsStopped).toBe(0);
 		expect(s.smsSubscribed).toBe(1);
+	});
+
+	it('maintains the exact SMS dispatch intersection across status and phone transitions', () => {
+		const noPhone = subscribed({ smsStatus: 'subscribed' });
+		let s = computeSupporterStats(undefined, null, noPhone);
+		expect(s.smsDispatchEligible).toBe(0);
+
+		const decryptable = { ...noPhone, encryptedPhone: 'ciphertext' };
+		s = computeSupporterStats(s, noPhone, decryptable);
+		expect(s.smsDispatchEligible).toBe(1);
+
+		const stopped = { ...decryptable, smsStatus: 'stopped' };
+		s = computeSupporterStats(s, decryptable, stopped);
+		expect(s.smsDispatchEligible).toBe(0);
+
+		const resubscribed = { ...stopped, smsStatus: 'subscribed' };
+		s = computeSupporterStats(s, stopped, resubscribed);
+		expect(s.smsDispatchEligible).toBe(1);
+
+		s = computeSupporterStats(s, resubscribed, { ...resubscribed, encryptedPhone: undefined });
+		expect(s.smsDispatchEligible).toBe(0);
 	});
 
 	it('gaining a postal code increments postalResolved exactly once', () => {
@@ -269,21 +311,11 @@ describe('counter writers are wired (source pins for the fixed misses)', () => {
 		path.resolve(process.cwd(), 'convex/supporters.ts'),
 		'utf8'
 	);
-	const dashboardSrc = readFileSync(
-		path.resolve(process.cwd(), 'convex/_dashboardStats.ts'),
-		'utf8'
-	);
 
 	it('updateSmsStatus applies the supporter-stats delta', () => {
 		const from = supportersSrc.indexOf('export const updateSmsStatus');
 		const next = supportersSrc.indexOf('export const', from + 20);
 		const body = supportersSrc.slice(from, next === -1 ? undefined : next);
 		expect(body).toContain('applySupporterStatsDelta');
-	});
-
-	it('computeDistrictVerified counts only verified actions', () => {
-		const from = dashboardSrc.indexOf('export async function computeDistrictVerified');
-		const body = dashboardSrc.slice(from, dashboardSrc.indexOf('\n}', from));
-		expect(body).toContain("eq('verified', true)");
 	});
 });

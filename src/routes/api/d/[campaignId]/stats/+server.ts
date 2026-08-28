@@ -7,7 +7,7 @@ import { FEATURES } from '$lib/config/features';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
 

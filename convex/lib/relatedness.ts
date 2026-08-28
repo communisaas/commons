@@ -68,9 +68,9 @@ export const TWIN_THRESHOLD = 0.13;
 /**
  * The persisted relatedness normalization: the corpus centroid (the genre
  * common-mode that mean-centering removes) plus the calibrated twin threshold
- * that travels with it. A scheduled job recomputes this from the live public
- * corpus so the normalization tracks the corpus as it grows, and the edge query
- * reads it instead of recomputing the centroid on every call.
+ * that travels with it. The optional operator maintenance function can persist
+ * this for observation; production relation snapshots compute a matched
+ * calibration inline from their exact bounded corpus.
  *
  * `threshold` is carried alongside the centroid so the two stay a matched set:
  * the edge gate that ran when this centroid was fit can be reproduced exactly,

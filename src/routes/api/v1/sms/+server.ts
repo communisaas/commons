@@ -8,7 +8,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { isSmsBlastStatus } from '$lib/server/sms/types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -32,7 +32,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		status: statusFilter && isSmsBlastStatus(statusFilter) ? statusFilter : undefined});
+		status: statusFilter && isSmsBlastStatus(statusFilter) ? statusFilter : undefined
+	});
 
 	const data = result.items.map((b: any) => ({
 		id: b._id,

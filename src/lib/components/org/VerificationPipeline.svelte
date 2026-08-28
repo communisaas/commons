@@ -13,7 +13,7 @@
 		total: number;
 		postalResolved: number;
 		identityVerified: number;
-		districtVerified: number;
+		districtVerified: number | null;
 		growth?: { thisWeek: number; lastWeek: number };
 		class?: string;
 	} = $props();
@@ -26,7 +26,7 @@
 	$effect(() => {
 		animTotal.set(total);
 		animPostal.set(postalResolved);
-		animDistrict.set(districtVerified);
+		if (districtVerified !== null) animDistrict.set(districtVerified);
 		animVerified.set(identityVerified);
 	});
 
@@ -73,10 +73,18 @@
 		<!-- Stage 3: District-verified -->
 		<div class="flex items-center gap-3">
 			<span class="w-6 text-center text-lg text-teal-500">◑</span>
-			<p class="font-mono text-2xl font-bold text-teal-500 tabular-nums">{fmt($animDistrict)}</p>
+			{#if districtVerified === null}
+				<p class="text-text-quaternary font-mono text-sm">Open the people list</p>
+			{:else}
+				<p class="font-mono text-2xl font-bold text-teal-500 tabular-nums">{fmt($animDistrict)}</p>
+			{/if}
 			<div>
 				<p class="text-text-secondary text-sm">district-verified</p>
-				<p class="text-text-quaternary text-xs">their actions carry proof of their district</p>
+				<p class="text-text-quaternary text-xs">
+					{districtVerified === null
+						? 'loaded only in the page that owns action history'
+						: 'their actions carry proof of their district'}
+				</p>
 			</div>
 		</div>
 

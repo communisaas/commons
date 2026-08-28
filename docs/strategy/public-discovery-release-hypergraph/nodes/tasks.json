@@ -1,0 +1,1370 @@
+{
+	"type": "tasks",
+	"tasks": [
+		{
+			"id": "FND-10",
+			"type": "action",
+			"name": "Separate compact discovery data from embeddings",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Materialize transactionally maintained, size-validated public-card and purpose-bound detail planes and move relation vectors to bounded embedding rows so snapshot, search, and recipient-detail paths never hydrate the embedding-bearing templates corpus merely to serve public content.",
+			"acceptance": "Both list variants use exact indexed limits, every discovery source is at most 16000 bytes, every detail/send projection is at most 48 KiB and is exhaustively re-projected at its read boundary, high-cardinality district histograms preserve exact totals in a bounded top-six-plus-suppressed-tail representation, relation preparation hydrates only selected bounded vector rows, coordinated reseeds hide every public compact read until commit, migrations are paged and observable, and measured producer/detail reads stay below declared transaction budgets at maximum dimensions. Source-plane activation additionally requires recipientLossTemplates == recipientLossClassifiedTemplates and recipientLossRecipients == recipientLossClassifiedRecipients. Pending rows are enumerated by listPublicRecipientMigrationBlockers and require either fresh recipient re-attestation or an explicit classifyPublicRecipientMigrationRedaction decision bound to the current intentHash and a bounded operatorReference; classification never re-exposes unsigned recipient PII and must be followed by migratePublicDiscoverySourcePage before activation. A previously valid author-bound detail projection may be reused across projection-version or MAC-expiry changes only after the current exhaustive reader validation succeeds.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/templates-source-plane.convex.test.ts",
+					"convex/templates-ssr-query-auth.convex.test.ts",
+					"convex/templates-read-budget.convex.test.ts",
+					"convex/submissions-public-discovery-source.convex.test.ts",
+					"tests/unit/convex/public-discovery-coordinated-rebuild.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/publicDiscovery.ts",
+					"convex/lib/publicTemplateDiscoverySource.ts",
+					"docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md"
+				]
+			}
+		},
+		{
+			"id": "FND-15",
+			"type": "action",
+			"name": "Bound authenticated template read surfaces",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace whole-range reads of embedding-bearing templates in profile, user API, organization chooser, and campaign detail flows with a transactionally maintained compact projection, cursor pages, explicit byte/row budgets, and honest continuation state.",
+			"acceptance": "Every copied projection field has a deterministic byte bound for all canonically valid templates; every known consumer reads at most 50 rows and 256 KiB per page and exposes continuation without silent truncation; coordinated reseeds hide progressive projection state; legacy array contracts fail with a coded pagination-required result on overflow; campaign detail reads its winning debate argument by the exact composite index; and a durable paged migrate-then-activate cutover plus readiness signal prevents deployment against an incomplete projection.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/template-list-projection.convex.test.ts",
+					"convex/templates-authenticated-list.convex.test.ts",
+					"convex/campaigns-org-page-template-budget.convex.test.ts",
+					"tests/unit/routes/user-templates-pagination.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/templateListProjection.ts",
+					"convex/templates.ts",
+					"docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md"
+				]
+			}
+		},
+		{
+			"id": "FND-20",
+			"type": "action",
+			"name": "Bound relation compute and degradation",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Cap and deterministically select distinct tag vectors before clustering, reuse shared work where possible, and publish explicit degradation evidence instead of allowing corpus cardinality to determine mutation CPU or arguments.",
+			"acceptance": "A 768-dimensional worst-case regression proves both relation variants within the Convex execution envelope; the complete valid top-50 by five-topic envelope cannot make readiness unhealthy merely by reaching 250 distinct tags; and retained tag count, shed count, source count, and byte count are visible and stable for an unchanged corpus.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/templates-relation-valid-envelope.convex.test.ts",
+					"convex/lib/relatedness.test.ts",
+					"convex/lib/tag_concepts.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/publicDiscovery.ts",
+					"convex/templates.ts",
+					"docs/architecture/public-discovery-cache-invariants.md"
+				]
+			}
+		},
+		{
+			"id": "FND-25",
+			"type": "action",
+			"name": "Materialize recipient-page metrics",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace per-request message, position-registration, and decision-maker collections on recipient pages with compact write-maintained aggregates and one server-gated bounded read surface.",
+			"acceptance": "Message district counts and combined position totals/by-district update transactionally on every writer; legacy aggregates have a durable bounded migration and explicit readiness cutover; recipient SSR and public API consumers make constant-cardinality exact-index reads; total-state metadata has a correct bounded source and return shape; anonymous direct Convex calls fail before database work; and seed/reseed clears close readers and writers before draining raw contributions ahead of compact rows, then rebuild and activate the plane before returning.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/recipient-metrics.convex.test.ts",
+					"tests/unit/convex/recipient-metrics-read-contract.test.ts",
+					"tests/unit/routes/public-template-recipient-boundary.test.ts"
+				],
+				"artifacts": ["convex/lib/recipientMetrics.ts", "docs/ops/RECIPIENT-METRICS-CUTOVER.md"]
+			}
+		},
+		{
+			"id": "FND-26",
+			"type": "action",
+			"name": "Separate session authority from mutable profiles",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Reject forged session identifiers locally through a versioned HMAC cookie envelope, then replace the every-request query over the wide mutable user document and database clock with an exact session read plus a compact write-maintained user authority projection whose expiry is evaluated once at the SvelteKit request boundary.",
+			"acceptance": "Malformed, oversized, legacy, expired, implausibly future, or forged cookies fail before Convex; active-key and one bounded previous-key verification supports rotation and reseals with the active key; every OAuth, passkey, dev-login, and renewal setter emits the signed envelope; and both active and previous cookie keys remain disjoint from both active and previous creation-proof keys at every setter and readiness boundary, with CI exercising four distinct values. A verified request reads exactly one session row and one deterministic size-bounded authority row without a Convex clock dependency; the hook enforces stored and absolute expiry before minting a token; identity and profile/auth writers, revocation, renewal, and deletion preserve the authority contract transactionally; unrelated profile or reputation writes cannot invalidate authentication; legacy users have a bounded migrate-then-activate readiness gate; session/user deletion cannot leave an accepted orphan; and forged-volume, concurrency, expiry, rotation, revocation, migration, and maximum-field tests prove constant read cost and fail-closed behavior.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:50:50Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/session-authority.convex.test.ts",
+					"convex/session-authority-projection.convex.test.ts",
+					"tests/unit/server/session-cookie.test.ts",
+					"tests/unit/convex/session-authority-writer-contract.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/sessionAuthority.ts",
+					"src/lib/server/auth/session-cookie.ts",
+					"src/lib/server/session-authority.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-27",
+			"type": "action",
+			"name": "Materialize campaign verification and analytics",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace repeated whole-campaign action and debate scans with a transactionally maintained, revisioned aggregate that serves verification packets, analytics, timelines, district summaries, and bounded debate evidence through one authorized read per request and a zero-cost Cloudflare cache tier.",
+			"acceptance": "Every campaign-action and debate writer either updates the aggregate transactionally or invalidates a revision before returning; legacy campaigns have a durable row-and-byte-bounded migrate-then-activate cutover and readiness signal; layout and detail consumers share one request-scoped result rather than rebuilding overlapping views; the Cloudflare Cache API uses revisioned keys without a paid KV dependency; and maximum-cardinality tests prove constant-read serving with exact totals and explicit bounded truncation metadata.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/campaign-launch-invariants.convex.test.ts",
+					"convex/campaign-read-model.convex.test.ts",
+					"convex/campaign-report-dedup.convex.test.ts",
+					"tests/unit/server/verification-packet-cache.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/campaignReadModel.ts",
+					"src/lib/server/campaign-read-model.ts",
+					"src/lib/server/verification-packet.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-28",
+			"type": "action",
+			"name": "Make the organization layout a compact shell",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Remove feature-history megafetches from the shared authenticated organization layout and serve only bounded organization identity, authorization, capability posture, and transactionally maintained navigation badges; feature datasets belong to their owning pages or explicit lazy boundaries.",
+			"acceptance": "Every organization route authenticates from a compact exact-index shell read with deterministic row and byte limits; settings and unrelated routes do not read campaign actions, donations, SMS replies, supporters, workflows, networks, legislation, or scorecards; feature pages preserve authorization and load only their owned data; shell badges update on every relevant writer or expose a bounded migration/readiness gate; and contract plus large-cardinality tests prevent the 21-query fan-out from returning.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/org-shell-read-budget.convex.test.ts",
+					"tests/unit/routes/org-shell-query-contract.test.ts",
+					"tests/unit/routes/root-layout-membership-budget.test.ts",
+					"tests/unit/server/org-shell-load-policy.test.ts"
+				],
+				"artifacts": [
+					"src/lib/server/org-shell-load-policy.ts",
+					"src/routes/org/[slug]/+layout.server.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-29",
+			"type": "action",
+			"name": "Bound public deliberation reads",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace public full-debate argument collections and offset-after-collect pagination with a compact write-maintained debate summary plus exact-index cursor pages or explicitly bounded top-argument projections shared by recipient, debate-detail, and HTTP API consumers.",
+			"acceptance": "Recipient pages never enumerate debate history; public detail and argument APIs enforce deterministic page, row, and byte bounds before database work; every argument, co-sign, evaluation, appeal, and resolution writer maintains or invalidates the required summary revision; legacy debates use a durable bounded migration and readiness cutover; SSR-only composites reject direct Convex calls at handler entry; and large-cardinality tests prove constant or page-bounded reads without silently truncating a contract that claims completeness.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/debate-read-boundary.convex.test.ts",
+					"tests/unit/routes/debate-request-budgets.test.ts",
+					"tests/unit/routes/debate-launch-invariants.test.ts",
+					"tests/unit/server/debate-input-validation.test.ts"
+				],
+				"artifacts": ["convex/lib/debateReadModel.ts", "src/lib/server/debate-input-validation.ts"]
+			}
+		},
+		{
+			"id": "FND-31",
+			"type": "action",
+			"name": "Make public API authentication cost-bounded",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Authenticate each v1 API request from stable compact credential and plan state, atomically consume a nonzero per-key window before endpoint work, and separate bounded usage telemetry from the credential row so request accounting cannot invalidate the hot authentication read on every call.",
+			"acceptance": "Every active and inactive plan has a finite positive limit for every HTTP method; concurrent and varied-endpoint requests share one atomic actor/window budget; invalid keys and exhausted windows stop before endpoint data reads; per-request telemetry never patches the credential row; expired rate/usage rows have essential bounded global cleanup; plan/key revoke and plan-transition writers update the compact authority transactionally; and adversarial concurrency proves the configured cap cannot be exceeded.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/_rateLimit.convex.test.ts",
+					"convex/v1api-rate-limit.convex.test.ts",
+					"tests/unit/api-v1/auth.test.ts",
+					"tests/unit/api/api-rate-limit.test.ts"
+				],
+				"artifacts": [
+					"convex/_rateLimit.ts",
+					"src/lib/server/api-v1/auth.ts",
+					"src/lib/server/api-v1/rate-limit.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-32",
+			"type": "action",
+			"name": "Bound public catalogs and live artifacts",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace anonymous whole-table directory, charter, fundraiser, event-stat, and dormant hero collections with compact indexed projections, immutable publication artifacts, exact status indexes, write-maintained counters, bounded caches, or explicit tombstones.",
+			"acceptance": "Organization directory pages use bounded cursor reads from a public-safe projection with explicit continuation and total semantics; published network charters serve an immutable bounded signatory snapshot/hash; fundraiser reads never hydrate or scan PII-bearing non-completed donations; event polls use write-maintained counters, a one-poll cache, and the public K=5 floor; unused hero/donation bombs reject direct calls before database work; every legacy public projection has a bounded cutover/readiness signal; and large-cardinality anonymous tests prove constant or page-bounded I/O.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/public-organization-directory.convex.test.ts",
+					"convex/network-charter-projection.convex.test.ts",
+					"convex/event-live-stats.convex.test.ts",
+					"tests/unit/convex/public-query-tombstones.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/publicOrganizationDirectory.ts",
+					"src/lib/server/public-organization-directory.ts",
+					"src/lib/server/public-event-stats.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-33",
+			"type": "action",
+			"name": "Make supporter browsing truly paginated",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace the repeated 10001-row encrypted supporter scan and per-row tag fan-out with database-cursor pages over bounded filter indexes or a transactionally maintained compact operator projection, including honest filtered continuation and export iteration.",
+			"acceptance": "Every browse, search, and export request reads only one bounded database page or scan slice; cursors are database continuation tokens rather than IDs searched inside a rebuilt 10000-row window; combined filters and tag membership have explicit indexed or bounded-scan semantics; tag chips cannot create an unbounded N-by-M join; editor/member PII projections remain correct; exports iterate pages without rereading prior encrypted rows; and 10000-plus-supporter tests prove per-page row/byte bounds and complete continuation.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/supporter-browse.convex.test.ts",
+					"tests/unit/org/supporter-list-scan-cap.test.ts",
+					"tests/unit/org/supporter-search.test.ts",
+					"tests/unit/org/supporter-export.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/supporterBrowse.ts",
+					"src/lib/core/org/supporter-search.ts",
+					"src/lib/core/org/supporter-export.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-34",
+			"type": "action",
+			"name": "Materialize coalition statistics",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace coalition detail, report, proof-pressure, and v1 network-stat reconstruction across every member supporter, action, receipt, and bill with authorized write-maintained per-organization inputs and a revisioned bounded network aggregate.",
+			"acceptance": "Network stat/detail/report/API requests read constant-cardinality aggregate rows after role/credential checks; supporter, campaign-action, receipt, bill, and membership writers update or invalidate their exact aggregate inputs; legacy networks use a bounded phased migration and readiness cutover; direct Convex callers cannot bypass the same authority/cost boundary; HTTP caching and rate limits are defense in depth rather than the database bound; and maximum-member/history tests prove constant serving cost with exact totals or explicit bounded truncation metadata.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/coalition-metrics.convex.test.ts",
+					"tests/unit/networks/proof-pressure-stats.test.ts"
+				],
+				"artifacts": ["convex/lib/coalitionMetrics.ts", "docs/ops/COALITION-METRICS-CUTOVER.md"]
+			}
+		},
+		{
+			"id": "FND-36",
+			"type": "action",
+			"name": "Inventory, bound, and contain native recurring work",
+			"status": "ready",
+			"owner": "application and reliability engineering",
+			"description": "Maintain an exact machine-checked inventory and activation envelope for every Convex cron, bound each reachable recurring-work path, make unset or unknown profile selection register no cron jobs, and prevent durable write-site continuations queued during suspension from crossing the recovery resume boundary.",
+			"acceptance": "The AST and bounded same-repository call-graph authority finds exactly 39 logical cron definitions (25 essential, 11 operational, 3 speculative), resolves local/imported helpers plus runQuery/runMutation/runAction and static scheduler targets, and rejects unlisted inventory, cadence, fan-out, collect, for-await, dynamic-reference, or helper-indirection drift. Unset, unknown, and explicit contained profiles register exactly zero jobs and therefore have zero cron ticks and zero cron database I/O. Write-site runAfter/runAt continuations remain causal but durable: both exact deployments stay user-paused through a provider-audit-backed recovery epoch, the active inventory is captured before cancellation, every pending row is canceled or explicitly dispositioned, every action first observed inProgress has execution-specific completion/support evidence because cancellation does not stop it, and the reviewed contained SHA is deployed while paused before either realm resumes. Quota-authorized essential activation is capped at exactly 1,278 root ticks and 2,335 reviewed idle function calls per backend day, or 144,770 calls across two backends in a 31-day month; contact fanout runs every 15 minutes and stuck-processing recovery every 5 minutes. Each essential root has explicit row, byte, call, idle, ownership, and disposition bounds. The boundary-cell monitor reads one 250-result/251-row/512-KiB indexed page, records saturation instead of sampling as exact, validates safe integers and an exact 24-hour window, and cannot let delayed evidence overwrite newer state. Legacy supporter and donation placeholder cleanup is dormant behind an explicit one-shot version, advances one 500-row/512-KiB page per tick under cursor/revision/run-token CAS, permanently tombstones completion, and has no normal empty-ciphertext writer. Homepage refresh reads compact ready/dirty/failure/temporal state first, rebuilds after source publication or the exact seven-day/UTC-day presentation boundary, and performs no corpus read on a clean tick. The paused verifier requires separate exact-deployment data-view and audit-log-view keys, brackets containment with current backend-state reads, pins the pause/unpause history scan to a four-page/25-result budget and closes its snapshot race with one complete overlapping tail page after the final paused read. Runnable work uses the indexed active-job query with page size one, never scans retained completion history or dereferences argsId, and fails on its first returned row. Normal running pre/post release proofs require all-none backend state and strict preview-versus-production credential separation.",
+			"externalEvidencePending": "Source containment is verified at zero registrations, but deployed state is not: the authoritative 2026-07-20 private system inventory observed 18 registered cron jobs on production quirky-chinchilla-352 and 16 on preview outstanding-firefly-831, while the durable scheduled-function queues have not yet been captured. PD-00 owns this external launch blocker. Immediately before pausing both exact deployments, an authorized operator must record a recovery-epoch lower-bound timestamp; if the disabled team prevents user pause or the deployment audit history is unavailable, Convex support for an atomic pause/reactivation control is required. The state-only verifier must use distinct deployment:data:view and deployment:auditLog:view keys to prove a provider pause event at/after the bound, zero later resume transitions, and user=paused while provider system/usage disablement is recorded exactly. With both deployments still paused, the operator must capture active scheduled work before mutation, obtain execution-specific completion/support evidence for every action first seen inProgress, disposition pending work, set CRON_PROFILE=contained, deploy the reviewed release to both, and run `node scripts/verify-convex-contained-cron-deployments.mjs --environment all --scope containment --expected-state paused --recovery-epoch <id> --recovery-epoch-min-ms <ms>`. Both `_system/frontend/listCronJobs:default` results must be exact empty arrays, the indexed active-work page must be final and empty, and the bounded history plus overlapping tail audit proof must remain resume-free. After controlled resume, the containment proof repeats with `--expected-state running`. No production mutation, pause, resume, cancellation, or deployment is part of the source proof or this ready status.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"npm run check:convex-native-recurring-work",
+					"npx tsc --noEmit --project convex/tsconfig.json",
+					"npx vitest --run tests/unit/scripts/convex-native-recurring-work.test.ts tests/unit/scripts/convex-contained-cron-deployments.test.ts tests/unit/scripts/release-gate-blobs.test.ts tests/unit/convex/stranded-placeholder-sweep-cas.test.ts tests/unit/i2-boundary-observability.test.ts tests/unit/convex/class-of-vuln-cures-v4.test.ts",
+					"node scripts/verify-release-hypergraph.mjs"
+				],
+				"tests": [
+					"convex/essential-supervisors-bounded.convex.test.ts",
+					"tests/fixtures/convex-native-recurring-helper-indirection.ts",
+					"tests/unit/scripts/convex-native-recurring-work.test.ts",
+					"tests/unit/scripts/convex-contained-cron-deployments.test.ts",
+					"tests/unit/scripts/release-gate-blobs.test.ts",
+					"tests/unit/convex/stranded-placeholder-sweep-cas.test.ts",
+					"tests/unit/i2-boundary-observability.test.ts",
+					"tests/unit/convex/class-of-vuln-cures-v4.test.ts"
+				],
+				"artifacts": [
+					"config/convex-native-recurring-work.json",
+					"convex/crons.ts",
+					"convex/lib/strandedPlaceholderSweep.ts",
+					"convex/observability.ts",
+					"convex/supporters.ts",
+					"convex/donations.ts",
+					"convex/templates.ts",
+					"scripts/verify-convex-native-recurring-work.mjs",
+					"scripts/verify-convex-contained-cron-deployments.mjs",
+					"scripts/verify-release-gate-blobs.mjs",
+					".github/workflows/deploy.yml",
+					"docs/ops/CRON-PROFILES.md",
+					"docs/development/cron-setup.md",
+					"docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md"
+				]
+			}
+		},
+		{
+			"id": "FND-37",
+			"type": "action",
+			"name": "Materialize accountability receipt paths",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Replace profile receipt traversal and organization scorecard N-plus-one collections with write-maintained user-receipt and organization-decision-maker projections, exact cursor pages, and a separately bounded export path.",
+			"acceptance": "Profile receipts never scan supporters or filter campaign actions in memory; organization and public decision-maker scorecards never collect every receipt merely to filter by organization; receipt, delivery, action, supporter-identity, and scorecard writers update or invalidate the compact projections transactionally; legacy rows have a durable bounded migration and fail-closed readiness cutover; public and organization reads preserve privacy and authorization; export iterates explicit pages without rereading history; and maximum-user, decision-maker, and receipt tests prove fixed or page-bounded read and byte costs.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/accountability-read-model-runtime.convex.test.ts",
+					"convex/accountability-read-model.convex.test.ts",
+					"tests/unit/convex/accountability-read-model-contract.test.ts",
+					"tests/unit/routes/accountability-pagination.test.ts"
+				],
+				"artifacts": ["convex/lib/accountabilityReadModel.ts", "convex/accountabilityReadModel.ts"]
+			}
+		},
+		{
+			"id": "FND-38",
+			"type": "action",
+			"name": "Bound every enabled public API read and organization budget",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Replace rebuilt ten-thousand-row API windows, per-item history collections, global representative scans, and embedding-bearing organization reads with exact gets, one-page compound-index cursors, compact counters, and an organization-wide request budget shared by every key.",
+			"acceptance": "Every enabled v1 list performs at most one bounded database page per request and returns an opaque continuation cursor; item endpoints normalize and fetch one ID before an indexed ownership check; campaign, organization, representative, network, and activity responses use compact projections rather than child or corpus collections; active API keys are transactionally capped per organization; a stable organization-wide bucket is consumed atomically in addition to the per-key bucket; key creation is throttled; and maximum-cardinality plus multi-key concurrency tests prove request cost and quota cannot multiply with corpus or key count.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/v1api-cardinality.convex.test.ts",
+					"convex/v1api-key-limits.convex.test.ts",
+					"tests/unit/convex/v1api-bounds-contract.test.ts",
+					"tests/unit/api/api-v1-edge-worker.test.ts"
+				],
+				"artifacts": [
+					"convex/v1api.ts",
+					"workers/api-v1-edge/src/index.ts",
+					"src/lib/server/api-v1/rate-limit.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-39",
+			"type": "action",
+			"name": "Bound webhook subscriptions, fan-out, and destinations",
+			"status": "ready",
+			"owner": "application, security, and reliability engineering",
+			"description": "Make webhook creation and delivery a capped organization resource, validate destinations against private-network egress, and turn event fan-out and delivery cleanup into explicit fixed-cardinality work.",
+			"acceptance": "Session and v1 webhook creation share one transactional maximum and stable organization throttle; URL, description, event-set, header, and payload sizes are bounded before writes; duplicate events are canonicalized; private, loopback, link-local, credential-bearing, and non-HTTPS destinations fail closed at creation and again before delivery; event fan-out reads at most the invariant maximum and emits durable overflow evidence without amplifying; parent deletion pages delivery cleanup; legacy overflow has a bounded repair; and concurrent creation, rebinding, fan-out, and cleanup tests prove the cap.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/org-webhooks-invariants.convex.test.ts",
+					"convex/webhook-response-bounds.convex.test.ts",
+					"tests/unit/convex/org-webhook-policy.test.ts",
+					"tests/unit/convex/webhook-event-parity.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/orgWebhookPolicy.ts",
+					"src/lib/server/api-v1/webhook-policy.ts",
+					"docs/ops/WEBHOOK-EGRESS.md"
+				]
+			}
+		},
+		{
+			"id": "FND-41",
+			"type": "action",
+			"name": "Snapshot and page outbound communication audiences",
+			"status": "ready",
+			"owner": "application and reliability engineering",
+			"description": "Replace email and SMS recipient queries that repeatedly paginate an organization and perform per-supporter tag and action joins with immutable bounded audience jobs whose scan, membership, dispatch, and recovery cursors advance one page per transaction.",
+			"acceptance": "No Convex transaction loops across database pagination cursors or rebuilds a prior audience; filter arrays have small structural caps; status/source and tag anchors are indexed; segment membership and action context are materialized or evaluated from bounded projections; compose counts expose exact projection state or explicit not-ready semantics; dispatch consumes a persisted immutable cohort once through fixed batches; cancellation and retries are idempotent; SMS dispatch stays disabled until its proof is ready; and sparse-filter plus ten-thousand-recipient tests demonstrate one-page transaction cost and complete delivery without duplicates.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/supporter-audience.convex.test.ts",
+					"tests/unit/convex/audience-filter-bounds.test.ts",
+					"tests/unit/convex/audience-dispatch-launch-gate.test.ts",
+					"tests/unit/org/recipient-pagination.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/supporterAudience.ts",
+					"convex/_audienceFilters.ts",
+					"src/lib/server/email/audience.ts",
+					"src/lib/server/sms/audience.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-42",
+			"type": "action",
+			"name": "Bound explicit coalition and representative browse surfaces",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Harden page-owned network roster and decision-maker follow/discovery reads so explicit feature navigation cannot bypass the compact organization shell with unbounded caller limits, whole-follow collections, or per-network roster joins.",
+			"acceptance": "All public Convex limit arguments are clamped before database work; follows and network rosters use opaque cursor pages with exact composite indexes; followed and active-member counts are write-maintained; discovery advances an indexed active-decision-maker page without collecting exclusions; network lists read compact owner/count fields rather than every membership; legacy active and pending rows are bounded or fail closed above declared invariants; and maximum-network, member, and follow tests prove fixed or page-bounded reads.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/explicit-browse-bounds.convex.test.ts",
+					"tests/unit/networks/proof-pressure-stats.test.ts",
+					"tests/unit/targets/cohort-roster.test.ts"
+				],
+				"artifacts": ["convex/networks.ts", "convex/targets.ts"]
+			}
+		},
+		{
+			"id": "FND-43",
+			"type": "action",
+			"name": "Make plan usage accounting projection-only",
+			"status": "ready",
+			"owner": "application and reliability engineering",
+			"description": "Remove synchronous request-path self-healing scans across actions, email blasts, and SMS blasts by maintaining compact per-organization period usage and repairing missing legacy state only through bounded background work.",
+			"acceptance": "Every plan check reads constant-cardinality authority and period-usage rows; all billable writers update the exact period counters transactionally or invalidate readiness; missing, stale, or malformed projections fail closed with a coded not-ready result and enqueue idempotent bounded repair; repair pages each source once with durable progress and activation; plan transitions preserve limits; and missing-baseline, large-history, concurrency, rollover, and retry tests prove no request can trigger a history scan.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/plan-usage-projection.convex.test.ts",
+					"convex/plan-usage-reservations.convex.test.ts",
+					"convex/subscription-authority.convex.test.ts"
+				],
+				"artifacts": ["convex/lib/planUsage.ts", "convex/planUsage.ts"]
+			}
+		},
+		{
+			"id": "FND-44",
+			"type": "action",
+			"name": "Bound configuration and operator outcome reads",
+			"status": "ready",
+			"owner": "application and reliability engineering",
+			"description": "Turn finite organization configuration into enforced cardinality invariants, retire dormant or superseded wide readers before I/O, cursor-page operator trace replay, and replace workflow, donation-confirmation, and SMS-reply history folds with exact launch-gated projections.",
+			"acceptance": "Segment, invite, membership, issue-domain, workflow, and A/B-group reads and writers enforce matching fixed caps with repair-required overflow; dormant delegation plus superseded organization and portable-reputation readers fail before authentication or database work; trace replay is cursor-paged at no more than 500 rows and 512 KiB; workflow execution counts, donation confirmation outcomes, and SMS reply summaries are marker-safe, write-maintained, self-paged through legacy data, fail closed before activation, and are mandatory in observability, health, release readiness, and the production cutover runbook; focused runtime, tombstone, query-efficiency, and deployment-contract tests pass.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/operator-read-models.convex.test.ts",
+					"tests/unit/convex/configuration-cardinality-contract.test.ts",
+					"tests/unit/convex/operator-query-bounds.test.ts",
+					"tests/unit/scripts/deployment-cutover-runbook.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/orgConfigurationLimits.ts",
+					"convex/lib/workflowExecutionCount.ts",
+					"convex/lib/donationConfirmationSummary.ts",
+					"convex/lib/smsReplySummary.ts",
+					"docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md"
+				]
+			}
+		},
+		{
+			"id": "FND-45",
+			"type": "action",
+			"name": "Bound profile and credential lifecycle reads",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Replace live profile, ground-vault, recipient-relation, and credential-history scans with exact lifecycle indexes, constant-cardinality invariant checks, bounded enforcement-window reads, compact representative output, and trusted server-coordinated query time.",
+			"acceptance": "Active credential selection reads one newest unrevoked row and fails closed on canonical expiry; downgrade protection uses a lifetime exact-index existence proof while cooldown, 180-day, and email-Sybil enforcement read only their exact windows and thresholds; tier bypass and oversized official inputs cannot amplify history or writes; ground reads reject multiple readable vaults or active wrappers from two-row probes; profile and recipient selectors use the exact active relation index under a ten-official and 32-KiB output envelope; cache-sensitive public queries accept authenticated server or internal-action time rather than Date.now; and revoked-history, drift, abuse, multiplicity, active-selection, and static query-efficiency tests pass.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/profile-credential-foundations.convex.test.ts",
+					"tests/unit/convex/profile-credential-foundations.test.ts",
+					"tests/unit/convex/credential-cutover-bounds.test.ts"
+				],
+				"artifacts": [
+					"convex/_credentialSelect.ts",
+					"convex/lib/credentialHistory.ts",
+					"docs/runbooks/V2-CREDENTIAL-CUTOVER.md"
+				]
+			}
+		},
+		{
+			"id": "FND-46",
+			"type": "action",
+			"name": "Make outbound email quota and carrier evidence durable",
+			"status": "ready",
+			"owner": "application, billing, and reliability engineering",
+			"description": "Linearize email admission against durable period reservations, preserve ambiguous carrier outcomes instead of guessing, and replace blast-body and receipt-history reads with compact scalar authority before any outbound email path can be armed.",
+			"acceptance": "Every campaign, blast, workflow, browser, scheduled, and enclave email path reserves the exact immutable cohort count transactionally against sent plus reserved period usage under an idempotent source identity before carrier authority; concurrent final-slot claims cannot overshoot and sent, released, and remaining partitions reconcile exactly once. A timeout, non-2xx response, missing SES acceptance id, action loss, or stale carrier-boundary lease becomes outcome-unknown and blocks automatic resend or capacity release; only one append-only complete carrier-evidence partition plus an audited bounded repair can reconcile it, and the recovery runbook forbids zero inference and manual counter edits. Blast receipts maintain a fixed-cap exact count without a history scan or caller-derived dynamic take, A/B winner discovery reads only a capped embedding-free scalar projection, and all legacy server dispatch authority remains fail-closed until the complete audience, consent, quota, one-shot grant, and evidence proof is active.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/plan-usage-reservations.convex.test.ts",
+					"tests/unit/convex/email-launch-invariants.test.ts",
+					"tests/unit/email/ses-result-ambiguity.test.ts",
+					"tests/unit/scripts/email-quota-recovery-runbook.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/planUsageReservations.ts",
+					"docs/ops/EMAIL-QUOTA-RESERVATION-RECOVERY.md"
+				]
+			}
+		},
+		{
+			"id": "FND-47",
+			"type": "action",
+			"name": "Make contact consent global and carrier-linearized",
+			"status": "ready",
+			"owner": "application, privacy, and reliability engineering",
+			"description": "Make email and SMS denial authority global across organizations, propagate it through durable bounded fan-out, and require an auditable per-recipient one-shot claim immediately before each non-transactional carrier call.",
+			"acceptance": "Canonical global email and phone identities have exact indexed deny authority with scoped re-enable semantics, and every STOP, START, unsubscribe, bounce, complaint, contact-identity change, or deletion serially bumps one authority epoch. Provider retries are idempotent; ambiguous or missing inbound routes fail closed; providers receive success only after durable ingress; legacy deny truth is adopted before activation; and fan-out advances through fixed 32-row and 256-KiB pages with durable retry, terminal evidence, and readiness failure. Every carrier-capable cohort rechecks the captured epoch at its final claim. Bulk SMS remains behind a non-overridable pre-I/O launch tombstone until each blast-plus-supporter identity can be claimed exactly once immediately before Twilio, a pre-claim STOP records a durable skip, accepted, failed, and ambiguous outcomes are persisted without automatic resend, and overdue unresolved claims fail health and support evidence-based operator reconciliation.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/contact-authority-foundations.convex.test.ts",
+					"tests/unit/convex/contact-authority-foundations.test.ts",
+					"tests/unit/server/sms-audience.test.ts",
+					"tests/unit/server/sms-carrier-boundary.test.ts"
+				],
+				"artifacts": ["convex/lib/contactAuthority.ts", "docs/ops/CONTACT-AUTHORITY-CUTOVER.md"]
+			}
+		},
+		{
+			"id": "FND-48",
+			"type": "action",
+			"name": "Bound differentially private analytics publication",
+			"status": "ready",
+			"owner": "application, privacy, and reliability engineering",
+			"description": "Replace whole-date analytics materialization and isolate-local contribution trust with a bounded durable snapshot plane whose ingestion and publication remain fail-closed until global contribution sensitivity is provable.",
+			"acceptance": "While durable contribution authority is absent, the browser client is a no-op and both the HTTP increment route and Convex batch mutation reject before request-body parsing or database reads; neither flags nor stale migration rows can publish snapshots. Activation requires globally enforced identity, clipping, and rate authority that proves the declared sensitivity. Aggregate, migration, supervisor, cleanup, and reader transactions use exact identities plus fixed eight-row, 512-KiB, and twenty-write envelopes; one durable run claims one epsilon spend; HMAC-SHA-256 derives deterministic replay-safe noise without publishing seeds or internal identities; partial runs remain invisible; raw aggregates are deleted only after exact snapshot evidence; and bounded migrate, activate, retry, and legacy-divergence tests prove fail-closed privacy and recovery.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"convex/analytics-privacy-gate.convex.test.ts",
+					"convex/analytics-snapshot-plane.convex.test.ts",
+					"tests/unit/convex/analytics-ingestion-launch-gate.test.ts",
+					"tests/unit/convex/analytics-snapshot-foundation.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/analyticsPrivacyGate.ts",
+					"docs/development/analytics.md",
+					"src/lib/core/analytics/SNAPSHOT-ARCHITECTURE.md"
+				]
+			}
+		},
+		{
+			"id": "FND-49",
+			"type": "action",
+			"name": "Bound every migration and operator maintenance read",
+			"status": "ready",
+			"owner": "application, data, and reliability engineering",
+			"description": "Eliminate unbounded Convex collections and post-index filters from executable code, then make schema repair, credential cutover, seeding, cleanup, backfill, audit, and destructive operator jobs consume explicit indexed pages with honest continuation.",
+			"acceptance": "A repository-wide ratchet reports zero executable collect calls and zero query-builder post-index filters; recurring and webhook hot paths use exact compound or due-range indexes, and every caller-controlled limit and cursor is validated before I/O. Schema normalizers, enum audits, credential cutover, seed reconciliation, subscription and submission backfills, witness and intelligence expiry, Shadow Atlas repair, revocation audit, and legislation pruning enforce fixed row, byte, write, page, and cursor ceilings; SplitRequired, multiplicity, stalled cursors, and legacy overflow fail closed; continuation advances only for work actually retained; due queues clear their selector so scrubbed rows cannot pin page one; and terminal drivers plus maximum-backlog tests prove complete, idempotent self-drain without corpus accumulation.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"tests/unit/convex/global-query-read-bounds.test.ts",
+					"tests/unit/convex/schema-migration-bounds.test.ts",
+					"tests/unit/convex/backfill-pagination-integrity.test.ts",
+					"tests/unit/convex/operator-query-bounds.test.ts"
+				],
+				"artifacts": [
+					"scripts/check-convex-query-efficiency.mjs",
+					"scripts/convex-query-efficiency-baseline.json",
+					"docs/ops/CONVEX-QUERY-EFFICIENCY-AUDIT.md"
+				]
+			}
+		},
+		{
+			"id": "FND-30",
+			"type": "action",
+			"name": "Make refresh and cache recovery durable",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Persist destructive refresh urgency, retired-revision floors, and monotonic withdrawal epochs; authenticate then globally cadence-gate each backend through one SQLite Durable Object; producer-publish immutable list and bundled-graph payloads before an ETag-fenced nine-minute manifest authority; keep anonymous Pages exact-GET-only; retire only validated exact ring coordinates; and supervise abandoned coordinated rebuild leases without exposing a partial corpus.",
+			"acceptance": "Destructive ready-to-false transitions atomically advance durable retired-revision floors and monotonic withdrawal epochs, and a writer that misses the false interval stages a tombstone before replacement authority. The dedicated capability is checked before Platform work; invalid traffic spends zero Durable Object, R2, Cache API, session, or Convex work. A one-minute cron polls one backend-named SQLite object that admits at most one ordinary writer per five minutes, bounds exact-release seed priority and continuation, and fails closed on missing or incompatible coordination. Manifest authority is acquisition-anchored for nine minutes, locally revalidated after 60 seconds, negatively memoized for 10 seconds, and has no stale-ready LKG. Anonymous reads are exact GET-only and never call Convex or perform R2 claim, mutation, LIST, DELETE, polling, or takeover; a miss fails closed. The producer conditionally creates two list and two bundled-graph variants before authority, retains an exact three-generation ring, and fences delayed deletion. Publication lag begins at the first trusted R2 acquisition, cannot reset on retry/supersession/rearm, retains prior authority for exactly 45 minutes, and fails health immediately on a terminal code; only complete publication clears it. Operator rearm is exact-key ETag/coordinate/evidence-fenced and does not bypass Queue admission or clear health. Production/nonproduction use distinct cron secrets, gate Workers, Durable Object namespaces, and private Standard R2 buckets; exact-200 protocol-v3 settlement, bounded decoding, two-read healthy graph behavior, lifecycle reconciliation, and abandoned-lock recovery are regression-proved. Trusted public-edge, Access, hidden-origin, candidate, terminal-C, landing-cache, and rollback proof is intentionally owned by FND-35D and is not self-attested by this cache-producer node.",
+			"proof": {
+				"verifiedAt": "2026-07-20T07:54:22Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries",
+					"npx vitest --run tests/unit/server/public-discovery-manifest-shield.test.ts tests/unit/routes/health-endpoint.test.ts tests/unit/scripts/rearm-public-template-og-backfill.test.ts"
+				],
+				"tests": [
+					"tests/unit/api/public-discovery-manifest-refresh.test.ts",
+					"tests/unit/server/public-discovery-manifest-refresh-auth.test.ts",
+					"tests/unit/server/public-discovery-manifest-refresh-gate.test.ts",
+					"tests/unit/server/public-discovery-manifest-refresh-hook.test.ts",
+					"tests/unit/server/public-discovery-manifest-shield.test.ts",
+					"tests/unit/server/public-discovery-cache.test.ts",
+					"tests/unit/server/public-template-queries.test.ts",
+					"tests/unit/convex/public-discovery-manifest-cron-worker.test.ts",
+					"tests/unit/convex/public-discovery-writer-contract.test.ts",
+					"tests/unit/routes/containment-readiness.test.ts",
+					"tests/unit/routes/health-endpoint.test.ts",
+					"tests/unit/routes/deploy-health-contract.test.ts",
+					"tests/unit/scripts/rearm-public-template-og-backfill.test.ts",
+					"tests/unit/scripts/pages-durable-object-binding.test.ts",
+					"tests/unit/scripts/public-discovery-cron-deployment.test.ts",
+					"tests/unit/scripts/public-discovery-r2-lifecycle.test.ts",
+					"tests/unit/scripts/pages-release-artifact.test.ts",
+					"tests/unit/server/verification-packet-cache.test.ts",
+					"tests/unit/routes/home-page-load.test.ts"
+				],
+				"artifacts": [
+					"src/lib/server/public-discovery-manifest-shield.ts",
+					"src/lib/server/public-discovery-cache.ts",
+					"src/lib/server/public-discovery-manifest-refresh-hook.ts",
+					"src/routes/api/health/+server.ts",
+					"src/routes/api/internal/public-discovery-manifest-refresh/+server.ts",
+					"workers/public-discovery-manifest-refresh-gate.ts",
+					"workers/public-discovery-manifest-cron.ts",
+					"wrangler.public-discovery-manifest-gate.toml",
+					"wrangler.public-discovery-manifest.toml",
+					"scripts/verify-pages-durable-object-binding.mjs",
+					"scripts/verify-public-discovery-cron-deployment.mjs",
+					"scripts/reconcile-public-discovery-r2-lifecycle.mjs",
+					"scripts/rearm-public-template-og-backfill.mjs",
+					".github/workflows/deploy.yml",
+					"docs/architecture/public-discovery-cache-invariants.md"
+				]
+			}
+		},
+		{
+			"id": "FND-35",
+			"type": "action",
+			"name": "Bound normal readiness and release proof mechanisms",
+			"status": "ready",
+			"owner": "application, security, and release engineering",
+			"description": "Keep public liveness I/O-free, prevent readiness probes from multiplying dependency work, pin the complete SvelteKit server-execution closure to immutable release gate T, keep the preview Pages realm capability-inert, and make normal preview and production publication reproducible, realm-isolated, provenance-gated, and rollback-safe before exhaustive exposure reconciliation.",
+			"acceptance": "Public liveness performs no dependency I/O; anonymous readiness and invalid refresh capabilities stop before Convex, Atlas, R2, Cache API, or session work; authenticated production readiness fails closed on missing exact-SHA, realm, cookie-authority, or projection evidence. Immutable gate T verifies source S Git objects and detached signed review A before any protected Environment exposes secrets. Git-object identity covers every SvelteKit route, both hook entrypoints, Svelte and Vite configuration, every transitive provider-capable helper/component and provider action reachable from server execution, the paid-provider policy/client/Worker boundary, and the release finalizer; alternate hook, instrumentation, and configuration entry candidates must remain absent. A new or changed `+server`, `+page.server`, `+layout.server`, universal route, import helper, component SSR path, hook, instrumentation module, or configuration file therefore stops before a protected Environment exposes credentials. The committed Pages configuration and trusted transaction materializer permit exactly public build-safe `[env.preview.vars]` in the preview realm and reject every preview KV, R2, Queue, Durable Object, session, provider, AI, D1, service, or other capability table before mutating the artifact; preview discovery work remains in separately isolated Workers. Repository-scope observers are finite-lived and read-only and prove GitHub authority, the exact Free-plan WAF, and exhaustive pages.dev closure. Two independent credential-free exact-S builds produce one canonical Pages tree; T installs and runs only trusted finalizers, rejects client-visible production-origin baking, and permits no candidate-supplied release tooling. Native Pages publication remains disabled. Queue/Pages activation uses distinct exact-SHA preview and production receipts over the same artifact id/digest, verifies live authority last, journals prior state and attempted mutations before each command, preserves rollback reserve, and has outer cancellation/crash recovery. Deployment inventory pagination, pruning/quarantine, alias identity, shared serialization, and terminal origin retirement fail closed. FND-35D separately owns the two trusted public edges, Access-protected hidden origins, exact staging candidate proof, Q-to-T-to-C terminal authority, post-authority landing cache, and retained-C rollback. Normal release remains pending until both nodes and their external evidence close.",
+			"externalEvidencePending": "The source mechanisms are implemented and verified, but source readiness does not self-attest live release authority. Detached FND-60 review, signed Queue phase receipts, protected-environment approval seams, staging runtime handoff, post-mutation account inventory, and production rollback execution remain in PD-05 and PD-50 through PD-70.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"actionlint .github/workflows/deploy.yml .github/workflows/public-template-og-release-recovery.yml",
+					"npx vitest --run tests/unit/routes/deploy-health-contract.test.ts tests/unit/scripts/release-gate-blobs.test.ts tests/unit/scripts/pages-release-config-materialization.test.ts tests/unit/scripts/pages-release-artifact-finalizer.test.ts tests/unit/scripts/production-release-commit-boundary.test.ts tests/unit/scripts/public-template-og-outer-recovery-workflow.test.ts tests/unit/scripts/public-template-og-production-coordination-recovery.test.ts tests/unit/scripts/reproducible-release-workflow.test.ts tests/unit/scripts/github-workflow-security.test.ts",
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check",
+					"npm run build"
+				],
+				"tests": [
+					"tests/unit/routes/deploy-health-contract.test.ts",
+					"tests/unit/routes/live-endpoint.test.ts",
+					"tests/unit/scripts/release-gate-blobs.test.ts",
+					"tests/unit/scripts/pages-release-config-materialization.test.ts",
+					"tests/unit/scripts/pages-release-artifact-finalizer.test.ts",
+					"tests/unit/scripts/production-release-commit-boundary.test.ts",
+					"tests/unit/scripts/public-template-og-outer-recovery-workflow.test.ts",
+					"tests/unit/scripts/public-template-og-production-coordination-recovery.test.ts",
+					"tests/unit/scripts/reproducible-release-workflow.test.ts",
+					"tests/unit/scripts/github-workflow-security.test.ts"
+				],
+				"artifacts": [
+					".github/workflows/deploy.yml",
+					".github/workflows/public-template-og-release-recovery.yml",
+					"scripts/run-public-template-og-release-phase.mjs",
+					"scripts/recover-public-template-og-production-coordination.mjs",
+					"scripts/public-template-og-release-recovery-store.mjs",
+					"scripts/finalize-pages-release-artifact.mjs",
+					"scripts/verify-release-gate-blobs.mjs",
+					"wrangler.toml",
+					"svelte.config.js",
+					"vite.config.ts",
+					"src/hooks.server.ts",
+					"src/routes",
+					"src/routes/api/live/+server.ts",
+					"docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md",
+					"docs/ops/PUBLIC-RELEASE-RECOVERY.md"
+				]
+			}
+		},
+		{
+			"id": "FND-35D",
+			"type": "action",
+			"name": "Separate trusted public edge from Access-protected Pages origin",
+			"status": "ready",
+			"owner": "application, security, Cloudflare, and release engineering",
+			"description": "Put separate least-privilege production and staging trusted Workers on the public routes, hide Pages behind distinct Service-Auth-only Access applications, reconstruct public authority in a trusted Access-safe adapter, gate the post-C proof with a dedicated production-only capability that is stripped before origin forwarding, make terminal release authority append-only and rollback-safe, and cache only the anonymous landing page after all authority checks.",
+			"acceptance": "`commons-trusted-pages-edge` exclusively owns `commons.email/*` and `commons-trusted-pages-edge-staging` exclusively owns `staging.commons.email/*`; both use date 2026-07-20, pin only `global_fetch_strictly_public`, disable workers.dev and preview URLs, and have exact disjoint binding allowlists. The finalized Pages candidate uses date 2025-04-01 and exact ordered flags `nodejs_compat`, `nodejs_als`, `global_fetch_strictly_public`. The Pages project exposes exactly `pages-origin.commons.email` and `pages-origin-staging.commons.email`; every pages.dev root/branch/hash origin remains closed. Complete live inventory enumerates every overlapping Access app/policy/token, DNS record, Pages custom domain/deployment alias, and Worker route; it equals the two expected apps, and `staging.commons.email` has no stale Pages/branch alias or competing route. Each hidden host has one distinct self-hosted Access app whose `read_service_tokens_from_header` is exactly `x-commons-pages-origin-access` and whose only policy is Service Auth/non-identity for its one distinct token id. One exact enabled post-Access late transform removes only that header from the two hidden hosts, and no later rule restores it. No-token, malformed, wrong-id, wrong-secret, cross-token, JWT-only, assertion-only, cookie-only, and standard-header attempts return 401/403 without candidate execution. The Access-safe adapter tolerates unavailable Cache API, derives the hidden host from the raw URL, reconstructs the public URL before SvelteKit pre-hook CSRF processing, preserves cookie/redirect/subrequest semantics, and the first hook revalidates and scrubs the Access assertion, host pair, exact SHA, transaction, and adapter marker. The exact staging probe alone reaches candidate code and requires empty 204 plus `x-commons-origin-access-token: absent` and `x-commons-preview-cache-api: unavailable`. Pending P/Q remains one expiring singleton, one active pointer names terminal C, and at most eight immutable committed tuples remain rollback-eligible; finalize appends C and advances active atomically, while ABA, duplicate, dangling, over-bound, or malformed state fails closed. Before Q and again after capture before T mutation, an existing T rejects missing/wrong proof capabilities and accepts the current retained-window value for the journal tuple; an old edge or different secret blocks promotion. Production promotion is Q then exact trusted edge T then terminal C as the last successful action, followed immediately by uncached exact `/api/release-origin` proof of the committed SHA/transaction, proof/Access-token absence, candidate Cache API unavailability, and zero external I/O. The trusted edge is the sole public landing-HTML cache owner. It admits only anonymous exact HTTPS GET `/` with no query/cookie/authorization/range, stores only exact 200 HTML without Set-Cookie up to 1 MiB, keys public host plus SHA plus transaction plus policy, and replaces all candidate cache metadata. Per key and isolate it admits one 250-millisecond quarantined raw match, one one-second abort-then-quarantined raw origin fetch, one serialized raw put, the newest submitted cacheable pending generation, and one materialized L1 representation. Caller and waitUntil observation is bounded even when raw work never settles. It serves 60 seconds fresh plus 300 seconds stale-while-revalidate with a hard origin-start-anchored 360-second ceiling and exposes `Cache-Tag: public-discovery`. Publication changes the R2 manifest but not the key. The inner manifest cache observes publication in less than 60 seconds; an outer fill that sees the old coordinate immediately before that observation can remain eligible for less than 360 more seconds, making the strict manifest-publication-to-last-old-HTML bound less than 420 seconds, with no purge credential or API call. Cache API ordering is not claimed across isolates; timestamps bound replay rather than proving global monotonicity. The tag is a future optional operator optimization only; its Free five-per-minute limit is not launch, freshness, or rollback authority. Per-colo behavior and the fact that every hit counts against 100,000 Workers requests/day are explicit. Rollback restores the retained-C-matching Pages candidate first, then its captured trusted edge, and repeats capability-gated `/api/release-origin`: normal Pages proves the exact tuple and origin absence, while containment proves captured metadata plus its deterministic 503 exception. It never rewinds the ledger; purge is optional acceleration whose failure cannot block or establish recovery.",
+			"externalEvidencePending": "Source tests do not prove external Cloudflare state. PD-50 through PD-70 retain the complete Access overlap and alias inventory, two applications/tokens, protected token JSON and ids, distinct production-only release-origin proof capability, origin stripping, late transform, hidden-domain inventory, deployed Worker/Pages versions/routes/bindings, direct-origin and cross-token denial, stale staging-alias retirement, valid staging candidate proof, capability-gated post-C `/api/release-origin`, live single-owner cache timing, and paired rollback execution. PD-00 retains production Convex reactivation. None of those live facts is implied by this ready source status.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"npx vitest --run tests/unit/server/access-safe-sveltekit-pages-adapter.test.ts tests/unit/server/trusted-pages-release-cache.test.ts tests/unit/server/trusted-pages-release-edge.test.ts tests/unit/scripts/trusted-pages-edge-release-workflow.test.ts tests/unit/scripts/trusted-pages-release-edge-verifier.test.ts tests/unit/scripts/trusted-pages-release-origin-response.test.ts tests/unit/scripts/pages-durable-object-binding.test.ts tests/unit/scripts/cloudflare-pages-dev-origin-closure.test.ts",
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check",
+					"npm run build"
+				],
+				"tests": [
+					"tests/unit/server/access-safe-sveltekit-pages-adapter.test.ts",
+					"tests/unit/server/trusted-pages-release-cache.test.ts",
+					"tests/unit/server/trusted-pages-release-edge.test.ts",
+					"tests/unit/scripts/trusted-pages-edge-release-workflow.test.ts",
+					"tests/unit/scripts/trusted-pages-release-edge-verifier.test.ts",
+					"tests/unit/scripts/trusted-pages-release-origin-response.test.ts",
+					"tests/unit/scripts/pages-durable-object-binding.test.ts",
+					"tests/unit/scripts/cloudflare-pages-dev-origin-closure.test.ts"
+				],
+				"artifacts": [
+					"workers/access-safe-sveltekit-pages-adapter.ts",
+					"workers/trusted-pages-release-edge.ts",
+					"workers/trusted-pages-release-cache.ts",
+					"src/hooks.server.ts",
+					"src/routes/api/release-origin/+server.ts",
+					"scripts/verify-trusted-pages-release-edge.mjs",
+					"scripts/verify-trusted-pages-release-origin-response.mjs",
+					"wrangler.trusted-pages-release-edge.toml",
+					"wrangler.trusted-pages-release-edge-staging.toml",
+					".github/workflows/deploy.yml"
+				]
+			}
+		},
+		{
+			"id": "FND-35C",
+			"type": "action",
+			"name": "Compile and prove zero-I/O containment bootstrap",
+			"status": "ready",
+			"owner": "application, security, and release engineering",
+			"description": "Generate emergency containment solely from immutable trusted gate T, intercept before application hooks, and prove a binding-free Pages artifact can be made canonical without requiring normal application or cache-plane readiness.",
+			"acceptance": "A trusted deterministic generator produces the containment Worker solely from immutable T; source S cannot supply or alter its executable bytes. Containment intercepts every non-allowlisted application and data route before Sentry, platform-env/Atlas setup, authentication, Convex initialization, and application rate limiting with one deterministic no-store 503; only GET/HEAD /api/live and authenticated /api/containment-readiness reach local routing. Its exact minimal Wrangler config contains no vars, KV, R2, Durable Object, service, queue, D1, or other application binding. Readiness proves the exact lowercase 40-character artifact SHA, accepted internal secret, active containment mode, isolated active/previous session-cookie keys, absent cache bindings, and exactly zero aggregate, Convex, Atlas, R2, Durable Object, fetch, Cache API, and session calls. Only protected main may manually target production containment. Immutable T/S/A, live GitHub authority, and the exhaustive zero-bypass account pages.dev redirect are proven before credentials for every production mode. The deterministic containment artifact is uploaded to the staging branch, proved by exact Pages API metadata and preview binding absence, and runtime-proved through staging.commons.email before canonical publication. A failed attempt forward-deploys that exact custom-authority-proven artifact rather than restoring a quota-amplifying normal canonical. Direct pages.dev probing is forbidden; app host rejection remains data-I/O defense during redirect drift. Containment skips Atlas, Convex, KV, R2, gate, cron, WAF, normal application-preview, and application-readiness preconditions, but it does not skip origin closure. Exhaustive reconciliation preserves zero noncanonical deployments and a live probe proves the prior immutable URL is terminally blocked or exactly redirected before Pages execution. Source readiness for this node authorizes only PD-05's external mutation and does not claim FND-35 normal readiness, FND-60 detached review, PD-05 deployment, or PD-00 reactivation.",
+			"proof": {
+				"verifiedAt": "2026-07-20T07:55:29Z",
+				"commands": [
+					"npx vitest --run tests/unit/server/runtime-containment.test.ts tests/unit/routes/containment-readiness.test.ts tests/unit/scripts/trusted-containment-worker.test.ts tests/unit/scripts/pages-containment-bindings.test.ts tests/unit/scripts/verify-containment-deployment.test.ts tests/unit/scripts/pages-release-artifact.test.ts",
+					"node scripts/verify-release-hypergraph.mjs --require-containment-bootstrap-source-ready"
+				],
+				"tests": [
+					"tests/unit/server/runtime-containment.test.ts",
+					"tests/unit/routes/containment-readiness.test.ts",
+					"tests/unit/scripts/trusted-containment-worker.test.ts",
+					"tests/unit/scripts/pages-containment-bindings.test.ts",
+					"tests/unit/scripts/verify-containment-deployment.test.ts",
+					"tests/unit/scripts/pages-release-artifact.test.ts"
+				],
+				"artifacts": [
+					"scripts/generate-trusted-containment-worker.mjs",
+					"scripts/verify-pages-containment-bindings.mjs",
+					"scripts/verify-containment-deployment.mjs",
+					"src/lib/server/runtime-containment.ts",
+					"src/routes/api/containment-readiness/+server.ts",
+					"wrangler.containment.toml"
+				]
+			}
+		},
+		{
+			"id": "FND-40",
+			"type": "action",
+			"name": "Close public cost-amplification boundaries",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Secret-gate every server-only discovery and paid-search Convex surface, eliminate full-document slug/dedup/cache scans, rate-limit on a stable actor rather than query text, store one bounded bucket row per identity/window, and perform bounded global expiry cleanup.",
+			"acceptance": "Anonymous direct Convex calls fail before Gemini or snapshot/database work; public snapshot producer calls pass a server-only secret; slug availability reads a compact exact-index projection and is rate-limited; published-but-private templates cannot cross public artifacts; content-hash lookup uses its exact index and a bounded result; source-cache reads/writes enforce caller ownership plus a structural byte budget; varying search text consumes the same actor bucket; concurrency cannot exceed the bucket; and expired rows are removed by an essential bounded supervisor. Exact GET/HEAD `/s/:slug`, `/template-modal/:slug`, and `/s/:slug/og-image` requests encounter the pre-I/O shield and resolve current manifest to a bounded producer-published 250-entry R2 inventory and exact revision-qualified exhaustive page artifact. Anonymous valid, random, missing, cold, and warm paths perform zero Convex calls and zero R2 LIST/writes/fallback. Authenticated routes reuse that public base plus separately budgeted indexed viewer overlays under private no-store responses. The producer persists one complete CAS-fenced coordinate plan, publishes at most 16 artifacts per admitted cycle through queries of at most four coordinates, rereads the final digest before inventory/manifest cutover, and returns typed authenticated 202 continuation without losing the durable Convex token on transport, protocol, retry, server, crash, or successor races. Authored/visibility/discrete writers use the prompt freshness class; aggregates retain the six-hour floor. The first trusted R2 acquisition that observes a newer unpublished target starts a monotonic 45-minute publication-lag clock; retry and supersession cannot reset it, terminal Queue exhaustion fails authenticated health immediately, and only complete publication clears it. Operator rearm is an exact-key, ETag-and-coordinate-digest-fenced local R2 CAS whose next send still consumes the shared Queue ledger. Page GC is producer-only under manifest before-publication ownership, scans 100, marks/deletes 32, requires continuous first-seen-unreferenced grace, protects current/prior/active coordinates, uses a monotonic logical clock, and rereads a successor plan after ledger CAS before DELETE. No personalized variant enters shared artifacts. The production custom domain proves the Cloudflare Free-plan rate-limit rule; the canonical route inventory maps every public dynamic example while exempting approved probes. Free-plan per-colo/IP limits are not a global cap. A separate exact account Bulk Redirect closes every pages.dev hostname and the first app hook rejects unexpected hosts before Convex/auth. WAF or origin-closure permission/drift fails release closed. Private/no-store surfaces are not claimed as outer-cache hits without separate live proof.",
+			"externalEvidencePending": "The immutable page plane, continuation, freshness, and GC contracts are source-verified. PD-20 through PD-40 retain the live migration, seed, and snapshot-read evidence; PD-50 through PD-70 retain the exact deployed Queue CPU limit/artifact, production WAF rule, exhaustive pages.dev closure, cache timing, and post-warm I/O evidence. The current Cloudflare token still receives HTTP 403 for Zone WAF read, and the dedicated read-only origin-closure proof has not been captured; this ready source status does not clear those operator gates.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"npm run check:convex-queries",
+					"npm run check:convex-authority",
+					"npm run check:convex-work-budget",
+					"npx vitest --run tests/unit/routes/template-search.test.ts tests/unit/routes/template-check-slug.test.ts tests/unit/routes/public-template-page-cache.test.ts tests/unit/server/public-template-detail-cache.test.ts tests/unit/server/public-template-page-gc.test.ts tests/unit/scripts/rearm-public-template-og-backfill.test.ts tests/unit/convex/public-discovery-coordinated-rebuild.test.ts tests/unit/convex/global-query-read-bounds.test.ts",
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check",
+					"npm run build"
+				],
+				"tests": [
+					"convex/public-template-page-artifacts.convex.test.ts",
+					"convex/v1api-rate-limit.convex.test.ts",
+					"tests/unit/routes/template-search.test.ts",
+					"tests/unit/routes/template-check-slug.test.ts",
+					"tests/unit/routes/public-template-page-cache.test.ts",
+					"tests/unit/server/public-discovery-manifest-shield.test.ts",
+					"tests/unit/server/public-template-detail-cache.test.ts",
+					"tests/unit/server/public-template-page-gc.test.ts",
+					"tests/unit/scripts/rearm-public-template-og-backfill.test.ts",
+					"tests/unit/convex/public-discovery-coordinated-rebuild.test.ts",
+					"tests/unit/convex/global-query-read-bounds.test.ts"
+				],
+				"artifacts": [
+					"convex/templates.ts",
+					"convex/lib/publicDiscovery.ts",
+					"src/lib/server/public-discovery-manifest-shield.ts",
+					"src/lib/server/public-template-page-cache.ts",
+					"src/lib/server/public-template-detail-cache.ts",
+					"src/lib/server/public-template-page-artifact.ts",
+					"scripts/check-convex-query-efficiency.mjs",
+					"scripts/rearm-public-template-og-backfill.mjs",
+					"docs/ops/CONVEX-PUBLIC-DISCOVERY-IO.md",
+					"docs/ops/CLOUDFLARE-PUBLIC-DYNAMIC-COST-SHIELD.md"
+				]
+			}
+		},
+		{
+			"id": "FND-40B",
+			"type": "action",
+			"name": "Layer native, Pages-to-Convex, paid-provider, and Queue budgets",
+			"status": "ready",
+			"owner": "application, security, and release engineering",
+			"description": "Use producer-published R2 and Cache API to avoid anonymous database work, exhaustively account for every Pages-to-Convex dispatch, serialize all paid AI/search/moderation provider work through one shared atomic budget, project every Queue message lifecycle across UTC days, coordinate conservative account-wide allowances, prove provider billing and actual-I/O state from signed phase evidence, and fail normal release closed wherever Pages/Queue gates cannot arbitrate browser-direct, native, duplicate, or sibling-project work.",
+			"acceptance": "Anonymous discovery resolves through memory, Cache API, and exact-key private R2 without falling through to Convex. Every reviewed SvelteKit serverQuery, serverMutation, serverAction, and exceptional direct ConvexHttpClient dispatch reserves exactly once immediately before real network work; R2, Cache API, in-process cache, rejection, malformed requests, and every other no-dispatch path reserve zero. An exhaustive static policy classifies all 381 exact operations and fails CI on unknown, stale, dynamically named, raw-import, default, namespace, or dynamic-import bypasses. The pinned production and preview realms share one stable SQLite Durable Object authority independent of protocol-generation changes. One synchronous Convex-work transaction writes exactly the UTC-day and UTC-month rows for each admission, enforcing 327,680 units (320 MiB) per day and 524,288 units (512 MiB) per month; the 100,000-row Cloudflare Free allowance therefore permits at most 40,960 admissions and 81,920 SQLite row writes per day. The exact envelope is 270,464 units for a clean 250-coordinate backfill, 49,176 for three bounded replays, 319,640 for the release, 2,048 for health, 4,608 for two-realm daily manifest work, and 1,024 for soft launch: 327,320 units on the worst release day with 360 units spare, and 496,280 units in a 31-day month with 28,008 spare. The same fixed Durable Object name owns protocol-1 paid-provider admission across production and preview. Its exact reviewed nine-operation inventory is `subject-line`, `decision-makers`, `message-generation`, `embeddings`, `moderation-personalization`, `moderation-check`, `template-authoring`, `delegation-policy`, and `embedding-backfill`, with no permissive default; provider-free keyword template search is outside this inventory. One synchronous transaction reserves actor-operation-hour and actor-day rows, then for non-operators the operation day/month and shared-public day/month rows, and finally platform day/month rows. Weighted platform caps are 1,000 units/day and 2,400 per UTC month; non-operator public caps are 750/day and 1,800/month, and each operation has a smaller reviewed public pool so one expensive surface cannot starve unrelated work before the shared ceiling. The exact server-derived operator tier skips only the public pools: its actor and hard platform rows remain binding, preserving 250 daily and 600 monthly units inside rather than above the global cap, enough for one reviewed 224-unit subject/decision-maker/message/two-moderation demonstration. Retry-aware arithmetic enumerates all thirteen decision-maker cache splits: no execution exceeds 150 provider attempts, while the intentionally non-coincident element-wise envelope is 72 ten-result Exa searches, 24 text-only Exa content pages, 24 Firecrawl attempts, 13 Gemini calls, one Groq call, and 18 MX lookups. Search cannot exceed Exa's base ten-result tier and Exa content fallback requests text only. Message generation is bounded to 9 Exa searches, 12 text-only Exa pages, 12 Firecrawl attempts, two Gemini calls, and three Groq calls. The worst 2,400-unit single-operation mixes consume at most $8.448 of the current $10 Exa monthly credit and 576 of the current 1,000 Firecrawl Free credits. This Commons UTC-month calculation is conservative capacity planning rather than billing authority: launch additionally requires exact production-key evidence that every provider account is on its exact Free plan with billing and pay-as-you-go disabled, actual provider reset interval/current balance, and absence of sibling-key consumption. Missing binding or realm, guest or unknown operation, raw/oversized actor identity, timeout, malformed request/reply, protocol drift, cap drift, corrupt state, or backward clock fails closed before a provider. Each provider attempt reads at most eight SQLite rows and each admission writes at most eight; at most 1,000 minimum-weight provider admissions add 8,000 rows to the 81,920 Convex-work ceiling, below the 100,000 daily SQLite write allowance, while 100,000 inbound attempts at eight reads remain below the five-million-row read allowance. Authenticated agent subject, decision-maker, and message routes; template authoring; direct embedding generation; delegation parsing; embedding backfill; and moderation check/personalization all authenticate and validate bounded body/shape/cardinality before one reservation immediately before the first provider call. Template authoring additionally performs exact own-content dedupe and bounded individual/organization allowance preflight before admission, repeats both authoritatively in the write transaction, and uses its single reservation for moderation plus deferred embedding. Invalid, oversized, unauthenticated, duplicate, quota-exhausted, replayed, and denied requests perform zero provider work; no-op paths reserve zero. Recoverable message `startOrGet` is the authenticated ownership and concurrency gate before readiness, admission, moderation, trace, search, or generation; an existing running/completed job replays without another reservation, exactly one racing request creates work, and every newly claimed preflight/provider failure is durably terminal. Fresh or cached indirect source ground is normalized to at most six URL-validated records, structurally quoted as untrusted JSON, delimiter-safe, deterministically shortened or tail-shed to the complete 2,000-character Prompt Guard window, and classified byte-for-byte before that exact string reaches Gemini; rejection stops the writer. Source evaluation separately quotes page-controlled candidates and resolves model output only through trusted candidate indexes, so the model cannot mint source identity. Concurrency cannot over-admit; clock rollback, corrupt persisted state, cap drift, timeout, malformed reply, missing binding, protocol drift, and unknown operation fail closed before Convex. A protocol or policy change cannot select a fresh object and erase charged work, and release failure never deletes or rolls back the monotonic budget authority. Ordinary denials are generic no-store 429 or 503 responses; exact estimated balances require internal operator authority. The official-dashboard capture twice fences the exact team, billing interval, Default/not-suspended usage state, null Orb subscription, binary 1 GiB entitlement, and four-project inventory around canonical integer usage queries; it rejects `_rest`, null, unknown, noncanonical, or unreconciled rows and never persists the operator bearer. A canonical Ed25519 SSH-signed receipt binds the release SHA, exact inventory, and 56-minute future-work allowances; Commons is quiescent with zero non-Pages allowance, and 512 MiB plus all signed future allowances must fit exact team headroom. The immutable verifier checks that signature and semantics, then makes exactly four read-only Deployment API calls to reconcile both Commons usage counters and native-limit inventories byte-for-byte. The 45-minute receipt requires 35 minutes at the first proof and three minutes at the final proof; the ratcheted canary-to-final path is at most 28 minutes. The shared-Free Convex receipt remains diagnostic only: checked-in 1 GiB per-deployment native limits are prospective desired backstops, and `full-normal-release` always fails under `blocked-shared-free` because authenticated browser-direct calls, native work, and siblings are outside Pages arbitration. Full normal authority requires a separately reviewed protected-main verifier for either quota isolation or an active paid plan proven not to share the Free hard-disable, with limits above current usage and the reserve retained. The workflow keeps the broad dashboard token and signing key operator-local, accepts only protected detached evidence plus read-only deployment credentials, proves quota before canary and again immediately before Pages, deploys and exact-SHA verifies the private budget Worker before Pages, verifies the shared Pages binding, and preserves the active Worker on downstream failure. Separately, each reserved OG Queue message attempt charges overlapping deterministic UTC-day projection weights of 9 on its send day, 8 on the next day, and 2 on the second day; every realm-day bucket is capped at 2,500 projected operations. Two realms therefore admit at most 5,000 modeled operations on one day. A distinct Ed25519-signed account-wide Cloudflare Queue Free envelope permits activation only when two complete observations at least 15 minutes apart, each with data at least 15 minutes settled, prove the exact account, complete Queue and subscription inventories, zero managed/unmanaged backlog or authority drift, and at most 2,500 already-observed account billable operations. The exact worst nominal arithmetic is therefore 5,000 projected plus 2,500 observed = 7,500, leaving 2,500 of the 10,000-operation Free allowance; analytics is an operational signal rather than invoice truth, and duplicate at-least-once delivery or sibling traffic makes that remainder non-guaranteed. Receipts are phase-scoped (`activate-preview` and `activate-production`), exact-SHA, canonical, at most 30 minutes long, verified no more than 27 minutes after capture, confined to one UTC accounting day, and authorize only the named target queues plus exact monotonic transitions with post-mutation live proof. The production receipt is a fresh post-preview observation, not preview receipt replay. The Queue consumer pins an exact 100 ms CPU ceiling and its observed 26.5–28.1 ms cold render is below that source cap; live proof must reconcile the exact deployed limit and artifact against Cloudflare's Queue-consumer 30-second default/configurable-five-minute class. Containment remains binding-free and zero-dispatch.",
+			"externalEvidencePending": "The 2026-07-20 read-only Convex observation proves the team is Free (`get_orb_subscription` is null), both Commons `list_usage_limits` results are empty, production current-month databaseIoGb is 4.015712767839432, preview is 0.08603430446237326, and the exact Commons sum is 4,404,217,383 bytes. Enabling the desired 1 GiB production stop below already accrued usage is not a recovery path, and a fresh deployment in the same team does not isolate the quota. PD-00 must replace `blocked-shared-free` with machine-verifiable paid/no-shared-hard-disable or quota-isolation authority and establish safe live native limits. PD-50 must obtain the exact live shared budget-Worker version and protocol, Pages binding, production-only operator allowlist posture, Queue signer/phase receipts, post-mutation proof, and rollback evidence. It must also bind each exact production provider key/account to current-period usage, reset window, full sibling-key/account inventory, and the exact Free plan with billing and pay-as-you-go disabled for every provider; Exa evidence should include the key-level budget/current billing cost and fail-closed exhaustion posture rather than generic plan text. The Queue and Convex allowed-signers files still contain no enrolled operator, and no live provider-account evidence is attached. Until those external gates close, only the binding-free containment artifact is authorized; this ready status records the source budget mechanisms only.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"npm run check:convex-work-budget",
+					"npm run check:convex-native-usage-limit-config",
+					"npx vitest --run tests/unit/scripts/convex-native-usage-limits.test.ts tests/unit/scripts/convex-work-budget-ratchet.test.ts tests/unit/server/convex-work-budget-client.test.ts tests/unit/server/convex-work-budget-worker.test.ts tests/unit/server/convex-work-budget-response.test.ts tests/unit/scripts/convex-work-budget-deployment.test.ts",
+					"npx vitest --run tests/unit/server/paid-provider-budget-policy.test.ts tests/unit/server/paid-provider-budget-client.test.ts tests/unit/server/paid-provider-runtime-readiness.test.ts tests/unit/server/provider-http-transports.test.ts tests/unit/server/llm-cost-protection.test.ts tests/unit/agents/provider-call-envelope.test.ts tests/unit/agents/provider-request-envelope.test.ts tests/unit/agents/exa-search.test.ts tests/unit/agents/gemini-provider.test.ts tests/unit/agents/gemini-embeddings-envelope.test.ts tests/unit/agents/generate-subject-endpoint.test.ts tests/unit/agents/stream-subject-endpoint.test.ts tests/unit/agents/stream-endpoints.test.ts tests/unit/agents/stream-message-recovery.test.ts tests/unit/agents/message-writer.test.ts tests/unit/agents/source-evaluator.test.ts tests/unit/routes/templates-api-auth.test.ts tests/unit/routes/template-search.test.ts tests/unit/routes/embedding-generate-endpoint.test.ts tests/unit/routes/delegation-parse-policy-endpoint.test.ts tests/unit/routes/admin-backfill-embeddings.test.ts tests/unit/moderation/groq-provider-envelope.test.ts tests/unit/moderation/moderation-pipeline.test.ts tests/unit/moderation/llama-guard-fail-closed.test.ts tests/unit/moderation/personalization-provider-boundary.test.ts convex/templates-input-budget.convex.test.ts convex/message-jobs.convex.test.ts",
+					"npm run check:convex-paid-provider-egress",
+					"npx vitest --run tests/unit/scripts/cloudflare-queue-free-envelope.test.ts tests/unit/scripts/public-template-og-deployment.test.ts tests/unit/scripts/public-template-og-release-artifact.test.ts",
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check",
+					"npm run build"
+				],
+				"tests": [
+					"tests/unit/scripts/convex-native-usage-limits.test.ts",
+					"tests/unit/scripts/convex-work-budget-ratchet.test.ts",
+					"tests/unit/server/convex-work-budget-client.test.ts",
+					"tests/unit/server/convex-work-budget-worker.test.ts",
+					"tests/unit/server/convex-work-budget-response.test.ts",
+					"tests/unit/server/paid-provider-budget-policy.test.ts",
+					"tests/unit/server/paid-provider-budget-client.test.ts",
+					"tests/unit/server/paid-provider-runtime-readiness.test.ts",
+					"tests/unit/server/provider-http-transports.test.ts",
+					"tests/unit/server/llm-cost-protection.test.ts",
+					"tests/unit/agents/provider-call-envelope.test.ts",
+					"tests/unit/agents/provider-request-envelope.test.ts",
+					"tests/unit/agents/exa-search.test.ts",
+					"tests/unit/agents/gemini-provider.test.ts",
+					"tests/unit/agents/gemini-embeddings-envelope.test.ts",
+					"tests/unit/agents/generate-subject-endpoint.test.ts",
+					"tests/unit/agents/stream-subject-endpoint.test.ts",
+					"tests/unit/agents/stream-endpoints.test.ts",
+					"tests/unit/agents/stream-message-recovery.test.ts",
+					"tests/unit/agents/message-writer.test.ts",
+					"tests/unit/agents/source-evaluator.test.ts",
+					"tests/unit/routes/templates-api-auth.test.ts",
+					"tests/unit/routes/template-search.test.ts",
+					"tests/unit/routes/embedding-generate-endpoint.test.ts",
+					"tests/unit/routes/delegation-parse-policy-endpoint.test.ts",
+					"tests/unit/routes/admin-backfill-embeddings.test.ts",
+					"tests/unit/moderation/moderation-pipeline.test.ts",
+					"tests/unit/moderation/groq-provider-envelope.test.ts",
+					"tests/unit/moderation/llama-guard-fail-closed.test.ts",
+					"tests/unit/moderation/personalization-provider-boundary.test.ts",
+					"convex/templates-input-budget.convex.test.ts",
+					"convex/message-jobs.convex.test.ts",
+					"tests/unit/scripts/convex-work-budget-deployment.test.ts",
+					"tests/unit/scripts/cloudflare-queue-free-envelope.test.ts",
+					"tests/unit/scripts/public-template-og-deployment.test.ts",
+					"tests/unit/scripts/public-template-og-release-artifact.test.ts"
+				],
+				"artifacts": [
+					"config/convex-work-budget-policy.json",
+					"config/paid-provider-budget-policy.json",
+					"config/convex-paid-provider-egress.json",
+					"config/convex-native-usage-limits.json",
+					".github/convex-quota-allowed-signers",
+					"workers/convex-work-budget.ts",
+					"src/lib/server/paid-provider-budget-policy.ts",
+					"src/lib/server/paid-provider-budget-client.ts",
+					"src/lib/server/paid-provider-runtime-readiness.ts",
+					"src/lib/core/agents/provider-call-envelope.ts",
+					"src/lib/core/agents/exa-search.ts",
+					"src/lib/core/agents/gemini-client.ts",
+					"src/lib/core/agents/providers/gemini-provider.ts",
+					"src/lib/core/search/gemini-embeddings.ts",
+					"src/lib/core/server/moderation/groq-transport.ts",
+					"src/lib/server/llm-cost-protection.ts",
+					"src/lib/server/agent-request-authority.ts",
+					"src/lib/server/agent-request-envelope.ts",
+					"src/lib/server/bounded-json-request.ts",
+					"src/lib/core/agents/agents/message-source-ground.ts",
+					"src/lib/core/agents/agents/message-writer.ts",
+					"src/lib/core/agents/agents/source-evaluator.ts",
+					"src/routes/api/agents/stream-message/+server.ts",
+					"src/routes/api/templates/+server.ts",
+					"src/routes/api/templates/search/+server.ts",
+					"src/routes/api/embeddings/generate/+server.ts",
+					"src/routes/api/delegation/parse-policy/+server.ts",
+					"src/routes/api/admin/backfill-embeddings/+server.ts",
+					"src/routes/api/moderation/check/+server.ts",
+					"src/routes/api/moderation/personalization/+server.ts",
+					"convex/templates.ts",
+					"scripts/check-convex-server-work-budget.mjs",
+					"scripts/verify-convex-paid-provider-egress.mjs",
+					"scripts/convex-team-usage-attestation.mjs",
+					"scripts/capture-convex-team-usage-attestation.mjs",
+					"scripts/sign-convex-team-usage-attestation.mjs",
+					"scripts/verify-convex-native-usage-limits.mjs",
+					"src/lib/server/public-template-og-operation-budget.mjs",
+					"scripts/cloudflare-queue-free-envelope.mjs",
+					"scripts/capture-cloudflare-queue-free-envelope.mjs",
+					"scripts/sign-cloudflare-queue-free-envelope.mjs",
+					"scripts/verify-cloudflare-queue-free-envelope.mjs",
+					"scripts/verify-public-template-og-deployment.mjs",
+					"wrangler.public-template-og.toml",
+					".github/cloudflare-queue-allowed-signers",
+					".github/workflows/deploy.yml",
+					"docs/ops/CONVEX-WORK-BUDGET.md",
+					"docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md"
+				]
+			}
+		},
+		{
+			"id": "FND-40C",
+			"type": "action",
+			"name": "Bootstrap the immutable discovery corpus without widening steady-state authority",
+			"status": "ready",
+			"owner": "application, security, Cloudflare, and release engineering",
+			"description": "Make a cold production discovery corpus resumable through one temporary Access-protected exact-path Worker while keeping normal releases one-shot, preserving signed Queue and Convex cost authority, and guaranteeing independent route-first cleanup after timeout or cancellation.",
+			"acceptance": "Before production activation, an exact-key read-only R2 verifier either proves one stable ready manifest, inventory, completed coordinate checkpoint, and every revision-qualified JSON/PNG pair or emits only the typed `PUBLIC_DISCOVERY_BOOTSTRAP_INCOMPLETE` cold-state sentinel; authentication, network, bucket, decoding, and other operational failures never authorize mutation. Every warm or cold bootstrap handoff consumes a canonical schema-2 `bootstrap-production` Queue Free receipt bound to the exact source SHA, release transaction, enrolled operator, complete account inventory, 75-minute lifetime, 72-minute verification age, and same UTC accounting day. Admission retains exactly 4,320 seconds. Before consumer code mutation, a signed live proof requires the exact existing consumer identity and work budget, unpaused delivery, zero producers, and zero backlog. The finalized consumer then deploys with exact `PUBLIC_RELEASE_SHA` and `PUBLIC_RELEASE_TRANSACTION_ID` bindings and must converge to that signed baseline even if Wrangler loses its response. Cold state alone authorizes the temporary `commons-public-discovery-bootstrap` producer binding on the already-existing `commons-public-template-og` Queue: no Queue, DLQ, consumer, setting, or unrelated producer may change. A 3,960-second post-deploy proof observes exactly the signed baseline plus that one producer before any seed work. After unconditional cleanup, a 180-second terminal proof requires the exact signed consumer identity, unpaused delivery, zero producers, zero backlog, and the same common dormant state for warm and cold paths. The temporary Worker deploys the immutable digest-proved finalized `pages/_worker.js`, never a candidate-supplied entrypoint, through a committed config whose sentinel makes bare Wrangler deployment fail. Its exact non-wildcard hidden-origin route covers only canonical POST `/api/internal/public-discovery-manifest-refresh`; query variants remain on the existing Pages origin. The finalized Pages artifact records the adapter, bootstrap runtime, and runtime-neutral protocol module in its trusted hashed source closure. The existing hidden-origin Access app remains first authority. A two-request negative canary proves anonymous traffic is denied before the Worker and an Access-authenticated request carrying a derived invalid refresh credential reaches the exact adapter boundary and fails application authentication before Durable Object, Convex, R2 write, or Queue work. Bootstrap authority is a separate SQLite lifecycle `absent → armed → completed|contained`, bound to exact SHA, transaction, purpose, UUID lease, and an absolute at-most-60-minute deadline; normal refresh leases cannot consume or complete it. At most 25 bounded seed attempts carry the exact provenance/lease, stop with ten minutes remaining, and continue only on the typed durable page-backfill response. Exact-key, no-LIST R2 completion polling may use at most the next five minutes and route-first/script-second cleanup retains the final five minutes. `/complete-bootstrap` records an exact ready generation only after hook-validated HTTP 200; generic completion cannot certify bootstrap. Success re-runs the stable R2 completion proof and matches its generation to completed authority. Before any temporary route mutation, an append-only private R2 custody chain records `intent`; exact deployed version adds `deployed`; route-first then script-second deletion plus terminal absence adds `cleaned`. The independent protected recovery workflow hydrates that chain even when normal schema-v4 activation custody never existed, classifies absent/exact/superseded state, and contains only the exact owned route/script after outer Pages, trusted-edge, and manifest-cron recovery. A normal production release performs exactly one receipt-deadline-fenced seed request, rejects the bootstrap boundary marker, and never recreates cold corpus work. Content changes publish new immutable revision keys behind a monotonic manifest; cron/retry advances the corpus, while the trusted edge retains its separately proven outer 60/300/360 entry ceiling and strict less-than-420-second manifest-publication convergence without purge authority.",
+			"externalEvidencePending": "The source bootstrap mechanism is implemented and verified. A live cold run remains downstream of PD-00 Convex reactivation and requires operator-refreshed schema-2 and schema-1 Queue receipts at the two protected approval seams. No live Queue, Access, R2, Worker, or cleanup fact is inferred from this ready source status.",
+			"proof": {
+				"verifiedAt": "2026-07-20T16:47:12Z",
+				"commands": [
+					"actionlint .github/workflows/deploy.yml .github/workflows/public-template-og-release-recovery.yml",
+					"npx vitest --run tests/unit/scripts/cloudflare-queue-free-envelope.test.ts tests/unit/scripts/public-template-og-deployment.test.ts tests/unit/scripts/public-template-og-queue-control.test.ts tests/unit/scripts/public-template-og-production-coordination-recovery.test.ts tests/unit/scripts/public-template-og-release-recovery-oracle.test.ts tests/unit/scripts/public-template-og-outer-recovery-workflow.test.ts tests/unit/scripts/public-discovery-bootstrap-workflow.test.ts tests/unit/scripts/public-discovery-bootstrap-completion.test.ts tests/unit/scripts/public-discovery-manifest-seed.test.ts tests/unit/scripts/public-discovery-bootstrap-recovery-custody.test.ts tests/unit/scripts/public-discovery-bootstrap-boundary.test.ts tests/unit/scripts/public-discovery-bootstrap-deployment.test.ts tests/unit/server/public-template-og-consumer.test.ts",
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-work-budget",
+					"npm run check",
+					"npm run build"
+				],
+				"tests": [
+					"tests/unit/scripts/cloudflare-queue-free-envelope.test.ts",
+					"tests/unit/scripts/public-template-og-deployment.test.ts",
+					"tests/unit/scripts/public-template-og-queue-control.test.ts",
+					"tests/unit/scripts/public-template-og-production-coordination-recovery.test.ts",
+					"tests/unit/scripts/public-template-og-release-recovery-oracle.test.ts",
+					"tests/unit/scripts/public-template-og-outer-recovery-workflow.test.ts",
+					"tests/unit/scripts/public-discovery-bootstrap-workflow.test.ts",
+					"tests/unit/scripts/public-discovery-bootstrap-completion.test.ts",
+					"tests/unit/scripts/public-discovery-manifest-seed.test.ts",
+					"tests/unit/scripts/public-discovery-bootstrap-recovery-custody.test.ts",
+					"tests/unit/scripts/public-discovery-bootstrap-boundary.test.ts",
+					"tests/unit/scripts/public-discovery-bootstrap-deployment.test.ts",
+					"tests/unit/server/public-template-og-consumer.test.ts"
+				],
+				"artifacts": [
+					".github/workflows/deploy.yml",
+					".github/workflows/public-template-og-release-recovery.yml",
+					"workers/access-safe-sveltekit-pages-adapter.ts",
+					"workers/public-template-og-consumer.ts",
+					"scripts/control-public-discovery-bootstrap-authority.mjs",
+					"scripts/prove-public-discovery-bootstrap-boundary.mjs",
+					"scripts/verify-public-discovery-bootstrap-completion.ts",
+					"scripts/public-discovery-bootstrap-recovery-custody.mjs",
+					"scripts/recover-public-discovery-bootstrap.mjs",
+					"scripts/seed-public-discovery-manifest.mjs",
+					"scripts/verify-cloudflare-queue-release-phase.mjs",
+					"scripts/verify-public-template-og-deployment.mjs",
+					"src/lib/server/public-discovery-bootstrap-protocol.mjs",
+					"src/lib/server/public-discovery-bootstrap-runtime.ts",
+					"wrangler.public-discovery-bootstrap.toml",
+					"docs/architecture/public-discovery-cache-invariants.md",
+					"docs/ops/LAUNCH-ACTIVATION-RUNBOOK.md",
+					"docs/ops/PUBLIC-RELEASE-RECOVERY.md"
+				]
+			}
+		},
+		{
+			"id": "FND-50",
+			"type": "action",
+			"name": "Repair legacy projection correctness",
+			"status": "ready",
+			"owner": "application engineering",
+			"description": "Use structured Convex lease errors, restore domain-hue derivation during embedding repair, grandfather unchanged oversized legacy configuration during metadata-only patches, and make endorsement counters authoritative through lazy repair plus a bounded migration.",
+			"acceptance": "Lease loss stops later writes by structured code; domain-hue repair rejects empty, non-finite, mixed-dimension, or out-of-range inputs before any write and every patched hue is finite and normalized; metadata-only changes cannot be blocked by untouched legacy config; snapshots never infer total endorsements from a bounded display sample; and coordinated or greater-than-500 endorsement drains make monotonic progress without republishing a stale exact count.",
+			"proof": {
+				"verifiedAt": "2026-07-19T16:24:10Z",
+				"commands": [
+					"node scripts/run-public-discovery-focused-tests.mjs",
+					"npm run check:convex-queries"
+				],
+				"tests": [
+					"tests/unit/routes/admin-backfill-embeddings.test.ts",
+					"convex/templates-domain-hue-backfill.convex.test.ts",
+					"convex/templates-endorsement-counts.convex.test.ts",
+					"convex/templates-input-budget.convex.test.ts"
+				],
+				"artifacts": [
+					"src/routes/api/admin/backfill-embeddings/+server.ts",
+					"convex/templates.ts",
+					"convex/seed.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-51",
+			"type": "action",
+			"name": "Put direct submission creation behind server authority",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Close the direct Convex action bypass on submission creation so only the bounded SvelteKit boundary can authorize proof verification, atomic insertion, and follow-on work.",
+			"acceptance": "The public submissions:create action requires the internal server secret before auth, database, scheduler, or other context work; the HTTP route authenticates and streaming-rejects bodies above 256 KiB, enforces exact shape/cardinality bounds, and passes the canonical server-held secret through the one work-budgeted action dispatch; missing, wrong, or browser-direct authority fails before useful work; and the generated public-function authority manifest classifies the action and caller without a residual browser path.",
+			"proof": {
+				"verifiedAt": "2026-07-20T21:47:52Z",
+				"commands": [
+					"npx vitest --run tests/unit/convex/public-action-auth-gates.test.ts tests/unit/api/submissions-create-canonical-domain.test.ts --config=vitest.config.ts --reporter=dot",
+					"npm run check:convex-authority"
+				],
+				"tests": [
+					"tests/unit/convex/public-action-auth-gates.test.ts",
+					"tests/unit/api/submissions-create-canonical-domain.test.ts"
+				],
+				"artifacts": [
+					"convex/submissions.ts",
+					"src/routes/api/submissions/create/+server.ts",
+					"config/convex-public-function-authority.json"
+				]
+			}
+		},
+		{
+			"id": "FND-52",
+			"type": "action",
+			"name": "Bound server-mediated segment, import, and rescore work",
+			"status": "in_progress",
+			"owner": "application engineering",
+			"description": "Replace authenticated-but-amplifiable Convex bulk actions with secret-first server mediation, small fixed work slices, honest partial results, and maximum-class shared work admission.",
+			"acceptance": "Segment count, tag apply/remove, and decrypted export require the server secret before role or data work, scan at most four 100-row/512-KiB pages per invocation, expose partial completion, and never perform a second export scan; exportMatching and supporter importBatch are internal-only. Import encryption requires the secret and editor role before key work, accepts at most 100 structurally and byte-bounded supporters per action, and is called only from 100-row server chunks. Bill rescoring requires the secret and editor role, canonical-deduplicates at most ten bill ids, resolves the authenticated slug to one orgId, applies that orgId as the vector-search filter, rejects any cross-org hydrated match, and upserts relevance only for that same org; an explicit A/B organization test proves an editor of A can neither hydrate B's issue domain nor write B-derived relevance. The HTTP boundary adds a one-user-and-organization-per-hour defense-in-depth bucket while the maximum-class shared work authority remains the global cost ceiling. Every externally reachable operation is classified maximum in the shared work-budget policy and direct callers cannot buy a corpus-sized loop with one admission.",
+			"proof": {
+				"verifiedAt": "2026-07-20T21:47:52Z",
+				"commands": [
+					"npx vitest --run tests/unit/convex/public-action-auth-gates.test.ts tests/unit/convex/class-of-vuln-cures-v2.test.ts tests/unit/convex/class-of-vuln-cures-v4.test.ts tests/unit/convex/supporter-input-budget.test.ts tests/unit/segments/action-context-segments.test.ts --config=vitest.config.ts --reporter=dot",
+					"npx tsc --noEmit -p convex/tsconfig.json",
+					"npm run check:convex-work-budget"
+				],
+				"tests": [
+					"tests/unit/convex/public-action-auth-gates.test.ts",
+					"tests/unit/convex/class-of-vuln-cures-v2.test.ts",
+					"tests/unit/convex/class-of-vuln-cures-v4.test.ts",
+					"tests/unit/convex/supporter-input-budget.test.ts",
+					"tests/unit/segments/action-context-segments.test.ts"
+				],
+				"artifacts": [
+					"convex/segments.ts",
+					"convex/supporters.ts",
+					"convex/legislation.ts",
+					"config/convex-work-budget-policy.json",
+					"src/routes/api/org/[slug]/segments/+server.ts",
+					"src/routes/api/org/[slug]/issue-domains/rescore/+server.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-53",
+			"type": "action",
+			"name": "Make position delivery batches bounded and replay-safe",
+			"status": "in_progress",
+			"owner": "application and security engineering",
+			"description": "Turn position-recipient registration into a bounded, identity-owned, durably admitted transaction whose retries cannot multiply delivery rows.",
+			"acceptance": "All three HTTP boundaries authenticate before body reads and require a server-held verified identity. Batch registration streaming-rejects more than 64 KiB or 20 exact-shape recipients, canonicalizes recipient identities, and rejects conflicting duplicates; mailto confirmation accepts only one 1-KiB template-id envelope; and /api/deliveries/record has an exact byte/shape/cardinality bound plus application and Cloudflare admission. All three secret-first Convex mutations converge on durable admission: registration-linked writers share appendRegistrationLinkedDeliveries, while direct delivery binds one canonical pseudonym/template key to an indexed lifetime ceiling that cannot be bypassed by varying recipient names. Indexed corruption fences and Convex OCC make request duplicates, cross-writer retries, and races create at most one row per identity key; concurrent calls cannot exceed the shared lifetime ceiling, and a failed admission rolls back a newly created position. The reserved system mailto identity is collision-proof, every expected rejection still consumes the durable five-request-per-minute identity bucket, and mailto confirmation pays no redundant template lookup. App and Cloudflare inventories include all three paths as defense in depth without claiming isolate-local enforcement as global authority; focused concurrency/replay tests cover the direct-delivery path as well as batch and mailto writers.",
+			"proof": {
+				"verifiedAt": "2026-07-20T22:10:05Z",
+				"commands": [
+					"npx vitest --run convex/position-delivery-admission.convex.test.ts convex/recipient-metrics.convex.test.ts tests/unit/routes/positions-batch-register.test.ts tests/unit/routes/positions-confirm-send.test.ts tests/unit/security/rate-limiter.test.ts tests/unit/scripts/cloudflare-public-dynamic-rate-limit.test.ts tests/unit/convex/recipient-metrics-read-contract.test.ts tests/unit/convex/direct-delivery-bounds.test.ts tests/unit/convex/public-action-auth-gates.test.ts tests/unit/scripts/convex-work-budget-ratchet.test.ts --config=vitest.config.ts --reporter=dot --silent=passed-only",
+					"npx tsc --noEmit -p convex/tsconfig.json",
+					"npm run check",
+					"npm run check:convex-queries",
+					"npm run check:convex-work-budget"
+				],
+				"tests": [
+					"convex/position-delivery-admission.convex.test.ts",
+					"convex/recipient-metrics.convex.test.ts",
+					"tests/unit/routes/positions-batch-register.test.ts",
+					"tests/unit/routes/positions-confirm-send.test.ts",
+					"tests/unit/security/rate-limiter.test.ts",
+					"tests/unit/scripts/cloudflare-public-dynamic-rate-limit.test.ts",
+					"tests/unit/convex/recipient-metrics-read-contract.test.ts",
+					"tests/unit/convex/direct-delivery-bounds.test.ts",
+					"tests/unit/convex/public-action-auth-gates.test.ts",
+					"tests/unit/scripts/convex-work-budget-ratchet.test.ts"
+				],
+				"artifacts": [
+					"convex/positions.ts",
+					"convex/schema.ts",
+					"src/routes/api/positions/batch-register/+server.ts",
+					"src/routes/api/positions/confirm-send/+server.ts",
+					"src/lib/core/security/rate-limiter.ts",
+					"config/convex-work-budget-policy.json"
+				]
+			}
+		},
+		{
+			"id": "FND-54",
+			"type": "action",
+			"name": "Retire Convex paid-provider search egress",
+			"status": "ready",
+			"owner": "application and security engineering",
+			"description": "Remove Gemini and every other paid-provider capability from Convex template search, serving authenticated search from the compact generation-scoped text index instead.",
+			"acceptance": "templates.search requires the server secret before readiness or durable burst admission, validates a stable actor and bounded query, and returns at most 20 compact rows from one generation-scoped title search that takes at most 50 indexed candidates with method=keyword. The SvelteKit route authenticates and shape-bounds before its shared Convex-work dispatch and performs no paid-provider reservation. The recursive Convex egress scanner covers every executable module, reports zero approved capabilities and zero findings, tombstones the retired Gemini/search/backfill capabilities, and fails if provider code or credentials return. The paid-provider policy contains exactly the nine remaining Pages operations and no template-search operation or permissive default.",
+			"proof": {
+				"verifiedAt": "2026-07-20T21:47:52Z",
+				"commands": [
+					"npx vitest --run tests/unit/convex/public-action-auth-gates.test.ts tests/unit/routes/template-search.test.ts tests/unit/scripts/convex-paid-provider-egress.test.ts --config=vitest.config.ts --reporter=dot",
+					"npm run check:convex-paid-provider-egress",
+					"npx tsc --noEmit -p convex/tsconfig.json"
+				],
+				"tests": [
+					"tests/unit/convex/public-action-auth-gates.test.ts",
+					"tests/unit/routes/template-search.test.ts",
+					"tests/unit/scripts/convex-paid-provider-egress.test.ts"
+				],
+				"artifacts": [
+					"convex/templates.ts",
+					"src/routes/api/templates/search/+server.ts",
+					"config/convex-paid-provider-egress.json",
+					"config/paid-provider-budget-policy.json",
+					"scripts/verify-convex-paid-provider-egress.mjs"
+				]
+			}
+		},
+		{
+			"id": "FND-55",
+			"type": "action",
+			"name": "Coalesce Shadow Atlas engagement replay durably",
+			"status": "in_progress",
+			"owner": "application and security engineering",
+			"description": "Persist one identity-scoped Shadow Atlas registration and refresh state so SSR, retries, concurrent tabs, and upstream failures cannot multiply Convex or Atlas work.",
+			"acceptance": "Every public state mutation is internal-secret-first and session-owner-bound. One serial lease owner per user and normalized identity controls refresh; a fresh 60-second snapshot returns with zero upstream work and a live 45-second lease coalesces followers. Metrics lookup precedes any first registration POST; a durable write_reserved transition before that POST makes registration at most once for the identity state; registered and leaf state persist before path lookup. Failures retain the last safe snapshot or tier-zero result behind a 30-second cooldown. An ambiguous write is never automatically retried; only an internal repair after 15 minutes, an expired lease, no leaf/snapshot, bounded operator evidence, and exact user/identity/reservation-time/generation CAS may reopen it, incrementing the generation once without external I/O. The route accepts at most 1 KiB, upstream calls time out after eight seconds, response JSON is capped at 32 KiB, and identity/root/path/index/tier/metric fields are validated. The direct submissions-side duplicate registration path and prior engagement identity query are retired; application and Cloudflare admission cover the route as defense in depth; and concurrency/replay tests prove bounded reads, no collect, and no duplicate POST.",
+			"proof": {
+				"verifiedAt": "2026-07-20T22:10:05Z",
+				"commands": [
+					"npx vitest --run convex/shadow-atlas-engagement.convex.test.ts tests/unit/routes/shadow-atlas-engagement.test.ts tests/unit/convex/shadow-atlas-engagement-foundation.test.ts tests/unit/security/rate-limiter.test.ts tests/unit/scripts/cloudflare-public-dynamic-rate-limit.test.ts --config=vitest.config.ts --reporter=dot",
+					"npx tsc --noEmit -p convex/tsconfig.json",
+					"npx tsc --noEmit -p tsconfig.json",
+					"npm run check:convex-queries",
+					"npm run check:convex-work-budget",
+					"npm run check:convex-authority"
+				],
+				"tests": [
+					"convex/shadow-atlas-engagement.convex.test.ts",
+					"tests/unit/routes/shadow-atlas-engagement.test.ts",
+					"tests/unit/convex/shadow-atlas-engagement-foundation.test.ts",
+					"tests/unit/security/rate-limiter.test.ts",
+					"tests/unit/scripts/cloudflare-public-dynamic-rate-limit.test.ts"
+				],
+				"artifacts": [
+					"convex/lib/shadowAtlasEngagement.ts",
+					"convex/users.ts",
+					"convex/submissions.ts",
+					"convex/schema.ts",
+					"src/lib/core/shadow-atlas/client.ts",
+					"src/routes/api/shadow-atlas/engagement/+server.ts"
+				]
+			}
+		},
+		{
+			"id": "FND-60",
+			"type": "gate",
+			"name": "Adversarial launch proof",
+			"status": "pending",
+			"owner": "CI and release operator",
+			"description": "Exercise maximum-size documents, high-cardinality tags, cross-isolate cache misses, authenticated pagination overflow, destructive-write races, abandoned rebuild leases, concurrent Convex and paid-provider quota claims, replay races, indirect-source prompt injection, carrier ambiguity, consent races, privacy-budget replay, direct-submission bypass, one-admission bulk amplification, cross-writer position replay, Convex provider-egress resurrection, Shadow Atlas registration replay, varied-query abuse, maximum maintenance backlogs, and legacy rows before accepting a release SHA.",
+			"acceptance": "Focused Convex, SvelteKit, trusted-edge, Access-safe-adapter, terminal-ledger, cache, workflow, recovery, complete server-execution-closure, inert-preview, paid-provider-boundary, zero-Convex-provider-egress, provider-preflight, submission-authority, bounded-bulk-work, cross-writer-position-idempotency, Shadow-Atlas-replay, replay, indirect-source-ground, detached-attestation, independent-review-authority, release-gate, and GitHub-authority tests; the zero-collect and query-efficiency contracts; application checks; Convex type checks; hypergraph verification; and a clean diff all pass with evidence attached to the PR. Agy, Claude, and Codex each review the exact two-edge/hidden-origin/Service-Auth/late-transform/Q-to-T-to-C/retained-C/outer-60-300-360/less-than-420-second-publication-convergence context plus the T-pinned SvelteKit execution closure, preview capability absence, one global provider ceiling with in-cap operator reserve, provider-before-call ordering, replay-before-provider ordering, byte-identical classified indirect-source ground, submission secret-before-context authority, fixed segment/import/rescore work slices, shared cross-writer position admission, keyword-only compact template search, zero Convex provider capabilities, and one durable Shadow Atlas registration/refresh lease, and no launch-severity finding remains. The exact signed S/A proof is authoritative only when the trusted pending-enrollment config has been separately changed to pin one real non-Actions GitHub App, one independent CODEOWNER team with complete bounded membership and exact visible write-only repository access, and one offline signer/fingerprint; protected main strictly requires the App-bound authority check and CODEOWNER/latest-push review with stale dismissal, no bypass, and administrator enforcement; the exact proof ref is administrator-enforced and force/delete protected; and the App's canonical successful check binds repository, S, A, team, signer, and review time. External Cloudflare configuration, protected credentials, live denial/candidate/cache/rollback proof, live provider-budget Worker/binding/operator posture, and production Convex reactivation remain downstream operator gates and are never self-attested by this source node.",
+			"externalEvidencePending": "Observed GitHub state on 2026-07-21 has no independent team, no enrolled signer, no ruleset, enforce_admins=false, only the Actions-owned test check, and no authoritative App check. config/brutalist-review-authority.json intentionally remains pending-independent-enrollment; FND-60 cannot pass until the independent identities and live protection/check evidence exist."
+		},
+		{
+			"id": "PD-05",
+			"type": "action",
+			"name": "Deploy fail-closed frontend containment bootstrap",
+			"status": "operator_gate",
+			"owner": "release operator and GitHub Actions",
+			"description": "Publish one exact-SHA production Pages artifact that makes the custom origin deterministic and dependency-isolated while the Convex team remains suspended, without claiming application launch readiness or platform reactivation.",
+			"acceptance": "An operator dispatches the workflow itself only from protected main and targets production containment at exact source S after immutable protected gate T inert-parses the source graph and verifies detached signed attestation A. Both candidate builders and artifact consensus are skipped; the T-only credential job locally generates, canonical-digests, and validates the standalone containment artifact solely from T plus exact S. The artifact is first uploaded to the staging branch; exact Pages API metadata, preview binding absence, and https://staging.commons.email each prove the same S before production publication. Staging and then https://commons.email return uncached /api/live status ok, authenticated /api/containment-readiness status ok for S with discovery R2 and Durable Object bindings absent, cookie keys isolated, the internal secret accepted, and zero external dependency calls, while / and every application/data route return the deterministic no-store 503 before auth, Convex, or Atlas. No direct pages.dev probe or redirect bypass is used. No deployment is pruned before every custom-authority probe passes; any failed canonical containment step forward-deploys the custom-authority-proven deterministic artifact rather than restoring the quota-bomb predecessor; successful reconciliation reports preserved=0; and a live old-URL probe proves the prior immutable deployment is terminally blocked or exactly redirected to the canonical origin before Pages execution. This operator gate remains operator_gate until live evidence is attached; it does not mark PD-00 or normal launch foundations complete.",
+			"operatorEvidence": [
+				"manual production workflow URL and source-verified SHA",
+				"staging and production custom-domain containment probe output",
+				"captured prior canonical deployment ID and SHA",
+				"success reconciliation or verified rollback and restored reconciliation output"
+			]
+		},
+		{
+			"id": "PD-00",
+			"type": "gate",
+			"name": "Controlled Convex reactivation after frontend and scheduler containment",
+			"status": "blocked_external",
+			"owner": "team billing administrator and release operator",
+			"description": "After PD-05 has made the public frontend fail closed without dependency I/O, hold both exact Convex deployments paused through team reactivation, eliminate queued runnable work, deploy the reviewed contained profile, and prove bounded production authority before any normal backend or frontend publication.",
+			"requiredExternalAuthority": "Protected release authority must prove either an active paid plan with no shared Free hard-disable or genuine quota isolation, reconcile exact current usage and native limits with the reserved release envelope, and keep both deployments operator-paused through controlled reactivation. A fresh deployment in the same shared Free team is not isolation.",
+			"acceptance": "PD-05 live evidence proves the custom domain is serving the exact containment SHA and all application/data routes fail closed without Convex or Atlas calls. Immediately before billing reactivation, an operator records a recovery-epoch lower bound and pauses both exact Commons deployments; if user pause, retained provider audit history, or controlled unpause authority is unavailable, Convex support supplies an atomic control before proceeding. Separate exact-deployment deployment:data:view and deployment:auditLog:view keys prove a pause event at/after the bound, no later unpause/running event through a pinned bounded history scan plus complete overlapping audit tail, and user=paused current-state fences even while system/usage state is disabled or suspended. The team is upgraded/reactivated with both deployments still paused. The active scheduled inventory is captured before mutation; pending work is canceled or explicitly dispositioned, and each action first observed inProgress receives execution-specific completion/support evidence because cancellation alone does not stop it. CRON_PROFILE=contained is frozen by deploying the reviewed SHA to production and preview while paused, and the immutable verifier proves exact-empty cron arrays plus a final empty one-row indexed active-work page in both realms. Only then are the deployments resumed. A bounded one-document production servicePing and production deploy authorization succeed, the containment proof repeats with exact all-none running state, database-I/O headroom for the bounded migration/rebuild plan is recorded, and the monitor no longer requests `/`. Normal staging jobs receive only the preview data key; only the Production Environment may receive the production data key. The containment artifact remains canonical until PD-20 through PD-50 normal exact-SHA release gates pass. PD-00 remains blocked_external until those platform and operator facts exist; repository code or a containment upload alone cannot clear it."
+		},
+		{
+			"id": "PD-10",
+			"type": "gate",
+			"name": "Exact-SHA verification",
+			"status": "pending",
+			"owner": "GitHub Actions",
+			"description": "Pin one SHA contained in the production branch and run the static Convex query-efficiency guardrail, focused public-discovery checks, full test suite, application checks, and Convex type checks.",
+			"acceptance": "Every verification command passes for the exact SHA recorded as the deploy input."
+		},
+		{
+			"id": "PD-20",
+			"type": "action",
+			"name": "Deploy snapshot-safe Convex producer",
+			"status": "operator_gate",
+			"owner": "release operator",
+			"description": "From the clean verified SHA, preview and deploy the Convex schema/functions to quirky-chinchilla-352. Immediately invoke migratePublicDiscoveryManifestAuthority exactly once and require its status proof before any Pages producer/readiness traffic, then perform the bounded legacy topic-marker, source, endorsement, authenticated-list, and recipient-metrics cutovers before embedding repair or frontend deployment.",
+			"acceptance": "Convex dry-run and deploy succeed; publicDiscoveryManifestAuthorityStatus reports ready=true, matches=true, and bytes <= maxBytes after the one-time activation; topicEmbeddingMarkerMigrationStatus reports complete after all self-paged work without Gemini; each compact-plane migration reaches its exact terminal migrated state and explicit ready activation, including both recipient scanned/projected pairs; publicDiscoveryList and publicDiscoveryRelations resolve through bounded versioned snapshot reads. Pages producer/readiness remains held until the compact manifest-authority proof exists."
+		},
+		{
+			"id": "PD-30",
+			"type": "gate",
+			"name": "Rebuild and prove snapshot readiness",
+			"status": "operator_gate",
+			"owner": "release operator",
+			"description": "After compact manifest-authority activation is proven, run the composite homepage snapshot rebuild and verify the public manifest plus every required compact-plane status, including recipient metrics, report ready.",
+			"acceptance": "For an existing publication, a pre-rebuild recovery point is recorded; publicDiscoveryManifestAuthorityStatus remains ready=true, matches=true, and bytes <= maxBytes; list sourceCap and relation sourceScanCap are 250, each relation variant sourceCap is 50, expected corpus counts are nonzero, all four payloads are below 900000 bytes, both manifest families are ready at timestamps no more than 26 hours old, and recipientMetricsMigrationStatus is ready/complete with equality for both scanned/projected pairs."
+		},
+		{
+			"id": "PD-40",
+			"type": "gate",
+			"name": "Backend read-path smoke",
+			"status": "operator_gate",
+			"owner": "release operator",
+			"description": "Call the manifest and versioned public-discovery payload queries directly, then inspect Convex logs/usage for singleton snapshot reads rather than templates-corpus scans.",
+			"acceptance": "The manifest query reads only the <=4 KiB compact authority singleton; each one-read payload revision equals its corresponding ready manifest revision, content is populated as expected, no vectors are returned, and request reads do not grow with either the wide control row or embedding-bearing corpus."
+		},
+		{
+			"id": "PD-50",
+			"type": "action",
+			"name": "Gate and deploy frontend consumer",
+			"status": "operator_gate",
+			"owner": "release operator and GitHub Actions",
+			"description": "Keep native Cloudflare Git production and preview deployment disabled, upload the verified candidate only behind the two Access-protected hidden Pages origins, and promote it through distinct trusted staging/production edges, a dedicated production-only release-origin proof capability, plus terminal release authority before exhaustive exposure reconciliation.",
+			"requiredExternalAuthority": "In addition to the Access, topology, candidate, terminal-ledger, cache, and rollback evidence below, production promotion requires the exact live Free-plan WAF rule; fresh schema-2 bootstrap and schema-1 preview/production Queue receipts at their protected approval seams; the exact signed consumer identity, source SHA and transaction bindings, active version, and 100 ms limit; a producerless/backlog-free/unpaused pre-mutation baseline; the cold-only authorized bootstrap producer delta when needed; and the unconditional terminal baseline with zero producers and backlog.",
+			"acceptance": "The Pages source config reports production_deployments_enabled=false and preview_deployment_setting=none before and after upload. The exact consensus-digested candidate uses the Access-safe adapter, exact finalized date/ordered flags, contains no Access/release/provider capability, proves Cache API unavailable, and exposes exactly the two hidden Pages domains. The trusted staging edge proves only the exact candidate endpoint: empty 204, origin Access token absent, Cache API unavailable, and exact SHA/transaction translated to candidate-fetch-completed. Live topology proves exact trusted-Worker dates/flags, two distinct Service-Auth-only Access apps/tokens, a complete overlap app/policy/token inventory, the exact late transform, strict public fetch, exact disjoint Worker bindings/routes, no public Worker subdomains, stale staging Pages/branch aliases retired, all direct-origin/JWT/cross-token attempts denied, and exhaustive pages.dev closure. Any existing retained T rejects missing/wrong proof capabilities and accepts the current retained-window value before Q and again after capture before T mutation. Production qualification is Q then exact trusted edge T then terminal C as the final successful authority mutation; pending state never overwrites active/retained C. Immediately after C, the uncached exact `/api/release-origin` path proves `post-commit-v1`, committed SHA/transaction, proof/Access token absent, candidate Cache API unavailable, and external I/O zero. Only then may ordinary commons.email liveness with `release.sha` equal to the exact source-verified SHA, authenticated health, and landing-cache proof close the handoff. The same directory is re-digested before upload; same SHA on a rebuild is insufficient. An exhaustive post-deploy inventory contains only declared hidden-origin and public-edge state. Failure before C contains pending state and restores captured state; failure after C restores the matching retained-C Pages candidate first and captured T second, then repeats capability-gated `/api/release-origin`; normal Pages proves its exact tuple/origin absence and containment proves captured metadata plus deterministic 503 maintenance. The ledger is never rewound, and optional purge failure cannot block or establish recovery. Any topology, credential, denial, adapter, ledger, digest, metadata, realm, SHA, readiness, cache, pruning, or rollback-proof failure blocks promotion. External Cloudflare configuration/secrets/live proof and production Convex quota reactivation remain required operator evidence."
+		},
+		{
+			"id": "PD-60",
+			"type": "action",
+			"name": "Prove bounded trusted landing-cache convergence",
+			"status": "operator_gate",
+			"owner": "release operator",
+			"description": "Prove zero-secret publication freshness through the trusted edge's single-owner per-colo cache and bounded outer 60/300/360 entry contract and strict less-than-420-second manifest-publication convergence, without making Cloudflare purge an operational dependency.",
+			"acceptance": "The public trusted edge serves the current authorized release and populated discovery generation and is the only public landing-HTML cache owner; the Access-protected candidate proves Cache API unavailable. Anonymous exact GET `/` has the trusted host/SHA/transaction/policy key, 60-second fresh plus 300-second stale-while-revalidate policy, hard origin-start-anchored 360-second ceiling, Accept-Encoding-only variance, `Cache-Tag: public-discovery`, and trusted `X-Commons-Public-Discovery-Cache: miss|hit|stale|bypass` diagnostics; query, cookie, authorization, range, non-GET, Set-Cookie, non-200, and over-1-MiB variants bypass storage. Publication updates the R2 manifest without changing the key. Proof observes an exact-policy `hit`, shows the inner manifest cache observes publication in less than 60 seconds, and shows an outer fill that sees the old coordinate immediately before that observation becomes ineligible less than 420 seconds after manifest publication. Adversarial proof covers one raw coalesced match with a 250-millisecond deadline and inert late result; one raw origin fetch with a one-second AbortSignal deadline and raw-settlement quarantine; one raw put quarantined until settlement; cacheable-submit-only replacement of the newest pending generation; one materialized 1 MiB L1; bounded caller and waitUntil observation; stale availability below but never at the ceiling; and explicit cross-isolate non-linearity whose replay cannot extend the timestamp. No purge credential, hook, or Cloudflare API call participates. The tag is future optional operator acceleration only; the Free five-per-minute limit is informational. Per-colo behavior and Workers inbound-request accounting remain explicit."
+		},
+		{
+			"id": "PD-70",
+			"type": "gate",
+			"name": "Live smoke and observation",
+			"status": "operator_gate",
+			"owner": "release operator",
+			"description": "Verify the public trusted edge, hidden-origin denial, landing-cache timing, list/graph/API bounds, control-plane health, and post-warm Convex I/O before enabling monitors.",
+			"acceptance": "Public paths render through commons.email; the exact post-C `/api/release-origin` proof records the serving Pages/T pair before ordinary smoke; liveness reports the separate-access-pages-origin boundary with `release.sha` equal to PD-50's exact source-verified SHA; authenticated readiness reports the exact source-verified SHA/transaction; the complete Access overlap and DNS/Pages-alias/Worker-route inventory remains exact; hidden origins still deny no-token, JWT-only, cookie-only, wrong-token, and cross-token requests before candidate execution; landing-cache age and headers remain within the zero-purge outer 60/300/360 entry contract and strict less-than-420-second manifest-publication convergence bound; only snapshot tables appear in public-query reads; database I/O stays flat relative to page requests; and Workers request volume remains inside the account-wide allowance."
+		},
+		{
+			"id": "RB-10",
+			"type": "rollback",
+			"name": "Roll back hidden Pages candidate and trusted edge",
+			"status": "recovery_only",
+			"owner": "release operator",
+			"description": "Before C, contain pending P/Q and restore captured state. After C, restore a previously proven hidden Pages candidate and matching trusted edge whose exact tuple remains in retained C; never rewind the terminal ledger or snapshot-safe Convex backend.",
+			"acceptance": "Before promotion, any retained T rejects missing/wrong proof capabilities and accepts the stable retained-window value before Q and again after capture before T mutation. Recovery restores the retained-C-matching hidden Pages candidate first and its captured trusted edge second, then repeats capability-gated `/api/release-origin`. Normal Pages establishes restored SHA/transaction, proof/Access-token absence, candidate Cache API unavailability, and external I/O zero before liveness, authenticated health, Access/direct-origin denial, and bounded landing-cache smoke; containment instead proves captured metadata plus its exact deterministic 503 maintenance contract. The release-qualified key isolates the failed pair. Cache-tag purge is best-effort only: any purge failure cannot block or establish recovery. The active and newest-eight retained-C ledger remains structurally valid and no embedding-heavy query path returns."
+		},
+		{
+			"id": "RB-20",
+			"type": "rollback",
+			"name": "Repair snapshot and cache generation",
+			"status": "recovery_only",
+			"owner": "release operator",
+			"description": "Correct source/code, rerun the atomic rebuild, then refresh the revision-aware cache payload; use a schema-version bump only when an urgent explicit namespace cutover is needed.",
+			"acceptance": "A corrected ready revision is published and warmed without deleting the last-known-good payload first."
+		},
+		{
+			"id": "RB-30",
+			"type": "rollback",
+			"name": "Forward-deploy known snapshot-safe backend",
+			"status": "recovery_only",
+			"owner": "release operator",
+			"description": "Redeploy known-good bounded-read Convex code and rebuild. Never restore a version where public requests collect embedding-bearing templates.",
+			"acceptance": "All public discovery functions retain indexed/capped snapshot reads; data restore is handled separately if a logically bad successful rebuild replaced a singleton."
+		}
+	]
+}

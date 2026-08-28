@@ -8,10 +8,11 @@
  *   3. write back via Convex internal mutation, gated on sequence number
  *   4. on SMT_SEQUENCE_CONFLICT, retry from step 1 (bounded)
  *
- * Why split between Convex and SvelteKit: Convex's runtime can't load
- * @aztec/bb.js (Barretenberg WASM). Poseidon2 has to live where bb.js does
- * — i.e., the Node-capable SvelteKit layer. The split is forced; we make it
- * clean by routing every read/write through the typed Convex API.
+ * Why split between Convex and SvelteKit: the SvelteKit layer computes the
+ * 128-level Poseidon2 path while Convex remains the transactional storage and
+ * sequence-check boundary. Poseidon2 itself is now pure TypeScript and
+ * runtime-neutral; keeping the expensive recurrence outside Convex is an
+ * explicit work-budget decision, not a Barretenberg/WASM constraint.
  *
  * Concurrency model: optimistic. The Convex mutation enforces the seq check
  * atomically — only one of N concurrent inserts succeeds; losers retry. This
@@ -27,7 +28,7 @@
 
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { poseidon2Hash2 } from '$lib/core/crypto/poseidon';
 import { getZeroHashes as getSharedZeroHashes } from '$lib/core/crypto/zero-hashes';
 // SMT depth widened from 64 to 128 to close the targeted-lockout grinding
@@ -157,7 +158,7 @@ export interface SMTInsertResult {
  */
 export async function insertRevocationNullifier(
 	nullifier: string,
-	maxRetries = 6,
+	maxRetries = 6
 ): Promise<SMTInsertResult> {
 	const leafKey = nullifierToLeafKey(nullifier);
 	const pathBits = leafKeyToPathBits(leafKey);
@@ -166,7 +167,8 @@ export async function insertRevocationNullifier(
 		// Step 1: read the current path + root.
 		const path = await serverQuery(api.revocations.getRevocationSMTPath, {
 			_secret: getInternalSecret(),
-			leafKey: leafKey.toString(16),});
+			leafKey: leafKey.toString(16)
+		});
 
 		// Idempotent re-emit: leaf already occupied. Return current root with
 		// isFresh=false so the caller can re-issue the chain write. The chain
@@ -181,7 +183,7 @@ export async function insertRevocationNullifier(
 				newRoot: rootForChainEmit,
 				newSequenceNumber: path.expectedSequenceNumber,
 				leafCount: path.leafCount,
-				isFresh: false,
+				isFresh: false
 			};
 		}
 
@@ -213,9 +215,10 @@ export async function insertRevocationNullifier(
 			nodeUpdates.push({ depth: d, pathKey: nodePath, hash: node });
 
 			const sibling = path.siblings[d] ?? zeros[d];
-			node = pathBits[d] === 0
-				? await poseidon2Hash2(node, sibling)
-				: await poseidon2Hash2(sibling, node);
+			node =
+				pathBits[d] === 0
+					? await poseidon2Hash2(node, sibling)
+					: await poseidon2Hash2(sibling, node);
 		}
 
 		const newRoot = node;
@@ -227,11 +230,13 @@ export async function insertRevocationNullifier(
 				leafKey: leafKey.toString(16),
 				nodeUpdates,
 				newRoot,
-				expectedSequenceNumber: path.expectedSequenceNumber,})) as { newRoot: string; newSequenceNumber: number };
+				expectedSequenceNumber: path.expectedSequenceNumber
+			})) as { newRoot: string; newSequenceNumber: number };
 
-			// Post-write read-back verification. The Convex mutation cannot
-			// recompute Poseidon (no bb.js in its runtime), so it accepts the
-			// caller-supplied `newRoot` verbatim. A caller bug (off-by-one in
+			// Post-write read-back verification. The storage mutation deliberately
+			// does not spend its Convex transaction budget recomputing 128 Poseidon
+			// levels, so it accepts the caller-supplied `newRoot` verbatim. A caller
+			// bug (off-by-one in
 			// bit decomposition, wrong sibling lookup, etc.) could persist a
 			// structurally-impossible tree that survives until the on-chain
 			// proof verifier rejects.
@@ -257,7 +262,8 @@ export async function insertRevocationNullifier(
 			try {
 				const verifyPath = await serverQuery(api.revocations.getRevocationSMTPath, {
 					_secret: getInternalSecret(),
-					leafKey: leafKey.toString(16),});
+					leafKey: leafKey.toString(16)
+				});
 				if (verifyPath.currentLeaf === null) {
 					throw new Error(
 						'SMT_POSTWRITE_LEAF_MISSING: applied insert but read-back returned no leaf'
@@ -267,10 +273,7 @@ export async function insertRevocationNullifier(
 				// assertion above — a stale Convex returning fewer siblings than
 				// SMT_DEPTH would cause the recomputation walk to pad with empty
 				// hashes and silently "pass" verification against a corrupted root.
-				if (
-					!Array.isArray(verifyPath.siblings) ||
-					verifyPath.siblings.length !== SMT_DEPTH
-				) {
+				if (!Array.isArray(verifyPath.siblings) || verifyPath.siblings.length !== SMT_DEPTH) {
 					throw new Error(
 						`SMT_POSTWRITE_PATH_LENGTH_MISMATCH: expected ${SMT_DEPTH} siblings on read-back, got ${verifyPath.siblings?.length}`
 					);
@@ -318,7 +321,8 @@ export async function insertRevocationNullifier(
 					try {
 						await serverMutation(api.revocations.setRevocationHaltForCaller, {
 							_secret: getInternalSecret(),
-							reason: 'postwrite_verification_failed'});
+							reason: 'postwrite_verification_failed'
+						});
 					} catch (haltErr) {
 						console.error(
 							'[insertRevocationNullifier] kill-switch flip failed during post-write halt',
@@ -340,7 +344,7 @@ export async function insertRevocationNullifier(
 				newRoot: result.newRoot,
 				newSequenceNumber: result.newSequenceNumber,
 				leafCount: path.leafCount + 1,
-				isFresh: true,
+				isFresh: true
 			};
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);

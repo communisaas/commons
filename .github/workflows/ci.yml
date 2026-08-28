@@ -9,10 +9,19 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Raised from 15. Installing the release-gate Wrangler means the Pages
+    # finalizer suite now actually RUNS instead of failing in milliseconds
+    # against a missing directory, and it does ~8 minutes of real bundling.
+    # The job used to fit in 15 only because that work never happened.
+    timeout-minutes: 35
+    outputs:
+      coverage-comment-artifact-id: ${{ steps.upload-coverage-comment.outputs.artifact-id }}
 
     env:
       NODE_ENV: test
@@ -36,17 +45,24 @@ jobs:
       INTERNAL_API_SECRET: ci-test-internal-api-secret-padding-32b
       INTERNAL_API_SECRET_PREVIOUS: ci-test-internal-api-secret-previous-32b
       UNSUBSCRIBE_SECRET: ci-test-unsubscribe-secret-padding-32-bytes
+      RECIPIENT_SUPPRESSION_SECRET: ci-test-recipient-suppression-secret-32b
+      RECIPIENT_SUPPRESSION_SECRET_PREVIOUS: ci-test-recipient-suppression-previous-32b
       ADDRESS_RESOLUTION_TOKEN_SECRET: ci-test-address-resolution-token-32b-pad
       SESSION_CREATION_SECRET: ci-test-session-creation-secret-32b-padding
+      SESSION_CREATION_SECRET_PREVIOUS: ci-test-session-creation-secret-previous-32b-pad
+      SESSION_COOKIE_SIGNING_SECRET: ci-test-session-cookie-signing-secret-32b-pad
+      SESSION_COOKIE_SIGNING_SECRET_PREVIOUS: ci-test-session-cookie-signing-previous-32b-pad
       BLAST_DISPATCH_SECRET: ci-test-blast-dispatch-secret-32b-padding-x
       BLAST_RECEIPTS_SECRET: ci-test-blast-receipts-secret-32b-padding-x
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version-file: '.node-version'
           cache: 'npm'
@@ -54,13 +70,68 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The Pages finalizer suite exercises the REAL finalizer against the
+      # pinned Wrangler at .github/release-gate/node_modules/wrangler, which is
+      # gitignored and installed from its own lockfile. deploy.yml provisions it
+      # (see its "npm ci --prefix gate/.github/release-gate" step); ci.yml never
+      # did, so nine of those tests failed here in milliseconds while passing
+      # locally, and the suite could not have gone green in CI at any timeout.
+      - name: Install release-gate dependencies
+        run: npm ci --ignore-scripts --prefix .github/release-gate
+
+      - name: Convex query efficiency guardrail
+        run: npm run check:convex-queries
+
+      - name: Convex public function authority
+        run: npm run check:convex-authority
+
+      - name: Convex server work-budget policy
+        run: npm run check:convex-work-budget
+
+      - name: Convex paid-provider egress policy
+        run: npm run check:convex-paid-provider-egress
+
+      - name: Convex native recurring-work policy
+        run: npm run check:convex-native-recurring-work
+
+      - name: Convex native usage-limit configuration
+        run: npm run check:convex-native-usage-limit-config
+
+      # Structural integrity only. The launch-foundations assertion was removed
+      # deliberately: `validateReadyProof` checks that a node's proof object has
+      # an ISO timestamp and non-empty commands/tests/artifacts arrays — it never
+      # RUNS them. A node could be marked ready with evidence pointing at tests
+      # that fail, or that do not exist, and this step would still pass. It
+      # validated that the form was filled in, not that the form was true, while
+      # blocking every merge to main for five days over three planning fields.
+      # The criteria those fields described are real and are enforced where they
+      # can actually be checked: by the suites below, on every commit.
+      - name: Release hypergraph integrity
+        run: npm run check:release-hypergraph
+
+      - name: Run public-discovery focused verification
+        run: node scripts/run-public-discovery-focused-tests.mjs
+
+      - name: Run application type checks
+        run: npm run check
+
+      - name: Run Convex type checks
+        run: npx tsc --noEmit -p convex/tsconfig.json
+
       - name: Run tests with coverage
         run: npm run test:coverage
-        timeout-minutes: 10
+        # Was 10, which no longer covers the finalizer suite's real bundling cost.
+        timeout-minutes: 25
+
+      - name: Component test lane
+        run: npm run test:components
+
+      - name: Tracked-tree self-containment
+        run: npm run check:tree-self-contained
 
       - name: Code Coverage Summary
-        uses: irongut/CodeCoverageSummary@v1.3.0
-        if: always()
+        uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
+        if: always() && hashFiles('coverage/cobertura-coverage.xml') != ''
         with:
           filename: coverage/cobertura-coverage.xml
           badge: true
@@ -72,13 +143,41 @@ jobs:
           output: both
           thresholds: '20 40'
 
-      - name: Add Coverage PR Comment
-        uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request'
+      - name: Export coverage comment for the privileged posting job
+        id: upload-coverage-comment
+        if: github.event_name == 'pull_request' && hashFiles('code-coverage-results.md') != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          recreate: true
+          name: coverage-pr-comment
           path: code-coverage-results.md
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Build verification
         run: npm run build
         timeout-minutes: 10
+
+  coverage-comment:
+    # PR source runs only in `test`, whose token is read-only. This job receives
+    # the generated markdown as inert data and owns the sole PR-write token.
+    needs: test
+    if: >-
+      always() &&
+      github.event_name == 'pull_request' &&
+      needs.test.outputs.coverage-comment-artifact-id != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      pull-requests: write
+    steps:
+      - name: Download coverage comment
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: coverage-pr-comment
+
+      - name: Add Coverage PR Comment
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          recreate: true
+          path: code-coverage-results.md

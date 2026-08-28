@@ -22,18 +22,29 @@ import path from 'node:path';
 
 const read = (rel: string) => readFileSync(path.resolve(process.cwd(), rel), 'utf8');
 
-describe('congressional billing self-heal excludes congressional rows', () => {
-	const src = read('convex/subscriptions.ts');
-	const body = src.slice(
-		src.indexOf('async function verifiedActionsThisPeriod'),
-		src.indexOf('async function blastSentThisPeriod')
+describe('congressional billing projection excludes congressional rows', () => {
+	const src = read('convex/planUsage.ts');
+	const migration = src.slice(
+		src.indexOf('async function scanSourcePage'),
+		src.indexOf('async function subscriptionForOrg')
+	);
+	const repair = src.slice(
+		src.indexOf('async function scanRepairPage'),
+		src.indexOf('export const enqueueForOrg')
 	);
 
-	it('the stale-baseline range scan filters out channel "congressional"', () => {
-		expect(body).toContain('by_orgId_verified_sentAt');
-		expect(body).toMatch(/\.filter\(\s*\(r\)\s*=>\s*r\.channel !== ['"]congressional['"]\s*\)/);
-		// The clamp returns the metered (congressional-excluded) count, not raw rows.
-		expect(body).toContain('Math.min(metered.length');
+	it.each([
+		['launch migration', migration, 'PLAN_USAGE_INVALID:verifiedActions'],
+		['per-org repair', repair, 'PLAN_USAGE_REPAIR_ACTION_COUNT_INVALID']
+	])('%s filters congressional rows before adding exact verified usage', (_name, body, code) => {
+		expect(body).toContain("query('campaignActions')");
+		expect(body).toContain("withIndex('by_orgId_verified_sentAt'");
+		expect(body).toContain('.paginate(options)');
+		expect(body).toMatch(
+			/page\.page\.filter\(\(row\) => row\.channel !== ['"]congressional['"]\)\.length/
+		);
+		expect(body).toContain('checkedAdd(');
+		expect(body).toContain(code);
 	});
 });
 

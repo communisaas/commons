@@ -151,7 +151,7 @@ Commons is live. The full verification loop works end-to-end: org creates campai
 |--------|-------|
 | Convex tables | 71 (`convex/schema.ts`) |
 | Backend | Convex (managed, ~71 tables, 232 indexes) |
-| Vector search | Convex `.vectorIndex` (768-dim Gemini `text-embedding-004`) |
+| Vector substrate | Convex `.vectorIndex` for stored 768-dim `gemini-embedding-001` vectors; launch template search is compact keyword-only |
 | Org-layer code | ~7,747 lines (historical — may drift with refactors) |
 | Person-layer code | ~8,665 lines (identity alone, historical) |
 | Total unit tests | ~4,000 (3,891 passing as of 2026-03-18; not re-counted post-Convex) |

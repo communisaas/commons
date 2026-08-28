@@ -30,30 +30,7 @@
 	import { FileCheck, Landmark, PenLine, UsersRound } from '@lucide/svelte';
 	import { TIMING, EASING } from '$lib/design/motion';
 	import { getOrgOS, rendersSpaceForUrl, type SpaceId } from './os/orgOS.svelte';
-
-	/** A route folded under a space. Not rendered in the rail — Spotlight
-	 * carries it. Kept on the mark so the layout can build the Spotlight index. */
-	export interface SecondaryLink {
-		href: string;
-		label: string;
-		/** Real loaded count, when the destination carries one. Null = unread. */
-		count?: number | null;
-		/** One plain-language limit sentence, for a bounded action. */
-		note?: string;
-	}
-
-	export interface WorkspaceMark {
-		/** Stable OS space id — routing state and the device-local process
-		 * ledger key derive from it, so it never churns with display copy. */
-		id: SpaceId;
-		label: string;
-		/** Primary destination — an existing route, for addressability / no-JS. */
-		href: string;
-		/** Real loaded count for the space. Null/absent = unread slice, no badge. */
-		count?: number | null;
-		/** Routes that fold under this space; rendered in Spotlight, not here. */
-		secondary?: SecondaryLink[];
-	}
+	import type { WorkspaceMark } from './os/navigationTypes';
 
 	let {
 		marks,

@@ -20,12 +20,9 @@
 
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
-import {
-	deserializeSignedDelegate,
-	relayDelegateAction
-} from '$lib/core/near/meta-transactions';
+import { deserializeSignedDelegate, relayDelegateAction } from '$lib/core/near/meta-transactions';
 import { MPC_SIGNER_TESTNET } from '$lib/core/near/chain-signatures';
 import { safeUserId } from '$lib/core/server/security';
 
@@ -42,7 +39,7 @@ const LOG_PREFIX = '[near/meta-tx]';
  */
 const ALLOWED_RECEIVERS = new Set<string>([
 	// MPC signer for Chain Signatures (testnet)
-	MPC_SIGNER_TESTNET,
+	MPC_SIGNER_TESTNET
 	// MPC signer for Chain Signatures (mainnet) — add when deploying to mainnet
 	// 'v1.signer.near',
 ]);
@@ -110,9 +107,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
 	// 2. Rate limiting (per-user, 10 req/min)
 	if (!checkRateLimit(userId)) {
-		console.warn(
-			`${LOG_PREFIX} Rate limit exceeded for user ${userId}`
-		);
+		console.warn(`${LOG_PREFIX} Rate limit exceeded for user ${userId}`);
 		return json(
 			{
 				success: false,
@@ -132,10 +127,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		body = await request.json();
 	} catch {
-		return json(
-			{ success: false, error: 'Invalid JSON body' },
-			{ status: 400 }
-		);
+		return json({ success: false, error: 'Invalid JSON body' }, { status: 400 });
 	}
 
 	const { signedDelegateAction: encodedAction } = body;
@@ -170,17 +162,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	} catch (err) {
 		const message = err instanceof Error ? err.message : 'Unknown error';
 		console.error(`${LOG_PREFIX} DB error looking up user ${safeUserId(userId)}:`, message);
-		return json(
-			{ success: false, error: 'Failed to verify user account' },
-			{ status: 500 }
-		);
+		return json({ success: false, error: 'Failed to verify user account' }, { status: 500 });
 	}
 
 	if (!userNearAccountId) {
-		return json(
-			{ success: false, error: 'User does not have a NEAR account' },
-			{ status: 400 }
-		);
+		return json({ success: false, error: 'User does not have a NEAR account' }, { status: 400 });
 	}
 
 	if (delegateAction.senderId !== userNearAccountId) {
@@ -214,18 +200,12 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	//    relative to a reasonable current block height (~200M on mainnet, ~200M on testnet).
 	//    A more precise check would query the RPC, but that adds latency.
 	if (delegateAction.maxBlockHeight <= 0n) {
-		return json(
-			{ success: false, error: 'Invalid max_block_height' },
-			{ status: 400 }
-		);
+		return json({ success: false, error: 'Invalid max_block_height' }, { status: 400 });
 	}
 
 	// Validate the nonce is positive
 	if (delegateAction.nonce <= 0n) {
-		return json(
-			{ success: false, error: 'Invalid nonce' },
-			{ status: 400 }
-		);
+		return json({ success: false, error: 'Invalid nonce' }, { status: 400 });
 	}
 
 	// 8. Relay the meta-transaction
@@ -237,19 +217,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	const result = await relayDelegateAction(signedDelegate);
 
 	if (!result.success) {
-		console.error(
-			`${LOG_PREFIX} Relay failed for user ${userId}:`,
-			result.error
-		);
-		return json(
-			{ success: false, error: result.error ?? 'Relay failed' },
-			{ status: 502 }
-		);
+		console.error(`${LOG_PREFIX} Relay failed for user ${userId}:`, result.error);
+		return json({ success: false, error: result.error ?? 'Relay failed' }, { status: 502 });
 	}
 
-	console.log(
-		`${LOG_PREFIX} Meta-tx relayed successfully for user ${userId}: ${result.txHash}`
-	);
+	console.log(`${LOG_PREFIX} Meta-tx relayed successfully for user ${userId}: ${result.txHash}`);
 
 	return json({
 		success: true,

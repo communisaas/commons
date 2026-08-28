@@ -13,16 +13,10 @@
  * client-side decryption, store org-key HMAC blind-index tokens per supporter
  * (normalized name/email fragments hashed under a key only the org holds) so
  * the server can narrow candidate rows without ever learning plaintext.
- * Current list sizes make the full client-side scan the simpler honest
- * answer.
+ * Cursor pages make the current full client-side pass an honest, exhaustive
+ * answer; its database cost grows with rows actually returned, never with a
+ * repeatedly rebuilt 10K window.
  */
-
-/**
- * Mirrors the per-query scan bound in `convex/supporters.ts` (`MAX_SCAN`):
- * the list endpoint reads at most this many rows per org, so a full client
- * scan can never search past it.
- */
-export const SUPPORTER_SEARCH_SCAN_CAP = 10_000;
 
 const MIN_TEXT_QUERY_LENGTH = 2;
 const MIN_PHONE_SUFFIX_DIGITS = 4;
@@ -167,36 +161,24 @@ export interface SearchCoverage {
 }
 
 /**
- * States plainly how much of the list a search has actually reached — while
- * rows are still decrypting, and when the per-query scan cap leaves rows
- * beyond reach.
+ * States plainly whether cursor traversal is still in progress. Exhaustion is
+ * exact now: there is no server-side scan window that can hide older rows.
  */
 export function searchCoverage(input: {
 	scannedCount: number;
 	totalCount: number;
 	scanning: boolean;
-	scanCap?: number;
 }): SearchCoverage {
-	const cap = input.scanCap ?? SUPPORTER_SEARCH_SCAN_CAP;
 	const fmt = (n: number) => n.toLocaleString('en-US');
-	const total = Math.max(input.totalCount, input.scannedCount);
 
 	if (input.scanning) {
+		const totalSuffix = input.totalCount > 0 ? ` of ${fmt(input.totalCount)}` : '';
 		return {
 			complete: false,
 			message:
 				input.scannedCount === 0
 					? 'Preparing search — decrypting your list in this browser…'
-					: `Searching ${fmt(input.scannedCount)} of ${fmt(total)} people while the rest decrypt…`
-		};
-	}
-	if (total > input.scannedCount) {
-		return {
-			complete: false,
-			message:
-				input.scannedCount >= cap
-					? `Search covers the first ${fmt(input.scannedCount)} of ${fmt(total)} people; rows beyond the scan limit are not searched.`
-					: `Search covers ${fmt(input.scannedCount)} of ${fmt(total)} people.`
+					: `Searching ${fmt(input.scannedCount)}${totalSuffix} people while the remaining cursor pages decrypt…`
 		};
 	}
 	return { complete: true, message: '' };

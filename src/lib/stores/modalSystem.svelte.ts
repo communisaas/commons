@@ -14,7 +14,6 @@ export type ModalType =
 	| 'auth'
 	| 'address'
 	| 'email_loading'
-	| 'mobile_preview'
 	| 'template_creator'
 	| 'onboarding'
 	| 'template_modal'
@@ -53,7 +52,7 @@ export type LegacyModalState =
 	| 'celebration'
 	| 'tracking'
 	| 'error'
-	| 'retry_needed';
+	| 'handoff_unobserved';
 
 interface LegacyModalContext {
 	template: Template | null;
@@ -345,9 +344,6 @@ function createModalSystem() {
 		get modalState() {
 			return legacyModalState.state;
 		},
-		get isModalOpen() {
-			return legacyModalState.showModal;
-		},
 		get currentTemplate() {
 			return legacyModalState.template;
 		},
@@ -396,7 +392,7 @@ export const modalActions = modalSystem;
 
 // For backwards compatibility, export getter functions that maintain reactivity
 export function isModalOpen() {
-	return modalSystem.isModalOpen;
+	return modalSystem.modalContext.showModal;
 }
 
 export function currentTemplate() {

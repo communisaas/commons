@@ -7,19 +7,15 @@
 
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { json, error } from '@sveltejs/kit';
-import { serverAction } from 'convex-sveltekit';
+import { serverAction } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
-import crypto from 'node:crypto';
+import { hashDistrictCode, hashPostalCode } from '$convex/lib/districtHash';
 import type { RequestHandler } from './$types';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function hashDistrict(value: string): string {
-	return crypto.createHash('sha256').update(value.toLowerCase().trim()).digest('hex');
-}
 
 export const POST: RequestHandler = async ({ params, request, getClientAddress }) => {
 	if (!FEATURES.EVENTS) throw error(404, 'Not found');
@@ -46,12 +42,18 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	if (postalCode !== undefined && (typeof postalCode !== 'string' || postalCode.length > 16)) {
 		throw error(400, 'Invalid postal code');
 	}
-	if (districtCode !== undefined && (typeof districtCode !== 'string' || districtCode.length > 64)) {
+	if (
+		districtCode !== undefined &&
+		(typeof districtCode !== 'string' || districtCode.length > 64)
+	) {
 		throw error(400, 'Invalid district code');
 	}
 	if (
 		guestCount !== undefined &&
-		(typeof guestCount !== 'number' || !Number.isFinite(guestCount) || guestCount < 0 || guestCount > 100)
+		(typeof guestCount !== 'number' ||
+			!Number.isFinite(guestCount) ||
+			guestCount < 0 ||
+			guestCount > 100)
 	) {
 		throw error(400, 'Invalid guest count (0-100)');
 	}
@@ -59,9 +61,9 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 	// Compute district hash
 	let dHash: string | undefined;
 	if (districtCode && FEATURES.ADDRESS_SPECIFICITY === 'district') {
-		dHash = hashDistrict(districtCode);
+		dHash = await hashDistrictCode(districtCode);
 	} else if (postalCode) {
-		dHash = hashDistrict(postalCode);
+		dHash = await hashPostalCode(postalCode);
 	}
 
 	// Engagement tier: district-verified = 2, postal = 1, none = 0

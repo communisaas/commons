@@ -7,8 +7,7 @@
 		Scale,
 		Users,
 		FileText,
-		TrendingUp,
-		Weight
+		TrendingUp
 	} from '@lucide/svelte';
 	import type { PageData } from './$types';
 	import { RegistryMark } from '$lib/design';
@@ -27,18 +26,6 @@
 			next.add(billId);
 		}
 		expandedBills = next;
-	}
-
-	function scoreColor(score: number): string {
-		if (score >= 67) return 'text-green-700 bg-green-100 border-green-300';
-		if (score >= 34) return 'text-amber-700 bg-amber-100 border-amber-300';
-		return 'text-red-700 bg-red-100 border-red-300';
-	}
-
-	function scoreLabel(score: number): string {
-		if (score >= 67) return 'High';
-		if (score >= 34) return 'Mixed';
-		return 'Low';
 	}
 
 	function alignmentIcon(alignment: number): { symbol: string; class: string; label: string } {
@@ -86,11 +73,6 @@
 		});
 	}
 
-	function proofWeightPercent(weight: number): number {
-		// Normalize: proof weight of 1.0 = 100%, cap at 100
-		return Math.min(Math.round(weight * 100), 100);
-	}
-
 	function averageAlignment(receipts: AlignmentReceipt[]): number {
 		if (receipts.length === 0) return 0;
 		return receipts.reduce((sum, receipt) => sum + receipt.alignment, 0) / receipts.length;
@@ -102,7 +84,7 @@
 	<meta property="og:title" content="Accountability Report: {data.dmName}" />
 	<meta
 		property="og:description"
-		content="Proof-weighted accountability tracking across {data.summary.uniqueBills} bills"
+		content="Accountability records across {data.summary.uniqueBills} bills"
 	/>
 	<meta property="og:type" content="profile" />
 </svelte:head>
@@ -134,29 +116,6 @@
 	>
 		<h2 class="sr-only">Summary</h2>
 		<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
-			<!-- Accountability Score -->
-			<div class="col-span-2 sm:col-span-1">
-				<div class="text-xs font-medium uppercase tracking-wide text-slate-500">
-					Accountability Score
-				</div>
-				<div class="mt-1 flex items-center gap-2">
-					<span
-						class="inline-flex items-center rounded-lg border px-3 py-1.5 text-2xl font-bold {scoreColor(
-							data.summary.accountabilityScore
-						)}"
-						role="img"
-						aria-label="{scoreLabel(data.summary.accountabilityScore)} accountability: {data
-							.summary.accountabilityScore} out of 100"
-					>
-						{data.summary.accountabilityScore}
-					</span>
-					<span class="text-xs text-slate-400">/ 100</span>
-				</div>
-				<div class="mt-1 text-xs text-slate-500">
-					{scoreLabel(data.summary.accountabilityScore)} alignment
-				</div>
-			</div>
-
 			<!-- Total Receipts -->
 			<div>
 				<div class="text-xs font-medium uppercase tracking-wide text-slate-500">
@@ -210,31 +169,6 @@
 				<div class="text-xs text-slate-400">strong + moderate</div>
 			</div>
 
-			<!-- Avg Proof Weight -->
-			<div>
-				<div class="text-xs font-medium uppercase tracking-wide text-slate-500">
-					<span class="mr-1 inline-block"><Weight class="inline h-3.5 w-3.5" /></span>
-					Avg Proof Weight
-				</div>
-				<div class="mt-2">
-					<div
-						class="h-2.5 w-full overflow-hidden rounded-full bg-slate-100"
-						role="progressbar"
-						aria-valuenow={proofWeightPercent(data.summary.avgProofWeight)}
-						aria-valuemin={0}
-						aria-valuemax={100}
-						aria-label="Average proof weight: {Math.round(data.summary.avgProofWeight * 100)}%"
-					>
-						<div
-							class="h-full rounded-full bg-indigo-500 transition-all"
-							style="width: {proofWeightPercent(data.summary.avgProofWeight)}%"
-						></div>
-					</div>
-					<div class="mt-0.5 text-xs text-slate-500">
-						{(data.summary.avgProofWeight * 100).toFixed(0)}%
-					</div>
-				</div>
-			</div>
 		</div>
 
 	</section>
@@ -283,22 +217,6 @@
 							{/if}
 						</div>
 
-						<!-- Proof weight bar -->
-						<div class="mt-1.5">
-							<div
-								class="h-1.5 w-full overflow-hidden rounded-full bg-slate-100"
-								role="progressbar"
-								aria-valuenow={proofWeightPercent(billEntry.maxProofWeight)}
-								aria-valuemin={0}
-								aria-valuemax={100}
-								aria-label="Max proof weight: {Math.round(billEntry.maxProofWeight * 100)}%"
-							>
-								<div
-									class="h-full rounded-full bg-indigo-400"
-									style="width: {proofWeightPercent(billEntry.maxProofWeight)}%"
-								></div>
-							</div>
-						</div>
 					</div>
 
 					<!-- Expand/collapse -->
@@ -319,7 +237,6 @@
 								<thead>
 									<tr class="border-b border-slate-200 text-left text-slate-500">
 										<th class="px-4 py-2 font-medium">Delivered</th>
-										<th class="px-4 py-2 font-medium">Weight</th>
 										<th class="px-4 py-2 font-medium">Verified</th>
 										<th class="px-4 py-2 font-medium">Causality</th>
 										<th class="px-4 py-2 font-medium">Action</th>
@@ -332,19 +249,6 @@
 										<tr class="border-b border-slate-100 last:border-0">
 											<td class="px-4 py-2 text-slate-700">
 												{formatDate(receipt.proofDeliveredAt)}
-											</td>
-											<td class="px-4 py-2">
-												<div class="flex items-center gap-1.5">
-													<div class="h-1.5 w-12 overflow-hidden rounded-full bg-slate-200">
-														<div
-															class="h-full rounded-full bg-indigo-500"
-															style="width: {proofWeightPercent(receipt.proofWeight)}%"
-														></div>
-													</div>
-													<span class="text-slate-600"
-														>{(receipt.proofWeight * 100).toFixed(0)}%</span
-													>
-												</div>
 											</td>
 											<td class="px-4 py-2 text-slate-700">
 												{#if receipt.verifiedCount !== null}
@@ -398,7 +302,7 @@
 	<footer class="mt-12 border-t border-slate-200 pt-6 text-center text-xs text-slate-500">
 		<p>
 			Data from <a href="/" class="font-medium text-indigo-600 hover:text-indigo-800">Commons</a>
-			— Proof-weighted accountability for governance
+			— Verified constituent action records
 		</p>
 		<p class="mt-1">
 			<a href="/" class="underline hover:text-slate-700">commons.email</a>

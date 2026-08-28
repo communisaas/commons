@@ -7,7 +7,9 @@ function makeContext(scopes: string[]): ApiKeyContext {
 		orgId: 'org_test123' as Id<'organizations'>,
 		keyId: 'key_test123' as Id<'apiKeys'>,
 		scopes,
-		planSlug: 'inactive'
+		planSlug: 'inactive',
+		rateLimitConsumed: true,
+		rateLimit: { limit: 100, remaining: 99, resetAt: 1_800_000_000_000 }
 	};
 }
 

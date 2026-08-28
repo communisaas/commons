@@ -14,30 +14,19 @@
   counts it as search-only source ground rather than fake evaluated confidence
   (the HONESTY RULE).
 -->
-<script lang="ts" module>
-	export interface StudioSource {
-		num: number;
-		title: string;
-		url: string;
-		type: 'journalism' | 'research' | 'government' | 'legal' | 'advocacy' | 'other';
-		credibility_rationale?: string;
-		incentive_position?: 'adversarial' | 'neutral' | 'aligned';
-		source_order?: 'primary' | 'secondary' | 'opinion';
-	}
-</script>
-
 <script lang="ts">
 	import { Datum } from '$lib/design';
+	import type { Source } from '$lib/core/agents/types';
 
 	let {
 		sources
 	}: {
 		/** Attached source ground from the live message stream. */
-		sources: StudioSource[];
+		sources: Source[];
 	} = $props();
 
 	// Incentive ranking weight. Adversarial ranks HIGHEST — intentional.
-	const INCENTIVE_RANK: Record<NonNullable<StudioSource['incentive_position']>, number> = {
+	const INCENTIVE_RANK: Record<NonNullable<Source['incentive_position']>, number> = {
 		adversarial: 0,
 		neutral: 1,
 		aligned: 2
@@ -78,7 +67,7 @@
 	const fallbackCount = $derived(sources.filter(isFallback).length);
 	const evaluatedCount = $derived(sources.length - fallbackCount);
 
-	function isFallback(s: StudioSource): boolean {
+	function isFallback(s: Source): boolean {
 		return !s.incentive_position || (s.credibility_rationale ?? '').startsWith(FALLBACK_MARKER);
 	}
 
@@ -124,9 +113,7 @@
 		<ol class="sources-list">
 			{#each ranked as source (source.num)}
 				{@const fallback = isFallback(source)}
-				{@const meta = source.incentive_position
-					? INCENTIVE_META[source.incentive_position]
-					: null}
+				{@const meta = source.incentive_position ? INCENTIVE_META[source.incentive_position] : null}
 				<li class="source">
 					<span class="source-num">[{source.num}]</span>
 					<div class="source-body">
@@ -145,14 +132,11 @@
 
 						{#if fallback}
 							<p class="source-boundary">
-								Credibility assessment not available — this source was included on search
-								relevance only.
+								Credibility assessment not available — this source was included on search relevance
+								only.
 							</p>
 						{:else if meta}
-							<span
-								class="source-incentive"
-								style="--inc-color: {meta.color};"
-							>
+							<span class="source-incentive" style="--inc-color: {meta.color};">
 								<span class="source-incentive-dot" aria-hidden="true"></span>
 								<span class="source-incentive-label">{meta.label}</span>
 								<span class="source-incentive-gloss">{meta.gloss}</span>

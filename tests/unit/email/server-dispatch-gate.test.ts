@@ -68,8 +68,15 @@ describe('draft-only dispatch claim', () => {
 
 	it('refuses an empty recipient set', () => {
 		const body = enqueue();
-		expect(body).toContain('recipients.length === 0');
+		// The composer has already completed the bounded cursor scan and stored
+		// its exact count on the draft. The atomic claim must use that count rather
+		// than rebuilding the whole audience inside one mutation.
+		expect(body).toContain('if (blast.totalRecipients <= 0)');
 		expect(body).toContain('No subscribed recipients match this blast filter');
+		expect(body.indexOf('blast.totalRecipients <= 0')).toBeLessThan(
+			body.indexOf('ctx.db.patch(args.blastId')
+		);
+		expect(body).toContain('if (blast.totalRecipients > RECIPIENT_COHORT_CAP)');
 	});
 });
 

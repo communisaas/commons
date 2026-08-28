@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — SMS/Twilio integration
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { PageServerLoad } from './$types';
@@ -62,16 +62,16 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 		org: { name: org.name, slug: org.slug },
 		smsHealth: spaces.base?.smsHealth ?? EMPTY_SMS_HEALTH,
 		consentEvidence: spaces.base?.consentEvidence ?? EMPTY_CONSENT_EVIDENCE,
-		textDispatchRuntimeReady: spaces.operating.textDelivery?.dispatchRuntimeReady ?? false,
-		textDispatchRuntimeMissing: spaces.operating.textDelivery?.dispatchRuntimeMissing ?? [],
+		textDispatchRuntimeReady: spaces.operating?.textDelivery?.dispatchRuntimeReady ?? false,
+		textDispatchRuntimeMissing: spaces.operating?.textDelivery?.dispatchRuntimeMissing ?? [],
 		textDispatchRuntimeDependency:
-			spaces.operating.textDelivery?.dispatchRuntimeDependency ??
+			spaces.operating?.textDelivery?.dispatchRuntimeDependency ??
 			'text dispatch gate, browser phone custody, Twilio dispatch runner, and transport credentials',
 		textDispatchRuntimeMessage:
-			spaces.operating.textDelivery?.dispatchRuntimeMessage ??
+			spaces.operating?.textDelivery?.dispatchRuntimeMessage ??
 			'Bulk text dispatch is dependency-bound. Drafts are preserved until carrier delivery dependencies are configured.',
 		textDispatchClientBatchRouteMounted:
-			spaces.operating.textDelivery?.dispatchClientBatchRouteMounted ?? false,
+			spaces.operating?.textDelivery?.dispatchClientBatchRouteMounted ?? false,
 		replySummary: {
 			replyCount: replySummary.replyCount,
 			matchedSupporterCount: replySummary.matchedSupporterCount,

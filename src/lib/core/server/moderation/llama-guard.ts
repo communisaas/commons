@@ -12,12 +12,14 @@
  * @see https://console.groq.com/docs/content-moderation
  */
 
-import { env } from '$env/dynamic/private';
 import type { MLCommonsHazard, SafetyResult } from './types';
-import { HAZARD_DESCRIPTIONS, BLOCKING_HAZARDS } from './types';
+import { HAZARD_DESCRIPTIONS, PERSON_BLOCKING_HAZARDS } from './types';
+import { blockingHazardsForAudience, type AudienceVerdict } from './audience';
+import { GroqTransportError, requestGroqChatCompletion } from './groq-transport';
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
 
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const MODEL = 'openai/gpt-oss-safeguard-20b';
+export const SAFETY_INPUT_MAX_BYTES = 64 * 1024;
 
 const SAFETY_SYSTEM_PROMPT = `Classify user content safety using MLCommons taxonomy. Respond ONLY with: safe OR unsafe followed by comma-separated hazard codes (e.g. unsafe,S1,S5).
 
@@ -44,10 +46,13 @@ S14: Code interpreter abuse`;
  * - Llama Guard: "unsafe\nS1" or "unsafe\nS1,S2"
  * - gpt-oss-safeguard: "unsafe,S1" or "unsafe,S1,S5"
  *
- * PERMISSIVE POLICY: Only BLOCKING_HAZARDS (S1, S4) cause safe=false.
- * All other hazards are logged but content proceeds.
+ * Blocking hazards are resolved from the server-derived audience verdict before
+ * parsing. All detected hazards remain visible in the result.
  */
-function parseResponse(response: string): {
+function parseResponse(
+	response: string,
+	blocking: MLCommonsHazard[]
+): {
 	safe: boolean;
 	hazards: MLCommonsHazard[];
 	blocking_hazards: MLCommonsHazard[];
@@ -59,16 +64,17 @@ function parseResponse(response: string): {
 	}
 
 	if (trimmed.startsWith('unsafe')) {
-		// Extract hazard codes from any format: "unsafe\nS1,S2" or "unsafe,S1,S5"
-		const hazardMatches = response.match(/S\d{1,2}/gi) || [];
-		const hazards = hazardMatches
-			.map((h) => h.toUpperCase())
-			.filter((h): h is MLCommonsHazard => /^S(1[0-4]|[1-9])$/.test(h));
+		// An unsafe decision without at least one valid taxonomy code is not a
+		// permissive result. Treat bare/ambiguous provider output as unavailable.
+		if (!/^unsafe(?:[\s,]+S(?:1[0-4]|[1-9]))+(?:[\s,]*)$/iu.test(trimmed)) {
+			throw new Error('Safety classifier returned an invalid response');
+		}
+		const hazardMatches = trimmed.match(/S(?:1[0-4]|[1-9])/giu) ?? [];
+		const hazards = [
+			...new Set(hazardMatches.map((hazard) => hazard.toUpperCase() as MLCommonsHazard))
+		];
 
-		// Only BLOCKING_HAZARDS (S1, S4) cause rejection
-		const blocking_hazards = hazards.filter((h) =>
-			BLOCKING_HAZARDS.includes(h)
-		) as MLCommonsHazard[];
+		const blocking_hazards = hazards.filter((hazard) => blocking.includes(hazard));
 
 		// Safe if no blocking hazards detected (non-blocking hazards are allowed)
 		const safe = blocking_hazards.length === 0;
@@ -76,9 +82,7 @@ function parseResponse(response: string): {
 		return { safe, hazards, blocking_hazards };
 	}
 
-	// Default to safe if parsing fails (fail-open for edge cases)
-	console.warn('[safety] Unexpected response format, defaulting to safe:', response);
-	return { safe: true, hazards: [], blocking_hazards: [] };
+	throw new Error('Safety classifier returned an invalid response');
 }
 
 /**
@@ -86,68 +90,63 @@ function parseResponse(response: string): {
  *
  * @param content - Text content to classify
  * @returns SafetyResult with hazard categories
- * @throws Error if rate limited (429)
+ * @throws Error whenever the provider is unavailable or its decision is malformed
  */
-export async function classifySafety(content: string): Promise<SafetyResult> {
-	const apiKey = env.GROQ_API_KEY;
-
-	if (!apiKey) {
-		console.warn('[safety] GROQ_API_KEY not configured, defaulting to safe');
-		return {
-			safe: true,
-			hazards: [],
-			blocking_hazards: [],
-			hazard_descriptions: [],
-			reasoning: 'GROQ API key not configured - safety check skipped',
-			timestamp: new Date().toISOString(),
-			model: MODEL
-		};
+export async function classifySafety(
+	content: string,
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
+): Promise<SafetyResult> {
+	if (new TextEncoder().encode(content).byteLength > SAFETY_INPUT_MAX_BYTES) {
+		throw new RangeError(`Safety moderation input exceeds ${SAFETY_INPUT_MAX_BYTES} bytes`);
 	}
 
 	const startTime = Date.now();
 
-	const response = await fetch(GROQ_API_URL, {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${apiKey}`
-		},
-		body: JSON.stringify({
-			model: MODEL,
-			messages: [
-				{ role: 'system', content: SAFETY_SYSTEM_PROMPT },
-				{ role: 'user', content }
-			],
-			temperature: 0,
-			max_tokens: 1000
-		})
-	});
-
-	if (!response.ok) {
-		const errorText = await response.text();
-
+	let data: {
+		choices?: Array<{ message?: { content?: unknown } }>;
+		usage?: { total_tokens?: unknown };
+	};
+	try {
+		data = await requestGroqChatCompletion<typeof data>(
+			{
+				model: MODEL,
+				messages: [
+					{ role: 'system', content: SAFETY_SYSTEM_PROMPT },
+					{ role: 'user', content }
+				],
+				temperature: 0,
+				max_tokens: 64
+			},
+			{ signal: options.signal }
+		);
+	} catch (error) {
+		if (
+			error !== null &&
+			typeof error === 'object' &&
+			'name' in error &&
+			(error as { name?: unknown }).name === 'AbortError'
+		) {
+			throw error;
+		}
 		// Handle rate limiting — user should retry
-		if (response.status === 429) {
-			console.error('[safety] Rate limited by GROQ:', errorText);
+		if (error instanceof GroqTransportError && error.status === 429) {
+			console.error('[safety] Rate limited by GROQ');
 			throw new Error('Safety check rate limited. Please try again in a moment.');
 		}
 
-		// Non-rate-limit errors: fail-open so Groq outages don't block publishing
-		console.error('[safety] GROQ API error (fail-open):', response.status, errorText);
-		return {
-			safe: true,
-			hazards: [],
-			blocking_hazards: [],
-			hazard_descriptions: [],
-			reasoning: `GROQ API returned ${response.status} - safety check skipped (fail-open)`,
-			timestamp: new Date().toISOString(),
-			model: MODEL
-		};
+		console.error('[safety] GROQ API error:', sanitizeProviderErrorMessage(error));
+		throw new Error('Safety moderation service unavailable');
 	}
 
-	const data = await response.json();
-	const modelResponse = data.choices?.[0]?.message?.content || 'safe';
-	const { safe, hazards, blocking_hazards } = parseResponse(modelResponse);
+	const modelResponse = data.choices?.[0]?.message?.content;
+	if (typeof modelResponse !== 'string' || modelResponse.length > 4_000) {
+		throw new Error('Safety classifier returned an invalid response');
+	}
+	// An absent audience is not a permissive audience: no verdict resolves strict.
+	const blocking = options.audience
+		? blockingHazardsForAudience(options.audience)
+		: PERSON_BLOCKING_HAZARDS;
+	const { safe, hazards, blocking_hazards } = parseResponse(modelResponse, blocking);
 
 	const latencyMs = Date.now() - startTime;
 
@@ -157,7 +156,7 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
 			safe,
 			all_hazards: hazards,
 			blocking_hazards,
-			tokens: data.usage?.total_tokens
+			tokens: typeof data.usage?.total_tokens === 'number' ? data.usage.total_tokens : undefined
 		});
 	} else {
 		console.debug(`[safety] Classification complete in ${latencyMs}ms: safe`);
@@ -181,17 +180,40 @@ export async function classifySafety(content: string): Promise<SafetyResult> {
  * @param contents - Array of content strings
  * @returns Array of SafetyResults
  */
-export async function classifySafetyBatch(contents: string[]): Promise<SafetyResult[]> {
+export async function classifySafetyBatch(
+	contents: string[],
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
+): Promise<SafetyResult[]> {
 	const results: SafetyResult[] = [];
 
 	for (let i = 0; i < contents.length; i++) {
-		const result = await classifySafety(contents[i]);
+		if (options.signal?.aborted) {
+			throw options.signal.reason instanceof Error
+				? options.signal.reason
+				: new DOMException('Safety batch aborted', 'AbortError');
+		}
+		const result = await classifySafety(contents[i], options);
 		results.push(result);
 
 		// Rate limit: 30 req/min = 1 req per 2 seconds
 		// Add buffer for safety
 		if (i < contents.length - 1) {
-			await new Promise((resolve) => setTimeout(resolve, 2100));
+			await new Promise<void>((resolve, reject) => {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				const onAbort = () => {
+					if (timer !== undefined) clearTimeout(timer);
+					reject(
+						options.signal?.reason instanceof Error
+							? options.signal.reason
+							: new DOMException('Safety batch aborted', 'AbortError')
+					);
+				};
+				options.signal?.addEventListener('abort', onAbort, { once: true });
+				timer = setTimeout(() => {
+					options.signal?.removeEventListener('abort', onAbort);
+					resolve();
+				}, 2100);
+			});
 		}
 	}
 

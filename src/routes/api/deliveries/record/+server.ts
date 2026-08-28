@@ -1,105 +1,235 @@
 /**
- * Direct Delivery Recording Endpoint — Stance-Agnostic Civic Action
+ * Direct delivery recording — authenticated, stance-agnostic civic action.
  *
- * POST: Record delivery events keyed on pseudonymousId + templateId, with
- * NO stance registration required. This is the first-class civic action
- * path: writing to a decision-maker is a primary event, not an overlay on
- * a public support/oppose tally.
- *
- * pseudonymousId = HMAC-SHA256(user.id, PSEUDONYMOUS_ID_SALT) per
- * voter-protocol G-07 (canonical name (legacy `SUBMISSION_ANONYMIZATION_SALT` remains a fallback); legacy
- * SUBMISSION_ANONYMIZATION_SALT remains a fallback). The same value MUST
- * be mirrored to the Convex backend's PSEUDONYMOUS_ID_SALT env var or the
- * cross-platform pseudonymousIds for the same user will diverge.
- * Available at tier 1+ (any authenticated user) —
- * "All civic actions are available at any tier" (REPUTATION-ARCHITECTURE-
- * SPEC.md §1.4). identity_commitment is not required; it remains for ZK
- * proofs and stance claims in DEBATE-era accountability flows.
+ * The browser supplies only the template and the bounded recipient identities
+ * needed for durable idempotency. The server derives the pseudonymous actor;
+ * raw user IDs and recipient email addresses never enter the delivery table.
  */
 
-import { json, error } from '@sveltejs/kit';
+import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { BoundedJsonRequestError, readBoundedJsonRequest } from '$lib/server/bounded-json-request';
+
+const DIRECT_DELIVERY_REQUEST_MAX_BYTES = 16 * 1024;
+const DIRECT_DELIVERY_RECIPIENT_MAX = 20;
+const DIRECT_DELIVERY_TEMPLATE_ID_MAX_CHARS = 64;
+const DIRECT_DELIVERY_NAME_MAX_CHARS = 200;
+const DIRECT_DELIVERY_NAME_MAX_BYTES = 512;
+const DIRECT_DELIVERY_RECIPIENT_KEY_MAX_CHARS = 256;
+const DIRECT_DELIVERY_METHODS = new Set(['cwc', 'email', 'recorded']);
+const NO_STORE_HEADERS = { 'Cache-Control': 'private, no-store' } as const;
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const textEncoder = new TextEncoder();
+
+type DirectDeliveryRecipient = {
+	name: string;
+	deliveryMethod: 'cwc' | 'email' | 'recorded';
+};
+
+class DirectDeliveryInputError extends Error {}
+
+function response(body: Record<string, unknown>, status = 200): Response {
+	return json(body, { status, headers: NO_STORE_HEADERS });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, allowed: readonly string[]): boolean {
+	const expected = new Set(allowed);
+	return Object.keys(value).every((key) => expected.has(key));
+}
+
+function normalizeRecipientName(value: unknown): string {
+	if (typeof value !== 'string') {
+		throw new DirectDeliveryInputError('Each recipient must have a string name');
+	}
+	const name = value.normalize('NFKC').trim().replace(/\s+/gu, ' ');
+	if (
+		name.length === 0 ||
+		name.length > DIRECT_DELIVERY_NAME_MAX_CHARS ||
+		textEncoder.encode(name).byteLength > DIRECT_DELIVERY_NAME_MAX_BYTES ||
+		CONTROL_CHARACTERS.test(name)
+	) {
+		throw new DirectDeliveryInputError(
+			`Each recipient name must be 1-${DIRECT_DELIVERY_NAME_MAX_CHARS} characters and at most ${DIRECT_DELIVERY_NAME_MAX_BYTES} bytes`
+		);
+	}
+	return name;
+}
+
+function canonicalRecipientKey(name: string): string {
+	const key = name
+		.normalize('NFKD')
+		.replace(/\p{M}+/gu, '')
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, '-')
+		.replace(/^-+|-+$/gu, '');
+	if (key.length === 0 || key.length > DIRECT_DELIVERY_RECIPIENT_KEY_MAX_CHARS) {
+		throw new DirectDeliveryInputError('Each recipient must produce a valid canonical key');
+	}
+	return key;
+}
+
+function normalizeRecipients(values: unknown[]): DirectDeliveryRecipient[] {
+	const byKey = new Map<
+		string,
+		DirectDeliveryRecipient & { recipientKey: string; fingerprint: string }
+	>();
+	for (const value of values) {
+		if (!isRecord(value) || !hasExactKeys(value, ['name', 'deliveryMethod'])) {
+			throw new DirectDeliveryInputError('Each recipient may contain only name and deliveryMethod');
+		}
+		const name = normalizeRecipientName(value.name);
+		if (
+			typeof value.deliveryMethod !== 'string' ||
+			!DIRECT_DELIVERY_METHODS.has(value.deliveryMethod)
+		) {
+			throw new DirectDeliveryInputError(
+				`deliveryMethod must be one of: ${[...DIRECT_DELIVERY_METHODS].join(', ')}`
+			);
+		}
+		const recipientKey = canonicalRecipientKey(name);
+		const recipient = {
+			name,
+			deliveryMethod: value.deliveryMethod as DirectDeliveryRecipient['deliveryMethod'],
+			recipientKey,
+			fingerprint: value.deliveryMethod
+		};
+		const existing = byKey.get(recipientKey);
+		if (existing) {
+			if (existing.fingerprint !== recipient.fingerprint) {
+				throw new DirectDeliveryInputError(
+					`Conflicting recipient entries share canonical key "${recipientKey}"`
+				);
+			}
+			continue;
+		}
+		byKey.set(recipientKey, recipient);
+	}
+	return [...byKey.values()].map(
+		({ recipientKey: _recipientKey, fingerprint: _fingerprint, ...recipient }) => recipient
+	);
+}
 
 export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const session = locals.session;
 		if (!session?.userId) {
-			return json({ error: 'Authentication required' }, { status: 401 });
+			return response({ error: 'Authentication required' }, 401);
 		}
 
-		const body = await request.json();
-		const { templateId, recipients } = body;
-
-		// bound caller-supplied identifiers + array sizes.
-		if (!templateId || typeof templateId !== 'string' || templateId.length > 64) {
-			return json({ error: 'Missing or invalid templateId (≤64 chars)' }, { status: 400 });
-		}
-
-		if (!Array.isArray(recipients) || recipients.length === 0 || recipients.length > 200) {
-			return json({ error: 'recipients must be a non-empty array (≤200 entries)' }, { status: 400 });
-		}
-
-		// Validate each recipient
-		const validMethods = ['cwc', 'email', 'recorded'];
-		for (const r of recipients) {
-			if (!r.name || typeof r.name !== 'string' || r.name.length > 200) {
-				return json({ error: 'Each recipient must have a name (≤200 chars)' }, { status: 400 });
+		let body: unknown;
+		try {
+			body = await readBoundedJsonRequest(request, DIRECT_DELIVERY_REQUEST_MAX_BYTES, {
+				maxArrayItems: DIRECT_DELIVERY_RECIPIENT_MAX,
+				maxDepth: 3,
+				maxNodes: 128,
+				maxObjectKeys: 2,
+				maxStringBytes: DIRECT_DELIVERY_NAME_MAX_BYTES
+			});
+		} catch (cause) {
+			if (cause instanceof BoundedJsonRequestError) {
+				return response({ error: cause.message }, cause.status);
 			}
-			if (r.email !== undefined && r.email !== null && (typeof r.email !== 'string' || r.email.length > 254)) {
-				return json({ error: 'Recipient email must be a string ≤254 chars' }, { status: 400 });
-			}
-			if (!r.deliveryMethod || !validMethods.includes(r.deliveryMethod)) {
-				return json(
-					{ error: `deliveryMethod must be one of: ${validMethods.join(', ')}` },
-					{ status: 400 }
-				);
-			}
+			return response({ error: 'Invalid request body' }, 400);
+		}
+		if (!isRecord(body) || !hasExactKeys(body, ['templateId', 'recipients'])) {
+			return response({ error: 'Request body may contain only templateId and recipients' }, 400);
+		}
+		if (
+			typeof body.templateId !== 'string' ||
+			body.templateId.length === 0 ||
+			body.templateId.length > DIRECT_DELIVERY_TEMPLATE_ID_MAX_CHARS
+		) {
+			return response(
+				{
+					error: `templateId must be a non-empty string of at most ${DIRECT_DELIVERY_TEMPLATE_ID_MAX_CHARS} characters`
+				},
+				400
+			);
+		}
+		if (
+			!Array.isArray(body.recipients) ||
+			body.recipients.length === 0 ||
+			body.recipients.length > DIRECT_DELIVERY_RECIPIENT_MAX
+		) {
+			return response(
+				{
+					error: `recipients must be a non-empty array of at most ${DIRECT_DELIVERY_RECIPIENT_MAX} entries`
+				},
+				400
+			);
 		}
 
-		// Derive pseudonymousId from session user — tier 1+ supported.
-		// computePseudonymousId throws on missing/short salt — catch and return
-		// generic error to avoid leaking env var names.
+		let recipients: DirectDeliveryRecipient[];
+		try {
+			recipients = normalizeRecipients(body.recipients);
+		} catch (cause) {
+			if (cause instanceof DirectDeliveryInputError) {
+				return response({ error: cause.message }, 400);
+			}
+			throw cause;
+		}
+
 		let pseudonymousId: string;
 		try {
 			pseudonymousId = computePseudonymousId(session.userId);
 		} catch {
-			return json({ error: 'Service configuration error' }, { status: 500 });
+			return response({ error: 'Service configuration error' }, 500);
 		}
-
-		// Backfill districtCode from user's Shadow Atlas registration (best-effort).
-		// Returns null for tier 0-1 users without a registration — delivery is
-		// recorded without district attribution in that case.
-		const atlas = await serverQuery(api.users.getShadowAtlasRegistration, {
-			userId: session.userId as Id<'users'>
-		}).catch(() => null);
-		const districtCode = atlas?.congressionalDistrict ?? undefined;
 
 		const result = await serverMutation(api.positions.recordDirectDeliveries, {
 			_secret: getInternalSecret(),
 			pseudonymousId,
-			templateId: templateId as Id<'templates'>,
-			districtCode,
-			recipients: recipients.map((r: { name: string; email?: string; deliveryMethod: string }) => ({
-				name: r.name,
-				email: r.email,
-				deliveryMethod: r.deliveryMethod
-			}))
+			templateId: body.templateId as Id<'templates'>,
+			recipients
 		});
 
-		return json({ created: result.created });
-	} catch (err) {
-		console.error('[Delivery Record] Error:', err);
+		return response({
+			created: result.created,
+			existing: result.existing,
+			duplicates: body.recipients.length - recipients.length
+		});
+	} catch (cause) {
+		console.error('[Delivery Record] Error:', cause);
 
-		if (err && typeof err === 'object' && 'status' in err) {
-			throw err;
+		if (cause && typeof cause === 'object' && 'status' in cause) throw cause;
+		const message = cause instanceof Error ? cause.message : '';
+		if (message.includes('DIRECT_DELIVERY_RATE_LIMITED')) {
+			return response(
+				{ error: 'Too many delivery recording requests. Please retry in one minute.' },
+				429
+			);
 		}
-
-		const message = err instanceof Error ? err.message : 'Failed to record deliveries';
-		throw error(500, message);
+		if (message.includes('DIRECT_DELIVERY_TEMPLATE_INELIGIBLE')) {
+			return response({ error: 'Template not found' }, 404);
+		}
+		if (
+			message.includes('DIRECT_DELIVERY_LIFETIME_CAP_EXCEEDED') ||
+			message.includes('DIRECT_DELIVERY_CARDINALITY_REPAIR_REQUIRED') ||
+			message.includes('DIRECT_DELIVERY_IDENTITY_REPAIR_REQUIRED') ||
+			message.includes('DIRECT_DELIVERY_IDENTITY_MULTIPLICITY')
+		) {
+			return response({ error: 'Direct delivery history requires review' }, 409);
+		}
+		if (message.includes('DIRECT_DELIVERY_INPUT_TOO_LARGE')) {
+			return response({ error: 'Request body exceeds maximum size' }, 413);
+		}
+		if (
+			message.includes('DIRECT_DELIVERY_') ||
+			message.includes('POSITION_DELIVERY_') ||
+			message.includes('POSITION_DISTRICT_CODE_INVALID')
+		) {
+			return response({ error: 'Invalid direct delivery request' }, 400);
+		}
+		throw error(500, 'Failed to record deliveries');
 	}
 };

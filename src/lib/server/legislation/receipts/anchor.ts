@@ -1,4 +1,14 @@
-import { sha256Hex } from './attestation';
+/**
+ * Compute SHA-256 hex digest of a string input.
+ * Works on CF Workers (Web Crypto API).
+ */
+async function sha256Hex(input: string): Promise<string> {
+	const encoded = new TextEncoder().encode(input);
+	const hash = await crypto.subtle.digest('SHA-256', encoded);
+	return Array.from(new Uint8Array(hash))
+		.map((b) => b.toString(16).padStart(2, '0'))
+		.join('');
+}
 
 export interface AnchorBatch {
 	root: string;

@@ -38,6 +38,18 @@ export function applyDowngradeGuard(
 	incomingCommitment: string | undefined
 ): DowngradeGuardResult {
 	const hasEverHeldCommitment = existing.some((c) => !!c.districtCommitment);
+	return applyDowngradeGuardFromHistory(hasEverHeldCommitment, incomingCommitment);
+}
+
+/**
+ * Apply the same guard from a storage-layer lifetime existence proof. This lets
+ * Convex use a constant-cardinality exact-index probe while pure callers and
+ * legacy tests can continue passing credential rows to `applyDowngradeGuard`.
+ */
+export function applyDowngradeGuardFromHistory(
+	hasEverHeldCommitment: boolean,
+	incomingCommitment: string | undefined
+): DowngradeGuardResult {
 	if (hasEverHeldCommitment && !incomingCommitment) {
 		return 'ADDRESS_VERIFICATION_COMMITMENT_DOWNGRADE';
 	}

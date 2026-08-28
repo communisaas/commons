@@ -11,6 +11,11 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Load .env file for tests (needed for smoke tests that hit real APIs)
 const env = loadEnv('test', process.cwd(), '');
 Object.assign(process.env, env);
+const TEST_RELEASE_SHA =
+	typeof process.env.VITE_RELEASE_SHA === 'string' &&
+	/^[a-f0-9]{40}$/.test(process.env.VITE_RELEASE_SHA)
+		? process.env.VITE_RELEASE_SHA
+		: '0'.repeat(40);
 
 /**
  * Test-only module resolver:
@@ -22,10 +27,14 @@ Object.assign(process.env, env);
  */
 function testModuleStubsPlugin(): Plugin {
 	const sentryStubPath = path.join(__dirname, 'tests/mocks/sentry-stub.ts');
+	const publicEnvStubPath = path.join(__dirname, 'tests/mocks/public-env-stub.ts');
 	return {
 		name: 'test-module-stubs',
 		enforce: 'pre',
 		resolveId(source) {
+			if (source === '$env/dynamic/public') {
+				return publicEnvStubPath;
+			}
 			if (
 				source === '$lib/server/monitoring/sentry' ||
 				source.endsWith('/src/lib/server/monitoring/sentry.ts') ||
@@ -41,6 +50,13 @@ function testModuleStubsPlugin(): Plugin {
 }
 
 export default defineConfig({
+	define: {
+		// Production receives the source-verified SHA from the deploy workflow.
+		// Unit tests use a syntactically valid sentinel so readiness behavior can
+		// be exercised without pretending a mutable runtime variable is identity.
+		'import.meta.env.VITE_RELEASE_SHA': JSON.stringify(TEST_RELEASE_SHA),
+		'import.meta.env.VITE_RUNTIME_CONTAINMENT_MODE': JSON.stringify('disabled')
+	},
 	plugins: [
 		testModuleStubsPlugin(),
 		sveltekit(),
@@ -61,7 +77,10 @@ export default defineConfig({
 		conditions: ['node', 'import', 'module', 'default'],
 		alias: {
 			// Stub @voter-protocol/noir-prover in CI where the local package isn't linked
-			'@voter-protocol/noir-prover': path.join(__dirname, 'src/lib/core/crypto/voter-protocol-stub.ts')
+			'@voter-protocol/noir-prover': path.join(
+				__dirname,
+				'src/lib/core/crypto/voter-protocol-stub.ts'
+			)
 			// Note: $lib/server/monitoring/sentry stub is wired via testModuleStubsPlugin
 			// (pre-plugin) because SvelteKit's $lib resolver overrides resolve.alias.
 		}
@@ -91,6 +110,10 @@ export default defineConfig({
 			// `mount(...)` is not available on the server-side render path that
 			// runs under the current vitest jsdom + MSW config.
 			'tests/unit/components/GroundCard.test.ts',
+			// Both mount real components and hit the same `mount(...)` failure here.
+			// They pass in the components lane, which resolves the browser build.
+			'tests/unit/components/send-text-swap-race.test.ts',
+			'tests/unit/components/zzz-integrated-repro.test.ts',
 			// Behavioral first-paint test for the Datum spring primitive —
 			// needs the components-lane browser runtime to mount.
 			'tests/unit/components/datum-first-paint.test.ts',
@@ -112,6 +135,30 @@ export default defineConfig({
 			// REQUIRED_CONGRESSIONAL_PROOF_TIER). Components-lane only; the structural
 			// single-source lock runs in CI via congressional-delivery-tier.test.ts.
 			'tests/unit/components/congressional-delivery-gate.behavior.test.ts',
+			// Renders the preview footer to prove it equals the outgoing mailto body.
+			// Components-lane only; the builder semantics run in CI via
+			// tests/unit/identity/attestation-parity.test.ts.
+			'tests/unit/components/attestation-parity.test.ts',
+			// Mounts TemplatePreview across the sign-in round trip to prove a note the
+			// lane cannot carry is discarded, cleared and announced. Components-lane
+			// only; the lane decision itself runs in CI via tests/unit/send-lane.test.ts.
+			'tests/unit/components/template-preview-sender-text.test.ts',
+			// Mounts TemplateModal to prove the honest receipt and the unobserved
+			// hand-off state are actually rendered, not just declared. Components-lane
+			// only; the evidence table itself runs in CI via
+			// tests/unit/send-evidence-honesty.test.ts.
+			'tests/unit/components/send-handoff-honesty.test.ts',
+			'tests/unit/components/free-lane-exhaustion-copy.test.ts',
+			// Mounts the stranger's `/s/[slug]` send surface to prove an empty shared
+			// pool renders as the shared pool, not "temporarily unavailable".
+			// Components-lane only.
+			'tests/unit/components/stranger-pool-exhaustion-copy.test.ts',
+			'tests/unit/components/decision-maker-results-delivery-tier.test.ts',
+			// Mounts PowerLandscape for the per-row route sentence. Components-lane only.
+			'tests/unit/components/landscape-card-measured-route.test.ts',
+			// Mounts PowerLandscape and TemplatePreview with a stranger's props to prove the
+			// batch promise equals the addressable set. Components-lane only.
+			'tests/unit/components/arrival-reach-honesty.test.ts',
 			// Post-Convex migration: these tests reference deleted source files,
 			// missing Convex URL config, or stale assertions. Need rewriting against Convex.
 			'tests/integration/analytics-aggregate.test.ts',

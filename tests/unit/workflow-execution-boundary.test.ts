@@ -30,11 +30,27 @@ describe('workflow execution boundary', () => {
 		expect(workflows).toContain("if (context.supporter.emailStatus !== 'subscribed')");
 		expect(workflows).toContain('getOrgKeyForAction(ctx, context.org._id)');
 		expect(workflows).toContain('decryptOrgPii(');
-		expect(workflows).toContain('applyWorkflowMergeFields');
-		expect(workflows).toContain('sendViaSes(');
+		// Merge fields resolve through the one shared grammar, not a local twin.
+		expect(workflows).toContain("from './lib/emailMergeFields'");
+		expect(workflows).toContain(
+			"applyEmailMergeFields(step.emailSubject ?? '', mergeContext, 'header')"
+		);
+		// Delivery now uses the receipt-bearing SES boundary. A boolean-only
+		// result cannot distinguish an accepted message from an ambiguous
+		// transport outcome, so the workflow must settle only an exact message id
+		// and block the reservation on every ambiguous result.
+		expect(workflows).toContain('sendViaSesWithResult(');
+		expect(workflows).toContain('if (!result.ok || !result.messageId)');
+		expect(workflows).toContain('internal.workflows.blockWorkflowEmailDispatch');
+		expect(workflows).toContain('internal.workflows.settleWorkflowEmailDispatch');
+		expect(workflows).toContain('messageId: result.messageId');
 		expect(workflows).toContain('export const applySupporterTagStep = internalMutation');
 		expect(workflows).toContain("if (args.mode === 'add_tag')");
-		expect(workflows).toContain('await ctx.db.delete(existing._id)');
+		// Tag joins now update the compact supporter browse projection in the
+		// same mutation; direct insert/delete would leave recipient and segment
+		// reads stale.
+		expect(workflows).toContain('attachSupporterTagProjection(ctx');
+		expect(workflows).toContain('detachSupporterTagProjection(ctx, existing)');
 		expect(workflows).toContain("} else if (step.type === 'send_email') {");
 		expect(workflows).toContain(
 			"} else if (step.type === 'add_tag' || step.type === 'remove_tag') {"

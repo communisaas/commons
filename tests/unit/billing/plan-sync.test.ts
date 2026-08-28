@@ -1,184 +1,158 @@
 /**
- * Plan sync test: ensures the Convex PLANS mirror stays in sync with
- * the canonical SvelteKit plan definitions.
+ * Plan-table agreement between the two runtimes.
  *
- * The Convex mirror at convex/subscriptions.ts cannot be directly imported
- * into vitest (Convex server code). Instead, we assert the expected values
- * from the SvelteKit canonical source and the Convex mirror's known contract.
+ * The numbers live in exactly one module — convex/lib/planLimits.ts — which
+ * imports nothing, so both the Convex function boundary and the SvelteKit
+ * boundary can read it. The SvelteKit view (src/lib/server/billing/plans.ts)
+ * DERIVES from it, adding only lazy Stripe price-ID getters.
  *
- * If this test fails, update convex/subscriptions.ts PLANS to match.
+ * So this file no longer carries a hand-written expectation table (a second
+ * copy of the numbers is exactly the failure mode being removed). It imports
+ * both sides and asserts structural equality modulo `stripePriceId`. If the
+ * SvelteKit view ever degrades or omits a field, that assertion goes red.
+ *
+ * A source scan below is a TRIPWIRE against a NEW hand-copy appearing in some
+ * other module. It is not the proof of agreement — the `toStrictEqual` is.
  */
 
 import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
+import { PLANS, INDIVIDUAL_PLANS, PLAN_ORDER } from '$lib/server/billing/plans';
 import {
-	PLANS,
-	INDIVIDUAL_PLANS,
+	ORG_PLAN_LIMITS,
+	INDIVIDUAL_PLAN_LIMITS,
 	FREE_INDIVIDUAL_AUTHORED_PER_MONTH,
-	authoredPerMonthForPlan
-} from '$lib/server/billing/plans';
-import {
-	INDIVIDUAL_AUTHORED_PER_MONTH,
-	FREE_INDIVIDUAL_TEMPLATES_PER_MONTH
-} from '../../../convex/_individualAuthoringCap';
+	authoredLimitForPlan
+} from '$convex/lib/planLimits';
 
-/**
- * These values MUST match convex/subscriptions.ts PLANS exactly.
- * If you change plans.ts, update both this test AND convex/subscriptions.ts.
- */
-const EXPECTED_CONVEX_MIRROR = {
-	inactive: {
-		priceCents: 0,
-		maxSeats: 1,
-		maxTemplatesMonth: 2,
-		maxVerifiedActions: 0,
-		maxEmails: 0,
-		maxSms: 0
-	},
-	starter: {
-		priceCents: 1_000,
-		maxSeats: 5,
-		maxTemplatesMonth: 100,
-		maxVerifiedActions: 1_000,
-		maxEmails: 20_000,
-		maxSms: 1_000
-	},
-	organization: {
-		priceCents: 7_500,
-		maxSeats: 10,
-		maxTemplatesMonth: 500,
-		maxVerifiedActions: 5_000,
-		maxEmails: 100_000,
-		maxSms: 10_000
-	},
-	coalition: {
-		priceCents: 20_000,
-		maxSeats: 25,
-		maxTemplatesMonth: 1_000,
-		maxVerifiedActions: 10_000,
-		maxEmails: 250_000,
-		maxSms: 50_000
-	}
-} as const;
-
-describe('Plan Sync: SvelteKit ↔ Convex Mirror', () => {
-	it('should have the same plan slugs', () => {
-		const svelteSlugs = Object.keys(PLANS).sort();
-		const convexSlugs = Object.keys(EXPECTED_CONVEX_MIRROR).sort();
-		expect(svelteSlugs).toEqual(convexSlugs);
+describe('org plan table: SvelteKit view derives from the shared source', () => {
+	it('exposes exactly the shared slugs, in both directions', () => {
+		expect(Object.keys(PLANS).sort()).toEqual(Object.keys(ORG_PLAN_LIMITS).sort());
 	});
 
-	for (const [slug, expected] of Object.entries(EXPECTED_CONVEX_MIRROR)) {
+	for (const slug of Object.keys(ORG_PLAN_LIMITS)) {
 		describe(`${slug} plan`, () => {
-			const sveltePlan = PLANS[slug as keyof typeof PLANS];
-
-			it('priceCents matches', () => {
-				expect(sveltePlan.priceCents).toBe(expected.priceCents);
-			});
-
-			it('maxSeats matches', () => {
-				expect(sveltePlan.maxSeats).toBe(expected.maxSeats);
-			});
-
-			it('maxTemplatesMonth matches', () => {
-				expect(sveltePlan.maxTemplatesMonth).toBe(expected.maxTemplatesMonth);
-			});
-
-			it('maxVerifiedActions matches', () => {
-				expect(sveltePlan.maxVerifiedActions).toBe(expected.maxVerifiedActions);
-			});
-
-			it('maxEmails matches', () => {
-				expect(sveltePlan.maxEmails).toBe(expected.maxEmails);
-			});
-
-			it('maxSms matches', () => {
-				expect(sveltePlan.maxSms).toBe(expected.maxSms);
+			it('matches the shared limits exactly, field for field, modulo stripePriceId', () => {
+				const { stripePriceId: _priceId, ...rest } = PLANS[slug];
+				expect(rest).toStrictEqual(ORG_PLAN_LIMITS[slug]);
 			});
 		});
 	}
+
+	it('the inactive floor carries no Stripe price — it cannot be purchased', () => {
+		expect(PLANS.inactive.stripePriceId).toBe('');
+	});
 });
 
-/**
- * Individual (person-layer) paid authoring tiers must land in the 4 plan-literal
- * sites in lockstep (issue 6):
- *   1. convex/schema.ts subscriptions.plan union  (validates the persisted slug)
- *   2. convex/_validators.ts subscriptionPlan     (validates mutation args)
- *   3. src/lib/server/billing/plans.ts INDIVIDUAL_PLANS  (canonical price + limit)
- *   4. convex/subscriptions.ts INDIVIDUAL_PLANS    (Convex mirror — price + limit)
- *
- * This file directly imports the Convex-side authored-limit map
- * (_individualAuthoringCap.ts, which templates.ts reads) and the canonical
- * plans.ts INDIVIDUAL_PLANS. The schema/validator unions and the
- * subscriptions.ts mirror can't be imported into vitest (Convex server code), so
- * we assert the expected contract those sites MUST encode. If this fails, sync
- * the failing site.
- *
- * CRITICAL: individual plans must never carry org quotas, and org plans must
- * never appear in the individual maps. The two scopes can never read each other.
- */
-const EXPECTED_INDIVIDUAL_MIRROR = {
-	voice: { priceCents: 700, authoredPerMonth: 20 },
-	advocate: { priceCents: 2_000, authoredPerMonth: 75 }
-} as const;
-
-describe('Plan Sync: individual (person-layer) tiers across the 4 sites', () => {
-	it('the same individual slugs exist in plans.ts INDIVIDUAL_PLANS and the expected mirror', () => {
-		const sveltSlugs = Object.keys(INDIVIDUAL_PLANS).sort();
-		const expectedSlugs = Object.keys(EXPECTED_INDIVIDUAL_MIRROR).sort();
-		expect(sveltSlugs).toEqual(expectedSlugs);
+describe('individual (person-layer) tiers derive from the same source', () => {
+	it('exposes exactly the shared individual slugs, in both directions', () => {
+		expect(Object.keys(INDIVIDUAL_PLANS).sort()).toEqual(
+			Object.keys(INDIVIDUAL_PLAN_LIMITS).sort()
+		);
 	});
 
-	it('the Convex authored-limit map (_individualAuthoringCap.ts) holds the same slugs', () => {
-		const capSlugs = Object.keys(INDIVIDUAL_AUTHORED_PER_MONTH).sort();
-		expect(capSlugs).toEqual(Object.keys(EXPECTED_INDIVIDUAL_MIRROR).sort());
-	});
-
-	it('the free floor is 3 in BOTH the SvelteKit and Convex constants', () => {
-		expect(FREE_INDIVIDUAL_AUTHORED_PER_MONTH).toBe(3);
-		expect(FREE_INDIVIDUAL_TEMPLATES_PER_MONTH).toBe(3);
-	});
-
-	for (const [slug, expected] of Object.entries(EXPECTED_INDIVIDUAL_MIRROR)) {
+	for (const slug of Object.keys(INDIVIDUAL_PLAN_LIMITS)) {
 		describe(`${slug} individual tier`, () => {
-			const sveltePlan = INDIVIDUAL_PLANS[slug];
-
-			it('priceCents matches plans.ts', () => {
-				expect(sveltePlan.priceCents).toBe(expected.priceCents);
-			});
-
-			it('authoredPerMonth matches plans.ts', () => {
-				expect(sveltePlan.authoredPerMonth).toBe(expected.authoredPerMonth);
-			});
-
-			it('authoredPerMonth matches the Convex cap map (_individualAuthoringCap.ts)', () => {
-				expect(INDIVIDUAL_AUTHORED_PER_MONTH[slug]).toBe(expected.authoredPerMonth);
-			});
-
-			it('authoredPerMonthForPlan resolves it', () => {
-				expect(authoredPerMonthForPlan(slug)).toBe(expected.authoredPerMonth);
+			it('matches the shared limits exactly, modulo stripePriceId', () => {
+				const { stripePriceId: _priceId, ...rest } = INDIVIDUAL_PLANS[slug];
+				expect(rest).toStrictEqual(INDIVIDUAL_PLAN_LIMITS[slug]);
 			});
 
 			it('carries NO org quota fields (individual plans buy ONLY authoring volume)', () => {
-				const fields = sveltePlan as unknown as Record<string, unknown>;
+				const fields = INDIVIDUAL_PLANS[slug] as unknown as Record<string, unknown>;
 				expect(fields.maxEmails).toBeUndefined();
 				expect(fields.maxSms).toBeUndefined();
 				expect(fields.maxSeats).toBeUndefined();
 				expect(fields.maxTemplatesMonth).toBeUndefined();
 			});
+
+			it('authoredLimitForPlan resolves the tier limit', () => {
+				expect(authoredLimitForPlan(slug)).toBe(INDIVIDUAL_PLAN_LIMITS[slug].authoredPerMonth);
+			});
 		});
 	}
 
-	it('org PLANS and INDIVIDUAL_PLANS share NO slugs (no cross-contamination)', () => {
-		const orgSlugs = new Set(Object.keys(PLANS));
-		for (const indSlug of Object.keys(INDIVIDUAL_PLANS)) {
+	it('the free floor is 3', () => {
+		expect(FREE_INDIVIDUAL_AUTHORED_PER_MONTH).toBe(3);
+	});
+
+	it('an org slug, an unknown slug, or no slug resolves to the free floor — never higher', () => {
+		for (const plan of ['starter', 'organization', 'coalition', 'inactive', 'nonexistent', '']) {
+			expect(authoredLimitForPlan(plan)).toBe(FREE_INDIVIDUAL_AUTHORED_PER_MONTH);
+		}
+		expect(authoredLimitForPlan(null)).toBe(FREE_INDIVIDUAL_AUTHORED_PER_MONTH);
+		expect(authoredLimitForPlan(undefined)).toBe(FREE_INDIVIDUAL_AUTHORED_PER_MONTH);
+	});
+
+	it('org and individual tables share NO slugs (no cross-contamination)', () => {
+		const orgSlugs = new Set(Object.keys(ORG_PLAN_LIMITS));
+		for (const indSlug of Object.keys(INDIVIDUAL_PLAN_LIMITS)) {
 			expect(orgSlugs.has(indSlug)).toBe(false);
 		}
 	});
 
-	it('individual slugs are absent from PLAN_ORDER (not marketed org tiers)', async () => {
-		const { PLAN_ORDER } = await import('$lib/server/billing/plans');
-		for (const indSlug of Object.keys(INDIVIDUAL_PLANS)) {
+	it('individual slugs are absent from PLAN_ORDER (not marketed org tiers)', () => {
+		for (const indSlug of Object.keys(INDIVIDUAL_PLAN_LIMITS)) {
 			expect((PLAN_ORDER as readonly string[]).includes(indSlug)).toBe(false);
 		}
+	});
+});
+
+/**
+ * Tripwire, not proof. A quota literal anywhere under the billing runtimes
+ * except the one table means a second copy has appeared and can drift. The walk
+ * covers every non-test module under convex/ plus the SvelteKit billing
+ * directory; it deliberately cannot cover src/routes/, where a quota name may
+ * legitimately appear as a response payload field.
+ */
+const QUOTA_LITERAL =
+	/(maxVerifiedActions|maxEmails|maxSms|maxSeats|maxTemplatesMonth|addressResolvesMonth|agenticResolvesMonth|authoredPerMonth)\s*:\s*[0-9]/;
+
+const REPO_ROOT = process.cwd();
+const CANONICAL_TABLE = join('convex', 'lib', 'planLimits.ts');
+
+function scannedFiles(root: string): string[] {
+	const out: string[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir)) {
+			const full = join(dir, entry);
+			if (statSync(full).isDirectory()) {
+				if (entry === '_generated' || entry === 'node_modules') continue;
+				walk(full);
+				continue;
+			}
+			if (!entry.endsWith('.ts')) continue;
+			if (entry.endsWith('.test.ts')) continue;
+			const rel = relative(REPO_ROOT, full);
+			if (rel.split(sep).join('/') === CANONICAL_TABLE.split(sep).join('/')) continue;
+			out.push(rel);
+		}
+	};
+	walk(join(REPO_ROOT, root));
+	return out;
+}
+
+describe('one plan table, not N', () => {
+	const files = [...scannedFiles('convex'), ...scannedFiles(join('src', 'lib', 'server', 'billing'))];
+
+	it('scans the modules that previously hand-copied the table', () => {
+		const covered = [
+			'src/lib/server/billing/plans.ts',
+			'convex/subscriptions.ts',
+			'convex/_individualAuthoringCap.ts',
+			'convex/seed.ts',
+			'convex/organizations.ts',
+			'convex/workflows.ts'
+		];
+		const normalized = files.map((f) => f.split(sep).join('/'));
+		for (const f of covered) {
+			expect(normalized).toContain(f);
+		}
+	});
+
+	it('finds no quota literal outside convex/lib/planLimits.ts', () => {
+		const offenders = files.filter((f) => QUOTA_LITERAL.test(readFileSync(join(REPO_ROOT, f), 'utf8')));
+		expect(offenders).toEqual([]);
 	});
 });

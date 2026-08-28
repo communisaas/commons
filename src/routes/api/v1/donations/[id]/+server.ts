@@ -9,7 +9,7 @@ import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ params, request }) => {
@@ -26,7 +26,8 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	const donation = await serverQuery(api.v1api.getDonationById, {
 		_secret: getInternalSecret(),
 		donationId: params.id,
-		orgId: auth.orgId});
+		orgId: auth.orgId
+	});
 	if (!donation) return apiError('NOT_FOUND', 'Donation not found', 404);
 
 	return apiOk({

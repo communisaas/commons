@@ -9,7 +9,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
 export const PATCH: RequestHandler = async ({ request, params }) => {
@@ -38,7 +38,8 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		_secret: getInternalSecret(),
 		tagId: params.id,
 		orgId: auth.orgId,
-		name: name.trim()});
+		name: name.trim()
+	});
 	if (!result) return apiError('NOT_FOUND', 'Tag not found', 404);
 	if ('duplicate' in result)
 		return apiError('CONFLICT', 'A tag with this name already exists', 409);
@@ -58,7 +59,8 @@ export const DELETE: RequestHandler = async ({ request, params }) => {
 	const deleted = await serverMutation(api.v1api.deleteTag, {
 		_secret: getInternalSecret(),
 		tagId: params.id,
-		orgId: auth.orgId});
+		orgId: auth.orgId
+	});
 	if (!deleted) return apiError('NOT_FOUND', 'Tag not found', 404);
 
 	return apiOk({ deleted: true });

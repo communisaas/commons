@@ -20,10 +20,19 @@
  * constant-time / dual-secret-rotation logic is never duplicated here.
  */
 
-import { mutation, query, internalAction, internalMutation, internalQuery } from './_generated/server';
+import {
+	mutation,
+	query,
+	internalAction,
+	internalMutation,
+	internalQuery
+} from './_generated/server';
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { requireInternalSecret } from './_internalAuth';
+import { AGENTIC_RESOLVE_PROVIDER_UNITS } from './lib/planLimits';
+import { durablyActive, uniqueSubscriptionForOrg } from './subscriptions';
+import { absent, blocked, present, type Fact } from '../src/lib/core/fact';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -32,12 +41,18 @@ declare const process: { env: Record<string, string | undefined> };
 // read-side mirror used for arg validation and the meterless period scan).
 const meterValidator = v.union(
 	v.literal('resolve_address'),
+	v.literal('agentic_resolve'),
 	// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
 	v.literal('resolve_district'),
 	v.literal('resolve_officials')
 );
 
-const METERS = ['resolve_address', 'resolve_district', 'resolve_officials'] as const;
+const METERS = [
+	'resolve_address',
+	'agentic_resolve',
+	'resolve_district',
+	'resolve_officials'
+] as const;
 type Meter = (typeof METERS)[number];
 
 /**
@@ -79,6 +94,17 @@ export const recordUsage = mutation({
 			return existing._id;
 		}
 
+		// Agentic resolve is an entitlement counter, never a billable overage.
+		// getUnreportedUsage selects `reportedToProvider === undefined` without
+		// filtering by meter, so an unstamped row could otherwise be posted to
+		// Stripe by drainUsageToProvider. Birth-stamp it as terminal instead.
+		const entitlementTerminal =
+			args.meter === 'agentic_resolve'
+				? {
+						reportedToProvider: true as const,
+						providerEventId: `entitlement:${args.requestId}`
+					}
+				: {};
 		const id = await ctx.db.insert('usageRecords', {
 			orgId: args.orgId,
 			// LATENT (2026-07-03): keyId is written but never read — reserved per-API-key usage attribution; no reader exists yet
@@ -87,7 +113,8 @@ export const recordUsage = mutation({
 			quantity: args.quantity,
 			occurredAt: args.occurredAt,
 			requestId: args.requestId,
-			billingPeriodStart: args.billingPeriodStart
+			billingPeriodStart: args.billingPeriodStart,
+			...entitlementTerminal
 		});
 
 		// Upsert the O(1) period counter in THIS transaction (ledger + counter
@@ -163,6 +190,127 @@ export const getUsageForPeriod = query({
 		}
 
 		return totals;
+	}
+});
+
+type AgenticProviderBalance = Readonly<{
+	balanceUnits: number;
+	allowance: number;
+}>;
+
+/**
+ * Decide whether an authenticated caller may consume one agentic resolve.
+ * Scope follows the context the caller DECLARES and this query VERIFIES: a call
+ * with no declared org is a person acting for themselves and stays on the free
+ * person lane, whatever org rooms that human also happens to belong to.
+ * Membership can only ADD capacity, never withhold admission
+ * (`docs/strategy/monetization-policy.md:105`). A declared org resolves its
+ * entitlement from its durable paid subscription and the existing period
+ * counter, with one indexed read at each step and no ledger scan.
+ */
+export const agenticResolveAdmission = query({
+	args: {
+		_secret: v.string(),
+		userId: v.id('users'),
+		orgSlug: v.optional(v.string())
+	},
+	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
+
+		// Shapes that would defeat this rule, and why each is safe:
+		// (i)   an org operator omitting orgSlug to dodge metering — lands on the
+		//       per-actor free lane (2 DM lookups/hr authenticated, 10 ops/day;
+		//       `docs/strategy/monetization-policy.md:86-89`), strictly smaller
+		//       than any paid grant and identical to what any human gets, so the
+		//       guard is not satisfiable-for-profit by the thing it forbids.
+		// (ii)  a non-member declaring someone else's slug — the (userId, orgId)
+		//       equality fails, so the caller lands on the person lane, no org is
+		//       billed, and the reply is byte-identical to an unknown slug, so org
+		//       existence does not leak.
+		// (iii) an unknown or mistyped slug — person lane, never a 5xx.
+		// (iv)  a human in many orgs — the DECLARED slug decides which org is
+		//       billed, not whichever membership the index happened to yield.
+		const declared = args.orgSlug?.trim();
+		if (!declared) return { scope: 'individual' as const };
+
+		const org = await ctx.db
+			.query('organizations')
+			.withIndex('by_slug', (q) => q.eq('slug', declared))
+			.first();
+		if (!org) return { scope: 'individual' as const };
+
+		const membership = await ctx.db
+			.query('orgMemberships')
+			.withIndex('by_userId_orgId', (q) => q.eq('userId', args.userId).eq('orgId', org._id))
+			.first();
+		if (!membership) return { scope: 'individual' as const };
+
+		const sub = await uniqueSubscriptionForOrg(ctx, org._id);
+		const plan = durablyActive(sub) ? (sub?.plan ?? 'inactive') : 'inactive';
+		const billingPeriodStart = sub?.currentPeriodStart ?? 0;
+		const billingPeriodEnd = sub?.currentPeriodEnd ?? 0;
+		const periodValid =
+			Number.isSafeInteger(billingPeriodStart) &&
+			billingPeriodStart >= 0 &&
+			Number.isSafeInteger(billingPeriodEnd) &&
+			billingPeriodEnd > billingPeriodStart;
+
+		let providerBalance: Fact<AgenticProviderBalance>;
+		if (plan === 'inactive') {
+			providerBalance = absent();
+		} else if (!sub || !periodValid) {
+			providerBalance = blocked('active subscription has no authoritative billing period');
+		} else {
+			const balanceRows = await ctx.db
+				.query('agenticProviderBalances')
+				.withIndex('by_orgId_period', (q) =>
+					q.eq('orgId', org._id).eq('billingPeriodStart', billingPeriodStart)
+				)
+				.take(2);
+			if (balanceRows.length === 0) {
+				providerBalance = blocked('settled capacity was not found at the active billing period');
+			} else if (balanceRows.length > 1) {
+				providerBalance = blocked('provider balance cardinality requires repair');
+			} else {
+				const balance = balanceRows[0]!;
+				const balanceValid =
+					balance.subscriptionId === sub._id &&
+					balance.billingPeriodEnd === billingPeriodEnd &&
+					Number.isSafeInteger(balance.balanceUnits) &&
+					balance.balanceUnits >= 0 &&
+					balance.balanceUnits % AGENTIC_RESOLVE_PROVIDER_UNITS === 0;
+				providerBalance = balanceValid
+					? present({
+							balanceUnits: balance.balanceUnits,
+							allowance: balance.balanceUnits / AGENTIC_RESOLVE_PROVIDER_UNITS
+						})
+					: blocked('provider balance does not match the active subscription period');
+			}
+		}
+		const counter = periodValid
+			? await ctx.db
+					.query('usagePeriodTotals')
+					.withIndex('by_orgId_meter_period', (q) =>
+						q
+							.eq('orgId', org._id)
+							.eq('meter', 'agentic_resolve')
+							.eq('billingPeriodStart', billingPeriodStart)
+					)
+					.first()
+			: null;
+		const used = counter?.count ?? 0;
+		const allowance = providerBalance.state === 'present' ? providerBalance.value.allowance : null;
+
+		return {
+			scope: 'org' as const,
+			orgId: org._id,
+			plan,
+			billingPeriodStart,
+			billingPeriodEnd,
+			providerBalance,
+			used,
+			allowed: allowance !== null && used < allowance
+		};
 	}
 });
 
@@ -386,7 +534,13 @@ function providerName(): string {
  * owns the Stripe SDK. The ledger above remains the source of truth either way.
  */
 function reportUsageInline(
-	records: { orgId: string; meter: string; quantity: number; occurredAt: number; requestId: string }[]
+	records: {
+		orgId: string;
+		meter: string;
+		quantity: number;
+		occurredAt: number;
+		requestId: string;
+	}[]
 ): { requestId: string; providerEventId: string }[] {
 	// Default (and P0): truthful Noop — externalizes nothing.
 	return records.map((r) => ({

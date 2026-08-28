@@ -1,0 +1,66 @@
+{
+	"schemaVersion": 1,
+	"enrollmentState": "pending-independent-signer",
+	"signatureNamespace": "commons-paid-provider-posture-v1",
+	"repository": "communisaas/commons",
+	"environment": "production",
+	"cloudflarePagesProject": "communique-site",
+	"maximumReceiptBytes": 32768,
+	"maximumSignatureBytes": 16384,
+	"maximumAllowedSignersBytes": 8192,
+	"maximumLifetimeSeconds": 21600,
+	"maximumCaptureAgeSeconds": 900,
+	"maximumFutureSkewSeconds": 60,
+	"maximumObservationLagSeconds": 300,
+	"minimumReleaseValiditySeconds": 10800,
+	"maximumBillingWindowSeconds": 2764800,
+	"sourceAuthorGithubUserIds": [19658882],
+	"independentSigner": {
+		"principal": null,
+		"githubUserId": null,
+		"keyFingerprint": null
+	},
+	"requiredLimitations": [
+		"Provider console/account facts are operator assertions countersigned by the independent posture signer; this verifier does not query provider billing APIs.",
+		"Cloudflare does not reveal deployed secret values; the operator and signer assert the protected credential inputs are the exact production Pages secrets.",
+		"Current usage may lag provider billing; Exa and Firecrawl pay-as-you-go authority is bounded by Commons' monthly Durable Object ceilings, while Gemini and Groq remain on Free plans with billing and pay-as-you-go disabled."
+	],
+	"providers": [
+		{
+			"provider": "exa",
+			"credentialSecretName": "EXA_API_KEY",
+			"credentialBinding": "cloudflare-pages:communique-site:production:secret:EXA_API_KEY",
+			"usageMetric": "monthly-spend-microusd",
+			"windowLimit": "100000000",
+			"minimumRemaining": "0",
+			"allowedBillingControls": ["payg-platform-monthly-ceiling"]
+		},
+		{
+			"provider": "firecrawl",
+			"credentialSecretName": "FIRECRAWL_API_KEY",
+			"credentialBinding": "cloudflare-pages:communique-site:production:secret:FIRECRAWL_API_KEY",
+			"usageMetric": "monthly-credits",
+			"windowLimit": "6000",
+			"minimumRemaining": "0",
+			"allowedBillingControls": ["payg-platform-monthly-ceiling"]
+		},
+		{
+			"provider": "gemini",
+			"credentialSecretName": "GEMINI_API_KEY",
+			"credentialBinding": "cloudflare-pages:communique-site:production:secret:GEMINI_API_KEY",
+			"usageMetric": "current-period-requests",
+			"windowLimit": null,
+			"minimumRemaining": "16",
+			"allowedBillingControls": ["free-no-payg"]
+		},
+		{
+			"provider": "groq",
+			"credentialSecretName": "GROQ_API_KEY",
+			"credentialBinding": "cloudflare-pages:communique-site:production:secret:GROQ_API_KEY",
+			"usageMetric": "current-period-requests",
+			"windowLimit": null,
+			"minimumRemaining": "9",
+			"allowedBillingControls": ["free-no-payg"]
+		}
+	]
+}

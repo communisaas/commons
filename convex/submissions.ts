@@ -14,11 +14,30 @@ import { requireInternalSecret } from './_internalAuth';
 import { CWCXmlGenerator } from './_cwcXml';
 import { selectActiveCredentialForUser } from './_credentialSelect';
 import { REQUIRED_CONGRESSIONAL_PROOF_TIER } from './_policy';
+import {
+	DELIVERABLE_PLACEHOLDER_DENYLIST,
+	manualFillReplacements,
+	resolvePlaceholders,
+	type TemplateReplacements
+} from './lib/messagePlaceholders';
+import { markPublicDiscoveryListDirty } from './lib/publicDiscovery';
+import { isCongressionalDelivery } from './lib/templateDeliveryMethod';
+import { syncCompactPublicDiscoveryProjection } from './lib/publicTemplateDiscoverySource';
+import { syncTemplateListProjection } from './lib/templateListProjection';
+import {
+	DAILY_ARRIVAL_BUCKET_MS,
+	TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS,
+	TEMPLATE_DISTRICT_COUNT_CAP,
+	TRUST_TIER_BUCKET_COUNT,
+	emptyDailyArrivalWindow,
+	emptyTrustTierBuckets,
+	isDailyArrivalWindowShape,
+	isTrustTierBucketShape
+} from './lib/publicAggregatePrivacy';
 
 // =============================================================================
 // SUBMISSIONS — ZK proof creation + congressional delivery
 // =============================================================================
-
 
 declare const process: { env: Record<string, string | undefined> };
 const WITNESS_TTL_MS = 30 * 60 * 1000; // 30 minutes
@@ -170,7 +189,7 @@ export const getCongressionalDeliveryReadiness = query({
 
 function getTemplateDeliveryError(template: CongressionalDeliveryTemplate | null): string | null {
 	if (!template) return 'CWC_TEMPLATE_NOT_FOUND';
-	if (template.deliveryMethod !== 'cwc') return 'CWC_TEMPLATE_NOT_CWC';
+	if (!isCongressionalDelivery(template.deliveryMethod)) return 'CWC_TEMPLATE_NOT_CWC';
 	if (template.status !== 'published' || !template.isPublic) return 'CWC_TEMPLATE_NOT_PUBLISHED';
 	if (!template.messageBody.trim()) return 'CWC_TEMPLATE_EMPTY_MESSAGE';
 	return null;
@@ -188,7 +207,11 @@ type CongressionalChamber = 'house' | 'senate';
 function normalizeCongressionalChamber(value: unknown): CongressionalChamber | null {
 	if (typeof value !== 'string') return null;
 	const normalized = value.trim().toLowerCase();
-	if (normalized === 'house' || normalized === 'representative' || normalized === 'representatives') {
+	if (
+		normalized === 'house' ||
+		normalized === 'representative' ||
+		normalized === 'representatives'
+	) {
 		return 'house';
 	}
 	if (normalized === 'senate' || normalized === 'senator' || normalized === 'senators') {
@@ -247,10 +270,11 @@ function missingTransportForChambers(
  * Pipeline:
  *   1. Validate required fields
  *   2. Atomic insert via internalMutation (idempotency + nullifier check)
- *   3. Schedule background tasks: deliverToCongress, registerEngagement
+ *   3. Schedule background congressional delivery
  */
 export const create = action({
 	args: {
+		_secret: v.string(),
 		templateId: v.string(),
 		proof: v.string(),
 		publicInputs: v.any(),
@@ -262,6 +286,12 @@ export const create = action({
 		idempotencyKey: v.optional(v.string())
 	},
 	handler: async (ctx, args): Promise<CreateSubmissionResult> => {
+		// This action schedules real congressional delivery. Keep the public
+		// Convex transport only as a server-to-server bridge: browser clients
+		// cannot reproduce the canonical proof/domain checks performed by the
+		// budgeted SvelteKit authority.
+		requireInternalSecret(args._secret);
+
 		// Auth check
 		const identity = await ctx.auth.getUserIdentity();
 		if (!identity) {
@@ -287,9 +317,12 @@ export const create = action({
 
 		assertCongressionalDeliveryLaunched();
 
-		const template: CongressionalDeliveryTemplate | null = await ctx.runQuery(internal.submissions.getTemplateForDelivery, {
-			templateId: args.templateId
-		});
+		const template: CongressionalDeliveryTemplate | null = await ctx.runQuery(
+			internal.submissions.getTemplateForDelivery,
+			{
+				templateId: args.templateId
+			}
+		);
 		assertDeliverableCongressionalTemplate(template);
 
 		// Compute pseudonymous ID (HMAC-SHA256 of userId)
@@ -301,7 +334,8 @@ export const create = action({
 		const credentialStatus: ActiveCredentialStatus = await ctx.runQuery(
 			internal.submissions.hasActiveDistrictCredential,
 			{
-				tokenIdentifier: identity.tokenIdentifier
+				tokenIdentifier: identity.tokenIdentifier,
+				asOf: Date.now()
 			}
 		);
 		if (!credentialStatus.active) {
@@ -309,19 +343,16 @@ export const create = action({
 		}
 		// Defense-in-depth congressional-floor gate at the Convex action, mirroring
 		// the SvelteKit endpoint (`/api/submissions/create/+server.ts`). This public
-		// Convex action is reachable directly via the Convex client by any
-		// authenticated user, so it re-enforces the floor independently of the
-		// SvelteKit path. Tiered floor: tier 2 (address-verified — district confirmed)
+		// Convex action requires the server-held internal secret, and it re-enforces
+		// the floor independently of the SvelteKit path. Tiered floor: tier 2
+		// (address-verified — district confirmed)
 		// DELIVERS; gov-ID (tier 4) raises the assurance BADGE, it is not the bar. The
 		// active-credential / revocation / nullifier checks above are independent of
 		// this threshold and are unchanged. MUST stay in sync with
 		// REQUIRED_CONGRESSIONAL_PROOF_TIER in the SvelteKit handler.
 		//
-		// NOTE: the canonical action-domain REBIND (recompute the domain from
-		// server-held inputs and reject mismatch) is performed by the SvelteKit
-		// resolver (`+server.ts`), NOT here — on the direct Convex path the domain
-		// in publicInputs is still self-referential. See follow-up note in the
-		// security review; closing it means moving the rebind into this action.
+		// The canonical action-domain rebind is performed by the only authorized
+		// external caller (`+server.ts`) before this secret-gated bridge is invoked.
 		//
 		// REQUIRED_CONGRESSIONAL_PROOF_TIER is imported from `convex/_policy` — the
 		// single source of truth shared with the SvelteKit handler + client gate.
@@ -351,22 +382,25 @@ export const create = action({
 		const actionId = (publicInputsTyped?.actionDomain as string) ?? args.templateId;
 
 		// Atomic insert: checks idempotency key + nullifier uniqueness
-		const result: InsertSubmissionResult = await ctx.runMutation(internal.submissions.insertSubmission, {
-			pseudonymousId,
-			templateId: args.templateId,
-			actionId,
-			proofHex: args.proof,
-			publicInputs: args.publicInputs,
-			nullifier: args.nullifier,
-			encryptedWitness: args.encryptedWitness,
-			witnessNonce: args.witnessNonce,
-			ephemeralPublicKey: args.ephemeralPublicKey,
-			teeKeyId: args.teeKeyId,
-			idempotencyKey: args.idempotencyKey,
-			witnessExpiresAt: Date.now() + WITNESS_TTL_MS,
-			issuingCredentialId,
-			trustTier: credentialStatus.trustTier
-		});
+		const result: InsertSubmissionResult = await ctx.runMutation(
+			internal.submissions.insertSubmission,
+			{
+				pseudonymousId,
+				templateId: args.templateId,
+				actionId,
+				proofHex: args.proof,
+				publicInputs: args.publicInputs,
+				nullifier: args.nullifier,
+				encryptedWitness: args.encryptedWitness,
+				witnessNonce: args.witnessNonce,
+				ephemeralPublicKey: args.ephemeralPublicKey,
+				teeKeyId: args.teeKeyId,
+				idempotencyKey: args.idempotencyKey,
+				witnessExpiresAt: Date.now() + WITNESS_TTL_MS,
+				issuingCredentialId,
+				trustTier: credentialStatus.trustTier
+			}
+		);
 
 		if (result.existing) {
 			// Idempotent retry — return existing submission
@@ -380,10 +414,6 @@ export const create = action({
 		// Schedule background tasks (fire-and-forget via Convex scheduler)
 		await ctx.scheduler.runAfter(0, internal.submissions.deliverToCongress, {
 			submissionId: result.submissionId
-		});
-
-		await ctx.scheduler.runAfter(0, internal.submissions.registerEngagement, {
-			userSubject: identity.subject
 		});
 
 		// promoteTier removed: trust tier escalation must wait until
@@ -480,7 +510,6 @@ export const insertSubmission = internalMutation({
 			publicInputs: args.publicInputs,
 			nullifier: args.nullifier,
 			encryptedWitness: args.encryptedWitness,
-			encryptedMessage: undefined,
 			witnessNonce: args.witnessNonce,
 			ephemeralPublicKey: args.ephemeralPublicKey,
 			teeKeyId: args.teeKeyId,
@@ -506,15 +535,16 @@ export const insertSubmission = internalMutation({
  * submissions.create action can pass through identity.tokenIdentifier directly.
  */
 export const hasActiveDistrictCredential = internalQuery({
-	args: { tokenIdentifier: v.string() },
-	handler: async (ctx, { tokenIdentifier }) => {
+	args: { tokenIdentifier: v.string(), asOf: v.number() },
+	handler: async (ctx, { tokenIdentifier, asOf }) => {
+		if (!Number.isSafeInteger(asOf) || asOf < 0) throw new Error('INVALID_QUERY_AS_OF');
 		const user = await ctx.db
 			.query('users')
 			.withIndex('by_tokenIdentifier', (q) => q.eq('tokenIdentifier', tokenIdentifier))
 			.unique();
 		if (!user) return { active: false as const, reason: 'user_not_found' };
 
-		const active = await selectActiveCredentialForUser(ctx, user._id);
+		const active = await selectActiveCredentialForUser(ctx, user._id, asOf);
 		if (!active) return { active: false as const, reason: 'revoked_or_expired' };
 
 		return {
@@ -641,11 +671,16 @@ export const recordDeliveryReceipt = internalMutation({
 	},
 	handler: async (ctx, args) => {
 		const now = Date.now();
-		const existing = await ctx.db
+		const existingRows = await ctx.db
 			.query('submissionDeliveryReceipts')
-			.withIndex('by_submissionId', (q) => q.eq('submissionId', args.submissionId))
-			.filter((q) => q.eq(q.field('recipientKey'), args.recipientKey))
-			.first();
+			.withIndex('by_submissionId_recipientKey', (q) =>
+				q.eq('submissionId', args.submissionId).eq('recipientKey', args.recipientKey)
+			)
+			.take(2);
+		if (existingRows.length > 1) {
+			throw new Error('SUBMISSION_DELIVERY_RECEIPT_CARDINALITY_REPAIR_REQUIRED');
+		}
+		const existing = existingRows[0];
 
 		const optional: Record<string, string | number | Id<'users'> | undefined> = {};
 		if (args.userId !== undefined) optional.userId = args.userId;
@@ -858,7 +893,7 @@ export const claimForAnchor = internalMutation({
 /**
  * Internal action: sweep submissions stuck in deliveryStatus='processing'.
  *
- * Runs every 2 minutes via cron. Threshold is 15 minutes — safely past the
+ * Runs every 5 minutes via cron. Threshold is 15 minutes — safely past the
  * Convex action timeout (~10 min) so we don't misclassify a legitimately slow
  * worker as stuck. The delivery path contains multiple external calls (TEE
  * resolve, Shadow Atlas, per-rep CWC), and a tight threshold would create
@@ -907,7 +942,7 @@ export const sweepStuckProcessing = internalAction({
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json',
-							'x-internal-secret': internalSecret,
+							'x-internal-secret': internalSecret
 						},
 						body: JSON.stringify({
 							code: 'SUBMISSION_SWEEP_REPEAT',
@@ -916,15 +951,15 @@ export const sweepStuckProcessing = internalAction({
 							context: {
 								submissionId: String(row._id),
 								deliveryAttempts: row.deliveryAttempts,
-								threshold: SWEEP_ALERT_THRESHOLD,
-							},
+								threshold: SWEEP_ALERT_THRESHOLD
+							}
 						}),
-						signal: AbortSignal.timeout(10_000),
+						signal: AbortSignal.timeout(10_000)
 					});
 				} catch (err) {
 					console.error(
 						'[sweepStuckProcessing] sweep-repeat alert failed:',
-						err instanceof Error ? err.message : String(err),
+						err instanceof Error ? err.message : String(err)
 					);
 				}
 			}
@@ -959,8 +994,9 @@ export const listStuckProcessing = internalQuery({
 	handler: async (ctx, args) => {
 		return await ctx.db
 			.query('submissions')
-			.withIndex('by_deliveryStatus', (q) => q.eq('deliveryStatus', 'processing'))
-			.filter((q) => q.lt(q.field('updatedAt'), args.olderThan))
+			.withIndex('by_deliveryStatus_updatedAt', (q) =>
+				q.eq('deliveryStatus', 'processing').lt('updatedAt', args.olderThan)
+			)
 			.take(100);
 	}
 });
@@ -1004,20 +1040,25 @@ export const listFailedAnchors = internalQuery({
 		//   relayer_config        — env/wallet fix needed, retry burns gas on a dead path
 		//   contract_invalid_proof — would have transitioned to 'divergent', not 'failed';
 		//                            included defensively in case of classifier drift
-		return await ctx.db
-			.query('submissions')
-			.withIndex('by_anchorStatus', (q) => q.eq('anchorStatus', 'failed'))
-			.filter((q) =>
-				q.and(
-					q.lt(q.field('updatedAt'), args.olderThan),
-					q.or(
-						q.eq(q.field('anchorResultKind'), undefined),
-						q.eq(q.field('anchorResultKind'), 'rpc_transient'),
-						q.eq(q.field('anchorResultKind'), 'contract_other_revert')
+		const resultKinds = [undefined, 'rpc_transient', 'contract_other_revert'] as const;
+		const pages = await Promise.all(
+			resultKinds.map((anchorResultKind) =>
+				ctx.db
+					.query('submissions')
+					.withIndex('by_anchorStatus_anchorResultKind_updatedAt', (q) =>
+						q
+							.eq('anchorStatus', 'failed')
+							.eq('anchorResultKind', anchorResultKind)
+							.lt('updatedAt', args.olderThan)
 					)
-				)
+					.order('asc')
+					.take(50)
 			)
-			.take(50);
+		);
+		return pages
+			.flat()
+			.sort((left, right) => left.updatedAt - right.updatedAt)
+			.slice(0, 50);
 	}
 });
 
@@ -1129,8 +1170,9 @@ export const listStuckAnchorPending = internalQuery({
 	handler: async (ctx, args) => {
 		return await ctx.db
 			.query('submissions')
-			.withIndex('by_anchorStatus', (q) => q.eq('anchorStatus', 'pending'))
-			.filter((q) => q.lt(q.field('updatedAt'), args.olderThan))
+			.withIndex('by_anchorStatus_updatedAt', (q) =>
+				q.eq('anchorStatus', 'pending').lt('updatedAt', args.olderThan)
+			)
 			.take(50);
 	}
 });
@@ -1564,8 +1606,7 @@ export const deliverToCongress = internalAction({
 					signal: AbortSignal.timeout(RESOLVER_FETCH_TIMEOUT_MS)
 				});
 			} catch (err) {
-				const isTimeout =
-					err instanceof DOMException && err.name === 'TimeoutError';
+				const isTimeout = err instanceof DOMException && err.name === 'TimeoutError';
 				const reason = isTimeout
 					? `resolver_timeout_${RESOLVER_FETCH_TIMEOUT_MS}ms`
 					: 'resolver_network_error';
@@ -1691,6 +1732,46 @@ export const deliverToCongress = internalAction({
 						status: 'processing'
 					});
 
+					// The authored letter carries bracket slots. Resolve them here, per
+					// official, because the addressee placeholders differ per official.
+					// This path holds no sender-typed text — the submission carries a proof,
+					// not a message body — so every manual-fill slot erases rather than
+					// travelling to a congressional office as literal bracket text.
+					const address = (resolved.constituent.address ?? {}) as Record<string, string>;
+					const wholeAddress =
+						address.street && address.city && address.state && address.zip
+							? `${address.street}, ${address.city}, ${address.state} ${address.zip}`
+							: null;
+					const officialName: string | null = official.name || null;
+					const honorific = official.chamber === 'senate' ? 'Sen.' : 'Rep.';
+					const replacements: TemplateReplacements = {
+						...manualFillReplacements(),
+						'[Name]': resolved.constituent.name || null,
+						'[Your Name]': resolved.constituent.name || null,
+						'[Address]': wholeAddress,
+						'[Your Address]': wholeAddress,
+						'[City]': address.city || null,
+						'[State]': address.state || null,
+						'[ZIP]': address.zip || null,
+						'[Zip Code]': address.zip || null,
+						'[Representative Name]': officialName,
+						'[Rep Name]': officialName,
+						'[Representative]': officialName ? `${honorific} ${officialName}` : null,
+						'[Senator Name]': official.chamber === 'senate' ? officialName : null,
+						'[Senator]':
+							official.chamber === 'senate' && officialName ? `Sen. ${officialName}` : null
+					};
+					// Anything else the validator would reject has no value here and must
+					// still leave. One array governs both sides, so a placeholder added to
+					// the denylist is resolved and validated without touching this code.
+					for (const placeholder of DELIVERABLE_PLACEHOLDER_DENYLIST) {
+						if (!(placeholder in replacements)) replacements[placeholder] = null;
+					}
+					const resolvedMessageBody = resolvePlaceholders(
+						template?.messageBody || template?.description || '',
+						replacements
+					);
+
 					const cwcXml = CWCXmlGenerator.generateUserAdvocacyXML({
 						template: {
 							id: String(submission.templateId),
@@ -1708,6 +1789,7 @@ export const deliverToCongress = internalAction({
 							representatives: { house: official, senate: [] }
 						},
 						_targetRep: official,
+						personalizedMessage: resolvedMessageBody,
 						proOrCon
 					});
 
@@ -1893,38 +1975,6 @@ export const deliverToCongress = internalAction({
 	}
 });
 
-/**
- * Internal action: Register engagement in Shadow Atlas (Tree 3).
- */
-export const registerEngagement = internalAction({
-	args: { userSubject: v.string() },
-	handler: async (ctx, args) => {
-		try {
-			// Look up user's wallet + identity commitment
-			// userSubject is the auth token subject — need to find user by email
-			// Default is the reference commons.email atlas; peer implementations
-			// override via SHADOW_ATLAS_URL set in the Convex dashboard.
-			// NOTE: distinct from PUBLIC_ATLAS_HOST (browser-side) — this var is
-			// read at Convex action runtime; both should point at the same atlas
-			// host for a coherent deployment. See docs/design/FEDERATION-DEPLOY.md.
-			const saUrl = process.env.SHADOW_ATLAS_URL || 'https://atlas.commons.email';
-
-			// This is fire-and-forget — failures are logged but don't block
-			const response = await fetch(`${saUrl}/api/engagement/register`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ userSubject: args.userSubject })
-			});
-
-			if (!response.ok) {
-				console.warn('[registerEngagement] Shadow Atlas returned:', response.status);
-			}
-		} catch (err) {
-			console.error('[registerEngagement] Failed:', err);
-		}
-	}
-});
-
 // promoteTier removed: it escalated trust tier unconditionally. Any
 // re-implementation must gate on verificationStatus === 'verified'.
 
@@ -1961,10 +2011,6 @@ export const incrementTemplateReach = internalMutation({
 		trustTier: v.optional(v.number())
 	},
 	handler: async (ctx, args) => {
-		const DAILY_WINDOW = 30;
-		const DISTRICT_CAP = 500;
-		const dayMs = 86400000;
-
 		// Resolve template by slug (same pattern as getTemplateForDelivery)
 		const template = await ctx.db
 			.query('templates')
@@ -1979,34 +2025,34 @@ export const incrementTemplateReach = internalMutation({
 		// Reach counter: union of districts that have ever delivered, plus a count.
 		const districts = template.deliveredDistricts ?? [];
 		const isNewDistrict = !districts.includes(args.districtCode);
-		const shouldTrackDistrict = isNewDistrict && districts.length < DISTRICT_CAP;
+		const shouldTrackDistrict = isNewDistrict && districts.length < TEMPLATE_DISTRICT_COUNT_CAP;
 		const newDistricts = shouldTrackDistrict ? [...districts, args.districtCode] : districts;
 
-		// Daily arrival rhythm: rolling 30-day window, oldest first. The last
-		// bucket is always the current day; older buckets shift left as days roll.
+		// Daily arrival rhythm: rolling window, oldest first. The last bucket is
+		// always the current day; older buckets shift left as days roll.
 		const verifiedAt = args.verifiedAt ?? Date.now();
-		const day = Math.floor(verifiedAt / dayMs) * dayMs;
-		let dailyArrivals = template.dailyArrivals ?? new Array(DAILY_WINDOW).fill(0);
-		if (dailyArrivals.length !== DAILY_WINDOW) {
-			dailyArrivals = new Array(DAILY_WINDOW).fill(0);
+		const day = Math.floor(verifiedAt / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+		let dailyArrivals = template.dailyArrivals ?? emptyDailyArrivalWindow();
+		if (!isDailyArrivalWindowShape(dailyArrivals)) {
+			dailyArrivals = emptyDailyArrivalWindow();
 		}
 		const lastDay = template.dailyArrivalsLastDay ?? day;
 		let newLastDay = lastDay;
 		if (day === lastDay) {
-			dailyArrivals[DAILY_WINDOW - 1]++;
+			dailyArrivals[TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1]++;
 		} else if (day > lastDay) {
-			const daysToShift = Math.min(DAILY_WINDOW, Math.floor((day - lastDay) / dayMs));
-			dailyArrivals = [
-				...dailyArrivals.slice(daysToShift),
-				...new Array(daysToShift).fill(0)
-			];
-			dailyArrivals[DAILY_WINDOW - 1]++;
+			const daysToShift = Math.min(
+				TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS,
+				Math.floor((day - lastDay) / DAILY_ARRIVAL_BUCKET_MS)
+			);
+			dailyArrivals = [...dailyArrivals.slice(daysToShift), ...new Array(daysToShift).fill(0)];
+			dailyArrivals[TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1]++;
 			newLastDay = day;
 		}
 		// else day < lastDay: out-of-order verifiedAt; drop the temporal update.
 
-		// Per-district counts: capped at DISTRICT_CAP. Read-time consumers
-		// (TemplateList per-row Ratio, hero Ratio) sort and truncate.
+		// Per-district counts: capped at TEMPLATE_DISTRICT_COUNT_CAP. Read-time
+		// consumers (TemplateList per-row Ratio, hero Ratio) sort and truncate.
 		let districtCounts = template.districtCounts ?? [];
 		const dcIdx = districtCounts.findIndex((d) => d.code === args.districtCode);
 		if (dcIdx >= 0) {
@@ -2016,21 +2062,25 @@ export const incrementTemplateReach = internalMutation({
 				updated,
 				...districtCounts.slice(dcIdx + 1)
 			];
-		} else if (districtCounts.length < DISTRICT_CAP) {
+		} else if (districtCounts.length < TEMPLATE_DISTRICT_COUNT_CAP) {
 			districtCounts = [...districtCounts, { code: args.districtCode, count: 1 }];
 		}
 
-		// Trust-tier breakdown: 6 buckets, index = tier 0-5.
-		let tierCounts = template.tierCounts ?? [0, 0, 0, 0, 0, 0];
-		if (tierCounts.length !== 6) {
-			tierCounts = [0, 0, 0, 0, 0, 0];
+		// Trust-tier breakdown: one bucket per tier, index = tier 0-5.
+		let tierCounts = template.tierCounts ?? emptyTrustTierBuckets();
+		if (!isTrustTierBucketShape(tierCounts)) {
+			tierCounts = emptyTrustTierBuckets();
 		}
-		if (args.trustTier !== undefined && args.trustTier >= 0 && args.trustTier <= 5) {
+		if (
+			args.trustTier !== undefined &&
+			args.trustTier >= 0 &&
+			args.trustTier <= TRUST_TIER_BUCKET_COUNT - 1
+		) {
 			tierCounts = [...tierCounts];
 			tierCounts[args.trustTier]++;
 		}
 
-		await ctx.db.patch(template._id, {
+		const templatePatch = {
 			verifiedSends: (template.verifiedSends || 0) + 1,
 			dailyArrivals,
 			dailyArrivalsLastDay: newLastDay,
@@ -2042,7 +2092,13 @@ export const incrementTemplateReach = internalMutation({
 						uniqueDistricts: newDistricts.length
 					}
 				: {})
-		});
+		};
+		await ctx.db.patch(template._id, templatePatch);
+		await syncTemplateListProjection(ctx, { ...template, ...templatePatch });
+		if (template.status === 'published' && template.isPublic) {
+			await syncCompactPublicDiscoveryProjection(ctx, { ...template, ...templatePatch });
+			await markPublicDiscoveryListDirty(ctx, 'aggregate');
+		}
 	}
 });
 
@@ -2089,15 +2145,15 @@ export const emitCongressionalAction = internalMutation({
 		ctx,
 		args
 	): Promise<
-		| { attributed: false; reason: 'template_not_found' | 'no_campaign' | 'cross_org' }
+		| { attributed: false; reason: 'template_not_found' | 'no_campaign' }
 		| { attributed: true; alreadySubmitted: boolean }
 	> => {
 		// Resolve the delivered template to a templates._id. Submissions carry
 		// either the Convex id or a slug (mirrors getTemplateForDelivery).
-		const normalizedTemplateId = (ctx.db as any).normalizeId?.(
-			'templates',
-			args.templateId
-		) as Id<'templates'> | null | undefined;
+		const normalizedTemplateId = (ctx.db as any).normalizeId?.('templates', args.templateId) as
+			| Id<'templates'>
+			| null
+			| undefined;
 		const template =
 			(normalizedTemplateId ? await ctx.db.get(normalizedTemplateId) : null) ??
 			(await ctx.db
@@ -2107,31 +2163,26 @@ export const emitCongressionalAction = internalMutation({
 		if (!template) {
 			return { attributed: false, reason: 'template_not_found' as const };
 		}
+		if (!template.orgId) {
+			return { attributed: false, reason: 'no_campaign' as const };
+		}
+		const orgId = template.orgId;
 
-		// Find the campaign that owns this template. Org-authored congressional
-		// campaigns set campaigns.templateId; person-layer sends against an
-		// unaffiliated public template have none.
-		//
-		// Defense-in-depth org-scope: only attribute to a campaign whose orgId
-		// matches the TEMPLATE's orgId. campaigns.create/update enforce template
-		// ownership at link time, but a stale cross-org link (or a future bypass)
-		// must not let Org B's congressional campaign siphon Org A's constituent
-		// actions — which would also leak A's districtHash/districtCode/trustTier
-		// via the campaign_action.created webhook. We verify the match rather than
-		// blindly taking .first() across orgs; if none matches, no-op the
-		// attribution (delivery + verifiedSends are unaffected upstream).
+		// Attribute only to the one active campaign owned by the template's org.
+		// Draft clones may share a template, but activation is a serialized writer
+		// invariant and this read fails closed if historical data violates it.
 		const linkedCampaigns = await ctx.db
 			.query('campaigns')
-			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
-			.collect();
-		const campaign = linkedCampaigns.find((c) => c.orgId === template.orgId) ?? null;
+			.withIndex('by_templateId_orgId_status', (q) =>
+				q.eq('templateId', template._id).eq('orgId', orgId).eq('status', 'ACTIVE')
+			)
+			.take(2);
+		if (linkedCampaigns.length > 1) {
+			throw new Error('CONGRESSIONAL_CAMPAIGN_ATTRIBUTION_MULTIPLICITY');
+		}
+		const campaign = linkedCampaigns[0] ?? null;
 		if (!campaign) {
-			// Distinguish "no campaign at all" from "only cross-org link(s) exist"
-			// so the reason is diagnosable, but both no-op the attribution.
-			return {
-				attributed: false,
-				reason: linkedCampaigns.length > 0 ? ('cross_org' as const) : ('no_campaign' as const)
-			};
+			return { attributed: false, reason: 'no_campaign' as const };
 		}
 
 		// Reuse the shared counter-maintaining create path. channel='congressional'
@@ -2181,10 +2232,10 @@ export const getTemplateForDelivery = internalQuery({
 	handler: async (ctx, args) => {
 		// Submissions may carry the Convex template id from UI DTOs or a slug
 		// from older clients. Support both, then apply delivery policy at caller.
-		const normalizedTemplateId = (ctx.db as any).normalizeId?.(
-			'templates',
-			args.templateId
-		) as Id<'templates'> | null | undefined;
+		const normalizedTemplateId = (ctx.db as any).normalizeId?.('templates', args.templateId) as
+			| Id<'templates'>
+			| null
+			| undefined;
 		const byId = normalizedTemplateId ? await ctx.db.get(normalizedTemplateId) : null;
 		const results =
 			byId ??
@@ -2297,34 +2348,43 @@ function deliveryProviderReceiptId(submissionId: Id<'submissions'>, recipientKey
  * ephemeral_public_key for submissions where witness has expired.
  * Called daily at 01:00 UTC by cron.
  */
+const SUBMISSION_WITNESS_CLEANUP_PAGE_SIZE = 32;
+
 export const cleanupExpiredWitnesses = internalMutation({
 	args: {},
 	handler: async (ctx) => {
 		const now = Date.now();
 
-		// Find submissions with expired witnesses
+		// Submission documents contain proofs and encrypted witnesses, so the due
+		// page stays far below the document-count limit. Clearing witnessExpiresAt
+		// is the durable cursor: scrubbed rows cannot pin page one forever.
 		const expired = await ctx.db
 			.query('submissions')
-			.withIndex('by_witnessExpiresAt')
+			.withIndex('by_witnessExpiresAt', (q) =>
+				q.gte('witnessExpiresAt', 0).lt('witnessExpiresAt', now)
+			)
 			.order('asc')
-			.take(500);
+			.take(SUBMISSION_WITNESS_CLEANUP_PAGE_SIZE + 1);
 
 		let cleaned = 0;
-		for (const sub of expired) {
-			if (sub.witnessExpiresAt && sub.witnessExpiresAt < now && sub.encryptedWitness) {
-				await ctx.db.patch(sub._id, {
-					encryptedWitness: '',
-					witnessNonce: undefined,
-					ephemeralPublicKey: undefined
-				});
-				cleaned++;
-			} else if (!sub.witnessExpiresAt || sub.witnessExpiresAt >= now) {
-				break; // sorted ascending, done
-			}
+		for (const sub of expired.slice(0, SUBMISSION_WITNESS_CLEANUP_PAGE_SIZE)) {
+			await ctx.db.patch(sub._id, {
+				encryptedWitness: '',
+				witnessNonce: undefined,
+				ephemeralPublicKey: undefined,
+				witnessExpiresAt: undefined,
+				witnessCleanedAt: now
+			});
+			cleaned++;
+		}
+
+		const hasMore = expired.length > SUBMISSION_WITNESS_CLEANUP_PAGE_SIZE;
+		if (hasMore) {
+			await ctx.scheduler.runAfter(0, internal.submissions.cleanupExpiredWitnesses, {});
 		}
 
 		console.log(`[cleanup-witness] Cleaned ${cleaned} expired witness records`);
-		return { cleaned };
+		return { cleaned, hasMore };
 	}
 });
 
@@ -2346,107 +2406,20 @@ export const getPublicById = internalQuery({
 });
 
 /**
- * Aggregate verified-submission stats for the homepage hero region.
+ * Retired direct-callable homepage aggregate.
  *
- * One scan over the `by_verificationStatus` index returns three derived
- * shapes — total count, daily-bucketed arrival rhythm, and top-district
- * composition — so SSR makes one round trip instead of three. Each
- * submission counted here is anchored on-chain individually
- * (`anchorTxHash` + `blockNumber`); the aggregate is publicly verifiable
- * by re-running the same scan.
- *
- * District composition uses k-anonymity: districts with fewer than
- * `K_ANON_THRESHOLD` verified sends in the window are folded into
- * `otherCount` rather than disclosed individually. Districts above the
- * threshold but outside the top N also fold into `otherCount`.
+ * The homepage no longer consumes this symbol. Its caller-controlled window
+ * and array sizes allowed a direct Convex client to force a full verified-row
+ * scan and attacker-sized allocations. Keep a tombstone for compatibility,
+ * and reject before reading the clock or database.
  */
 export const aggregateForHero = query({
 	args: {
 		windowDays: v.optional(v.number()),
 		topDistrictCount: v.optional(v.number())
 	},
-	handler: async (ctx, args) => {
-		const windowDays = args.windowDays ?? 30;
-		const topN = args.topDistrictCount ?? 6;
-		const dayMs = 86400000;
-		const now = Date.now();
-		const windowStart = now - windowDays * dayMs;
-		const K_ANON_THRESHOLD = 5;
-
-		// Range scan on verifiedAt within the verified status — bounded to
-		// the rolling window. Avoids the full-table scan that the prior
-		// `by_verificationStatus.collect()` triggered on every homepage SSR.
-		const verifiedSubs = await ctx.db
-			.query('submissions')
-			.withIndex('by_verificationStatus_verifiedAt', (q) =>
-				q.eq('verificationStatus', 'verified').gte('verifiedAt', windowStart)
-			)
-			.collect();
-
-		let count = 0;
-		const buckets: number[] = new Array(windowDays).fill(0);
-		const districtCounts = new Map<string, number>();
-		const tierCounts: number[] = [0, 0, 0, 0, 0, 0];
-
-		for (const s of verifiedSubs) {
-			if (s.verifiedAt === undefined) continue;
-			count++;
-			const dayIndex = Math.floor((s.verifiedAt - windowStart) / dayMs);
-			if (dayIndex >= 0 && dayIndex < windowDays) {
-				buckets[dayIndex]++;
-			}
-			if (s.resolvedDistrict) {
-				districtCounts.set(
-					s.resolvedDistrict,
-					(districtCounts.get(s.resolvedDistrict) ?? 0) + 1
-				);
-			}
-			if (s.trustTier !== undefined && s.trustTier >= 0 && s.trustTier <= 5) {
-				tierCounts[s.trustTier]++;
-			}
-		}
-
-		// Districts: split the leftover bucket into k-anon-suppressed (privacy
-		// floor) vs display-truncated (top-N cap). Same merged shape downstream
-		// for compactness, but caller can render the two semantics distinctly.
-		const sorted = [...districtCounts.entries()].sort((a, b) => b[1] - a[1]);
-		const topDistricts: Array<{ code: string; count: number }> = [];
-		let belowThresholdCount = 0;
-		let displayTruncationCount = 0;
-		for (const [code, c] of sorted) {
-			if (c < K_ANON_THRESHOLD) {
-				belowThresholdCount += c;
-			} else if (topDistricts.length < topN) {
-				topDistricts.push({ code, count: c });
-			} else {
-				displayTruncationCount += c;
-			}
-		}
-
-		// Tiers: apply the same k-anon floor. A single tier-5 user under a
-		// thin cohort would otherwise reveal a tier-5 presence to anyone
-		// viewing the homepage. Counts below threshold collapse to 0 in the
-		// returned shape; the suppressed mass is reflected via `count` minus
-		// the sum of revealed tiers (caller can compute the gap if needed).
-		const tierBreakdown = tierCounts.map((c, tier) => ({
-			tier,
-			count: c < K_ANON_THRESHOLD ? 0 : c
-		}));
-
-		return {
-			count,
-			windowDays,
-			windowStart,
-			windowEnd: now,
-			buckets,
-			topDistricts,
-			belowThresholdCount,
-			displayTruncationCount,
-			otherCount: belowThresholdCount + displayTruncationCount,
-			totalDistricts: districtCounts.size,
-			tierBreakdown,
-			kAnonymityThreshold: K_ANON_THRESHOLD
-		};
+	handler: async () => {
+		throw new Error('SUBMISSIONS_HERO_AGGREGATE_RETIRED');
 	}
 });
 
@@ -2510,6 +2483,10 @@ export const retryDelivery = action({
 // historical submissions. One-shot operations invoked at deployment time.
 // =============================================================================
 
+const SUBMISSION_BACKFILL_PAGE_ROWS = 100;
+const SUBMISSION_BACKFILL_PAGE_BYTES = 512 * 1024;
+const SUBMISSION_BACKFILL_CURSOR_MAX_BYTES = 2_048;
+
 /**
  * Internal: paginated user list for trustTier backfill driver.
  *
@@ -2519,9 +2496,21 @@ export const retryDelivery = action({
 export const _listUsersForTrustTierBackfill = internalQuery({
 	args: { paginationCursor: v.optional(v.string()), limit: v.number() },
 	handler: async (ctx, { paginationCursor, limit }) => {
-		const result = await ctx.db
-			.query('users')
-			.paginate({ numItems: limit, cursor: (paginationCursor ?? null) as any });
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > SUBMISSION_BACKFILL_PAGE_ROWS) {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_PAGE_SIZE_INVALID');
+		}
+		if (paginationCursor && paginationCursor.length > SUBMISSION_BACKFILL_CURSOR_MAX_BYTES) {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_CURSOR_INVALID');
+		}
+		const result = await ctx.db.query('users').paginate({
+			numItems: limit,
+			cursor: paginationCursor ?? null,
+			maximumRowsRead: limit + 1,
+			maximumBytesRead: SUBMISSION_BACKFILL_PAGE_BYTES
+		});
+		if (result.pageStatus === 'SplitRequired') {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_PAGE_SPLIT_REQUIRED');
+		}
 		return {
 			items: result.page
 				.filter((u) => u.tokenIdentifier !== undefined)
@@ -2544,21 +2533,43 @@ export const _listUsersForTrustTierBackfill = internalQuery({
 export const _patchTrustTierForPseudonymousId = internalMutation({
 	args: {
 		pseudonymousId: v.string(),
-		trustTier: v.number()
+		trustTier: v.number(),
+		cursor: v.optional(v.string())
 	},
-	handler: async (ctx, { pseudonymousId, trustTier }) => {
-		const subs = await ctx.db
+	handler: async (ctx, { pseudonymousId, trustTier, cursor }) => {
+		if (!pseudonymousId || pseudonymousId.length > 256) {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_PSEUDONYM_INVALID');
+		}
+		if (!Number.isSafeInteger(trustTier) || trustTier < 0 || trustTier > 5) {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_TIER_INVALID');
+		}
+		if (cursor && cursor.length > SUBMISSION_BACKFILL_CURSOR_MAX_BYTES) {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_CURSOR_INVALID');
+		}
+		const page = await ctx.db
 			.query('submissions')
 			.withIndex('by_pseudonymousId', (q) => q.eq('pseudonymousId', pseudonymousId))
-			.collect();
+			.paginate({
+				cursor: cursor ?? null,
+				numItems: SUBMISSION_BACKFILL_PAGE_ROWS,
+				maximumRowsRead: SUBMISSION_BACKFILL_PAGE_ROWS + 1,
+				maximumBytesRead: SUBMISSION_BACKFILL_PAGE_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('SUBMISSION_TRUST_BACKFILL_PAGE_SPLIT_REQUIRED');
+		}
 		let patched = 0;
-		for (const s of subs) {
+		for (const s of page.page) {
 			if (s.trustTier === undefined) {
 				await ctx.db.patch(s._id, { trustTier });
 				patched++;
 			}
 		}
-		return { patched };
+		return {
+			patched,
+			isDone: page.isDone,
+			continueCursor: page.isDone ? null : page.continueCursor
+		};
 	}
 });
 
@@ -2575,8 +2586,14 @@ export const _patchTrustTierForPseudonymousId = internalMutation({
  */
 export const backfillSubmissionTrustTier = internalAction({
 	args: { batchSize: v.optional(v.number()) },
-	handler: async (ctx, { batchSize }): Promise<{ usersProcessed: number; submissionsPatched: number; failed: number }> => {
-		const limit = batchSize ?? 100;
+	handler: async (
+		ctx,
+		{ batchSize }
+	): Promise<{ usersProcessed: number; submissionsPatched: number; failed: number }> => {
+		const limit = Math.min(
+			Math.max(Math.trunc(batchSize ?? 100), 1),
+			SUBMISSION_BACKFILL_PAGE_ROWS
+		);
 		let usersProcessed = 0;
 		let submissionsPatched = 0;
 		let failed = 0;
@@ -2584,21 +2601,36 @@ export const backfillSubmissionTrustTier = internalAction({
 		let paginationCursor: string | undefined;
 
 		while (!isDone) {
-			const batch: { items: Array<{ _id: Id<'users'>; tokenIdentifier: string; trustTier: number }>; continueCursor: string; isDone: boolean } = await ctx.runQuery(
-				internal.submissions._listUsersForTrustTierBackfill,
-				{ paginationCursor, limit }
-			);
+			const batch: {
+				items: Array<{ _id: Id<'users'>; tokenIdentifier: string; trustTier: number }>;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runQuery(internal.submissions._listUsersForTrustTierBackfill, {
+				paginationCursor,
+				limit
+			});
 			isDone = batch.isDone;
 			paginationCursor = batch.continueCursor;
 
 			for (const u of batch.items) {
 				try {
 					const pid = await computePseudonymousId(u.tokenIdentifier);
-					const result: { patched: number } = await ctx.runMutation(
-						internal.submissions._patchTrustTierForPseudonymousId,
-						{ pseudonymousId: pid, trustTier: u.trustTier }
-					);
-					submissionsPatched += result.patched;
+					let submissionCursor: string | undefined;
+					let submissionsDone = false;
+					while (!submissionsDone) {
+						const result: {
+							patched: number;
+							isDone: boolean;
+							continueCursor: string | null;
+						} = await ctx.runMutation(internal.submissions._patchTrustTierForPseudonymousId, {
+							pseudonymousId: pid,
+							trustTier: u.trustTier,
+							cursor: submissionCursor
+						});
+						submissionsPatched += result.patched;
+						submissionsDone = result.isDone;
+						submissionCursor = result.continueCursor ?? undefined;
+					}
 					usersProcessed++;
 				} catch (err) {
 					console.error(`[backfillSubmissionTrustTier] Failed user ${u._id}:`, err);
@@ -2621,9 +2653,21 @@ export const backfillSubmissionTrustTier = internalAction({
 export const _listTemplatesForAggregateBackfill = internalQuery({
 	args: { paginationCursor: v.optional(v.string()), limit: v.number() },
 	handler: async (ctx, { paginationCursor, limit }) => {
-		const result = await ctx.db
-			.query('templates')
-			.paginate({ numItems: limit, cursor: (paginationCursor ?? null) as any });
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > SUBMISSION_BACKFILL_PAGE_ROWS) {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_PAGE_SIZE_INVALID');
+		}
+		if (paginationCursor && paginationCursor.length > SUBMISSION_BACKFILL_CURSOR_MAX_BYTES) {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_CURSOR_INVALID');
+		}
+		const result = await ctx.db.query('templates').paginate({
+			numItems: limit,
+			cursor: paginationCursor ?? null,
+			maximumRowsRead: limit + 1,
+			maximumBytesRead: SUBMISSION_BACKFILL_PAGE_BYTES
+		});
+		if (result.pageStatus === 'SplitRequired') {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_PAGE_SPLIT_REQUIRED');
+		}
 		return {
 			items: result.page
 				.filter((t) => (t.verifiedSends ?? 0) > 0)
@@ -2641,8 +2685,41 @@ export const _listTemplatesForAggregateBackfill = internalQuery({
 });
 
 /**
- * Internal: derive dailyArrivals / districtCounts / tierCounts for one template
- * from its verified submissions, and patch the template with the result.
+ * Internal: read one bounded source page for a template aggregate backfill.
+ */
+export const _readTemplateAggregatePage = internalQuery({
+	args: { templateId: v.id('templates'), cursor: v.optional(v.string()) },
+	handler: async (ctx, { templateId, cursor }) => {
+		if (cursor && cursor.length > SUBMISSION_BACKFILL_CURSOR_MAX_BYTES) {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_CURSOR_INVALID');
+		}
+		const page = await ctx.db
+			.query('submissions')
+			.withIndex('by_templateId', (q) => q.eq('templateId', templateId))
+			.paginate({
+				cursor: cursor ?? null,
+				numItems: SUBMISSION_BACKFILL_PAGE_ROWS,
+				maximumRowsRead: SUBMISSION_BACKFILL_PAGE_ROWS + 1,
+				maximumBytesRead: SUBMISSION_BACKFILL_PAGE_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_PAGE_SPLIT_REQUIRED');
+		}
+		return {
+			items: page.page.map((submission) => ({
+				verificationStatus: submission.verificationStatus,
+				verifiedAt: submission.verifiedAt,
+				resolvedDistrict: submission.resolvedDistrict,
+				trustTier: submission.trustTier
+			})),
+			isDone: page.isDone,
+			continueCursor: page.isDone ? null : page.continueCursor
+		};
+	}
+});
+
+/**
+ * Internal: persist already-derived dailyArrivals / districtCounts / tierCounts.
  *
  * dailyArrivals is bucketed against a 30-day window ending at "today" (UTC).
  * districtCounts is the full per-district histogram, capped at 500 (matches
@@ -2650,63 +2727,44 @@ export const _listTemplatesForAggregateBackfill = internalQuery({
  * is a length-6 array indexed by trustTier 0-5.
  */
 export const _backfillOneTemplate = internalMutation({
-	args: { slug: v.string() },
-	handler: async (ctx, { slug }) => {
-		const DAILY_WINDOW = 30;
-		const DISTRICT_CAP = 500;
-		const dayMs = 86400000;
-		const now = Date.now();
-		const today = Math.floor(now / dayMs) * dayMs;
-		const oldestDay = today - (DAILY_WINDOW - 1) * dayMs;
-
-		const template = await ctx.db
-			.query('templates')
-			.withIndex('by_slug', (q) => q.eq('slug', slug))
-			.first();
+	args: {
+		templateId: v.id('templates'),
+		today: v.number(),
+		dailyArrivals: v.array(v.number()),
+		districtCounts: v.array(v.object({ code: v.string(), count: v.number() })),
+		tierCounts: v.array(v.number())
+	},
+	handler: async (ctx, args) => {
+		if (!Number.isSafeInteger(args.today) || args.today < 0) {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_DAY_INVALID');
+		}
+		if (
+			!isDailyArrivalWindowShape(args.dailyArrivals) ||
+			!isTrustTierBucketShape(args.tierCounts) ||
+			args.districtCounts.length > TEMPLATE_DISTRICT_COUNT_CAP ||
+			[
+				...args.dailyArrivals,
+				...args.tierCounts,
+				...args.districtCounts.map((row) => row.count)
+			].some((value) => !Number.isSafeInteger(value) || value < 0) ||
+			args.districtCounts.some((row) => !row.code || row.code.length > 32)
+		) {
+			throw new Error('TEMPLATE_AGGREGATE_BACKFILL_INPUT_INVALID');
+		}
+		const template = await ctx.db.get(args.templateId);
 		if (!template) return { patched: false };
 
-		const subs = await ctx.db
-			.query('submissions')
-			.withIndex('by_templateId', (q) => q.eq('templateId', template._id))
-			.collect();
-
-		const dailyArrivals: number[] = new Array(DAILY_WINDOW).fill(0);
-		const districtMap = new Map<string, number>();
-		const tierCounts: number[] = [0, 0, 0, 0, 0, 0];
-
-		for (const s of subs) {
-			if (s.verificationStatus !== 'verified') continue;
-			if (s.verifiedAt !== undefined) {
-				const day = Math.floor(s.verifiedAt / dayMs) * dayMs;
-				if (day >= oldestDay && day <= today) {
-					const dayIndex = Math.round((day - oldestDay) / dayMs);
-					if (dayIndex >= 0 && dayIndex < DAILY_WINDOW) {
-						dailyArrivals[dayIndex]++;
-					}
-				}
-			}
-			if (s.resolvedDistrict) {
-				districtMap.set(
-					s.resolvedDistrict,
-					(districtMap.get(s.resolvedDistrict) ?? 0) + 1
-				);
-			}
-			if (s.trustTier !== undefined && s.trustTier >= 0 && s.trustTier <= 5) {
-				tierCounts[s.trustTier]++;
-			}
+		const templatePatch = {
+			dailyArrivals: args.dailyArrivals,
+			dailyArrivalsLastDay: args.today,
+			districtCounts: args.districtCounts,
+			tierCounts: args.tierCounts
+		};
+		await ctx.db.patch(template._id, templatePatch);
+		if (template.status === 'published' && template.isPublic) {
+			await syncCompactPublicDiscoveryProjection(ctx, { ...template, ...templatePatch });
+			await markPublicDiscoveryListDirty(ctx, 'aggregate');
 		}
-
-		const districtCounts = [...districtMap.entries()]
-			.sort((a, b) => b[1] - a[1])
-			.slice(0, DISTRICT_CAP)
-			.map(([code, count]) => ({ code, count }));
-
-		await ctx.db.patch(template._id, {
-			dailyArrivals,
-			dailyArrivalsLastDay: today,
-			districtCounts,
-			tierCounts
-		});
 
 		return { patched: true };
 	}
@@ -2724,23 +2782,93 @@ export const _backfillOneTemplate = internalMutation({
 export const backfillTemplateAggregates = internalAction({
 	args: { batchSize: v.optional(v.number()) },
 	handler: async (ctx, { batchSize }): Promise<{ processed: number; failed: number }> => {
-		const limit = batchSize ?? 50;
+		const limit = Math.min(Math.max(Math.trunc(batchSize ?? 50), 1), SUBMISSION_BACKFILL_PAGE_ROWS);
+		const today = Math.floor(Date.now() / DAILY_ARRIVAL_BUCKET_MS) * DAILY_ARRIVAL_BUCKET_MS;
+		const oldestDay = today - (TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS - 1) * DAILY_ARRIVAL_BUCKET_MS;
 		let processed = 0;
 		let failed = 0;
 		let isDone = false;
 		let paginationCursor: string | undefined;
 
 		while (!isDone) {
-			const batch: { items: Array<{ _id: Id<'templates'>; slug: string }>; continueCursor: string; isDone: boolean } = await ctx.runQuery(
-				internal.submissions._listTemplatesForAggregateBackfill,
-				{ paginationCursor, limit }
-			);
+			const batch: {
+				items: Array<{ _id: Id<'templates'>; slug: string }>;
+				continueCursor: string;
+				isDone: boolean;
+			} = await ctx.runQuery(internal.submissions._listTemplatesForAggregateBackfill, {
+				paginationCursor,
+				limit
+			});
 			isDone = batch.isDone;
 			paginationCursor = batch.continueCursor;
 
 			for (const t of batch.items) {
 				try {
-					await ctx.runMutation(internal.submissions._backfillOneTemplate, { slug: t.slug });
+					const dailyArrivals = emptyDailyArrivalWindow();
+					const districtMap = new Map<string, number>();
+					const tierCounts = emptyTrustTierBuckets();
+					let sourceCursor: string | undefined;
+					let sourceDone = false;
+					while (!sourceDone) {
+						const page: {
+							items: Array<{
+								verificationStatus?: string;
+								verifiedAt?: number;
+								resolvedDistrict?: string;
+								trustTier?: number;
+							}>;
+							isDone: boolean;
+							continueCursor: string | null;
+						} = await ctx.runQuery(internal.submissions._readTemplateAggregatePage, {
+							templateId: t._id,
+							cursor: sourceCursor
+						});
+						for (const submission of page.items) {
+							if (submission.verificationStatus !== 'verified') continue;
+							if (submission.verifiedAt !== undefined) {
+								const day =
+									Math.floor(submission.verifiedAt / DAILY_ARRIVAL_BUCKET_MS) *
+									DAILY_ARRIVAL_BUCKET_MS;
+								if (day >= oldestDay && day <= today) {
+									const dayIndex = Math.round((day - oldestDay) / DAILY_ARRIVAL_BUCKET_MS);
+									if (dayIndex >= 0 && dayIndex < TEMPLATE_DAILY_ARRIVAL_WINDOW_DAYS) {
+										dailyArrivals[dayIndex]++;
+									}
+								}
+							}
+							if (submission.resolvedDistrict) {
+								if (
+									!districtMap.has(submission.resolvedDistrict) &&
+									districtMap.size >= TEMPLATE_DISTRICT_COUNT_CAP
+								) {
+									throw new Error('TEMPLATE_AGGREGATE_DISTRICT_CARDINALITY_EXCEEDED');
+								}
+								districtMap.set(
+									submission.resolvedDistrict,
+									(districtMap.get(submission.resolvedDistrict) ?? 0) + 1
+								);
+							}
+							if (
+								submission.trustTier !== undefined &&
+								submission.trustTier >= 0 &&
+								submission.trustTier <= TRUST_TIER_BUCKET_COUNT - 1
+							) {
+								tierCounts[submission.trustTier]++;
+							}
+						}
+						sourceDone = page.isDone;
+						sourceCursor = page.continueCursor ?? undefined;
+					}
+					const districtCounts = [...districtMap.entries()]
+						.sort((a, b) => b[1] - a[1])
+						.map(([code, count]) => ({ code, count }));
+					await ctx.runMutation(internal.submissions._backfillOneTemplate, {
+						templateId: t._id,
+						today,
+						dailyArrivals,
+						districtCounts,
+						tierCounts
+					});
 					processed++;
 				} catch (err) {
 					console.error(`[backfillTemplateAggregates] Failed template ${t._id}:`, err);

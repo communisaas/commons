@@ -1,0 +1,46 @@
+name = "commons-public-template-og"
+main = "workers/public-template-og-consumer.ts"
+compatibility_date = "2026-07-20"
+workers_dev = false
+preview_urls = false
+
+[limits]
+cpu_ms = 100
+
+[vars]
+PUBLIC_CONVEX_URL = "https://quirky-chinchilla-352.convex.cloud"
+
+[[r2_buckets]]
+binding = "PUBLIC_DISCOVERY_R2"
+bucket_name = "commons-public-discovery-cache"
+
+[[queues.consumers]]
+queue = "commons-public-template-og"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 2
+max_concurrency = 1
+retry_delay = 120
+dead_letter_queue = "commons-public-template-og-dlq"
+
+[env.preview]
+name = "commons-public-template-og-nonprod"
+
+[env.preview.limits]
+cpu_ms = 100
+
+[env.preview.vars]
+PUBLIC_CONVEX_URL = "https://outstanding-firefly-831.convex.cloud"
+
+[[env.preview.r2_buckets]]
+binding = "PUBLIC_DISCOVERY_R2"
+bucket_name = "commons-public-discovery-cache-nonprod"
+
+[[env.preview.queues.consumers]]
+queue = "commons-public-template-og-nonprod"
+max_batch_size = 1
+max_batch_timeout = 1
+max_retries = 2
+max_concurrency = 1
+retry_delay = 120
+dead_letter_queue = "commons-public-template-og-nonprod-dlq"

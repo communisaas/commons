@@ -14,13 +14,14 @@
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
-import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
+import { webhookPolicyError } from '$lib/server/api-v1/webhook-policy';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ request }) => {
+export const GET: RequestHandler = async ({ request, url }) => {
 	requirePublicApi();
 	const auth = await authenticateApiKey(request);
 	if (auth instanceof Response) return auth;
@@ -29,12 +30,19 @@ export const GET: RequestHandler = async ({ request }) => {
 	const scopeErr = requireScope(auth, 'read');
 	if (scopeErr) return scopeErr;
 
+	const { cursor, limit } = parsePagination(url);
 	const hooks = await serverQuery(api.v1api.listWebhooks, {
 		_secret: getInternalSecret(),
-		orgId: auth.orgId
+		orgId: auth.orgId,
+		limit,
+		cursor: cursor ?? undefined
 	});
 
-	return apiOk(hooks);
+	return apiOk(hooks.items, {
+		cursor: hooks.cursor,
+		hasMore: hooks.hasMore,
+		total: hooks.total
+	});
 };
 
 export const POST: RequestHandler = async ({ request }) => {
@@ -62,14 +70,12 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (!url || typeof url !== 'string') {
 		return apiError('BAD_REQUEST', 'url is required', 400);
 	}
-	if (url.length > 2048) {
-		return apiError('BAD_REQUEST', 'url must be 2048 characters or fewer', 400);
-	}
-	if (!Array.isArray(events) || events.length === 0) {
+	if (
+		!Array.isArray(events) ||
+		events.length === 0 ||
+		!events.every((event) => typeof event === 'string')
+	) {
 		return apiError('BAD_REQUEST', 'events array is required (at least one)', 400);
-	}
-	if (events.length > 20) {
-		return apiError('BAD_REQUEST', 'events array may have at most 20 entries', 400);
 	}
 	if (description !== undefined && typeof description !== 'string') {
 		return apiError('BAD_REQUEST', 'description must be a string if provided', 400);
@@ -80,21 +86,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		orgId: auth.orgId,
 		url,
 		events,
-		description: description?.slice(0, 500)
+		description
 	});
 
-	if (result.error === 'invalid_url') {
-		return apiError('BAD_REQUEST', 'url is malformed', 400);
-	}
-	if (result.error === 'invalid_url_scheme') {
-		return apiError('BAD_REQUEST', 'url scheme must be http or https', 400);
-	}
-	if (result.error === 'empty_events') {
-		return apiError('BAD_REQUEST', 'events array cannot be empty', 400);
-	}
-	if (result.error === 'unknown_event') {
-		return apiError('BAD_REQUEST', `Unknown event type: ${result.event}`, 400);
-	}
+	const policyError = webhookPolicyError(
+		result.error,
+		'event' in result ? result.event : undefined
+	);
+	if (policyError) return policyError;
 	if (!result.webhook) {
 		return apiError('SERVER_ERROR', 'Webhook could not be created', 500);
 	}

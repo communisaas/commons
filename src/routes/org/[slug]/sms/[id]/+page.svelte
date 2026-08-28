@@ -37,6 +37,10 @@
 		batchLimit: number;
 		truncated: boolean;
 		hasMore: boolean;
+		pageCursor: string | null;
+		continueCursor: string | null;
+		scannedCount: number;
+		scanDone: boolean;
 		recipients: EncryptedTextRecipient[];
 	};
 
@@ -157,11 +161,25 @@
 			}
 
 			let batchCount = 0;
+			let pageCount = 0;
 			let latestResult: TextDispatchSummary | null = null;
-			while (cohort.recipients.length > 0) {
+			while (!cohort.scanDone || cohort.recipients.length > 0) {
+				pageCount += 1;
+				if (pageCount > 101)
+					throw new Error('Text audience cursor did not complete within its bound.');
+				if (cohort.recipients.length === 0) {
+					await convex.mutation(api.sms.advanceEmptyDispatchPage, {
+						slug: data.org.slug,
+						blastId: data.blast.id as Id<'smsBlasts'>,
+						pageCursor: cohort.pageCursor,
+						expectedTotalRecipients: cohort.eligibleCount
+					});
+					cohort = await loadCohort();
+					continue;
+				}
 				const recordedBefore = cohort.dispatchedCount;
 				const failedBefore = latestResult?.failedCount ?? data.blast.failedCount;
-				const finalBatch = !cohort.hasMore;
+				const finalBatch = cohort.scanDone;
 				batchCount += 1;
 
 				const result = await sendTextBatchFromClient({
@@ -169,6 +187,7 @@
 					blastId: data.blast.id,
 					orgKey,
 					encryptedRecipients: cohort.recipients,
+					pageCursor: cohort.pageCursor,
 					expectedTotalRecipients: cohort.eligibleCount,
 					finalBatch,
 					onProgress: (progress) => {
@@ -241,7 +260,7 @@
 			</div>
 
 			<div class="flex gap-2">
-				{#if data.blast.status === 'draft' || data.blast.status === 'sent'}
+				{#if data.blast.status === 'draft'}
 					<button
 						onclick={deleteBlast}
 						disabled={deleting}

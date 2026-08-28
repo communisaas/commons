@@ -23,28 +23,6 @@ const templatesApi = {
 			return { success: true, data: templateData, status: res.status };
 		}
 		return res as ApiResponse<T>;
-	},
-
-	async update<T = unknown>(
-		id: string,
-		template: Record<string, unknown>
-	): Promise<ApiResponse<T>> {
-		const res = await api.put(`/templates/${id}`, template);
-		if (
-			res.success &&
-			res.data &&
-			typeof res.data === 'object' &&
-			res.data !== null &&
-			'template' in res.data
-		) {
-			const templateData = (res.data as { template: T }).template;
-			return { success: true, data: templateData, status: res.status };
-		}
-		return res as ApiResponse<T>;
-	},
-
-	async delete<T = unknown>(id: string): Promise<ApiResponse<T>> {
-		return api.delete(`/templates/${id}`);
 	}
 };
 
@@ -208,6 +186,16 @@ function createTemplateStore() {
 		error: null,
 		initialized: false
 	});
+	// Every authoritative write advances the epoch. A slower API fallback may
+	// never overwrite SSR data (or a newer explicit fetch) that arrived later.
+	let writeEpoch = 0;
+	const settleAuthoritativeListWrite = (): void => {
+		writeEpoch += 1;
+		state.loading = false;
+		state.error = null;
+		state.lastUpdated = new Date();
+		state.initialized = true;
+	};
 
 	return {
 		// Getters - replace subscribe pattern
@@ -261,24 +249,25 @@ function createTemplateStore() {
 		 * expensive columns (updatedAt) and use raw DB shapes for scope/scopes.
 		 */
 		hydrateFromSSR(templates: Record<string, unknown>[]): void {
-			if (state.initialized && state.templates.length > 0) return; // Already hydrated
+			settleAuthoritativeListWrite();
 			state.templates = templates as unknown as Template[];
-			state.loading = false;
-			state.error = null;
-			state.lastUpdated = new Date();
-			state.initialized = true;
-			if (!state.selectedId && templates.length > 0) {
-				state.selectedId = (templates[0] as { id: string }).id;
+			if (
+				!state.selectedId ||
+				!templates.some((template) => (template as { id?: unknown }).id === state.selectedId)
+			) {
+				state.selectedId = (templates[0] as { id?: string } | undefined)?.id ?? null;
 			}
 		},
 
 		// API Integration with progressive enhancement
 		async fetchTemplates(): Promise<void> {
+			const requestEpoch = ++writeEpoch;
 			state.loading = true;
 			state.error = null;
 
 			try {
 				const result = await templatesApi.list<Template[]>();
+				if (requestEpoch !== writeEpoch) return;
 
 				if (!result.success) {
 					console.error('Template fetch failed:', result.error);
@@ -304,6 +293,7 @@ function createTemplateStore() {
 					state.selectedId = data[0]?.id || null;
 				}
 			} catch (error) {
+				if (requestEpoch !== writeEpoch) return;
 				const errorMessage = formatErrorMessage(error, 'Failed to fetch templates');
 				console.error('Template fetch failed:', errorMessage);
 				state.loading = false;
@@ -341,7 +331,7 @@ function createTemplateStore() {
 				// Update state directly
 				state.templates = [...state.templates, newTemplate];
 				state.selectedId = newTemplate.id; // Auto-select newly created template
-				state.error = null;
+				settleAuthoritativeListWrite();
 
 				return newTemplate;
 			} catch (error) {
@@ -352,56 +342,9 @@ function createTemplateStore() {
 			}
 		},
 
-		async updateTemplate(id: string, updates: Partial<Template>): Promise<Template> {
-			try {
-				const result = await templatesApi.update(id, updates);
-
-				if (!result.success) {
-					throw new Error(result.error || 'Failed to update template');
-				}
-
-				const updatedTemplate = result.data as Template;
-
-				// Type guard validation
-				if (!isTemplate(updatedTemplate)) {
-					throw new Error('Invalid template data received from API');
-				}
-
-				// Update state directly
-				state.templates = state.templates.map((t) => (t.id === id ? updatedTemplate : t));
-				state.error = null;
-
-				return updatedTemplate;
-			} catch (error) {
-				state.error = 'Failed to update template';
-				throw new Error('Failed to update template');
-			}
-		},
-
-		async deleteTemplate(id: string): Promise<void> {
-			try {
-				const result = await templatesApi.delete(id);
-
-				if (!result.success) {
-					throw new Error(result.error || 'Failed to delete template');
-				}
-
-				// Update state directly
-				const newTemplates = state.templates.filter((t) => t.id !== id);
-				const newSelectedId =
-					state.selectedId === id ? newTemplates[0]?.id || null : state.selectedId;
-
-				state.templates = newTemplates;
-				state.selectedId = newSelectedId;
-				state.error = null;
-			} catch (error) {
-				state.error = 'Failed to delete template';
-				throw new Error('Failed to delete template');
-			}
-		},
-
 		// Development helpers
 		reset(): void {
+			writeEpoch += 1;
 			state.templates = [];
 			state.selectedId = null;
 			state.loading = false;

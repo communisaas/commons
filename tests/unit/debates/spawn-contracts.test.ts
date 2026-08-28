@@ -82,7 +82,7 @@ describe('eligibility re-checks (idempotence boundary)', () => {
 			'export const forceSpawnDebateForCampaign'
 		);
 		for (const reason of ['no_campaign', 'already_spawned', 'disabled', 'no_template', 'below_threshold']) {
-			expect(atomic).toContain(`reason: "${reason}"`);
+			expect(atomic).toMatch(new RegExp(`reason:\\s*['"]${reason}['"]`));
 		}
 	});
 
@@ -93,11 +93,11 @@ describe('eligibility re-checks (idempotence boundary)', () => {
 			'ctx.db.insert'
 		);
 		expect(mutation).toContain('if (campaign.debateId) return');
-		expect(mutation).toContain('reason: "already_spawned"');
+		expect(mutation).toMatch(/reason:\s*['"]already_spawned['"]/);
 		expect(mutation).toContain(
 			'(campaign.verifiedActionCount ?? 0) < (campaign.debateThreshold ?? 0)'
 		);
-		expect(mutation).toContain('reason: "below_threshold"');
+		expect(mutation).toMatch(/reason:\s*['"]below_threshold['"]/);
 	});
 
 	it('force mutation re-checks debateId but skips the threshold', () => {
@@ -107,7 +107,7 @@ describe('eligibility re-checks (idempotence boundary)', () => {
 			'export const _getCampaignForSpawn'
 		);
 		expect(force).toContain('if (campaign.debateId) return');
-		expect(force).toContain('reason: "already_spawned"');
+		expect(force).toMatch(/reason:\s*['"]already_spawned['"]/);
 		expect(force).not.toContain('below_threshold');
 	});
 

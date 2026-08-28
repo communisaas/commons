@@ -62,15 +62,22 @@ export const FEATURES = {
 	/** Enhanced campaign analytics: delivery metrics, timelines, coordination integrity overlay */
 	ANALYTICS_EXPANDED: true,
 
+	/**
+	 * Anonymous analytics ingestion. Keep closed until the Convex writer owns a
+	 * durable per-actor/cell/day contribution ledger; isolate-local IP counters
+	 * cannot prove DP sensitivity or prevent database-I/O amplification.
+	 */
+	ANALYTICS_INGESTION: false,
+
 	/** Email A/B testing: two-variant split, winner selection, results comparison */
 	AB_TESTING: true,
 
 	/**
-	 * Server-side email dispatch from the org composer. Draft creation and
-	 * client-direct sends exist; the Convex server sender can be queued when
-	 * route-local SES, org-key, and unsubscribe runtime dependencies pass.
+	 * Bulk email dispatch launch gate. Draft authoring remains available, but
+	 * browser-direct credentials and every Convex carrier path stay closed until
+	 * a durable recipient-membership job makes retries immutable and idempotent.
 	 */
-	EMAIL_SERVER_DISPATCH: true,
+	EMAIL_SERVER_DISPATCH: false,
 
 	/**
 	 * Per-recipient merge-field substitution for client-direct Lambda sends.
@@ -125,7 +132,7 @@ export const FEATURES = {
 	 */
 	LEGISLATIVE_INTELLIGENCE_LIVE: false,
 
-	/** Accountability receipts: proof-weighted decision-maker tracking */
+	/** Accountability receipts: verified-action decision-maker tracking */
 	ACCOUNTABILITY: true,
 
 	/** Shadow Atlas client-side verification: browser computes district commitment (no plaintext to server) */

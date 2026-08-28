@@ -7,7 +7,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { getStripe } from '$lib/server/billing/stripe';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 

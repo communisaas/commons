@@ -7,8 +7,9 @@
 
 	import {
 		processDecisionMakers,
-		extractRecipientEmails
+		collectRecipientEmails
 	} from '$lib/utils/decision-maker-processing';
+	import { buildTopics, buildVoiceSample } from '$lib/utils/authoring-inputs';
 	import { parseSSEStream } from '$lib/utils/sse-stream';
 	import AgentThinking from '$lib/components/ui/AgentThinking.svelte';
 	import DecisionMakerResults from './DecisionMakerResults.svelte';
@@ -31,6 +32,37 @@
 	let stage = $state<Stage>('resolving');
 	let errorMessage = $state<string | null>(null);
 	let rateLimitResetAt = $state<string | null>(null);
+	/** Whose capacity ran out. Anything the server did not measure is `blocked`. */
+	type BudgetScope = 'actor' | 'platform' | 'blocked';
+	let budgetScope = $state<BudgetScope | null>(null);
+
+	function normalizeBudgetScope(value: unknown): BudgetScope {
+		return value === 'actor' || value === 'platform' ? value : 'blocked';
+	}
+
+	/**
+	 * A monthly pool resets up to thirty-one days out. Rendering that as a bare
+	 * time of day tells a person to come back in an hour, so the date shows
+	 * whenever the reset is not on today's local calendar day.
+	 */
+	function formatResetMoment(iso: string): string {
+		const reset = new Date(iso);
+		if (Number.isNaN(reset.getTime())) return 'later';
+		const now = new Date();
+		const sameDay =
+			reset.getFullYear() === now.getFullYear() &&
+			reset.getMonth() === now.getMonth() &&
+			reset.getDate() === now.getDate();
+		if (sameDay) {
+			return `at ${reset.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
+		}
+		return `on ${reset.toLocaleString([], {
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		})}`;
+	}
 	let isResolving = $state(false);
 	/** True when the resolved decision-makers were built for a now-stale subject. */
 	let audienceStale = $state(false);
@@ -49,36 +81,6 @@
 	};
 	let pendingIdentities = $state<PendingIdentity[]>([]);
 	let identitiesRevealed = $state(false);
-
-	/**
-	 * Build topics array with robust fallback chain
-	 * 1. Use topics array if populated with valid entries
-	 * 2. Fall back to domain (lowercased)
-	 * 3. Ultimate fallback - empty array (domain carries the signal now)
-	 */
-	function buildTopics(): string[] {
-		if (Array.isArray(formData.objective.topics) && formData.objective.topics.length > 0) {
-			const valid = formData.objective.topics.filter((t) => t && t.trim());
-			if (valid.length > 0) return valid;
-		}
-		if (formData.objective.domain && formData.objective.domain.trim()) {
-			return [formData.objective.domain.toLowerCase().trim()];
-		}
-		return [];
-	}
-
-	/**
-	 * Build voice sample with fallback chain
-	 * Prefer AI-extracted voiceSample, fall back to rawInput, then description
-	 */
-	function buildVoiceSample(): string {
-		return (
-			formData.objective.voiceSample ||
-			formData.objective.rawInput ||
-			formData.objective.description ||
-			''
-		);
-	}
 
 	/** Normalize a string for fuzzy matching (lowercase, strip leading "the", trim). */
 	function norm(s: string): string {
@@ -122,8 +124,8 @@
 				thoughts = [`Starting from: ${formData.objective.audienceGuidance}`];
 			}
 
-			const topics = buildTopics();
-			const voiceSample = buildVoiceSample();
+			const topics = buildTopics(formData.objective);
+			const voiceSample = buildVoiceSample(formData.objective);
 
 			const response = await fetch('/api/agents/stream-decision-makers', {
 				method: 'POST',
@@ -179,7 +181,12 @@
 				}
 
 				// Authenticated/verified user who exhausted quota → rate-limited
-				throw { _kind: 'rate-limited', resetAt: errorData.resetAt, message: errorData.error };
+				throw {
+					_kind: 'rate-limited',
+					resetAt: errorData.resetAt,
+					message: errorData.error,
+					budgetScope: errorData.budgetScope
+				};
 			}
 
 			if (!response.ok) {
@@ -311,6 +318,7 @@
 				stage = 'auth-required';
 			} else if (err?._kind === 'rate-limited') {
 				rateLimitResetAt = err.resetAt ?? null;
+				budgetScope = normalizeBudgetScope(err.budgetScope);
 				stage = 'rate-limited';
 			} else if (err instanceof Error && err.name === 'AbortError') {
 				errorMessage = 'Research took too long and was stopped. Please try again — it may go faster on retry.';
@@ -440,7 +448,7 @@
 		}
 
 		// Ensure recipientEmails is updated from decision-makers
-		formData.audience.recipientEmails = extractRecipientEmails(
+		formData.audience.recipientEmails = collectRecipientEmails(
 			formData.audience.decisionMakers,
 			formData.audience.customRecipients,
 			formData.audience.includesCongress
@@ -575,9 +583,16 @@
 					Research limit reached
 				</p>
 				<p class="mx-auto mt-2 max-w-md text-sm text-amber-700">
-					You've used all your decision-maker lookups for now.
+					{#if budgetScope === 'actor'}
+						You've used your share of the free research pool this month.
+					{:else if budgetScope === 'platform'}
+						The shared free research pool is empty until it resets. Nobody can run a
+						lookup until then.
+					{:else}
+						We couldn't confirm how much capacity is left.
+					{/if}
 					{#if rateLimitResetAt}
-						Resets at {new Date(rateLimitResetAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}.
+						Resets {formatResetMoment(rateLimitResetAt)}.
 					{/if}
 					You can still add recipients manually below.
 				</p>

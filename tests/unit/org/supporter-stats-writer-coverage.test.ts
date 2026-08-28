@@ -57,7 +57,10 @@ function isSupporterWriter(src: string): boolean {
 
 function listConvexSources(): Array<{ file: string; src: string }> {
 	return readdirSync(CONVEX_DIR)
-		.filter((f) => f.endsWith('.ts'))
+		// Convex integration fixtures deliberately write raw table rows to exercise
+		// migration and cutover behavior. They are not deployable production writers
+		// and must not expand this production-source ratchet's allowlist.
+		.filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
 		.map((file) => ({ file, src: readFileSync(path.join(CONVEX_DIR, file), 'utf8') }));
 }
 

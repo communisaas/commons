@@ -168,13 +168,18 @@ export interface ConversationState {
 // ============================================================================
 
 export interface GenerateOptions {
+	/** Reviewed paid-provider stage; selects immutable request ceilings. */
+	stage: import('./provider-call-envelope').GeminiProviderStage;
 	temperature?: number;
+	/** May lower a stage ceiling, never raise it. */
 	maxOutputTokens?: number;
 	thinkingLevel?: 'low' | 'medium' | 'high';
 	enableGrounding?: boolean;
 	responseSchema?: object;
 	systemInstruction?: string;
 	previousInteractionId?: string;
+	/** Propagated to the Gemini SDK so disconnect/cancellation stops local work. */
+	signal?: AbortSignal;
 	/**
 	 * When true, streams thinking summaries from Gemini.
 	 * IMPORTANT: This disables responseMimeType (incompatible with thoughts).
@@ -271,8 +276,10 @@ export interface CostBreakdown {
 		geminiOutput: number;
 		geminiThinking: number;
 		exaSearch: number;
+		exaContents: number;
 		firecrawlRead: number;
 		groundingSearch: number;
+		groqModeration: number;
 	};
 }
 

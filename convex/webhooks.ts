@@ -5,11 +5,11 @@
  * Stripe webhook processing is in convex/subscriptions.ts.
  */
 
-import { internalAction, internalMutation } from './_generated/server';
+import { internalAction, internalMutation, internalQuery } from './_generated/server';
 import { internal } from './_generated/api';
 import { v } from 'convex/values';
 import { smsMessageStatus as smsMessageStatusV } from './_validators';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
 /**
  * Unkeyed SHA-256 hash of normalized email — for cross-org bounce/complaint
  * correlation. No server-held secret key needed.
@@ -21,7 +21,43 @@ import type { Id } from './_generated/dataModel';
 // never match the stored row — SES bounce/complaint and TCPA
 // STOP/START would fail to find any supporter.
 import { computeGlobalEmailHash, computeGlobalPhoneHash } from './_orgHash';
-import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
+import {
+	applySupporterStatsDelta,
+	applySupporterStatsDeltaBatch,
+	type CountableSupporter
+} from './_supporterStats';
+import {
+	applyCampaignDeliveryTransitionReadModel,
+	applyCampaignVerifyClickReadModel
+} from './lib/campaignReadModelDb';
+import { ACCOUNTABILITY_RESPONSE_MAX } from './lib/accountabilityReadModel';
+import { syncAccountabilityReceiptProjection } from './lib/accountabilityReadModelDb';
+import {
+	applyDonationConfirmationTransition,
+	DONATION_CONFIRMATION_SUMMARY_VERSION
+} from './lib/donationConfirmationSummary';
+import { recordSmsReply, SMS_REPLY_SUMMARY_VERSION } from './lib/smsReplySummary';
+import {
+	CONTACT_AUTHORITY_MIGRATION_KEY,
+	CONTACT_AUTHORITY_MIGRATION_PAGE_MAX_BYTES,
+	CONTACT_AUTHORITY_MIGRATION_PAGE_SIZE,
+	CONTACT_FANOUT_CURSOR_MAX_BYTES,
+	CONTACT_FANOUT_INPUT_MAX,
+	CONTACT_FANOUT_MAX_ATTEMPTS,
+	CONTACT_FANOUT_OVERDUE_MS,
+	CONTACT_FANOUT_PAGE_MAX_BYTES,
+	CONTACT_FANOUT_PAGE_SIZE,
+	CONTACT_FANOUT_PAYLOAD_MAX_BYTES,
+	applyEmailAuthorityEvent,
+	applySmsAuthorityEvent,
+	contactFanoutPriority,
+	enqueueContactFanoutJob,
+	filterEmailSendAuthorized,
+	readContactAuthority,
+	seedContactAuthorityFromSupporter,
+	type ContactFanoutKind
+} from './lib/contactAuthority';
+import { syncEmailAbWinnerCandidate } from './lib/emailAbWinnerCandidate';
 
 type DeliveryResponseEvent = {
 	type: 'opened' | 'clicked_verify';
@@ -59,6 +95,27 @@ function isVerifyLink(linkUrl: string | undefined): boolean {
 	return /^\/(v|verify)\//.test(path);
 }
 
+const CONTACT_FANOUT_BACKOFF_MS = [5_000, 30_000, 120_000, 300_000, 900_000, 3_600_000];
+
+function boundedProviderEventId(value: string | undefined): string | undefined {
+	if (value === undefined) return undefined;
+	if (!value || value.length > 256) throw new Error('CONTACT_FANOUT_PROVIDER_EVENT_ID_INVALID');
+	return value;
+}
+
+function contactFanoutIdempotencyKey(
+	source: string,
+	providerEventId: string | undefined,
+	kind: ContactFanoutKind,
+	contactHash: string
+): string | undefined {
+	return providerEventId ? `${source}:${providerEventId}:${kind}:${contactHash}` : undefined;
+}
+
+async function scheduleContactFanoutDrain(ctx: { scheduler: any }): Promise<void> {
+	await ctx.scheduler.runAfter(0, (internal as any).webhooks.drainContactFanoutQueue, {});
+}
+
 // =============================================================================
 // SES WEBHOOK — INTERNAL MUTATIONS
 // =============================================================================
@@ -70,29 +127,45 @@ function isVerifyLink(linkUrl: string | undefined): boolean {
 export const updateSupporterEmailStatus = internalMutation({
 	args: {
 		emailHashes: v.array(v.string()),
-		status: v.string() // 'bounced' | 'complained'
+		status: v.string(), // 'bounced' | 'complained'
+		providerEventId: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		for (const hash of args.emailHashes) {
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', hash))
-				.collect();
-
-			for (const s of supporters) {
-				// Complaints always win — once complained, never re-emailed
-				if (args.status === 'bounced' && s.emailStatus === 'complained') continue;
-				if (s.emailStatus === args.status) continue; // no transition, no delta
-				await ctx.db.patch(s._id, { emailStatus: args.status, updatedAt: Date.now() });
-				// emailStatus transition — move this supporter between email
-				// buckets in its own org's breakdown counters (the lookup is
-				// cross-org, so each row carries its own orgId).
-				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
-					...(s as CountableSupporter),
-					emailStatus: args.status
-				});
-			}
+		if (args.status !== 'bounced' && args.status !== 'complained') {
+			throw new Error('CONTACT_FANOUT_EMAIL_STATUS_INVALID');
 		}
+		if (args.emailHashes.length < 1 || args.emailHashes.length > CONTACT_FANOUT_INPUT_MAX) {
+			throw new Error('CONTACT_FANOUT_EMAIL_HASH_BATCH_INVALID');
+		}
+		const providerEventId = boundedProviderEventId(args.providerEventId);
+		const hashes = [...new Set(args.emailHashes)];
+		let accepted = 0;
+		for (const hash of hashes) {
+			const kind = args.status === 'complained' ? 'email_set_complained' : 'email_set_bounced';
+			const result = await enqueueContactFanoutJob(ctx, {
+				kind,
+				contactHash: hash,
+				providerEventId,
+				idempotencyKey: contactFanoutIdempotencyKey('ses', providerEventId, kind, hash),
+				now: Date.now()
+			});
+			if (result.existing) continue;
+			const authority = await applyEmailAuthorityEvent(ctx, {
+				kind,
+				contactHash: hash,
+				source: 'ses',
+				sourceEventId: providerEventId,
+				now: Date.now()
+			});
+			await ctx.db.patch(result.jobId, {
+				targetEmailStatus: authority.state === 'email_complained' ? 'complained' : 'bounced',
+				targetSoftBounceCount: authority.softBounceCount,
+				authorityUpdatedAt: authority.updatedAt
+			});
+			accepted++;
+		}
+		if (accepted > 0) await scheduleContactFanoutDrain(ctx);
+		return { accepted, duplicates: hashes.length - accepted };
 	}
 });
 
@@ -107,47 +180,45 @@ export const updateSupporterEmailStatus = internalMutation({
  * 'Transient' or 'Undetermined' (i.e. not Permanent).
  */
 export const recordSoftBounces = internalMutation({
-	args: { emailHashes: v.array(v.string()) },
+	args: { emailHashes: v.array(v.string()), providerEventId: v.optional(v.string()) },
 	handler: async (ctx, args) => {
-		const SOFT_BOUNCE_THRESHOLD = 3;
-		const SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000;
-		const now = Date.now();
-
-		for (const hash of args.emailHashes) {
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', hash))
-				.collect();
-
-			for (const s of supporters) {
-				if (s.emailStatus === 'complained') continue; // complaints win
-				const next = (s.softBounceCount ?? 0) + 1;
-				const patch: Record<string, unknown> = {
-					softBounceCount: next,
-					updatedAt: now
-				};
-				if (next >= SOFT_BOUNCE_THRESHOLD && s.emailStatus !== 'bounced') {
-					patch.emailStatus = 'bounced';
-					await ctx.db.insert('suppressedEmails', {
-						emailHash: hash,
-						domain: 'unknown',
-						reason: 'bounce_report',
-						source: 'verification',
-						expiresAt: now + SUPPRESSION_MS
-					});
-				}
-				await ctx.db.patch(s._id, patch);
-				// Threshold crossing flips emailStatus subscribed→bounced — a
-				// counted transition. softBounceCount on its own is not counted,
-				// so only apply a delta when emailStatus actually changed.
-				if (patch.emailStatus !== undefined) {
-					await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
-						...(s as CountableSupporter),
-						emailStatus: patch.emailStatus as string
-					});
-				}
-			}
+		if (args.emailHashes.length < 1 || args.emailHashes.length > CONTACT_FANOUT_INPUT_MAX) {
+			throw new Error('CONTACT_FANOUT_EMAIL_HASH_BATCH_INVALID');
 		}
+		const providerEventId = boundedProviderEventId(args.providerEventId);
+		const hashes = [...new Set(args.emailHashes)];
+		let accepted = 0;
+		for (const hash of hashes) {
+			const kind = 'email_soft_bounce' as const;
+			const result = await enqueueContactFanoutJob(ctx, {
+				kind,
+				contactHash: hash,
+				providerEventId,
+				idempotencyKey: contactFanoutIdempotencyKey('ses', providerEventId, kind, hash),
+				now: Date.now()
+			});
+			if (result.existing) continue;
+			const authority = await applyEmailAuthorityEvent(ctx, {
+				kind,
+				contactHash: hash,
+				source: 'ses',
+				sourceEventId: providerEventId,
+				now: Date.now()
+			});
+			await ctx.db.patch(result.jobId, {
+				targetEmailStatus:
+					authority.state === 'email_complained'
+						? 'complained'
+						: authority.state === 'email_bounced'
+							? 'bounced'
+							: undefined,
+				targetSoftBounceCount: authority.softBounceCount ?? 0,
+				authorityUpdatedAt: authority.updatedAt
+			});
+			accepted++;
+		}
+		if (accepted > 0) await scheduleContactFanoutDrain(ctx);
+		return { accepted, duplicates: hashes.length - accepted };
 	}
 });
 
@@ -157,19 +228,39 @@ export const recordSoftBounces = internalMutation({
  * doesn't carry over from a previous send.
  */
 export const resetSoftBounce = internalMutation({
-	args: { emailHashes: v.array(v.string()) },
+	args: { emailHashes: v.array(v.string()), providerEventId: v.optional(v.string()) },
 	handler: async (ctx, args) => {
-		for (const hash of args.emailHashes) {
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', hash))
-				.collect();
-			for (const s of supporters) {
-				if ((s.softBounceCount ?? 0) > 0) {
-					await ctx.db.patch(s._id, { softBounceCount: 0, updatedAt: Date.now() });
-				}
-			}
+		if (args.emailHashes.length < 1 || args.emailHashes.length > CONTACT_FANOUT_INPUT_MAX) {
+			throw new Error('CONTACT_FANOUT_EMAIL_HASH_BATCH_INVALID');
 		}
+		const providerEventId = boundedProviderEventId(args.providerEventId);
+		const hashes = [...new Set(args.emailHashes)];
+		let accepted = 0;
+		for (const hash of hashes) {
+			const kind = 'email_reset_soft_bounce' as const;
+			const result = await enqueueContactFanoutJob(ctx, {
+				kind,
+				contactHash: hash,
+				providerEventId,
+				idempotencyKey: contactFanoutIdempotencyKey('ses', providerEventId, kind, hash),
+				now: Date.now()
+			});
+			if (result.existing) continue;
+			const authority = await applyEmailAuthorityEvent(ctx, {
+				kind,
+				contactHash: hash,
+				source: 'ses',
+				sourceEventId: providerEventId,
+				now: Date.now()
+			});
+			await ctx.db.patch(result.jobId, {
+				targetSoftBounceCount: 0,
+				authorityUpdatedAt: authority.updatedAt
+			});
+			accepted++;
+		}
+		if (accepted > 0) await scheduleContactFanoutDrain(ctx);
+		return { accepted, duplicates: hashes.length - accepted };
 	}
 });
 
@@ -198,14 +289,14 @@ export const recordEmailOpen = internalMutation({
 			if (emailHash) {
 				existingOpen = await ctx.db
 					.query('emailEvents')
-					.withIndex('by_blastId_recipientEmailHash', (q) =>
-						q.eq('blastId', blast._id).eq('recipientEmailHash', emailHash)
+					.withIndex('by_blastId_recipientEmailHash_eventType', (q) =>
+						q.eq('blastId', blast._id).eq('recipientEmailHash', emailHash).eq('eventType', 'open')
 					)
-					.filter((q) => q.eq(q.field('eventType'), 'open'))
 					.first();
 			}
 
 			if (!existingOpen && blast.batches && blast.batches.length > 0) {
+				const totalOpened = (blast.totalOpened ?? 0) + 1;
 				await ctx.db.insert('emailEvents', {
 					blastId: blast._id,
 					recipientEmailHash: emailHash ?? undefined,
@@ -213,8 +304,22 @@ export const recordEmailOpen = internalMutation({
 					timestamp: Date.now()
 				});
 				await ctx.db.patch(blast._id, {
-					totalOpened: (blast.totalOpened ?? 0) + 1,
+					totalOpened,
 					updatedAt: Date.now()
+				});
+				await syncEmailAbWinnerCandidate(ctx, {
+					blastId: blast._id,
+					orgId: blast.orgId,
+					status: blast.status,
+					isAbTest: blast.isAbTest,
+					abParentId: blast.abParentId,
+					abVariant: blast.abVariant,
+					abWinnerPickedAt: blast.abWinnerPickedAt,
+					abTestConfig: blast.abTestConfig,
+					totalSent: blast.totalSent,
+					totalOpened,
+					totalClicked: blast.totalClicked,
+					sentAt: blast.sentAt
 				});
 				return;
 			}
@@ -247,10 +352,9 @@ export const recordEmailClick = internalMutation({
 			if (emailHash) {
 				hasOpen = await ctx.db
 					.query('emailEvents')
-					.withIndex('by_blastId_recipientEmailHash', (q) =>
-						q.eq('blastId', blast._id).eq('recipientEmailHash', emailHash)
+					.withIndex('by_blastId_recipientEmailHash_eventType', (q) =>
+						q.eq('blastId', blast._id).eq('recipientEmailHash', emailHash).eq('eventType', 'open')
 					)
-					.filter((q) => q.eq(q.field('eventType'), 'open'))
 					.first();
 			}
 
@@ -263,17 +367,19 @@ export const recordEmailClick = internalMutation({
 				if (emailHash) {
 					const existingClick = await ctx.db
 						.query('emailEvents')
-						.withIndex('by_blastId_recipientEmailHash', (q) =>
-							q.eq('blastId', blast._id).eq('recipientEmailHash', emailHash)
-						)
-						.filter((q) =>
-							q.and(q.eq(q.field('eventType'), 'click'), q.eq(q.field('linkUrl'), args.linkUrl))
+						.withIndex('by_blastId_recipientEmailHash_eventType_linkUrl', (q) =>
+							q
+								.eq('blastId', blast._id)
+								.eq('recipientEmailHash', emailHash)
+								.eq('eventType', 'click')
+								.eq('linkUrl', args.linkUrl)
 						)
 						.first();
 					if (existingClick) {
 						return;
 					}
 				}
+				const totalClicked = (blast.totalClicked ?? 0) + 1;
 				await ctx.db.insert('emailEvents', {
 					blastId: blast._id,
 					recipientEmailHash: emailHash ?? undefined,
@@ -282,8 +388,22 @@ export const recordEmailClick = internalMutation({
 					timestamp: Date.now()
 				});
 				await ctx.db.patch(blast._id, {
-					totalClicked: (blast.totalClicked ?? 0) + 1,
+					totalClicked,
 					updatedAt: Date.now()
+				});
+				await syncEmailAbWinnerCandidate(ctx, {
+					blastId: blast._id,
+					orgId: blast.orgId,
+					status: blast.status,
+					isAbTest: blast.isAbTest,
+					abParentId: blast.abParentId,
+					abVariant: blast.abVariant,
+					abWinnerPickedAt: blast.abWinnerPickedAt,
+					abTestConfig: blast.abTestConfig,
+					totalSent: blast.totalSent,
+					totalOpened: blast.totalOpened,
+					totalClicked,
+					sentAt: blast.sentAt
 				});
 				return;
 			}
@@ -318,10 +438,24 @@ export const handleDeliveryEvent = internalMutation({
 
 		switch (args.notificationType) {
 			case 'Delivery':
+				await applyCampaignDeliveryTransitionReadModel(
+					ctx,
+					delivery._id,
+					delivery.status,
+					'delivered',
+					now
+				);
 				await ctx.db.patch(delivery._id, { status: 'delivered' });
 				break;
 
 			case 'Bounce':
+				await applyCampaignDeliveryTransitionReadModel(
+					ctx,
+					delivery._id,
+					delivery.status,
+					'bounced',
+					now
+				);
 				await ctx.db.patch(delivery._id, { status: 'bounced' });
 				break;
 
@@ -337,16 +471,33 @@ export const handleDeliveryEvent = internalMutation({
 					const responses = receipt.responses ?? [];
 					const alreadyOpened = hasResponse(responses, event);
 					if (!alreadyOpened) {
-						await ctx.db.patch(receipt._id, {
-							responses: [...responses, event]
-						});
+						if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+							throw new Error('ACCOUNTABILITY_RESPONSE_LIMIT_EXCEEDED');
+						} else {
+							await ctx.db.patch(receipt._id, {
+								responses: [...responses, event],
+								updatedAt: now
+							});
+							await syncAccountabilityReceiptProjection(ctx, receipt._id);
+						}
 					}
 				} else {
 					const responses = delivery.responses ?? [];
 					if (!hasResponse(responses, event)) {
-						await ctx.db.patch(delivery._id, { responses: [...responses, event] });
+						if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+							throw new Error('CAMPAIGN_DELIVERY_RESPONSE_LIMIT_EXCEEDED');
+						} else {
+							await ctx.db.patch(delivery._id, { responses: [...responses, event] });
+						}
 					}
 				}
+				await applyCampaignDeliveryTransitionReadModel(
+					ctx,
+					delivery._id,
+					delivery.status,
+					'opened',
+					now
+				);
 				await ctx.db.patch(delivery._id, { status: 'opened' });
 				break;
 			}
@@ -369,6 +520,9 @@ export const handleDeliveryEvent = internalMutation({
 
 				if (receipt) {
 					const responses = receipt.responses ?? [];
+					const verifyAlreadyCounted = responses.some(
+						(response) => response.type === 'clicked_verify'
+					);
 					// dedup against duplicate SNS click delivery.
 					// Same retry-inflation pattern as elsewhere (SNS click on emailEvents)
 					// and (Twilio delivered counter). For verify clicks, dedup
@@ -379,14 +533,33 @@ export const handleDeliveryEvent = internalMutation({
 					const alreadyRecorded = hasResponse(responses, event);
 
 					if (!alreadyRecorded) {
-						await ctx.db.patch(receipt._id, {
-							responses: [...responses, event]
-						});
+						if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+							throw new Error('ACCOUNTABILITY_RESPONSE_LIMIT_EXCEEDED');
+						} else {
+							if (isVerifyClick && !verifyAlreadyCounted) {
+								await applyCampaignVerifyClickReadModel(ctx, delivery._id, now);
+							}
+							await ctx.db.patch(receipt._id, {
+								responses: [...responses, event],
+								updatedAt: now
+							});
+							await syncAccountabilityReceiptProjection(ctx, receipt._id);
+						}
 					}
 				} else {
 					const responses = delivery.responses ?? [];
+					const verifyAlreadyCounted = responses.some(
+						(response) => response.type === 'clicked_verify'
+					);
 					if (!hasResponse(responses, event)) {
-						await ctx.db.patch(delivery._id, { responses: [...responses, event] });
+						if (responses.length >= ACCOUNTABILITY_RESPONSE_MAX) {
+							throw new Error('CAMPAIGN_DELIVERY_RESPONSE_LIMIT_EXCEEDED');
+						} else {
+							if (isVerifyClick && !verifyAlreadyCounted) {
+								await applyCampaignVerifyClickReadModel(ctx, delivery._id, now);
+							}
+							await ctx.db.patch(delivery._id, { responses: [...responses, event] });
+						}
 					}
 				}
 				break;
@@ -414,10 +587,9 @@ export const processSesWebhook = internalAction({
 	handler: async (ctx, args) => {
 		// Handle SNS subscription confirmation
 		if (args.snsType === 'SubscriptionConfirmation' && args.subscribeURL) {
-			try {
-				await fetch(args.subscribeURL);
-			} catch (err) {
-				console.error('[ses-webhook] Failed to confirm subscription:', err);
+			const response = await fetch(args.subscribeURL);
+			if (!response.ok) {
+				throw new Error(`SES_SUBSCRIPTION_CONFIRMATION_FAILED_${response.status}`);
 			}
 			return { ok: true };
 		}
@@ -460,14 +632,16 @@ export const processSesWebhook = internalAction({
 			if (bounce?.bounceType === 'Permanent') {
 				await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
 					emailHashes: hashes,
-					status: 'bounced'
+					status: 'bounced',
+					providerEventId: mailMessageId ?? undefined
 				});
 			} else {
 				// Transient / Undetermined — increment soft-bounce tally; SES sends
 				// these even on successful retries, so we only flip emailStatus once
 				// we cross the threshold inside recordSoftBounces.
 				await ctx.runMutation(internal.webhooks.recordSoftBounces, {
-					emailHashes: hashes
+					emailHashes: hashes,
+					providerEventId: mailMessageId ?? undefined
 				});
 			}
 		} else if (notificationType === 'Delivery') {
@@ -484,7 +658,8 @@ export const processSesWebhook = internalAction({
 				).filter((h): h is string => h !== null);
 				if (hashes.length > 0) {
 					await ctx.runMutation(internal.webhooks.resetSoftBounce, {
-						emailHashes: hashes
+						emailHashes: hashes,
+						providerEventId: mailMessageId ?? undefined
 					});
 				}
 			}
@@ -502,7 +677,8 @@ export const processSesWebhook = internalAction({
 				if (hashes.length > 0) {
 					await ctx.runMutation(internal.webhooks.updateSupporterEmailStatus, {
 						emailHashes: hashes,
-						status: 'complained'
+						status: 'complained',
+						providerEventId: mailMessageId ?? undefined
 					});
 				}
 			}
@@ -580,216 +756,700 @@ export const handleInboundSms = internalMutation({
 	args: {
 		from: v.string(), // E.164 phone number
 		// Twilio destination number the user replied to. When present +
-		// registered in `orgTwilioNumbers`, START is scoped to just that
-		// org's supporters — without this, a START response would
-		// resubscribe the phone across every org that ever had it as a
-		// supporter, even orgs the user never knowingly engaged. Optional
-		// because legacy webhook configs may not populate it; the handler
-		// falls back to cross-org with a warn when missing.
+		// registered exactly once in `orgTwilioNumbers`, START is scoped to
+		// that org. Missing/unregistered/ambiguous routes become durable failed
+		// jobs and never relax the global STOP authority.
 		to: v.optional(v.string()),
-		messageSid: v.optional(v.string()),
+		messageSid: v.string(),
 		body: v.string()
 	},
 	handler: async (ctx, args) => {
 		const STOP_KEYWORDS = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']);
 		const START_KEYWORDS = new Set(['start', 'yes', 'unstop']);
-
+		if (!args.from || args.from.length > 32) throw new Error('CONTACT_FANOUT_FROM_INVALID');
+		if (args.to !== undefined && args.to.length > 32) {
+			throw new Error('CONTACT_FANOUT_DESTINATION_TOO_LARGE');
+		}
+		if (!args.messageSid || args.messageSid.length > 128) {
+			throw new Error('CONTACT_FANOUT_PROVIDER_EVENT_ID_INVALID');
+		}
 		const replyBody = args.body.trim();
+		if (replyBody.length > 1600) throw new Error('CONTACT_FANOUT_REPLY_TOO_LARGE');
+		if (!replyBody) return { accepted: false as const, reason: 'empty' as const };
 		const body = replyBody.toLowerCase();
-		const isStop = STOP_KEYWORDS.has(body);
-		const isStart = START_KEYWORDS.has(body);
+		const kind: ContactFanoutKind = STOP_KEYWORDS.has(body)
+			? 'sms_stop'
+			: START_KEYWORDS.has(body)
+				? 'sms_start'
+				: 'sms_reply';
+		const fromPhoneHash = await computeGlobalPhoneHash(args.from);
+		if (!fromPhoneHash) throw new Error('CONTACT_FANOUT_PHONE_HASH_FAILED');
 
-		// Compute phone hash for lookup (phone field is encrypted at rest).
-		// If `crypto.subtle.digest` ever errors (e.g. sandbox/edge runtime
-		// swap), the catch must be visible — silently dropping a hash
-		// failure would honor a TCPA STOP as opt-IN. Log structured
-		// context so an operator sees the failure before the silent
-		// return; throwing would force Twilio retry but a retry storm on
-		// STOP is worse than one visible drop.
-		const fromPhoneHash = await computeGlobalPhoneHash(args.from).catch((err) => {
-			console.error(
-				'[webhooks.handleInboundSms] computeGlobalPhoneHash failed — TCPA opt-in/out cannot be honored without phone hash. Body keyword="' +
-					body +
-					'":',
-				err instanceof Error ? err.message : String(err)
-			);
-			return null;
+		let scopedOrgId: Id<'organizations'> | undefined;
+		let routingFailure: string | undefined;
+		if (kind !== 'sms_stop') {
+			const prefix = kind === 'sms_start' ? 'SMS_START' : 'SMS_REPLY';
+			if (!args.to) {
+				routingFailure = `${prefix}_ROUTE_MISSING`;
+			} else {
+				const matches = await ctx.db
+					.query('orgTwilioNumbers')
+					.withIndex('by_phoneNumber', (q) => q.eq('phoneNumber', args.to as string))
+					.take(2);
+				if (matches.length === 1) scopedOrgId = matches[0].orgId;
+				else {
+					routingFailure =
+						matches.length > 1 ? `${prefix}_ROUTE_AMBIGUOUS` : `${prefix}_ROUTE_UNREGISTERED`;
+				}
+			}
+		}
+
+		const now = Date.now();
+		const providerEventId = boundedProviderEventId(args.messageSid);
+		const result = await enqueueContactFanoutJob(ctx, {
+			kind,
+			contactHash: fromPhoneHash,
+			scopeOrgId: scopedOrgId,
+			providerEventId,
+			idempotencyKey: contactFanoutIdempotencyKey('twilio', providerEventId, kind, fromPhoneHash),
+			replyBody: kind === 'sms_reply' ? replyBody : undefined,
+			replyToNumber: args.to,
+			now,
+			failureCode: routingFailure
 		});
-
-		if (isStop) {
-			// Mark all supporters with this phone as stopped
-			if (!fromPhoneHash) {
-				console.error(
-					'[webhooks.handleInboundSms] DROPPED TCPA STOP — phone hash unavailable. Body="' +
-						body +
-						'". This MUST be investigated; user remains opted-in.'
-				);
-				return;
-			}
-			// Index lookup via `by_globalPhoneHash`. A `.filter()` on the
-			// org-scoped `phoneHash` would not match because that hash
-			// family is per-org keyed; the cross-org STOP needs the global
-			// hash family that supporter writers populate alongside the
-			// org-scoped one. Bounded by the small number of supporters
-			// sharing this phone across orgs, not the full table.
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalPhoneHash', (q) => q.eq('globalPhoneHash', fromPhoneHash))
-				.collect();
-
-			for (const s of supporters) {
-				if (s.smsStatus === 'stopped') continue; // no transition
-				await ctx.db.patch(s._id, { smsStatus: 'stopped', updatedAt: Date.now() });
-				// smsStatus transition — update this supporter's org breakdown.
-				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
-					...(s as CountableSupporter),
-					smsStatus: 'stopped'
-				});
-			}
-		} else if (isStart) {
-			// Re-subscribe supporters that were previously stopped
-			if (!fromPhoneHash) {
-				console.error(
-					'[webhooks.handleInboundSms] DROPPED TCPA START — phone hash unavailable. Body="' +
-						body +
-						'". User remains opted-out.'
-				);
-				return;
-			}
-
-			// Scope START to the org that owns the `To` Twilio number when
-			// registered. STOP stays cross-org (carrier-level opt-out is
-			// TCPA-universal), but START is the re-engagement signal —
-			// resubscribing every org that ever had this phone as a
-			// supporter would be consent scope collapse. Registry-miss /
-			// multi-match falls back to cross-org with a warn: better to
-			// honor an ambiguous START than leave the user stuck opted-out.
-			let scopedOrgId: Id<'organizations'> | null = null;
-			if (args.to) {
-				const matches = await ctx.db
-					.query('orgTwilioNumbers')
-					.withIndex('by_phoneNumber', (q) => q.eq('phoneNumber', args.to as string))
-					.collect();
-				if (matches.length === 1) {
-					scopedOrgId = matches[0].orgId;
-				} else if (matches.length > 1) {
-					console.warn(
-						'[webhooks.handleInboundSms] START to=' +
-							args.to +
-							' matched ' +
-							matches.length +
-							' orgTwilioNumbers rows (ambiguous registry) — falling back to cross-org resubscribe'
-					);
-				}
-			}
-
-			// Index lookup via `by_globalPhoneHash`, then filter for
-			// `smsStatus === "stopped"` post-fetch — the index doesn't
-			// carry status; the additional filter is a small fan-out over
-			// only the rows that share this phone across orgs.
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalPhoneHash', (q) => q.eq('globalPhoneHash', fromPhoneHash))
-				.collect();
-
-			for (const s of supporters) {
-				if (s.smsStatus !== 'stopped') continue;
-				// When scopedOrgId is resolved, only resubscribe supporters
-				// belonging to that org. Cross-org rows stay opted-out until
-				// those orgs re-prompt and get their own START.
-				if (scopedOrgId !== null && String(s.orgId) !== String(scopedOrgId)) continue;
-				await ctx.db.patch(s._id, { smsStatus: 'subscribed', updatedAt: Date.now() });
-				// smsStatus transition stopped→subscribed — update breakdown.
-				await applySupporterStatsDelta(ctx, s.orgId, s as CountableSupporter, {
-					...(s as CountableSupporter),
-					smsStatus: 'subscribed'
-				});
-			}
-		} else {
-			if (!replyBody) return;
-			if (!fromPhoneHash) {
-				console.error(
-					'[webhooks.handleInboundSms] DROPPED SMS REPLY — phone hash unavailable. Reply body cannot be scoped without phone hash.'
-				);
-				return;
-			}
-
-			if (args.messageSid) {
-				const existingReply = await ctx.db
-					.query('smsReplies')
-					.withIndex('by_twilioSid', (q) => q.eq('twilioSid', args.messageSid as string))
-					.first();
-				if (existingReply) return;
-			}
-
-			let scopedOrgId: Id<'organizations'> | null = null;
-			if (args.to) {
-				const matches = await ctx.db
-					.query('orgTwilioNumbers')
-					.withIndex('by_phoneNumber', (q) => q.eq('phoneNumber', args.to as string))
-					.collect();
-				if (matches.length === 1) {
-					scopedOrgId = matches[0].orgId;
-				} else if (matches.length > 1) {
-					console.warn(
-						'[webhooks.handleInboundSms] DROPPED SMS REPLY — to=' +
-							args.to +
-							' matched ' +
-							matches.length +
-							' orgTwilioNumbers rows (ambiguous registry).'
-					);
-					return;
-				}
-			}
-
-			const supporters = await ctx.db
-				.query('supporters')
-				.withIndex('by_globalPhoneHash', (q) => q.eq('globalPhoneHash', fromPhoneHash))
-				.collect();
-
-			if (scopedOrgId === null) {
-				const orgIds = Array.from(new Set(supporters.map((supporter) => String(supporter.orgId))));
-				if (orgIds.length !== 1) {
-					console.warn(
-						'[webhooks.handleInboundSms] DROPPED SMS REPLY — no unique org scope from To or phone hash.'
-					);
-					return;
-				}
-				scopedOrgId = supporters[0].orgId;
-			}
-
-			const scopedSupporters = supporters.filter(
-				(supporter) => String(supporter.orgId) === String(scopedOrgId)
-			);
-			const supporterId = scopedSupporters.length === 1 ? scopedSupporters[0]._id : undefined;
-			let blastId: Id<'smsBlasts'> | undefined;
-
-			if (supporterId) {
-				const recentMessages = await ctx.db
-					.query('smsMessages')
-					.withIndex('by_supporterId', (q) => q.eq('supporterId', supporterId))
-					.order('desc')
-					.take(25);
-				for (const message of recentMessages) {
-					const blast = await ctx.db.get(message.blastId);
-					if (!blast || String(blast.orgId) !== String(scopedOrgId)) continue;
-					if (args.to && blast.fromNumber && blast.fromNumber !== args.to) continue;
-					blastId = blast._id;
-					break;
-				}
-			}
-
-			await ctx.db.insert('smsReplies', {
-				orgId: scopedOrgId,
-				supporterId,
-				blastId,
-				fromHash: fromPhoneHash,
-				toNumber: args.to,
-				body: replyBody.slice(0, 1600),
-				twilioSid: args.messageSid,
-				receivedAt: Date.now()
+		if (!result.existing && !result.failed && kind !== 'sms_reply') {
+			const authority = await applySmsAuthorityEvent(ctx, {
+				kind,
+				contactHash: fromPhoneHash,
+				scopeOrgId: scopedOrgId,
+				sourceEventId: providerEventId,
+				now
+			});
+			await ctx.db.patch(result.jobId, {
+				targetSmsStatus: kind === 'sms_stop' ? 'stopped' : 'subscribed',
+				authorityUpdatedAt: authority.updatedAt
 			});
 		}
+		if (!result.existing && !result.failed) await scheduleContactFanoutDrain(ctx);
+		return {
+			accepted: true as const,
+			jobId: result.jobId,
+			duplicate: result.existing,
+			status: result.failed ? ('failed' as const) : ('pending' as const),
+			failureCode: routingFailure ?? null
+		};
+	}
+});
+
+// =============================================================================
+// DURABLE GLOBAL CONTACT AUTHORITY + FANOUT
+// =============================================================================
+
+export const getNextContactFanoutJob = internalQuery({
+	args: { asOf: v.number() },
+	handler: async (ctx, { asOf }) => {
+		if (!Number.isSafeInteger(asOf) || asOf < 0) throw new Error('CONTACT_FANOUT_AS_OF_INVALID');
+		for (let priority = 0; priority <= contactFanoutPriority('sms_reply'); priority++) {
+			const job = await ctx.db
+				.query('contactFanoutJobs')
+				.withIndex('by_status_priority_nextAttemptAt', (q) =>
+					q.eq('status', 'pending').eq('priority', priority).lte('nextAttemptAt', asOf)
+				)
+				.order('asc')
+				.first();
+			if (job) return job;
+		}
+		return null;
+	}
+});
+
+function addStatsTransition(
+	groups: Map<
+		string,
+		{
+			orgId: Id<'organizations'>;
+			pairs: Array<{ before: CountableSupporter; after: CountableSupporter }>;
+		}
+	>,
+	before: Doc<'supporters'>,
+	after: Doc<'supporters'>
+): void {
+	const key = String(before.orgId);
+	const group = groups.get(key) ?? { orgId: before.orgId, pairs: [] };
+	group.pairs.push({ before, after });
+	groups.set(key, group);
+}
+
+async function completeSmsReplyJob(
+	ctx: Parameters<typeof recordSmsReply>[0],
+	job: Doc<'contactFanoutJobs'>,
+	now: number
+): Promise<{ processed: number; changed: number }> {
+	if (!job.scopeOrgId || !job.replyBody) throw new Error('SMS_REPLY_ROUTE_NOT_RESOLVED');
+	if (job.providerEventId) {
+		const existing = await ctx.db
+			.query('smsReplies')
+			.withIndex('by_twilioSid', (q) => q.eq('twilioSid', job.providerEventId as string))
+			.take(2);
+		if (existing.length > 1) throw new Error('SMS_REPLY_PROVIDER_ID_MULTIPLICITY');
+		if (existing[0]) return { processed: 1, changed: 0 };
+	}
+	const supporters = await ctx.db
+		.query('supporters')
+		.withIndex('by_globalPhoneHash_orgId', (q) =>
+			q.eq('globalPhoneHash', job.contactHash).eq('orgId', job.scopeOrgId as Id<'organizations'>)
+		)
+		.take(2);
+	if (supporters.length > 1) throw new Error('SMS_REPLY_SUPPORTER_MULTIPLICITY');
+	const supporterId = supporters.length === 1 ? supporters[0]._id : undefined;
+	let blastId: Id<'smsBlasts'> | undefined;
+	if (supporterId) {
+		const recentMessages = await ctx.db
+			.query('smsMessages')
+			.withIndex('by_supporterId', (q) => q.eq('supporterId', supporterId))
+			.order('desc')
+			.take(25);
+		for (const message of recentMessages) {
+			const blast = await ctx.db.get(message.blastId);
+			if (!blast || blast.orgId !== job.scopeOrgId) continue;
+			if (job.replyToNumber && blast.fromNumber && blast.fromNumber !== job.replyToNumber) continue;
+			blastId = blast._id;
+			break;
+		}
+	}
+	const reply = {
+		orgId: job.scopeOrgId,
+		supporterId,
+		blastId,
+		fromHash: job.contactHash,
+		toNumber: job.replyToNumber,
+		body: job.replyBody,
+		twilioSid: job.providerEventId,
+		receivedAt: job.createdAt,
+		summaryVersion: SMS_REPLY_SUMMARY_VERSION
+	};
+	await recordSmsReply(ctx, reply, now);
+	await ctx.db.insert('smsReplies', reply);
+	return { processed: supporters.length, changed: 1 };
+}
+
+export const processContactFanoutPage = internalMutation({
+	args: {
+		jobId: v.id('contactFanoutJobs'),
+		expectedCursor: v.optional(v.string()),
+		asOf: v.number()
+	},
+	handler: async (ctx, args) => {
+		if (!Number.isSafeInteger(args.asOf) || args.asOf < 0) {
+			throw new Error('CONTACT_FANOUT_AS_OF_INVALID');
+		}
+		const job = await ctx.db.get(args.jobId);
+		if (!job || job.status !== 'pending') return { status: 'stale' as const };
+		if ((job.cursor ?? undefined) !== args.expectedCursor) return { status: 'stale' as const };
+		if (job.nextAttemptAt > args.asOf) return { status: 'not-due' as const };
+		if (job.payloadBytes > 4 * 1024) throw new Error('CONTACT_FANOUT_PAYLOAD_TOO_LARGE');
+		if (
+			job.cursor !== undefined &&
+			new TextEncoder().encode(job.cursor).byteLength > CONTACT_FANOUT_CURSOR_MAX_BYTES
+		) {
+			throw new Error('CONTACT_FANOUT_CURSOR_TOO_LARGE');
+		}
+
+		if (job.kind === 'sms_reply') {
+			const result = await completeSmsReplyJob(ctx, job, args.asOf);
+			await ctx.db.patch(job._id, {
+				status: 'complete',
+				processedCount: job.processedCount + result.processed,
+				changedCount: job.changedCount + result.changed,
+				pageCount: job.pageCount + 1,
+				completedAt: args.asOf,
+				updatedAt: args.asOf
+			});
+			await scheduleContactFanoutDrain(ctx);
+			return { status: 'complete' as const, ...result };
+		}
+
+		if (job.authorityUpdatedAt === undefined) {
+			throw new Error('CONTACT_FANOUT_AUTHORITY_SNAPSHOT_MISSING');
+		}
+		const pagination = {
+			cursor: job.cursor ?? null,
+			numItems: CONTACT_FANOUT_PAGE_SIZE,
+			maximumRowsRead: CONTACT_FANOUT_PAGE_SIZE + 1,
+			maximumBytesRead: CONTACT_FANOUT_PAGE_MAX_BYTES
+		};
+		const pageResult = job.kind.startsWith('email_')
+			? await ctx.db
+					.query('supporters')
+					.withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', job.contactHash))
+					.order('asc')
+					.paginate(pagination)
+			: job.kind === 'sms_start' && job.scopeOrgId
+				? await ctx.db
+						.query('supporters')
+						.withIndex('by_globalPhoneHash_orgId', (q) =>
+							q
+								.eq('globalPhoneHash', job.contactHash)
+								.eq('orgId', job.scopeOrgId as Id<'organizations'>)
+						)
+						.order('asc')
+						.paginate(pagination)
+				: await ctx.db
+						.query('supporters')
+						.withIndex('by_globalPhoneHash', (q) => q.eq('globalPhoneHash', job.contactHash))
+						.order('asc')
+						.paginate(pagination);
+		if (pageResult.pageStatus === 'SplitRequired') {
+			throw new Error('CONTACT_FANOUT_PAGE_SPLIT_REQUIRED');
+		}
+
+		const statsGroups = new Map<
+			string,
+			{
+				orgId: Id<'organizations'>;
+				pairs: Array<{ before: CountableSupporter; after: CountableSupporter }>;
+			}
+		>();
+		let changed = 0;
+		for (const supporter of pageResult.page) {
+			if (job.kind.startsWith('email_')) {
+				if ((supporter.contactEmailAuthorityUpdatedAt ?? -1) >= job.authorityUpdatedAt) continue;
+				const nextEmailStatus =
+					job.targetEmailStatus === 'complained'
+						? 'complained'
+						: supporter.emailStatus === 'complained'
+							? 'complained'
+							: (job.targetEmailStatus ?? supporter.emailStatus);
+				const after = {
+					...supporter,
+					emailStatus: nextEmailStatus,
+					softBounceCount: job.targetSoftBounceCount ?? supporter.softBounceCount,
+					contactEmailAuthorityUpdatedAt: job.authorityUpdatedAt,
+					updatedAt: args.asOf
+				};
+				await ctx.db.patch(supporter._id, {
+					emailStatus: after.emailStatus,
+					softBounceCount: after.softBounceCount,
+					contactEmailAuthorityUpdatedAt: job.authorityUpdatedAt,
+					updatedAt: args.asOf
+				});
+				if (after.emailStatus !== supporter.emailStatus) {
+					addStatsTransition(statsGroups, supporter, after);
+				}
+				changed++;
+			} else {
+				if ((supporter.contactSmsAuthorityUpdatedAt ?? -1) >= job.authorityUpdatedAt) continue;
+				if (job.targetSmsStatus !== 'stopped' && job.targetSmsStatus !== 'subscribed') {
+					throw new Error('CONTACT_FANOUT_SMS_TARGET_INVALID');
+				}
+				const after = {
+					...supporter,
+					smsStatus: job.targetSmsStatus,
+					contactSmsAuthorityUpdatedAt: job.authorityUpdatedAt,
+					updatedAt: args.asOf
+				};
+				await ctx.db.patch(supporter._id, {
+					smsStatus: after.smsStatus,
+					contactSmsAuthorityUpdatedAt: job.authorityUpdatedAt,
+					updatedAt: args.asOf
+				});
+				if (after.smsStatus !== supporter.smsStatus) {
+					addStatsTransition(statsGroups, supporter, after);
+				}
+				changed++;
+			}
+		}
+		for (const group of statsGroups.values()) {
+			await applySupporterStatsDeltaBatch(ctx, group.orgId, group.pairs);
+		}
+
+		const complete = pageResult.isDone;
+		await ctx.db.patch(job._id, {
+			status: complete ? 'complete' : 'pending',
+			cursor: complete ? undefined : pageResult.continueCursor,
+			processedCount: job.processedCount + pageResult.page.length,
+			changedCount: job.changedCount + changed,
+			pageCount: job.pageCount + 1,
+			attempts: 0,
+			nextAttemptAt: args.asOf,
+			failureCode: undefined,
+			lastError: undefined,
+			updatedAt: args.asOf,
+			...(complete ? { completedAt: args.asOf } : {})
+		});
+		await scheduleContactFanoutDrain(ctx);
+		return {
+			status: complete ? ('complete' as const) : ('continued' as const),
+			processed: pageResult.page.length,
+			changed
+		};
+	}
+});
+
+export const recordContactFanoutFailure = internalMutation({
+	args: {
+		jobId: v.id('contactFanoutJobs'),
+		expectedCursor: v.optional(v.string()),
+		asOf: v.number(),
+		error: v.string()
+	},
+	handler: async (ctx, args) => {
+		const job = await ctx.db.get(args.jobId);
+		if (!job || job.status !== 'pending' || (job.cursor ?? undefined) !== args.expectedCursor) {
+			return { status: 'stale' as const };
+		}
+		const attempts = job.attempts + 1;
+		const terminal = attempts >= CONTACT_FANOUT_MAX_ATTEMPTS;
+		const error = args.error.slice(0, 256);
+		const delay =
+			CONTACT_FANOUT_BACKOFF_MS[Math.min(attempts - 1, CONTACT_FANOUT_BACKOFF_MS.length - 1)];
+		await ctx.db.patch(job._id, {
+			status: terminal ? 'failed' : 'pending',
+			attempts,
+			nextAttemptAt: terminal ? args.asOf : args.asOf + delay,
+			failureCode: terminal ? 'CONTACT_FANOUT_ATTEMPTS_EXHAUSTED' : undefined,
+			lastError: error,
+			updatedAt: args.asOf,
+			...(terminal ? { completedAt: args.asOf } : {})
+		});
+		if (terminal) {
+			await ctx.db.insert('contactFanoutJobEvents', {
+				jobId: job._id,
+				type: 'worker_failed',
+				attempt: attempts,
+				failureCode: 'CONTACT_FANOUT_ATTEMPTS_EXHAUSTED',
+				error,
+				createdAt: args.asOf
+			});
+		}
+		await ctx.scheduler.runAfter(
+			terminal ? 0 : delay,
+			(internal as any).webhooks.drainContactFanoutQueue,
+			{}
+		);
+		return { status: terminal ? ('failed' as const) : ('retrying' as const), attempts };
+	}
+});
+
+/**
+ * Bounded operator recovery for a terminal job. The same cursor and job id are
+ * preserved, attempts reset, and an append-only event records the intervention.
+ * Routing failures can resolve from the repaired Twilio registry or an explicit
+ * organization supplied by an operator; no new fanout job is created.
+ */
+export const retryContactFanoutJob = internalMutation({
+	args: {
+		jobId: v.id('contactFanoutJobs'),
+		scopeOrgId: v.optional(v.id('organizations'))
+	},
+	handler: async (ctx, args) => {
+		const job = await ctx.db.get(args.jobId);
+		if (!job) throw new Error('CONTACT_FANOUT_JOB_NOT_FOUND');
+		if (job.status !== 'failed') return { status: job.status, retried: false as const };
+		const now = Date.now();
+		let scopeOrgId = job.scopeOrgId;
+		if (args.scopeOrgId) {
+			const org = await ctx.db.get(args.scopeOrgId);
+			if (!org) throw new Error('CONTACT_FANOUT_RETRY_ORG_NOT_FOUND');
+			if (scopeOrgId && scopeOrgId !== args.scopeOrgId) {
+				throw new Error('CONTACT_FANOUT_RETRY_SCOPE_MISMATCH');
+			}
+			scopeOrgId = args.scopeOrgId;
+		}
+		if ((job.kind === 'sms_start' || job.kind === 'sms_reply') && !scopeOrgId) {
+			if (!job.replyToNumber) throw new Error('CONTACT_FANOUT_RETRY_ROUTE_MISSING');
+			const routes = await ctx.db
+				.query('orgTwilioNumbers')
+				.withIndex('by_phoneNumber', (q) => q.eq('phoneNumber', job.replyToNumber as string))
+				.take(2);
+			if (routes.length !== 1) {
+				throw new Error(
+					routes.length > 1
+						? 'CONTACT_FANOUT_RETRY_ROUTE_AMBIGUOUS'
+						: 'CONTACT_FANOUT_RETRY_ROUTE_UNREGISTERED'
+				);
+			}
+			scopeOrgId = routes[0].orgId;
+		}
+
+		let targetSmsStatus = job.targetSmsStatus;
+		let authorityUpdatedAt = job.authorityUpdatedAt;
+		if (job.kind === 'sms_start' && authorityUpdatedAt === undefined) {
+			if (!scopeOrgId) throw new Error('CONTACT_FANOUT_RETRY_ROUTE_MISSING');
+			const authority = await applySmsAuthorityEvent(ctx, {
+				kind: 'sms_start',
+				contactHash: job.contactHash,
+				scopeOrgId,
+				sourceEventId: job.providerEventId,
+				now
+			});
+			targetSmsStatus = 'subscribed';
+			authorityUpdatedAt = authority.updatedAt;
+		}
+		if (job.kind !== 'sms_reply' && authorityUpdatedAt === undefined) {
+			throw new Error('CONTACT_FANOUT_RETRY_AUTHORITY_SNAPSHOT_MISSING');
+		}
+		const payloadBytes = new TextEncoder().encode(
+			JSON.stringify({
+				kind: job.kind,
+				contactHash: job.contactHash,
+				scopeOrgId,
+				idempotencyKey: job.idempotencyKey,
+				providerEventId: job.providerEventId,
+				replyBody: job.replyBody,
+				replyToNumber: job.replyToNumber
+			})
+		).byteLength;
+		if (payloadBytes > CONTACT_FANOUT_PAYLOAD_MAX_BYTES) {
+			throw new Error('CONTACT_FANOUT_PAYLOAD_TOO_LARGE');
+		}
+		await ctx.db.insert('contactFanoutJobEvents', {
+			jobId: job._id,
+			type: 'operator_retry',
+			attempt: job.attempts,
+			failureCode: job.failureCode,
+			error: job.lastError,
+			createdAt: now
+		});
+		await ctx.db.patch(job._id, {
+			...(scopeOrgId ? { scopeOrgId } : {}),
+			...(targetSmsStatus ? { targetSmsStatus } : {}),
+			...(authorityUpdatedAt !== undefined ? { authorityUpdatedAt } : {}),
+			status: 'pending',
+			attempts: 0,
+			nextAttemptAt: now,
+			failureCode: undefined,
+			lastError: undefined,
+			completedAt: undefined,
+			payloadBytes,
+			updatedAt: now
+		});
+		await scheduleContactFanoutDrain(ctx);
+		return { status: 'pending' as const, retried: true as const, scopeOrgId: scopeOrgId ?? null };
+	}
+});
+
+export const listContactFanoutJobEvents = internalQuery({
+	args: { jobId: v.id('contactFanoutJobs'), limit: v.optional(v.number()) },
+	handler: async (ctx, args) => {
+		const limit = args.limit ?? 50;
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+			throw new Error('CONTACT_FANOUT_EVENT_LIMIT_INVALID');
+		}
+		return ctx.db
+			.query('contactFanoutJobEvents')
+			.withIndex('by_jobId_createdAt', (q) => q.eq('jobId', args.jobId))
+			.order('desc')
+			.take(limit);
+	}
+});
+
+export const drainContactFanoutQueue: any = internalAction({
+	args: {},
+	handler: async (ctx): Promise<unknown> => {
+		const asOf = Date.now();
+		const job = (await ctx.runQuery((internal as any).webhooks.getNextContactFanoutJob, {
+			asOf
+		})) as Doc<'contactFanoutJobs'> | null;
+		if (!job) return { status: 'idle' as const };
+		try {
+			return await ctx.runMutation((internal as any).webhooks.processContactFanoutPage, {
+				jobId: job._id,
+				expectedCursor: job.cursor,
+				asOf
+			});
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			return await ctx.runMutation((internal as any).webhooks.recordContactFanoutFailure, {
+				jobId: job._id,
+				expectedCursor: job.cursor,
+				asOf,
+				error: message
+			});
+		}
+	}
+});
+
+export const assertEmailSendAdmissions = internalQuery({
+	args: { supporterIds: v.array(v.id('supporters')) },
+	handler: async (ctx, args) => {
+		if (args.supporterIds.length < 1 || args.supporterIds.length > 100) {
+			throw new Error('EMAIL_CONTACT_AUTHORITY_BATCH_INVALID');
+		}
+		const supporters: Array<Doc<'supporters'>> = [];
+		for (const supporterId of args.supporterIds) {
+			const supporter = await ctx.db.get(supporterId);
+			if (!supporter || supporter.emailStatus !== 'subscribed') continue;
+			supporters.push(supporter);
+		}
+		const allowed = await filterEmailSendAuthorized(ctx, supporters);
+		return { allowedSupporterIds: allowed.map((supporter) => supporter._id) };
+	}
+});
+
+export const startContactAuthorityMigration = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const existing = await ctx.db
+			.query('contactAuthorityMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CONTACT_AUTHORITY_MIGRATION_KEY))
+			.unique();
+		if (existing?.status === 'ready') return { status: 'ready' as const };
+		const now = Date.now();
+		if (existing) {
+			await ctx.db.patch(existing._id, {
+				status: 'running',
+				cursor: undefined,
+				scanned: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				startedAt: now,
+				completedAt: undefined,
+				updatedAt: now
+			});
+		} else {
+			await ctx.db.insert('contactAuthorityMigrations', {
+				key: CONTACT_AUTHORITY_MIGRATION_KEY,
+				status: 'running',
+				scanned: 0,
+				startedAt: now,
+				updatedAt: now
+			});
+		}
+		await ctx.scheduler.runAfter(
+			0,
+			(internal as any).webhooks.runContactAuthorityMigrationPage,
+			{}
+		);
+		return { status: 'running' as const };
+	}
+});
+
+export const runContactAuthorityMigrationPage = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await ctx.db
+			.query('contactAuthorityMigrations')
+			.withIndex('by_key', (q) => q.eq('key', CONTACT_AUTHORITY_MIGRATION_KEY))
+			.unique();
+		if (!migration || migration.status !== 'running') return { status: 'idle' as const };
+		const page = await ctx.db
+			.query('supporters')
+			.order('asc')
+			.paginate({
+				cursor: migration.cursor ?? null,
+				numItems: CONTACT_AUTHORITY_MIGRATION_PAGE_SIZE,
+				maximumRowsRead: CONTACT_AUTHORITY_MIGRATION_PAGE_SIZE + 1,
+				maximumBytesRead: CONTACT_AUTHORITY_MIGRATION_PAGE_MAX_BYTES
+			});
+		if (page.pageStatus === 'SplitRequired') {
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode: 'CONTACT_AUTHORITY_MIGRATION_PAGE_SPLIT_REQUIRED',
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const };
+		}
+		const missing = page.page.find((supporter) => {
+			const needsEmailAuthority =
+				supporter.emailStatus === 'subscribed' ||
+				supporter.emailStatus === 'bounced' ||
+				supporter.emailStatus === 'complained';
+			const needsSmsAuthority =
+				supporter.smsStatus === 'stopped' ||
+				(supporter.smsStatus === 'subscribed' && !!supporter.encryptedPhone);
+			return (
+				(needsEmailAuthority && !supporter.globalEmailHash) ||
+				(needsSmsAuthority && !supporter.globalPhoneHash)
+			);
+		});
+		if (missing) {
+			const missingEmail =
+				!missing.globalEmailHash &&
+				(missing.emailStatus === 'subscribed' ||
+					missing.emailStatus === 'bounced' ||
+					missing.emailStatus === 'complained');
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode: missingEmail
+					? 'CONTACT_AUTHORITY_EMAIL_HASH_MISSING'
+					: 'CONTACT_AUTHORITY_PHONE_HASH_MISSING',
+				failureSourceId: missing._id,
+				updatedAt: Date.now()
+			});
+			return { status: 'blocked' as const, supporterId: missing._id };
+		}
+		const now = Date.now();
+		let authoritiesSeeded = 0;
+		for (const supporter of page.page) {
+			authoritiesSeeded += await seedContactAuthorityFromSupporter(ctx, supporter, now);
+		}
+		const scanned = migration.scanned + page.page.length;
+		if (page.isDone) {
+			await ctx.db.patch(migration._id, {
+				status: 'ready',
+				cursor: undefined,
+				scanned,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				completedAt: now,
+				updatedAt: now
+			});
+			return { status: 'ready' as const, scanned, authoritiesSeeded };
+		}
+		await ctx.db.patch(migration._id, {
+			cursor: page.continueCursor,
+			scanned,
+			updatedAt: now
+		});
+		await ctx.scheduler.runAfter(
+			0,
+			(internal as any).webhooks.runContactAuthorityMigrationPage,
+			{}
+		);
+		return { status: 'running' as const, scanned, authoritiesSeeded };
+	}
+});
+
+export const contactFanoutReadiness = internalQuery({
+	args: { asOf: v.number() },
+	handler: async (ctx, { asOf }) => {
+		if (!Number.isSafeInteger(asOf) || asOf < 0) throw new Error('CONTACT_FANOUT_AS_OF_INVALID');
+		const [migration, failed, oldestPending] = await Promise.all([
+			ctx.db
+				.query('contactAuthorityMigrations')
+				.withIndex('by_key', (q) => q.eq('key', CONTACT_AUTHORITY_MIGRATION_KEY))
+				.unique(),
+			ctx.db
+				.query('contactFanoutJobs')
+				.withIndex('by_status_createdAt', (q) => q.eq('status', 'failed'))
+				.order('asc')
+				.first(),
+			ctx.db
+				.query('contactFanoutJobs')
+				.withIndex('by_status_createdAt', (q) => q.eq('status', 'pending'))
+				.order('asc')
+				.first()
+		]);
+		const overdue =
+			oldestPending !== null && asOf - oldestPending.createdAt > CONTACT_FANOUT_OVERDUE_MS;
+		const ready =
+			migration?.status === 'ready' &&
+			migration.cursor === undefined &&
+			migration.failureCode === undefined &&
+			failed === null &&
+			!overdue;
+		return {
+			ready,
+			status: migration?.status ?? 'missing',
+			failureCode:
+				migration?.failureCode ??
+				failed?.failureCode ??
+				(overdue ? 'CONTACT_FANOUT_OVERDUE' : null),
+			failedJobId: failed?._id ?? null,
+			oldestPendingAt: oldestPending?.createdAt ?? null,
+			oldestPendingKind: oldestPending?.kind ?? null
+		};
 	}
 });
 
@@ -835,28 +1495,33 @@ export const completeDonation = internalMutation({
 		stripeSubscriptionId: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
-		// Find pending donations matching this ID
-		const donations = await ctx.db
+		// Stripe session IDs already have an exact index; never scan every
+		// pending donation and filter in memory for one webhook identifier.
+		const donation = await ctx.db
 			.query('donations')
-			.withIndex('by_status', (q) => q.eq('status', 'pending'))
-			.filter((q) => q.eq(q.field('stripeSessionId'), args.donationId))
-			.collect();
-
-		// Also try direct ID lookup if stripeSessionId didn't match
-		// (donationId might be a Convex ID)
-		let donation = donations[0];
+			.withIndex('by_stripeSessionId', (q) => q.eq('stripeSessionId', args.donationId))
+			.first();
 		if (!donation) return { processed: false };
 
 		// Atomic status transition
 		if (donation.status !== 'pending') return { processed: false };
 
-		await ctx.db.patch(donation._id, {
+		const now = Date.now();
+		const donationPatch = {
 			status: 'completed',
 			stripePaymentIntentId: args.stripePaymentIntentId,
 			stripeSubscriptionId: args.stripeSubscriptionId,
-			completedAt: Date.now(),
-			updatedAt: Date.now()
-		});
+			completedAt: now,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
+			updatedAt: now
+		} as const;
+		await applyDonationConfirmationTransition(
+			ctx,
+			donation,
+			{ ...donation, ...donationPatch },
+			now
+		);
+		await ctx.db.patch(donation._id, donationPatch);
 
 		// Increment campaign counters
 		if (donation.campaignId) {
@@ -932,10 +1597,19 @@ export const refundDonation = internalMutation({
 
 		if (!donation || donation.status !== 'completed') return;
 
-		await ctx.db.patch(donation._id, {
+		const now = Date.now();
+		const donationPatch = {
 			status: 'refunded',
-			updatedAt: Date.now()
-		});
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
+			updatedAt: now
+		} as const;
+		await applyDonationConfirmationTransition(
+			ctx,
+			donation,
+			{ ...donation, ...donationPatch },
+			now
+		);
+		await ctx.db.patch(donation._id, donationPatch);
 
 		// Emit donation.refunded (A4) — mirror of donation.completed. Sits after
 		// the early-return guard so a replayed/non-completed refund never emits a

@@ -30,6 +30,8 @@ function section(src: string, start: string, end: string): string {
 }
 
 const email = source('convex/email.ts');
+const webhooks = source('convex/webhooks.ts');
+const authority = source('convex/lib/contactAuthority.ts');
 const schema = source('convex/schema.ts');
 const reportEndpoint = source('src/routes/api/emails/report-bounce/+server.ts');
 
@@ -67,9 +69,9 @@ describe('pending scan uses the resolved index', () => {
 	});
 
 	it('pending + stale queries filter unresolved via the index', () => {
-		const occurrences =
-			email.match(/\.withIndex\('by_resolved', \(q\) => q\.eq\('resolved', false\)\)/g) ?? [];
+		const occurrences = email.match(/\.withIndex\('by_resolved'/g) ?? [];
 		expect(occurrences.length).toBeGreaterThanOrEqual(2);
+		expect(email).not.toMatch(/query\('bounceReports'\)[\s\S]{0,200}?\.filter\(/);
 	});
 });
 
@@ -84,14 +86,16 @@ describe('suppression effects', () => {
 		expect(suppress).toContain("suppressedBy: 'verified_user_report_consensus'");
 	});
 
-	it('propagates to supporters via the global email hash index', () => {
-		expect(email).toContain(
-			".withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', emailHash))"
-		);
+	it('propagates through a bounded durable job on the global email hash index', () => {
+		expect(email).toContain('enqueueContactFanoutJob(ctx');
+		expect(webhooks).toContain(".withIndex('by_globalEmailHash'");
+		expect(webhooks).toContain('CONTACT_FANOUT_PAGE_SIZE');
+		expect(email).not.toContain(".withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', emailHash))");
 	});
 
 	it('never downgrades a complained supporter to bounced', () => {
-		expect(email).toContain("if (supporter.emailStatus === 'complained') continue;");
+		expect(authority).toContain("existing?.state === 'email_complained'");
+		expect(webhooks).toContain("supporter.emailStatus === 'complained'");
 	});
 
 	it('marks the consumed reports with the consensus probe result', () => {

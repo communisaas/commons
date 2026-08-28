@@ -146,6 +146,23 @@ afterEach(() => {
 });
 
 describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', () => {
+	it('rejects an oversized body before any Convex operation', async () => {
+		let caught: unknown;
+		try {
+			await POST(
+				buildEvent({
+					...buildBody(),
+					encryptedWitness: 'x'.repeat(256 * 1024)
+				})
+			);
+		} catch (cause) {
+			caught = cause;
+		}
+		expect((caught as { status?: number })?.status).toBe(413);
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerAction).not.toHaveBeenCalled();
+	});
+
 	it('returns 403 CREDENTIAL_MIGRATION_REQUIRED when user has no active commitment', async () => {
 		mockCommitment = null;
 
@@ -230,6 +247,10 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 		expect(json.success).toBe(true);
 		expect(json.submissionId).toBe('sub-1');
 		expect(mockServerAction).toHaveBeenCalledTimes(1);
+		expect(mockServerAction).toHaveBeenCalledWith(
+			'submissions.create',
+			expect.objectContaining({ _secret: expect.any(String) })
+		);
 	});
 
 	it('returns 403 when the proof authority public input is below the CWC tier', async () => {
@@ -374,5 +395,55 @@ describe('POST /api/submissions/create — Stage 2.5 canonical domain binding', 
 			'users.getActiveCredentialDistrictCommitment',
 			expect.objectContaining({ userId: 'user_abc' })
 		);
+	});
+});
+
+/**
+ * This route carries a proof, not a body. The words a sender types cannot travel
+ * on it, so the boundary is a strict parse of the whole key set rather than a
+ * denylist of message-shaped names — a denylist is beaten by renaming the field,
+ * which would make the refusal theater.
+ */
+describe('POST /api/submissions/create — the lane accepts no field it does not read', () => {
+	async function postAndCatch(body: unknown) {
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
+		let caught: unknown;
+		try {
+			await POST(buildEvent(body));
+		} catch (e) {
+			caught = e;
+		}
+		return caught as { status?: number; body?: { message?: string } } | undefined;
+	}
+
+	it('refuses a message-bearing field appended to an otherwise valid submission', async () => {
+		const caught = await postAndCatch({ ...buildBody(), personalConnection: 'let me tell you' });
+
+		expect(caught?.status).toBe(400);
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerAction).not.toHaveBeenCalled();
+	});
+
+	it('refuses the same field under a name no denylist would have guessed', async () => {
+		const caught = await postAndCatch({ ...buildBody(), note: 'let me tell you' });
+
+		expect(caught?.status).toBe(400);
+		expect(mockServerQuery).not.toHaveBeenCalled();
+		expect(mockServerAction).not.toHaveBeenCalled();
+	});
+
+	it('names the lane in the refusal so the reason is legible', async () => {
+		const caught = await postAndCatch({ ...buildBody(), note: 'x' });
+
+		expect(caught?.body?.message).toContain('cwc_zkp');
+	});
+
+	it('still accepts the exact field set the proof client sends', async () => {
+		mockCommitment = { districtCommitment: ACTIVE_COMMITMENT };
+		mockServerAction.mockResolvedValueOnce({ submissionId: 'sub-3', status: 'accepted' });
+
+		const response = await POST(buildEvent(buildBody()));
+
+		expect(response.status).toBe(200);
 	});
 });

@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -15,19 +15,50 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const body = await request.json();
-	const { title, description, eventType, startAt, endAt, timezone, venue, address, city, state, postalCode, latitude, longitude, virtualUrl, capacity, waitlistEnabled, requireVerification, campaignId } = body;
+	const {
+		title,
+		description,
+		eventType,
+		startAt,
+		endAt,
+		timezone,
+		venue,
+		address,
+		city,
+		state,
+		postalCode,
+		latitude,
+		longitude,
+		virtualUrl,
+		capacity,
+		waitlistEnabled,
+		requireVerification,
+		campaignId
+	} = body;
 
 	// bound caller-supplied strings + numeric ranges.
 	if (typeof title !== 'string' || !title.trim() || title.length > 200) {
 		throw error(400, 'title is required (≤200 characters)');
 	}
-	if (description !== undefined && description !== null && (typeof description !== 'string' || description.length > 5000)) {
+	if (
+		description !== undefined &&
+		description !== null &&
+		(typeof description !== 'string' || description.length > 5000)
+	) {
 		throw error(400, 'description must be ≤5,000 characters');
 	}
-	if (eventType !== undefined && eventType !== null && (typeof eventType !== 'string' || eventType.length > 32)) {
+	if (
+		eventType !== undefined &&
+		eventType !== null &&
+		(typeof eventType !== 'string' || eventType.length > 32)
+	) {
 		throw error(400, 'eventType must be ≤32 characters');
 	}
-	if (timezone !== undefined && timezone !== null && (typeof timezone !== 'string' || timezone.length > 64)) {
+	if (
+		timezone !== undefined &&
+		timezone !== null &&
+		(typeof timezone !== 'string' || timezone.length > 64)
+	) {
 		throw error(400, 'timezone must be ≤64 characters (IANA format)');
 	}
 	for (const [field, max] of [
@@ -50,13 +81,31 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (endAt !== undefined && endAt !== null && !Number.isFinite(new Date(endAt).getTime())) {
 		throw error(400, 'endAt must be a valid date');
 	}
-	if (latitude !== undefined && latitude !== null && (typeof latitude !== 'number' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90)) {
+	if (
+		latitude !== undefined &&
+		latitude !== null &&
+		(typeof latitude !== 'number' || !Number.isFinite(latitude) || latitude < -90 || latitude > 90)
+	) {
 		throw error(400, 'latitude must be a number -90 to 90');
 	}
-	if (longitude !== undefined && longitude !== null && (typeof longitude !== 'number' || !Number.isFinite(longitude) || longitude < -180 || longitude > 180)) {
+	if (
+		longitude !== undefined &&
+		longitude !== null &&
+		(typeof longitude !== 'number' ||
+			!Number.isFinite(longitude) ||
+			longitude < -180 ||
+			longitude > 180)
+	) {
 		throw error(400, 'longitude must be a number -180 to 180');
 	}
-	if (capacity !== undefined && capacity !== null && (typeof capacity !== 'number' || !Number.isInteger(capacity) || capacity < 0 || capacity > 1_000_000)) {
+	if (
+		capacity !== undefined &&
+		capacity !== null &&
+		(typeof capacity !== 'number' ||
+			!Number.isInteger(capacity) ||
+			capacity < 0 ||
+			capacity > 1_000_000)
+	) {
 		throw error(400, 'capacity must be an integer 0-1,000,000');
 	}
 

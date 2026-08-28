@@ -557,8 +557,12 @@ describe('POST /api/location/resolve-address', () => {
 			// Should still resolve with address data
 			expect(data.resolved).toBe(true);
 			expect(data.address.matched).toBeTruthy();
-			// District is null when officials is null (endpoint derives district_code from officials)
-			expect(data.district).toBeNull();
+			// BLOCKED is not ABSENT: an officials-fetch failure is a retrieval failure,
+			// never evidence that the person has no district. The endpoint therefore
+			// sources the district code from the resolver's own district hit, so the
+			// roster degrades to [] while the district survives intact.
+			expect(data.district).not.toBeNull();
+			expect(data.district.code).toBe('IL-18');
 			// Officials empty when Shadow Atlas returns null
 			expect(Array.isArray(data.officials)).toBe(true);
 			expect(data.officials).toHaveLength(0);

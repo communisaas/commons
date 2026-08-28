@@ -19,8 +19,6 @@
 import { describe, it, expect } from 'vitest';
 import {
 	pageFilteredRecipients,
-	collectFilteredRecipients,
-	countFilteredRecipients,
 	RECIPIENT_COHORT_CAP
 } from '../../../convex/_emailRecipientFilter';
 
@@ -29,10 +27,11 @@ type Supporter = {
 	orgId: string;
 	emailStatus: string;
 	emailHash: string;
+	globalEmailHash: string;
 	source?: string;
 };
 
-const ORG = 'org_1' as unknown as Parameters<typeof collectFilteredRecipients>[1];
+const ORG = 'org_1' as unknown as Parameters<typeof pageFilteredRecipients>[1];
 
 /**
  * Fake of the Convex query chain backing `.paginate()`. Pages the supplied row
@@ -43,8 +42,8 @@ function fakeCtx(rows: Supporter[], pageSize: number) {
 	let collectCalled = false;
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const ctx: any = {
-		db: {
-			query(_table: string) {
+			db: {
+				query(table: string) {
 					return {
 						withIndex(_name: string, fn: (q: unknown) => unknown) {
 							const q = {
@@ -79,8 +78,19 @@ function fakeCtx(rows: Supporter[], pageSize: number) {
 									collectCalled = true;
 									throw new Error('recipient resolution must not .collect() the supporter roster');
 								},
-								async take() {
-									throw new Error('recipient resolution must paginate, not take()');
+							async unique() {
+								if (table === 'contactAuthorityMigrations') {
+									return {
+										key: 'contact-authority-v1',
+										status: 'ready',
+										completedAt: 1
+									};
+								}
+								throw new Error(`unexpected unique() on ${table}`);
+							},
+							async take() {
+								if (table === 'contactAuthorities') return [];
+								throw new Error('supporter roster resolution must paginate, not take()');
 								}
 							};
 							// The fake's page size is fixed by the helper's internal
@@ -106,50 +116,10 @@ function makeRoster(total: number, subscribedEvery = 1): Supporter[] {
 		orgId: 'org_1',
 		emailStatus: i % subscribedEvery === 0 ? 'subscribed' : 'unsubscribed',
 		emailHash: `${'a'.repeat(63)}${(i % 16).toString(16)}`,
+		globalEmailHash: `${'b'.repeat(63)}${(i % 16).toString(16)}`,
 		source: i % 3 === 0 ? 'csv' : 'widget'
 	}));
 }
-
-describe('collectFilteredRecipients (bounded must-enumerate scan)', () => {
-	it('enumerates EVERY subscribed recipient across many page boundaries — none dropped', async () => {
-		// 3500 supporters, all subscribed; helper page size is 1000, so this
-		// crosses 4 page boundaries. A correct cursor walk returns all 3500.
-		const roster = makeRoster(3500);
-		const fake = fakeCtx(roster, 1000);
-		const { recipients, truncated } = await collectFilteredRecipients(fake.ctx, ORG, {});
-		expect(fake.collectCalled).toBe(false);
-		expect(recipients).toHaveLength(3500);
-		expect(truncated).toBe(false);
-		// No duplicates, no skips: the returned id set equals the input id set.
-		expect(new Set(recipients.map((r) => r._id)).size).toBe(3500);
-		expect(recipients[0]._id).toBe('s000000');
-		expect(recipients[3499]._id).toBe('s003499');
-	});
-
-	it('only counts subscribed rows — unsubscribed are filtered per page', async () => {
-		// Every 2nd supporter subscribed → 1250 of 2500.
-		const roster = makeRoster(2500, 2);
-		const { ctx } = fakeCtx(roster, 1000);
-		const { recipients } = await collectFilteredRecipients(ctx, ORG, {});
-		expect(recipients).toHaveLength(1250);
-		expect(recipients.every((r) => r.emailStatus === 'subscribed')).toBe(true);
-	});
-
-	it('truncates at the cohort cap and flags a floor (no silent drop without signal)', async () => {
-		const roster = makeRoster(RECIPIENT_COHORT_CAP + 250);
-		const { ctx } = fakeCtx(roster, 1000);
-		const { recipients, truncated } = await collectFilteredRecipients(ctx, ORG, {});
-		expect(truncated).toBe(true);
-		expect(recipients).toHaveLength(RECIPIENT_COHORT_CAP);
-	});
-
-	it('an empty roster yields no recipients and is not truncated', async () => {
-		const { ctx } = fakeCtx([], 1000);
-		const { recipients, truncated } = await collectFilteredRecipients(ctx, ORG, {});
-		expect(recipients).toHaveLength(0);
-		expect(truncated).toBe(false);
-	});
-});
 
 describe('pageFilteredRecipients (resumable send-batch page)', () => {
 	it('the send loop walks the full cohort page-by-page — concatenation drops nothing', async () => {
@@ -225,34 +195,5 @@ describe('pageFilteredRecipients (resumable send-batch page)', () => {
 		}
 		expect(seen).toHaveLength(100);
 		expect(new Set(seen).size).toBe(100);
-	});
-});
-
-describe('countFilteredRecipients (bounded count + source breakdown)', () => {
-	it('counts the full subscribed cohort across page boundaries (matches collect)', async () => {
-		const roster = makeRoster(3500);
-		const fake = fakeCtx(roster, 1000);
-		const { totalCount, truncated } = await countFilteredRecipients(fake.ctx, ORG, {});
-		expect(fake.collectCalled).toBe(false);
-		expect(totalCount).toBe(3500);
-		expect(truncated).toBe(false);
-	});
-
-	it('source breakdown sums to the total (subscribed only)', async () => {
-		const roster = makeRoster(2400); // every 3rd source=csv, rest widget
-		const { ctx } = fakeCtx(roster, 1000);
-		const { totalCount, sourceCounts } = await countFilteredRecipients(ctx, ORG, {});
-		const sum = Object.values(sourceCounts).reduce((a, b) => a + b, 0);
-		expect(sum).toBe(totalCount);
-		expect(sourceCounts.csv).toBe(800);
-		expect(sourceCounts.widget).toBe(1600);
-	});
-
-	it('count saturates at the cap and flags truncated (a floor)', async () => {
-		const roster = makeRoster(RECIPIENT_COHORT_CAP + 100);
-		const { ctx } = fakeCtx(roster, 1000);
-		const { totalCount, truncated } = await countFilteredRecipients(ctx, ORG, {});
-		expect(totalCount).toBe(RECIPIENT_COHORT_CAP);
-		expect(truncated).toBe(true);
 	});
 });

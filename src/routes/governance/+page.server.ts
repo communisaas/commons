@@ -1,10 +1,14 @@
 // CONVEX: Fully migrated — debates awaiting governance via Convex query
 import { error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
-import type { AIResolutionData, ArgumentAIScore, MinerEvaluation } from '$lib/stores/debateState.svelte';
+import type {
+	AIResolutionData,
+	ArgumentAIScore,
+	MinerEvaluation
+} from '$lib/stores/debateState.svelte';
 
 /**
  * Governance Dashboard — loads all debates awaiting governance review.
@@ -28,6 +32,7 @@ interface GovernanceCase {
 	uniqueParticipants: number | null;
 	aiPanelConsensus: number | null;
 	escalatedAt: string;
+	hasMoreArguments: boolean;
 	arguments: {
 		argumentIndex: number;
 		stance: string;
@@ -103,10 +108,15 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const focusDebateId = url.searchParams.get('debate');
+	const caseCursor = url.searchParams.get('caseCursor');
+	if (caseCursor && caseCursor.length > 2_048) throw error(400, 'Invalid governance cursor');
 
-	const debates = await serverQuery(api.debates.listAwaitingGovernance, {});
+	const debates = await serverQuery(api.debates.listAwaitingGovernance, {
+		cursor: caseCursor,
+		limit: 10
+	});
 
-	const cases: GovernanceCase[] = debates.map((d) => {
+	const cases: GovernanceCase[] = debates.data.map((d) => {
 		const blob = (d.aiResolution ?? {}) as Record<string, unknown>;
 
 		return {
@@ -123,6 +133,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 			uniqueParticipants: d.uniqueParticipants,
 			aiPanelConsensus: d.aiPanelConsensus,
 			escalatedAt: new Date(d.updatedAt).toISOString(),
+			hasMoreArguments: d.hasMoreArguments,
 			arguments: d.arguments,
 			aiResolution: d.aiResolution
 				? buildResolutionData(blob, d.arguments, d.aiSignatureCount)
@@ -130,5 +141,16 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		};
 	});
 
-	return { cases, focusDebateId };
+	return {
+		cases,
+		focusDebateId,
+		casePagination: {
+			isFirstPage: caseCursor === null,
+			hasMore: debates.hasMore,
+			firstPageUrl: '/governance',
+			nextPageUrl: debates.cursor
+				? `/governance?caseCursor=${encodeURIComponent(debates.cursor)}`
+				: null
+		}
+	};
 };

@@ -17,9 +17,11 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { computeSourceCacheInputHash } from '$lib/server/source-cache-key';
 
 const {
 	mockModeratePromptOnly,
+	mockClassifySafety,
 	mockEnforceLLMRateLimit,
 	mockGenerateMessage,
 	mockServerMutation,
@@ -41,6 +43,15 @@ const {
 
 	return {
 		mockModeratePromptOnly: vi.fn(),
+		mockClassifySafety: vi.fn(async () => ({
+			safe: true,
+			hazards: [],
+			blocking_hazards: [],
+			hazard_descriptions: [],
+			reasoning: 'safe',
+			timestamp: new Date().toISOString(),
+			model: 'test'
+		})),
 		mockEnforceLLMRateLimit: vi.fn(),
 		mockGenerateMessage: vi.fn(),
 		mockServerMutation: vi.fn(),
@@ -75,7 +86,8 @@ const {
 });
 
 vi.mock('$lib/core/server/moderation', () => ({
-	moderatePromptOnly: mockModeratePromptOnly
+	moderatePromptOnly: mockModeratePromptOnly,
+	classifySafety: mockClassifySafety
 }));
 
 vi.mock('$lib/server/llm-cost-protection', () => ({
@@ -84,7 +96,12 @@ vi.mock('$lib/server/llm-cost-protection', () => ({
 	addRateLimitHeaders: vi.fn(),
 	getUserContext: vi.fn(() => ({ userId: 'test-user', tier: 'authenticated' })),
 	logLLMOperation: vi.fn(),
-	computeCostUsd: vi.fn(() => ({ totalCostUsd: 0.0142, components: {}, tokenUsage: undefined, externalCounts: undefined }))
+	computeCostUsd: vi.fn(() => ({
+		totalCostUsd: 0.0142,
+		components: {},
+		tokenUsage: undefined,
+		externalCounts: undefined
+	}))
 }));
 
 vi.mock('$lib/core/agents/agents/message-writer', () => ({
@@ -158,13 +175,11 @@ function baseBody(overrides: Record<string, unknown> = {}) {
 		subject_line: 'Clean water for our city',
 		core_message: 'Please support the watershed restoration bill',
 		topics: ['water', 'environment'],
-		decision_makers: [
-			{ name: 'A. Mayor', title: 'Mayor', organization: 'City of Springfield' }
-		],
+		decision_makers: [{ name: 'A. Mayor', title: 'Mayor', organization: 'City of Springfield' }],
 		voice_sample: 'My kid is asthmatic — the air matters here.',
 		raw_input: 'I want clean air and clean water for my family.',
 		geographic_scope: {
-			type: 'subnational',
+			type: 'subnational' as const,
 			country: 'US',
 			subdivision: 'IL',
 			locality: 'Springfield'
@@ -231,8 +246,7 @@ describe('agent-trace pipeline — happy path', () => {
 
 		// traceEnd fires with success=true on the happy path
 		expect(mockTraceEnd).toHaveBeenCalledTimes(1);
-		const [endTraceId, endEndpoint, success, durationMs, endPayload] =
-			mockTraceEnd.mock.calls[0];
+		const [endTraceId, endEndpoint, success, durationMs, endPayload] = mockTraceEnd.mock.calls[0];
 		expect(endTraceId).toBe(traceId);
 		expect(endEndpoint).toBe('message-generation');
 		expect(success).toBe(true);
@@ -360,15 +374,24 @@ describe('agent-trace pipeline — prompt-injection short circuit', () => {
 
 describe('agent-trace pipeline — source-cache event', () => {
 	it('fires source-cache event with full source URLs/titles when cache hits', async () => {
+		const body = baseBody({ template_id: 'tmpl-1' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
 		mockServerQuery.mockResolvedValueOnce({
 			cachedSources: [
 				{ num: 1, title: 'cached A', url: 'https://example.com/a', type: 'journalism' },
 				{ num: 2, title: 'cached B', url: 'https://example.com/b', type: 'government' }
 			],
-			sourcesCachedAt: Date.now()
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash
 		});
 
-		const event = createEvent(baseBody({ template_id: 'tmpl-1' }));
+		const event = createEvent(body);
 		await POST(event);
 		await event.waitUntilPromise;
 
@@ -397,6 +420,160 @@ describe('agent-trace pipeline — source-cache event', () => {
 			templateId: 'tmpl-1',
 			sourceCount: 2
 		});
+	});
+
+	it('treats a fresh cache for different research inputs as a miss', async () => {
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources: [
+				{ num: 1, title: 'unrelated', url: 'https://example.com/other', type: 'journalism' }
+			],
+			sourcesCachedAt: Date.now(),
+			sourceCacheInputHash: '0'.repeat(64)
+		});
+
+		const event = createEvent(baseBody({ template_id: 'tmpl-mismatch' }));
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockGenerateMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ verifiedSources: undefined })
+		);
+		const cacheEvent = mockTraceEvent.mock.calls.find(([, , evt]) => evt === 'source-cache');
+		expect(cacheEvent?.[3]).toMatchObject({ cacheHit: false, sourceCount: 0 });
+		expect(mockTraceEvent.mock.calls.some(([, , evt]) => evt === 'source-discovery-skipped')).toBe(
+			false
+		);
+	});
+
+	it('treats a matching cache timestamped in the future as a miss', async () => {
+		const body = baseBody({ template_id: 'tmpl-future' });
+		const sourceCacheInputHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		const cachedSources = [
+			{ num: 1, title: 'future', url: 'https://example.com/future', type: 'journalism' }
+		];
+		mockServerQuery.mockResolvedValueOnce({
+			cachedSources,
+			sourcesCachedAt: Date.now() + 60 * 60 * 1000,
+			sourceCacheInputHash
+		});
+
+		const event = createEvent(body);
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockGenerateMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ verifiedSources: undefined })
+		);
+		expect(
+			mockTraceEvent.mock.calls.find(([, , evt]) => evt === 'source-cache')?.[3]
+		).toMatchObject({ cacheHit: false, sourceCount: 0 });
+	});
+
+	it('writes the same server-derived research-input hash beside fresh source ground', async () => {
+		const body = baseBody({ template_id: 'tmpl-write' });
+		const expectedHash = await computeSourceCacheInputHash({
+			subjectLine: body.subject_line,
+			coreMessage: body.core_message,
+			topics: body.topics,
+			geographicScope: body.geographic_scope,
+			decisionMakers: body.decision_makers
+		});
+		mockServerQuery.mockResolvedValueOnce(null);
+		mockGenerateMessage.mockResolvedValueOnce({
+			message: 'Generated body',
+			sources: [],
+			evaluatedSources: [
+				{
+					num: 1,
+					title: 'Bound source',
+					url: 'https://example.com/source',
+					type: 'journalism',
+					snippet: 'Bound report',
+					relevance: 'Directly relevant',
+					excerpt: 'Evidence',
+					credibility_rationale: 'Independent reporting.',
+					incentive_position: 'neutral',
+					source_order: 'secondary'
+				}
+			],
+			research_log: []
+		});
+
+		const event = createEvent(body);
+		await POST(event);
+		await event.waitUntilPromise;
+
+		expect(mockServerMutation).toHaveBeenCalledWith(
+			api.templates.updateSourceCache,
+			expect.objectContaining({
+				templateId: 'tmpl-write',
+				sourceCacheInputHash: expectedHash
+			})
+		);
+	});
+
+	it('registers the cache mutation as its own lifetime task without holding the client stream open', async () => {
+		let releaseCacheWrite: (() => void) | undefined;
+		let cacheWriteSettled = false;
+		const pendingCacheWrite = new Promise<void>((resolve) => {
+			releaseCacheWrite = resolve;
+		}).finally(() => {
+			cacheWriteSettled = true;
+		});
+
+		mockServerQuery.mockResolvedValueOnce(null);
+		mockGenerateMessage.mockResolvedValueOnce({
+			message: 'Generated body',
+			sources: [],
+			evaluatedSources: [
+				{
+					num: 1,
+					title: 'Bound source',
+					url: 'https://example.com/source',
+					type: 'journalism',
+					snippet: 'Bound report',
+					relevance: 'Directly relevant',
+					excerpt: 'Evidence',
+					credibility_rationale: 'Independent reporting.',
+					incentive_position: 'neutral',
+					source_order: 'secondary'
+				}
+			],
+			research_log: []
+		});
+		mockServerMutation.mockImplementation((fn: string) =>
+			fn === api.templates.updateSourceCache ? pendingCacheWrite : Promise.resolve()
+		);
+
+		const event = createEvent(baseBody({ template_id: 'tmpl-durable-write' }));
+		await POST(event);
+
+		try {
+			await vi.waitFor(() => {
+				expect(event.platform.context.waitUntil).toHaveBeenCalledTimes(2);
+			});
+			const generationTask = event.platform.context.waitUntil.mock.calls[0][0] as Promise<unknown>;
+			const registeredCacheWrite = event.platform.context.waitUntil.mock
+				.calls[1][0] as Promise<unknown>;
+
+			await generationTask;
+			expect(mockEmitter.complete).toHaveBeenCalledTimes(1);
+			expect(mockEmitter.close).toHaveBeenCalledTimes(1);
+			expect(cacheWriteSettled).toBe(false);
+
+			releaseCacheWrite?.();
+			await registeredCacheWrite;
+			expect(cacheWriteSettled).toBe(true);
+		} finally {
+			releaseCacheWrite?.();
+			await pendingCacheWrite;
+		}
 	});
 
 	it('does not fire source-discovery-skipped on cache miss', async () => {

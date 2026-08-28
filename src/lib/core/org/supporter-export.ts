@@ -23,26 +23,45 @@ export interface SupporterPageResult<T> {
 /**
  * Page a cursor-based supporter list to exhaustion.
  *
- * The server scans at most 10,000 rows per org list query, so exhaustion here
- * means "everything the list endpoint can reach" — callers compare the result
- * count against the org total to detect truncation (see `exportSummary`).
- * Guards against repeated cursors so a misbehaving endpoint cannot loop.
+ * Each request advances one opaque database cursor. Exhaustion therefore means
+ * every matching row, regardless of roster size. Cursor and row-identity
+ * checks fail closed: an export never silently accepts a reread or partial
+ * continuation.
  */
 export async function fetchAllSupporters<T>(
 	fetchPage: (cursor: string | null) => Promise<SupporterPageResult<T>>,
 	onProgress?: (fetched: number) => void
 ): Promise<T[]> {
 	const all: T[] = [];
-	const seenCursors = new Set<string>();
+	const requestedCursors = new Set<string>();
+	const seenRows = new Set<string>();
 	let cursor: string | null = null;
 
 	for (;;) {
+		if (cursor !== null) {
+			if (requestedCursors.has(cursor)) throw new Error('SUPPORTER_CURSOR_REPEATED');
+			requestedCursors.add(cursor);
+		}
 		const page = await fetchPage(cursor);
+		for (const row of page.supporters) {
+			const candidate = row as { id?: unknown; _id?: unknown };
+			const identity =
+				typeof candidate.id === 'string'
+					? candidate.id
+					: typeof candidate._id === 'string'
+						? candidate._id
+						: null;
+			if (!identity) throw new Error('SUPPORTER_PAGE_ROW_ID_MISSING');
+			if (seenRows.has(identity)) throw new Error('SUPPORTER_PAGE_ROW_REPEATED');
+			seenRows.add(identity);
+		}
 		all.push(...page.supporters);
 		onProgress?.(all.length);
-		if (!page.hasMore || !page.nextCursor) break;
-		if (seenCursors.has(page.nextCursor)) break;
-		seenCursors.add(page.nextCursor);
+		if (!page.hasMore) break;
+		if (!page.nextCursor) throw new Error('SUPPORTER_CURSOR_MISSING');
+		if (page.nextCursor === cursor || requestedCursors.has(page.nextCursor)) {
+			throw new Error('SUPPORTER_CURSOR_REPEATED');
+		}
 		cursor = page.nextCursor;
 	}
 
@@ -336,8 +355,9 @@ export interface ExportSummary {
 }
 
 /**
- * States exactly how many of how many rows the export reached. The list query
- * scans at most 10,000 rows per org, so very large lists truncate honestly.
+ * States exactly how many rows the cursor traversal exported. A mismatch is no
+ * longer a known scan cap: it means the live list changed while the multi-page
+ * export ran (or a caller supplied a non-authoritative total).
  */
 export function exportSummary(exportedCount: number, totalCount: number): ExportSummary {
 	const fmt = (n: number) => n.toLocaleString('en-US');
@@ -345,7 +365,7 @@ export function exportSummary(exportedCount: number, totalCount: number): Export
 	return {
 		truncated,
 		message: truncated
-			? `Exported ${fmt(exportedCount)} of ${fmt(totalCount)} people. The remaining ${fmt(totalCount - exportedCount)} rows are beyond the per-export scan limit.`
+			? `Exported ${fmt(exportedCount)} of the current ${fmt(totalCount)} people. The list changed while this cursor export was running; run it again for a same-moment takeout.`
 			: `Exported ${fmt(exportedCount)} of ${fmt(totalCount)} people.`
 	};
 }

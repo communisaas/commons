@@ -1,0 +1,7 @@
+# Independent paid-provider posture signer Ed25519 public keys are enrolled
+# here only through an explicitly reviewed protected-main change. Format:
+# principal namespaces="commons-paid-provider-posture-v1" ssh-ed25519 AAAA...
+#
+# Enrollment is deliberately empty. Normal production release must fail closed
+# until an independent signer is enrolled and fresh exact-account evidence is
+# captured. Never store private keys, provider credentials, or account IDs here.

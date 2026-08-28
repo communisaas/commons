@@ -1,0 +1,12 @@
+name = "communique-site"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat", "nodejs_als"]
+pages_build_output_dir = ".svelte-kit/cloudflare"
+
+# Emergency containment is deliberately capability-minimal. The artifact may
+# receive only Pages secrets that Cloudflare preserves out of band; this source
+# of truth declares no plain-text vars, KV, R2, Durable Object, D1, service,
+# queue, Hyperdrive, Vectorize, Analytics Engine, Workers AI, or other storage
+# binding. Both the preview proof and the production publication use this exact
+# config, and the workflow verifies the resulting Pages environment is free of
+# application bindings before it can continue.

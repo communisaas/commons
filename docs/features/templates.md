@@ -9,7 +9,16 @@
 - **Nested arrays, not separate tables:** `jurisdictions` and `scopes` are flattened onto the template record as `v.array(v.object({...}))`.
 - **Category is deprecated:** `category` remains as a backward-compat string; the primary grouping fields are `domain` + `topics`.
 - **Draft store encrypts DM emails separately:** `templateDraftStore` (`src/lib/stores/templateDraft.ts`) strips decision-maker emails from the plaintext draft and encrypts them in a separate localStorage key to avoid plaintext PII.
-- **`recipientConfig`** is stored as opaque `v.any()`; there is no typed `recipientEmails` computed field on current responses.
+- **`recipientConfig`** is stored as opaque `v.any()` and must never cross a
+  public boundary wholesale. Cacheable discovery projections return
+  `recipient_config: null`, `recipientEmails: []`, and only the non-identifying
+  `recipient_count` scalar. The indexed, published-only detail query constructs
+  an explicit public roster allowlist for the anonymous mailto flow. Up to 50
+  normalized public-official addresses, identity/role fields, send-page prompts,
+  rank, and a validated credential-free bare HTTP(S) email-verification link
+  (no userinfo, query, or fragment) are intentionally public and scrapeable.
+  Delivery, CWC, free-form provenance,
+  authoring, and unknown recipient-config fields remain redacted.
 
 ---
 
@@ -92,14 +101,17 @@ A unique constraint on `(userId, content_hash)` prevents the same author from pu
 
 ### `GET /api/templates`
 
-Returns all public templates (`is_public: true`), ordered by creation date descending.
+Returns the newest 50 published, public templates from the bounded discovery
+materialization, ordered by creation date descending. It is a landing-page/API
+projection, not an unpaginated export of the complete public-template corpus.
 
 Response includes computed fields:
 - `coordinationScale` -- logarithmic 0-1 scale based on `verified_sends` (for visual weight in UI)
 - `isNew` -- true if created within the last 7 days
 - `hasActiveDebate` -- cross-referenced from the Debate table
 - `scopes` -- joined from `TemplateScope` table for hierarchical location filtering
-- `recipientEmails` -- extracted from `recipient_config` JSON
+- `recipient_count` -- non-identifying target cardinality; raw recipient config
+  and email addresses are stripped from anonymous responses
 
 ### `POST /api/templates`
 

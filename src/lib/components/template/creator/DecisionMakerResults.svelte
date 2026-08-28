@@ -7,6 +7,10 @@
 	import CustomDecisionMakerForm from './CustomDecisionMakerForm.svelte';
 	import { isDuplicateEmail } from '$lib/utils/decision-maker-processing';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import {
+		countUnestablishedTargets,
+		describeDeliveryTier
+	} from '$lib/core/agents/delivery-tier-copy';
 
 	const labels = getJurisdictionLabels();
 
@@ -32,10 +36,26 @@
 	let showCustomForm = $state(false);
 	let duplicateError = $state<string | null>(null);
 
-	const withEmail = $derived(decisionMakers?.filter(dm => dm.email) || []);
-	const withoutEmail = $derived(decisionMakers?.filter(dm => !dm.email) || []);
+	const withEmail = $derived(decisionMakers?.filter((dm) => dm.email) || []);
+	const withoutEmail = $derived(decisionMakers?.filter((dm) => !dm.email) || []);
 	const totalRecipients = $derived(
 		withEmail.length + (customRecipients?.length || 0) + (includesCongress ? 1 : 0)
+	);
+
+	// The headline above counts any address as "a contactable public email route".
+	// The delivery tier is the server's read of whether the institution actually
+	// publishes that address as a channel for this decision, so this caution
+	// repairs the headline in place. It is counted over the FULL roster rather
+	// than a filtered slice, and `delivery-tier-copy.ts` speaks only about the
+	// restrictive case — a route with no such evidence, or a tier a client forged,
+	// produces silence rather than a claim in either direction.
+	const unestablishedCount = $derived(countUnestablishedTargets(decisionMakers));
+	const unestablishedCopy = $derived(describeDeliveryTier('C') ?? '');
+	const unestablishedNames = $derived(
+		(decisionMakers ?? [])
+			.filter((dm) => describeDeliveryTier(dm?.deliveryTier) !== null)
+			.map((dm) => dm?.name)
+			.filter((name): name is string => typeof name === 'string' && name.trim().length > 0)
 	);
 
 	function handleAddCustom(recipient: { email: string; name: string; organization?: string }) {
@@ -63,9 +83,7 @@
 
 	function handleUpdateEmail(index: number, email: string) {
 		if (!decisionMakers) return;
-		decisionMakers = decisionMakers.map((dm, i) =>
-			i === index ? { ...dm, email } : dm
-		);
+		decisionMakers = decisionMakers.map((dm, i) => (i === index ? { ...dm, email } : dm));
 	}
 </script>
 
@@ -75,9 +93,12 @@
 		<h3 class="text-lg font-semibold text-slate-900 md:text-xl">
 			{#if decisionMakers?.length > 0}
 				{#if withEmail.length > 0}
-					We found {withEmail.length} decision-maker{withEmail.length === 1 ? '' : 's'} with verified contact
+					We found {withEmail.length} decision-maker{withEmail.length === 1 ? '' : 's'} with a contactable
+					public email route
 				{:else}
-					We identified {decisionMakers.length} decision-maker{decisionMakers.length === 1 ? '' : 's'}
+					We identified {decisionMakers.length} decision-maker{decisionMakers.length === 1
+						? ''
+						: 's'}
 				{/if}
 			{:else}
 				Add decision-makers
@@ -85,20 +106,35 @@
 		</h3>
 		{#if withoutEmail.length > 0 && withEmail.length > 0}
 			<p class="mt-1 text-sm text-slate-600">
-				{withoutEmail.length} more identified — add their email to include them
+				{withoutEmail.length} more identified — review each contact-route finding or add an email to include
+				them
 			</p>
 		{:else if withoutEmail.length > 0 && withEmail.length === 0}
 			<p class="mt-1 text-sm text-amber-600">
-				Email addresses weren't found in public sources. Add emails to include them, or add recipients manually below.
+				No contactable public email route was confirmed. Review each contact-route finding, add an
+				email, or add recipients manually below.
 			</p>
 		{:else if totalRecipients > 0}
 			<p class="mt-1 text-sm text-slate-600">
 				Total recipients: {totalRecipients}
 			</p>
 		{/if}
+		{#if unestablishedCount > 0}
+			<p class="reach-unestablished mt-1 text-sm text-slate-600">
+				{unestablishedCount}
+				{unestablishedCount === 1 ? 'route' : 'routes'} not established. {unestablishedCopy}
+				{#if unestablishedNames.length > 0}
+					Review below: {unestablishedNames.slice(0, 3).join(', ')}{unestablishedNames.length > 3
+						? ` +${unestablishedNames.length - 3} more`
+						: ''}
+				{/if}
+			</p>
+		{/if}
 		{#if audienceGuidance}
-			<p class="mt-1 text-xs italic text-slate-500">
-				Your guidance: "{audienceGuidance.length > 80 ? audienceGuidance.slice(0, 77) + '...' : audienceGuidance}"
+			<p class="mt-1 text-xs text-slate-500 italic">
+				Your guidance: "{audienceGuidance.length > 80
+					? audienceGuidance.slice(0, 77) + '...'
+					: audienceGuidance}"
 			</p>
 		{/if}
 	</div>
@@ -146,7 +182,7 @@
 		<button
 			type="button"
 			onclick={() => (showCustomForm = true)}
-			class="inline-flex items-center gap-2 rounded-lg border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition-colors hover:border-participation-primary-400 hover:bg-participation-primary-50 hover:text-participation-primary-700"
+			class="hover:border-participation-primary-400 hover:bg-participation-primary-50 hover:text-participation-primary-700 inline-flex items-center gap-2 rounded-lg border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition-colors"
 		>
 			<Plus class="h-4 w-4" />
 			Add another decision-maker
@@ -167,10 +203,12 @@
 				<input
 					type="checkbox"
 					bind:checked={includesCongress}
-					class="mt-0.5 h-5 w-5 rounded border-slate-300 text-participation-primary-600 focus:ring-2 focus:ring-participation-primary-500"
+					class="text-participation-primary-600 focus:ring-participation-primary-500 mt-0.5 h-5 w-5 rounded border-slate-300 focus:ring-2"
 				/>
 				<div class="flex-1">
-					<p class="font-medium text-slate-900">Also send to my {labels.legislativeAdjective} representatives</p>
+					<p class="font-medium text-slate-900">
+						Also send to my {labels.legislativeAdjective} representatives
+					</p>
 					<p class="mt-0.5 text-sm text-slate-600">
 						Your message will be sent via certified delivery to your House rep and both Senators
 					</p>
@@ -183,7 +221,8 @@
 	{#if (decisionMakers?.length || 0) === 0 && (customRecipients?.length || 0) === 0 && !includesCongress}
 		<div class="rounded-lg border-2 border-dashed border-slate-200 bg-slate-50 p-8 text-center">
 			<p class="text-sm text-slate-600">
-				No decision-makers found. Add contacts manually{#if FEATURES.CONGRESSIONAL} or include {labels.legislativeAdjective} representatives{/if}.
+				No decision-makers found. Add contacts manually{#if FEATURES.CONGRESSIONAL}
+					or include {labels.legislativeAdjective} representatives{/if}.
 			</p>
 		</div>
 	{/if}

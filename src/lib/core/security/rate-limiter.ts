@@ -69,16 +69,20 @@ export interface RouteRateLimitConfig extends RateLimitConfig {
 /**
  * Storage backend interface for rate limit data
  */
+interface RateLimitReservation {
+	/** Whether this reservation consumed one request slot. */
+	allowed: boolean;
+	/** Post-reservation count, or the current count when denied. */
+	count: number;
+	/** Oldest admitted request still inside the window. */
+	oldestTimestamp: number;
+}
+
 interface RateLimitStore {
 	/**
-	 * Get timestamps for a key, filtered to only those within windowMs of now
+	 * Atomically prune the window and reserve a slot when capacity remains.
 	 */
-	getTimestamps(key: string, windowMs: number): Promise<number[]>;
-
-	/**
-	 * Add a timestamp and clean up old entries
-	 */
-	addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void>;
+	reserve(key: string, timestamp: number, config: RateLimitConfig): Promise<RateLimitReservation>;
 
 	/**
 	 * Get statistics about the store
@@ -109,21 +113,36 @@ class InMemoryStore implements RateLimitStore {
 		}
 	}
 
-	async getTimestamps(key: string, windowMs: number): Promise<number[]> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
-		const timestamps = this.store.get(key) || [];
-		return timestamps.filter((ts) => ts > cutoff);
-	}
-
-	async addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
+	async reserve(
+		key: string,
+		timestamp: number,
+		config: RateLimitConfig
+	): Promise<RateLimitReservation> {
+		const cutoff = timestamp - config.windowMs;
 		const existing = this.store.get(key) || [];
-		// Filter old timestamps and add new one
 		const filtered = existing.filter((ts) => ts > cutoff);
+		const oldestTimestamp =
+			filtered.length > 0
+				? filtered.reduce((oldest, candidate) => Math.min(oldest, candidate), Infinity)
+				: timestamp;
+
+		if (filtered.length >= config.maxRequests) {
+			this.store.set(key, filtered);
+			return {
+				allowed: false,
+				count: filtered.length,
+				oldestTimestamp
+			};
+		}
+
 		filtered.push(timestamp);
 		this.store.set(key, filtered);
+
+		return {
+			allowed: true,
+			count: filtered.length,
+			oldestTimestamp: Math.min(oldestTimestamp, timestamp)
+		};
 	}
 
 	private cleanup(): void {
@@ -170,11 +189,11 @@ class InMemoryStore implements RateLimitStore {
  * - Score = timestamp
  * - Member = unique request ID (timestamp + random suffix)
  *
- * Commands used:
+ * One Lua EVAL atomically performs:
  * - ZREMRANGEBYSCORE: Remove old entries
  * - ZCARD: Count entries in window
- * - ZADD: Add new timestamp
- * - EXPIRE: Auto-cleanup
+ * - ZADD: Conditionally reserve one request slot
+ * - PEXPIRE: Auto-cleanup
  */
 class RedisStore implements RateLimitStore {
 	private client: RedisClient | null = null;
@@ -225,30 +244,48 @@ class RedisStore implements RateLimitStore {
 		}
 	}
 
-	async getTimestamps(key: string, windowMs: number): Promise<number[]> {
+	async reserve(
+		key: string,
+		timestamp: number,
+		config: RateLimitConfig
+	): Promise<RateLimitReservation> {
 		const client = await this.getClient();
-		const now = Date.now();
-		const cutoff = now - windowMs;
+		const cutoff = timestamp - config.windowMs;
+		const member = `${timestamp}:${crypto.randomUUID()}`;
+		const ttlMs = config.windowMs * 2;
 
-		// Remove old entries first
-		await client.zRemRangeByScore(key, '-inf', cutoff.toString());
+		const rawResult = await client.eval(REDIS_RESERVE_SCRIPT, {
+			keys: [key],
+			arguments: [
+				timestamp.toString(),
+				cutoff.toString(),
+				config.maxRequests.toString(),
+				member,
+				ttlMs.toString()
+			]
+		});
 
-		// Get all remaining entries (they're all within window)
-		const members = await client.zRange(key, 0, -1);
+		if (!Array.isArray(rawResult) || rawResult.length !== 3) {
+			throw new Error('[RateLimiter] Redis reservation returned an invalid result');
+		}
 
-		// Extract timestamps from members (format: "timestamp:random")
-		return members.map((m) => parseInt(m.split(':')[0], 10));
-	}
+		const allowed = Number(rawResult[0]);
+		const count = Number(rawResult[1]);
+		const oldestTimestamp = Number(rawResult[2]);
+		if (
+			(allowed !== 0 && allowed !== 1) ||
+			!Number.isSafeInteger(count) ||
+			count < 0 ||
+			!Number.isFinite(oldestTimestamp)
+		) {
+			throw new Error('[RateLimiter] Redis reservation returned invalid values');
+		}
 
-	async addTimestamp(key: string, timestamp: number, windowMs: number): Promise<void> {
-		const client = await this.getClient();
-
-		// Add new timestamp with unique member
-		const member = `${timestamp}:${Math.random().toString(36).slice(2, 10)}`;
-		await client.zAdd(key, { score: timestamp, value: member });
-
-		// Set expiry to clean up abandoned keys (2x window to be safe)
-		await client.expire(key, Math.ceil((windowMs * 2) / 1000));
+		return {
+			allowed: allowed === 1,
+			count,
+			oldestTimestamp
+		};
 	}
 
 	getStats(): { implementation: string } {
@@ -266,12 +303,39 @@ class RedisStore implements RateLimitStore {
 	}
 }
 
+const REDIS_RESERVE_SCRIPT = `
+local key = KEYS[1]
+local timestamp = tonumber(ARGV[1])
+local cutoff = tonumber(ARGV[2])
+local max_requests = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl_ms = tonumber(ARGV[5])
+
+redis.call('ZREMRANGEBYSCORE', key, '-inf', cutoff)
+
+local count = redis.call('ZCARD', key)
+local allowed = 0
+if count < max_requests then
+	redis.call('ZADD', key, timestamp, member)
+	redis.call('PEXPIRE', key, ttl_ms)
+	count = count + 1
+	allowed = 1
+end
+
+local oldest_timestamp = timestamp
+if count > 0 then
+	local oldest = redis.call('ZRANGE', key, 0, 0, 'WITHSCORES')
+	if oldest[2] then
+		oldest_timestamp = tonumber(oldest[2])
+	end
+end
+
+return { allowed, count, oldest_timestamp }
+`;
+
 // Minimal Redis client interface (avoids full type import)
 interface RedisClient {
-	zRemRangeByScore(key: string, min: string, max: string): Promise<number>;
-	zRange(key: string, start: number, stop: number): Promise<string[]>;
-	zAdd(key: string, member: { score: number; value: string }): Promise<number>;
-	expire(key: string, seconds: number): Promise<boolean>;
+	eval(script: string, options: { keys: string[]; arguments: string[] }): Promise<unknown>;
 	quit(): Promise<string>;
 }
 
@@ -309,8 +373,7 @@ export class SlidingWindowRateLimiter {
 			// rather than the codebase silently degrading.
 			const nodeEnv = env.NODE_ENV ?? process.env.NODE_ENV;
 			const allowMemory =
-				env.RATE_LIMITER_ALLOW_MEMORY === '1' ||
-				process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
+				env.RATE_LIMITER_ALLOW_MEMORY === '1' || process.env.RATE_LIMITER_ALLOW_MEMORY === '1';
 			if (nodeEnv === 'production' && !allowMemory) {
 				throw new Error(
 					'[RateLimiter] In-memory fallback in production must be explicit. ' +
@@ -336,17 +399,13 @@ export class SlidingWindowRateLimiter {
 	async check(key: string, config: RateLimitConfig): Promise<RateLimitResult> {
 		const { maxRequests, windowMs } = config;
 		const now = Date.now();
-
-		// Get current timestamps in window
-		const timestamps = await this.store.getTimestamps(key, windowMs);
-		const count = timestamps.length;
+		const reservation = await this.store.reserve(key, now, config);
 
 		// Calculate reset time (oldest timestamp + window, or now + window if empty)
-		const oldestTimestamp = timestamps.length > 0 ? Math.min(...timestamps) : now;
-		const resetMs = oldestTimestamp + windowMs;
+		const resetMs = reservation.oldestTimestamp + windowMs;
 		const resetSeconds = Math.ceil(resetMs / 1000);
 
-		if (count >= maxRequests) {
+		if (!reservation.allowed) {
 			// Rate limit exceeded
 			const retryAfter = Math.ceil((resetMs - now) / 1000);
 			return {
@@ -358,12 +417,9 @@ export class SlidingWindowRateLimiter {
 			};
 		}
 
-		// Add this request
-		await this.store.addTimestamp(key, now, windowMs);
-
 		return {
 			allowed: true,
-			remaining: maxRequests - count - 1,
+			remaining: Math.max(0, maxRequests - reservation.count),
 			limit: maxRequests,
 			reset: resetSeconds
 		};
@@ -426,9 +482,36 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip'
 	},
 	{
+		pattern: '/api/shadow-atlas/engagement',
+		maxRequests: 10,
+		windowMs: 60 * 1000, // replay is cached/coalesced; cap authenticated claim traffic
+		keyStrategy: 'user'
+	},
+	{
 		pattern: '/api/shadow-atlas/register',
 		maxRequests: 5,
 		windowMs: 60 * 1000, // 1 minute
+		keyStrategy: 'user'
+	},
+	{
+		pattern: '/api/deliveries/record',
+		maxRequests: 5,
+		windowMs: 60 * 1000, // mirrors the durable actor-template Convex admission
+		keyStrategy: 'user'
+	},
+	{
+		// Both Convex mutations independently share one durable five-per-minute
+		// identity budget. These request-layer rules reject ordinary replay before
+		// request parsing or route-level Convex work is attempted.
+		pattern: '/api/positions/batch-register',
+		maxRequests: 5,
+		windowMs: 60 * 1000,
+		keyStrategy: 'user'
+	},
+	{
+		pattern: '/api/positions/confirm-send',
+		maxRequests: 5,
+		windowMs: 60 * 1000,
 		keyStrategy: 'user'
 	},
 	{
@@ -464,6 +547,24 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		keyStrategy: 'ip'
 	},
 	// Anti-astroturf rate limits
+	// Slug availability is public GET traffic and performs one compact Convex
+	// lookup. Keep it ahead of the broader authoring rule so anonymous probes
+	// cannot bypass GET throttling or inherit the 24-hour mutation policy.
+	{
+		pattern: '/api/templates/check-slug',
+		maxRequests: 30,
+		windowMs: 60 * 1000,
+		keyStrategy: 'ip',
+		includeGet: true
+	},
+	// Search is a read/AI-cost surface, not template authoring. Keep this more
+	// specific rule before `/api/templates` because matching is first-wins.
+	{
+		pattern: '/api/templates/search',
+		maxRequests: 30,
+		windowMs: 60 * 1000,
+		keyStrategy: 'user'
+	},
 	{
 		pattern: '/api/templates',
 		maxRequests: 10,
@@ -561,14 +662,8 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
 		windowMs: 60 * 1000, // 10 req/min per user — Stripe portal redirects
 		keyStrategy: 'user'
 	},
-	// ── Public REST API v1 (Phase 1) ──
-	{
-		pattern: '/api/v1/',
-		maxRequests: 100,
-		windowMs: 60 * 1000, // 100 req/min per API key (key ID fills userId slot)
-		keyStrategy: 'user',
-		includeGet: true
-	},
+	// Public REST API v1 is protected by the exact Convex auth mutation. Keeping
+	// a generic 100/min IP rule here would undercut paid API tiers.
 	// ── Events  ──
 	{
 		pattern: '/api/e/',
@@ -636,7 +731,8 @@ export const ROUTE_RATE_LIMITS: RouteRateLimitConfig[] = [
  */
 export const RATE_LIMIT_EXEMPT_PATHS = [
 	'/api/health', // Health checks
-	'/api/cron/', // Cron jobs (authenticated separately)
+	'/api/live', // Process-liveness checks (no dependency I/O)
+	'/api/cron/' // Cron jobs (authenticated separately)
 	// Stripe, SES, and Twilio webhooks moved to Convex HTTP actions (/webhooks/*)
 ];
 

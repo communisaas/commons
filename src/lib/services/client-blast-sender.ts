@@ -15,7 +15,8 @@ import {
 	buildEmailTierContext,
 	hasEmailMergeFields,
 	type VerificationStatus
-} from '$lib/core/email/merge-fields';
+} from '$convex/lib/emailMergeFields';
+import { FEATURES } from '$lib/config/features';
 
 export interface BlastSendOptions {
 	orgSlug: string;
@@ -114,6 +115,11 @@ interface LambdaResponse {
 }
 
 export async function sendBlastFromClient(options: BlastSendOptions): Promise<BlastResult> {
+	// Defense in depth: the credential and claim endpoints are tombstoned too,
+	// but the browser sender itself must never begin decrypting or networking.
+	if (!FEATURES.EMAIL_SERVER_DISPATCH) {
+		throw new Error('EMAIL_CLIENT_DIRECT_DISPATCH_DISABLED');
+	}
 	const {
 		orgSlug,
 		orgId,

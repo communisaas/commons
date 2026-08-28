@@ -6,6 +6,10 @@
 
 import { createHash } from 'crypto';
 
+import {
+	canonicalizeTemplateSlug,
+	isCanonicalTemplateSlug
+} from '../../convex/lib/templateInputBudget';
 import { generateSubjectLine } from '$lib/core/agents/agents/subject-line';
 import { resolveDecisionMakers } from '$lib/core/agents/agents/decision-maker';
 import { generateMessage } from '$lib/core/agents/agents/message-writer';
@@ -14,10 +18,15 @@ import type { ResolveContext } from '$lib/core/agents/providers/types';
 
 // Lazy-import moderation — it uses $env/dynamic/private which only resolves in SvelteKit.
 // Falls back to auto-approve when unavailable.
-async function tryModerate(title: string, messageBody: string): Promise<{ approved: boolean; summary: string; rejection_reason?: string }> {
+async function tryModerate(input: {
+	title: string;
+	description: string;
+	preview: string;
+	message_body: string;
+}): Promise<{ approved: boolean; summary: string; rejection_reason?: string }> {
 	try {
 		const { moderateTemplate } = await import('$lib/core/server/moderation/index');
-		return await moderateTemplate({ title, message_body: messageBody });
+		return await moderateTemplate(input);
 	} catch {
 		return { approved: true, summary: 'moderation unavailable (skipped)' };
 	}
@@ -131,16 +140,6 @@ export interface SnapshotDecisionMaker {
 // ============================================================================
 // Helpers
 // ============================================================================
-
-export function generateSlug(title: string, maxLen = 80): string {
-	return title
-		.toLowerCase()
-		.replace(/[^a-z0-9\s-]/g, '')
-		.replace(/\s+/g, '-')
-		.replace(/-+/g, '-')
-		.replace(/^-|-$/g, '')
-		.slice(0, maxLen);
-}
 
 export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
@@ -418,7 +417,16 @@ export async function processVibe({ vibe, label }: ProcessVibeOptions): Promise<
 
 	console.log(`${label} Phase 4: Running moderation...`);
 
-	const moderationResult = await tryModerate(title, messageBody);
+	// Derived here so the classified strings and the snapshot below are the same
+	// bytes — a seeded template cannot publish text moderation never saw.
+	const preview = messageBody.slice(0, 200).replace(/\n/g, ' ').trim();
+
+	const moderationResult = await tryModerate({
+		title,
+		message_body: messageBody,
+		description: coreMessage,
+		preview
+	});
 	const approved = moderationResult.approved;
 	console.log(`${label}   Moderation: ${moderationResult.summary}`);
 	if (!approved) {
@@ -427,13 +435,19 @@ export async function processVibe({ vibe, label }: ProcessVibeOptions): Promise<
 
 	// ── Build Snapshot ────────────────────────────────────────────────────
 
-	const slug = generateSlug(urlSlug || title);
+	// The canonicalizer never fabricates a slug: an input with nothing usable
+	// returns '', which the Convex boundary would reject. Bail here instead.
+	const slug = canonicalizeTemplateSlug(urlSlug || title);
+	if (!isCanonicalTemplateSlug(slug)) {
+		console.error(`${label}   FAILED: "${urlSlug || title}" yields no canonical slug. Skipping.`);
+		return null;
+	}
+
 	const deliveryMethod = inferDeliveryMethod(
 		inferredContext.detected_target_type,
 		vibe.countryCode,
 		inferredContext.detected_scope
 	);
-	const preview = messageBody.slice(0, 200).replace(/\n/g, ' ').trim();
 
 	// Map pipeline scope levels to Convex schema values
 	const convexScopeLevel: Record<string, string> = {

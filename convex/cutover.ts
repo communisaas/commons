@@ -8,9 +8,10 @@
  * specs/CIRCUIT-REVISION-MIGRATION.md.
  */
 
-import { internalQuery, internalMutation } from "./_generated/server";
-import { v } from "convex/values";
-import { internal } from "./_generated/api";
+import { internalQuery, internalMutation } from './_generated/server';
+import { paginationOptsValidator } from 'convex/server';
+import { v } from 'convex/values';
+import { internal } from './_generated/api';
 
 /**
  * Admin query: list every currently-active districtCredential. Used by the
@@ -22,19 +23,28 @@ import { internal } from "./_generated/api";
  * roster off the public data plane.
  */
 export const listActiveCredentials = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const now = Date.now();
-    const rows = await ctx.db.query("districtCredentials").collect();
-    return rows
-      .filter((r) => r.revokedAt === undefined && r.expiresAt > now)
-      .map((r) => ({
-        _id: r._id,
-        userId: r.userId,
-        districtCommitment: r.districtCommitment ?? undefined,
-        issuedAt: r.issuedAt,
-      }));
-  },
+	args: { paginationOpts: paginationOptsValidator },
+	handler: async (ctx, { paginationOpts }) => {
+		const now = Date.now();
+		const page = await ctx.db
+			.query('districtCredentials')
+			.withIndex('by_revokedAt_expiresAt', (q) => q.eq('revokedAt', undefined).gt('expiresAt', now))
+			.paginate({
+				...paginationOpts,
+				numItems: Math.min(Math.max(Math.trunc(paginationOpts.numItems), 1), 100),
+				maximumRowsRead: 101,
+				maximumBytesRead: 512 * 1024
+			});
+		return {
+			...page,
+			page: page.page.map((r) => ({
+				_id: r._id,
+				userId: r.userId,
+				districtCommitment: r.districtCommitment ?? undefined,
+				issuedAt: r.issuedAt
+			}))
+		};
+	}
 });
 
 /**
@@ -43,32 +53,33 @@ export const listActiveCredentials = internalQuery({
  * {scheduled:false}.
  */
 export const markCredentialForCutover = internalMutation({
-  args: { credentialId: v.id("districtCredentials") },
-  handler: async (ctx, { credentialId }) => {
-    const cred = await ctx.db.get(credentialId);
-    if (!cred) return { scheduled: false, reason: "not_found" as const };
-    if (cred.revokedAt) return { scheduled: false, reason: "already_revoked" as const };
+	args: { credentialId: v.id('districtCredentials') },
+	handler: async (ctx, { credentialId }) => {
+		const cred = await ctx.db.get(credentialId);
+		if (!cred) return { scheduled: false, reason: 'not_found' as const };
+		if (cred.revokedAt) return { scheduled: false, reason: 'already_revoked' as const };
 
-    const now = Date.now();
-    const hasCommitment = Boolean(cred.districtCommitment);
+		const now = Date.now();
+		const hasCommitment = Boolean(cred.districtCommitment);
 
-    await ctx.db.patch(credentialId, {
-      revokedAt: now,
-      ...(hasCommitment
-        ? {
-            revocationStatus: "pending" as const,
-            revocationAttempts: 0,
-            revocationLastAttemptAt: now,
-          }
-        : {}),
-    });
+		await ctx.db.patch(credentialId, {
+			revokedAt: now,
+			retirementReason: 'operator_cutover' as const,
+			...(hasCommitment
+				? {
+						revocationStatus: 'pending' as const,
+						revocationAttempts: 0,
+						revocationLastAttemptAt: now
+					}
+				: {})
+		});
 
-    if (hasCommitment) {
-      await ctx.scheduler.runAfter(0, internal.users.emitOnChainRevocation, {
-        credentialId,
-      });
-    }
+		if (hasCommitment) {
+			await ctx.scheduler.runAfter(0, internal.users.emitOnChainRevocation, {
+				credentialId
+			});
+		}
 
-    return { scheduled: hasCommitment };
-  },
+		return { scheduled: hasCommitment };
+	}
 });

@@ -18,35 +18,26 @@ const blasts = src('convex/blasts.ts');
 const sms = src('convex/sms.ts');
 
 describe('ses-token quota gate', () => {
-	it('checks the plan limit BEFORE issuing STS credentials', () => {
-		const gate = sesToken.indexOf('api.subscriptions.checkPlanLimits');
-		const mint = sesToken.indexOf('AssumeRoleCommand(');
+	it('hard-denies the disabled launch path before Convex or STS work', () => {
+		const handler = sesToken.slice(sesToken.indexOf('export const POST'));
+		const gate = handler.indexOf('if (!FEATURES.EMAIL_SERVER_DISPATCH)');
+		const convex = handler.indexOf('serverQuery(');
+		const mint = handler.indexOf('AssumeRoleCommand(');
 		expect(gate).toBeGreaterThanOrEqual(0);
-		expect(mint).toBeGreaterThan(gate); // gate strictly before the mint
-	});
-	it('refuses on exhaustion (>=) and fails closed on a null result', () => {
-		expect(sesToken).toMatch(/current\.emailsSent >= limits\.limits\.maxEmails/);
-		expect(sesToken).toContain('!limits?.current'); // null ⇒ refuse, not allow
-	});
-	it('distinguishes subscribe-gate from upgrade in the 403 body', () => {
-		expect(sesToken).toContain('DELIVERY_QUOTA_SUBSCRIBE_GATE');
-		expect(sesToken).toContain('EMAIL_QUOTA_EXCEEDED');
+		expect(convex).toBeGreaterThan(gate);
+		expect(mint).toBeGreaterThan(gate);
 	});
 });
 
 describe('dispatch-claim quota gate', () => {
-	it('checks the plan limit BEFORE signing the claim AND before the cohort scan', () => {
-		const gate = dispatchClaim.indexOf('api.subscriptions.checkPlanLimits');
-		const sign = dispatchClaim.indexOf('= signDispatchClaim(');
-		const cohort = dispatchClaim.indexOf('api.blasts.getEncryptedSupportersForBlast');
+	it('hard-denies the disabled launch path before signing or cohort reads', () => {
+		const handler = dispatchClaim.slice(dispatchClaim.indexOf('export const GET'));
+		const gate = handler.indexOf('if (!FEATURES.EMAIL_SERVER_DISPATCH)');
+		const sign = handler.indexOf('= signDispatchClaim(');
+		const cohort = handler.indexOf('api.blasts.getEncryptedSupportersForBlast');
 		expect(gate).toBeGreaterThanOrEqual(0);
 		expect(sign).toBeGreaterThan(gate);
-		expect(cohort).toBeGreaterThan(gate); // slug-first short-circuit
-	});
-	it('fails closed and distinguishes the two cases', () => {
-		expect(dispatchClaim).toMatch(/current\.emailsSent >= limits\.limits\.maxEmails/);
-		expect(dispatchClaim).toContain('!limits?.current');
-		expect(dispatchClaim).toContain('DELIVERY_QUOTA_SUBSCRIBE_GATE');
+		expect(cohort).toBeGreaterThan(gate);
 	});
 });
 

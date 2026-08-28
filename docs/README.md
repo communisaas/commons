@@ -78,7 +78,7 @@ Feature-specific documentation (person-facing).
 - `oauth.md` — OAuth provider flows
 - `onboarding.md` — User onboarding flows
 - `jurisdiction.md` — Jurisdiction system (TemplateJurisdiction model)
-- `search.md` — Template search (Gemini `text-embedding-004` + Convex vector index)
+- `search.md` — Launch template search (provider-free compact Convex text index; semantic design deferred)
 - `sharing.md` — Sharing and social proof
 - `abstraction.md` — Legislative body abstraction layer
 - `coordination-integrity.md` — 5 coordination integrity metrics (GDS, ALD, entropy, burst, CAI)

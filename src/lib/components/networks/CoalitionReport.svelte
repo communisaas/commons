@@ -15,6 +15,9 @@
 		temporalEntropy: number | null;
 		cai: number | null;
 		districtCount: number | null;
+		// True when the readings exist but this organization's plan does not
+		// carry them. Distinct from null readings, which mean never computed.
+		readingsWithheld: boolean;
 	};
 
 	let { stats, loading, brandingAccent = null }: {
@@ -114,7 +117,7 @@
 			</div>
 			<div class="rounded-lg bg-zinc-900/50 p-3">
 				<p class="text-xs font-medium text-zinc-500">Verified Supporters</p>
-				<p class="mt-1 text-xl font-bold text-green-400">{formatCount(stats.verifiedSupporters)}</p>
+				<p class="mt-1 text-xl font-bold text-zinc-100">{formatCount(stats.verifiedSupporters)}</p>
 			</div>
 		</div>
 	{:else}
@@ -124,8 +127,15 @@
 		</p>
 	{/if}
 
-	<!-- Coordination reading: one plain-language line; raw scores stay in the collapsed audit. -->
-	{#if stats.gds !== null || stats.ald !== null || stats.temporalEntropy !== null || stats.cai !== null}
+	<!-- Coordination reading: one plain-language line; raw scores stay in the collapsed audit.
+	     Three distinct states — withheld behind the plan, present, or never computed. -->
+	{#if stats.readingsWithheld}
+		<p class="text-text-tertiary mb-4 text-xs">
+			The coordination readings are computed for this coalition, but they are not shown here because
+			this organization's own plan is not currently paid. Where they are shown, the reading is
+			computed across every organization in the coalition, and every member organization can see it.
+		</p>
+	{:else if stats.gds !== null || stats.ald !== null || stats.temporalEntropy !== null || stats.cai !== null}
 		<div class="mb-4">
 			<p class="text-text-secondary text-sm">
 				{assessIntegrity({
@@ -135,6 +145,9 @@
 					burstVelocity: null,
 					cai: stats.cai
 				})}
+			</p>
+			<p class="text-text-tertiary mt-2 text-xs">
+				This reading is computed across every organization in this coalition, and every member organization can see it.
 			</p>
 			<details class="mt-2">
 				<summary

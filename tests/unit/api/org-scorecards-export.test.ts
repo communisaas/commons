@@ -54,19 +54,29 @@ const scorecardRow = {
 	score: 77
 };
 
+function scorecardPage(scorecards: Array<Record<string, unknown>>, nextCursor: string | null = null) {
+	return {
+		scorecards,
+		meta: {
+			nextCursor
+		}
+	};
+}
+
 describe('GET /api/org/[slug]/scorecards/export', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 	});
 
 	it('returns a CSV download with one row per scorecard', async () => {
-		mockServerQuery.mockResolvedValueOnce({ scorecards: [scorecardRow] });
+		mockServerQuery.mockResolvedValueOnce(scorecardPage([scorecardRow]));
 
 		const response = await GET(buildEvent());
 
 		expect(response.status).toBe(200);
 		expect(response.headers.get('Content-Type')).toContain('text/csv');
 		expect(response.headers.get('Content-Disposition')).toContain('climate-action-now');
+		expect(response.headers.get('X-Export-Complete')).toBe('true');
 
 		const lines = (await response.text()).split('\n');
 		expect(lines).toHaveLength(2);
@@ -83,7 +93,7 @@ describe('GET /api/org/[slug]/scorecards/export', () => {
 	});
 
 	it('labels the derived response-time column as an estimate, never as measured', async () => {
-		mockServerQuery.mockResolvedValueOnce({ scorecards: [scorecardRow] });
+		mockServerQuery.mockResolvedValueOnce(scorecardPage([scorecardRow]));
 
 		const response = await GET(buildEvent());
 		const lines = (await response.text()).split('\n');
@@ -96,8 +106,8 @@ describe('GET /api/org/[slug]/scorecards/export', () => {
 	});
 
 	it('leaves unknown values empty rather than fabricating zeros', async () => {
-		mockServerQuery.mockResolvedValueOnce({
-			scorecards: [
+		mockServerQuery.mockResolvedValueOnce(
+			scorecardPage([
 				{
 					...scorecardRow,
 					reportsOpened: null,
@@ -105,8 +115,8 @@ describe('GET /api/org/[slug]/scorecards/export', () => {
 					alignmentRate: null,
 					score: null
 				}
-			]
-		});
+			])
+		);
 
 		const response = await GET(buildEvent());
 		const lines = (await response.text()).split('\n');

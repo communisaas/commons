@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — SMS/Twilio integration
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -61,7 +61,9 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 	const { org, spaces, membership } = await parent();
 	const keyInfo =
 		membership.role === 'owner' || membership.role === 'editor'
-			? await serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug }).catch(() => null)
+			? await serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug }).catch(
+					() => null
+				)
 			: null;
 	const [result, replies] = (await Promise.all([
 		serverQuery(api.sms.getBlast, {
@@ -82,16 +84,16 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 		orgKeyVerifier: keyInfo?.orgKeyVerifier ?? null,
 		smsHealth: spaces.base?.smsHealth ?? EMPTY_SMS_HEALTH,
 		consentEvidence: spaces.base?.consentEvidence ?? EMPTY_CONSENT_EVIDENCE,
-		textDispatchRuntimeReady: spaces.operating.textDelivery?.dispatchRuntimeReady ?? false,
-		textDispatchRuntimeMissing: spaces.operating.textDelivery?.dispatchRuntimeMissing ?? [],
+		textDispatchRuntimeReady: spaces.operating?.textDelivery?.dispatchRuntimeReady ?? false,
+		textDispatchRuntimeMissing: spaces.operating?.textDelivery?.dispatchRuntimeMissing ?? [],
 		textDispatchRuntimeDependency:
-			spaces.operating.textDelivery?.dispatchRuntimeDependency ??
+			spaces.operating?.textDelivery?.dispatchRuntimeDependency ??
 			'text dispatch gate, browser phone custody, Twilio dispatch runner, and transport credentials',
 		textDispatchRuntimeMessage:
-			spaces.operating.textDelivery?.dispatchRuntimeMessage ??
+			spaces.operating?.textDelivery?.dispatchRuntimeMessage ??
 			'Bulk text dispatch is dependency-bound. Drafts are preserved until carrier delivery dependencies are configured.',
 		textDispatchClientBatchRouteMounted:
-			spaces.operating.textDelivery?.dispatchClientBatchRouteMounted ?? false,
+			spaces.operating?.textDelivery?.dispatchClientBatchRouteMounted ?? false,
 		blast: {
 			id: result.blast._id,
 			body: result.blast.body,

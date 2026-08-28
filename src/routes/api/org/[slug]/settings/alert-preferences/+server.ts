@@ -10,7 +10,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -41,7 +41,11 @@ export const PATCH: RequestHandler = async ({ locals, params, request }) => {
 	) {
 		throw error(400, 'minRelevanceScore must be a number 0-1');
 	}
-	if (body.digestOnly !== undefined && body.digestOnly !== null && typeof body.digestOnly !== 'boolean') {
+	if (
+		body.digestOnly !== undefined &&
+		body.digestOnly !== null &&
+		typeof body.digestOnly !== 'boolean'
+	) {
 		throw error(400, 'digestOnly must be a boolean');
 	}
 	if (

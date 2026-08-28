@@ -1,443 +1,236 @@
-name: Configure Cloudflare Branch Alias
+name: Reconcile Cloudflare Trusted Staging Edge
 
 on:
   workflow_dispatch:
     inputs:
-      record_name:
-        description: Cloudflare DNS record to configure
+      expected_commit:
+        description: Exact source SHA deployed to the trusted staging edge
         required: true
-        default: staging.commons.email
-      branch_alias_target:
-        description: Pages branch alias target
-        required: true
-        default: staging.communique-site.pages.dev
+        type: string
 
+# This workflow mutates the Pages-domain and DNS exposure boundary. It must not
+# overlap publication, forced exposure cleanup, or release recovery.
 concurrency:
-  group: cloudflare-branch-alias-staging
+  group: cloudflare-pages-publication
   cancel-in-progress: false
 
+permissions: {}
+
 jobs:
-  configure:
+  reconcile:
+    # A dispatch can select an arbitrary ref. Only protected main may supply
+    # executable workflow authority to the Cloudflare write capability.
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions: {}
+    environment: Staging
+    permissions:
+      contents: read
+    env:
+      EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+      TRUSTED_GATE_SHA: ${{ github.workflow_sha }}
+      WORKFLOW_REF: ${{ github.workflow_ref }}
+      REPOSITORY: ${{ github.repository }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.PROTECTED_CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+      CLOUDFLARE_ZONE_ID: ${{ secrets.PROTECTED_CLOUDFLARE_ZONE_ID }}
+      PAGES_ORIGIN_ACCESS_TOKEN: ${{ secrets.PROTECTED_PAGES_ORIGIN_ACCESS_TOKEN_PREVIEW }}
+      PAGES_ORIGIN_ACCESS_SERVICE_TOKEN_ID_PREVIEW: ${{ secrets.PROTECTED_PAGES_ORIGIN_ACCESS_SERVICE_TOKEN_ID_PREVIEW }}
 
     steps:
-      - name: Upsert staging branch alias CNAME
-        env:
-          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CF_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          CF_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
-          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
-          PAGES_PROJECT: communique-site
-          DISPATCH_REF: ${{ github.ref_name }}
-          RECORD_NAME: ${{ inputs.record_name }}
-          TARGET: ${{ inputs.branch_alias_target }}
-          EXPECTED_COMMIT: ${{ github.sha }}
+      - name: Checkout immutable protected staging-exposure gate
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: gate
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Authenticate immutable staging-exposure authority
         run: |
           set -euo pipefail
+          expected_workflow_ref="${REPOSITORY}/.github/workflows/cloudflare-branch-alias.yml@refs/heads/${DEFAULT_BRANCH}"
+          if ! [[ "$TRUSTED_GATE_SHA" =~ ^[0-9a-f]{40}$ ]] || \
+            ! [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || \
+            [ "$DEFAULT_BRANCH" != "main" ] || \
+            [ "$WORKFLOW_REF" != "$expected_workflow_ref" ]; then
+            echo "::error::Staging exposure reconciliation requires exact protected-main authority and one exact release SHA."
+            exit 1
+          fi
+          gate_checkout=$(git -C gate rev-parse --verify 'HEAD^{commit}')
+          trusted_default=$(git -C gate rev-parse --verify "refs/remotes/origin/${DEFAULT_BRANCH}^{commit}")
+          if [ "$gate_checkout" != "$TRUSTED_GATE_SHA" ] || \
+            [ "$TRUSTED_GATE_SHA" != "$trusted_default" ]; then
+            echo "::error::The staging exposure workflow is not the current protected-main head."
+            exit 1
+          fi
 
-          api_base="https://api.cloudflare.com/client/v4"
+      - name: Setup trusted Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: 'gate/.node-version'
 
-          cf_request() {
+      - name: Install trusted Cloudflare tooling
+        run: npm ci --ignore-scripts --prefix gate/.github/release-gate
+        timeout-minutes: 10
+
+      - name: Retire direct Pages alias and establish originless route DNS
+        id: reconcile_exposure
+        run: |
+          set -euo pipefail
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_ZONE_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is required from the protected Staging Environment."
+              exit 1
+            fi
+          done
+          api='https://api.cloudflare.com/client/v4'
+          project='communique-site'
+          public_host='staging.commons.email'
+          worker='commons-trusted-pages-edge-staging'
+
+          cf_get() {
+            local path="$1"
+            curl -fsS --max-time 30 \
+              --proto '=https' \
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+              -H 'Accept: application/json' \
+              "${api}${path}"
+          }
+
+          cf_mutate() {
             local method="$1"
             local path="$2"
-            local data="${3:-}"
-            local response_file
+            local payload="${3:-}"
+            local output="$RUNNER_TEMP/cloudflare-staging-exposure-mutation.json"
+            local args=(
+              --silent --show-error --max-time 30 --proto '=https'
+              --request "$method"
+              --header "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}"
+              --header 'Accept: application/json'
+              --output "$output"
+              --write-out '%{http_code}'
+            )
+            if [ -n "$payload" ]; then
+              args+=(--header 'Content-Type: application/json' --data "$payload")
+            fi
             local status
-            local retry_args=(--retry 2 --retry-all-errors)
-            response_file=$(mktemp)
-            if [ "${method}" = "POST" ]; then
-              retry_args=()
-            fi
-
-            if [ -n "${data}" ]; then
-              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 "${retry_args[@]}" \
-                -o "${response_file}" -w "%{http_code}" -X "${method}" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                --data "${data}" \
-                "${api_base}${path}") || {
-                  echo "::error::Cloudflare ${method} ${path} request failed before an HTTP response." >&2
-                  cat "${response_file}" >&2 || true
-                  rm -f "${response_file}"
-                  exit 1
-                }
-            else
-              status=$(curl -sS --show-error --max-time 30 --connect-timeout 10 "${retry_args[@]}" \
-                -o "${response_file}" -w "%{http_code}" -X "${method}" \
-                -H "Authorization: Bearer ${CF_API_TOKEN}" \
-                -H "Content-Type: application/json" \
-                "${api_base}${path}") || {
-                  echo "::error::Cloudflare ${method} ${path} request failed before an HTTP response." >&2
-                  cat "${response_file}" >&2 || true
-                  rm -f "${response_file}"
-                  exit 1
-                }
-            fi
-
-            if ! [[ "${status}" =~ ^2[0-9][0-9]$ ]]; then
-              echo "::error::Cloudflare ${method} ${path} returned HTTP ${status}." >&2
-              cat "${response_file}" >&2
-              rm -f "${response_file}"
+            status=$(curl "${args[@]}" "${api}${path}")
+            if ! [[ "$status" =~ ^2[0-9][0-9]$ ]] || \
+              ! jq -e '.success == true' "$output" >/dev/null; then
+              echo "::error::Cloudflare ${method} ${path} did not report exact success (HTTP ${status})."
+              cat "$output"
               exit 1
             fi
-
-            if ! jq -e '.success == true' "${response_file}" >/dev/null; then
-              echo "::error::Cloudflare ${method} ${path} did not report success." >&2
-              cat "${response_file}" >&2
-              rm -f "${response_file}"
-              exit 1
-            fi
-
-            cat "${response_file}"
-            rm -f "${response_file}"
           }
 
-          probe_health() {
-            local label="$1"
-            local url="$2"
-            local required="${3:-true}"
-            local challenged=false
-            local hard_failure=false
-
-            for attempt in {1..6}; do
-              if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "${url}"); then
-                http_status=$(printf '%s\n' "${response}" | tail -n 1)
-                body=$(printf '%s\n' "${response}" | sed '$d')
-
-                if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
-                  echo "${label} health ok: ${url}"
-                  return 0
-                fi
-
-                if echo "${body}" | jq -e . >/dev/null 2>&1; then
-                  echo "${label} health attempt ${attempt} returned HTTP ${http_status}:"
-                  echo "${body}" | jq '{status, convex, message}'
-                  hard_failure=true
-                else
-                  if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
-                    challenged=true
-                  else
-                    hard_failure=true
-                  fi
-                  echo "${label} health attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
-                  printf '%s\n' "${body}" | head -c 4000
-                  printf '\n'
-                fi
-              else
-                echo "${label} health attempt ${attempt} failed before an HTTP response."
-                hard_failure=true
-              fi
-
-              sleep 10
-            done
-
-            if [ "${required}" = "false" ] && [ "${challenged}" = "true" ] && [ "${hard_failure}" = "false" ]; then
-              echo "::warning::${label} health was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
-              return 0
-            fi
-
-            echo "::error::${label} health did not pass: ${url}"
-            exit 1
-          }
-
-          if [ -z "${CF_API_TOKEN:-}" ]; then
-            echo "::error::CLOUDFLARE_API_TOKEN is not configured."
+          pages_domains=$(cf_get \
+            "/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}/domains")
+          printf '%s' "$pages_domains" | jq -e \
+            --arg public "$public_host" \
+            '.success == true and (.result | type == "array") and
+             ((.result_info.total_pages // 1) == 1) and
+             ((.result_info.total_count // (.result | length)) == (.result | length)) and
+             ([.result[] | select(.name != "pages-origin.commons.email" and
+              .name != "pages-origin-staging.commons.email" and .name != $public)] | length == 0) and
+             ([.result[] | select((.name == "pages-origin.commons.email" or
+              .name == "pages-origin-staging.commons.email") and .status == "active")] | length == 2)' \
+            >/dev/null
+          stale_pages_domain_count=$(printf '%s' "$pages_domains" | jq -er \
+            --arg public "$public_host" '[.result[] | select(.name == $public)] | length')
+          if [ "$stale_pages_domain_count" -gt 1 ]; then
+            echo "::error::The stale public Pages domain is duplicated."
             exit 1
           fi
+          if [ "$stale_pages_domain_count" = "1" ]; then
+            cf_mutate DELETE \
+              "/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}/domains/${public_host}"
+          fi
 
-          if [ -z "${CF_ZONE_ID:-}" ]; then
-            echo "::error::CLOUDFLARE_ZONE_ID is not configured."
+          dns=$(cf_get "/zones/${CLOUDFLARE_ZONE_ID}/dns_records?name=${public_host}")
+          printf '%s' "$dns" | jq -e \
+            '.success == true and (.result | type == "array") and (.result | length <= 1)' \
+            >/dev/null
+          dns_count=$(printf '%s' "$dns" | jq -er '.result | length')
+          dns_payload=$(jq -nc \
+            --arg type AAAA \
+            --arg name "$public_host" \
+            --arg content '100::' \
+            '{type:$type,name:$name,content:$content,proxied:true,ttl:1}')
+          if [ "$dns_count" = "0" ]; then
+            cf_mutate POST "/zones/${CLOUDFLARE_ZONE_ID}/dns_records" "$dns_payload"
+          elif ! printf '%s' "$dns" | jq -e \
+            --arg name "$public_host" \
+            '.result[0].type == "AAAA" and .result[0].name == $name and
+             .result[0].content == "100::" and .result[0].proxied == true and .result[0].ttl == 1' \
+            >/dev/null; then
+            dns_id=$(printf '%s' "$dns" | jq -er \
+              '.result[0].id | select(test("^[a-f0-9]{32}$"))')
+            cf_mutate PUT "/zones/${CLOUDFLARE_ZONE_ID}/dns_records/${dns_id}" "$dns_payload"
+          fi
+
+          final_domains=$(cf_get \
+            "/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${project}/domains")
+          printf '%s' "$final_domains" | jq -e \
+            '.success == true and (.result | type == "array") and
+             ((.result_info.total_pages // 1) == 1) and
+             ((.result_info.total_count // (.result | length)) == 2) and
+             ([.result[] | .name] | sort) ==
+              (["pages-origin-staging.commons.email","pages-origin.commons.email"] | sort) and
+             ([.result[] | select(.status == "active")] | length == 2)' >/dev/null
+          final_dns=$(cf_get "/zones/${CLOUDFLARE_ZONE_ID}/dns_records?name=${public_host}")
+          printf '%s' "$final_dns" | jq -e \
+            --arg name "$public_host" \
+            '.success == true and (.result | length == 1) and
+             .result[0].type == "AAAA" and .result[0].name == $name and
+             .result[0].content == "100::" and .result[0].proxied == true and .result[0].ttl == 1' \
+            >/dev/null
+
+          routes_file="$RUNNER_TEMP/trusted-staging-edge-routes.json"
+          cf_get "/zones/${CLOUDFLARE_ZONE_ID}/workers/routes" > "$routes_file"
+          node gate/scripts/verify-trusted-pages-release-edge.mjs verify-route-inventory \
+            --environment preview \
+            --expected present \
+            < "$routes_file" >/dev/null
+
+          status_file="$RUNNER_TEMP/trusted-staging-edge-deployment.json"
+          version_file="$RUNNER_TEMP/trusted-staging-edge-version.json"
+          gate/.github/release-gate/node_modules/.bin/wrangler deployments status \
+            --name "$worker" --json > "$status_file"
+          version_id=$(jq -er \
+            '.versions | select(length == 1) | .[0] | select(.percentage == 100) | .version_id' \
+            "$status_file")
+          if ! [[ "$version_id" =~ ^([a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$ ]]; then
+            echo "::error::The active staging edge version id is invalid."
             exit 1
           fi
+          gate/.github/release-gate/node_modules/.bin/wrangler versions view "$version_id" \
+            --name "$worker" --json > "$version_file"
+          jq -e --arg sha "$EXPECTED_COMMIT" '.annotations["workers/tag"] == $sha' \
+            "$version_file" >/dev/null
 
-          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
-            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub secret."
-            exit 1
-          fi
+      - name: Prove exact trusted staging-edge topology and denial boundary
+        run: |
+          set -euo pipefail
+          settings=$(curl -fsS --max-time 30 \
+            --proto '=https' \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/workers/scripts/commons-trusted-pages-edge-staging/settings")
+          release_transaction=$(printf '%s' "$settings" | jq -er \
+            '.result.bindings | map(select(.name == "PUBLIC_RELEASE_TRANSACTION_ID" and
+             .type == "plain_text")) | select(length == 1) | .[0].text |
+             select(test("^[1-9][0-9]{0,19}-[1-9][0-9]{0,9}$"))')
+          PUBLIC_RELEASE_TRANSACTION_ID="$release_transaction" \
+            node gate/scripts/verify-trusted-pages-release-edge.mjs --environment preview >/dev/null
 
-          if [ "${DISPATCH_REF}" != "staging" ]; then
-            echo "::error::Run this workflow from the staging ref so github.sha matches the reviewed staging deployment."
-            exit 1
-          fi
-
-          case "${RECORD_NAME}:${TARGET}" in
-            staging.commons.email:staging.communique-site.pages.dev) ;;
-            *)
-              echo "::error::This workflow is intentionally limited to staging.commons.email -> staging.communique-site.pages.dev."
-              exit 1
-              ;;
-          esac
-
-          proxied=true
-          cf_page_size=25
-
-          find_latest_branch_deployment() {
-            local branch="$1"
-            local page
-            local deployments
-            local page_count
-
-            for page in {1..20}; do
-              deployments=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments?per_page=${cf_page_size}&page=${page}")
-              echo "${deployments}" | jq -c '.result[]?'
-              page_count=$(echo "${deployments}" | jq '.result | length')
-              if [ "${page_count}" -lt "${cf_page_size}" ]; then
-                break
-              fi
-            done | jq -s -c --arg branch "${branch}" \
-              '[.[] | select(.deployment_trigger.metadata.branch == $branch)] | sort_by(.created_on // .modified_on // "") | reverse | first // empty'
-          }
-
-          staging_deployment=$(find_latest_branch_deployment staging)
-
-          if [ -z "${staging_deployment}" ]; then
-            echo "::error::No staging deployment found for Pages project ${PAGES_PROJECT}."
-            exit 1
-          fi
-
-          staging_commit=$(echo "${staging_deployment}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
-          staging_status=$(echo "${staging_deployment}" | jq -r '.latest_stage.status // ""')
-          staging_id=$(echo "${staging_deployment}" | jq -r '.id // ""')
-          staging_url=$(echo "${staging_deployment}" | jq -r '.url // ""')
-          branch_alias=$(echo "${staging_deployment}" | jq -r --arg target "https://${TARGET}" \
-            '(.aliases // []) | index($target) // empty')
-
-          if [ "${staging_commit}" != "${EXPECTED_COMMIT}" ]; then
-            echo "::error::Latest staging Pages deployment is ${staging_commit}; expected workflow commit ${EXPECTED_COMMIT}."
-            exit 1
-          fi
-
-          if [ "${staging_status}" != "success" ]; then
-            echo "::error::Latest staging Pages deployment status is ${staging_status}, not success."
-            exit 1
-          fi
-
-          if [ -z "${branch_alias}" ]; then
-            echo "::error::Latest staging Pages deployment does not advertise branch alias https://${TARGET}."
-            exit 1
-          fi
-
-          echo "Latest staging deployment: ${staging_url} (${staging_commit}, ${staging_status})."
-          probe_health "immutable staging deployment" "${staging_url}/api/health"
-          probe_health "staging branch alias target" "https://${TARGET}/api/health"
-
-          latest_before_dns=$(find_latest_branch_deployment staging)
-          latest_before_dns_id=$(echo "${latest_before_dns}" | jq -r '.id // ""')
-          if [ "${latest_before_dns_id}" != "${staging_id}" ]; then
-            echo "::error::Latest staging Pages deployment moved before DNS verification: ${latest_before_dns_id}; expected ${staging_id}."
-            exit 1
-          fi
-
-          domain_active=false
-          for page in {1..10}; do
-            pages_domains=$(cf_request GET "/accounts/${CF_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/domains?per_page=${cf_page_size}&page=${page}")
-            if echo "${pages_domains}" | jq -e --arg name "${RECORD_NAME}" \
-              '.result[]? | select(.name == $name and .status == "active")' >/dev/null; then
-              domain_active=true
-              break
-            fi
-            if [ "$(echo "${pages_domains}" | jq '.result | length')" -lt "${cf_page_size}" ]; then
-              break
-            fi
-          done
-
-          if [ "${domain_active}" != "true" ]; then
-            echo "::error::${RECORD_NAME} is not an active custom domain on Pages project ${PAGES_PROJECT}."
-            exit 1
-          fi
-
-          list_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
-          count=$(echo "${list_response}" | jq '.result | length')
-
-          if [ "${count}" -gt 1 ]; then
-            echo "::error::Expected at most one DNS record for ${RECORD_NAME}; found ${count}."
-            echo "${list_response}" | jq -r '.result[] | "record id: \(.id), type: \(.type), content: \(.content), proxied: \(.proxied)"'
-            exit 1
-          fi
-
-          payload=$(jq -n \
-            --arg type CNAME \
-            --arg name "${RECORD_NAME}" \
-            --arg content "${TARGET}" \
-            --argjson proxied "${proxied}" \
-            '{type: $type, name: $name, content: $content, proxied: $proxied, ttl: 1}')
-
-          if [ "${count}" -eq 0 ]; then
-            echo "No CNAME exists for ${RECORD_NAME}; target will be ${TARGET}, proxied=${proxied}."
-            mutation_response=$(cf_request POST "/zones/${CF_ZONE_ID}/dns_records" "${payload}")
-          else
-            record_id=$(echo "${list_response}" | jq -r '.result[0].id')
-            current_type=$(echo "${list_response}" | jq -r '.result[0].type')
-            current_content=$(echo "${list_response}" | jq -r '.result[0].content')
-            current_proxied=$(echo "${list_response}" | jq -r '.result[0].proxied')
-
-            if [ "${current_type}" != "CNAME" ]; then
-              echo "::error::${RECORD_NAME} exists as ${current_type}; replace it with a proxied CNAME before staging smoke."
-              exit 1
-            fi
-
-            if [ "${current_content}" = "${TARGET}" ] && [ "${current_proxied}" = "${proxied}" ]; then
-              echo "${RECORD_NAME} already points to ${TARGET} with proxied=${proxied}."
-            else
-              echo "${RECORD_NAME} will change from ${current_content} proxied=${current_proxied} to ${TARGET} proxied=${proxied}."
-              mutation_response=$(cf_request PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" "${payload}")
-              echo "${mutation_response}" | jq -r '.result | "Configured \(.name) -> \(.content), proxied=\(.proxied)"'
-            fi
-          fi
-
-          dns_verified=false
-          for dns_attempt in {1..6}; do
-            final_response=$(cf_request GET "/zones/${CF_ZONE_ID}/dns_records?name=${RECORD_NAME}")
-            if echo "${final_response}" | jq -e --arg name "${RECORD_NAME}" --arg content "${TARGET}" \
-              '.result | length == 1 and .[0].type == "CNAME" and .[0].name == $name and .[0].content == $content and .[0].proxied == true' >/dev/null; then
-              dns_verified=true
-              break
-            fi
-            echo "DNS read-after-write verification attempt ${dns_attempt} did not see the required record yet."
-            sleep 5
-          done
-
-          if [ "${dns_verified}" != "true" ]; then
-            echo "::error::Final DNS state is not the required proxied CNAME."
-            echo "${final_response}" | jq -r '.result[] | "record id: \(.id), type: \(.type), content: \(.content), proxied: \(.proxied)"'
-            exit 1
-          fi
-
-          probe_health "staging custom domain" "https://${RECORD_NAME}/api/health" false
-          probe_health "production custom domain" "https://commons.email/api/health" false
-
-          readiness_challenged=false
-          readiness_hard_failure=false
-          for attempt in {1..12}; do
-            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
-              -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
-              "https://${RECORD_NAME}/api/internal/identity/mdl-readiness"); then
-              http_status=$(printf '%s\n' "${response}" | tail -n 1)
-              body=$(printf '%s\n' "${response}" | sed '$d')
-
-              if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
-                echo "${body}" | jq '{status, blockers, warnings}'
-                break
-              fi
-
-              if echo "${body}" | jq -e . >/dev/null 2>&1; then
-                echo "${body}" | jq '{status, blockers, warnings, checks: [.checks[]? | select(.status != "ok")]}'
-                readiness_hard_failure=true
-              else
-                if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
-                  readiness_challenged=true
-                else
-                  readiness_hard_failure=true
-                fi
-                echo "Readiness attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
-                printf '%s\n' "${body}" | head -c 4000
-                printf '\n'
-              fi
-            else
-              echo "Readiness attempt ${attempt} failed before an HTTP response."
-              readiness_hard_failure=true
-            fi
-
-            if [ "${attempt}" = "12" ]; then
-              if [ "${readiness_challenged}" = "true" ] && [ "${readiness_hard_failure}" = "false" ]; then
-                echo "::warning::Internal mDL readiness was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
-                break
-              fi
-
-              echo "::error::${RECORD_NAME} did not pass internal mDL readiness after DNS branch-alias configuration."
-              exit 1
-            fi
-
-            sleep 10
-          done
-
-          mdl_start_challenged=false
-          mdl_start_hard_failure=false
-          for attempt in {1..6}; do
-            if mdl_start_response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
-              -H "Origin: https://${RECORD_NAME}" \
-              -X POST "https://${RECORD_NAME}/api/identity/verify-mdl/start"); then
-              mdl_start_status=$(printf '%s\n' "${mdl_start_response}" | tail -n 1)
-              mdl_start_body=$(printf '%s\n' "${mdl_start_response}" | sed '$d')
-
-              if [ "${mdl_start_status}" = "401" ] && echo "${mdl_start_body}" | jq -e '.message == "Authentication required"' >/dev/null 2>&1; then
-                echo "Browser-mediated mDL start route is present and authentication-gated; unauthenticated probe returned 401."
-                break
-              fi
-
-              if [ "${mdl_start_status}" = "403" ] && printf '%s' "${mdl_start_body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
-                mdl_start_challenged=true
-                echo "Browser-mediated mDL start attempt ${attempt} was blocked by a Cloudflare challenge from the GitHub runner."
-              else
-                mdl_start_hard_failure=true
-                echo "Browser-mediated mDL start attempt ${attempt} did not return expected unauthenticated 401; got HTTP ${mdl_start_status}."
-                if echo "${mdl_start_body}" | jq -e . >/dev/null 2>&1; then
-                  echo "${mdl_start_body}" | jq '{message, status, blockers, warnings}'
-                else
-                  printf '%s\n' "${mdl_start_body}" | head -c 4000
-                  printf '\n'
-                fi
-              fi
-            else
-              mdl_start_hard_failure=true
-              echo "Browser-mediated mDL start attempt ${attempt} failed before an HTTP response."
-            fi
-
-            if [ "${attempt}" = "6" ]; then
-              if [ "${mdl_start_challenged}" = "true" ] && [ "${mdl_start_hard_failure}" = "false" ]; then
-                echo "::warning::Browser-mediated mDL start route probe was blocked by a Cloudflare challenge from the GitHub runner; verify it from an operator shell."
-                break
-              fi
-
-              echo "::error::Browser-mediated mDL start route did not pass."
-              exit 1
-            fi
-
-            sleep 10
-          done
-
-          latest_after=""
-          latest_after=$(find_latest_branch_deployment staging)
-
-          if [ -z "${latest_after}" ]; then
-            echo "::error::No staging deployment found after branch-alias verification."
-            exit 1
-          fi
-
-          latest_after_commit=$(echo "${latest_after}" | jq -r '.deployment_trigger.metadata.commit_hash // ""')
-          latest_after_status=$(echo "${latest_after}" | jq -r '.latest_stage.status // ""')
-          latest_after_id=$(echo "${latest_after}" | jq -r '.id // ""')
-          latest_after_url=$(echo "${latest_after}" | jq -r '.url // ""')
-          latest_after_alias=$(echo "${latest_after}" | jq -r --arg target "https://${TARGET}" \
-            '(.aliases // []) | index($target) // empty')
-
-          if [ "${latest_after_id}" != "${staging_id}" ]; then
-            echo "::error::Latest staging Pages deployment moved during branch-alias verification: ${latest_after_id}; expected ${staging_id}."
-            exit 1
-          fi
-
-          if [ "${latest_after_commit}" != "${EXPECTED_COMMIT}" ]; then
-            echo "::error::Latest staging Pages deployment moved during branch-alias verification: ${latest_after_commit}; expected ${EXPECTED_COMMIT}."
-            exit 1
-          fi
-
-          if [ "${latest_after_status}" != "success" ]; then
-            echo "::error::Latest staging Pages deployment status changed during branch-alias verification: ${latest_after_status}, not success."
-            exit 1
-          fi
-
-          if [ -z "${latest_after_alias}" ]; then
-            echo "::error::Latest staging Pages deployment lost branch alias https://${TARGET} during branch-alias verification."
-            exit 1
-          fi
-
+      - name: Summarize trusted staging ownership
+        run: |
           {
-            echo "### Cloudflare branch alias gate"
-            echo "- Commit: ${EXPECTED_COMMIT}"
-            echo "- Staging deployment: ${staging_id}"
-            echo "- Staging deployment URL: ${latest_after_url}"
-            echo "- DNS: ${RECORD_NAME} -> ${TARGET}, proxied=${proxied}"
-            echo "- Custom-domain probes completed; runner-side Cloudflare challenges are warnings only."
-          } >> "${GITHUB_STEP_SUMMARY}"
+            echo '### Trusted staging edge reconciled'
+            echo "- Trusted edge release: ${EXPECTED_COMMIT}"
+            echo "- Public owner: \`commons-trusted-pages-edge-staging\` on \`staging.commons.email/*\`"
+            echo "- Public DNS: proxied originless \`AAAA 100::\` (route removal fails closed)"
+            echo "- Pages origins: \`pages-origin.commons.email\`, \`pages-origin-staging.commons.email\` only"
+            echo "- Direct \`staging.commons.email\` Pages custom-domain attachment: absent"
+          } >> "$GITHUB_STEP_SUMMARY"

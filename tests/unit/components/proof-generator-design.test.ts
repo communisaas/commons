@@ -26,7 +26,7 @@ describe('ProofGenerator design contracts', () => {
 		expect(svelte).not.toContain('hover:from-blue-700 hover:to-indigo-700');
 
 		// Neutral slate fill on CTA + progress matches the receipt-page
-		// Proof Weight bar's canonical replacement.
+		// registry voice.
 		expect(svelte).toContain('bg-slate-700');
 		expect(svelte).toContain('hover:bg-slate-800');
 	});

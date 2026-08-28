@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { buildUnsubscribeUrl } from '$lib/server/email/unsubscribe';
 import type { Id } from '$convex/_generated/dataModel';

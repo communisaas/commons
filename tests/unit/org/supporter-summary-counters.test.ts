@@ -4,14 +4,14 @@
  * The handler previously collected every supporter row + every verified
  * campaign action, which throws past the per-query document cap (the page
  * 500s). It now maps organizations.supporterStats into the same response shape
- * — O(1), no scan. District-of-record cardinality moved to a separate bounded
- * query because a scalar counter can't represent a set without double-counting.
+ * — O(1), no scan. District-of-record cardinality is a separate O(1) scalar
+ * maintained by first/last qualifying-action transitions.
  *
  * convex-test isn't wired in this repo, so this mirrors the handler's pure
  * mapping against an org's stored counters and source-pins:
  *   - the response shape consumers depend on (minus districtVerified),
  *   - that districtVerified is absent from the always-on payload,
- *   - the district query's scan-cap truncation signal.
+ *   - the district query's exact non-truncating compatibility shape.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -47,16 +47,13 @@ function summary(total: number, stats: SupporterStats) {
 	};
 }
 
-/** Mirror of getDistrictVerifiedCount: take(MAX+1) sentinel, distinct supporterIds. */
-const MAX_SCAN = 10_000;
-function districtCount(actions: Array<{ supporterId?: string; districtHash?: string }>) {
-	const scanned = actions.slice(0, MAX_SCAN + 1);
-	const truncated = scanned.length > MAX_SCAN;
-	const set = new Set<string>();
-	for (const a of scanned.slice(0, MAX_SCAN)) {
-		if (a.supporterId && a.districtHash) set.add(a.supporterId);
-	}
-	return { districtVerified: set.size, truncated, scanLimit: MAX_SCAN };
+/** Mirror of the readiness-gated getDistrictVerifiedCount scalar mapping. */
+function districtCount(districtVerifiedSupporterCount: number | undefined) {
+	return {
+		districtVerified: districtVerifiedSupporterCount ?? 0,
+		truncated: false,
+		scanLimit: 0
+	};
 }
 
 describe('getSummaryStats counter mapping', () => {
@@ -107,35 +104,19 @@ describe('getSummaryStats counter mapping', () => {
 	});
 });
 
-describe('getDistrictVerifiedCount (bounded)', () => {
-	it('counts distinct supporters with a districtHash', () => {
-		const r = districtCount([
-			{ supporterId: 'a', districtHash: 'd1' },
-			{ supporterId: 'a', districtHash: 'd2' }, // same supporter, two districts → 1
-			{ supporterId: 'b', districtHash: 'd1' },
-			{ supporterId: 'c' }, // no districtHash → not counted
-			{ districtHash: 'd3' } // no supporterId → not counted
-		]);
-		expect(r.districtVerified).toBe(2);
+describe('getDistrictVerifiedCount (exact projection)', () => {
+	it('maps the exact org scalar without truncation', () => {
+		const r = districtCount(12_345);
+		expect(r.districtVerified).toBe(12_345);
 		expect(r.truncated).toBe(false);
+		expect(r.scanLimit).toBe(0);
 	});
 
-	it('flags truncated when the action scan saturates the cap', () => {
-		const actions = Array.from({ length: MAX_SCAN + 500 }, (_, i) => ({
-			supporterId: `s${i}`,
-			districtHash: `d${i}`
-		}));
-		const r = districtCount(actions);
-		expect(r.truncated).toBe(true);
-		expect(r.scanLimit).toBe(MAX_SCAN);
-		expect(r.districtVerified).toBe(MAX_SCAN);
-	});
-
-	it('an org exactly at the cap is complete, not truncated', () => {
-		const actions = Array.from({ length: MAX_SCAN }, (_, i) => ({
-			supporterId: `s${i}`,
-			districtHash: `d${i}`
-		}));
-		expect(districtCount(actions).truncated).toBe(false);
+	it('treats a missing scalar as zero only after the reader readiness gate', () => {
+		expect(districtCount(undefined)).toEqual({
+			districtVerified: 0,
+			truncated: false,
+			scanLimit: 0
+		});
 	});
 });

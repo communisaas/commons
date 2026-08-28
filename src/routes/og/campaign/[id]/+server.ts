@@ -1,7 +1,8 @@
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 /**
  * Dynamic OG image for campaign social sharing.
@@ -10,7 +11,8 @@ import { api } from '$lib/convex';
  */
 export const GET: RequestHandler = async ({ params }) => {
 	const campaign = await serverQuery(api.campaigns.getPublicAny, {
-		campaignId: params.id,
+		_secret: getInternalSecret(),
+		campaignId: params.id
 	});
 
 	if (!campaign) {
@@ -35,15 +37,21 @@ export const GET: RequestHandler = async ({ params }) => {
   <text x="80" y="100" font-family="system-ui, -apple-system, sans-serif" font-size="24" fill="#a1a1aa" font-weight="400">${escSvg(orgName)}</text>
   <!-- Campaign title -->
   <text x="80" y="200" font-family="system-ui, -apple-system, sans-serif" font-size="48" fill="#f4f4f5" font-weight="700">
-    ${wrapText(title, 44).map((line, i) => `<tspan x="80" dy="${i === 0 ? 0 : 58}">${escSvg(line)}</tspan>`).join('')}
+    ${wrapText(title, 44)
+			.map((line, i) => `<tspan x="80" dy="${i === 0 ? 0 : 58}">${escSvg(line)}</tspan>`)
+			.join('')}
   </text>
   <!-- Verified count -->
-  ${verified > 0 ? `
+  ${
+		verified > 0
+			? `
   <text x="80" y="480" font-family="monospace" font-size="64" fill="#34d399" font-weight="700">${verified.toLocaleString()}</text>
   <text x="${80 + String(verified.toLocaleString()).length * 40 + 20}" y="480" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#a1a1aa">verified actions</text>
-  ` : `
+  `
+			: `
   <text x="80" y="480" font-family="system-ui, -apple-system, sans-serif" font-size="28" fill="#71717a">Take verified action</text>
-  `}
+  `
+	}
   <!-- Commons branding -->
   <text x="80" y="580" font-family="monospace" font-size="18" fill="#52525b">commons.email</text>
   <!-- Verified badge -->
@@ -60,7 +68,11 @@ export const GET: RequestHandler = async ({ params }) => {
 };
 
 function escSvg(s: string): string {
-	return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+	return s
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;');
 }
 
 function truncate(s: string, max: number): string {

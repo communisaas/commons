@@ -1,5 +1,5 @@
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -29,6 +29,8 @@ export const GET: RequestHandler = async ({ url }) => {
 	}
 
 	const results = await serverQuery(api.v1api.compareDmScorecards, {
- _secret: getInternalSecret(), dmIds: ids});
+		_secret: getInternalSecret(),
+		dmIds: ids
+	});
 	return json(results);
 };

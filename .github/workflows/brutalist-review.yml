@@ -1,66 +1,76 @@
-name: Brutalist Review
+name: Brutalist Review (diagnostic)
 
-# claude + codex + agy review on every PR, posted as inline comments.
-# Codex auth: a broker (e.g. noot-1) pushes a fresh ChatGPT-plan access_token
-# (refresh blanked) to the CODEX_AUTH secret out-of-band — no tailnet, no
-# inbound, firewall-friendly. CI just reads it; codex never refreshes. The
-# image_generation tool is disabled (codex#21952 gpt-image-2 bug).
+# SECURITY: pull_request_target loads this workflow from the protected base.
+# Candidate Git objects are fetched into a new bare repository and are never
+# checked out, imported, installed, or executed. This check is diagnostic until
+# a distinct GitHub App or organization-required workflow owns the authoritative
+# launch-gate status; ordinary Actions contexts can be spoofed by PR workflows.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  brutalist:
+  brutalist-diagnostic:
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-    if: github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout trusted base gate only
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          fetch-depth: 0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: gate
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup trusted Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
-      - name: Install CLI critics
-        run: |
-          npm install -g @brutalist/mcp@1.18.3 \
-                         @anthropic-ai/claude-code@2.1.177 \
-                         @openai/codex@0.139.0
-          # NOTE: the agy installer is unpinned upstream (no published checksum) —
-          # residual supply-chain surface; it runs before any secret is present.
-          curl -fsSL https://antigravity.google/cli/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          # codex: disable the broken built-in image_generation tool (gpt-image-2)
-          mkdir -p "$HOME/.codex"
-          printf '[features]\nimage_generation = false\n' > "$HOME/.codex/config.toml"
-      - name: Brutalist review
-        # Tracks the moving @v1 tag (repointed to each release upstream by the
-        # move-tags automation) so this repo auto-updates to the latest action.
-        uses: ejmockler/brutalist-mcp/packages/github-action@v1
+          node-version-file: 'gate/.node-version'
+
+      - name: Fetch source and proof as inert Git objects
+        id: fetch_inert_objects
         env:
-          BRUTALIST_TIMEOUT: "1800000"
-          BRUTALIST_ORCHESTRATOR_TIMEOUT_MS: "2700000"
-          # Disable agy's in-run self-update (it self-updates from a us-central1
-          # endpoint mid-run). NOTE: this does NOT pin the installed version —
-          # install.sh above fetches the latest; this only stops drift WITHIN a run.
-          AGY_CLI_DISABLE_AUTO_UPDATE: "1"
-        with:
-          github-token: ${{ github.token }}
-          anthropic-oauth-token: ${{ secrets.ANTHROPIC_OAUTH_TOKEN }}
-          codex-auth: ${{ secrets.CODEX_AUTH }}
-          agy-oauth-token: ${{ secrets.AGY_OAUTH_TOKEN }}
-          minimum-severity: medium
-          # GLM routed critic — Anthropic-compatible gateway (public Tailscale Funnel).
-          # Additive 4th critic, hardened by default. GLM is the slowest critic
-          # (~5min healthy); down=fast preflight, over-quota 429 retries ~3-4min/chunk.
-          # Reviews are advisory, so this never gates merges.
-          custom-claude-client-id: glm
-          custom-claude-base-url: https://immersivecommons13.tail5da903.ts.net
-          custom-claude-auth-token: ${{ secrets.GLM_TOKEN }}
-          custom-claude-model: glm-5.1
-          custom-claude-small-fast-model: glm-4.5-air
-          custom-claude-context-window: 128000
+          CANDIDATE_GIT_DIR: ${{ runner.temp }}/commons-candidate.git
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          git init --bare "$CANDIDATE_GIT_DIR"
+          git --git-dir="$CANDIDATE_GIT_DIR" remote add origin "$SERVER_URL/$REPOSITORY.git"
+          git --git-dir="$CANDIDATE_GIT_DIR" fetch --no-tags --filter=blob:none origin \
+            "+refs/pull/$PR_NUMBER/head:refs/heads/review-head" \
+            "+$BASE_SHA:refs/brutalist/fetched-base"
+          resolved_base_sha="$(git --git-dir="$CANDIDATE_GIT_DIR" \
+            rev-parse --verify 'refs/brutalist/fetched-base^{commit}')"
+          resolved_source_sha="$(git --git-dir="$CANDIDATE_GIT_DIR" \
+            rev-parse --verify 'refs/heads/review-head^{commit}')"
+          test "$resolved_base_sha" = "$BASE_SHA"
+          test "$resolved_source_sha" = "$SOURCE_SHA"
+
+          attestation_ref="refs/heads/brutalist-attestations/$SOURCE_SHA"
+          git --git-dir="$CANDIDATE_GIT_DIR" fetch --no-tags --filter=blob:none origin \
+            "+$attestation_ref:refs/brutalist/fetched-proof"
+          proof_commit_sha="$(git --git-dir="$CANDIDATE_GIT_DIR" \
+            rev-parse --verify 'refs/brutalist/fetched-proof^{commit}')"
+          [[ "$proof_commit_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "proof_commit_sha=$proof_commit_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Verify candidate Git objects with trusted base code
+        env:
+          BRUTALIST_EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BRUTALIST_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BRUTALIST_EXPECTED_REPOSITORY_ID: ${{ github.repository_id }}
+          BRUTALIST_EXPECTED_REPOSITORY_SLUG: ${{ github.repository }}
+          BRUTALIST_PROOF_COMMIT_SHA: ${{ steps.fetch_inert_objects.outputs.proof_commit_sha }}
+          BRUTALIST_REPOSITORY_GIT_DIR: ${{ runner.temp }}/commons-candidate.git
+        run: node gate/scripts/verify-brutalist-attestation.mjs

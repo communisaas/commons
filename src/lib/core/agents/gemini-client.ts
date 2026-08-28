@@ -6,8 +6,9 @@
  * - Structured output with JSON schemas
  * - Google Search grounding
  * - Multi-turn conversations (simulated until Interactions API is available)
- * - Retry logic with exponential backoff (1s, 2s, 4s)
- * - Max 3 retries for RESOURCE_EXHAUSTED errors
+ * - Stage-specific prompt/output/timeout ceilings
+ * - At most one retry, only for explicitly classified transient responses
+ * - SDK abort propagation with hidden SDK retries disabled
  */
 
 import { GoogleGenAI } from '@google/genai';
@@ -22,6 +23,8 @@ import type {
 } from './types';
 import { extractJsonFromGroundingResponse } from './utils/grounding-json';
 import { recoverTruncatedJson } from './utils/truncation-recovery';
+import { geminiStageEnvelope, type GeminiStageEnvelope } from './provider-call-envelope';
+import { sanitizeProviderErrorMessage } from './provider-error';
 
 // ============================================================================
 // Gemini SDK Grounding Types
@@ -86,10 +89,149 @@ export const GEMINI_CONFIG = {
 	model: 'gemini-3.5-flash',
 	defaults: {
 		temperature: 0.3,
-		maxOutputTokens: 65536,
+		// A compatibility default for display/tests only. Real calls are governed
+		// by their required stage envelope below.
+		maxOutputTokens: 4096,
 		thinkingLevel: 'low' as const
 	}
 } as const;
+
+const THINKING_BUDGETS = Object.freeze({
+	low: 512,
+	medium: 1_024,
+	high: 2_048
+} as const);
+
+function byteLength(value: string): number {
+	return new TextEncoder().encode(value).byteLength;
+}
+
+function promptBytes(
+	prompt: string,
+	options: GenerateOptions,
+	systemInstruction: string | undefined
+): number {
+	let total = byteLength(prompt) + byteLength(systemInstruction ?? '');
+	if (options.responseSchema) total += byteLength(JSON.stringify(options.responseSchema));
+	return total;
+}
+
+function effectiveOutputTokens(options: GenerateOptions, envelope: GeminiStageEnvelope): number {
+	const requested = options.maxOutputTokens ?? envelope.maxOutputTokens;
+	if (!Number.isSafeInteger(requested) || requested <= 0 || requested > envelope.maxOutputTokens) {
+		throw new RangeError(
+			`[agents/gemini-client] ${options.stage} output exceeds ${envelope.maxOutputTokens} tokens`
+		);
+	}
+	return requested;
+}
+
+function assertPromptEnvelope(
+	prompt: string,
+	options: GenerateOptions,
+	systemInstruction: string | undefined
+): GeminiStageEnvelope {
+	const envelope = geminiStageEnvelope(options.stage);
+	const bytes = promptBytes(prompt, options, systemInstruction);
+	if (bytes > envelope.maxPromptBytes) {
+		throw new RangeError(
+			`[agents/gemini-client] ${options.stage} prompt exceeds ${envelope.maxPromptBytes} bytes`
+		);
+	}
+	return envelope;
+}
+
+function thinkingBudget(options: GenerateOptions, envelope: GeminiStageEnvelope): number {
+	const level = options.thinkingLevel ?? GEMINI_CONFIG.defaults.thinkingLevel;
+	return Math.min(THINKING_BUDGETS[level], envelope.maxThinkingTokens);
+}
+
+function errorField(error: unknown, field: 'code' | 'status' | 'statusCode'): unknown {
+	return error !== null && typeof error === 'object' && field in error
+		? (error as Record<string, unknown>)[field]
+		: undefined;
+}
+
+function errorName(error: unknown): string | undefined {
+	return error instanceof Error ? error.name : undefined;
+}
+
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error
+		? signal.reason
+		: new DOMException('The provider request was aborted', 'AbortError');
+}
+
+/** Wait between explicit transient attempts without outliving request cancellation. */
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+	if (!signal) {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
+	if (signal.aborted) return Promise.reject(abortReason(signal));
+
+	return new Promise((resolve, reject) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const onAbort = () => {
+			if (timer !== undefined) clearTimeout(timer);
+			reject(abortReason(signal));
+		};
+		signal.addEventListener('abort', onAbort, { once: true });
+		timer = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort);
+			resolve();
+		}, ms);
+	});
+}
+
+/**
+ * Only provider-declared capacity/unavailability responses are retryable.
+ * Unknown network failures, local parsing/validation errors, and abort/timeouts
+ * are deliberately terminal because the first request may already be billable.
+ */
+export function isRetryableGeminiError(error: unknown): boolean {
+	if (errorName(error) === 'AbortError' || errorName(error) === 'TimeoutError') return false;
+	const values = [
+		errorField(error, 'code'),
+		errorField(error, 'status'),
+		errorField(error, 'statusCode')
+	];
+	return values.some((value) => {
+		if (
+			value === 8 ||
+			value === 14 ||
+			value === 429 ||
+			value === 502 ||
+			value === 503 ||
+			value === 504
+		) {
+			return true;
+		}
+		if (typeof value !== 'string') return false;
+		return ['8', '14', '429', '502', '503', '504', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE'].includes(
+			value.toUpperCase()
+		);
+	});
+}
+
+function terminalProviderError(error: unknown, attempts: number): Error {
+	const code = errorField(error, 'code');
+	const safeDetail = sanitizeProviderErrorMessage(error);
+	if (code === 'INVALID_ARGUMENT') {
+		return new Error(
+			sanitizeProviderErrorMessage(`[agents/gemini-client] Invalid input: ${safeDetail}`)
+		);
+	}
+	if (code === 'UNAUTHENTICATED') {
+		return new Error(
+			'[agents/gemini-client] Invalid GEMINI_API_KEY. Get key from: https://aistudio.google.com/apikey'
+		);
+	}
+	return new Error(
+		sanitizeProviderErrorMessage(
+			`[agents/gemini-client] Failed to generate content after ${attempts} attempt${attempts === 1 ? '' : 's'}: ${safeDetail}`
+		)
+	);
+}
 
 // ============================================================================
 // Token Usage Extraction
@@ -124,8 +266,8 @@ export function extractTokenUsage(response: GenerateContentResponse): TokenUsage
  * - System instructions
  * - Thinking levels (low/medium/high) - not yet available in SDK v1.28.0
  *
- * Includes retry logic for rate limits (RESOURCE_EXHAUSTED).
- * Uses exponential backoff: 1s, 2s, 4s.
+ * Retry behavior is selected by the reviewed stage envelope. No stage can
+ * exceed two attempts and local/ambiguous failures are never retried.
  *
  * @param prompt - User prompt to generate from
  * @param options - Generation configuration options
@@ -143,13 +285,25 @@ export function extractTokenUsage(response: GenerateContentResponse): TokenUsage
  */
 export async function generate(
 	prompt: string,
-	options: GenerateOptions = {}
+	options: GenerateOptions
 ): Promise<GenerateContentResponse> {
+	const envelope = assertPromptEnvelope(prompt, options, options.systemInstruction);
 	const ai = getGeminiClient();
 
 	const config: GenerateContentConfig = {
 		temperature: options.temperature ?? GEMINI_CONFIG.defaults.temperature,
-		maxOutputTokens: options.maxOutputTokens ?? GEMINI_CONFIG.defaults.maxOutputTokens
+		maxOutputTokens: effectiveOutputTokens(options, envelope),
+		thinkingConfig: {
+			thinkingBudget: thinkingBudget(options, envelope)
+		},
+		// The SDK defaults to five attempts when retryOptions is present without
+		// an explicit value. Force one SDK attempt; our reviewed loop below owns
+		// the only possible retry.
+		httpOptions: {
+			timeout: envelope.timeoutMs,
+			retryOptions: { attempts: 1 }
+		},
+		...(options.signal ? { abortSignal: options.signal } : {})
 	};
 
 	// Add grounding if enabled
@@ -171,22 +325,8 @@ export async function generate(
 		config.systemInstruction = options.systemInstruction;
 	}
 
-	// Thinking budget. `maxOutputTokens` on Gemini 3 caps combined
-	// thinking+output, so unbounded thinking starves output and trips MAX_TOKENS
-	// on mechanical extraction tasks. Mirror the budget map used by
-	// generateStream/generateStreamWithThoughts.
-	if (options.thinkingLevel) {
-		config.thinkingConfig = {
-			thinkingBudget:
-				options.thinkingLevel === 'high' ? 8192 : options.thinkingLevel === 'low' ? 1024 : 4096
-		};
-	}
-
-	// Retry logic with exponential backoff
-	const maxRetries = 3;
-	const retryDelay = 1000; // 1 second base delay
-
-	for (let attempt = 0; attempt < maxRetries; attempt++) {
+	for (let attempt = 0; attempt < envelope.maxAttempts; attempt++) {
+		if (options.signal?.aborted) throw abortReason(options.signal);
 		try {
 			const response = await ai.models.generateContent({
 				model: GEMINI_CONFIG.model,
@@ -217,10 +357,9 @@ export async function generate(
 					const recovery = recoverTruncatedJson<Record<string, unknown>>(response.text, []);
 
 					if (recovery.data && Object.keys(recovery.data).length > 0) {
-						console.debug(
-							'[agents/gemini-client] Truncated but recoverable - extracted fields:',
-							Object.keys(recovery.data)
-						);
+						console.debug('[agents/gemini-client] Truncated but recoverable structured response:', {
+							fieldCount: Object.keys(recovery.data).length
+						});
 						// Patch the response with recovered partial JSON
 						const patchedResponse = {
 							...response,
@@ -230,10 +369,10 @@ export async function generate(
 					}
 
 					// Recovery failed completely
-					console.error(
-						'[agents/gemini-client] JSON parse failed and recovery unsuccessful. Last chars:',
-						recovery.lastChars
-					);
+					console.error('[agents/gemini-client] JSON parse failed and recovery unsuccessful:', {
+						responseCharacters: response.text.length,
+						recoverableFieldCount: 0
+					});
 					throw new Error(
 						'[agents/gemini-client] Response contains malformed JSON that could not be recovered'
 					);
@@ -242,51 +381,22 @@ export async function generate(
 
 			return response;
 		} catch (error) {
-			const isLastAttempt = attempt === maxRetries - 1;
-
-			// Check for specific error types
-			if (error && typeof error === 'object' && 'code' in error) {
-				const errorCode = (error as { code: string }).code;
-
-				if (errorCode === 'RESOURCE_EXHAUSTED') {
-					// Rate limit exceeded - retry with exponential backoff
-					if (!isLastAttempt) {
-						const delay = retryDelay * Math.pow(2, attempt);
-						console.warn(
-							`[agents/gemini-client] Rate limit exceeded, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})...`
-						);
-						await new Promise((resolve) => setTimeout(resolve, delay));
-						continue;
-					}
-				} else if (errorCode === 'INVALID_ARGUMENT') {
-					// Invalid input - don't retry
-					throw new Error(
-						`[agents/gemini-client] Invalid input: ${error instanceof Error ? error.message : String(error)}`
-					);
-				} else if (errorCode === 'UNAUTHENTICATED') {
-					// Invalid API key - don't retry
-					throw new Error(
-						'[agents/gemini-client] Invalid GEMINI_API_KEY. Get key from: https://aistudio.google.com/apikey'
-					);
-				}
+			const attempts = attempt + 1;
+			const isLastAttempt = attempts >= envelope.maxAttempts;
+			if (isLastAttempt || !isRetryableGeminiError(error) || options.signal?.aborted) {
+				throw terminalProviderError(error, attempts);
 			}
 
-			// Unknown error or last attempt - throw
-			if (isLastAttempt) {
-				console.error('[agents/gemini-client] Generation failed:', error);
-				throw new Error(
-					`[agents/gemini-client] Failed to generate content after ${maxRetries} attempts: ${error instanceof Error ? error.message : String(error)}`
-				);
-			}
-
-			// Retry with exponential backoff
-			const delay = retryDelay * Math.pow(2, attempt);
-			console.warn(`[agents/gemini-client] Generation failed, retrying in ${delay}ms...`);
-			await new Promise((resolve) => setTimeout(resolve, delay));
+			const delay = 500 * 2 ** attempt;
+			console.warn(
+				`[agents/gemini-client] ${options.stage} transient provider failure; retrying once in ${delay}ms`
+			);
+			await abortableDelay(delay, options.signal);
+			if (options.signal?.aborted) throw abortReason(options.signal);
 		}
 	}
 
-	throw new Error('[agents/gemini-client] Max retries exceeded (should not reach here)');
+	throw new Error('[agents/gemini-client] Stage attempt envelope exhausted');
 }
 
 // ============================================================================
@@ -321,19 +431,24 @@ export async function generate(
  */
 export async function* generateStream(
 	prompt: string,
-	options: GenerateOptions = {}
+	options: GenerateOptions
 ): AsyncGenerator<StreamChunk> {
+	const envelope = assertPromptEnvelope(prompt, options, options.systemInstruction);
 	const ai = getGeminiClient();
 
 	const config: GenerateContentConfig = {
 		temperature: options.temperature ?? GEMINI_CONFIG.defaults.temperature,
-		maxOutputTokens: options.maxOutputTokens ?? GEMINI_CONFIG.defaults.maxOutputTokens,
+		maxOutputTokens: effectiveOutputTokens(options, envelope),
 		// Enable thinking with summaries
 		thinkingConfig: {
 			includeThoughts: true,
-			thinkingBudget:
-				options.thinkingLevel === 'high' ? 8192 : options.thinkingLevel === 'low' ? 1024 : 4096
-		}
+			thinkingBudget: thinkingBudget(options, envelope)
+		},
+		httpOptions: {
+			timeout: envelope.timeoutMs,
+			retryOptions: { attempts: 1 }
+		},
+		...(options.signal ? { abortSignal: options.signal } : {})
 	};
 
 	// Add response schema if provided (non-grounding mode)
@@ -379,10 +494,11 @@ export async function* generateStream(
 
 		yield { type: 'complete', content: fullText };
 	} catch (error) {
-		console.error('[agents/gemini-client] Stream error:', error);
+		const safeError = sanitizeProviderErrorMessage(error, 'Stream generation failed');
+		console.error('[agents/gemini-client] Stream error:', safeError);
 		yield {
 			type: 'error',
-			content: error instanceof Error ? error.message : 'Stream generation failed'
+			content: safeError
 		};
 	}
 }
@@ -436,25 +552,29 @@ Output the JSON object directly, starting with { and ending with }.`;
  */
 export async function* generateStreamWithThoughts<T = unknown>(
 	prompt: string,
-	options: GenerateOptions = {}
+	options: GenerateOptions
 ): AsyncGenerator<StreamChunk, StreamResultWithThoughts<T>> {
-	const ai = getGeminiClient();
-
 	// Append JSON instruction to system prompt
 	const systemInstruction = options.systemInstruction
 		? options.systemInstruction + JSON_OUTPUT_INSTRUCTION
 		: JSON_OUTPUT_INSTRUCTION;
+	const envelope = assertPromptEnvelope(prompt, options, systemInstruction);
+	const ai = getGeminiClient();
 
 	const config: GenerateContentConfig = {
 		temperature: options.temperature ?? GEMINI_CONFIG.defaults.temperature,
-		maxOutputTokens: options.maxOutputTokens ?? GEMINI_CONFIG.defaults.maxOutputTokens,
+		maxOutputTokens: effectiveOutputTokens(options, envelope),
 		systemInstruction,
 		// Enable thinking with summaries
 		thinkingConfig: {
 			includeThoughts: true,
-			thinkingBudget:
-				options.thinkingLevel === 'high' ? 8192 : options.thinkingLevel === 'low' ? 1024 : 4096
-		}
+			thinkingBudget: thinkingBudget(options, envelope)
+		},
+		httpOptions: {
+			timeout: envelope.timeoutMs,
+			retryOptions: { attempts: 1 }
+		},
+		...(options.signal ? { abortSignal: options.signal } : {})
 		// NOTE: Do NOT use responseMimeType here - it suppresses thoughts
 	};
 
@@ -547,15 +667,18 @@ export async function* generateStreamWithThoughts<T = unknown>(
 			rawText: fullText,
 			data: extraction.data,
 			parseSuccess: extraction.success,
-			parseError: extraction.error,
+			parseError: extraction.error
+				? sanitizeProviderErrorMessage(extraction.error, 'Structured response parsing failed')
+				: undefined,
 			groundingMetadata,
 			tokenUsage
 		};
 	} catch (error) {
-		console.error('[agents/gemini-client] Stream error:', error);
+		const safeError = sanitizeProviderErrorMessage(error, 'Stream generation failed');
+		console.error('[agents/gemini-client] Stream error:', safeError);
 		yield {
 			type: 'error',
-			content: error instanceof Error ? error.message : 'Stream generation failed'
+			content: safeError
 		};
 
 		return {
@@ -563,7 +686,7 @@ export async function* generateStreamWithThoughts<T = unknown>(
 			rawText: fullText,
 			data: null,
 			parseSuccess: false,
-			parseError: error instanceof Error ? error.message : 'Stream generation failed',
+			parseError: safeError,
 			groundingMetadata,
 			tokenUsage
 		};
@@ -583,7 +706,7 @@ export async function* generateStreamWithThoughts<T = unknown>(
  */
 export async function generateWithThoughts<T = unknown>(
 	prompt: string,
-	options: GenerateOptions = {},
+	options: GenerateOptions,
 	onThought?: (thought: string) => void
 ): Promise<StreamResultWithThoughts<T>> {
 	const generator = generateStreamWithThoughts<T>(prompt, options);
@@ -660,7 +783,7 @@ export async function generateWithThoughts<T = unknown>(
  */
 export async function interact(
 	input: string,
-	options: GenerateOptions = {}
+	options: GenerateOptions
 ): Promise<InteractionResponse> {
 	// Use generate() since Interactions API isn't available yet in SDK v1.28.0
 	// When ai.interactions.create() becomes available, replace this implementation

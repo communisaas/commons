@@ -84,11 +84,19 @@
 	}
 
 	const followed = $derived(data?.followed ?? []);
+	const followedLoaded = $derived(data?.followed !== null && data?.followed !== undefined);
 	const bills = $derived(data?.bills ?? []);
 	const scorecards = $derived(data?.scorecards ?? []);
+	const billsLoaded = $derived(data?.bills !== null && data?.bills !== undefined);
+	const scorecardsLoaded = $derived(data?.scorecards !== null && data?.scorecards !== undefined);
 	const legislationEnabled = $derived(data?.legislationEnabled ?? false);
 	const headline = $derived(
-		data
+		data &&
+			followedLoaded &&
+			data.followedCount !== null &&
+			billsLoaded &&
+			scorecardsLoaded &&
+			data.scorecardSnapshotCount !== null
 			? describePowerPosition({
 					followedCount: data.followedCount,
 					watchedBillCount: bills.length,
@@ -98,7 +106,9 @@
 				})
 			: null
 	);
-	const relevantBillsLine = $derived(data ? describeRelevantBills(data.relevantBillCount) : null);
+	const relevantBillsLine = $derived(
+		data && billsLoaded ? describeRelevantBills(data.relevantBillCount) : null
+	);
 </script>
 
 <div class="power" style="--timing-slow: {TIMING.SLOW}ms; --easing: {EASING};">
@@ -124,9 +134,11 @@
 		<section class="block" aria-label="Decision-makers you follow">
 			<div class="block-head">
 				<span class="section-label">Who decides</span>
-				{#if followed.length > 0}
+				{#if followedLoaded && followed.length > 0 && data.followedCount !== null}
 					<span class="block-count">
-						<Datum value={data.followedCount} class="block-count-num" /> followed
+						<Datum value={data.followedCount} class="block-count-num" />{data.followedCountTruncated
+							? '+'
+							: ''} followed
 					</span>
 				{/if}
 				<a
@@ -139,7 +151,13 @@
 			<!-- Coverage honesty: what the directory holds today, in plain words. -->
 			<p class="power-quiet">{DECISION_MAKER_COVERAGE_SENTENCE}</p>
 
-			{#if followed.length === 0}
+			{#if !followedLoaded}
+				<p class="block-empty">
+					Decision-makers load in their owned directory while the compact projection is becoming
+					ready.
+					<a class="block-link" href={fullViewHref(`${base}/representatives`)}>Open directory →</a>
+				</p>
+			{:else if followed.length === 0}
 				<p class="block-empty">
 					{NO_FOLLOWED_DECISION_MAKERS_LEAD} —
 					<a class="block-link" href={fullViewHref(`${base}/representatives`)}>find yours</a>.
@@ -183,7 +201,12 @@
 					>
 				</div>
 
-				{#if bills.length === 0}
+				{#if !billsLoaded}
+					<p class="block-empty">
+						Watched bills load in the Bills tool, which owns that collection.
+						<a class="block-link" href="{base}/legislation">Open bills →</a>
+					</p>
+				{:else if bills.length === 0}
 					<p class="block-empty">
 						{NO_WATCHED_BILLS_SENTENCE}
 						<a class="block-link" href="{base}/legislation">Find bills →</a>
@@ -216,7 +239,7 @@
 			<section class="block" aria-label="Accountability scorecards">
 				<div class="block-head">
 					<span class="section-label">Is your pressure registering</span>
-					{#if data.scorecardSnapshotCount > 0}
+					{#if data.scorecardSnapshotCount !== null && data.scorecardSnapshotCount > 0}
 						<span class="block-count">
 							<Datum value={data.scorecardSnapshotCount} class="block-count-num" />
 							scorecard{data.scorecardSnapshotCount === 1 ? '' : 's'}
@@ -231,7 +254,11 @@
 					>
 				</div>
 
-				{#if scorecards.length === 0}
+				{#if !scorecardsLoaded}
+					<p class="block-empty">
+						Scorecards load in the Scorecards tool, which owns that collection.
+					</p>
+				{:else if scorecards.length === 0}
 					<p class="block-empty">{SCORECARDS_BUILD_SENTENCE}</p>
 				{:else}
 					<div class="card-list">

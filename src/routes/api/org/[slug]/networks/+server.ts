@@ -6,13 +6,20 @@
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 import { z } from 'zod';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
 const CreateNetworkSchema = z.object({
-	name: z.string().min(3, 'Name must be at least 3 characters').max(100, 'Name must be at most 100 characters'),
-	slug: z.string().min(3).max(50).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
+	name: z
+		.string()
+		.min(3, 'Name must be at least 3 characters')
+		.max(100, 'Name must be at most 100 characters'),
+	slug: z
+		.string()
+		.min(3)
+		.max(50)
+		.regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
 	description: z.string().max(500).optional()
 });
 
@@ -48,9 +55,19 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		slug,
 		description: description ?? undefined
 	});
-	return json({
-		data: { id: networkId, name, slug, description: description ?? null, status: 'active', createdAt: new Date().toISOString() }
-	}, { status: 201 });
+	return json(
+		{
+			data: {
+				id: networkId,
+				name,
+				slug,
+				description: description ?? null,
+				status: 'active',
+				createdAt: new Date().toISOString()
+			}
+		},
+		{ status: 201 }
+	);
 };
 
 export const GET: RequestHandler = async ({ params, locals }) => {

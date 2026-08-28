@@ -1,7 +1,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { env as publicEnv } from '$env/dynamic/public';
 import { env as privateEnv } from '$env/dynamic/private';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import {
@@ -17,6 +17,7 @@ import { getEmailServerDispatchReadiness } from '$lib/server/email/server-dispat
 import { orgLimitSentence, DELIVERY_QUOTA_SUBSCRIBE_GATE } from '$lib/data/org-limit-sentences';
 import { getRateLimiter } from '$lib/core/security/rate-limiter';
 import { FEATURES } from '$lib/config/features';
+import { countEmailAudience, resolveEmailAudienceHashes } from '$lib/server/email/audience';
 import type { PageServerLoad, Actions } from './$types';
 
 const baseUrl = publicEnv.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
@@ -107,10 +108,7 @@ async function countRecipientsByFilter(
 	orgSlug: string,
 	filter: RecipientFilter
 ): Promise<RecipientCountResult> {
-	const result = (await serverQuery(api.email.countRecipientsForFilter, {
-		orgSlug,
-		recipientFilter: filter
-	})) as { totalCount: number; sourceCounts?: Record<string, number> };
+	const result = await countEmailAudience(orgSlug, filter);
 	return {
 		totalCount: result.totalCount,
 		sourceCounts: asSourceCounts(result.sourceCounts)
@@ -148,30 +146,20 @@ function allocateAbCohort(
 }
 
 export const load: PageServerLoad = async ({ parent, params }) => {
-	const { org, membership } = await parent();
+	await parent();
 
-	const [
-		convexCampaigns,
-		convexSupporterStats,
-		convexTags,
-		convexSegments,
-		sub,
-		orgKeyResult,
-		initialRecipientCount
-	] = await Promise.all([
-		serverQuery(api.campaigns.list, {
-			slug: params.slug,
-			paginationOpts: { numItems: 50, cursor: null }
-		}),
-		serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
-		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
-		serverQuery(api.segments.list, { slug: params.slug }),
-		serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug }),
-		serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug }),
-		canEdit(membership.role)
-			? countRecipientsByFilter(params.slug, { verified: 'any' }).catch(() => null)
-			: Promise.resolve(null)
-	]);
+	const [convexCampaigns, convexSupporterStats, convexTags, convexSegments, sub, orgKeyResult] =
+		await Promise.all([
+			serverQuery(api.campaigns.list, {
+				slug: params.slug,
+				paginationOpts: { numItems: 50, cursor: null }
+			}),
+			serverQuery(api.supporters.getSummaryStats, { orgSlug: params.slug }),
+			serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
+			serverQuery(api.segments.list, { slug: params.slug }),
+			serverQuery(api.subscriptions.getByOrg, { orgSlug: params.slug }),
+			serverQuery(api.organizations.getOrgKeyVerifier, { slug: params.slug })
+		]);
 
 	// A/B testing allowed if org has an active marketed plan (Starter+).
 	// An org with no subscription falls to the gated `inactive` floor (sub is
@@ -197,9 +185,10 @@ export const load: PageServerLoad = async ({ parent, params }) => {
 			id: asString(segment._id ?? segment.id),
 			name: asString(segment.name)
 		})),
-		subscribedCount:
-			initialRecipientCount?.totalCount ?? convexSupporterStats.emailHealth?.subscribed ?? 0,
-		recipientSourceCounts: initialRecipientCount?.sourceCounts ?? {},
+		// Initial unfiltered count is the O(1) supporter summary. Exact filtered
+		// counts are fetched only after the editor changes an audience filter.
+		subscribedCount: convexSupporterStats.emailHealth?.subscribed ?? 0,
+		recipientSourceCounts: {},
 		abTestingAllowed,
 		orgKeyVerifier: orgKeyResult?.orgKeyVerifier ?? null,
 		serverDispatchRuntimeReady: serverDispatchReadiness.ready,
@@ -342,6 +331,15 @@ export const actions: Actions = {
 
 		// Billing usage check via Convex
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (!limits.usageReady) {
+			if (limits.usageRepairRequired) {
+				await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+			}
+			return fail(503, {
+				error: 'Billing usage is being rebuilt. Your draft is preserved; retry shortly.',
+				errorCode: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			});
+		}
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			return fail(403, emailQuotaFailBody(limits.limits.maxEmails));
 		}
@@ -490,6 +488,15 @@ export const actions: Actions = {
 
 		// Billing usage check via Convex
 		const abLimits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (!abLimits.usageReady) {
+			if (abLimits.usageRepairRequired) {
+				await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+			}
+			return fail(503, {
+				error: 'Billing usage is being rebuilt. Your draft is preserved; retry shortly.',
+				errorCode: abLimits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			});
+		}
 		if (abLimits?.current && abLimits.current.emailsSent >= abLimits.limits.maxEmails) {
 			return fail(403, emailQuotaFailBody(abLimits.limits.maxEmails));
 		}
@@ -555,23 +562,22 @@ export const actions: Actions = {
 		}
 
 		const filter = parseFilter(formData);
-		const resolvedCohort = (await serverQuery(api.email.resolveRecipientHashesForFilter, {
-			orgSlug: params.slug,
-			recipientFilter: filter
-		})) as {
-			emailHashes: string[];
-			totalCount: number;
-			limited: boolean;
-			maxSupported: number;
-		};
-		if (resolvedCohort.limited) {
+		let resolvedHashes: string[];
+		try {
+			resolvedHashes = await resolveEmailAudienceHashes(params.slug, filter);
+		} catch (error) {
+			const code = error instanceof Error ? error.message : 'EMAIL_AUDIENCE_RESOLUTION_FAILED';
 			return fail(400, {
-				error: `A/B cohort snapshots are currently capped at ${resolvedCohort.maxSupported.toLocaleString()} recipients. Narrow the audience before creating the test.`
+				error:
+					code === 'EMAIL_AUDIENCE_COHORT_TOO_LARGE' ||
+					code === 'EMAIL_AUDIENCE_SCAN_LIMIT_EXCEEDED'
+						? 'A/B cohort snapshots support an exact scan of at most 10,000 subscribed people. Narrow the audience before creating the test.'
+						: 'The A/B audience could not be resolved exactly. Review the saved filters and try again.'
 			});
 		}
 		let allocation: AbCohortAllocation;
 		try {
-			allocation = allocateAbCohort(resolvedCohort.emailHashes, testGroupPct, splitPct);
+			allocation = allocateAbCohort(resolvedHashes, testGroupPct, splitPct);
 		} catch (err) {
 			return fail(400, {
 				error: err instanceof Error ? err.message : 'A/B cohort could not be allocated.'
@@ -637,6 +643,15 @@ export const actions: Actions = {
 		}
 
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (!limits.usageReady) {
+			if (limits.usageRepairRequired) {
+				await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+			}
+			return fail(503, {
+				error: 'Billing usage is being rebuilt. Your draft is preserved; retry shortly.',
+				errorCode: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			});
+		}
 		if (limits?.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			return fail(403, emailQuotaFailBody(limits.limits.maxEmails));
 		}

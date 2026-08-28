@@ -1,0 +1,3843 @@
+{
+	"version": 1,
+	"generatedBy": "scripts/verify-convex-public-function-authority.mjs",
+	"registrationNote": "Every new public Convex function must also be registered in config/convex-work-budget-policy.json before any SvelteKit server call; an unregistered work-budget operation is rejected unconditionally before any bypass.",
+	"categories": [
+		"authenticated-role",
+		"explicitly-io-free",
+		"pre-io-tombstone",
+		"server-hmac",
+		"server-secret"
+	],
+	"counts": {
+		"authenticated-role": 241,
+		"explicitly-io-free": 0,
+		"pre-io-tombstone": 26,
+		"server-hmac": 5,
+		"server-secret": 195
+	},
+	"browserDirectAuthenticatedResiduals": [
+		{
+			"runtimeName": "blasts:getEncryptedSupportersForBlast",
+			"caller": "src/routes/org/[slug]/emails/compose/+page.svelte",
+			"kind": "query",
+			"callCount": 1,
+			"workBound": "one cursor page; 10,000-recipient and 10,000-scan cohort ceilings"
+		},
+		{
+			"runtimeName": "blasts:recordBlastReceipts",
+			"caller": "src/routes/org/[slug]/emails/compose/+page.svelte",
+			"kind": "mutation",
+			"callCount": 1,
+			"workBound": "200 receipts per mutation; exact blast receipt ceiling"
+		},
+		{
+			"runtimeName": "blasts:updateClientBlastProgress",
+			"caller": "src/routes/org/[slug]/emails/compose/+page.svelte",
+			"kind": "mutation",
+			"callCount": 2,
+			"workBound": "one blast row; counters bounded by persisted cohort size"
+		},
+		{
+			"runtimeName": "organizations:rotateOrgPassphrase",
+			"caller": "src/routes/org/[slug]/settings/+page.svelte",
+			"kind": "mutation",
+			"callCount": 1,
+			"workBound": "owner role; fixed org-key rows"
+		},
+		{
+			"runtimeName": "organizations:sealOrgKey",
+			"caller": "src/routes/org/[slug]/settings/+page.svelte",
+			"kind": "action",
+			"callCount": 2,
+			"workBound": "owner verification before fixed-size key sealing and one patch"
+		},
+		{
+			"runtimeName": "organizations:setOrgKeyVerifier",
+			"caller": "src/routes/org/[slug]/settings/+page.svelte",
+			"kind": "mutation",
+			"callCount": 1,
+			"workBound": "owner role; fixed org-key fields"
+		},
+		{
+			"runtimeName": "segments:list",
+			"caller": "src/routes/org/[slug]/supporters/+page.svelte",
+			"kind": "query",
+			"callCount": 1,
+			"workBound": "member role; fixed MAX_SEGMENTS_PER_ORG ceiling"
+		},
+		{
+			"runtimeName": "sms:advanceEmptyDispatchPage",
+			"caller": "src/routes/org/[slug]/sms/[id]/+page.svelte",
+			"kind": "mutation",
+			"callCount": 1,
+			"workBound": "one byte-bounded recipient page; cumulative scan ceiling"
+		},
+		{
+			"runtimeName": "sms:getEncryptedRecipientsForBlast",
+			"caller": "src/routes/org/[slug]/sms/[id]/+page.svelte",
+			"kind": "query",
+			"callCount": 1,
+			"workBound": "one byte-bounded recipient page; cumulative scan ceiling"
+		},
+		{
+			"runtimeName": "supporters:get",
+			"caller": "src/routes/org/[slug]/supporters/+page.svelte",
+			"kind": "query",
+			"callCount": 1,
+			"workBound": "one supporter plus at most 100 tag links and point reads"
+		},
+		{
+			"runtimeName": "supporters:list",
+			"caller": "src/routes/org/[slug]/supporters/+page.svelte",
+			"kind": "query",
+			"callCount": 2,
+			"workBound": "100 rows and 512 KiB per cursor page"
+		},
+		{
+			"runtimeName": "supporters:searchByEmail",
+			"caller": "src/routes/org/[slug]/supporters/+page.svelte",
+			"kind": "query",
+			"callCount": 1,
+			"workBound": "one indexed supporter plus at most 100 tag links and point reads"
+		}
+	],
+	"entries": [
+		{
+			"runtimeName": "accountabilityReadModel:readiness",
+			"source": "convex/accountabilityReadModel.ts",
+			"exportName": "readiness",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "agentTraces:findStuck",
+			"source": "convex/agentTraces.ts",
+			"exportName": "findStuck",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "agentTraces:listByTrace",
+			"source": "convex/agentTraces.ts",
+			"exportName": "listByTrace",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "agentTraces:recentByEndpoint",
+			"source": "convex/agentTraces.ts",
+			"exportName": "recentByEndpoint",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "agentTraces:record",
+			"source": "convex/agentTraces.ts",
+			"exportName": "record",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "analytics:incrementBatch",
+			"source": "convex/analytics.ts",
+			"exportName": "incrementBatch",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "authOps:backfillTokenIdentifier",
+			"source": "convex/authOps.ts",
+			"exportName": "backfillTokenIdentifier",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "authOps:createSession",
+			"source": "convex/authOps.ts",
+			"exportName": "createSession",
+			"kind": "mutation",
+			"authority": "server-hmac",
+			"guard": "crypto.subtle.verify+fail-closed"
+		},
+		{
+			"runtimeName": "authOps:invalidateSession",
+			"source": "convex/authOps.ts",
+			"exportName": "invalidateSession",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "authOps:renewSession",
+			"source": "convex/authOps.ts",
+			"exportName": "renewSession",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "authOps:upsertFromOAuth",
+			"source": "convex/authOps.ts",
+			"exportName": "upsertFromOAuth",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "authOps:validateSession",
+			"source": "convex/authOps.ts",
+			"exportName": "validateSession",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "blasts:getEncryptedSupportersForBlast",
+			"source": "convex/blasts.ts",
+			"exportName": "getEncryptedSupportersForBlast",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "blasts:recordBlastReceipts",
+			"source": "convex/blasts.ts",
+			"exportName": "recordBlastReceipts",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "blasts:sealAndScheduleBlast",
+			"source": "convex/blasts.ts",
+			"exportName": "sealAndScheduleBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "blasts:updateClientBlastProgress",
+			"source": "convex/blasts.ts",
+			"exportName": "updateClientBlastProgress",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:createCall",
+			"source": "convex/calls.ts",
+			"exportName": "createCall",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:listCalls",
+			"source": "convex/calls.ts",
+			"exportName": "listCalls",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:listCallsPaginated",
+			"source": "convex/calls.ts",
+			"exportName": "listCallsPaginated",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:updateCallSid",
+			"source": "convex/calls.ts",
+			"exportName": "updateCallSid",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:updateCallStatus",
+			"source": "convex/calls.ts",
+			"exportName": "updateCallStatus",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:validateCampaign",
+			"source": "convex/calls.ts",
+			"exportName": "validateCampaign",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "calls:validateSupporter",
+			"source": "convex/calls.ts",
+			"exportName": "validateSupporter",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:addTarget",
+			"source": "convex/campaigns.ts",
+			"exportName": "addTarget",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:clone",
+			"source": "convex/campaigns.ts",
+			"exportName": "clone",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:create",
+			"source": "convex/campaigns.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:get",
+			"source": "convex/campaigns.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "campaigns:getCampaignByDebateId",
+			"source": "convex/campaigns.ts",
+			"exportName": "getCampaignByDebateId",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "campaigns:getCampaignPacketSummary",
+			"source": "convex/campaigns.ts",
+			"exportName": "getCampaignPacketSummary",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getCampaignReadModelReadiness",
+			"source": "convex/campaigns.ts",
+			"exportName": "getCampaignReadModelReadiness",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getDebateId",
+			"source": "convex/campaigns.ts",
+			"exportName": "getDebateId",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getDebateSnapshotForCampaign",
+			"source": "convex/campaigns.ts",
+			"exportName": "getDebateSnapshotForCampaign",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getForOrgPage",
+			"source": "convex/campaigns.ts",
+			"exportName": "getForOrgPage",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:getPastDeliveries",
+			"source": "convex/campaigns.ts",
+			"exportName": "getPastDeliveries",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:getPublic",
+			"source": "convex/campaigns.ts",
+			"exportName": "getPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getPublicActive",
+			"source": "convex/campaigns.ts",
+			"exportName": "getPublicActive",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getPublicAny",
+			"source": "convex/campaigns.ts",
+			"exportName": "getPublicAny",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getReadModelBundle",
+			"source": "convex/campaigns.ts",
+			"exportName": "getReadModelBundle",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getReportPreview",
+			"source": "convex/campaigns.ts",
+			"exportName": "getReportPreview",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:getStats",
+			"source": "convex/campaigns.ts",
+			"exportName": "getStats",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:getStatusCounts",
+			"source": "convex/campaigns.ts",
+			"exportName": "getStatusCounts",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:list",
+			"source": "convex/campaigns.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:recordResponse",
+			"source": "convex/campaigns.ts",
+			"exportName": "recordResponse",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:remove",
+			"source": "convex/campaigns.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:removeTarget",
+			"source": "convex/campaigns.ts",
+			"exportName": "removeTarget",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:sendReport",
+			"source": "convex/campaigns.ts",
+			"exportName": "sendReport",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:submitAction",
+			"source": "convex/campaigns.ts",
+			"exportName": "submitAction",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "campaigns:update",
+			"source": "convex/campaigns.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "campaigns:updateStatus",
+			"source": "convex/campaigns.ts",
+			"exportName": "updateStatus",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "debates:cosign",
+			"source": "convex/debates.ts",
+			"exportName": "cosign",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:createArgument",
+			"source": "convex/debates.ts",
+			"exportName": "createArgument",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:findNullifier",
+			"source": "convex/debates.ts",
+			"exportName": "findNullifier",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:forceSpawnDebateForCampaign",
+			"source": "convex/debates.ts",
+			"exportName": "forceSpawnDebateForCampaign",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "ctx.auth.getUserIdentity+fail-closed"
+		},
+		{
+			"runtimeName": "debates:get",
+			"source": "convex/debates.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getArgumentByIndexForSsr",
+			"source": "convex/debates.ts",
+			"exportName": "getArgumentByIndexForSsr",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getByTemplateId",
+			"source": "convex/debates.ts",
+			"exportName": "getByTemplateId",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getCampaignForDebate",
+			"source": "convex/debates.ts",
+			"exportName": "getCampaignForDebate",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "debates:getDebateReadModelReadiness",
+			"source": "convex/debates.ts",
+			"exportName": "getDebateReadModelReadiness",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getFullByTemplateId",
+			"source": "convex/debates.ts",
+			"exportName": "getFullByTemplateId",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getFullByTemplateIdForSsr",
+			"source": "convex/debates.ts",
+			"exportName": "getFullByTemplateIdForSsr",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getPublicDetail",
+			"source": "convex/debates.ts",
+			"exportName": "getPublicDetail",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:getSnapshot",
+			"source": "convex/debates.ts",
+			"exportName": "getSnapshot",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:insertDebateForCaller",
+			"source": "convex/debates.ts",
+			"exportName": "insertDebateForCaller",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:listArguments",
+			"source": "convex/debates.ts",
+			"exportName": "listArguments",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:listAwaitingGovernance",
+			"source": "convex/debates.ts",
+			"exportName": "listAwaitingGovernance",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "debates:listPublic",
+			"source": "convex/debates.ts",
+			"exportName": "listPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:spawnDebate",
+			"source": "convex/debates.ts",
+			"exportName": "spawnDebate",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "ctx.auth.getUserIdentity+fail-closed"
+		},
+		{
+			"runtimeName": "debates:updateArgumentScores",
+			"source": "convex/debates.ts",
+			"exportName": "updateArgumentScores",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "debates:updateStatus",
+			"source": "convex/debates.ts",
+			"exportName": "updateStatus",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "delegation:createGrant",
+			"source": "convex/delegation.ts",
+			"exportName": "createGrant",
+			"kind": "action",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:getGrant",
+			"source": "convex/delegation.ts",
+			"exportName": "getGrant",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:listActions",
+			"source": "convex/delegation.ts",
+			"exportName": "listActions",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:listGrants",
+			"source": "convex/delegation.ts",
+			"exportName": "listGrants",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:revokeGrant",
+			"source": "convex/delegation.ts",
+			"exportName": "revokeGrant",
+			"kind": "mutation",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:submitReview",
+			"source": "convex/delegation.ts",
+			"exportName": "submitReview",
+			"kind": "mutation",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "delegation:updateGrant",
+			"source": "convex/delegation.ts",
+			"exportName": "updateGrant",
+			"kind": "action",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "donations:createFundraiser",
+			"source": "convex/donations.ts",
+			"exportName": "createFundraiser",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:deleteFundraiser",
+			"source": "convex/donations.ts",
+			"exportName": "deleteFundraiser",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:getConfirmationSummary",
+			"source": "convex/donations.ts",
+			"exportName": "getConfirmationSummary",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:listByCampaign",
+			"source": "convex/donations.ts",
+			"exportName": "listByCampaign",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:listByOrg",
+			"source": "convex/donations.ts",
+			"exportName": "listByOrg",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:listByOrgWithDonors",
+			"source": "convex/donations.ts",
+			"exportName": "listByOrgWithDonors",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:listDonors",
+			"source": "convex/donations.ts",
+			"exportName": "listDonors",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "donations:listPublicByCampaign",
+			"source": "convex/donations.ts",
+			"exportName": "listPublicByCampaign",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "donations:processCheckout",
+			"source": "convex/donations.ts",
+			"exportName": "processCheckout",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "donations:updateFundraiser",
+			"source": "convex/donations.ts",
+			"exportName": "updateFundraiser",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:applyUnsubscribeByBlastEmail",
+			"source": "convex/email.ts",
+			"exportName": "applyUnsubscribeByBlastEmail",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:countActiveReports",
+			"source": "convex/email.ts",
+			"exportName": "countActiveReports",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "email:countRecipientsForFilter",
+			"source": "convex/email.ts",
+			"exportName": "countRecipientsForFilter",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:createAbRemainderDraft",
+			"source": "convex/email.ts",
+			"exportName": "createAbRemainderDraft",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:createAbTestDrafts",
+			"source": "convex/email.ts",
+			"exportName": "createAbTestDrafts",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:createBlast",
+			"source": "convex/email.ts",
+			"exportName": "createBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:createBounceReport",
+			"source": "convex/email.ts",
+			"exportName": "createBounceReport",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:enqueueAbRemainderDispatch",
+			"source": "convex/email.ts",
+			"exportName": "enqueueAbRemainderDispatch",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:enqueueAbTestDispatch",
+			"source": "convex/email.ts",
+			"exportName": "enqueueAbTestDispatch",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:enqueueServerDispatch",
+			"source": "convex/email.ts",
+			"exportName": "enqueueServerDispatch",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:filterSuppressedContactHashes",
+			"source": "convex/email.ts",
+			"exportName": "filterSuppressedContactHashes",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:findUnresolvedReport",
+			"source": "convex/email.ts",
+			"exportName": "findUnresolvedReport",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:getAbTestGroup",
+			"source": "convex/email.ts",
+			"exportName": "getAbTestGroup",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:getBlast",
+			"source": "convex/email.ts",
+			"exportName": "getBlast",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:getBlastEvents",
+			"source": "convex/email.ts",
+			"exportName": "getBlastEvents",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:getBlastForEditor",
+			"source": "convex/email.ts",
+			"exportName": "getBlastForEditor",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:issueRecipientSuppressionChallenge",
+			"source": "convex/email.ts",
+			"exportName": "issueRecipientSuppressionChallenge",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:listBlasts",
+			"source": "convex/email.ts",
+			"exportName": "listBlasts",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:listReceiptsForBlast",
+			"source": "convex/email.ts",
+			"exportName": "listReceiptsForBlast",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:resolveRecipientHashesForFilter",
+			"source": "convex/email.ts",
+			"exportName": "resolveRecipientHashesForFilter",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "email:suppressRecipientByRequest",
+			"source": "convex/email.ts",
+			"exportName": "suppressRecipientByRequest",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "email:updateBlast",
+			"source": "convex/email.ts",
+			"exportName": "updateBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:checkIn",
+			"source": "convex/events.ts",
+			"exportName": "checkIn",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:create",
+			"source": "convex/events.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:createRsvp",
+			"source": "convex/events.ts",
+			"exportName": "createRsvp",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "events:get",
+			"source": "convex/events.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:getEventInternalForCaller",
+			"source": "convex/events.ts",
+			"exportName": "getEventInternalForCaller",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "events:getPublic",
+			"source": "convex/events.ts",
+			"exportName": "getPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "events:getRsvps",
+			"source": "convex/events.ts",
+			"exportName": "getRsvps",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:list",
+			"source": "convex/events.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "events:publicCheckIn",
+			"source": "convex/events.ts",
+			"exportName": "publicCheckIn",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "events:update",
+			"source": "convex/events.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "ground:addPasskeyWrapperToActiveVault",
+			"source": "convex/ground.ts",
+			"exportName": "addPasskeyWrapperToActiveVault",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "ground:getMyGroundRestoreState",
+			"source": "convex/ground.ts",
+			"exportName": "getMyGroundRestoreState",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "ground:getMyGroundState",
+			"source": "convex/ground.ts",
+			"exportName": "getMyGroundState",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "ground:persistGroundBundle",
+			"source": "convex/ground.ts",
+			"exportName": "persistGroundBundle",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "intelligence:getRecent",
+			"source": "convex/intelligence.ts",
+			"exportName": "getRecent",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "intelligence:queryItems",
+			"source": "convex/intelligence.ts",
+			"exportName": "queryItems",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "invites:accept",
+			"source": "convex/invites.ts",
+			"exportName": "accept",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "invites:create",
+			"source": "convex/invites.ts",
+			"exportName": "create",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "ctx.auth.getUserIdentity+fail-closed"
+		},
+		{
+			"runtimeName": "invites:getByToken",
+			"source": "convex/invites.ts",
+			"exportName": "getByToken",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "invites:list",
+			"source": "convex/invites.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "invites:remove",
+			"source": "convex/invites.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "invites:resend",
+			"source": "convex/invites.ts",
+			"exportName": "resend",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "ctx.auth.getUserIdentity+fail-closed"
+		},
+		{
+			"runtimeName": "invites:revoke",
+			"source": "convex/invites.ts",
+			"exportName": "revoke",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "legislation:browseBills",
+			"source": "convex/legislation.ts",
+			"exportName": "browseBills",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:discoverDms",
+			"source": "convex/legislation.ts",
+			"exportName": "discoverDms",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:dismissAlert",
+			"source": "convex/legislation.ts",
+			"exportName": "dismissAlert",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:exportReceiptsByOrg",
+			"source": "convex/legislation.ts",
+			"exportName": "exportReceiptsByOrg",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:exportScorecards",
+			"source": "convex/legislation.ts",
+			"exportName": "exportScorecards",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:followDm",
+			"source": "convex/legislation.ts",
+			"exportName": "followDm",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getAlertPreferences",
+			"source": "convex/legislation.ts",
+			"exportName": "getAlertPreferences",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getAlertWithBill",
+			"source": "convex/legislation.ts",
+			"exportName": "getAlertWithBill",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getBill",
+			"source": "convex/legislation.ts",
+			"exportName": "getBill",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "legislation:getDmActivity",
+			"source": "convex/legislation.ts",
+			"exportName": "getDmActivity",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getDmDetail",
+			"source": "convex/legislation.ts",
+			"exportName": "getDmDetail",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getDmFeed",
+			"source": "convex/legislation.ts",
+			"exportName": "getDmFeed",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getDmPublicProfile",
+			"source": "convex/legislation.ts",
+			"exportName": "getDmPublicProfile",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "legislation:getDmScorecard",
+			"source": "convex/legislation.ts",
+			"exportName": "getDmScorecard",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "legislation:getOrgReceiptSummary",
+			"source": "convex/legislation.ts",
+			"exportName": "getOrgReceiptSummary",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:getPendingAlertsByOrgId",
+			"source": "convex/legislation.ts",
+			"exportName": "getPendingAlertsByOrgId",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "legislation:getScorecard",
+			"source": "convex/legislation.ts",
+			"exportName": "getScorecard",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "legislation:importRepresentatives",
+			"source": "convex/legislation.ts",
+			"exportName": "importRepresentatives",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listActions",
+			"source": "convex/legislation.ts",
+			"exportName": "listActions",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "legislation:listAlerts",
+			"source": "convex/legislation.ts",
+			"exportName": "listAlerts",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listBills",
+			"source": "convex/legislation.ts",
+			"exportName": "listBills",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "legislation:listMyReceipts",
+			"source": "convex/legislation.ts",
+			"exportName": "listMyReceipts",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "legislation:listOrgDmFollows",
+			"source": "convex/legislation.ts",
+			"exportName": "listOrgDmFollows",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listOrgScorecards",
+			"source": "convex/legislation.ts",
+			"exportName": "listOrgScorecards",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listReceiptsByCampaign",
+			"source": "convex/legislation.ts",
+			"exportName": "listReceiptsByCampaign",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listReceiptsByOrg",
+			"source": "convex/legislation.ts",
+			"exportName": "listReceiptsByOrg",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listRecentBills",
+			"source": "convex/legislation.ts",
+			"exportName": "listRecentBills",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listRelevantBills",
+			"source": "convex/legislation.ts",
+			"exportName": "listRelevantBills",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listRepresentatives",
+			"source": "convex/legislation.ts",
+			"exportName": "listRepresentatives",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:listWatchedBills",
+			"source": "convex/legislation.ts",
+			"exportName": "listWatchedBills",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:rescoreBills",
+			"source": "convex/legislation.ts",
+			"exportName": "rescoreBills",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "legislation:searchBills",
+			"source": "convex/legislation.ts",
+			"exportName": "searchBills",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:unfollowDm",
+			"source": "convex/legislation.ts",
+			"exportName": "unfollowDm",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:unwatchBill",
+			"source": "convex/legislation.ts",
+			"exportName": "unwatchBill",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:updateAlertPreferences",
+			"source": "convex/legislation.ts",
+			"exportName": "updateAlertPreferences",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:updateBillWatch",
+			"source": "convex/legislation.ts",
+			"exportName": "updateBillWatch",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:updateDmFollow",
+			"source": "convex/legislation.ts",
+			"exportName": "updateDmFollow",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "legislation:watchBill",
+			"source": "convex/legislation.ts",
+			"exportName": "watchBill",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "matters:create",
+			"source": "convex/matters.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "messageJobs:checkpointPhase",
+			"source": "convex/messageJobs.ts",
+			"exportName": "checkpointPhase",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:loadOwnedJob"
+		},
+		{
+			"runtimeName": "messageJobs:completeEncrypted",
+			"source": "convex/messageJobs.ts",
+			"exportName": "completeEncrypted",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:loadOwnedJob"
+		},
+		{
+			"runtimeName": "messageJobs:fail",
+			"source": "convex/messageJobs.ts",
+			"exportName": "fail",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:loadOwnedJob"
+		},
+		{
+			"runtimeName": "messageJobs:getForUser",
+			"source": "convex/messageJobs.ts",
+			"exportName": "getForUser",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:loadOwnedJob"
+		},
+		{
+			"runtimeName": "messageJobs:markRunning",
+			"source": "convex/messageJobs.ts",
+			"exportName": "markRunning",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:loadOwnedJob"
+		},
+		{
+			"runtimeName": "messageJobs:startOrGet",
+			"source": "convex/messageJobs.ts",
+			"exportName": "startOrGet",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "metering:agenticResolveAdmission",
+			"source": "convex/metering.ts",
+			"exportName": "agenticResolveAdmission",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "metering:getUsageForPeriod",
+			"source": "convex/metering.ts",
+			"exportName": "getUsageForPeriod",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "metering:recordUsage",
+			"source": "convex/metering.ts",
+			"exportName": "recordUsage",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "networks:checkMembership",
+			"source": "convex/networks.ts",
+			"exportName": "checkMembership",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "networks:create",
+			"source": "convex/networks.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:get",
+			"source": "convex/networks.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:getMembers",
+			"source": "convex/networks.ts",
+			"exportName": "getMembers",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "networks:getProofPressure",
+			"source": "convex/networks.ts",
+			"exportName": "getProofPressure",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireNetworkAccess"
+		},
+		{
+			"runtimeName": "networks:getPublicCharter",
+			"source": "convex/networks.ts",
+			"exportName": "getPublicCharter",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "networks:getStats",
+			"source": "convex/networks.ts",
+			"exportName": "getStats",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireNetworkAccess"
+		},
+		{
+			"runtimeName": "networks:invite",
+			"source": "convex/networks.ts",
+			"exportName": "invite",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:list",
+			"source": "convex/networks.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:publishCharter",
+			"source": "convex/networks.ts",
+			"exportName": "publishCharter",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:refreshCoalitionPacketHash",
+			"source": "convex/networks.ts",
+			"exportName": "refreshCoalitionPacketHash",
+			"kind": "mutation",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "networks:remove",
+			"source": "convex/networks.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:update",
+			"source": "convex/networks.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:updateMemberRole",
+			"source": "convex/networks.ts",
+			"exportName": "updateMemberRole",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "networks:updateMemberStatus",
+			"source": "convex/networks.ts",
+			"exportName": "updateMemberStatus",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "observability:discoveryProducerStatus",
+			"source": "convex/observability.ts",
+			"exportName": "discoveryProducerStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "organizations:completePlatformApiSync",
+			"source": "convex/organizations.ts",
+			"exportName": "completePlatformApiSync",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:connectPlatformApiCredential",
+			"source": "convex/organizations.ts",
+			"exportName": "connectPlatformApiCredential",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:create",
+			"source": "convex/organizations.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "organizations:createIssueDomain",
+			"source": "convex/organizations.ts",
+			"exportName": "createIssueDomain",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:deleteIssueDomain",
+			"source": "convex/organizations.ts",
+			"exportName": "deleteIssueDomain",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:disconnectPlatformApiCredential",
+			"source": "convex/organizations.ts",
+			"exportName": "disconnectPlatformApiCredential",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:failPlatformApiSync",
+			"source": "convex/organizations.ts",
+			"exportName": "failPlatformApiSync",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:generateBrandingUploadUrl",
+			"source": "convex/organizations.ts",
+			"exportName": "generateBrandingUploadUrl",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getBillingContext",
+			"source": "convex/organizations.ts",
+			"exportName": "getBillingContext",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getBySlug",
+			"source": "convex/organizations.ts",
+			"exportName": "getBySlug",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getDashboard",
+			"source": "convex/organizations.ts",
+			"exportName": "getDashboard",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "organizations:getDashboardStats",
+			"source": "convex/organizations.ts",
+			"exportName": "getDashboardStats",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "organizations:getMembers",
+			"source": "convex/organizations.ts",
+			"exportName": "getMembers",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "organizations:getMyMemberships",
+			"source": "convex/organizations.ts",
+			"exportName": "getMyMemberships",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "organizations:getOrganizationProjectionReadiness",
+			"source": "convex/organizations.ts",
+			"exportName": "getOrganizationProjectionReadiness",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "organizations:getOrgContext",
+			"source": "convex/organizations.ts",
+			"exportName": "getOrgContext",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getOrgKeyVerifier",
+			"source": "convex/organizations.ts",
+			"exportName": "getOrgKeyVerifier",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getPlatformApiState",
+			"source": "convex/organizations.ts",
+			"exportName": "getPlatformApiState",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getPublicBrandingBySlug",
+			"source": "convex/organizations.ts",
+			"exportName": "getPublicBrandingBySlug",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "organizations:getSettingsData",
+			"source": "convex/organizations.ts",
+			"exportName": "getSettingsData",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:getUserOrgPlan",
+			"source": "convex/organizations.ts",
+			"exportName": "getUserOrgPlan",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "organizations:listIssueDomains",
+			"source": "convex/organizations.ts",
+			"exportName": "listIssueDomains",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:listPublic",
+			"source": "convex/organizations.ts",
+			"exportName": "listPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "organizations:listTwilioNumbers",
+			"source": "convex/organizations.ts",
+			"exportName": "listTwilioNumbers",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "organizations:recordPlatformApiCredentialProbe",
+			"source": "convex/organizations.ts",
+			"exportName": "recordPlatformApiCredentialProbe",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:recordPlatformApiSyncProgress",
+			"source": "convex/organizations.ts",
+			"exportName": "recordPlatformApiSyncProgress",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:registerTwilioNumber",
+			"source": "convex/organizations.ts",
+			"exportName": "registerTwilioNumber",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:removeMember",
+			"source": "convex/organizations.ts",
+			"exportName": "removeMember",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:rotateOrgPassphrase",
+			"source": "convex/organizations.ts",
+			"exportName": "rotateOrgPassphrase",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:sealOrgKey",
+			"source": "convex/organizations.ts",
+			"exportName": "sealOrgKey",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "call:internal.organizations.verifyOwner"
+		},
+		{
+			"runtimeName": "organizations:setBranding",
+			"source": "convex/organizations.ts",
+			"exportName": "setBranding",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:setOrgKeyVerifier",
+			"source": "convex/organizations.ts",
+			"exportName": "setOrgKeyVerifier",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:setPublicDirectoryVisibility",
+			"source": "convex/organizations.ts",
+			"exportName": "setPublicDirectoryVisibility",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:slugExists",
+			"source": "convex/organizations.ts",
+			"exportName": "slugExists",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "organizations:startPlatformApiSync",
+			"source": "convex/organizations.ts",
+			"exportName": "startPlatformApiSync",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:unregisterTwilioNumber",
+			"source": "convex/organizations.ts",
+			"exportName": "unregisterTwilioNumber",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:update",
+			"source": "convex/organizations.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:updateIssueDomain",
+			"source": "convex/organizations.ts",
+			"exportName": "updateIssueDomain",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:updateMemberRole",
+			"source": "convex/organizations.ts",
+			"exportName": "updateMemberRole",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "organizations:updateStripeCustomerId",
+			"source": "convex/organizations.ts",
+			"exportName": "updateStripeCustomerId",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionCreateWebhook",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionCreateWebhook",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionDeleteWebhook",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionDeleteWebhook",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionListRecentDeliveries",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionListRecentDeliveries",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionListRecentEvents",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionListRecentEvents",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionListWebhooks",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionListWebhooks",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionRotateWebhookSecret",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionRotateWebhookSecret",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionTestWebhook",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionTestWebhook",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "orgWebhooks:sessionUpdateWebhook",
+			"source": "convex/orgWebhooks.ts",
+			"exportName": "sessionUpdateWebhook",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "passkeys:consumeAuthenticationCeremony",
+			"source": "convex/passkeys.ts",
+			"exportName": "consumeAuthenticationCeremony",
+			"kind": "mutation",
+			"authority": "server-hmac",
+			"guard": "verifyServerProof"
+		},
+		{
+			"runtimeName": "passkeys:consumeRegistrationCeremony",
+			"source": "convex/passkeys.ts",
+			"exportName": "consumeRegistrationCeremony",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "passkeys:createAuthenticationCeremony",
+			"source": "convex/passkeys.ts",
+			"exportName": "createAuthenticationCeremony",
+			"kind": "mutation",
+			"authority": "server-hmac",
+			"guard": "verifyServerProof"
+		},
+		{
+			"runtimeName": "passkeys:createRegistrationCeremony",
+			"source": "convex/passkeys.ts",
+			"exportName": "createRegistrationCeremony",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "passkeys:getAuthMaterialByEmail",
+			"source": "convex/passkeys.ts",
+			"exportName": "getAuthMaterialByEmail",
+			"kind": "query",
+			"authority": "server-hmac",
+			"guard": "verifyServerProof"
+		},
+		{
+			"runtimeName": "passkeys:updatePasskeyAfterAuthentication",
+			"source": "convex/passkeys.ts",
+			"exportName": "updatePasskeyAfterAuthentication",
+			"kind": "mutation",
+			"authority": "server-hmac",
+			"guard": "verifyServerProof"
+		},
+		{
+			"runtimeName": "positions:batchRegisterDeliveries",
+			"source": "convex/positions.ts",
+			"exportName": "batchRegisterDeliveries",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:confirmMailtoSend",
+			"source": "convex/positions.ts",
+			"exportName": "confirmMailtoSend",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getCounts",
+			"source": "convex/positions.ts",
+			"exportName": "getCounts",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getEngagementByDistrict",
+			"source": "convex/positions.ts",
+			"exportName": "getEngagementByDistrict",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getExisting",
+			"source": "convex/positions.ts",
+			"exportName": "getExisting",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getFullEngagementByDistrict",
+			"source": "convex/positions.ts",
+			"exportName": "getFullEngagementByDistrict",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getMetrics",
+			"source": "convex/positions.ts",
+			"exportName": "getMetrics",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:getViewerDistrictMetric",
+			"source": "convex/positions.ts",
+			"exportName": "getViewerDistrictMetric",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:listViewerConfirmedContacts",
+			"source": "convex/positions.ts",
+			"exportName": "listViewerConfirmedContacts",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:recordDirectDeliveries",
+			"source": "convex/positions.ts",
+			"exportName": "recordDirectDeliveries",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "positions:register",
+			"source": "convex/positions.ts",
+			"exportName": "register",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "resolvedContacts:getCached",
+			"source": "convex/resolvedContacts.ts",
+			"exportName": "getCached",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "resolvedContacts:updateVerification",
+			"source": "convex/resolvedContacts.ts",
+			"exportName": "updateVerification",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "resolvedContacts:upsert",
+			"source": "convex/resolvedContacts.ts",
+			"exportName": "upsert",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:applyRevocationSMTUpdate",
+			"source": "convex/revocations.ts",
+			"exportName": "applyRevocationSMTUpdate",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:getRevocationHaltStatus",
+			"source": "convex/revocations.ts",
+			"exportName": "getRevocationHaltStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:getRevocationNonMembershipPath",
+			"source": "convex/revocations.ts",
+			"exportName": "getRevocationNonMembershipPath",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:getRevocationRoot",
+			"source": "convex/revocations.ts",
+			"exportName": "getRevocationRoot",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:getRevocationSMTPath",
+			"source": "convex/revocations.ts",
+			"exportName": "getRevocationSMTPath",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "revocations:setRevocationHaltForCaller",
+			"source": "convex/revocations.ts",
+			"exportName": "setRevocationHaltForCaller",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "segments:bulkApplyTag",
+			"source": "convex/segments.ts",
+			"exportName": "bulkApplyTag",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "segments:bulkRemoveTag",
+			"source": "convex/segments.ts",
+			"exportName": "bulkRemoveTag",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "segments:countMatching",
+			"source": "convex/segments.ts",
+			"exportName": "countMatching",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "segments:create",
+			"source": "convex/segments.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "segments:exportDecrypted",
+			"source": "convex/segments.ts",
+			"exportName": "exportDecrypted",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "segments:list",
+			"source": "convex/segments.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "segments:remove",
+			"source": "convex/segments.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "segments:update",
+			"source": "convex/segments.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sessionAuthority:get",
+			"source": "convex/sessionAuthority.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "sessionAuthority:readiness",
+			"source": "convex/sessionAuthority.ts",
+			"exportName": "readiness",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "sms:advanceEmptyDispatchPage",
+			"source": "convex/sms.ts",
+			"exportName": "advanceEmptyDispatchPage",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:assertDispatchRecipientsAuthorized",
+			"source": "convex/sms.ts",
+			"exportName": "assertDispatchRecipientsAuthorized",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:countEligibleRecipientsForFilter",
+			"source": "convex/sms.ts",
+			"exportName": "countEligibleRecipientsForFilter",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:createBlast",
+			"source": "convex/sms.ts",
+			"exportName": "createBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:deleteBlast",
+			"source": "convex/sms.ts",
+			"exportName": "deleteBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:getBlast",
+			"source": "convex/sms.ts",
+			"exportName": "getBlast",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:getBlastMessages",
+			"source": "convex/sms.ts",
+			"exportName": "getBlastMessages",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:getEncryptedRecipientsForBlast",
+			"source": "convex/sms.ts",
+			"exportName": "getEncryptedRecipientsForBlast",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:getReplySummary",
+			"source": "convex/sms.ts",
+			"exportName": "getReplySummary",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:listBlasts",
+			"source": "convex/sms.ts",
+			"exportName": "listBlasts",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:listReplies",
+			"source": "convex/sms.ts",
+			"exportName": "listReplies",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:recordDispatchBatch",
+			"source": "convex/sms.ts",
+			"exportName": "recordDispatchBatch",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "sms:updateBlast",
+			"source": "convex/sms.ts",
+			"exportName": "updateBlast",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "submissions:aggregateForHero",
+			"source": "convex/submissions.ts",
+			"exportName": "aggregateForHero",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "submissions:create",
+			"source": "convex/submissions.ts",
+			"exportName": "create",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "submissions:getCongressionalDeliveryReadiness",
+			"source": "convex/submissions.ts",
+			"exportName": "getCongressionalDeliveryReadiness",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "submissions:listAnchorIncidents",
+			"source": "convex/submissions.ts",
+			"exportName": "listAnchorIncidents",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "submissions:retryDelivery",
+			"source": "convex/submissions.ts",
+			"exportName": "retryDelivery",
+			"kind": "action",
+			"authority": "authenticated-role",
+			"guard": "ctx.auth.getUserIdentity+fail-closed"
+		},
+		{
+			"runtimeName": "subscriptions:cancel",
+			"source": "convex/subscriptions.ts",
+			"exportName": "cancel",
+			"kind": "mutation",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "subscriptions:checkPlanLimits",
+			"source": "convex/subscriptions.ts",
+			"exportName": "checkPlanLimits",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "subscriptions:checkPlanLimitsByOrgIdForCaller",
+			"source": "convex/subscriptions.ts",
+			"exportName": "checkPlanLimitsByOrgIdForCaller",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "subscriptions:getByOrg",
+			"source": "convex/subscriptions.ts",
+			"exportName": "getByOrg",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "subscriptions:getByUser",
+			"source": "convex/subscriptions.ts",
+			"exportName": "getByUser",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "subscriptions:getMyBillingContext",
+			"source": "convex/subscriptions.ts",
+			"exportName": "getMyBillingContext",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "subscriptions:hasActivePaidIndividual",
+			"source": "convex/subscriptions.ts",
+			"exportName": "hasActivePaidIndividual",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "subscriptions:requestPlanUsageRepair",
+			"source": "convex/subscriptions.ts",
+			"exportName": "requestPlanUsageRepair",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "subscriptions:requestPlanUsageRepairByOrgIdForCaller",
+			"source": "convex/subscriptions.ts",
+			"exportName": "requestPlanUsageRepairByOrgIdForCaller",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "subscriptions:updateMyStripeCustomerId",
+			"source": "convex/subscriptions.ts",
+			"exportName": "updateMyStripeCustomerId",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "supporters:addTag",
+			"source": "convex/supporters.ts",
+			"exportName": "addTag",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:create",
+			"source": "convex/supporters.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:createTag",
+			"source": "convex/supporters.ts",
+			"exportName": "createTag",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:deleteTag",
+			"source": "convex/supporters.ts",
+			"exportName": "deleteTag",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:ensureTags",
+			"source": "convex/supporters.ts",
+			"exportName": "ensureTags",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:findByEmailHash",
+			"source": "convex/supporters.ts",
+			"exportName": "findByEmailHash",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:get",
+			"source": "convex/supporters.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:getDistrictVerifiedCount",
+			"source": "convex/supporters.ts",
+			"exportName": "getDistrictVerifiedCount",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:getEmailStatus",
+			"source": "convex/supporters.ts",
+			"exportName": "getEmailStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "supporters:getSummaryStats",
+			"source": "convex/supporters.ts",
+			"exportName": "getSummaryStats",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:getTags",
+			"source": "convex/supporters.ts",
+			"exportName": "getTags",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:importWithEncryption",
+			"source": "convex/supporters.ts",
+			"exportName": "importWithEncryption",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "supporters:list",
+			"source": "convex/supporters.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:remove",
+			"source": "convex/supporters.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:removeTag",
+			"source": "convex/supporters.ts",
+			"exportName": "removeTag",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:renameTag",
+			"source": "convex/supporters.ts",
+			"exportName": "renameTag",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:searchByEmail",
+			"source": "convex/supporters.ts",
+			"exportName": "searchByEmail",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:unsubscribe",
+			"source": "convex/supporters.ts",
+			"exportName": "unsubscribe",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "supporters:update",
+			"source": "convex/supporters.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "supporters:updateSmsStatus",
+			"source": "convex/supporters.ts",
+			"exportName": "updateSmsStatus",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "targets:cohortDistrictHistogram",
+			"source": "convex/targets.ts",
+			"exportName": "cohortDistrictHistogram",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:getMessageDistrictCounts",
+			"source": "convex/templatePage.ts",
+			"exportName": "getMessageDistrictCounts",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:getTotalStates",
+			"source": "convex/templatePage.ts",
+			"exportName": "getTotalStates",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:getUserDmRelation",
+			"source": "convex/templatePage.ts",
+			"exportName": "getUserDmRelation",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:getViewerAuthorRelation",
+			"source": "convex/templatePage.ts",
+			"exportName": "getViewerAuthorRelation",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:getViewerMessageDistrictCount",
+			"source": "convex/templatePage.ts",
+			"exportName": "getViewerMessageDistrictCount",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templatePage:recipientMetricsStatus",
+			"source": "convex/templatePage.ts",
+			"exportName": "recipientMetricsStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:claimEmbeddingBackfillLease",
+			"source": "convex/templates.ts",
+			"exportName": "claimEmbeddingBackfillLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:claimTemplateAuthoringLease",
+			"source": "convex/templates.ts",
+			"exportName": "claimTemplateAuthoringLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:completePublicTemplateEmbeddings",
+			"source": "convex/templates.ts",
+			"exportName": "completePublicTemplateEmbeddings",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:conceptRelations",
+			"source": "convex/templates.ts",
+			"exportName": "conceptRelations",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:createTemplate",
+			"source": "convex/templates.ts",
+			"exportName": "createTemplate",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:endorse",
+			"source": "convex/templates.ts",
+			"exportName": "endorse",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "templates:findByContentHash",
+			"source": "convex/templates.ts",
+			"exportName": "findByContentHash",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "templates:getBySlug",
+			"source": "convex/templates.ts",
+			"exportName": "getBySlug",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:getBySlugPublic",
+			"source": "convex/templates.ts",
+			"exportName": "getBySlugPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:getSourceCache",
+			"source": "convex/templates.ts",
+			"exportName": "getSourceCache",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:listByOrg",
+			"source": "convex/templates.ts",
+			"exportName": "listByOrg",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "templates:listByOrgPage",
+			"source": "convex/templates.ts",
+			"exportName": "listByOrgPage",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "templates:listByUser",
+			"source": "convex/templates.ts",
+			"exportName": "listByUser",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:currentTemplateListUser"
+		},
+		{
+			"runtimeName": "templates:listByUserPage",
+			"source": "convex/templates.ts",
+			"exportName": "listByUserPage",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:currentTemplateListUser"
+		},
+		{
+			"runtimeName": "templates:listMissingEmbeddings",
+			"source": "convex/templates.ts",
+			"exportName": "listMissingEmbeddings",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:listPublic",
+			"source": "convex/templates.ts",
+			"exportName": "listPublic",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:patchMetadata",
+			"source": "convex/templates.ts",
+			"exportName": "patchMetadata",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "templates:publicDiscoveryList",
+			"source": "convex/templates.ts",
+			"exportName": "publicDiscoveryList",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:publicDiscoveryManifest",
+			"source": "convex/templates.ts",
+			"exportName": "publicDiscoveryManifest",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:publicDiscoveryManifestAuthorityStatus",
+			"source": "convex/templates.ts",
+			"exportName": "publicDiscoveryManifestAuthorityStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:publicDiscoveryRelations",
+			"source": "convex/templates.ts",
+			"exportName": "publicDiscoveryRelations",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:publicTemplatePageArtifactInventoryPage",
+			"source": "convex/templates.ts",
+			"exportName": "publicTemplatePageArtifactInventoryPage",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:publicTemplatePageArtifactsByCoordinates",
+			"source": "convex/templates.ts",
+			"exportName": "publicTemplatePageArtifactsByCoordinates",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:rebuildHomepageSnapshotsAfterBackfill",
+			"source": "convex/templates.ts",
+			"exportName": "rebuildHomepageSnapshotsAfterBackfill",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:relatednessEdges",
+			"source": "convex/templates.ts",
+			"exportName": "relatednessEdges",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:releaseEmbeddingBackfillLease",
+			"source": "convex/templates.ts",
+			"exportName": "releaseEmbeddingBackfillLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:releaseTemplateAuthoringLease",
+			"source": "convex/templates.ts",
+			"exportName": "releaseTemplateAuthoringLease",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:removeEndorsement",
+			"source": "convex/templates.ts",
+			"exportName": "removeEndorsement",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "templates:search",
+			"source": "convex/templates.ts",
+			"exportName": "search",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:setCwcVerification",
+			"source": "convex/templates.ts",
+			"exportName": "setCwcVerification",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:templateSlugsExist",
+			"source": "convex/templates.ts",
+			"exportName": "templateSlugsExist",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:updateMissingEmbeddingsForBackfill",
+			"source": "convex/templates.ts",
+			"exportName": "updateMissingEmbeddingsForBackfill",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "templates:updateSourceCache",
+			"source": "convex/templates.ts",
+			"exportName": "updateSourceCache",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:beginShadowAtlasRegistrationDispatch",
+			"source": "convex/users.ts",
+			"exportName": "beginShadowAtlasRegistrationDispatch",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:claimShadowAtlasEngagement",
+			"source": "convex/users.ts",
+			"exportName": "claimShadowAtlasEngagement",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:clearPasskey",
+			"source": "convex/users.ts",
+			"exportName": "clearPasskey",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:commitShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "commitShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:completeShadowAtlasEngagement",
+			"source": "convex/users.ts",
+			"exportName": "completeShadowAtlasEngagement",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:connectWallet",
+			"source": "convex/users.ts",
+			"exportName": "connectWallet",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:countRegistrations",
+			"source": "convex/users.ts",
+			"exportName": "countRegistrations",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:deleteEncryptedBlob",
+			"source": "convex/users.ts",
+			"exportName": "deleteEncryptedBlob",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:disconnectWallet",
+			"source": "convex/users.ts",
+			"exportName": "disconnectWallet",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:finalizeMdlVerification",
+			"source": "convex/users.ts",
+			"exportName": "finalizeMdlVerification",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:getActiveCredentialDistrictCommitment",
+			"source": "convex/users.ts",
+			"exportName": "getActiveCredentialDistrictCommitment",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:getActiveCredentialHash",
+			"source": "convex/users.ts",
+			"exportName": "getActiveCredentialHash",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:getDidKey",
+			"source": "convex/users.ts",
+			"exportName": "getDidKey",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getEncryptedBlob",
+			"source": "convex/users.ts",
+			"exportName": "getEncryptedBlob",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getIdentityCommitment",
+			"source": "convex/users.ts",
+			"exportName": "getIdentityCommitment",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getIdentityForAtlas",
+			"source": "convex/users.ts",
+			"exportName": "getIdentityForAtlas",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getMyActionCount",
+			"source": "convex/users.ts",
+			"exportName": "getMyActionCount",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getMyRepresentatives",
+			"source": "convex/users.ts",
+			"exportName": "getMyRepresentatives",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getMyReputationPortable",
+			"source": "convex/users.ts",
+			"exportName": "getMyReputationPortable",
+			"kind": "query",
+			"authority": "pre-io-tombstone",
+			"guard": "throw:first-statement"
+		},
+		{
+			"runtimeName": "users:getMyTemplates",
+			"source": "convex/users.ts",
+			"exportName": "getMyTemplates",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getMyTemplatesPage",
+			"source": "convex/users.ts",
+			"exportName": "getMyTemplatesPage",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getNearAccountId",
+			"source": "convex/users.ts",
+			"exportName": "getNearAccountId",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getPasskeyStatus",
+			"source": "convex/users.ts",
+			"exportName": "getPasskeyStatus",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getProfile",
+			"source": "convex/users.ts",
+			"exportName": "getProfile",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getReverificationBudget",
+			"source": "convex/users.ts",
+			"exportName": "getReverificationBudget",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:getShadowAtlasRegistration",
+			"source": "convex/users.ts",
+			"exportName": "getShadowAtlasRegistration",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:getWalletStatus",
+			"source": "convex/users.ts",
+			"exportName": "getWalletStatus",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:listRecentRegistrations",
+			"source": "convex/users.ts",
+			"exportName": "listRecentRegistrations",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:markShadowAtlasEngagementRegistered",
+			"source": "convex/users.ts",
+			"exportName": "markShadowAtlasEngagementRegistered",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:markShadowAtlasRegistrationOperationAmbiguous",
+			"source": "convex/users.ts",
+			"exportName": "markShadowAtlasRegistrationOperationAmbiguous",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reconcileShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "reconcileShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:recordShadowAtlasEngagementFailure",
+			"source": "convex/users.ts",
+			"exportName": "recordShadowAtlasEngagementFailure",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reserveShadowAtlasEngagementRegistration",
+			"source": "convex/users.ts",
+			"exportName": "reserveShadowAtlasEngagementRegistration",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:reserveShadowAtlasRegistrationOperation",
+			"source": "convex/users.ts",
+			"exportName": "reserveShadowAtlasRegistrationOperation",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:resolveCredentialHash",
+			"source": "convex/users.ts",
+			"exportName": "resolveCredentialHash",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "users:storePasskey",
+			"source": "convex/users.ts",
+			"exportName": "storePasskey",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:updateProfile",
+			"source": "convex/users.ts",
+			"exportName": "updateProfile",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:upsertEncryptedBlob",
+			"source": "convex/users.ts",
+			"exportName": "upsertEncryptedBlob",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireAuth"
+		},
+		{
+			"runtimeName": "users:verifyAddress",
+			"source": "convex/users.ts",
+			"exportName": "verifyAddress",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:authenticateApiKey",
+			"source": "convex/v1api.ts",
+			"exportName": "authenticateApiKey",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:compareDmScorecards",
+			"source": "convex/v1api.ts",
+			"exportName": "compareDmScorecards",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:confirmEmailDelivery",
+			"source": "convex/v1api.ts",
+			"exportName": "confirmEmailDelivery",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:createApiKey",
+			"source": "convex/v1api.ts",
+			"exportName": "createApiKey",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:createCampaign",
+			"source": "convex/v1api.ts",
+			"exportName": "createCampaign",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:createSupporter",
+			"source": "convex/v1api.ts",
+			"exportName": "createSupporter",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:createTag",
+			"source": "convex/v1api.ts",
+			"exportName": "createTag",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:createWebhook",
+			"source": "convex/v1api.ts",
+			"exportName": "createWebhook",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:deleteSupporter",
+			"source": "convex/v1api.ts",
+			"exportName": "deleteSupporter",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:deleteTag",
+			"source": "convex/v1api.ts",
+			"exportName": "deleteTag",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:deleteWebhook",
+			"source": "convex/v1api.ts",
+			"exportName": "deleteWebhook",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getCampaignById",
+			"source": "convex/v1api.ts",
+			"exportName": "getCampaignById",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getCampaignStats",
+			"source": "convex/v1api.ts",
+			"exportName": "getCampaignStats",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getDelegationGrant",
+			"source": "convex/v1api.ts",
+			"exportName": "getDelegationGrant",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getDmScorecard",
+			"source": "convex/v1api.ts",
+			"exportName": "getDmScorecard",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getDonationById",
+			"source": "convex/v1api.ts",
+			"exportName": "getDonationById",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getEventById",
+			"source": "convex/v1api.ts",
+			"exportName": "getEventById",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getEventStats",
+			"source": "convex/v1api.ts",
+			"exportName": "getEventStats",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getNetworkByIdV1",
+			"source": "convex/v1api.ts",
+			"exportName": "getNetworkByIdV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getOrgForApiKey",
+			"source": "convex/v1api.ts",
+			"exportName": "getOrgForApiKey",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getSubmissionStatus",
+			"source": "convex/v1api.ts",
+			"exportName": "getSubmissionStatus",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getSupporterById",
+			"source": "convex/v1api.ts",
+			"exportName": "getSupporterById",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getWebhook",
+			"source": "convex/v1api.ts",
+			"exportName": "getWebhook",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:getWorkflowById",
+			"source": "convex/v1api.ts",
+			"exportName": "getWorkflowById",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listActivityFeed",
+			"source": "convex/v1api.ts",
+			"exportName": "listActivityFeed",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listCallsV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listCallsV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listCampaignActions",
+			"source": "convex/v1api.ts",
+			"exportName": "listCampaignActions",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listCampaigns",
+			"source": "convex/v1api.ts",
+			"exportName": "listCampaigns",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listDonationsV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listDonationsV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listEventsV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listEventsV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listNetworksV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listNetworksV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listRepresentativesV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listRepresentativesV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listSmsBlastsV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listSmsBlastsV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listSupporters",
+			"source": "convex/v1api.ts",
+			"exportName": "listSupporters",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listTags",
+			"source": "convex/v1api.ts",
+			"exportName": "listTags",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listWebhooks",
+			"source": "convex/v1api.ts",
+			"exportName": "listWebhooks",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:listWorkflowsV1",
+			"source": "convex/v1api.ts",
+			"exportName": "listWorkflowsV1",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:pollOrgEvents",
+			"source": "convex/v1api.ts",
+			"exportName": "pollOrgEvents",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:renameApiKey",
+			"source": "convex/v1api.ts",
+			"exportName": "renameApiKey",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:revokeApiKey",
+			"source": "convex/v1api.ts",
+			"exportName": "revokeApiKey",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:rotateWebhookSecret",
+			"source": "convex/v1api.ts",
+			"exportName": "rotateWebhookSecret",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:submitDelegationReview",
+			"source": "convex/v1api.ts",
+			"exportName": "submitDelegationReview",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:testWebhook",
+			"source": "convex/v1api.ts",
+			"exportName": "testWebhook",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:updateCampaign",
+			"source": "convex/v1api.ts",
+			"exportName": "updateCampaign",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:updateDelegationGrant",
+			"source": "convex/v1api.ts",
+			"exportName": "updateDelegationGrant",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:updateSupporter",
+			"source": "convex/v1api.ts",
+			"exportName": "updateSupporter",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:updateTag",
+			"source": "convex/v1api.ts",
+			"exportName": "updateTag",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "v1api:updateWebhook",
+			"source": "convex/v1api.ts",
+			"exportName": "updateWebhook",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "verify:getCampaignForVerify",
+			"source": "convex/verify.ts",
+			"exportName": "getCampaignForVerify",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "verify:getCredentialByHash",
+			"source": "convex/verify.ts",
+			"exportName": "getCredentialByHash",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "verify:getDelivery",
+			"source": "convex/verify.ts",
+			"exportName": "getDelivery",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "verify:getReceipt",
+			"source": "convex/verify.ts",
+			"exportName": "getReceipt",
+			"kind": "query",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "waitlist:join",
+			"source": "convex/waitlist.ts",
+			"exportName": "join",
+			"kind": "mutation",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "workflows:create",
+			"source": "convex/workflows.ts",
+			"exportName": "create",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:get",
+			"source": "convex/workflows.ts",
+			"exportName": "get",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:getExecutions",
+			"source": "convex/workflows.ts",
+			"exportName": "getExecutions",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:list",
+			"source": "convex/workflows.ts",
+			"exportName": "list",
+			"kind": "query",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:processScheduledNow",
+			"source": "convex/workflows.ts",
+			"exportName": "processScheduledNow",
+			"kind": "action",
+			"authority": "server-secret",
+			"guard": "requireInternalSecret:first-statement"
+		},
+		{
+			"runtimeName": "workflows:remove",
+			"source": "convex/workflows.ts",
+			"exportName": "remove",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:setEnabled",
+			"source": "convex/workflows.ts",
+			"exportName": "setEnabled",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		},
+		{
+			"runtimeName": "workflows:update",
+			"source": "convex/workflows.ts",
+			"exportName": "update",
+			"kind": "mutation",
+			"authority": "authenticated-role",
+			"guard": "call:requireOrgRole"
+		}
+	]
+}

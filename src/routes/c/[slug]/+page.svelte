@@ -2,50 +2,12 @@
 	import { enhance } from '$app/forms';
 	import { browser } from '$app/environment';
 	import { FEATURES } from '$lib/config/features';
-	import DebateMarketCard from '$lib/components/debate/DebateMarketCard.svelte';
-	import DebateParticipationPanel from '$lib/components/wallet/debate/DebateParticipationPanel.svelte';
-	import { buildArgumentStanceMap } from '$lib/utils/debate-stats';
-	import type { DebateData } from '$lib/stores/debateState.svelte';
 	import type { PageData, ActionData } from './$types';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 
 	const labels = getJurisdictionLabels();
 
-	type PublicCampaignTarget = {
-		name: string;
-		title?: string | null;
-	};
-
-	type PublicDebateSignal = Pick<
-		DebateData,
-		| 'id'
-		| 'debateIdOnchain'
-		| 'propositionText'
-		| 'status'
-		| 'argumentCount'
-		| 'totalStake'
-		| 'uniqueParticipants'
-		| 'deadline'
-		| 'currentPrices'
-		| 'currentEpoch'
-		| 'arguments'
-	> & {
-		templateSlug?: string | null;
-	};
-
-	type ViewData = Omit<PageData, 'campaign'> & {
-		campaign: PageData['campaign'] & {
-			orgAvatar?: string | null;
-			targets?: PublicCampaignTarget[];
-		};
-		stats: {
-			verifiedActions: number;
-			uniqueDistricts: number;
-		};
-		debateSignal?: PublicDebateSignal | null;
-	};
-
-	let { data, form }: { data: ViewData; form: ActionData } = $props();
+	let { data, form }: { data: PageData; form: ActionData } = $props();
 
 	// ── Feature checks ──
 	const districtEnabled = FEATURES.ADDRESS_SPECIFICITY === 'district';
@@ -79,16 +41,6 @@
 	// ── Verification state ──
 	let verificationTier = $state(0); // 0=unverified, 1=postal, 2=district
 
-	// ── Debate signal (read-only, no wallet needed) ──
-	const debateStanceMap = $derived(
-		data.debateSignal?.arguments ? buildArgumentStanceMap(data.debateSignal.arguments) : undefined
-	);
-	const debateHref = $derived(
-		data.debateSignal?.templateSlug
-			? `/s/${data.campaign.orgSlug}/debate/${data.debateSignal.id}`
-			: undefined
-	);
-
 	// ── Live verified count (optimistic + polled) ──
 	let displayCount = $state(data.stats.verifiedActions);
 	let displayDistricts = $state(data.stats.uniqueDistricts);
@@ -97,6 +49,10 @@
 	// Poll verified count — 10s after submission, 30s otherwise
 	$effect(() => {
 		if (!browser) return;
+		// Every render site of these counts sits behind FEATURES.ENGAGEMENT_METRICS.
+		// Without this guard each visitor would run a Convex-backed poll forever and
+		// display none of it.
+		if (!FEATURES.ENGAGEMENT_METRICS) return;
 		const intervalMs = hasSubmitted ? 10_000 : 30_000;
 		const interval = setInterval(async () => {
 			try {
@@ -370,10 +326,10 @@
 					<div class="mt-3 border-t border-slate-200 pt-3">
 						<p class="font-mono text-3xl font-bold text-slate-900">{displayCount}</p>
 						<p class="text-sm text-slate-500">verified actions taken</p>
-						{#if displayDistricts > 0}
+						{#if (displayDistricts ?? 0) > 0}
 							<p class="mt-1 text-xs text-slate-400">
-								across {displayDistricts}
-								{displayDistricts === 1 ? 'district' : 'districts'}
+								across {displayDistricts ?? 0}
+								{(displayDistricts ?? 0) === 1 ? 'district' : 'districts'}
 							</p>
 						{/if}
 					</div>
@@ -448,39 +404,14 @@
 					<p class="font-mono text-lg font-bold text-slate-900">{displayCount}</p>
 					<p class="text-xs text-slate-500">
 						verified {displayCount === 1 ? 'action' : 'actions'} taken
-						{#if displayDistricts > 0}
+						{#if (displayDistricts ?? 0) > 0}
 							<span class="ml-1 text-slate-400">
-								across {displayDistricts}
-								{displayDistricts === 1 ? 'district' : 'districts'}
+								across {displayDistricts ?? 0}
+								{(displayDistricts ?? 0) === 1 ? 'district' : 'districts'}
 							</span>
 						{/if}
 					</p>
 				</div>
-			</div>
-		{/if}
-
-		<!-- Debate signal (read-only market consensus) -->
-		{#if FEATURES.DEBATE && data.debateSignal}
-			<div class="mt-4">
-				<DebateMarketCard
-					debateId={data.debateSignal.id}
-					propositionText={data.debateSignal.propositionText}
-					status={data.debateSignal.status === 'active' ? 'active' : 'resolved'}
-					argumentCount={data.debateSignal.argumentCount}
-					totalStake={data.debateSignal.totalStake}
-					uniqueParticipants={data.debateSignal.uniqueParticipants}
-					deadline={data.debateSignal.deadline}
-					prices={data.debateSignal.currentPrices ?? undefined}
-					argumentStances={debateStanceMap}
-					currentEpoch={data.debateSignal.currentEpoch ?? undefined}
-					href={debateHref}
-				/>
-				<DebateParticipationPanel
-					debateId={data.debateSignal.id}
-					debateStatus={data.debateSignal.status}
-					arguments={data.debateSignal.arguments ?? []}
-					debateIdOnchain={data.debateSignal.debateIdOnchain}
-				/>
 			</div>
 		{/if}
 

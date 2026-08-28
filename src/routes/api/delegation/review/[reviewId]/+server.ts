@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
@@ -35,11 +35,14 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		_secret: getInternalSecret(),
 		reviewId: params.reviewId,
 		userId: session.userId,
-		decision});
+		decision
+	});
 
 	if (!result) throw error(404, 'Review not found');
-	if ('forbidden' in result && result.forbidden) throw error(403, 'Not authorized to review this action');
-	if ('alreadyDecided' in result && result.alreadyDecided) throw error(400, 'Review already decided');
+	if ('forbidden' in result && result.forbidden)
+		throw error(403, 'Not authorized to review this action');
+	if ('alreadyDecided' in result && result.alreadyDecided)
+		throw error(400, 'Review already decided');
 
 	return json(result);
 };

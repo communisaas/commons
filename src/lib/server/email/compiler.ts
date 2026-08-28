@@ -1,4 +1,4 @@
-import { applyEmailMergeFields } from '$lib/core/email/merge-fields';
+import { applyEmailMergeFields } from '$convex/lib/emailMergeFields';
 import { escapeHtml } from './escape';
 
 export interface MergeContext {
@@ -23,7 +23,7 @@ export interface VerificationBlock {
 // {{tierContext}}. Each accepts an optional fallback — {{firstName|Friend}} —
 // used when the recipient value is blank; a blank token with no fallback
 // collapses along with one preceding space so punctuation is not orphaned.
-// Delegates to the shared grammar in $lib/core/email/merge-fields so the
+// Delegates to the shared grammar in $convex/lib/emailMergeFields so the
 // server and browser-direct paths cannot drift.
 export function compileMergeFields(template: string, ctx: MergeContext): string {
 	return applyEmailMergeFields(template, ctx, 'html');

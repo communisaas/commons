@@ -136,4 +136,15 @@ describe('cohort path is NOT the per-sender ZK resolver (RV-C1 vector 1)', () =>
 		expect(endpoint).toContain("getOfficials");
 		expect(endpoint).toContain('$lib/core/shadow-atlas/client');
 	});
+
+	it('fails closed before the database-backed cohort path while congressional launch is off', () => {
+		const convexTarget = files[1];
+		const endpoint = files[2];
+		expect(endpoint.indexOf('if (!FEATURES.CONGRESSIONAL)')).toBeLessThan(
+			endpoint.indexOf('serverQuery(api.targets.cohortDistrictHistogram')
+		);
+		expect(convexTarget).toContain('COHORT_GEOGRAPHY_PROJECTION_REQUIRED');
+		expect(convexTarget).not.toContain('ctx.db');
+		expect(convexTarget).not.toContain('.take(');
+	});
 });

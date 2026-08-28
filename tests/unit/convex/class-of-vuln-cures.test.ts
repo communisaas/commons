@@ -22,13 +22,16 @@ function source(rel: string): string {
 describe('class-of-vulnerability cures (source-text pins)', () => {
 	it('templates.createTemplate has explicit auth + identity match + status enum', () => {
 		const svelte = source('convex/templates.ts');
-		const create = svelte.slice(
-			svelte.indexOf('export const createTemplate = mutation'),
-			svelte.indexOf('export const createTemplate = mutation') + 4000
-		);
+		const start = svelte.indexOf('export const createTemplate = mutation');
+		const next = svelte.indexOf('\nexport const ', start + 1);
+		expect(start).toBeGreaterThan(-1);
+		expect(next).toBeGreaterThan(start);
+		const create = svelte.slice(start, next);
 		expect(create).toContain('await requireAuth(ctx)');
 		expect(create).toContain('String(authUserId) !== String(args.userId)');
-		expect(create).toMatch(/ALLOWED_TEMPLATE_STATUSES.*=\s*\["draft",\s*"published",\s*"archived",\s*"pending"\]/);
+		expect(create).toMatch(
+			/ALLOWED_TEMPLATE_STATUSES.*=\s*\[['"]draft['"],\s*['"]published['"],\s*['"]archived['"],\s*['"]pending['"]\]/
+		);
 		expect(create).toContain('INVALID_TEMPLATE_STATUS');
 	});
 
@@ -56,14 +59,18 @@ describe('class-of-vulnerability cures (source-text pins)', () => {
 		);
 	});
 
-	it('webhooks.handleInboundSms logs TCPA drop instead of silent swallow', () => {
+	it('webhooks.handleInboundSms durably records TCPA transitions before provider acknowledgement', () => {
 		const svelte = source('convex/webhooks.ts');
-		expect(svelte).toContain('DROPPED TCPA STOP');
-		expect(svelte).toContain('DROPPED TCPA START');
-		expect(svelte).toMatch(/user remains opted-in/i);
-		expect(svelte).toMatch(/User remains opted-out/i);
-		// Hash-failure path also logs.
-		expect(svelte).toContain('computeGlobalPhoneHash failed');
+		const inbound = svelte.slice(
+			svelte.indexOf('export const handleInboundSms = internalMutation'),
+			svelte.indexOf('// DURABLE GLOBAL CONTACT AUTHORITY + FANOUT')
+		);
+		expect(inbound).toContain('messageSid: v.string()');
+		expect(inbound).toContain('enqueueContactFanoutJob(ctx');
+		expect(inbound).toContain('failureCode: routingFailure');
+		expect(inbound).toContain('applySmsAuthorityEvent(ctx');
+		expect(inbound).toContain("!result.failed && kind !== 'sms_reply'");
+		expect(inbound).not.toContain('.collect(');
 	});
 
 	it('events.createRsvp pins status enum', () => {
@@ -83,13 +90,15 @@ describe('class-of-vulnerability cures (source-text pins)', () => {
 		const seed = source('convex/seed.ts');
 
 		// backfill: supporters only.
-		expect(backfill).toMatch(/ALLOWED_BACKFILL_TABLES.*=\s*\["supporters"\]/);
+		expect(backfill).toMatch(/ALLOWED_BACKFILL_TABLES.*=\s*\[['"]supporters['"]\]/);
 		expect(backfill).toContain('PATCH_TABLE_NOT_ALLOWED');
 		expect(backfill).toContain('PATCH_ID_INVALID_FOR_TABLE');
 		expect(backfill).toContain('ctx.db.normalizeId(table');
 
 		// seed: supporters + donations + orgInvites (audited callers).
-		expect(seed).toMatch(/ALLOWED_SEED_TABLES.*=\s*\["supporters",\s*"donations",\s*"orgInvites"\]/);
+		expect(seed).toMatch(
+			/ALLOWED_SEED_TABLES.*=\s*\[['"]supporters['"],\s*['"]donations['"],\s*['"]orgInvites['"]\]/
+		);
 		expect(seed).toContain('PATCH_TABLE_NOT_ALLOWED');
 		expect(seed).toContain('ctx.db.normalizeId(table');
 	});

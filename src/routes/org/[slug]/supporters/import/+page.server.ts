@@ -1,8 +1,8 @@
 import { redirect, fail } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { parseCSV } from '$lib/server/csv';
-import { serverAction } from 'convex-sveltekit';
+import { serverAction } from '$lib/server/convex-work-budget';
 import {
 	PEOPLE_IMPORT_FIELD_ALIASES,
 	detectPlatformExportProfile,
@@ -10,6 +10,7 @@ import {
 	type PlatformSource
 } from '$lib/data/platform-export-profiles';
 import type { PageServerLoad, Actions } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 function requireRole(role: string, required: string): void {
 	const hierarchy = ['viewer', 'member', 'editor', 'owner'];
@@ -243,8 +244,7 @@ function applyMapping(
 		name,
 		postalCode: fields['postalCode'] || null,
 		stateCode: cleanBounded(fields['stateCode'], 8)?.toUpperCase() ?? null,
-		congressionalDistrict:
-			cleanBounded(fields['congressionalDistrict'], 32)?.toUpperCase() ?? null,
+		congressionalDistrict: cleanBounded(fields['congressionalDistrict'], 32)?.toUpperCase() ?? null,
 		phone: fields['phone'] || null,
 		country: fields['country'] || null,
 		customFields,
@@ -423,6 +423,7 @@ export const actions: Actions = {
 
 				if (plaintextBatch.length > 0) {
 					const result = await serverAction(api.supporters.importWithEncryption, {
+						_secret: getInternalSecret(),
 						slug: params.slug,
 						supporters: plaintextBatch
 					});

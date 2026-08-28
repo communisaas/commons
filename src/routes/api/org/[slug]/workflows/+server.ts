@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -21,7 +21,11 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (typeof name !== 'string' || !name.trim() || name.length > 200) {
 		throw error(400, 'name is required (≤200 characters)');
 	}
-	if (description !== undefined && description !== null && (typeof description !== 'string' || description.length > 2000)) {
+	if (
+		description !== undefined &&
+		description !== null &&
+		(typeof description !== 'string' || description.length > 2000)
+	) {
 		throw error(400, 'description must be a string ≤2,000 characters');
 	}
 	if (Array.isArray(steps) && steps.length > 50) {

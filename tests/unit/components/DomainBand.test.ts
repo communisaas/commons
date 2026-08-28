@@ -37,7 +37,7 @@ function makeTemplate(overrides: Partial<Template> = {}): Template {
 		description: 'Ask the county to fund evening hours at the public clinic.',
 		domain: 'Healthcare',
 		type: 'advocacy',
-		deliveryMethod: 'direct',
+		deliveryMethod: 'email',
 		message_body: 'Body',
 		delivery_config: {},
 		recipient_config: {},

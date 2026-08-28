@@ -1,7 +1,10 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import { readBoundedAgentRequest } from '$lib/server/agent-request-envelope';
 
 type AgentTraceEvent = {
 	_creationTime: number;
@@ -18,12 +21,12 @@ type AgentTraceEvent = {
 
 type TracePayload = Record<string, unknown>;
 
-const MAX_TRACE_ID_LENGTH = 128;
-const INTERNAL_SECRET_MIN_BYTES = 32;
-
 function internalSecret(): string | null {
-	const secret = process.env.INTERNAL_API_SECRET;
-	return typeof secret === 'string' && secret.length >= INTERNAL_SECRET_MIN_BYTES ? secret : null;
+	try {
+		return getInternalSecret();
+	} catch {
+		return null;
+	}
 }
 
 function payloadRecord(payload: unknown): TracePayload {
@@ -138,15 +141,12 @@ function toReplayEvent(event: AgentTraceEvent) {
 }
 
 export const GET: RequestHandler = async (event) => {
-	const session = event.locals.session;
-	if (!session?.userId) {
-		return json({ error: 'Authentication required' }, { status: 401 });
-	}
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'trace-replay');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
 
-	const traceId = event.params.traceId;
-	if (!traceId || traceId.length > MAX_TRACE_ID_LENGTH) {
-		return json({ error: 'Invalid trace id' }, { status: 400 });
-	}
+	const { cursor, traceId } = requestEnvelope;
 
 	const secret = internalSecret();
 	if (!secret) {
@@ -160,13 +160,25 @@ export const GET: RequestHandler = async (event) => {
 		);
 	}
 
-	const events = (await serverQuery(api.agentTraces.listByTrace, {
+	const page = (await serverQuery(api.agentTraces.listByTrace, {
 		_secret: secret,
-		traceId
-	})) as AgentTraceEvent[];
+		traceId,
+		cursor
+	})) as {
+		firstEvent: AgentTraceEvent | null;
+		events: AgentTraceEvent[];
+		isDone: boolean;
+		continueCursor: string | null;
+	};
+	const events = page.events;
 
-	const start = events.find((traceEvent) => traceEvent.eventType === 'trace.start');
-	if (!start || start.userId !== session.userId || start.endpoint !== 'message-generation') {
+	const start = page.firstEvent;
+	if (
+		!start ||
+		start.eventType !== 'trace.start' ||
+		start.userId !== authenticatedUserId ||
+		start.endpoint !== 'message-generation'
+	) {
 		return json({ error: 'Trace replay not found' }, { status: 404 });
 	}
 
@@ -174,8 +186,13 @@ export const GET: RequestHandler = async (event) => {
 		traceId,
 		endpoint: start.endpoint,
 		startedAt: start._creationTime,
-		expiresAt: Math.min(...events.map((traceEvent) => traceEvent.expiresAt)),
+		expiresAt:
+			events.length > 0
+				? Math.min(...events.map((traceEvent) => traceEvent.expiresAt))
+				: start.expiresAt,
 		eventCount: events.length,
-		events: events.map(toReplayEvent)
+		events: events.map(toReplayEvent),
+		isDone: page.isDone,
+		continueCursor: page.continueCursor
 	});
 };

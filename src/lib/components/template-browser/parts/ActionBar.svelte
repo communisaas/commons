@@ -1,11 +1,12 @@
 <script lang="ts">
 	import type { Template } from '$lib/types/template';
 	import Button from '$lib/components/ui/Button.svelte';
-	import { browser } from '$app/environment';
 	import { type Spring } from 'svelte/motion';
-	import { extractRecipientEmails } from '$lib/types/templateConfig';
-	import { parseRecipientConfig } from '$lib/utils/deriveTargetPresentation';
+	import { recipientIntentCount } from '$convex/lib/recipientRoster';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { moderatePersonalConnection } from '$lib/utils/personal-connection';
+	import { laneCarriesSenderText, SENDER_TEXT_NOT_CARRIED_REASON } from '$lib/services/send-lane';
 
 	const labels = getJurisdictionLabels();
 
@@ -38,100 +39,69 @@
 	// Derived trust tier state
 	const userTrustTier = $derived(user?.trust_tier ?? 0);
 	const isVerifiedConstituent = $derived(userTrustTier >= 2);
-	const isCwcTemplate = $derived(template.deliveryMethod === 'cwc');
+	const isCwcTemplate = $derived(isCongressionalDelivery(template.deliveryMethod));
+
+	// Whether this send's lane delivers the sender's own words. Keyed on the lane,
+	// not on the delivery method: a guest on a congressional template goes out
+	// through the mailto relay, which carries the note like any other letter.
+	const carriesSenderText = $derived(laneCarriesSenderText(template, user));
 
 	// Recipient count from template config
-	const recipientCount = $derived.by(() => {
-		const config = parseRecipientConfig(template?.recipient_config);
-		const dms = config?.decisionMakers?.length ?? 0;
-		const emails = extractRecipientEmails(template?.recipient_config)?.length ?? 0;
-		return dms || emails;
-	});
+	const recipientCount = $derived(
+		typeof template.recipient_count === 'number'
+			? template.recipient_count
+			: recipientIntentCount(template?.recipient_config)
+	);
 
 	// Button text and variant based on trust tier + delivery method
-	const buttonVariant = $derived(
-		isCwcTemplate && isVerifiedConstituent ? 'verified' : 'primary'
-	);
+	const buttonVariant = $derived(isCwcTemplate && isVerifiedConstituent ? 'verified' : 'primary');
 	const buttonText = $derived.by(() => {
 		if (isModerating) return 'Checking...';
 		const count = recipientCount;
 		if (isCwcTemplate && isVerifiedConstituent) {
-			return count > 0 ? `Deliver as verified constituent to ${count}` : 'Deliver as verified constituent';
+			return count > 0
+				? `Deliver as verified constituent to ${count}`
+				: 'Deliver as verified constituent';
 		}
 		if (isCwcTemplate) {
 			return `Deliver to ${labels.legislativeBody}`;
 		}
-		return count > 0 ? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}` : 'Send to Decision-Makers';
+		return count > 0
+			? `Deliver to ${count} decision-maker${count !== 1 ? 's' : ''}`
+			: 'Send to Decision-Makers';
 	});
-
-	// Circuit breaker for moderation service (CI-004 hardening)
-	// Fail-closed: block sends when moderation is unavailable, unless circuit trips open
-	// after CIRCUIT_BREAKER_THRESHOLD consecutive failures within CIRCUIT_BREAKER_WINDOW_MS
-	const CIRCUIT_BREAKER_THRESHOLD = 3;
-	const CIRCUIT_BREAKER_WINDOW_MS = 60_000;
-	let moderationFailures: number[] = [];
-	let circuitOpen = false;
-
-	function recordModerationFailure(): void {
-		const now = Date.now();
-		moderationFailures = moderationFailures.filter((t) => now - t < CIRCUIT_BREAKER_WINDOW_MS);
-		moderationFailures.push(now);
-		if (moderationFailures.length >= CIRCUIT_BREAKER_THRESHOLD && !circuitOpen) {
-			circuitOpen = true;
-			console.warn(
-				`[ActionBar] Circuit breaker OPEN: ${CIRCUIT_BREAKER_THRESHOLD} moderation failures in ${CIRCUIT_BREAKER_WINDOW_MS / 1000}s — allowing sends with audit log`
-			);
-		} else if (moderationFailures.length < CIRCUIT_BREAKER_THRESHOLD && circuitOpen) {
-			// Half-open → closed: failures aged out of window, restore fail-closed behavior
-			circuitOpen = false;
-		}
-	}
 
 	async function handleSendClick() {
 		moderationError = null;
 
-		// Moderate personalization text before applying (CI-004)
-		const pc = personalConnectionValue?.trim();
-		if (pc && pc.length > 0) {
-			isModerating = true;
-			try {
-				const res = await fetch('/api/moderation/personalization', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ text: pc })
-				});
-				const result = await res.json();
-				if (!result.approved) {
-					moderationError = result.summary || 'Personalization text was not approved. Please edit and try again.';
-					isModerating = false;
-					return;
-				}
-			} catch {
-				// Fail-closed: block the send when moderation is unavailable
-				recordModerationFailure();
-				if (!circuitOpen) {
-					moderationError =
-						'Content moderation is temporarily unavailable. Please try again in a moment.';
-					isModerating = false;
-					return;
-				}
-				// Circuit is open (repeated failures) — degrade gracefully with audit trail
-				console.warn('[ActionBar] Circuit breaker open — sending without moderation (audited)');
-			}
-			isModerating = false;
-
+		// Fail closed before the send even reaches moderation: on a lane that
+		// transmits no sender-typed words, a note that exists is refused with the
+		// reason. Moderating it and then dropping it on the way out would spend the
+		// sender's attention on words this lane was never going to deliver.
+		if (!carriesSenderText && personalConnectionValue.trim()) {
+			moderationError = SENDER_TEXT_NOT_CARRIED_REASON;
+			return;
 		}
 
-		// Save personalization for all users
-		if (browser && personalConnectionValue) {
-			sessionStorage.setItem(
-				`template_${template.id}_personalization`,
-				JSON.stringify({
-					personalConnection: personalConnectionValue,
-					timestamp: Date.now()
-				})
-			);
+		// The sender's own words pass the shared send-time gate before anything else
+		// runs. Same gate, same failure policy, as every other send lane.
+		isModerating = true;
+		// This lane hands off before recipients are resolved, so it names no
+		// addressed set and takes the strict policy rather than guessing one.
+		const moderation = await moderatePersonalConnection(
+			personalConnectionValue,
+			template.slug,
+			undefined
+		);
+		isModerating = false;
+		if (!moderation.approved) {
+			moderationError = moderation.reason;
+			return;
 		}
+
+		// Persistence across the OAuth round trip belongs to TemplatePreview, which
+		// owns the storage key and gates the write on the lane. A second writer here
+		// would re-seed a note the lane cannot carry, past that gate.
 
 		// Let parent handle the entire flow (auth, address, or email modal)
 		if (onSendMessage) {

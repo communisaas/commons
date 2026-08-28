@@ -8,7 +8,7 @@ import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
 import { isCallStatus } from '$lib/server/sms/types';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -35,7 +35,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		limit,
 		cursor: cursor ?? undefined,
 		status: statusFilter && isCallStatus(statusFilter) ? statusFilter : undefined,
-		campaignId: campaignIdFilter ?? undefined});
+		campaignId: campaignIdFilter ?? undefined
+	});
 
 	const data = result.items.map((c: any) => ({
 		id: c._id,

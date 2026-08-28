@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { RequestHandler } from './$types';
 
@@ -21,14 +21,27 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// bound description + currency + goal amount (defense-in-depth).
-	if (description !== undefined && description !== null && (typeof description !== 'string' || description.length > 5000)) {
+	if (
+		description !== undefined &&
+		description !== null &&
+		(typeof description !== 'string' || description.length > 5000)
+	) {
 		throw error(400, 'Description must be a string ≤5,000 characters');
 	}
-	if (currency !== undefined && currency !== null && (typeof currency !== 'string' || currency.length > 8)) {
+	if (
+		currency !== undefined &&
+		currency !== null &&
+		(typeof currency !== 'string' || currency.length > 8)
+	) {
 		throw error(400, 'Currency must be a 3-letter ISO 4217 code');
 	}
 	if (goalAmountCents !== undefined && goalAmountCents !== null) {
-		if (typeof goalAmountCents !== 'number' || !Number.isInteger(goalAmountCents) || goalAmountCents <= 0 || goalAmountCents > 100_000_000_000) {
+		if (
+			typeof goalAmountCents !== 'number' ||
+			!Number.isInteger(goalAmountCents) ||
+			goalAmountCents <= 0 ||
+			goalAmountCents > 100_000_000_000
+		) {
 			throw error(400, 'Goal amount must be a positive integer (in cents) ≤ $1,000,000,000');
 		}
 	}
@@ -48,7 +61,12 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	const status = url.searchParams.get('status');
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1), 100);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 1),
+		100
+	);
+	const cursor = url.searchParams.get('cursor');
+	if (cursor && cursor.length > 2_048) throw error(400, 'Invalid cursor');
 
 	const result = await serverQuery(api.donations.listByOrgWithDonors, {
 		orgSlug: params.slug,
@@ -56,7 +74,8 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 			status && ['DRAFT', 'ACTIVE', 'COMPLETE'].includes(status)
 				? (status as 'DRAFT' | 'ACTIVE' | 'COMPLETE')
 				: undefined,
-		limit
+		limit,
+		cursor
 	});
 	return json(result);
 };

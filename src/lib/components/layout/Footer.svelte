@@ -19,6 +19,14 @@
 		<div class="footer-coda__links">
 			<a href="mailto:hello@commons.email" class="footer-coda__contact">hello@commons.email</a>
 			<span class="footer-coda__sep" aria-hidden="true"></span>
+			<!-- Both of these render and neither had a single inbound link anywhere
+			     in the app, so the only way to reach them was to already know the
+			     URL. /directory is deliberately absent: it currently errors, and a
+			     link to a broken page is worse than no link. -->
+			<a href="/browse" class="footer-coda__contact">Browse campaigns</a>
+			<span class="footer-coda__sep" aria-hidden="true"></span>
+			<a href="/developers" class="footer-coda__contact">Developers</a>
+			<span class="footer-coda__sep" aria-hidden="true"></span>
 			<a href="/org" class="footer-coda__contact footer-coda__contact--org">For organizations</a>
 		</div>
 

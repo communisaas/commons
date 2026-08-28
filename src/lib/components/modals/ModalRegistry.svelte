@@ -29,6 +29,14 @@
 		return (data?.user as { id: string; name: string; trust_tier?: number }) ?? null;
 	}
 
+	/**
+	 * The sender's own words, already moderated by whichever surface opened the
+	 * modal. Absent on lanes with no preview — the modal then simply has none.
+	 */
+	function getPersonalConnection(data: ModalData): string | undefined {
+		return data?.personalConnection as string | undefined;
+	}
+
 	function getSource(data: ModalData): 'social-link' | 'direct-link' | 'share' {
 		return (data?.source as 'social-link' | 'direct-link' | 'share') || 'direct-link';
 	}
@@ -117,6 +125,7 @@
 			<TemplateModal
 				template={getTemplate(data)!}
 				user={getUser(data)}
+				personalConnection={getPersonalConnection(data)}
 				initialState={data?.initialState}
 				onclose={() => modalActions.closeModal('template-modal')}
 				onused={() => {

@@ -24,7 +24,7 @@
 	// page passes only the hash to compare against; the verifier owns the
 	// recipient-entered preimage.
 	const attestationHash = $derived(
-		data.mode === 'campaign' ? data.campaignContext?.attestationHash ?? null : null
+		data.mode === 'campaign' ? (data.campaignContext?.attestationHash ?? null) : null
 	);
 
 	const verifiedDate = $derived(
@@ -38,6 +38,7 @@
 	const headline = $derived.by(() => {
 		// Campaign mode is a cohort report — NO per-sender tier claim.
 		if (data.mode === 'campaign') return 'Constituent report';
+		if (data.trustTier === null) return 'Sender record';
 		if (data.trustTier >= 3) return 'Government-Verified Identity';
 		if (data.trustTier >= 2) return 'Verified Resident';
 		if (data.trustTier >= 1) return 'Authenticated Sender';
@@ -55,17 +56,47 @@
 				? `This report aggregates ${n} verified constituent action${n === 1 ? '' : 's'}. Recompute its cryptographic attestation below.`
 				: 'This report carries a cryptographic attestation you can recompute below.';
 		}
-		const state = data.location.state;
+		if (data.trustTier === null) {
+			return data.record.status === 'active'
+				? 'This page records the sender information captured when the record was issued.'
+				: 'The sender information on this page was captured when the record was issued.';
+		}
+		const isActive = data.record.status === 'active';
+		if (
+			data.location.state.value.state === 'present' &&
+			data.location.state.source.state === 'present' &&
+			data.location.state.source.value === 'atlas-derived'
+		) {
+			const state = data.location.state.value.value;
+			if (data.trustTier >= 3) {
+				return isActive
+					? `The person who sent you this message proved their identity and residency in ${state} with a government credential.`
+					: `When this record was issued, the sender had proved their identity and residency in ${state} with a government credential.`;
+			}
+			if (data.trustTier >= 2) {
+				return isActive
+					? `The person who sent you this message verified their address in ${state} before sending.`
+					: `When this record was issued, the sender had verified their address in ${state}.`;
+			}
+		}
 		if (data.trustTier >= 3) {
-			return `The person who sent you this message proved their identity and residency${state ? ` in ${state}` : ''} with a government credential.`;
+			return isActive
+				? 'The person who sent you this message proved their identity and residency with a government credential.'
+				: 'When this record was issued, the sender had proved their identity and residency with a government credential.';
 		}
 		if (data.trustTier >= 2) {
-			return `The person who sent you this message verified their address${state ? ` in ${state}` : ''} before sending.`;
+			return isActive
+				? 'The person who sent you this message verified their address before sending.'
+				: 'The sender had verified their address when this record was issued.';
 		}
 		if (data.trustTier >= 1) {
-			return 'The person who sent you this message authenticated their account via email before sending.';
+			return isActive
+				? 'The person who sent you this message authenticated their account via email before sending.'
+				: 'The sender had authenticated their account via email when this record was issued.';
 		}
-		return 'This sender has not completed verification.';
+		return isActive
+			? 'This sender has not completed verification.'
+			: 'When this record was issued, the sender had not completed verification.';
 	});
 
 	const authRow = $derived.by(() => {
@@ -77,7 +108,11 @@
 				: { label: 'Attestation', value: 'No attestation issued yet', verified: false };
 		}
 		if (data.identity.method === 'gov-id') {
-			return { label: 'Identity', value: 'Government credential (mDL)', verified: true };
+			return {
+				label: 'Identity',
+				value: 'Government credential (mDL)',
+				verified: data.identity.verified
+			};
 		}
 		return { label: 'Authentication', value: 'Email', verified: data.identity.verified };
 	});
@@ -91,7 +126,9 @@
 	// The shield: in campaign mode it marks a real cryptographic attestation (not a
 	// per-sender tier); in individual mode it marks tier-1+ verification.
 	const showShield = $derived(
-		data.mode === 'campaign' ? attestationHash !== null : data.trustTier >= 1
+		data.mode === 'campaign'
+			? attestationHash !== null
+			: data.record.status === 'active' && data.trustTier !== null && data.trustTier >= 1
 	);
 
 	// B3 — district-resolution freshness. Two INDEPENDENT clocks: the BOUNDARY
@@ -101,10 +138,10 @@
 	// unknown at issuance and renders nothing. We never copy one clock's value
 	// into the other and make no comparative "fresher than X" claim. Campaign
 	// mode has no per-credential freshness, so these resolve to null there.
-	function formatClock(value: string | null | undefined): string | null {
-		if (!value) return null;
+	function formatClock(value: string | number | null | undefined): string | null {
+		if (value === null || value === undefined || value === '') return null;
 		const parsed = new Date(value);
-		if (Number.isNaN(parsed.getTime())) return value; // show the raw label if not a date
+		if (Number.isNaN(parsed.getTime())) return typeof value === 'string' ? value : null;
 		return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 	}
 	const boundaryClock = $derived(
@@ -114,14 +151,29 @@
 		data.mode === 'individual' ? formatClock(data.location.officialsAsOf) : null
 	);
 	const tigerVintage = $derived(
-		data.mode === 'individual' ? data.location.tigerVintage ?? null : null
+		data.mode === 'individual' ? (data.location.tigerVintage ?? null) : null
 	);
 	const resolutionConfidence = $derived(
-		data.mode === 'individual' ? data.location.resolutionConfidence ?? null : null
+		data.mode === 'individual' ? (data.location.resolutionConfidence ?? null) : null
 	);
 	const confidencePct = $derived(
 		resolutionConfidence !== null ? Math.round(resolutionConfidence * 100) : null
 	);
+	const terminalStateLine = $derived.by(() => {
+		if (data.mode !== 'individual' || data.record.status === 'active') return null;
+		const date = formatClock(data.record.retiredAt);
+		if (!date) return null;
+		switch (data.record.status) {
+			case 'superseded':
+				return `This record stopped standing on ${date}. The sender re-verified their address; this page does not link to the newer record.`;
+			case 'operator_retired':
+				return `This record was retired by Commons on ${date} during a credential rotation.`;
+			case 'retired_reason_unrecorded':
+				return `This record was retired on ${date}. The reason was not recorded.`;
+			case 'lapsed':
+				return `This record lapsed on ${date}. It was accurate when issued and has not been renewed.`;
+		}
+	});
 </script>
 
 <svelte:head>
@@ -129,61 +181,129 @@
 	<meta name="robots" content="noindex" />
 </svelte:head>
 
-<div class="flex flex-col px-6"
+<div
+	class="flex flex-col px-6"
 	style="background: oklch(0.993 0.003 60); min-height: calc(100vh - 48px);"
 >
-	<div class="w-full max-w-lg mx-auto pt-[5vh]">
-
+	<div class="mx-auto w-full max-w-lg pt-[5vh]">
 		<!-- Header -->
-		<div class="flex items-center gap-3.5 mb-2 verify-stagger" style="--stagger: 0">
-			<div class="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
+		<div class="verify-stagger mb-2 flex items-center gap-3.5" style="--stagger: 0">
+			<div
+				class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full"
 				style="background: oklch(0.95 0.03 160 / 0.5); border: 1px solid oklch(0.88 0.04 160 / 0.4);"
 			>
 				{#if showShield}
-					<svg class="w-5 h-5" style="color: oklch(0.45 0.12 160)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					<svg
+						class="h-5 w-5"
+						style="color: oklch(0.45 0.12 160)"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
 						<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 						<path d="m9 12 2 2 4-4" />
 					</svg>
 				{:else}
-					<svg class="w-5 h-5 text-text-quaternary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+					<svg
+						class="text-text-quaternary h-5 w-5"
+						viewBox="0 0 24 24"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
 						<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
 					</svg>
 				{/if}
 			</div>
 			<div>
-				<h1 class="font-brand text-2xl font-bold tracking-tight text-text-primary">
+				<h1 class="font-brand text-text-primary text-2xl font-bold tracking-tight">
 					{headline}
 				</h1>
-				<p class="font-mono text-[13px] text-text-quaternary mt-0.5">commons.email</p>
+				<p class="text-text-quaternary mt-0.5 font-mono text-[13px]">commons.email</p>
 			</div>
 		</div>
 
-		<p class="font-brand text-[15px] text-text-tertiary leading-relaxed mb-8 sm:ml-[54px] verify-stagger" style="--stagger: 1">
+		<p
+			class="font-brand text-text-tertiary verify-stagger mb-8 text-[15px] leading-relaxed sm:ml-[54px]"
+			style="--stagger: 1"
+		>
 			{lead}
 		</p>
 
+		{#if terminalStateLine}
+			<p
+				data-terminal-state
+				class="verify-stagger mb-8 text-[15px] leading-relaxed sm:ml-[54px]"
+				style="--stagger: 2"
+			>
+				{terminalStateLine}
+			</p>
+		{/if}
+
 		<!-- Jurisdictions: the strong center -->
-		{#if data.location.verified && data.location.districts.length > 0}
-			<div class="rounded-participation-lg border border-surface-border bg-surface-raised shadow-atmospheric-card px-5 py-4 mb-2 verify-stagger" style="--stagger: 2">
-				<p class="font-mono text-[11px] font-medium text-text-accent uppercase tracking-widest mb-3">
-					Proven Jurisdictions
+		{#if data.mode === 'individual'}
+			<div
+				class="rounded-participation-lg border-surface-border bg-surface-raised shadow-atmospheric-card verify-stagger mb-2 border px-5 py-4"
+				style="--stagger: 2"
+			>
+				<p
+					class="text-text-accent mb-3 font-mono text-[11px] font-medium tracking-widest uppercase"
+				>
+					Containment
 				</p>
 				<div class="space-y-2">
 					{#each data.location.districts as d}
-						<div class="flex items-baseline justify-between gap-6">
-							<span class="text-sm text-text-tertiary shrink-0">{d.label}</span>
-							<span class="font-mono text-sm font-medium text-text-primary text-right">{d.value}</span>
+						<div class="flex items-start justify-between gap-6" data-containment-slot={d.slot}>
+							<span class="text-text-tertiary shrink-0 text-sm">{d.label}</span>
+							<span class="flex flex-col items-end text-right">
+								{#if d.value.state === 'present'}
+									<span class="text-text-primary font-mono text-sm font-medium"
+										>{d.value.value}</span
+									>
+								{:else if d.value.state === 'absent'}
+									<span class="text-text-tertiary font-mono text-sm font-medium">ABSENT</span>
+									<span class="text-text-quaternary text-[10px]">not carried by credential</span>
+								{:else if d.value.state === 'withheld'}
+									<span class="text-text-tertiary font-mono text-sm font-medium">WITHHELD</span>
+									<span class="text-text-quaternary text-[10px]">{d.value.why}</span>
+								{:else}
+									<span class="text-text-tertiary font-mono text-sm font-medium">BLOCKED</span>
+									<span class="text-text-quaternary text-[10px]">{d.value.why}</span>
+								{/if}
+								<span class="text-text-quaternary font-mono text-[10px]">
+									provenance:
+									{#if d.source.state === 'present'}
+										{d.source.value}
+									{:else if d.source.state === 'absent'}
+										ABSENT
+									{:else if d.source.state === 'withheld'}
+										WITHHELD — {d.source.why}
+									{:else}
+										BLOCKED — {d.source.why}
+									{/if}
+								</span>
+							</span>
 						</div>
 					{/each}
 				</div>
 			</div>
-			<p class="text-xs text-text-quaternary mb-8 px-1 verify-stagger" style="--stagger: 3">
-				Proven at the district level — exact address is never revealed.
+			<p class="text-text-quaternary verify-stagger mb-8 px-1 text-xs" style="--stagger: 3">
+				Atlas-derived rows were checked against the published district atlas. Self-reported rows
+				were supplied by the sender and not independently checked. Exact address is never revealed.
 			</p>
-		{:else if data.location.state}
-			<div class="mb-8 px-1 verify-stagger" style="--stagger: 2">
-				<span class="text-sm text-text-quaternary">State:</span>
-				<span class="font-mono text-sm font-medium text-text-secondary ml-1">{data.location.state}</span>
+		{:else if data.location.state.value.state === 'present'}
+			<div class="verify-stagger mb-8 px-1" style="--stagger: 2">
+				<span class="text-text-quaternary text-sm">State:</span>
+				<span class="text-text-secondary ml-1 font-mono text-sm font-medium"
+					>{data.location.state.value.value}</span
+				>
 			</div>
 		{/if}
 
@@ -193,8 +313,10 @@
 		     and shown only when the credential carries a real value. No comparative
 		     "fresher than X" claim — these are this credential's own provenance. -->
 		{#if boundaryClock || officialsClock || confidencePct !== null}
-			<div class="mb-8 px-1 verify-stagger" style="--stagger: 3">
-				<p class="font-mono text-[11px] font-medium text-text-quaternary uppercase tracking-widest mb-2">
+			<div class="verify-stagger mb-8 px-1" style="--stagger: 3">
+				<p
+					class="text-text-quaternary mb-2 font-mono text-[11px] font-medium tracking-widest uppercase"
+				>
 					Resolution freshness
 				</p>
 				<div class="grid grid-cols-[auto_1fr] gap-x-8 gap-y-1.5 text-[13px]">
@@ -202,25 +324,27 @@
 						<span class="text-text-quaternary">
 							District boundary{tigerVintage ? ` (${tigerVintage})` : ''}
 						</span>
-						<span class="font-mono text-text-secondary text-right">{boundaryClock}</span>
+						<span class="text-text-secondary text-right font-mono">{boundaryClock}</span>
 					{/if}
 					{#if officialsClock}
 						<span class="text-text-quaternary">Officials roster</span>
-						<span class="font-mono text-text-secondary text-right">{officialsClock}</span>
+						<span class="text-text-secondary text-right font-mono">{officialsClock}</span>
 					{/if}
 					{#if confidencePct !== null}
 						<span class="text-text-quaternary">Match confidence</span>
-						<span class="font-mono text-text-secondary text-right">{confidencePct}%</span>
+						<span class="text-text-secondary text-right font-mono">{confidencePct}%</span>
 					{/if}
 				</div>
 			</div>
 		{/if}
 
 		<!-- Compact metadata -->
-		<div class="border-t border-surface-border pt-5 mb-8 verify-stagger" style="--stagger: 4">
+		<div class="border-surface-border verify-stagger mb-8 border-t pt-5" style="--stagger: 4">
 			<div class="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2.5 text-[13px]">
 				<span class="text-text-quaternary">{authRow.label}</span>
-				<span class="text-right {authRow.verified ? 'text-channel-verified-700' : 'text-text-tertiary'}">
+				<span
+					class="text-right {authRow.verified ? 'text-channel-verified-700' : 'text-text-tertiary'}"
+				>
 					{authRow.value}
 				</span>
 
@@ -235,7 +359,7 @@
 				<span class="text-text-quaternary"
 					>{data.mode === 'campaign' ? 'Report ID' : 'Attestation'}</span
 				>
-				<span class="font-mono text-text-tertiary text-right">{data.hash}</span>
+				<span class="text-text-tertiary text-right font-mono">{data.hash}</span>
 
 				<span class="text-text-quaternary">Verified</span>
 				<span class="text-text-secondary text-right">{verifiedDate}</span>
@@ -246,7 +370,7 @@
 	<!-- Browser-side attestation recomputation (recipient pastes their report's
 	     offline-verify block; nothing private is published on this surface). -->
 	{#if data.mode === 'campaign' && attestationHash}
-		<div class="w-full max-w-lg mx-auto verify-stagger" style="--stagger: 5">
+		<div class="verify-stagger mx-auto w-full max-w-lg" style="--stagger: 5">
 			<AttestationVerifier
 				expectedHash={attestationHash}
 				campaignId={data.hash}
@@ -256,15 +380,17 @@
 	{/if}
 
 	<!-- Footer: explanation flows into attribution -->
-	<footer class="mt-auto w-full max-w-lg mx-auto pb-6 pt-6 verify-stagger" style="--stagger: 5">
-		<p class="text-[13px] leading-relaxed mb-4" style="color: oklch(0.48 0.02 55)">
-			Commons verifies identity and location for civic communication.
-			Location is proven through a zero-knowledge proof — residency
-			is demonstrated without revealing the sender's address. Each
-			check produces a cryptographic attestation.
+	<footer class="verify-stagger mx-auto mt-auto w-full max-w-lg pt-6 pb-6" style="--stagger: 5">
+		<p class="mb-4 text-[13px] leading-relaxed" style="color: oklch(0.48 0.02 55)">
+			Commons verifies identity and location for civic communication where the certificate marks an
+			atlas-derived row. Self-reported rows are labeled and are not independently checked. Exact
+			addresses remain private, and each completed check produces a cryptographic attestation.
 		</p>
 		<div class="flex items-baseline justify-between text-[13px]" style="color: oklch(0.55 0.02 55)">
-			<a href="/" class="font-brand font-semibold hover:text-text-accent transition-colors duration-participation">
+			<a
+				href="/"
+				class="font-brand hover:text-text-accent duration-participation font-semibold transition-colors"
+			>
 				commons.email
 			</a>
 			<span>&copy; {new Date().getFullYear()} Commons PBC</span>

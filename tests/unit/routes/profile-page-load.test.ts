@@ -10,7 +10,7 @@ vi.mock('$lib/convex', () => ({
 	api: {
 		users: {
 			getProfile: 'users.getProfile',
-			getMyTemplates: 'users.getMyTemplates',
+			getMyTemplatesPage: 'users.getMyTemplatesPage',
 			getMyRepresentatives: 'users.getMyRepresentatives',
 			getReverificationBudget: 'users.getReverificationBudget'
 		},
@@ -60,7 +60,7 @@ describe('profile page load', () => {
 				profileVisibility: 'private',
 				profileCompletedAt: null
 			})
-			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce({ page: [], isDone: true, continueCursor: 'complete' })
 			.mockResolvedValueOnce([])
 			.mockResolvedValueOnce({
 				tierBypass: false,
@@ -75,6 +75,7 @@ describe('profile page load', () => {
 			.mockResolvedValueOnce(null);
 
 		const result = (await load({
+			url: new URL('https://commons.email/profile'),
 			locals: {
 				user: {
 					id: 'user_123',
@@ -102,6 +103,56 @@ describe('profile page load', () => {
 			trust_tier: 2,
 			district_verified: true,
 			address_verified_at: new Date(verifiedAt).toISOString()
+		});
+		expect(mockServerQuery).toHaveBeenCalledWith('users.getMyTemplatesPage', {
+			paginationOpts: { numItems: 5, cursor: null }
+		});
+	});
+
+	it('publishes explicit continuation metadata for a partial authored-template page', async () => {
+		mockServerQuery
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce({
+				page: [
+					{
+						_id: 'template_1',
+						_creationTime: 1_700_000_000_000,
+						title: 'First page template',
+						slug: 'first-page-template',
+						status: 'draft',
+						isPublic: false
+					}
+				],
+				isDone: false,
+				continueCursor: 'next/cursor=='
+			})
+			.mockResolvedValueOnce([])
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce(null);
+
+		const result = (await load({
+			url: new URL('https://commons.email/profile?view=record'),
+			locals: {
+				user: {
+					id: 'user_1',
+					email: 'user@example.test',
+					name: 'User',
+					avatar: null,
+					trust_tier: 1,
+					district_verified: false,
+					address_verified_at: null
+				}
+			}
+		} as never)) as Exclude<Awaited<ReturnType<typeof load>>, void>;
+
+		const templatesData = await result.streamed.templatesData;
+		expect(templatesData.templates).toHaveLength(1);
+		expect(templatesData.pagination).toEqual({
+			isFirstPage: true,
+			isCompleteCorpus: false,
+			firstPageUrl: '/profile?view=record',
+			nextPageUrl: '/profile?view=record&templateCursor=next%2Fcursor%3D%3D'
 		});
 	});
 });

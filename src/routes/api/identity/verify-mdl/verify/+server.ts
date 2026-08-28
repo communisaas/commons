@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { z } from 'zod';
 import type { RequestHandler } from './$types';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { Id } from '$convex/_generated/dataModel';
@@ -168,7 +168,8 @@ export const POST: RequestHandler = async ({ request, locals, platform }) => {
 				sessionChannel: 'digital-credentials',
 				verifiedAt: now,
 				addressVerificationMethod: 'mdl',
-				documentType: 'mdl'});
+				documentType: 'mdl'
+			});
 		} catch (err) {
 			if (isMdlCredentialReuseError(err)) {
 				return json(

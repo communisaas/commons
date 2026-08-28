@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Studio → campaigns/new congressional handoff (B2). Locks: the unified
+ * Studio → campaigns/new congressional handoff. Locks: the unified
  * readiness predicate (no static-flag drift), the artifact carry (campaign
  * shell + GeoScope mapping), and the wiring (one SSOT both surfaces import;
  * takeToCongressional carries a draft id).
@@ -10,7 +10,20 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { congressionalDeliveryAvailable } from '$lib/congressional-readiness';
 import { saveStudioProcessAsCampaignDraft } from '$lib/components/org/studio/studio-draft-bridge';
-import { getOrgCampaignDraft } from '$lib/stores/orgCampaignDraft';
+import { orgCampaignDrafts, type OrgCampaignDraft } from '$lib/stores/orgDraftStore';
+
+const OPERATOR = 'operator-test';
+
+// Owner-scoped round trip: the store's only read is consume(id, ownerId),
+// so write and read back as the SAME operator.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function saveAndConsume(proc: any): Promise<OrgCampaignDraft> {
+	const draftId = await saveStudioProcessAsCampaignDraft(proc, OPERATOR);
+	expect(draftId).not.toBeNull();
+	const draft = await orgCampaignDrafts.consume(draftId!, OPERATOR);
+	expect(draft).not.toBeNull();
+	return draft!;
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mockProc(scope: any): any {
@@ -51,10 +64,8 @@ describe('saveStudioProcessAsCampaignDraft', () => {
 		};
 	});
 
-	it('carries the campaign shell (title=subjectLine, body=PLAIN message, type) + counts', () => {
-		const d = getOrgCampaignDraft(
-			saveStudioProcessAsCampaignDraft(mockProc({ type: 'nationwide', country: 'US' }))
-		)!;
+	it('carries the campaign shell (title=subjectLine, body=PLAIN message, type) + counts', async () => {
+		const d = await saveAndConsume(mockProc({ type: 'nationwide', country: 'US' }));
 		expect(d.title).toBe('Protect the Watershed');
 		expect(d.body).toBe('Dear Senator, please support the watershed bill.');
 		expect(d.body).not.toMatch(/<[a-z]/i); // plain message, not the email-HTML serializer
@@ -64,20 +75,18 @@ describe('saveStudioProcessAsCampaignDraft', () => {
 		expect(d.metadata.sourceCount).toBe(2);
 	});
 
-	it('maps every GeoScope arm without crashing', () => {
-		const sub = getOrgCampaignDraft(
-			saveStudioProcessAsCampaignDraft(mockProc({ type: 'subnational', country: 'US', subdivision: 'CA' }))
-		)!;
+	it('maps every GeoScope arm without crashing', async () => {
+		const sub = await saveAndConsume(
+			mockProc({ type: 'subnational', country: 'US', subdivision: 'CA' })
+		);
 		expect(sub.targetCountry).toBe('US');
 		expect(sub.targetJurisdiction).toBe('CA');
 
-		const intl = getOrgCampaignDraft(
-			saveStudioProcessAsCampaignDraft(mockProc({ type: 'international' }))
-		)!;
+		const intl = await saveAndConsume(mockProc({ type: 'international' }));
 		expect(intl.targetCountry).toBeUndefined();
 		expect(intl.targetJurisdiction).toBeUndefined();
 
-		const none = getOrgCampaignDraft(saveStudioProcessAsCampaignDraft(mockProc(null)))!;
+		const none = await saveAndConsume(mockProc(null));
 		expect(none.targetCountry).toBeUndefined();
 		expect(none.targetJurisdiction).toBeUndefined();
 	});

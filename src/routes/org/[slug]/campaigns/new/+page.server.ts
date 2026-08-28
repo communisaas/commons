@@ -1,7 +1,7 @@
-import { redirect, fail } from '@sveltejs/kit';
+import { error, redirect, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { CongressionalDeliveryGroundData } from '$lib/components/org/os/spaces';
@@ -18,9 +18,7 @@ function asString(value: unknown, fallback = ''): string {
 	return typeof value === 'string' ? value : fallback;
 }
 
-function buildCongressionalDeliveryGround(
-	result: unknown
-): CongressionalDeliveryGroundData | null {
+function buildCongressionalDeliveryGround(result: unknown): CongressionalDeliveryGroundData | null {
 	if (!result || typeof result !== 'object') return null;
 	const runtime = result as Record<string, unknown>;
 	return {
@@ -32,10 +30,7 @@ function buildCongressionalDeliveryGround(
 			runtime.dependency,
 			'congressional launch flag + House CWC proxy env + Senate CWC API env + per-submission proof/template checks'
 		),
-		runtimeMessage: asString(
-			runtime.message,
-			'Congressional delivery runtime posture is unread.'
-		),
+		runtimeMessage: asString(runtime.message, 'Congressional delivery runtime posture is unread.'),
 		launched: runtime.launched === true,
 		houseTransportConfigured: runtime.houseTransportConfigured === true,
 		senateTransportConfigured: runtime.senateTransportConfigured === true
@@ -48,14 +43,21 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 
 	const fromAlertId = url.searchParams.get('fromAlert');
 	const requestedType = url.searchParams.get('type');
+	const templateCursor = url.searchParams.get('templateCursor');
+	if (templateCursor && templateCursor.length > 2_048) {
+		throw error(400, 'Invalid template pagination cursor');
+	}
 
-	const [templates, alertPrefill, congressionalDeliveryResult] = await Promise.all([
-		serverQuery(api.templates.listByOrg, { slug: params.slug }),
+	const [templatePage, alertPrefill, congressionalDeliveryResult] = await Promise.all([
+		serverQuery(api.templates.listByOrgPage, {
+			slug: params.slug,
+			paginationOpts: { numItems: 50, cursor: templateCursor }
+		}),
 		fromAlertId
 			? serverQuery(api.legislation.getAlertWithBill, {
-				slug: params.slug,
-				alertId: fromAlertId as Id<'legislativeAlerts'>
-			}).catch(() => null)
+					slug: params.slug,
+					alertId: fromAlertId as Id<'legislativeAlerts'>
+				}).catch(() => null)
 			: Promise.resolve(null),
 		serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(() => null)
 	]);
@@ -69,12 +71,26 @@ export const load: PageServerLoad = async ({ parent, url, params }) => {
 	// honored when congressional is actually offered, else falls back to default.
 	const initialType =
 		requestedType === 'CONGRESSIONAL' && congressionalAuthoringEnabled ? 'CONGRESSIONAL' : 'LETTER';
+	const firstTemplatePageUrl = new URL(url);
+	firstTemplatePageUrl.searchParams.delete('templateCursor');
+	const nextTemplatePageUrl = new URL(url);
+	if (!templatePage.isDone) {
+		nextTemplatePageUrl.searchParams.set('templateCursor', templatePage.continueCursor);
+	}
 
 	return {
-		templates: templates.map((t: { _id: string; title: string }) => ({
+		templates: templatePage.page.map((t: { _id: string; title: string }) => ({
 			id: t._id,
 			title: t.title
 		})),
+		templatePagination: {
+			isFirstPage: templateCursor === null,
+			isDone: templatePage.isDone,
+			firstPageUrl: `${firstTemplatePageUrl.pathname}${firstTemplatePageUrl.search}`,
+			nextPageUrl: templatePage.isDone
+				? null
+				: `${nextTemplatePageUrl.pathname}${nextTemplatePageUrl.search}`
+		},
 		alertPrefill,
 		congressionalDelivery: buildCongressionalDeliveryGround(congressionalDeliveryResult),
 		congressionalAuthoringEnabled,
@@ -105,53 +121,127 @@ export const actions: Actions = {
 		const fromAlertId = formData.get('fromAlertId')?.toString() || null;
 
 		if (!title) {
-			return fail(400, { error: 'Title is required', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Title is required',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 
 		// CONGRESSIONAL is accepted only when delivery readiness offers it — the
 		// same runtime-readiness SSOT the reveal uses (not a static flag), so a
 		// hand-crafted POST can't author a congressional campaign the UI doesn't
 		// offer. The CWC delivery gate is enforced independently at send time.
-		const readiness = await serverQuery(api.submissions.getCongressionalDeliveryReadiness, {}).catch(
-			() => null
-		);
+		const readiness = await serverQuery(
+			api.submissions.getCongressionalDeliveryReadiness,
+			{}
+		).catch(() => null);
 		const allowedTypes = congressionalDeliveryAvailable(
 			readiness as { launched?: boolean; ready?: boolean } | null
 		)
 			? ['LETTER', 'EVENT', 'FORM', 'CONGRESSIONAL']
 			: ['LETTER', 'EVENT', 'FORM'];
 		if (!type || !allowedTypes.includes(type)) {
-			return fail(400, { error: 'Invalid campaign type', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Invalid campaign type',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 
 		// Parity with /api/org/[slug]/campaigns POST — bound the same caller-supplied
 		// fields at this form-action boundary so `campaigns.create` never sees
 		// outsized writes from either path.
 		if (title.length > 200) {
-			return fail(400, { error: 'Title must be 200 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Title must be 200 characters or fewer',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 		if (body && body.length > 10_000) {
-			return fail(400, { error: 'Body must be 10,000 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Body must be 10,000 characters or fewer',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 		if (templateId && templateId.length > 64) {
-			return fail(400, { error: 'Invalid templateId', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Invalid templateId',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 		if (targetJurisdiction && targetJurisdiction.length > 64) {
-			return fail(400, { error: 'targetJurisdiction must be 64 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'targetJurisdiction must be 64 characters or fewer',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 		if (targetCountry.length > 8) {
-			return fail(400, { error: 'targetCountry must be 8 characters or fewer', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'targetCountry must be 8 characters or fewer',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 
-		if (debateEnabled && (isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)) {
-			return fail(400, { error: 'Debate threshold must be 1 to 1,000,000', title, type, body, targetCountry, targetJurisdiction });
+		if (
+			debateEnabled &&
+			(isNaN(debateThreshold) || debateThreshold < 1 || debateThreshold > 1_000_000)
+		) {
+			return fail(400, {
+				error: 'Debate threshold must be 1 to 1,000,000',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 
 		if (billId && !position) {
-			return fail(400, { error: 'Position (support/oppose) is required when linking to a bill', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Position (support/oppose) is required when linking to a bill',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 		if (position && !['support', 'oppose'].includes(position)) {
-			return fail(400, { error: 'Position must be "support" or "oppose"', title, type, body, targetCountry, targetJurisdiction });
+			return fail(400, {
+				error: 'Position must be "support" or "oppose"',
+				title,
+				type,
+				body,
+				targetCountry,
+				targetJurisdiction
+			});
 		}
 
 		const campaignId = await serverMutation(api.campaigns.create, {

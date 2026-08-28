@@ -1,0 +1,375 @@
+{
+	"type": "requires",
+	"edges": [
+		{
+			"source": "FND-10",
+			"target": "FND-60",
+			"evidence": "Maximum-dimension compact-source, purpose-bound detail, and embedding-plane read-budget measurements; poisoned-detail rejection; exact bounded district-tail accounting; coordinated-read denial; recipient-loss observed/classified equality; current-intent blocker enumeration; re-attestation or explicit redaction classification followed by remigration; and migration status."
+		},
+		{
+			"source": "FND-15",
+			"target": "FND-60",
+			"evidence": "Authenticated projection migration/activation/readiness, canonical-input byte bounds, coordinated-read denial, 50-row and 256-KiB page limits, cursor continuation, explicit overflow, consumer navigation, and exact winning-argument tests."
+		},
+		{
+			"source": "FND-20",
+			"target": "FND-60",
+			"evidence": "Deterministic 768-dimensional 250-tag maximum-valid-input CPU/read/argument regression and degradation metadata assertions."
+		},
+		{
+			"source": "FND-25",
+			"target": "FND-60",
+			"evidence": "Transactional aggregate-writer coverage, fail-closed pre-cutover writes, bounded legacy migration/cutover, coordinated seed/reseed ordering, direct-origin denial, exact-index recipient-page/API reads, and large-cardinality constant-read tests."
+		},
+		{
+			"source": "FND-26",
+			"target": "FND-60",
+			"evidence": "Versioned active/previous-key HMAC cookie verification before Convex, full cross-product isolation from active/previous creation-proof keys at every setter and readiness, forged-volume zero-query behavior, complete setter and reseal coverage, compact authority byte bounds and writer coverage, request-boundary stored and absolute expiry, deterministic Convex reads, bounded legacy cutover, unrelated-profile invalidation isolation, orphan/revocation denial, and concurrent session lifecycle tests."
+		},
+		{
+			"source": "FND-27",
+			"target": "FND-60",
+			"evidence": "Campaign-action and debate writer coverage, revision invalidation, bounded migrate-then-activate readiness, one-result request deduplication, Cache API revision-key tests, and maximum-cardinality constant-read verification."
+		},
+		{
+			"source": "FND-28",
+			"target": "FND-60",
+			"evidence": "Compact shell authorization and byte bounds, writer-maintained badge coverage or explicit cutover, route-owned loading, unrelated-route no-history-read contracts, and maximum-cardinality organization tests."
+		},
+		{
+			"source": "FND-29",
+			"target": "FND-60",
+			"evidence": "Debate-summary writer coverage and revision invalidation, bounded legacy cutover, handler-entry origin denial, exact-index cursor/top-argument reads, explicit continuation, and large-cardinality recipient/detail/API transaction-budget tests."
+		},
+		{
+			"source": "FND-31",
+			"target": "FND-60",
+			"evidence": "Compact key/plan authority writer coverage, finite all-method plan limits, atomic concurrency and varied-endpoint exhaustion, credential-row stability, bounded telemetry, revoke/transition tests, and global expiry cleanup."
+		},
+		{
+			"source": "FND-32",
+			"target": "FND-60",
+			"evidence": "Public-directory projection pagination, charter publication snapshot/hash and cutover, completed-donation exact-index bounds or tombstone, event-counter K-floor and cache tests, dormant-function origin denial, and anonymous large-cardinality transaction budgets."
+		},
+		{
+			"source": "FND-33",
+			"target": "FND-60",
+			"evidence": "Database-cursor browse/search/export continuation, bounded multi-filter and tag semantics, tag-fan-out cap or projection writer coverage, PII role projection, and 10000-plus-row per-page transaction-budget tests."
+		},
+		{
+			"source": "FND-34",
+			"target": "FND-60",
+			"evidence": "Coalition input/network aggregate writer coverage, membership and authority checks, bounded legacy cutover, direct-origin denial, revision invalidation, and maximum-network constant-read tests."
+		},
+		{
+			"source": "FND-36",
+			"target": "FND-60",
+			"evidence": "Exact 39-definition/25-essential AST and reachable-helper inventory; fail-closed contained default with zero registrations, ticks, and cron database I/O; explicit essential cadence/call/row/byte activation envelopes; one-page monotonic boundary evidence; one-shot CAS cleanup; compact temporal homepage invalidation; provider-audit-backed user-pause recovery epoch with separate audit/data keys, pinned four-page history and complete overlapping tail; pre-cancel active inventory plus execution evidence for actions first observed inProgress; one-row indexed active-work rejection without retained-history scans or argsId dereference; immutable normal-release pre/post exact-empty cron/runnable proof with strict realm credentials; and current 18-production/16-dev live registrations plus unknown queued work retained as external blockers until an authorized paused contained redeploy and queue disposition."
+		},
+		{
+			"source": "FND-37",
+			"target": "FND-60",
+			"evidence": "User-receipt and organization-decision-maker projection writer coverage, bounded migration/readiness, exact cursor browse/export continuation, auth and privacy gates, and maximum-cardinality fixed/page-bounded transaction tests."
+		},
+		{
+			"source": "FND-38",
+			"target": "FND-60",
+			"evidence": "One-page v1 cursor contracts, exact item gets, compact campaign/org/representative/network/activity reads, active-key cap, key-create throttle, organization-plus-key atomic budgets, and maximum-data plus multi-key concurrency tests."
+		},
+		{
+			"source": "FND-39",
+			"target": "FND-60",
+			"evidence": "Shared transactional subscription cap, canonical bounded inputs, private-destination denial at creation and delivery, fixed fan-out, paged cleanup, bounded legacy repair, and concurrent cap/rebinding tests."
+		},
+		{
+			"source": "FND-41",
+			"target": "FND-60",
+			"evidence": "One-page audience scan and materialization transactions, bounded indexed filter joins, immutable cohort cursors, idempotent dispatch/cancellation/retry, explicit count readiness, SMS enable gate, and sparse plus ten-thousand-recipient tests."
+		},
+		{
+			"source": "FND-42",
+			"target": "FND-60",
+			"evidence": "Convex-side limit clamps, decision-maker follow/discovery cursor pages and counters, compact network list/count projections, bounded roster continuation, legacy overflow behavior, and maximum-cardinality transaction tests."
+		},
+		{
+			"source": "FND-43",
+			"target": "FND-60",
+			"evidence": "Transactional period-usage writer coverage, constant-cardinality plan checks, fail-closed not-ready behavior, self-paged durable legacy repair, activation/readiness, rollover, retry, and large-history tests."
+		},
+		{
+			"source": "FND-44",
+			"target": "FND-60",
+			"evidence": "Configuration cap and overflow contracts; pre-I/O tombstone proofs; 500-row/512-KiB trace cursor contract; exact workflow, donation-confirmation, and SMS-reply migration plus same-transaction writer tests; aggregate readiness plane checks; production cutover ordering; and a zero-growth query-efficiency baseline."
+		},
+		{
+			"source": "FND-45",
+			"target": "FND-60",
+			"evidence": "Exact credential and active-relation indexes; constant-cardinality newest-credential and ground multiplicity behavior; bounded cooldown, period, sibling, and representative envelopes; lifetime downgrade proof; trusted server-time caller contracts; large revoked-history and tier-bypass runtime tests; and removal of all corresponding query-efficiency baselines."
+		},
+		{
+			"source": "FND-46",
+			"target": "FND-60",
+			"evidence": "Concurrent quota-reservation serialization, idempotent source replay, exact sent/released partitions, ambiguous SES classification, append-only carrier evidence and bounded recovery, compact receipt authority, scalar-only A/B discovery, and fail-closed dispatch tests."
+		},
+		{
+			"source": "FND-47",
+			"target": "FND-60",
+			"evidence": "Global deny and scoped re-enable precedence, serial authority-epoch coverage, idempotent inbound routing, bounded durable fan-out, migration/readiness, final carrier recheck, and a non-overridable SMS tombstone until per-recipient one-shot claim and ambiguous-outcome evidence exists."
+		},
+		{
+			"source": "FND-48",
+			"target": "FND-60",
+			"evidence": "Pre-I/O ingestion tombstone, global contribution-authority activation gate, fixed row/byte/write envelopes, deterministic HMAC noise, exact one-run budget spending, hidden partial state, evidence-before-cleanup, bounded migration/supervision, and privacy-safe publication DTO tests."
+		},
+		{
+			"source": "FND-49",
+			"target": "FND-60",
+			"evidence": "Repository-wide zero-collect and zero-query-filter ratchet, exact hot-path indexes, bounded schema and credential cutovers, cursor-integrity checks, seed and backfill ceilings, due-queue progress, destructive operator clamps, terminal drivers, and maximum-backlog self-drain tests."
+		},
+		{
+			"source": "FND-31",
+			"target": "FND-38",
+			"evidence": "Stable compact key and plan authority exists before endpoint data reads consume shared organization and per-key budgets."
+		},
+		{
+			"source": "FND-33",
+			"target": "FND-41",
+			"evidence": "The canonical indexed supporter browse plane supplies one-page audience source slices without rereading encrypted roster windows."
+		},
+		{
+			"source": "FND-41",
+			"target": "FND-46",
+			"evidence": "An immutable bounded audience supplies the exact cohort cardinality that one email quota reservation admits."
+		},
+		{
+			"source": "FND-43",
+			"target": "FND-46",
+			"evidence": "Ready write-maintained plan usage is the constant-cardinality authority against which email reservations serialize."
+		},
+		{
+			"source": "FND-41",
+			"target": "FND-47",
+			"evidence": "The persisted audience cursor provides the finite recipient identities that must each pass final contact and carrier authority."
+		},
+		{
+			"source": "FND-47",
+			"target": "FND-35",
+			"evidence": "Release readiness includes the global contact migration, fan-out backlog, terminal failure evidence, and an honest outbound-SMS activation state."
+		},
+		{
+			"source": "FND-48",
+			"target": "FND-35",
+			"evidence": "Release readiness must distinguish a deliberately disabled analytics plane from an activated, migrated, privacy-authorized publication plane."
+		},
+		{
+			"source": "FND-49",
+			"target": "FND-36",
+			"evidence": "Essential supervisors depend on exact due indexes, bounded pages, and continuation primitives that cannot pin or skip maintenance work."
+		},
+		{
+			"source": "FND-30",
+			"target": "FND-60",
+			"evidence": "Destructive supersession, withdrawal epochs, and durable floors; capability-before-I/O; one-minute polling through backend-named SQLite one-per-five-minute admission with bounded exact-release seed priority; exact nine-minute acquisition authority covering gate, seed hold, poll/HTTP/jitter, and positive reserve; 60-second local revalidation; worst-phase and abandoned-seed-priority regression; unchanged 288 accepted calls/day/realm with explicit Cloudflare Free poll-request/row arithmetic; anonymous exact-GET-only denial of origin, claim, mutation, LIST, polling, and takeover; conditional publication of two list plus two bundled graph variants before authority; monotonic 45-minute publication-lag authority; exact-key ETag/coordinate/evidence-fenced operator rearm; exact-ring retirement and delayed-old-producer fencing; two-read healthy graph proof; bounded decoding; exact-200 protocol-v3/epoch-coherent dual-realm cron with durable push retry; private R2 exposure and live lifecycle reconciliation; Pages-only containment; zero-I/O readiness; and abandoned-lock recovery tests. Trusted public-edge, Access, hidden-origin, candidate, and release handoff evidence belongs to FND-35D rather than this cache-producer source proof."
+		},
+		{
+			"source": "FND-35",
+			"target": "FND-60",
+			"evidence": "I/O-free liveness, anonymous readiness denial before dependency I/O, authenticated fresh-probe contracts, fail-closed R2, runtime-neutral browser realm scan, exact production-tree digest and metadata proof on the release-only staging authority, same-directory production upload, isolated cookie authority and every required projection predicate, source-setting drift checks, exhaustive Pages inventory, zero-bypass account redirect desired-state proof, pre-Convex exact-host rejection, stale-artifact removal, shared publication/reconciliation serialization, distinct exact-SHA activate-preview/activate-production receipts over one immutable artifact id/digest, post-preview production observations, mutation-last signed/live verification, persistent prior-state/attempt journals, command deadlines with rollback reserve, cancellation/crash outer recovery, and the recorded 2026-07-19 exposure remediation. T additionally proves Git-object identity for the complete SvelteKit route/hook/config/transitive provider-capability execution closure and absence of alternate hook/instrumentation/config entrypoints; committed config and transaction materialization prove the preview realm contains only public build-safe vars and reject all preview capability tables before artifact mutation. Live reviewed-artifact custom-domain, phase receipt, post-mutation inventory, and rollback proof is retained in PD-00, PD-50, and PD-70."
+		},
+		{
+			"source": "FND-35C",
+			"target": "FND-60",
+			"evidence": "Trusted-T deterministic containment generation, binding-free minimal config, outermost interception, authenticated exact-SHA local readiness, zero aggregate/Convex/Atlas/R2/DO/fetch/Cache/session counters, staging custom-authority runtime preflight, exhaustive origin closure for containment, forward-only recovery, preserved=0 reconciliation, and prior-URL terminal block or exact pre-Function redirect."
+		},
+		{
+			"source": "FND-35D",
+			"target": "FND-60",
+			"evidence": "Source artifacts and adversarial tests for separate exact-binding production/staging trusted edge configs; exact Worker and finalized Pages compatibility dates/ordered flags including global_fetch_strictly_public plus disabled Worker subdomains; Access-safe pre-hook public-URL reconstruction and transport scrubbing; independent pending P/Q, active C pointer, newest-eight append-only terminal ledger with ABA/dangling/over-bound failure; retained-edge capability validation and proof-header stripping contracts; Q-to-T-to-C ordering with post-C release-origin verification; trusted-edge-only anonymous exact-root release/policy cache with coalesced and quarantined cold work, a zero-purge outer 60/300/360 entry ceiling, and strict manifest-publication convergence below 420 seconds; per-colo and 100,000-request accounting; Cache-Tag as optional acceleration only; retained-C Pages-first/T-second rollback logic with purge remaining best-effort; workflow gates that leave Access, secret, topology, denial, deployment, cache-timing, and rollback-execution facts to PD-50 through PD-70; and Convex quota/reactivation facts left to PD-00."
+		},
+		{
+			"source": "FND-40",
+			"target": "FND-60",
+			"evidence": "Direct snapshot/detail/action denial before I/O; exact GET/HEAD pre-I/O throttling; a producer-published 250-entry immutable R2 page inventory and revision-qualified exhaustive detail/author/aggregate artifacts; anonymous memory/Cache/R2 misses with zero Convex, LIST, writes, or origin fallback; authenticated indexed viewer overlays outside the shared artifact; a CAS-fenced 16-artifact continuation protocol with durable token/no-drop, drift, crash, and concurrency proofs; JSON-before-Queue, Queue-rendered create-only PNG, pair-before-inventory authority, monotonic 45-minute publication-lag/terminal health, and exact-key operator rearm contracts; producer-owned two-phase GC with continuous grace, backward-clock, and post-CAS successor-reuse fencing; public-visibility, content-hash, source-cache, stable-actor, cleanup, pre-I/O host-rejection, dynamic-route inventory, and WAF/pages.dev desired-state verifier oracles; live WAF and origin-closure evidence remains in PD-05 and PD-50."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-60",
+			"evidence": "Anonymous memory/Cache API/exact-key R2 reads with zero Convex fallback; exhaustive 381-operation dispatch policy and one-dispatch/one-reservation plus cache/rejection zero-reservation contracts; one stable production-plus-preview SQLite Durable Object authority with exact 320 MiB UTC-day and 512 MiB UTC-month Convex caps, two row writes per admission, 40,960-admission/81,920-row daily ceilings, and exact 327,320-unit release-day plus 496,280-unit 31-day envelopes. The same fixed authority provides atomic protocol-1 paid-provider admission for the exact nine-operation inventory through actor-hour/day, operation-day/month, shared-public-day/month, and hard-platform-day/month pools; proves 1,000/day and 2,400/UTC-month global caps, 750/day and 1,800/month public caps, operation isolation, a 250/day and 600/month in-cap operator reserve sufficient for one 224-unit demonstration, at most eight SQLite reads/writes per attempt/admission, and the 89,920-row combined daily write ceiling. Retry-aware call proof enumerates every decision-maker cache split: no execution exceeds 150 total provider attempts, while the intentionally non-coincident element-wise envelope is 72 ten-result Exa searches, 24 text-only Exa content pages, 24 Firecrawl attempts, 13 Gemini calls, one Groq call, and 18 MX lookups. The 2,400-unit worst-operation mixes consume at most $8.448 of the current $10 Exa credit or 576 of 1,000 Firecrawl Free credits, but UTC-month arithmetic is not billing authority; exact production-key Free-plan, billing-disabled, no-PAYG, reset-window/current-balance, and no-sibling-consumption evidence remains an external release requirement. Authenticated bounded preflight-before-reservation/provider proof covers every agent route, template authoring, direct embeddings, delegation, backfill, and moderation; recoverable `startOrGet` replay/ownership/concurrency precedes readiness and provider admission; new failures become terminal. The exact fresh-or-cached indirect-source JSON is URL/field/count bounded, delimiter-safe, tail-shed within the complete 2,000-character Prompt Guard window, classified byte-identically before Gemini, and source-evaluator output remains bound to trusted candidate indexes. Concurrency, rollover, backward-clock, persisted-cap, malformed, timeout, binding, protocol, operation, and identity fail-closed proof applies to both budget protocols. Canonical signed shared-Free Convex and account-wide Queue receipt schemas, capture/fencing/verifier contracts, exact future-work and 9/8/2 lifecycle arithmetic, phase/SHA/time/inventory bounds, operator-local broad credentials, protected read-only release credentials, exact 100 ms consumer source cap, and deploy-before-Pages preservation/containment workflow oracles remain required; a hard `blocked-shared-free` normal-release authority leaves external empty-limit/current-usage and paid-or-isolated quota authority to PD-00, and live provider/Queue budget Worker, bindings, operator posture, provider-account evidence, receipts, and consumer evidence to PD-50."
+		},
+		{
+			"source": "FND-30",
+			"target": "FND-40C",
+			"evidence": "Monotonic manifest authority, resumable coordinate checkpoints, immutable generation keys, typed continuation, and bounded refresh admission supply the bootstrap data-plane protocol."
+		},
+		{
+			"source": "FND-35",
+			"target": "FND-40C",
+			"evidence": "Immutable release artifact consensus, trusted finalization, exact-SHA/transaction binding, persistent recovery, and production workflow ordering supply bootstrap provenance and custody."
+		},
+		{
+			"source": "FND-35D",
+			"target": "FND-40C",
+			"evidence": "The source-defined Access-first hidden-origin contract, Access-safe adapter, exact origin tuple, and trusted release topology constrain the temporary canonical path; live existence remains PD-50 evidence."
+		},
+		{
+			"source": "FND-40",
+			"target": "FND-40C",
+			"evidence": "Bounded immutable page artifacts, 16-item cycles, durable continuation, Queue-rendered PNGs, complete inventory cutover, and freshness/GC fences define finite corpus completion."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-40C",
+			"evidence": "Stable Convex work-budget authority and signed account-wide Queue evidence constrain every temporary producer, seed attempt, and final baseline proof."
+		},
+		{
+			"source": "FND-40C",
+			"target": "FND-60",
+			"evidence": "Typed exact-key/no-LIST cold detection; warm/cold schema-2 handoff with a signed producerless, backlog-free, unpaused exact-consumer baseline before code mutation; exact SHA/transaction consumer deployment and response-loss convergence; cold-only transient producer authority; exact 4,320/3,960/180-second receipt fences; immutable finalized-entry deployment; Access-before-Worker negative canary; separate 60-minute bootstrap admission/completion; 25-attempt seed with a ten-minute reserve split into at most five minutes of R2 convergence and a hard final five minutes of cleanup; stable R2 generation proof; append-only intent/deployed/cleaned custody; independent exact-owner recovery; unconditional route-first/script-second cleanup and terminal Queue oracle; common dormant warm/cold handoff; and one-shot normal release proof."
+		},
+		{
+			"source": "FND-50",
+			"target": "FND-60",
+			"evidence": "Structured lease, all-or-nothing domain-hue input validation, finite normalized patching, legacy metadata, exact endorsement migration, coordinated-clear suppression, and greater-than-500 drain-progress tests."
+		},
+		{
+			"source": "FND-51",
+			"target": "FND-60",
+			"evidence": "Secret-before-context submission action contract, 256-KiB streaming route budget, exact input-shape tests, canonical secret-bearing caller proof, and generated authority-manifest classification."
+		},
+		{
+			"source": "FND-52",
+			"target": "FND-60",
+			"evidence": "Secret-before-context and editor-role contracts; internal-only raw segment export and supporter import; four-page/400-row segment slices with honest partial state and one-pass decryption; 100-row import cap; ten-id deduplicated rescore cap plus one-hour HTTP defense in depth; maximum-class work policy; and focused/typecheck proof."
+		},
+		{
+			"source": "FND-53",
+			"target": "FND-60",
+			"evidence": "Pre-body HTTP authentication and verified-identity binding on both routes; 64-KiB/20-recipient batch and 1-KiB mailto envelopes; one indexed append primitive with collision-proof system identity, 21-row corruption fence, and shared lifetime cap; canonical/conflicting/cross-writer duplicate tests; exact composite-index idempotency; OCC race serialization; atomic rollback; durable five-per-minute admission; and app/Cloudflare route inventory proof."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-60",
+			"evidence": "Secret-first actor-bound search, generation-scoped compact text-index limit, method=keyword response, zero route provider admission, exact nine-operation Pages provider policy, recursive exhaustive Convex scanner with zero approvals/findings, retired-capability tombstones, focused tests, and Convex typecheck."
+		},
+		{
+			"source": "FND-55",
+			"target": "FND-60",
+			"evidence": "Identity-normalized serial lease and generation, 60-second fresh snapshot, 45-second follower coalescing, metrics-before-register ordering, durable write reservation before the sole registration POST, persisted registered/leaf state before path lookup, 30-second failure cooldown with safe fallback, no automatic ambiguous resend, internal 15-minute expired-lease/no-leaf/no-snapshot exact-CAS repair with bounded evidence and one generation increment, bounded transport, retired duplicate submission/query paths, route admission inventory, and concurrent replay tests."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-51",
+			"evidence": "The exhaustive dispatch policy supplies the one canonical maximum-class serverAction reservation that the submission boundary must preserve."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-52",
+			"evidence": "Stable maximum-class admission supplies the outer budget within which each action-level page, row, byte, and fan-out ceiling executes."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-53",
+			"evidence": "Each shared-budget mutation converges on the same feature-specific durable identity admission and composite replay idempotency; rejection paths dispatch zero work."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-40B",
+			"evidence": "The paid-provider policy and call-envelope omit template-search, while the Convex scanner makes zero provider capability the enforced backend baseline."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-55",
+			"evidence": "The shared Pages-to-Convex dispatch envelope feeds one durable claim before external registration so repeated route work can be coalesced under replay."
+		},
+		{
+			"source": "FND-51",
+			"target": "PD-10",
+			"evidence": "Exact-SHA authority manifest, direct-call rejection, bounded route, and canonical secret-caller verification output."
+		},
+		{
+			"source": "FND-52",
+			"target": "PD-10",
+			"evidence": "Exact-SHA focused bulk-action suite, Convex typecheck, and exhaustive work-budget ratchet output."
+		},
+		{
+			"source": "FND-53",
+			"target": "PD-10",
+			"evidence": "Exact-SHA cross-writer concurrency, initial-confirm rollback, retry, shared lifetime-cap, rate-admission, bounded-route, Cloudflare inventory, query-efficiency, work-budget, and typecheck output."
+		},
+		{
+			"source": "FND-54",
+			"target": "PD-10",
+			"evidence": "Exact-SHA keyword-search tests plus recursive zero-provider-egress scanner and Convex typecheck output."
+		},
+		{
+			"source": "FND-55",
+			"target": "PD-10",
+			"evidence": "Exact-SHA concurrent lease/replay suite, bounded route/client transport tests, rate-inventory proof, query-efficiency check, and typecheck output."
+		},
+		{
+			"source": "FND-60",
+			"target": "PD-10",
+			"evidence": "PR evidence showing every foundational node accepted and every launch-severity thread resolved, plus exact live distinct-App authority, independently reviewed CODEOWNERS/signer enrollment, strict administrator-enforced main protection, and force/delete-protected S-bound attestation-ref evidence."
+		},
+		{
+			"source": "FND-35C",
+			"target": "PD-05",
+			"evidence": "Trusted-generated executable outermost containment, authenticated local-only exact-SHA readiness with all dependency counters zero, protected-main manual mode selection, immutable T/S/A and live GitHub authority verification, exhaustive origin-closure proof, staging custom-authority binding-free runtime preflight, forward-only recovery, preserved=0 reconciliation, and old-URL retirement tests."
+		},
+		{
+			"source": "FND-60",
+			"target": "PD-05",
+			"evidence": "Agy, Claude, and Codex pass the exact reviewed containment and rollback context with every launch-severity finding closed; the signed S/A proof is accepted only after the exact independent App/team/signer authority assertion and live protections pass."
+		},
+		{
+			"source": "PD-05",
+			"target": "PD-00",
+			"evidence": "The exact-SHA containment artifact was runtime-proved on staging and is live on the production custom origin with zero dependency calls, deterministic no-store 503 application interception, exhaustive pages.dev redirect closure, and success or verified rollback evidence; both Convex deployments are then paused before billing reactivation begins."
+		},
+		{
+			"source": "PD-00",
+			"target": "PD-20",
+			"evidence": "Active Convex team and database-I/O headroom reached while both exact deployments remained user-paused under a provider-audit-backed, resume-free recovery epoch; pre-cancel active inventory and execution completion/support evidence exist for every action first observed inProgress; the reviewed contained SHA was deployed while paused; exact empty cron and indexed runnable-scheduler inventories passed before resume and with exact running state afterward; credential realms stayed separated; and the safe current custom-domain frontend's authenticated exact SHA matches the preserved canonical deployment with a controlled Pages exposure inventory."
+		},
+		{
+			"source": "PD-10",
+			"target": "PD-20",
+			"evidence": "Verified release SHA and green focused/full checks."
+		},
+		{
+			"source": "PD-20",
+			"target": "PD-30",
+			"evidence": "Successful production backend deployment record plus the exactly-once migratePublicDiscoveryManifestAuthority invocation and publicDiscoveryManifestAuthorityStatus ready=true, matches=true, bytes<=maxBytes proof."
+		},
+		{
+			"source": "PD-30",
+			"target": "PD-50",
+			"evidence": "Compact manifest authority remains ready, matching, and byte-bounded; list and relations manifest revisions and recipient metrics are exactly ready; and the rebuild result is bounded."
+		},
+		{
+			"source": "PD-40",
+			"target": "PD-50",
+			"evidence": "Direct-query payload and read-path log evidence."
+		},
+		{
+			"source": "FND-35D",
+			"target": "PD-50",
+			"evidence": "Source artifacts and oracles define the exact trusted-edge configs, Access-safe adapter, realm-separated capability schemas, overlap/alias and denial inventories, terminal-C ledger, retained-edge compatibility checks, Q-to-T-to-C ordering, post-C origin-response contract, single-owner zero-purge cache, and Pages-first/T-second rollback algorithm. PD-50 must supply the corresponding live Cloudflare topology, secrets, denial, candidate, deployment, post-C, cache, and rollback evidence; PD-00 separately supplies Convex quota reactivation."
+		},
+		{
+			"source": "PD-50",
+			"target": "PD-60",
+			"evidence": "Exact candidate proof through the staging trusted edge; terminal production C after Q and T; exact capability-gated uncached post-C release-origin proof for the Pages/T pair with the capability absent at origin; healthy public production edge with exact SHA/transaction; unchanged disabled native source settings; hidden-origin, complete Access-overlap, late-transform, stale-alias, and pages.dev closure; and zero undeclared artifacts."
+		},
+		{
+			"source": "PD-60",
+			"target": "PD-70",
+			"evidence": "Successful list, graph, and API warm responses plus trusted-edge single cache ownership, candidate Cache API unavailability, exact-root eligibility, trusted headers, a 250 ms quarantined match lane, one-second abort/quarantined origin lane, one serialized raw put plus newest cacheable pending value, a 1 MiB L1, bounded waitUntil, explicit cross-isolate non-linearity, zero-purge origin-start-anchored outer 60/300/360 age behavior, strict manifest-publication convergence below 420 seconds, and the bypass matrix."
+		},
+		{
+			"source": "PD-50",
+			"target": "PD-70",
+			"evidence": "Observation is tied to terminal production C, exact capability-gated post-C release-origin proof, the healthy public trusted edge, exact SHA/transaction, complete hidden-origin denial and Access-overlap inventory, stale-alias absence, exhaustive pages.dev closure, and contained canonical Pages exposure set."
+		}
+	]
+}

@@ -1,8 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { PageServerLoad } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 export const load: PageServerLoad = async ({ url }) => {
 	if (!FEATURES.DEBATE) throw error(404, 'Not found');
@@ -10,6 +11,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	const status = url.searchParams.get('status') === 'resolved' ? 'resolved' : 'active';
 
 	const result = await serverQuery(api.debates.listPublic, {
+		_secret: getInternalSecret(),
 		status,
 		limit: 30
 	});

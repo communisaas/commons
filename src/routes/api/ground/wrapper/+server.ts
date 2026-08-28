@@ -1,6 +1,6 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import type { FunctionArgs } from 'convex/server';
 import { api } from '$lib/convex';
 
@@ -38,11 +38,10 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	// The cast asserts our `unknown`-typed blob will satisfy that validator;
 	// any mismatch surfaces as a Convex 400 with the offending field path.
 	return json(
-		await serverMutation(
-			api.ground.addPasskeyWrapperToActiveVault,
-			{ groundVaultId, vault, wrapper } as FunctionArgs<
-				typeof api.ground.addPasskeyWrapperToActiveVault
-			>
-		)
+		await serverMutation(api.ground.addPasskeyWrapperToActiveVault, {
+			groundVaultId,
+			vault,
+			wrapper
+		} as FunctionArgs<typeof api.ground.addPasskeyWrapperToActiveVault>)
 	);
 };

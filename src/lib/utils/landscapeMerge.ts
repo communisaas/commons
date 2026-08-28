@@ -12,7 +12,7 @@
  *   'recorded'   Position recorded but no direct delivery channel
  */
 
-import type { RoleCategory, ProcessedDecisionMaker } from '$lib/types/template';
+import type { RoleCategory, RecipientConfigDecisionMaker } from '$lib/types/template';
 
 // ============================================================================
 // Types
@@ -28,7 +28,6 @@ export interface LandscapeMember {
   organization: string;
   accountabilityOpener: string | null;
   roleCategory: RoleCategory;
-  relevanceRank: number;
   publicActions: string[];
   source: 'template' | 'district';
   // Delivery routing
@@ -125,7 +124,7 @@ function resolveDeliveryRoute(member: {
 // ============================================================================
 
 export function mergeLandscape(
-  templateDMs: ProcessedDecisionMaker[],
+  templateDMs: RecipientConfigDecisionMaker[],
   districtOfficials: DistrictOfficialInput[] = [],
   // True only for the author or a viewer with a real verified/entered-address
   // district. Gates the possessive "YOUR REPRESENTATIVES" label so a guest or a
@@ -155,12 +154,11 @@ export function mergeLandscape(
     const member: LandscapeMember = {
       id: slugify(dm.name),
       name: dm.name,
-      title: dm.title || ((dm as unknown as Record<string, unknown>).role as string) || '',
-      organization: dm.organization,
+      title: dm.title || dm.role || '',
+      organization: dm.organization ?? '',
       email: dm.email || null,
       accountabilityOpener: dm.accountabilityOpener || null,
       roleCategory: category,
-      relevanceRank: dm.relevanceRank || 99,
       publicActions: dm.publicActions || [],
       source: 'template',
       deliveryRoute: resolveDeliveryRoute({ email: dm.email }),
@@ -203,7 +201,6 @@ export function mergeLandscape(
       email: official.email || null,
       accountabilityOpener: null,
       roleCategory: 'votes',
-      relevanceRank: 50,
       publicActions: [],
       source: 'district',
       deliveryRoute,
@@ -225,7 +222,7 @@ export function mergeLandscape(
     .map(cat => ({
       category: cat,
       label: ROLE_LABELS[cat],
-      members: roleGroupMap.get(cat)!.sort((a, b) => a.relevanceRank - b.relevanceRank)
+      members: roleGroupMap.get(cat)!
     }));
 
   const districtGroup = districtMembers.length > 0

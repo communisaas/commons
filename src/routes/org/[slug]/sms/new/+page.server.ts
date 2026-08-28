@@ -1,9 +1,10 @@
 // CONVEX: Keep SvelteKit — SMS/Twilio integration
 import { error, redirect } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { FEATURES } from '$lib/config/features';
 import type { Id } from '$convex/_generated/dataModel';
+import { countSmsAudience } from '$lib/server/sms/audience';
 import type { PageServerLoad } from './$types';
 
 type CampaignOption = {
@@ -70,28 +71,23 @@ export const load: PageServerLoad = async ({ params, locals, parent }) => {
 		}),
 		serverQuery(api.supporters.getTags, { orgSlug: params.slug }),
 		serverQuery(api.segments.list, { slug: params.slug }),
-		canShapeAudience
-			? serverQuery(api.sms.countEligibleRecipientsForFilter, {
-					slug: params.slug,
-					recipientFilter: undefined
-				}).catch(() => null)
-			: Promise.resolve(null)
+		canShapeAudience ? countSmsAudience(params.slug).catch(() => null) : Promise.resolve(null)
 	])) as [CampaignPage, TagOption[], SegmentList, AudienceCountResult | null];
 
 	return {
 		org: { name: org.name, slug: org.slug },
 		smsHealth: spaces.base?.smsHealth ?? EMPTY_SMS_HEALTH,
 		consentEvidence: spaces.base?.consentEvidence ?? EMPTY_CONSENT_EVIDENCE,
-		textDispatchRuntimeReady: spaces.operating.textDelivery?.dispatchRuntimeReady ?? false,
-		textDispatchRuntimeMissing: spaces.operating.textDelivery?.dispatchRuntimeMissing ?? [],
+		textDispatchRuntimeReady: spaces.operating?.textDelivery?.dispatchRuntimeReady ?? false,
+		textDispatchRuntimeMissing: spaces.operating?.textDelivery?.dispatchRuntimeMissing ?? [],
 		textDispatchRuntimeDependency:
-			spaces.operating.textDelivery?.dispatchRuntimeDependency ??
+			spaces.operating?.textDelivery?.dispatchRuntimeDependency ??
 			'text dispatch gate, browser phone custody, Twilio dispatch runner, and transport credentials',
 		textDispatchRuntimeMessage:
-			spaces.operating.textDelivery?.dispatchRuntimeMessage ??
+			spaces.operating?.textDelivery?.dispatchRuntimeMessage ??
 			'Bulk text dispatch is dependency-bound. Drafts are preserved until carrier delivery dependencies are configured.',
 		textDispatchClientBatchRouteMounted:
-			spaces.operating.textDelivery?.dispatchClientBatchRouteMounted ?? false,
+			spaces.operating?.textDelivery?.dispatchClientBatchRouteMounted ?? false,
 		initialAudienceCount: initialAudience?.eligibleCount ?? 0,
 		initialAudienceBatchLimit: initialAudience?.batchLimit ?? 100,
 		initialAudienceHasMoreThanBatchLimit: initialAudience?.hasMoreThanBatchLimit ?? false,

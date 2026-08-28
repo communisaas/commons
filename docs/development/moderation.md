@@ -2,7 +2,7 @@
 
 **Status**: Automated Two-Layer Pipeline (via Groq).
 
-**Fully automated, permissive moderation optimized for civic speech. No manual review, no admin dashboard, no appeals process — by design.** The pipeline is fail-open: Groq errors, missing `GROQ_API_KEY`, or rate-limit exhaustion all return `safe: true` / sentinel `-1` scores. No `reviewed_at` / `reviewed_by` / `consensus_approved` fields exist in the Convex schema.
+**Fully automated, permissive moderation optimized for civic speech. No manual review, no admin dashboard, no appeals process — by design.** Provider availability is fail-closed: Groq errors, missing `GROQ_API_KEY`, malformed output, or rate-limit exhaustion hold content with a sentinel `-1` score, and pipeline wrappers return an availability error. No `reviewed_at` / `reviewed_by` / `consensus_approved` fields exist in the Convex schema.
 
 ## Overview
 
@@ -24,7 +24,7 @@ Protects AI agents from jailbreak and manipulation attacks.
 | Parameter | Value |
 |---|---|
 | Default threshold | 0.5 (50% probability) |
-| Input limit | 512 tokens (~2,000 chars, truncated) |
+| Input limit | 512 tokens; the complete untrusted surface is capped at 2,000 characters and never silently truncated |
 | Performance | 99.8% AUC, 97.5% recall at 1% FPR |
 | Behavior | BLOCKS content scoring above threshold |
 
@@ -97,7 +97,7 @@ Checks user-added personal messages at send time. Both layers run. Target: < 500
 
 ### Testing Endpoint (`POST /api/moderation/check`)
 
-Public endpoint (no auth required) for testing content before template creation. Returns moderation assessment without creating a template.
+Authenticated diagnostic endpoint for testing content before template creation. The request is exact-window bounded and must reserve the shared `moderation-check` budget before either Groq call.
 
 ---
 
@@ -117,11 +117,11 @@ These are **intentional omissions**, not missing features:
 
 | Scenario | Behavior |
 |---|---|
-| Groq API down/rate-limited | Returns `score=-1` (sentinel), content passes (fail-open) |
+| Groq API down/rate-limited | Holds content with `score=-1`; pipeline returns an availability error |
 | Safety check blocks | HTTP 400 with `CONTENT_FLAGGED` and summary |
-| `GROQ_API_KEY` not set | Both checks skip, content passes |
+| `GROQ_API_KEY` not set | Moderation is unavailable; content does not proceed |
 
-**Rationale**: Availability > safety blocking. Users should never be blocked due to third-party outages.
+**Rationale**: A provider outage must not be misrepresented as a safe moderation decision.
 
 ---
 

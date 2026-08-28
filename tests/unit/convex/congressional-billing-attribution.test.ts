@@ -36,6 +36,34 @@ vi.mock('../../../convex/_authHelpers', () => ({
 	requireOrgMembership: vi.fn()
 }));
 
+vi.mock('../../../convex/lib/campaignOrgCounters', () => ({
+	CAMPAIGN_ACTIVE_COUNTER_MIGRATION_KEY: 'test',
+	CAMPAIGN_ACTIVE_COUNTER_VERSION: 1,
+	recordCampaignCreated: vi.fn(async () => undefined),
+	recordCampaignRemoved: vi.fn(async () => undefined),
+	recordCampaignStatusTransition: vi.fn(async () => undefined)
+}));
+
+vi.mock('../../../convex/lib/publicOrganizationDirectory', () => ({
+	syncPublicOrganizationDirectory: vi.fn(async () => undefined)
+}));
+
+vi.mock('../../../convex/lib/campaignReadModelDb', () => ({
+	applyCampaignActionReadModel: vi.fn(async () => undefined),
+	applyCampaignDeliveryBaselineReadModel: vi.fn(async () => undefined),
+	applyCampaignDeliveryTransitionReadModel: vi.fn(async () => undefined)
+}));
+
+vi.mock('../../../convex/lib/coalitionMetrics', () => ({
+	applyCoalitionActionTransition: vi.fn(async () => undefined),
+	applyCoalitionReceiptProjection: vi.fn(async () => undefined)
+}));
+
+vi.mock('../../../convex/lib/supporterAudience', () => ({
+	SUPPORTER_AUDIENCE_ACTION_VERSION: 1,
+	applySupporterAudienceActionTransition: vi.fn(async () => undefined)
+}));
+
 import { create, update, createCampaignAction } from '../../../convex/campaigns';
 
 function handlerOf(fn: unknown): (ctx: any, args: any) => Promise<any> {
@@ -84,7 +112,11 @@ describe('FIX 1a — createCampaignAction does not meter when metersOrgQuota is 
 					})
 				}),
 				get: async (id: string) => docs[id] ?? null,
-				insert: async (_table: string, _doc: any) => 'action_1',
+				insert: async (table: string, doc: any) => {
+					const id = table === 'campaignActions' ? 'action_1' : `${table}_1`;
+					docs[id] = { _id: id, ...doc };
+					return id;
+				},
 				patch: async (id: string, patch: Record<string, unknown>) => {
 					patches.push({ id, patch });
 					docs[id] = { ...docs[id], ...patch };
@@ -153,6 +185,7 @@ describe('FIX 2a — campaigns.create / update reject a foreign templateId', () 
 		return {
 			db: {
 				get: async (id: string) => {
+					if (id === 'org_1') return ORG;
 					if (id === 'tmpl_foreign' || id === 'tmpl_owned') return template;
 					return null;
 				},

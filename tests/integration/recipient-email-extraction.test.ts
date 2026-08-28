@@ -1,50 +1,34 @@
 import { describe, it, expect } from 'vitest';
-import {
-	extractRecipientEmails,
-	isValidRecipientConfig,
-	isValidDeliveryConfig
-} from '$lib/types/templateConfig';
+import { recipientEmailsFromConfig } from '$lib/types/template';
+import { isValidDeliveryConfig } from '$lib/types/templateConfig';
 
 describe('Recipient Email Extraction Integration', () => {
-	describe('extractRecipientEmails', () => {
+	describe('recipientEmailsFromConfig', () => {
 		// Use parameterized tests for edge cases
 		it.each([
 			[null, []],
 			[undefined, []],
 			[{}, []],
 			[{ emails: [] }, []],
-			[{ recipients: ['test@example.com'] }, []], // wrong property
+			// `recipients` is a real persisted shape, read by the count arithmetic too
+			[{ recipients: ['test@example.com'] }, ['test@example.com']],
 			[{ emails: 'test@example.com' }, []], // string instead of array
-			[{ emails: ['test@example.com', 123, null] }, []], // mixed types
+			// junk elements are dropped individually, never all-or-nothing
+			[{ emails: ['test@example.com', 123, null] }, ['test@example.com']],
 			[{ emails: ['valid@email.com'] }, ['valid@email.com']],
 			[{ emails: ['a@b.com', 'c@d.org', 'e@f.net'] }, ['a@b.com', 'c@d.org', 'e@f.net']]
 		])('extracts emails from %p', (input, expected) => {
-			expect(extractRecipientEmails(input)).toEqual(expected);
+			expect(recipientEmailsFromConfig(input)).toEqual(expected);
 		});
 
 		it('handles large email arrays efficiently', () => {
 			const largeArray = Array.from({ length: 100 }, (_, i) => `user${i}@example.com`);
 			const config = { emails: largeArray };
 
-			const result = extractRecipientEmails(config);
+			const result = recipientEmailsFromConfig(config);
 			expect(result).toHaveLength(100);
 			expect(result[0]).toBe('user0@example.com');
 			expect(result[99]).toBe('user99@example.com');
-		});
-	});
-
-	describe('isValidRecipientConfig', () => {
-		it.each([
-			[null, false],
-			[undefined, false],
-			[{}, false],
-			[{ emails: [] }, false],
-			[{ emails: 'string' }, false],
-			[{ emails: [123] }, false],
-			[{ emails: ['valid@email.com'] }, true],
-			[{ emails: ['a@b.com', 'c@d.org'] }, true]
-		])('validates %p as %p', (input, expected) => {
-			expect(isValidRecipientConfig(input)).toBe(expected);
 		});
 	});
 
@@ -118,11 +102,8 @@ describe('Recipient Email Extraction Integration', () => {
 				specific_locations: []
 			};
 
-			const emails = extractRecipientEmails(consolidatedTemplate.recipient_config);
+			const emails = recipientEmailsFromConfig(consolidatedTemplate.recipient_config);
 			expect(emails).toEqual(['consolidated@example.com', 'test@example.com']);
-
-			const isValidRecipient = isValidRecipientConfig(consolidatedTemplate.recipient_config);
-			expect(isValidRecipient).toBe(true);
 
 			const isValidDelivery = isValidDeliveryConfig(consolidatedTemplate.delivery_config);
 			expect(isValidDelivery).toBe(true);
@@ -149,7 +130,7 @@ describe('Recipient Email Extraction Integration', () => {
 			};
 
 			// Should still work with partial data
-			const emails = extractRecipientEmails(partialTemplate.recipient_config);
+			const emails = recipientEmailsFromConfig(partialTemplate.recipient_config);
 			expect(emails).toEqual(['partial@example.com']);
 		});
 	});

@@ -14,7 +14,7 @@ import type { RequestHandler } from './$types';
 import { validateConfirmationToken } from '$lib/core/email/delivery-confirmation';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 
 export const GET: RequestHandler = async ({ params }) => {
 	const token = params.token;
@@ -38,6 +38,8 @@ export const GET: RequestHandler = async ({ params }) => {
 	}
 
 	const result = await serverMutation(api.v1api.confirmEmailDelivery, {
- _secret: getInternalSecret(), submissionId: id});
+		_secret: getInternalSecret(),
+		submissionId: id
+	});
 	return json(result);
 };

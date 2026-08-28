@@ -4,7 +4,7 @@ import { getInternalSecret } from '$lib/server/internal/secret-auth';
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api, internal } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -31,7 +31,9 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 
 	// Look up the full event server-side so check-in codes are never exposed publicly.
 	const event = await serverQuery(api.events.getEventInternalForCaller, {
- _secret: getInternalSecret(), eventId: params.id as Id<'events'>});
+		_secret: getInternalSecret(),
+		eventId: params.id as Id<'events'>
+	});
 	if (!event) throw error(404, 'Event not found');
 	if (event.status !== 'PUBLISHED') throw error(400, 'Event is not active');
 
@@ -58,13 +60,13 @@ export const POST: RequestHandler = async ({ params, request, getClientAddress }
 		emailHash,
 		verified,
 		verificationMethod: verificationMethod || (checkinCode ? 'checkin_code' : undefined),
-		identityCommitment: identityCommitment || undefined,
+		identityCommitment: identityCommitment || undefined
 	});
 
 	return json({
 		success: true,
 		verified,
 		attendeeCount: result.attendeeCount,
-		alreadyCheckedIn: result.alreadyCheckedIn ?? false,
+		alreadyCheckedIn: result.alreadyCheckedIn ?? false
 	});
 };

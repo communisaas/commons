@@ -1,227 +1,59 @@
 import type { RequestHandler } from './$types';
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
-import satori, { type SatoriOptions } from 'satori';
-import sharp from 'sharp';
+import { isValidPublicTemplateSlug } from '$lib/server/public-template-detail-path';
+import { getCachedPublicTemplateOgImageArtifact } from '$lib/server/public-template-queries';
 
-export const GET: RequestHandler = async ({ params }) => {
-	try {
-		// Fetch template from Convex
-		const template = await serverQuery(api.templates.getBySlugPublic, { slug: params.slug });
+const PRIVATE_NO_STORE = 'private, no-store, max-age=0';
+const PUBLIC_REVALIDATE = 'public, max-age=60, must-revalidate';
 
-		if (!template) {
-			return new Response('Template not found', { status: 404 });
+function textFailure(body: string, status: 404 | 503, retryAfter?: string): Response {
+	return new Response(body, {
+		status,
+		headers: {
+			'Cache-Control': PRIVATE_NO_STORE,
+			'Content-Type': 'text/plain; charset=utf-8',
+			'X-Content-Type-Options': 'nosniff',
+			...(retryAfter ? { 'Retry-After': retryAfter } : {})
 		}
+	});
+}
 
-		const actionCount = template.verified_sends || 0;
-
-		// Domain-aware color selection via keyword matching
-		const domainColors: Array<{ keywords: string[]; bg: string; accent: string }> = [
-			{ keywords: ['housing', 'zoning', 'affordab'], bg: '#FEF3C7', accent: '#F59E0B' },
-			{ keywords: ['climate', 'environment', 'energy', 'park'], bg: '#D1FAE5', accent: '#10B981' },
-			{ keywords: ['health', 'medical', 'telehealth'], bg: '#DBEAFE', accent: '#3B82F6' },
-			{ keywords: ['labor', 'wage', 'worker', 'retail'], bg: '#FCE7F3', accent: '#EC4899' },
-			{ keywords: ['voting', 'election', 'democra'], bg: '#E0E7FF', accent: '#6366F1' },
-			{ keywords: ['education', 'school', 'preschool', 'librar'], bg: '#FED7AA', accent: '#EA580C' },
-			{ keywords: ['justice', 'criminal', 'police', 'sentenc'], bg: '#E9D5FF', accent: '#A855F7' },
-			{ keywords: ['transport', 'parking', 'bike', 'transit', 'highway'], bg: '#FFEDD5', accent: '#EA580C' },
-			{ keywords: ['immigra', 'green card', 'visa'], bg: '#E0E7FF', accent: '#6366F1' },
-			{ keywords: ['indigenous', 'first nation', 'tribal'], bg: '#FEF3C7', accent: '#B45309' },
-		];
-
-		const domainLower = (template.domain || '').toLowerCase();
-		const matchedColor = domainColors.find((d) =>
-			d.keywords.some((k) => domainLower.includes(k))
-		);
-		const colors = matchedColor || { bg: '#F1F5F9', accent: '#64748B' };
-
-		// Generate SVG using Satori
-		const svg = await satori(
-			{
-				type: 'div',
-				props: {
-					style: {
-						height: '100%',
-						width: '100%',
-						display: 'flex',
-						flexDirection: 'column',
-						alignItems: 'flex-start',
-						justifyContent: 'space-between',
-						backgroundColor: colors.bg,
-						padding: '60px',
-						fontFamily: 'sans-serif'
-					},
-					children: [
-						// Category Badge + Social Proof
-						{
-							type: 'div',
-							props: {
-								style: { display: 'flex', alignItems: 'center', gap: '12px' },
-								children: [
-									{
-										type: 'div',
-										props: {
-											style: {
-												backgroundColor: colors.accent,
-												color: 'white',
-												padding: '12px 24px',
-												borderRadius: '8px',
-												fontSize: '20px',
-												fontWeight: 600
-											},
-											children: template.domain
-										}
-									},
-									...(actionCount > 0
-										? [
-												{
-													type: 'div',
-													props: {
-														style: {
-															backgroundColor: 'white',
-															color: '#334155',
-															padding: '12px 24px',
-															borderRadius: '8px',
-															fontSize: '18px',
-															display: 'flex',
-															alignItems: 'center',
-															gap: '8px'
-														},
-														children: `👥 ${actionCount.toLocaleString()} routes confirmed`
-													}
-												}
-											]
-										: [])
-								]
-							}
-						},
-						// Template Title + Description
-						{
-							type: 'div',
-							props: {
-								style: {
-									display: 'flex',
-									flexDirection: 'column',
-									gap: '20px',
-									maxWidth: '900px'
-								},
-								children: [
-									{
-										type: 'h1',
-										props: {
-											style: {
-												fontSize: '56px',
-												fontWeight: 700,
-												lineHeight: '1.2',
-												color: '#1E293B',
-												margin: 0
-											},
-											children: template.title
-										}
-									},
-									{
-										type: 'p',
-										props: {
-											style: {
-												fontSize: '28px',
-												lineHeight: '1.4',
-												color: '#475569',
-												margin: 0
-											},
-											children:
-												template.description.substring(0, 120) +
-												(template.description.length > 120 ? '...' : '')
-										}
-									}
-								]
-							}
-						},
-						// Bottom Bar
-						{
-							type: 'div',
-							props: {
-								style: {
-									display: 'flex',
-									alignItems: 'center',
-									justifyContent: 'space-between',
-									width: '100%'
-								},
-								children: [
-									// Commons Branding
-									{
-										type: 'div',
-										props: {
-											style: { display: 'flex', alignItems: 'center', gap: '12px' },
-											children: [
-												{
-													type: 'div',
-													props: {
-														style: {
-															backgroundColor: '#3B82F6',
-															width: '48px',
-															height: '48px',
-															borderRadius: '12px',
-															display: 'flex',
-															alignItems: 'center',
-															justifyContent: 'center',
-															fontSize: '28px'
-														},
-														children: '📮'
-													}
-												},
-												{
-													type: 'div',
-													props: {
-														style: { fontSize: '32px', fontWeight: 700, color: '#1E293B' },
-														children: 'Commons'
-													}
-												}
-											]
-										}
-									},
-									// Social Proof Stats
-									...(actionCount > 0
-										? [
-												{
-													type: 'div',
-													props: {
-														style: {
-															display: 'flex',
-															alignItems: 'center',
-															gap: '8px',
-															color: colors.accent,
-															fontWeight: 600,
-															fontSize: '20px'
-														},
-														children: '✨ Confirm your route'
-													}
-												}
-											]
-										: [])
-								]
-							}
-						}
-					]
-				}
-			},
-			{
-				width: 1200,
-				height: 630,
-				fonts: []
-			} satisfies SatoriOptions
-		);
-
-		// Convert SVG to PNG using Sharp
-		const png = await sharp(Buffer.from(svg as string)).png().toBuffer();
-
-		return new Response(new Uint8Array(png), {
+/** Anonymous requests can select and GET only a producer-published exact PNG. */
+export const GET: RequestHandler = async ({ params, url, platform }) => {
+	if (!isValidPublicTemplateSlug(params.slug)) {
+		return textFailure('Template not found', 404);
+	}
+	try {
+		const artifact = await getCachedPublicTemplateOgImageArtifact({ url, platform }, params.slug);
+		if (!artifact) return textFailure('Template not found', 404);
+		const body = new ArrayBuffer(artifact.bytes.byteLength);
+		new Uint8Array(body).set(artifact.bytes);
+		return new Response(body, {
 			headers: {
+				'Cache-Control': PUBLIC_REVALIDATE,
+				'Cloudflare-CDN-Cache-Control': PUBLIC_REVALIDATE,
+				'Content-Length': String(artifact.bytes.byteLength),
 				'Content-Type': 'image/png',
-				'Cache-Control': 'public, max-age=3600' // Cache for 1 hour
+				ETag: `"og-${artifact.revision}"`,
+				'X-Content-Type-Options': 'nosniff'
 			}
 		});
 	} catch (error) {
-		console.error('Error generating OG image:', error);
-		return new Response('Error generating image', { status: 500 });
+		console.error(
+			'[public-template-og] exact published image unavailable:',
+			error instanceof Error ? error.name : 'unknown'
+		);
+		return textFailure('Image temporarily unavailable', 503, '60');
 	}
 };
+
+/** Disable SvelteKit's implicit GET-backed HEAD path: anonymous storage is GET-only. */
+export const HEAD: RequestHandler = () =>
+	new Response('Method not allowed', {
+		status: 405,
+		headers: {
+			Allow: 'GET',
+			'Cache-Control': PRIVATE_NO_STORE,
+			'Content-Type': 'text/plain; charset=utf-8',
+			'X-Content-Type-Options': 'nosniff'
+		}
+	});

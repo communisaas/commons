@@ -4,7 +4,7 @@
     {
       "id": "V-1",
       "slug": "verify-userid-threadthrough",
-      "name": "Verify NEW-E-1 userId thread \u2192 reputation cron promotes seeded user",
+      "name": "Verify NEW-E-1 userId thread \u2192 action transaction promotes seeded user",
       "track": "TR-V",
       "clusters": [
         "C-coordination-integrity"
@@ -15,7 +15,7 @@
         "days": 0.25
       },
       "carryover_substrate": "NEW-E-1",
-      "description": "Trace from /api/submissions/create \u2192 submissions.create \u2192 processCampaignSubmission \u2192 createCampaignAction. Confirm userId arrives. Run recomputeAllReputationTiers cron mentally against seeded user with 5+ verified actions; should promote to 'active'.",
+      "description": "Trace from /api/submissions/create \u2192 submissions.create \u2192 processCampaignSubmission \u2192 createCampaignAction. Confirm userId arrives and the fifth verified action atomically writes actionCount=5, reputationTier=active, and engagementTier=1 attribution.",
       "acceptance_criteria": "File:line citations confirm userId flows. Either: (a) honest end-to-end with proof, or (b) GAP-noted with new fix task in W-1.",
       "depends_on": [],
       "status": "completed",
@@ -25,8 +25,8 @@
         "convex/campaigns.ts:855 (getUserTrustTier returns user._id)",
         "convex/campaigns.ts:971 (createCampaignAction declares userId arg)",
         "convex/campaigns.ts:1309 (submitAction passes userData?.userId)",
-        "convex/campaigns.ts:1043-1052 (handler increments user.actionCount when verified+userId)",
-        "convex/users.ts:1998 (recomputeAllReputationTiers walks actionCount)"
+        "convex/campaigns.ts:createCampaignAction (verified user action updates count+tier before insert)",
+        "convex/lib/reputationTier.ts:reputationStateForActionCount (shared exact thresholds)"
       ],
       "notes": "Note: ZK submission path (submissions.create) writes submissions table not campaignActions \u2014 userId thread is N/A there by design."
     },

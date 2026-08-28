@@ -18,6 +18,8 @@
  * @module exa/rate-limiter
  */
 
+import { sanitizeProviderErrorMessage } from '$lib/core/agents/provider-error';
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -25,7 +27,7 @@
 export interface RateLimitConfig {
 	/** Maximum requests per second for this endpoint */
 	maxRps: number;
-	/** Maximum retry attempts on rate limit */
+	/** Maximum total attempts, including the initial request */
 	maxRetries: number;
 	/** Base delay in ms for exponential backoff */
 	baseDelayMs: number;
@@ -54,6 +56,9 @@ export interface RetryResult<T> {
 	error?: string;
 	attempts: number;
 	wasRateLimited: boolean;
+	/** True when no provider response proved whether the request completed. */
+	completionUnknown?: boolean;
+	reason?: 'aborted' | 'circuit_open' | 'non_retryable' | 'rate_limit_exhausted';
 }
 
 // ============================================================================
@@ -101,8 +106,11 @@ export class ExaRateLimiter {
 	 */
 	async execute<T>(
 		fn: () => Promise<T>,
-		context: string
+		context: string,
+		signal?: AbortSignal
 	): Promise<RetryResult<T>> {
+		if (signal?.aborted) return this.abortedResult(0, false);
+
 		// Check circuit breaker
 		if (this.isCircuitOpen()) {
 			console.warn(`[exa-rate-limit] Circuit OPEN for ${context}, failing fast`);
@@ -110,7 +118,8 @@ export class ExaRateLimiter {
 				success: false,
 				error: 'Service temporarily unavailable (circuit breaker open)',
 				attempts: 0,
-				wasRateLimited: false
+				wasRateLimited: false,
+				reason: 'circuit_open'
 			};
 		}
 
@@ -118,10 +127,11 @@ export class ExaRateLimiter {
 		let wasRateLimited = false;
 
 		while (attempts < this.config.maxRetries) {
-			attempts++;
-
 			// Proactive throttling: wait if we're at RPS limit
-			await this.throttle();
+			if (!(await this.throttle(signal))) return this.abortedResult(attempts, false);
+			if (signal?.aborted) return this.abortedResult(attempts, false);
+
+			attempts++;
 
 			try {
 				// Record request timestamp
@@ -139,32 +149,40 @@ export class ExaRateLimiter {
 					wasRateLimited
 				};
 			} catch (error) {
+				if (signal?.aborted || this.isAbortError(error)) {
+					return this.abortedResult(attempts, true);
+				}
 				const isRateLimit = this.isRateLimitError(error);
 
 				if (isRateLimit) {
 					wasRateLimited = true;
+					if (attempts >= this.config.maxRetries) break;
 					const delay = this.calculateBackoff(attempts, error);
 
 					console.warn(
 						`[exa-rate-limit] Rate limited on ${context} (attempt ${attempts}/${this.config.maxRetries}), ` +
-						`waiting ${delay}ms before retry`
+							`waiting ${delay}ms before retry`
 					);
 
-					await this.sleep(delay);
+					if (!(await this.sleep(delay, signal))) {
+						return this.abortedResult(attempts, false);
+					}
 					continue;
 				}
 
 				// Non-rate-limit error: record failure and don't retry
 				this.onFailure();
 
-				const message = error instanceof Error ? error.message : String(error);
+				const message = sanitizeProviderErrorMessage(error);
 				console.error(`[exa-rate-limit] Non-retryable error on ${context}: ${message}`);
 
 				return {
 					success: false,
 					error: message,
 					attempts,
-					wasRateLimited
+					wasRateLimited,
+					completionUnknown: this.isCompletionUnknown(error),
+					reason: 'non_retryable'
 				};
 			}
 		}
@@ -177,7 +195,9 @@ export class ExaRateLimiter {
 			success: false,
 			error: `Rate limit retries exhausted after ${attempts} attempts`,
 			attempts,
-			wasRateLimited: true
+			wasRateLimited: true,
+			completionUnknown: false,
+			reason: 'rate_limit_exhausted'
 		};
 	}
 
@@ -190,7 +210,8 @@ export class ExaRateLimiter {
 	 */
 	async executeStaggered<T>(
 		fns: Array<() => Promise<T>>,
-		context: string
+		context: string,
+		signal?: AbortSignal
 	): Promise<Array<RetryResult<T>>> {
 		const results: Array<RetryResult<T>> = [];
 		const staggerDelayMs = Math.ceil(1000 / this.config.maxRps);
@@ -198,10 +219,13 @@ export class ExaRateLimiter {
 		for (let i = 0; i < fns.length; i++) {
 			// Stagger requests to stay under RPS limit
 			if (i > 0) {
-				await this.sleep(staggerDelayMs);
+				if (!(await this.sleep(staggerDelayMs, signal))) {
+					results.push(this.abortedResult(0, false));
+					break;
+				}
 			}
 
-			const result = await this.execute(fns[i], `${context}[${i}]`);
+			const result = await this.execute(fns[i], `${context}[${i}]`, signal);
 			results.push(result);
 		}
 
@@ -215,14 +239,12 @@ export class ExaRateLimiter {
 	/**
 	 * Proactive throttling: wait if we've hit RPS limit in sliding window
 	 */
-	private async throttle(): Promise<void> {
+	private async throttle(signal?: AbortSignal): Promise<boolean> {
 		const now = Date.now();
 		const windowStart = now - 1000;
 
 		// Clean old timestamps
-		this.state.requestTimestamps = this.state.requestTimestamps.filter(
-			(ts) => ts > windowStart
-		);
+		this.state.requestTimestamps = this.state.requestTimestamps.filter((ts) => ts > windowStart);
 
 		// If at limit, wait until oldest request exits the window
 		if (this.state.requestTimestamps.length >= this.config.maxRps) {
@@ -231,9 +253,10 @@ export class ExaRateLimiter {
 
 			if (waitMs > 0) {
 				console.debug(`[exa-rate-limit] Throttling: waiting ${waitMs}ms to stay under RPS limit`);
-				await this.sleep(waitMs);
+				return this.sleep(waitMs, signal);
 			}
 		}
+		return true;
 	}
 
 	/**
@@ -247,6 +270,9 @@ export class ExaRateLimiter {
 	 * Check if error is a rate limit (429) response
 	 */
 	private isRateLimitError(error: unknown): boolean {
+		const status = this.errorStatus(error);
+		if (status === 429) return true;
+
 		if (error instanceof Error) {
 			const message = error.message.toLowerCase();
 			// Exa rate limit errors contain these patterns
@@ -257,12 +283,45 @@ export class ExaRateLimiter {
 			);
 		}
 
-		// Check for response object with status
-		if (error && typeof error === 'object' && 'status' in error) {
-			return (error as { status: number }).status === 429;
-		}
-
 		return false;
+	}
+
+	private errorStatus(error: unknown): number | undefined {
+		if (!error || typeof error !== 'object') return undefined;
+		for (const field of ['status', 'statusCode'] as const) {
+			const value = (error as Record<string, unknown>)[field];
+			if (typeof value === 'number' && Number.isFinite(value)) return value;
+		}
+		return undefined;
+	}
+
+	private errorCode(error: unknown): string | undefined {
+		if (!error || typeof error !== 'object') return undefined;
+		const value = (error as Record<string, unknown>).code;
+		return typeof value === 'string' ? value.toUpperCase() : undefined;
+	}
+
+	private isAbortError(error: unknown): boolean {
+		return error instanceof Error && error.name === 'AbortError';
+	}
+
+	/**
+	 * Without an HTTP response, a transport failure may have happened after the
+	 * paid provider accepted the request. Callers must not launch a fallback or
+	 * retry that could overlap it.
+	 */
+	private isCompletionUnknown(error: unknown): boolean {
+		if (this.errorStatus(error) !== undefined) return false;
+		const code = this.errorCode(error);
+		if (
+			code &&
+			['ABORT_ERR', 'ECONNABORTED', 'ECONNRESET', 'ETIMEDOUT', 'UND_ERR_ABORTED'].includes(code)
+		) {
+			return true;
+		}
+		// Be conservative for every status-less failure. Fixed call sites do not
+		// pass user-authored provider options, so these are transport-ambiguous.
+		return true;
 	}
 
 	/**
@@ -270,9 +329,9 @@ export class ExaRateLimiter {
 	 */
 	private calculateBackoff(attempt: number, error: unknown): number {
 		// Check for Retry-After header
-		const retryAfter = this.extractRetryAfter(error);
-		if (retryAfter) {
-			return retryAfter * 1000; // Convert to ms
+		const retryAfterMs = this.extractRetryAfterMs(error);
+		if (retryAfterMs !== null) {
+			return Math.min(retryAfterMs, this.config.maxDelayMs);
 		}
 
 		// Exponential backoff: base * 2^(attempt-1) + jitter
@@ -286,17 +345,21 @@ export class ExaRateLimiter {
 	/**
 	 * Extract Retry-After header value if present
 	 */
-	private extractRetryAfter(error: unknown): number | null {
+	private extractRetryAfterMs(error: unknown): number | null {
 		if (error && typeof error === 'object') {
 			// Check for headers object
-			const headers = (error as { headers?: Record<string, string> }).headers;
+			const headers = (error as { headers?: Record<string, string> | Headers }).headers;
 			if (headers) {
-				const retryAfter = headers['retry-after'] || headers['Retry-After'];
+				const retryAfter =
+					typeof Headers !== 'undefined' && headers instanceof Headers
+						? headers.get('retry-after')
+						: (headers as Record<string, string>)['retry-after'] ||
+							(headers as Record<string, string>)['Retry-After'];
 				if (retryAfter) {
-					const parsed = parseInt(retryAfter, 10);
-					if (!isNaN(parsed)) {
-						return parsed;
-					}
+					const seconds = Number(retryAfter);
+					if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+					const retryDate = Date.parse(retryAfter);
+					if (Number.isFinite(retryDate)) return Math.max(0, retryDate - Date.now());
 				}
 			}
 		}
@@ -364,8 +427,31 @@ export class ExaRateLimiter {
 	/**
 	 * Sleep helper
 	 */
-	private sleep(ms: number): Promise<void> {
-		return new Promise((resolve) => setTimeout(resolve, ms));
+	private sleep(ms: number, signal?: AbortSignal): Promise<boolean> {
+		if (signal?.aborted) return Promise.resolve(false);
+		return new Promise((resolve) => {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const onAbort = () => {
+				if (timer !== undefined) clearTimeout(timer);
+				resolve(false);
+			};
+			signal?.addEventListener('abort', onAbort, { once: true });
+			timer = setTimeout(() => {
+				signal?.removeEventListener('abort', onAbort);
+				resolve(true);
+			}, ms);
+		});
+	}
+
+	private abortedResult<T>(attempts: number, completionUnknown: boolean): RetryResult<T> {
+		return {
+			success: false,
+			error: 'Request aborted',
+			attempts,
+			wasRateLimited: false,
+			completionUnknown,
+			reason: 'aborted'
+		};
 	}
 
 	/**

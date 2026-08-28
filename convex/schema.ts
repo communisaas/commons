@@ -11,6 +11,9 @@ import {
 	accountabilityCausalityClass,
 	accountabilityResponseType
 } from './_validators';
+import { campaignReadModelStateValidator } from './lib/campaignReadModel';
+import { shadowAtlasEngagementStateValidator } from './lib/shadowAtlasEngagement';
+import { shadowAtlasTree1OperationStateValidator } from './lib/shadowAtlasRegistration';
 
 // =============================================================================
 // Commons Convex Schema
@@ -63,6 +66,14 @@ export default defineSchema({
 
 		// Cross-provider identity deduplication
 		identityCommitment: v.optional(v.string()),
+		// Durable Tree-3 lease, one-write reservation, and short proof snapshot.
+		// This lives on the user row so the authenticated primary-key lookup and
+		// state transition remain one serializable document operation.
+		shadowAtlasEngagement: v.optional(shadowAtlasEngagementStateValidator),
+		// Durable Tree-1 register/replace entitlement. The operation remains on
+		// the user row after commit so a lost HTTP response cannot mint a second
+		// external write when the browser retries the same leaf.
+		shadowAtlasTree1Operation: v.optional(shadowAtlasTree1OperationStateValidator),
 
 		// Document type
 		documentType: v.optional(v.string()), // 'passport' | 'drivers_license' | 'national_id'
@@ -128,10 +139,11 @@ export default defineSchema({
 		activeMonths: v.number(),
 
 		// Verified-action count for reputation-tier promotion. Hybrid model:
-		// incremented on-action inside createCampaignAction (ZK paths supplying
-		// userId), then nightly cron `recomputeAllReputationTiers` recomputes
-		// reputationTier from this counter against a threshold table. Optional
-		// because pre-T10-1 rows didn't carry it; cron treats missing as 0.
+		// incremented on-action inside createCampaignAction (registered verified
+		// paths supplying userId), in the same transaction that derives and writes
+		// reputationTier and stamps immutable action attribution. Optional because
+		// no users insert sets it; the sole writer reads it as `?? 0`, so absent
+		// and zero are the same state.
 		actionCount: v.optional(v.number()),
 
 		// Profile
@@ -165,6 +177,58 @@ export default defineSchema({
 	})
 		.index('by_userId', ['userId'])
 		.index('by_expiresAt', ['expiresAt']),
+
+	// Compact authority read by the SvelteKit hook for every cookie-bearing
+	// request. Keep this strict allowlist separate from the mutable/wide users
+	// document so unrelated profile, billing, and reputation writes cannot
+	// invalidate or inflate the global authentication path.
+	userSessionAuthorities: defineTable({
+		userId: v.id('users'),
+		userCreatedAt: v.number(),
+		// Required, never optional: email is the anti-sybil control, and
+		// users.emailHash is the dedup key the sybil throttle reads. An authority
+		// row without one would hand the request boundary an unthrottleable
+		// identity, so the projection fails closed rather than mint it.
+		email: v.string(),
+		tokenIdentifier: v.optional(v.string()),
+		name: v.optional(v.string()),
+		avatar: v.optional(v.string()),
+		isVerified: v.boolean(),
+		verificationMethod: v.optional(v.string()),
+		verifiedAt: v.optional(v.number()),
+		passkeyCredentialId: v.optional(v.string()),
+		identityCommitment: v.optional(v.string()),
+		documentType: v.optional(v.string()),
+		districtHash: v.optional(v.string()),
+		districtVerified: v.boolean(),
+		addressVerifiedAt: v.optional(v.number()),
+		trustScore: v.number(),
+		walletAddress: v.optional(v.string()),
+		version: v.number()
+	}).index('by_userId', ['userId']),
+
+	sessionAuthorityMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		runToken: v.string(),
+		cursor: v.optional(v.string()),
+		scanComplete: v.boolean(),
+		scanned: v.number(),
+		written: v.number(),
+		// Scanned users that could not be projected YET. See the deferral note in
+		// convex/sessionAuthority.ts: exactness is `scanned === written + deferred`.
+		deferred: v.optional(v.number()),
+		failureCode: v.optional(v.string()),
+		failureUserId: v.optional(v.id('users')),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	passkeyCeremonySessions: defineTable({
 		userId: v.id('users'),
@@ -217,26 +281,25 @@ export default defineSchema({
 		category: v.optional(v.string()), // DEPRECATED: pre-migration field, replaced by domain. Kept for schema compat with existing documents.
 		topics: v.optional(v.any()), // JSON array of topic tags
 		type: v.string(),
-		deliveryMethod: v.string(),
+		deliveryMethod: v.union(v.literal('cwc'), v.literal('email')),
 		preview: v.string(),
 		messageBody: v.string(),
 		sources: v.optional(v.any()),
 		researchLog: v.optional(v.any()),
 		cachedSources: v.optional(v.any()),
 		sourcesCachedAt: v.optional(v.number()),
+		sourceCacheInputHash: v.optional(v.string()),
 		deliveryConfig: v.any(),
 		cwcConfig: v.optional(v.any()),
 		recipientConfig: v.any(),
 		// DEAD FIELD: no writer anywhere in convex/ or src/ sets
-		// templates.campaignId. Three readers echo it null to the v1 API
+		// templates.campaignId. Two readers echo it null to the v1 API
 		// contract for stability:
-		//   - convex/templates.ts:276 (paginated list)
-		//   - src/routes/api/templates/+server.ts:399 (existing-by-content)
-		//   - src/routes/api/templates/+server.ts:553 (newly-created)
+		//   - convex/templates.ts:1590 (public discovery payload)
+		//   - src/lib/server/templates/authoring-response.ts (authoring endpoint)
 		// All emit `campaign_id: ... ?? null`. Field removal requires
 		// consumers to drop the key, then a schema deploy. Template→
 		// campaign linkage goes the other way (campaigns.templateId).
-		// See [[F22-templates-campaignId-dead]].
 		campaignId: v.optional(v.string()),
 		status: v.string(), // 'draft' | 'published' | etc.
 		isPublic: v.boolean(),
@@ -281,6 +344,10 @@ export default defineSchema({
 		),
 		embeddingVersion: v.string(),
 		embeddingsUpdatedAt: v.optional(v.number()),
+		// Topic-vector completion is tracked independently from tag-vector writes.
+		// A shared timestamp let a tag-only backfill hide a still-missing topic
+		// vector from the indexed repair queue.
+		topicEmbeddingsUpdatedAt: v.optional(v.number()),
 		domainHue: v.optional(v.float64()), // oklch hue angle (0-360) projected from topicEmbedding
 
 		// Status & tracking
@@ -364,6 +431,22 @@ export default defineSchema({
 		.index('by_countryCode', ['countryCode'])
 		.index('by_userId_contentHash', ['userId', 'contentHash'])
 		.index('by_status', ['status'])
+		// One-time endorsement-counter reconciliation and its post-cutover health
+		// check select legacy rows without scanning every embedding-heavy template.
+		.index('by_endorsementCount', ['endorsementCount'])
+		// Exact public-corpus selector used by the off-request relation snapshot
+		// rebuild. Keeping both predicates in the index avoids hydrating drafts or
+		// private templates (including their embedding-heavy fields) during the
+		// nightly materialization pass.
+		.index('by_status_isPublic', ['status', 'isPublic'])
+		// Bounded embedding-repair batches select only public documents that have
+		// never completed an embedding write. This keeps the admin/backfill path
+		// off the full embedding-bearing public corpus.
+		.index('by_status_isPublic_topicEmbeddingsUpdatedAt', [
+			'status',
+			'isPublic',
+			'topicEmbeddingsUpdatedAt'
+		])
 		.searchIndex('search_templates', {
 			searchField: 'title',
 			filterFields: ['domain', 'status', 'countryCode']
@@ -378,6 +461,77 @@ export default defineSchema({
 			dimensions: 768,
 			filterFields: ['countryCode']
 		}),
+
+	// Short-lived provider-work lease for template authoring. The lease is
+	// acquired before Groq admission so concurrent same-content or same-slug
+	// requests cannot each spend provider capacity and race at createTemplate.
+	templateAuthoringLeases: defineTable({
+		userId: v.id('users'),
+		contentHash: v.string(),
+		slug: v.string(),
+		token: v.string(),
+		expiresAt: v.number()
+	})
+		.index('by_userId_contentHash', ['userId', 'contentHash'])
+		.index('by_slug', ['slug'])
+		.index('by_expiresAt', ['expiresAt']),
+
+	// Embedding-free authenticated list plane. Every canonical template has
+	// exactly one row after the explicit migration cutover. The 4 KiB writer
+	// budget is enforced in `lib/templateListProjection.ts`; 51 maximum rows
+	// therefore remain below the 256 KiB query ceiling even with system fields.
+	templateListProjections: defineTable({
+		templateId: v.id('templates'),
+		templateCreatedAt: v.number(),
+		userId: v.optional(v.id('users')),
+		orgId: v.optional(v.id('organizations')),
+		slug: v.string(),
+		slugTruncated: v.boolean(),
+		slugOriginalBytes: v.number(),
+		title: v.string(),
+		titleTruncated: v.boolean(),
+		titleOriginalBytes: v.number(),
+		description: v.string(), // deterministic UTF-8-safe list preview
+		descriptionTruncated: v.boolean(),
+		descriptionOriginalBytes: v.number(),
+		domain: v.string(),
+		domainTruncated: v.boolean(),
+		domainOriginalBytes: v.number(),
+		domainHue: v.optional(v.float64()),
+		status: v.string(),
+		isPublic: v.boolean(),
+		verifiedSends: v.number(),
+		templateUpdatedAt: v.number(),
+		projectionVersion: v.number(),
+		projectionBytes: v.number(),
+		projectionWrittenAt: v.number()
+	})
+		.index('by_templateId', ['templateId'])
+		.index('by_slug', ['slug'])
+		.index('by_userId', ['userId', 'templateCreatedAt', 'templateId'])
+		.index('by_orgId', ['orgId', 'templateCreatedAt', 'templateId']),
+
+	// Durable, operator-visible migration/cutover gate for the authenticated
+	// list plane. Readers fail closed until status is explicitly `ready`.
+	templateListProjectionMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		projectionVersion: v.optional(v.number()),
+		runToken: v.string(),
+		cursor: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureTemplateId: v.optional(v.id('templates')),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// MESSAGE GENERATION JOBS
@@ -431,6 +585,9 @@ export default defineSchema({
 		deliveryMethod: v.string(), // 'cwc' | 'email'
 		cwcSubmissionId: v.optional(v.string()),
 		deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed'
+		// Same-transaction idempotency marker for the compact recipient-metrics
+		// migration. No live writer currently inserts this legacy table.
+		recipientMetricsVersion: v.optional(v.number()),
 		errorMessage: v.optional(v.string())
 	})
 		.index('by_templateId', ['templateId'])
@@ -454,7 +611,8 @@ export default defineSchema({
 	})
 		.index('by_userId', ['userId'])
 		.index('by_decisionMakerId', ['decisionMakerId'])
-		.index('by_userId_decisionMakerId', ['userId', 'decisionMakerId']),
+		.index('by_userId_decisionMakerId', ['userId', 'decisionMakerId'])
+		.index('by_userId_isActive_decisionMakerId', ['userId', 'isActive', 'decisionMakerId']),
 
 	// ===========================================================================
 	// ANALYTICS (aggregates + snapshots only)
@@ -463,6 +621,13 @@ export default defineSchema({
 	analytics: defineTable({
 		// Record type discriminator
 		recordType: v.string(), // 'aggregate' | 'snapshot'
+		// Canonical identities are optional only during the bounded launch
+		// migration. New aggregate and snapshot writers always populate exactly one
+		// of these and fail closed on multiplicity.
+		aggregateIdentity: v.optional(v.string()),
+		snapshotIdentity: v.optional(v.string()),
+		sourceAggregateId: v.optional(v.id('analytics')),
+		planeVersion: v.optional(v.number()),
 
 		// ── Aggregate / Snapshot shared fields ──
 		date: v.optional(v.number()), // epoch ms of day (aggregate)
@@ -490,6 +655,10 @@ export default defineSchema({
 		updatedAt: v.optional(v.number())
 	})
 		.index('by_recordType', ['recordType'])
+		.index('by_recordType_date', ['recordType', 'date'])
+		.index('by_recordType_date_metric_dimension', ['recordType', 'date', 'metric', 'dimensionKey'])
+		.index('by_aggregateIdentity', ['aggregateIdentity'])
+		.index('by_snapshotIdentity', ['snapshotIdentity'])
 		.index('by_date', ['date'])
 		.index('by_metric_date', ['metric', 'date'])
 		.index('by_metric_date_dimension', ['metric', 'date', 'dimensionKey'])
@@ -502,6 +671,12 @@ export default defineSchema({
 	// ===========================================================================
 
 	privacyBudgets: defineTable({
+		// Optional only until analyticsSnapshotMigrations is activated. The
+		// identity closes the historical by-window/metric `.first()` ambiguity;
+		// spendIdentity binds the one composition charge to one durable daily run.
+		budgetIdentity: v.optional(v.string()),
+		spendIdentity: v.optional(v.string()),
+		snapshotRunId: v.optional(v.id('analyticsSnapshotRuns')),
 		userId: v.optional(v.id('users')), // null for system-level budget (cron snapshots)
 		metric: v.string(), // "system" for global budget, or specific metric
 		epsilon: v.number(), // budget limit for this window
@@ -511,7 +686,66 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_userId_metric', ['userId', 'metric'])
-		.index('by_windowStart_metric', ['windowStart', 'metric']),
+		.index('by_windowStart_metric', ['windowStart', 'metric'])
+		.index('by_budgetIdentity', ['budgetIdentity'])
+		.index('by_spendIdentity', ['spendIdentity']),
+
+	// Singleton cutover state for the analytics snapshot plane. Snapshot rows are
+	// adopted first, then aggregates, then budget rows, so a legacy partial run
+	// (snapshot plus surviving raw aggregate) is detected rather than published.
+	analyticsSnapshotMigrations: defineTable({
+		key: v.string(),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		phase: v.union(
+			v.literal('snapshots'),
+			v.literal('aggregates'),
+			v.literal('budgets'),
+			v.literal('complete')
+		),
+		runToken: v.string(),
+		cursor: v.optional(v.string()),
+		scannedRows: v.number(),
+		adoptedRows: v.number(),
+		legacyRunsAdopted: v.number(),
+		failureCode: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// One durable coordinator row per UTC snapshot date. Pages are materialized
+	// before any source deletion; snapshot readers require status=ready, so a
+	// partial page or cleanup never becomes externally visible.
+	analyticsSnapshotRuns: defineTable({
+		runIdentity: v.string(),
+		snapshotDate: v.number(),
+		status: v.union(v.literal('running'), v.literal('blocked'), v.literal('ready')),
+		phase: v.union(v.literal('materialize'), v.literal('cleanup'), v.literal('complete')),
+		runToken: v.string(),
+		noiseSeed: v.string(),
+		cursor: v.optional(v.string()),
+		budgetClaimed: v.boolean(),
+		snapshotsCreated: v.number(),
+		aggregatesDeleted: v.number(),
+		scannedRows: v.number(),
+		restarts: v.number(),
+		leaseExpiresAt: v.number(),
+		legacyAdopted: v.optional(v.boolean()),
+		failureCode: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_runIdentity', ['runIdentity'])
+		.index('by_snapshotDate', ['snapshotDate'])
+		.index('by_noiseSeed', ['noiseSeed'])
+		.index('by_legacyAdopted_budgetClaimed', ['legacyAdopted', 'budgetClaimed'])
+		.index('by_status_leaseExpiresAt', ['status', 'leaseExpiresAt']),
 
 	// ===========================================================================
 	// ENCRYPTED DELIVERY DATA — legacy tombstone
@@ -687,7 +921,6 @@ export default defineSchema({
 		// tightening to `v.object({publicInputsArray: v.array(v.string()),
 		// actionDomain: v.string(), ...})` would close the divergence
 		// but requires +server.ts to normalize at the boundary first.
-		// See [[F39-publicInputs-normalize-at-boundary]].
 		publicInputs: v.any(),
 		nullifier: v.string(),
 		actionId: v.string(),
@@ -697,7 +930,6 @@ export default defineSchema({
 
 		// Witness encryption
 		encryptedWitness: v.string(),
-		encryptedMessage: v.optional(v.string()),
 		witnessNonce: v.optional(v.string()),
 		ephemeralPublicKey: v.optional(v.string()),
 		teeKeyId: v.optional(v.string()),
@@ -740,6 +972,9 @@ export default defineSchema({
 
 		// Witness expiry
 		witnessExpiresAt: v.optional(v.number()),
+		// Completion marker for the bounded expiry queue. Cleanup clears the indexed
+		// due time so an already-scrubbed wide submission can never pin page one.
+		witnessCleanedAt: v.optional(v.number()),
 
 		// F1 gate: Convex Id of the district credential that was active when this
 		// submission was accepted. Re-checked at delivery enqueue (closes the TOCTOU
@@ -768,6 +1003,13 @@ export default defineSchema({
 		// submissions every homepage SSR.
 		.index('by_verificationStatus_verifiedAt', ['verificationStatus', 'verifiedAt'])
 		.index('by_anchorStatus', ['anchorStatus'])
+		.index('by_deliveryStatus_updatedAt', ['deliveryStatus', 'updatedAt'])
+		.index('by_anchorStatus_updatedAt', ['anchorStatus', 'updatedAt'])
+		.index('by_anchorStatus_anchorResultKind_updatedAt', [
+			'anchorStatus',
+			'anchorResultKind',
+			'updatedAt'
+		])
 		.index('by_witnessExpiresAt', ['witnessExpiresAt'])
 		.index('by_issuingCredentialId', ['issuingCredentialId']),
 
@@ -797,6 +1039,7 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_submissionId', ['submissionId'])
+		.index('by_submissionId_recipientKey', ['submissionId', 'recipientKey'])
 		.index('by_templateId', ['templateId'])
 		.index('by_recipientKey', ['recipientKey'])
 		.index('by_status', ['status'])
@@ -828,10 +1071,27 @@ export default defineSchema({
 		congressionalDistrict: v.string(),
 		stateSenateDistrict: v.optional(v.string()),
 		stateAssemblyDistrict: v.optional(v.string()),
+		// County is server-derived from the root-verified atlas cell array and is never
+		// client-supplied. Provenance is stored per slot beside the value it qualifies.
+		// These added fields are strictly optional and never backfilled: `undefined`
+		// means the credential did not carry that fact at issuance, never that the
+		// address is outside the jurisdiction.
+		countyFips: v.optional(v.string()),
+		congressionalDistrictSource: v.optional(v.string()),
+		stateSenateDistrictSource: v.optional(v.string()),
+		stateAssemblyDistrictSource: v.optional(v.string()),
+		countyFipsSource: v.optional(v.string()),
 		verificationMethod: v.string(), // 'civic_api' | 'postal'
 		issuedAt: v.number(),
 		expiresAt: v.number(),
 		revokedAt: v.optional(v.number()),
+		// STRICTLY OPTIONAL and NEVER backfilled. `undefined` is a distinct third
+		// fact: retired before this field existed / reason not recorded, never a
+		// synonym for either recorded reason. This is a render label only and MUST
+		// NOT be read by any credential-admissibility path.
+		retirementReason: v.optional(
+			v.union(v.literal('superseded_by_reissue'), v.literal('operator_cutover'))
+		),
 		credentialHash: v.string(),
 
 		// Privacy-preserving district storage
@@ -912,9 +1172,17 @@ export default defineSchema({
 		revocationLastAttemptAt: v.optional(v.number())
 	})
 		.index('by_userId_expiresAt', ['userId', 'expiresAt'])
+		.index('by_userId_issuedAt', ['userId', 'issuedAt'])
+		.index('by_userId_revokedAt_issuedAt', ['userId', 'revokedAt', 'issuedAt'])
+		.index('by_userId_districtCommitment', ['userId', 'districtCommitment'])
 		.index('by_congressionalDistrict', ['congressionalDistrict'])
 		.index('by_credentialHash', ['credentialHash'])
+		.index('by_revokedAt_expiresAt', ['revokedAt', 'expiresAt'])
 		.index('by_revocationStatus', ['revocationStatus'])
+		.index('by_revocationStatus_revocationLastAttemptAt', [
+			'revocationStatus',
+			'revocationLastAttemptAt'
+		])
 		// Time-windowed scan for boundary-cell observability (`getBoundaryCellRate24h`).
 		// Without this index, the cron does a full-table `.collect()` and
 		// hits Convex's row-scan cap somewhere between 5K-16K active
@@ -937,7 +1205,9 @@ export default defineSchema({
 		expiresAt: v.number()
 	})
 		.index('by_credentialHash', ['credentialHash'])
+		.index('by_credentialHash_expiresAt', ['credentialHash', 'expiresAt'])
 		.index('by_nonce', ['nonce'])
+		.index('by_nonce_expiresAt', ['nonce', 'expiresAt'])
 		.index('by_expiresAt', ['expiresAt']),
 
 	// ===========================================================================
@@ -1123,8 +1393,139 @@ export default defineSchema({
 		expiresAt: v.number()
 	})
 		.index('by_emailHash', ['emailHash'])
+		.index('by_emailHash_expiresAt', ['emailHash', 'expiresAt'])
 		.index('by_domain', ['domain'])
 		.index('by_expiresAt', ['expiresAt']),
+
+	// Global contact authority is the synchronous send-admission truth while
+	// bounded fanout jobs converge denormalized supporter status rows. The
+	// optional organization scope is used only for START: a global STOP remains
+	// authoritative unless a newer org-scoped START explicitly restores consent.
+	contactAuthorities: defineTable({
+		channel: v.union(v.literal('email'), v.literal('sms')),
+		contactHash: v.string(),
+		scopeOrgId: v.optional(v.id('organizations')),
+		state: v.union(
+			v.literal('email_active'),
+			v.literal('email_bounced'),
+			v.literal('email_complained'),
+			v.literal('email_suppressed'),
+			v.literal('sms_allowed'),
+			v.literal('sms_stopped')
+		),
+		softBounceCount: v.optional(v.number()),
+		source: v.string(),
+		sourceEventId: v.optional(v.string()),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	}).index('by_channel_contactHash_scopeOrgId', ['channel', 'contactHash', 'scopeOrgId']),
+
+	// Proof that the mailbox itself asked, not merely that someone holds a link
+	// addressed to it. A suppression URL rides a message the SENDER composes, so
+	// possession of it proves nothing about control of the mailbox; the terminal
+	// write therefore consumes a row here, and a row is only created by mailing a
+	// random nonce TO the address. Only `sha256(nonce)` is stored — the nonce is
+	// the credential and it lives in exactly one place, the recipient's inbox.
+	// `consumedAt` is set in the same transaction as the authority write, so a
+	// replay is refused by construction rather than by a time-of-check window.
+	recipientSuppressionChallenges: defineTable({
+		contactHash: v.string(),
+		slug: v.string(),
+		tokenHash: v.string(),
+		issuedAt: v.number(),
+		expiresAt: v.number(),
+		consumedAt: v.optional(v.number()),
+		requestId: v.optional(v.string())
+	})
+		.index('by_tokenHash', ['tokenHash'])
+		.index('by_contactHash_issuedAt', ['contactHash', 'issuedAt']),
+
+	// One OCC-serialized logical clock for contact admission. Bulk dispatchers
+	// capture the epoch while materializing a cohort and require the same value
+	// at the final carrier boundary; any intervening STOP/START/bounce/complaint
+	// invalidates the stale cohort before external send authority is exercised.
+	contactAuthorityEpochs: defineTable({
+		key: v.literal('global'),
+		epoch: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Durable provider/contact fanout. Ingress commits one compact job before it
+	// acknowledges the signed provider request; workers advance only fixed-size
+	// supporter cursor pages and leave explicit terminal failure evidence.
+	contactFanoutJobs: defineTable({
+		kind: v.union(
+			v.literal('email_set_bounced'),
+			v.literal('email_set_complained'),
+			v.literal('email_soft_bounce'),
+			v.literal('email_reset_soft_bounce'),
+			v.literal('sms_stop'),
+			v.literal('sms_start'),
+			v.literal('sms_reply')
+		),
+		contactHash: v.string(),
+		scopeOrgId: v.optional(v.id('organizations')),
+		idempotencyKey: v.optional(v.string()),
+		providerEventId: v.optional(v.string()),
+		replyBody: v.optional(v.string()),
+		replyToNumber: v.optional(v.string()),
+		targetEmailStatus: v.optional(v.string()),
+		targetSmsStatus: v.optional(v.string()),
+		targetSoftBounceCount: v.optional(v.number()),
+		authorityUpdatedAt: v.optional(v.number()),
+		cursor: v.optional(v.string()),
+		status: v.union(v.literal('pending'), v.literal('complete'), v.literal('failed')),
+		priority: v.number(),
+		attempts: v.number(),
+		nextAttemptAt: v.number(),
+		processedCount: v.number(),
+		changedCount: v.number(),
+		pageCount: v.number(),
+		failureCode: v.optional(v.string()),
+		lastError: v.optional(v.string()),
+		payloadBytes: v.number(),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		completedAt: v.optional(v.number())
+	})
+		.index('by_idempotencyKey', ['idempotencyKey'])
+		.index('by_status_priority_nextAttemptAt', ['status', 'priority', 'nextAttemptAt'])
+		.index('by_status_createdAt', ['status', 'createdAt'])
+		.index('by_contactHash_status', ['contactHash', 'status']),
+
+	// Append-only recovery evidence. Retrying a failed job clears its active
+	// failure fields so the worker can resume, while this journal preserves why
+	// it failed, how many attempts preceded it, and when an operator requeued it.
+	contactFanoutJobEvents: defineTable({
+		jobId: v.id('contactFanoutJobs'),
+		type: v.union(
+			v.literal('ingress_failed'),
+			v.literal('worker_failed'),
+			v.literal('operator_retry')
+		),
+		attempt: v.number(),
+		failureCode: v.optional(v.string()),
+		error: v.optional(v.string()),
+		createdAt: v.number()
+	})
+		.index('by_jobId_createdAt', ['jobId', 'createdAt'])
+		.index('by_type_createdAt', ['type', 'createdAt']),
+
+	// Activation is a self-paged audit, not an optimistic flag: send admission
+	// fails closed until every currently eligible supporter has the global hash
+	// required for an exact authority lookup.
+	contactAuthorityMigrations: defineTable({
+		key: v.literal('contact-authority-v1'),
+		status: v.union(v.literal('running'), v.literal('ready'), v.literal('blocked')),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.id('supporters')),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// BOUNCE REPORTS
@@ -1140,7 +1541,9 @@ export default defineSchema({
 	})
 		.index('by_emailHash_resolved', ['emailHash', 'resolved'])
 		.index('by_resolved', ['resolved'])
-		.index('by_reportedBy', ['reportedBy']),
+		.index('by_reportedBy', ['reportedBy'])
+		.index('by_reportedBy_resolved', ['reportedBy', 'resolved'])
+		.index('by_reportedBy_emailHash_resolved', ['reportedBy', 'emailHash', 'resolved']),
 
 	// ===========================================================================
 	// AGENT TRACE
@@ -1220,8 +1623,10 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_templateId', ['templateId'])
+		.index('by_templateId_status', ['templateId', 'status'])
 		.index('by_status', ['status'])
 		.index('by_status_deadline', ['status', 'deadline'])
+		.index('by_status_updatedAt', ['status', 'updatedAt'])
 		.index('by_debateIdOnchain', ['debateIdOnchain']),
 
 	debateArguments: defineTable({
@@ -1261,8 +1666,55 @@ export default defineSchema({
 		.index('by_debateId', ['debateId'])
 		.index('by_debateId_argumentIndex', ['debateId', 'argumentIndex'])
 		.index('by_debateId_nullifierHash', ['debateId', 'nullifierHash'])
+		.index('by_debateId_weightedScore', ['debateId', 'weightedScore'])
+		.index('by_debateId_stance_weightedScore', ['debateId', 'stance', 'weightedScore'])
 		.index('by_weightedScore', ['weightedScore'])
 		.index('by_verificationStatus', ['verificationStatus']),
+
+	// Constant-read debate summary. The potentially large argument bodies remain
+	// in cursor-paged debateArguments; only the current winner preview is copied.
+	debateReadModels: defineTable({
+		debateId: v.id('debates'),
+		templateId: v.id('templates'),
+		debateIdOnchain: v.string(),
+		version: v.number(),
+		revision: v.number(),
+		status: debateStatus,
+		argumentCount: v.number(),
+		uniqueParticipants: v.number(),
+		totalStake: v.number(),
+		topArgument: v.optional(
+			v.object({
+				argumentId: v.id('debateArguments'),
+				argumentIndex: v.number(),
+				stance: v.string(),
+				bodyPreview: v.string(),
+				weightedScore: v.number(),
+				totalStake: v.number(),
+				coSignCount: v.number()
+			})
+		),
+		updatedAt: v.number()
+	})
+		.index('by_debateId', ['debateId'])
+		.index('by_templateId', ['templateId'])
+		.index('by_debateIdOnchain', ['debateIdOnchain']),
+
+	debateReadModelMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	debateNullifiers: defineTable({
 		debateId: v.id('debates'),
@@ -1349,7 +1801,10 @@ export default defineSchema({
 		identityCommitment: v.string(),
 		stance: v.string(), // 'support' | 'oppose'
 		districtCode: v.optional(v.string()),
-		registeredAt: v.number()
+		registeredAt: v.number(),
+		// New writers set this in the same transaction as the compact aggregate;
+		// legacy migration patches it only after applying the contribution.
+		recipientMetricsVersion: v.optional(v.number())
 	})
 		.index('by_templateId', ['templateId'])
 		.index('by_templateId_identityCommitment', ['templateId', 'identityCommitment']),
@@ -1372,16 +1827,87 @@ export default defineSchema({
 		recipientEmail: v.optional(v.string()),
 		encryptedRecipientEmail: v.optional(v.string()),
 		recipientEmailHash: v.optional(v.string()),
-		deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded'
-		deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed'
+		deliveryMethod: v.string(), // 'cwc' | 'email' | 'recorded' | 'mailto_confirmed'
+		deliveryStatus: v.string(), // 'pending' | 'delivered' | 'failed' | 'user_confirmed'
 		deliveredAt: v.optional(v.number()),
 		// Optional district attribution for coordination display, backfilled from
 		// the user's Shadow Atlas registration at write time.
 		districtCode: v.optional(v.string())
 	})
 		.index('by_registrationId', ['registrationId'])
+		.index('by_registrationId_recipientKey', ['registrationId', 'recipientKey'])
 		.index('by_templateId_pseudonymousId', ['templateId', 'pseudonymousId'])
+		.index('by_templateId_pseudonymousId_recipientKey', [
+			'templateId',
+			'pseudonymousId',
+			'recipientKey'
+		])
 		.index('by_templateId', ['templateId']),
+
+	// Constant-read recipient-page metrics. The summary contains exact totals
+	// and bounded top-20 display cohorts; raw messages/registrations are never
+	// collected by request paths.
+	templateRecipientMetrics: defineTable({
+		templateId: v.id('templates'),
+		version: v.number(),
+		messageDeliveredCount: v.number(),
+		messageVisibleDistrictCount: v.number(),
+		messageTopDistricts: v.array(v.object({ districtHash: v.string(), count: v.number() })),
+		positionCount: v.number(),
+		positionSupport: v.number(),
+		positionOppose: v.number(),
+		positionDistrictCount: v.number(),
+		positionTopDistricts: v.array(
+			v.object({
+				districtCode: v.string(),
+				support: v.number(),
+				oppose: v.number()
+			})
+		),
+		updatedAt: v.number()
+	}).index('by_templateId', ['templateId']),
+
+	// Exact per-district rows make every append an O(1) increment and let a
+	// viewer retrieve their own above-floor district even when it is outside the
+	// bounded top-20 summary.
+	templateMessageDistrictMetrics: defineTable({
+		templateId: v.id('templates'),
+		districtHash: v.string(),
+		deliveredCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_templateId_districtHash', ['templateId', 'districtHash']),
+
+	templatePositionDistrictMetrics: defineTable({
+		templateId: v.id('templates'),
+		districtCode: v.string(),
+		support: v.number(),
+		oppose: v.number(),
+		updatedAt: v.number()
+	}).index('by_templateId_districtCode', ['templateId', 'districtCode']),
+
+	// Durable two-phase migration and explicit reader cutover. Run tokens
+	// supersede delayed continuations; `ready` is the only serving state.
+	recipientMetricsMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		runToken: v.string(),
+		phase: v.union(v.literal('messages'), v.literal('positions'), v.literal('complete')),
+		cursor: v.optional(v.string()),
+		scannedMessages: v.number(),
+		projectedMessages: v.number(),
+		scannedPositions: v.number(),
+		projectedPositions: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// COMMUNITY FIELD CONTRIBUTIONS
@@ -1430,10 +1956,43 @@ export default defineSchema({
 
 		// Denormalized counters
 		supporterCount: v.optional(v.number()),
+		// Exact number of supporters with at least one verified action carrying a
+		// non-empty normalized district hash. The supporter-audience projection
+		// owns adoption and every first/last qualifying-action transition.
+		districtVerifiedSupporterCount: v.optional(v.number()),
 		campaignCount: v.optional(v.number()),
+		// Exact ACTIVE+PAUSED tally. Legacy rows remain null until the bounded,
+		// marker-safe migration reaches ready; hot writers maintain it thereafter.
+		activeCampaignCount: v.optional(v.number()),
+		campaignStatusCounts: v.optional(
+			v.object({
+				DRAFT: v.number(),
+				ACTIVE: v.number(),
+				PAUSED: v.number(),
+				COMPLETE: v.number(),
+				total: v.number()
+			})
+		),
 		memberCount: v.optional(v.number()),
 		sentEmailCount: v.optional(v.number()),
+		// Exact current-period capacity held by durable delivery reservations.
+		// Writers update the count and reservation row in one serializable
+		// mutation; the period marker prevents a rollover from reusing stale holds.
+		emailReservedCount: v.optional(v.number()),
+		emailReservationPeriodStart: v.optional(v.number()),
+		emailReservationState: v.optional(v.union(v.literal('ready'), v.literal('blocked'))),
+		emailReservationFailureCode: v.optional(v.string()),
 		smsSentCount: v.optional(v.number()),
+		// Monotonic delivery totals above are converted into exact per-period
+		// usage by subtracting these baselines. Their period marker must match
+		// the subscription/calendar period before a plan check may serve.
+		sentEmailPeriodBaseline: v.optional(v.number()),
+		sentEmailPeriodBaselineAt: v.optional(v.number()),
+		smsSentPeriodBaseline: v.optional(v.number()),
+		smsSentPeriodBaselineAt: v.optional(v.number()),
+		// Per-row cutover marker for the compact public directory. Optional only
+		// while the cursor migration adopts legacy organizations.
+		publicDirectoryVersion: v.optional(v.number()),
 
 		// Scale-safe verified-action metering. The billing read counts verified
 		// actions WITHIN the current period; the prior implementation collected
@@ -1483,6 +2042,10 @@ export default defineSchema({
 				emailComplained: v.number(),
 				// smsStatus histogram.
 				smsSubscribed: v.number(),
+				// Exact intersection consumed by the unfiltered text-audience path.
+				// Optional only across the live cutover: an absent value forces the
+				// bounded cursor reader instead of being treated as zero.
+				smsDispatchEligible: v.optional(v.number()),
 				smsUnsubscribed: v.number(),
 				smsStopped: v.number(),
 				smsNone: v.number(),
@@ -1573,6 +2136,47 @@ export default defineSchema({
 			filterFields: ['countryCode', 'isPublic']
 		}),
 
+	// Strictly bounded public organization rows. Public readers page the stable
+	// normalized name order and never hydrate the full organization document.
+	publicOrganizationDirectory: defineTable({
+		orgId: v.id('organizations'),
+		slug: v.string(),
+		name: v.string(),
+		nameSort: v.string(),
+		description: v.optional(v.string()),
+		mission: v.optional(v.string()),
+		logoUrl: v.optional(v.string()),
+		avatar: v.optional(v.string()),
+		supporterCount: v.number(),
+		campaignCount: v.number(),
+		memberCount: v.number(),
+		updatedAt: v.number(),
+		version: v.number()
+	})
+		.index('by_orgId', ['orgId'])
+		.index('by_slug', ['slug'])
+		.index('by_nameSort_orgId', ['nameSort', 'orgId']),
+
+	publicOrganizationDirectoryMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('ready'),
+			v.literal('failed')
+		),
+		token: v.string(),
+		cursor: v.optional(v.string()),
+		scanComplete: v.optional(v.boolean()),
+		scanned: v.number(),
+		processed: v.number(),
+		written: v.number(),
+		rejected: v.number(),
+		total: v.number(),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
 	orgMemberships: defineTable({
 		userId: v.id('users'),
 		orgId: v.id('organizations'),
@@ -1581,7 +2185,8 @@ export default defineSchema({
 		invitedBy: v.optional(v.string())
 	})
 		.index('by_userId_orgId', ['userId', 'orgId'])
-		.index('by_orgId', ['orgId']),
+		.index('by_orgId', ['orgId'])
+		.index('by_orgId_role', ['orgId', 'role']),
 
 	orgInvites: defineTable({
 		orgId: v.id('organizations'),
@@ -1635,6 +2240,11 @@ export default defineSchema({
 		principles: v.optional(v.array(v.string())),
 		charterText: v.optional(v.string()),
 		charterPublishedAt: v.optional(v.number()),
+		coalitionMembershipRevision: v.optional(v.number()),
+		// Exact active-roster count maintained on every membership transition.
+		// Optional only for legacy networks, which may use the ready coalition
+		// aggregate until a roster transition adopts the field.
+		activeMemberCount: v.optional(v.number()),
 
 		// Most recent computed coalition-packet attestation hash. Deterministic
 		// SHA-256 over sorted (orgId, campaignId, packetDigest) tuples of all
@@ -1661,7 +2271,258 @@ export default defineSchema({
 		.index('by_orgId', ['orgId'])
 		.index('by_networkId_orgId', ['networkId', 'orgId'])
 		.index('by_orgId_status', ['orgId', 'status'])
-		.index('by_networkId_status', ['networkId', 'status']),
+		.index('by_networkId_status', ['networkId', 'status'])
+		.index('by_networkId_status_joinedAt', ['networkId', 'status', 'joinedAt']),
+
+	// Incremental per-organization inputs and generation-swapped network
+	// projections. Public coalition reads never scan raw supporters, actions,
+	// receipts, or the full member roster.
+	coalitionOrgMetricInputs: defineTable({
+		orgId: v.id('organizations'),
+		version: v.number(),
+		revision: v.number(),
+		totalSupporters: v.number(),
+		verifiedSupporters: v.number(),
+		totalCampaignActions: v.number(),
+		verifiedCampaignActions: v.number(),
+		messageHashedTotal: v.number(),
+		tier1: v.number(),
+		tier3: v.number(),
+		tier4: v.number(),
+		updatedAt: v.number()
+	}).index('by_orgId', ['orgId']),
+
+	coalitionOrgMetricDimensions: defineTable({
+		orgId: v.id('organizations'),
+		kind: v.union(
+			v.literal('supporter_hash'),
+			v.literal('country'),
+			v.literal('action_district'),
+			v.literal('action_message'),
+			v.literal('action_hour')
+		),
+		key: v.string(),
+		count: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_kind_key', ['orgId', 'kind', 'key'])
+		.index('by_orgId_kind', ['orgId', 'kind']),
+
+	coalitionOrgPressureInputs: defineTable({
+		orgId: v.id('organizations'),
+		decisionMakerId: v.id('decisionMakers'),
+		dmName: v.string(),
+		canonicalSlug: v.optional(v.string()),
+		verifiedActionEvidence: v.number(),
+		districtSignalCount: v.number(),
+		receiptCount: v.number(),
+		latestReceiptAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_decisionMakerId', ['orgId', 'decisionMakerId'])
+		.index('by_orgId', ['orgId']),
+
+	coalitionOrgPressureBillInputs: defineTable({
+		orgId: v.id('organizations'),
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		billTitle: v.string(),
+		alignmentNumerator: v.float64(),
+		alignmentWeight: v.float64(),
+		dmAction: v.optional(v.string()),
+		receiptCount: v.number(),
+		latestReceiptAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_decisionMakerId_billId', ['orgId', 'decisionMakerId', 'billId'])
+		.index('by_orgId', ['orgId']),
+
+	coalitionNetworkAggregates: defineTable({
+		networkId: v.id('orgNetworks'),
+		version: v.number(),
+		status: v.string(),
+		activeGeneration: v.optional(v.number()),
+		revision: v.number(),
+		memberCount: v.number(),
+		totalSupporters: v.number(),
+		uniqueSupporters: v.number(),
+		verifiedSupporters: v.number(),
+		totalCampaignActions: v.number(),
+		verifiedCampaignActions: v.number(),
+		messageHashedTotal: v.number(),
+		uniqueMessages: v.number(),
+		districtCount: v.number(),
+		districtSquareSum: v.float64(),
+		hourCountXLogXSum: v.float64(),
+		tier1: v.number(),
+		tier3: v.number(),
+		tier4: v.number(),
+		stateDistribution: v.array(v.object({ code: v.string(), count: v.number() })),
+		stateDistributionOtherCount: v.number(),
+		gds: v.optional(v.float64()),
+		ald: v.optional(v.float64()),
+		temporalEntropy: v.optional(v.float64()),
+		cai: v.optional(v.float64()),
+		dirtyAt: v.optional(v.number()),
+		refreshScheduledAt: v.optional(v.number()),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	})
+		.index('by_networkId', ['networkId'])
+		.index('by_status', ['status']),
+
+	coalitionNetworkMetricDimensions: defineTable({
+		networkId: v.id('orgNetworks'),
+		generation: v.number(),
+		kind: v.union(
+			v.literal('supporter_hash'),
+			v.literal('country'),
+			v.literal('action_district'),
+			v.literal('action_message'),
+			v.literal('action_hour')
+		),
+		key: v.string(),
+		count: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_networkId_generation_kind_key', ['networkId', 'generation', 'kind', 'key'])
+		.index('by_networkId_generation_kind', ['networkId', 'generation', 'kind']),
+
+	coalitionNetworkPressureRows: defineTable({
+		networkId: v.id('orgNetworks'),
+		generation: v.number(),
+		decisionMakerId: v.id('decisionMakers'),
+		canonicalSlug: v.optional(v.string()),
+		dmName: v.string(),
+		orgCount: v.number(),
+		verifiedActionEvidence: v.number(),
+		districtSignalCount: v.number(),
+		receiptCount: v.number(),
+		bills: v.array(
+			v.object({
+				billId: v.string(),
+				billTitle: v.string(),
+				alignment: v.float64(),
+				dmAction: v.optional(v.string()),
+				receiptCount: v.number()
+			})
+		),
+		latestReceiptAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_networkId_generation_decisionMakerId', [
+			'networkId',
+			'generation',
+			'decisionMakerId'
+		])
+		.index('by_networkId_generation_verifiedActionEvidence', [
+			'networkId',
+			'generation',
+			'verifiedActionEvidence'
+		]),
+
+	coalitionNetworkPressureBills: defineTable({
+		networkId: v.id('orgNetworks'),
+		generation: v.number(),
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		billTitle: v.string(),
+		alignmentNumerator: v.float64(),
+		alignmentWeight: v.float64(),
+		dmAction: v.optional(v.string()),
+		receiptCount: v.number(),
+		latestReceiptAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_networkId_generation_decisionMakerId_billId', [
+			'networkId',
+			'generation',
+			'decisionMakerId',
+			'billId'
+		])
+		.index('by_networkId_generation', ['networkId', 'generation']),
+
+	coalitionNetworkRebuilds: defineTable({
+		networkId: v.id('orgNetworks'),
+		status: v.string(),
+		runToken: v.string(),
+		targetGeneration: v.number(),
+		phase: v.string(),
+		memberOrgIds: v.array(v.id('organizations')),
+		memberRevisions: v.array(v.number()),
+		membershipRevision: v.number(),
+		memberIndex: v.number(),
+		kindIndex: v.number(),
+		cursor: v.optional(v.string()),
+		accumulator: v.any(),
+		failureCode: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_networkId', ['networkId'])
+		.index('by_status', ['status']),
+
+	coalitionMetricsMigrations: defineTable({
+		key: v.string(),
+		status: v.string(),
+		runToken: v.string(),
+		phase: v.string(),
+		cursor: v.optional(v.string()),
+		scannedSupporters: v.number(),
+		projectedSupporters: v.number(),
+		scannedActions: v.number(),
+		projectedActions: v.number(),
+		scannedReceipts: v.number(),
+		projectedReceipts: v.number(),
+		networksScheduled: v.number(),
+		networksReady: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	publicNetworkCharters: defineTable({
+		networkId: v.id('orgNetworks'),
+		slug: v.string(),
+		name: v.string(),
+		applicableCountries: v.array(v.string()),
+		mission: v.optional(v.string()),
+		principles: v.array(v.string()),
+		charterText: v.optional(v.string()),
+		charterPublishedAt: v.number(),
+		charterHash: v.string(),
+		ownerOrg: v.optional(v.object({ name: v.string(), slug: v.string() })),
+		founders: v.array(
+			v.object({
+				orgName: v.string(),
+				orgSlug: v.string(),
+				role: v.string(),
+				joinedAt: v.number()
+			})
+		),
+		projectionVersion: v.number(),
+		payloadBytes: v.number(),
+		createdAt: v.number()
+	})
+		.index('by_slug', ['slug'])
+		.index('by_networkId', ['networkId']),
+
+	networkCharterMigrations: defineTable({
+		key: v.string(),
+		status: v.string(),
+		runToken: v.string(),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	templateEndorsements: defineTable({
 		templateId: v.id('templates'),
@@ -1698,6 +2559,7 @@ export default defineSchema({
 		// context). Both producers in `convex/_orgHash.ts`.
 		globalEmailHash: v.optional(v.string()),
 		globalPhoneHash: v.optional(v.string()),
+		coalitionMetricsVersion: v.optional(v.number()),
 
 		// ZK identity binding
 		identityCommitment: v.optional(v.string()),
@@ -1723,14 +2585,57 @@ export default defineSchema({
 		// Import tracking
 		source: v.optional(v.string()), // 'csv' | platform profile id | 'organic' | 'widget'
 		importedAt: v.optional(v.number()),
+		// Compact, versioned People-browser projection. These fields make every
+		// list/export page proportional to its requested page size: no 10K roster
+		// rebuild and no per-row supporterTags fan-out.
+		browseSource: v.optional(v.string()),
+		browseTagIds: v.optional(v.array(v.id('tags'))),
+		supporterBrowseVersion: v.optional(v.number()),
+
+		// Compact audience-filter read model. Launch-path email/SMS cohort
+		// resolution reads these bounded arrays directly from each supporter page;
+		// it never joins supporterTags or campaignActions per supporter. Exact
+		// dimension counts live in supporterAudienceActionDimensions so action
+		// insert/delete transitions can maintain the arrays transactionally.
+		audienceCampaignIds: v.optional(v.array(v.id('campaigns'))),
+		audienceDistrictHashes: v.optional(v.array(v.string())),
+		audienceDistrictCodes: v.optional(v.array(v.string())),
+		audienceMaxEngagementTier: v.optional(v.number()),
+		audienceActionProjectionVersion: v.optional(v.number()),
+		// A supporter whose distinct action dimensions exceed the product
+		// envelope is never approximated. Action-context cohort builds fail closed
+		// until an operator deliberately repairs or narrows the history.
+		audienceActionProjectionOverflow: v.optional(v.boolean()),
+		// Monotonic fanout checkpoints. Provider jobs may complete out of order;
+		// a supporter row only accepts an authority snapshot newer than the last
+		// one already projected for that channel.
+		contactEmailAuthorityUpdatedAt: v.optional(v.number()),
+		contactSmsAuthorityUpdatedAt: v.optional(v.number()),
 
 		updatedAt: v.number()
 	})
 		.index('by_orgId', ['orgId'])
+		.index('by_orgId_emailStatus', ['orgId', 'emailStatus'])
+		.index('by_orgId_smsStatus', ['orgId', 'smsStatus'])
+		.index('by_orgId_verified', ['orgId', 'verified'])
+		.index('by_orgId_browseSource', ['orgId', 'browseSource'])
+		.index('by_orgId_emailStatus_verified', ['orgId', 'emailStatus', 'verified'])
+		.index('by_orgId_emailStatus_browseSource', ['orgId', 'emailStatus', 'browseSource'])
+		.index('by_orgId_verified_browseSource', ['orgId', 'verified', 'browseSource'])
+		.index('by_orgId_emailStatus_verified_browseSource', [
+			'orgId',
+			'emailStatus',
+			'verified',
+			'browseSource'
+		])
 		.index('by_orgId_emailHash', ['orgId', 'emailHash'])
 		.index('by_orgId_phoneHash', ['orgId', 'phoneHash'])
 		.index('by_globalEmailHash', ['globalEmailHash'])
+		.index('by_globalEmailHash_emailStatus', ['globalEmailHash', 'emailStatus'])
 		.index('by_globalPhoneHash', ['globalPhoneHash'])
+		.index('by_globalPhoneHash_smsStatus', ['globalPhoneHash', 'smsStatus'])
+		.index('by_globalPhoneHash_orgId', ['globalPhoneHash', 'orgId'])
+		.index('by_globalPhoneHash_orgId_smsStatus', ['globalPhoneHash', 'orgId', 'smsStatus'])
 		.index('by_emailStatus', ['emailStatus'])
 		.index('by_smsStatus', ['smsStatus'])
 		.index('by_source', ['source'])
@@ -1738,18 +2643,101 @@ export default defineSchema({
 
 	tags: defineTable({
 		orgId: v.id('organizations'),
-		name: v.string()
+		name: v.string(),
+		nameKey: v.optional(v.string()),
+		// Exact count maintained by versioned supporterTag link transitions.
+		supporterCount: v.optional(v.number())
 	})
 		.index('by_orgId', ['orgId'])
-		.index('by_orgId_name', ['orgId', 'name']),
+		.index('by_orgId_name', ['orgId', 'name'])
+		.index('by_orgId_nameKey', ['orgId', 'nameKey']),
 
 	supporterTags: defineTable({
 		supporterId: v.id('supporters'),
-		tagId: v.id('tags')
+		tagId: v.id('tags'),
+		// Copied supporter ordering key + version marker for a real tag-anchored
+		// database cursor. The version equality excludes unprojected legacy links.
+		supporterCreatedAt: v.optional(v.number()),
+		supporterBrowseVersion: v.optional(v.number())
 	})
 		.index('by_supporterId', ['supporterId'])
 		.index('by_tagId', ['tagId'])
+		.index('by_tagId_supporterBrowseVersion_supporterCreatedAt', [
+			'tagId',
+			'supporterBrowseVersion',
+			'supporterCreatedAt'
+		])
 		.index('by_supporterId_tagId', ['supporterId', 'tagId']),
+
+	supporterBrowseMigrations: defineTable({
+		key: v.literal('supporter-browse-v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		runToken: v.string(),
+		phase: v.union(
+			v.literal('links'),
+			v.literal('supporters'),
+			v.literal('tags'),
+			v.literal('complete')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		failurePhase: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Exact multiplicities behind the compact supporter action projection.
+	// One campaign action contributes at most five rows (campaign, district
+	// hash, readable district code, engagement tier, verified-district marker). The compound index is a
+	// logical uniqueness boundary used by every writer transition.
+	supporterAudienceActionDimensions: defineTable({
+		orgId: v.id('organizations'),
+		supporterId: v.id('supporters'),
+		kind: v.union(
+			v.literal('campaign'),
+			v.literal('district_hash'),
+			v.literal('district_code'),
+			v.literal('engagement_tier'),
+			v.literal('verified_district_supporter')
+		),
+		value: v.string(),
+		count: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_supporter_kind_value', ['supporterId', 'kind', 'value'])
+		.index('by_supporter_kind', ['supporterId', 'kind']),
+
+	supporterAudienceActionMigrations: defineTable({
+		// v1 rows remain valid during the marker-only v2 adoption. The active
+		// reader/writer version is selected in lib/supporterAudience.ts.
+		key: v.union(
+			v.literal('supporter-audience-actions-v1'),
+			v.literal('supporter-audience-actions-v2')
+		),
+		status: v.union(
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// SEGMENTS
@@ -1823,9 +2811,9 @@ export default defineSchema({
 		raisedAmountCents: v.number(),
 		// Counts donations completed, NOT unique donors. Field name is legacy
 		// (renaming is a Convex migration); UI labels it "Donations" to match
-		// the actual semantics. True unique-donor tracking is deferred to
-		// Phase 9 substrate work — would need a (campaignId, supporterId)
-		// composite index plus refund-aware decrement logic. (cure shipped).
+		// the actual semantics. True unique-donor tracking is deferred: it would
+		// need a (campaignId, supporterId) composite index plus refund-aware
+		// decrement logic.
 		donorCount: v.number(),
 		donationCurrency: v.optional(v.string()),
 		donationReceiptPolicy: v.optional(
@@ -1858,16 +2846,24 @@ export default defineSchema({
 		// `getCampaignForReport` would have to read every campaignAction
 		// row just to count this subset in memory.
 		tier3VerifiedActionCount: v.optional(v.number()),
+		// Marks that this campaign's current status has been folded into the
+		// organization activeCampaignCount. Enables exact concurrent migration.
+		orgCounterVersion: v.optional(v.number()),
 
 		updatedAt: v.number()
 	})
 		.index('by_orgId', ['orgId'])
+		.index('by_orgId_type', ['orgId', 'type'])
+		.index('by_orgId_type_status', ['orgId', 'type', 'status'])
+		.index('by_orgId_status', ['orgId', 'status'])
 		.index('by_status', ['status'])
 		.index('by_debateId', ['debateId'])
 		// Resolve the campaign that owns a given template — used by the
 		// congressional delivery path to attribute a successful CWC send back to
 		// the org campaign whose templateId matches the delivered submission.
-		.index('by_templateId', ['templateId']),
+		.index('by_templateId', ['templateId'])
+		.index('by_templateId_debateId', ['templateId', 'debateId'])
+		.index('by_templateId_orgId_status', ['templateId', 'orgId', 'status']),
 
 	campaignActions: defineTable({
 		campaignId: v.id('campaigns'),
@@ -1910,12 +2906,7 @@ export default defineSchema({
 		// as unattributed). Adding a value requires a schema deploy + a matching
 		// read-side branch — the right friction for a cross-channel discriminator.
 		channel: v.optional(
-			v.union(
-				v.literal('congressional'),
-				v.literal('email'),
-				v.literal('sms'),
-				v.literal('web')
-			)
+			v.union(v.literal('congressional'), v.literal('email'), v.literal('sms'), v.literal('web'))
 		),
 
 		// Set only on congressional-channel rows: the submissions row whose
@@ -1934,6 +2925,9 @@ export default defineSchema({
 		// Senate-fail rollup is recorded as 'partial', not silently counted as a
 		// full delivery.
 		deliveryStatus: v.optional(v.union(v.literal('delivered'), v.literal('partial'))),
+		readModelVersion: v.optional(v.number()),
+		coalitionMetricsVersion: v.optional(v.number()),
+		audienceActionProjectionVersion: v.optional(v.number()),
 
 		sentAt: v.number()
 	})
@@ -1952,13 +2946,14 @@ export default defineSchema({
 		.index('by_campaignId_channel', ['campaignId', 'channel'])
 		// Congressional-path dedup: a single-doc lookup for the action a given
 		// submission already produced, so retries are idempotent.
-		.index('by_campaignId_congressionalSubmissionId', [
-			'campaignId',
-			'congressionalSubmissionId'
-		]),
+		.index('by_campaignId_congressionalSubmissionId', ['campaignId', 'congressionalSubmissionId']),
 
 	campaignDeliveries: defineTable({
 		campaignId: v.id('campaigns'),
+		// Denormalized ownership is the exact bounded source for plan-usage
+		// repair. Legacy rows are adopted by the global plan-usage migration
+		// before any organization can be projected ready.
+		orgId: v.optional(v.id('organizations')),
 		actionId: v.optional(v.id('campaignActions')),
 		decisionMakerId: v.optional(v.id('decisionMakers')),
 		billId: v.optional(v.id('bills')),
@@ -1970,6 +2965,7 @@ export default defineSchema({
 		targetTitle: v.string(),
 		targetDistrict: v.optional(v.string()),
 		status: v.string(), // 'queued' | 'sent' | 'delivered' | 'bounced' | 'opened'
+		planUsageReservationId: v.optional(v.id('planUsageReservations')),
 		sentAt: v.optional(v.number()),
 		sesMessageId: v.optional(v.string()),
 		// Append-only history of sesMessageIds that previously bound to
@@ -1983,7 +2979,6 @@ export default defineSchema({
 		previousSesMessageIds: v.optional(v.array(v.string())),
 		packetSnapshot: v.optional(v.any()),
 		packetDigest: v.optional(v.string()),
-		proofWeight: v.optional(v.number()),
 		// Sender-side delivery rows become receipt-eligible only when they
 		// are bound to both a Power target and a bill. This is readiness,
 		// not a Merkle-anchored accountability receipt.
@@ -2010,9 +3005,13 @@ export default defineSchema({
 				})
 			)
 		),
+		readModelVersion: v.optional(v.number()),
 		createdAt: v.number()
 	})
 		.index('by_campaignId', ['campaignId'])
+		.index('by_orgId_sentAt', ['orgId', 'sentAt'])
+		.index('by_campaignId_status', ['campaignId', 'status'])
+		.index('by_campaignId_targetEmail', ['campaignId', 'targetEmail'])
 		.index('by_actionId', ['actionId'])
 		.index('by_status', ['status'])
 		// SES bounce/delivery webhook (`webhooks.handleDeliveryEvent`) uses
@@ -2021,6 +3020,95 @@ export default defineSchema({
 		// O(n) over every campaign delivery, ever. With the index this is
 		// a bounded read by SES MessageId, which is unique per send.
 		.index('by_sesMessageId', ['sesMessageId']),
+
+	// Meters only institution-designated person-bound routes. Officeholder,
+	// statutory-record, and office-inbox routes never write a binding row.
+	personBoundRouteBindings: defineTable({
+		targetHash: v.string(),
+		boundCampaignKey: v.string(),
+		boundAt: v.number(),
+		boundUntil: v.number(),
+		updatedAt: v.number()
+	}).index('by_targetHash', ['targetHash']),
+
+	// Meters only institution-designated person-bound routes. Officeholder,
+	// statutory-record, and office-inbox routes never write a sender row.
+	personBoundRouteSends: defineTable({
+		targetHash: v.string(),
+		senderToken: v.string(),
+		campaignKey: v.string(),
+		firstSeenAt: v.number(),
+		expiresAt: v.number()
+	})
+		.index('by_targetHash_expiresAt', ['targetHash', 'expiresAt'])
+		.index('by_targetHash_senderToken', ['targetHash', 'senderToken']),
+
+	// Compact campaign proof/analytics singleton. Every embedded list has a
+	// hard cap in lib/campaignReadModel.ts.
+	campaignReadModels: defineTable({
+		campaignId: v.id('campaigns'),
+		orgId: v.id('organizations'),
+		state: campaignReadModelStateValidator
+	})
+		.index('by_campaignId', ['campaignId'])
+		.index('by_orgId', ['orgId']),
+
+	// Exact high-cardinality dimensions live outside the hot singleton. Each
+	// action touches at most eight unique [campaign,kind,key] rows.
+	campaignReadModelDimensions: defineTable({
+		campaignId: v.id('campaigns'),
+		kind: v.union(
+			v.literal('district'),
+			v.literal('cell'),
+			v.literal('hour'),
+			v.literal('day'),
+			v.literal('day_verified'),
+			v.literal('message'),
+			v.literal('message_no_mode'),
+			v.literal('atlas')
+		),
+		key: v.string(),
+		count: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_campaignId_kind_key', ['campaignId', 'kind', 'key'])
+		.index('by_campaignId_kind', ['campaignId', 'kind']),
+
+	campaignReadModelMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		phase: v.union(v.literal('actions'), v.literal('deliveries')),
+		cursor: v.optional(v.string()),
+		actionsScanned: v.number(),
+		actionsAdopted: v.number(),
+		deliveriesScanned: v.number(),
+		deliveriesAdopted: v.number(),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	campaignActiveCounterMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		adopted: v.number(),
+		activeCounted: v.number(),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// EMAIL BLASTS (with flattened email_batch)
@@ -2043,12 +3131,24 @@ export default defineSchema({
 		fromEmail: v.string(),
 
 		status: emailBlastStatus,
+		planUsageReservationId: v.optional(v.id('planUsageReservations')),
+		// One-shot, serializable grant immediately before the enclave POST. The
+		// global contact-authority epoch and exact materialized cohort size are
+		// committed with the grant so duplicate action invocations cannot exercise
+		// carrier authority twice. Optional only for pre-grant/legacy rows.
+		carrierAuthorityIssuedAt: v.optional(v.number()),
+		carrierAuthorityEpoch: v.optional(v.number()),
+		carrierAuthorityRecipientCount: v.optional(v.number()),
 
 		// Recipient targeting. Closed shape (see convex/_validators.ts) so a
 		// malformed write cannot widen a targeted blast to the entire
 		// subscribed cohort — the failure mode the prior `v.any()` allowed.
 		recipientFilter: v.optional(recipientFilterValidator),
 		totalRecipients: v.number(),
+		// Exact O(1) receipt cardinality authority. Optional only for legacy rows:
+		// receipt writers fail closed when it is absent, so they never rebuild a
+		// cohort-sized count inside a request transaction.
+		receiptCount: v.optional(v.number()),
 
 		// Verification context
 		verificationContext: v.optional(v.any()),
@@ -2092,12 +3192,33 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_status', ['status'])
+		.index('by_status_sendMode_scheduledAt', ['status', 'sendMode', 'scheduledAt'])
+		.index('by_status_updatedAt', ['status', 'updatedAt'])
 		// Range index for the billing period read: checkPlanLimits ranges
 		// sentAt >= periodStart so it touches only this period's blasts, not the
 		// org's entire blast history (one row per blast — same unbounded-collect
 		// cliff the verified-action read already fixed via by_orgId_verified_sentAt).
 		.index('by_orgId_sentAt', ['orgId', 'sentAt'])
-		.index('by_abParentId', ['abParentId']),
+		.index('by_orgId_abParentId', ['orgId', 'abParentId']),
+
+	// Compact unresolved A/B winner read model. The picker never needs subject,
+	// bodyHtml, recipient filters, or cohort hash arrays; keeping those fields
+	// out prevents a bounded row scan from becoming a multi-megabyte I/O scan.
+	emailAbWinnerCandidates: defineTable({
+		blastId: v.id('emailBlasts'),
+		orgId: v.id('organizations'),
+		abParentId: v.string(),
+		abVariant: v.optional(v.string()),
+		totalSent: v.number(),
+		totalOpened: v.number(),
+		totalClicked: v.number(),
+		sentAt: v.number(),
+		winnerMetric: v.optional(v.union(v.literal('open'), v.literal('click'))),
+		testDurationMs: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_blastId', ['blastId'])
+		.index('by_sentAt', ['sentAt']),
 
 	emailAbTestCohorts: defineTable({
 		orgId: v.id('organizations'),
@@ -2127,7 +3248,18 @@ export default defineSchema({
 	})
 		.index('by_blastId', ['blastId'])
 		.index('by_blastId_eventType', ['blastId', 'eventType'])
-		.index('by_blastId_recipientEmailHash', ['blastId', 'recipientEmailHash']),
+		.index('by_blastId_recipientEmailHash', ['blastId', 'recipientEmailHash'])
+		.index('by_blastId_recipientEmailHash_eventType', [
+			'blastId',
+			'recipientEmailHash',
+			'eventType'
+		])
+		.index('by_blastId_recipientEmailHash_eventType_linkUrl', [
+			'blastId',
+			'recipientEmailHash',
+			'eventType',
+			'linkUrl'
+		]),
 
 	// Per-recipient send receipts — one row per (blast, recipient) at the moment
 	// the SES Lambda dispatches the message. Closes (no durable
@@ -2198,6 +3330,17 @@ export default defineSchema({
 		),
 		currentPeriodStart: v.number(),
 		currentPeriodEnd: v.number(),
+		// Checkout can only seed a synthetic window. Stripe subscription items and
+		// settled invoice lines are authoritative; this provenance lets an exact
+		// period correct an earlier-looking checkout timestamp without permitting a
+		// stale exact webhook to rewind a later settled period.
+		billingPeriodSource: v.optional(
+			v.union(
+				v.literal('checkout_approximate'),
+				v.literal('stripe_subscription_item'),
+				v.literal('settled_invoice')
+			)
+		),
 
 		paymentMethod: v.union(v.literal('stripe'), v.literal('crypto')),
 
@@ -2213,12 +3356,217 @@ export default defineSchema({
 
 		// Grace period tracking: set on first transition to past_due, cleared on recovery
 		pastDueSince: v.optional(v.number()),
+		pastDueExpiryScheduledAt: v.optional(v.number()),
 
 		updatedAt: v.number()
 	})
 		.index('by_userId', ['userId'])
 		.index('by_orgId', ['orgId'])
-		.index('by_stripeSubscriptionId', ['stripeSubscriptionId']),
+		.index('by_stripeSubscriptionId', ['stripeSubscriptionId'])
+		.index('by_status_pastDueSince', ['status', 'pastDueSince']),
+
+	// Revenue-backed provider capacity. A balance is the aggregate for one exact
+	// org subscription period; immutable payment receipts make Stripe retries
+	// idempotent while allowing legitimate prorations to add capacity.
+	agenticProviderBalances: defineTable({
+		orgId: v.id('organizations'),
+		subscriptionId: v.id('subscriptions'),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number(),
+		balanceUnits: v.number(),
+		amountPaidCents: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_period', ['orgId', 'billingPeriodStart'])
+		.index('by_subscriptionId_period', ['subscriptionId', 'billingPeriodStart']),
+
+	agenticProviderReceipts: defineTable({
+		paymentId: v.string(),
+		orgId: v.id('organizations'),
+		subscriptionId: v.id('subscriptions'),
+		billingPeriodStart: v.number(),
+		billingPeriodEnd: v.number(),
+		amountPaidCents: v.number(),
+		balanceUnits: v.number(),
+		createdAt: v.number()
+	}).index('by_paymentId', ['paymentId']),
+
+	// Bounded pre-activation proof that subscription owner and Stripe identity
+	// cardinality are exact. All entitlement readers fail closed independently;
+	// this singleton prevents launch readiness while legacy rows are malformed.
+	subscriptionAuthorityMigrations: defineTable({
+		key: v.literal('subscription-authority-v1'),
+		status: v.union(v.literal('running'), v.literal('ready'), v.literal('blocked')),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Durable, one-page-at-a-time cutover for exact organization plan usage.
+	// The migration holds one organization and one source cursor at a time;
+	// activation is separate so every request fails closed until the projection
+	// is globally exact.
+	planUsageMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		runToken: v.string(),
+		phase: v.union(
+			v.literal('campaignDeliveriesAdoption'),
+			v.literal('emailBlastsAdoption'),
+			v.literal('workflowEmailsAdoption'),
+			v.literal('organizations'),
+			v.literal('verifiedActions'),
+			v.literal('emailBlasts'),
+			v.literal('campaignDeliveries'),
+			v.literal('workflowEmails'),
+			v.literal('emailReservations'),
+			v.literal('smsBlasts'),
+			v.literal('complete')
+		),
+		organizationCursor: v.optional(v.string()),
+		currentOrgId: v.optional(v.id('organizations')),
+		sourceCursor: v.optional(v.string()),
+		periodStart: v.optional(v.number()),
+		verifiedActions: v.number(),
+		emailsSent: v.number(),
+		emailReserved: v.number(),
+		smsSent: v.number(),
+		verifiedLifetimeSnapshot: v.optional(v.number()),
+		emailLifetimeSnapshot: v.optional(v.number()),
+		emailReservedSnapshot: v.optional(v.number()),
+		emailReservationPeriodSnapshot: v.optional(v.number()),
+		smsLifetimeSnapshot: v.optional(v.number()),
+		restarts: v.number(),
+		scannedOrganizations: v.number(),
+		projectedOrganizations: v.number(),
+		scannedSourceRows: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Durable per-organization repair evidence for projection-only plan usage.
+	// One bounded worker transaction advances exactly one source page. The
+	// organization row remains the hot O(1) usage authority; this row records
+	// why that authority is not ready, the period being rebuilt, and enough
+	// cursor/snapshot state to resume without request-path history scans.
+	planUsageRepairs: defineTable({
+		orgId: v.id('organizations'),
+		status: v.union(
+			v.literal('pending'),
+			v.literal('running'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		runToken: v.string(),
+		periodStart: v.number(),
+		phase: v.union(
+			v.literal('verifiedActions'),
+			v.literal('emailBlasts'),
+			v.literal('campaignDeliveries'),
+			v.literal('workflowEmails'),
+			v.literal('emailReservations'),
+			v.literal('smsBlasts'),
+			v.literal('complete')
+		),
+		sourceCursor: v.optional(v.string()),
+		verifiedActions: v.number(),
+		emailsSent: v.number(),
+		emailReserved: v.number(),
+		smsSent: v.number(),
+		verifiedLifetimeSnapshot: v.number(),
+		emailLifetimeSnapshot: v.number(),
+		emailReservedSnapshot: v.number(),
+		emailReservationPeriodSnapshot: v.optional(v.number()),
+		smsLifetimeSnapshot: v.number(),
+		restarts: v.number(),
+		scannedSourceRows: v.number(),
+		repairedCounterFields: v.optional(v.array(v.string())),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		requestedAt: v.number(),
+		scheduledAt: v.optional(v.number()),
+		startedAt: v.optional(v.number()),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_orgId', ['orgId'])
+		.index('by_status_updatedAt', ['status', 'updatedAt']),
+
+	// Durable quota holds bridge the non-transactional carrier boundary. A
+	// reservation is immutable in identity/requested capacity; only its exact
+	// sent/released/remaining partition advances. The organization scalar is the
+	// O(1) admission authority, while this table is the repair/audit source.
+	planUsageReservations: defineTable({
+		reservationIdentity: v.string(),
+		orgId: v.id('organizations'),
+		resource: v.literal('email'),
+		sourceType: v.union(
+			v.literal('campaignDelivery'),
+			v.literal('emailBlast'),
+			v.literal('workflowEmail')
+		),
+		sourceId: v.string(),
+		// Workflow email identities are the durable (execution, step) tuple.
+		// Other source types leave this unset and use their document id alone.
+		sourceStepIndex: v.optional(v.number()),
+		periodStart: v.number(),
+		requestedCount: v.number(),
+		remainingCount: v.number(),
+		sentCount: v.number(),
+		releasedCount: v.number(),
+		status: v.union(
+			v.literal('active'),
+			v.literal('blocked'),
+			v.literal('settled'),
+			v.literal('released')
+		),
+		leaseExpiresAt: v.number(),
+		terminalReason: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number(),
+		settledAt: v.optional(v.number())
+	})
+		.index('by_identity', ['reservationIdentity'])
+		.index('by_orgId_status_periodStart', ['orgId', 'status', 'periodStart'])
+		.index('by_status_leaseExpiresAt', ['status', 'leaseExpiresAt']),
+
+	// Append-only, operator-ingested carrier evidence for ambiguous outcomes.
+	// Reconciliation derives the quota outcome from this audited row and the
+	// reservation/source identity; it never accepts a naked count directly.
+	planUsageCarrierEvidence: defineTable({
+		evidenceIdentity: v.string(),
+		reservationId: v.id('planUsageReservations'),
+		orgId: v.id('organizations'),
+		carrier: v.literal('ses'),
+		carrierMessageIds: v.array(v.string()),
+		absoluteSentCount: v.number(),
+		absoluteFailedCount: v.number(),
+		sourceType: v.union(
+			v.literal('campaignDelivery'),
+			v.literal('emailBlast'),
+			v.literal('workflowEmail')
+		),
+		sourceId: v.string(),
+		sourceStepIndex: v.optional(v.number()),
+		sourceDigest: v.string(),
+		operatorRef: v.string(),
+		observedAt: v.number(),
+		ingestedAt: v.number()
+	})
+		.index('by_identity', ['evidenceIdentity'])
+		.index('by_reservationId', ['reservationId']),
 
 	// ===========================================================================
 	// API KEYS
@@ -2241,6 +3589,10 @@ export default defineSchema({
 		createdBy: v.optional(v.string())
 	})
 		.index('by_orgId', ['orgId'])
+		// Active-key cardinality is enforced transactionally by reading this
+		// exact optional-field range before insert. Revoked history remains on
+		// `by_orgId` and is separately hard-capped by the creation mutation.
+		.index('by_orgId_revokedAt', ['orgId', 'revokedAt'])
 		.index('by_keyHash', ['keyHash']),
 
 	usageRecords: defineTable({
@@ -2248,6 +3600,8 @@ export default defineSchema({
 		keyId: v.optional(v.id('apiKeys')),
 		meter: v.union(
 			v.literal('resolve_address'),
+			// agentic_resolve is an ENTITLEMENT counter (a hard block), not a billable overage meter.
+			v.literal('agentic_resolve'),
 			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
 			v.literal('resolve_district'),
 			v.literal('resolve_officials')
@@ -2273,6 +3627,8 @@ export default defineSchema({
 		orgId: v.id('organizations'),
 		meter: v.union(
 			v.literal('resolve_address'),
+			// agentic_resolve is an ENTITLEMENT counter (a hard block), not a billable overage meter.
+			v.literal('agentic_resolve'),
 			// LATENT (2026-07-03): zero writers today — meter slots for future district/officials endpoints
 			v.literal('resolve_district'),
 			v.literal('resolve_officials')
@@ -2316,6 +3672,8 @@ export default defineSchema({
 
 		// Aggregate counters
 		rsvpCount: v.number(),
+		goingCount: v.optional(v.number()),
+		maybeCount: v.optional(v.number()),
 		attendeeCount: v.number(),
 		verifiedAttendees: v.number(),
 
@@ -2420,6 +3778,9 @@ export default defineSchema({
 		confirmationEmailFailureReason: v.optional(v.string()),
 		confirmationEmailProvider: v.optional(v.string()),
 		confirmationEmailProviderMessageId: v.optional(v.string()),
+		// Exactly-once marker for the writer-maintained confirmation register.
+		// Optional only until the bounded migration reaches ready.
+		confirmationSummaryVersion: v.optional(v.number()),
 
 		districtHash: v.optional(v.string()),
 		engagementTier: v.number(),
@@ -2429,10 +3790,47 @@ export default defineSchema({
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_campaignId', ['campaignId'])
+		.index('by_campaignId_status', ['campaignId', 'status'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_status', ['status'])
 		.index('by_stripeSessionId', ['stripeSessionId'])
 		.index('by_stripePaymentIntentId', ['stripePaymentIntentId']),
+
+	donationConfirmationSummaries: defineTable({
+		scopeKey: v.string(),
+		orgId: v.id('organizations'),
+		campaignId: v.optional(v.id('campaigns')),
+		completed: v.number(),
+		sent: v.number(),
+		sending: v.number(),
+		skipped: v.number(),
+		failed: v.number(),
+		notRecorded: v.number(),
+		providerAccepted: v.number(),
+		version: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_scopeKey', ['scopeKey'])
+		.index('by_orgId', ['orgId'])
+		.index('by_campaignId', ['campaignId']),
+
+	donationConfirmationSummaryMigrations: defineTable({
+		key: v.literal('donation-confirmation-summary-v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	// ===========================================================================
 	// AUTOMATION — WORKFLOWS
@@ -2445,6 +3843,9 @@ export default defineSchema({
 		trigger: v.any(), // { type: 'donation_completed' | ... }
 		steps: v.any(), // Array of step objects
 		enabled: v.boolean(),
+		// Exact total maintained on every workflowExecution insert.
+		executionCount: v.optional(v.number()),
+		executionCountVersion: v.optional(v.number()),
 		updatedAt: v.number()
 	})
 		.index('by_orgId', ['orgId'])
@@ -2473,13 +3874,34 @@ export default defineSchema({
 		currentStep: v.number(),
 		nextRunAt: v.optional(v.number()),
 		error: v.optional(v.string()),
-		completedAt: v.optional(v.number())
+		completedAt: v.optional(v.number()),
+		// Exactly-once migration/writer marker for the parent count.
+		workflowCountVersion: v.optional(v.number())
 	})
 		.index('by_workflowId', ['workflowId'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_status', ['status'])
 		.index('by_nextRunAt', ['nextRunAt'])
 		.index('by_status_nextRunAt', ['status', 'nextRunAt']),
+
+	workflowExecutionCountMigrations: defineTable({
+		key: v.literal('workflow-execution-count-v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		phase: v.union(v.literal('workflows'), v.literal('executions'), v.literal('complete')),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	workflowActionLogs: defineTable({
 		executionId: v.id('workflowExecutions'),
@@ -2488,6 +3910,34 @@ export default defineSchema({
 		result: v.any(),
 		createdAt: v.number()
 	}).index('by_executionId', ['executionId']),
+
+	// Durable carrier-boundary state for workflow send_email steps. An action
+	// log is written after a step and therefore cannot serve as the pre-send
+	// authority. This row is created with the quota reservation before SES.
+	workflowEmailDispatches: defineTable({
+		executionId: v.id('workflowExecutions'),
+		stepIndex: v.number(),
+		orgId: v.id('organizations'),
+		// Optional for migration-adopted legacy evidence and terminal pre-authority
+		// consent skips. Every dispatch that reaches `sending` must link a
+		// reservation first.
+		reservationId: v.optional(v.id('planUsageReservations')),
+		status: v.union(
+			v.literal('prepared'),
+			v.literal('sending'),
+			v.literal('sent'),
+			v.literal('failed'),
+			v.literal('blocked')
+		),
+		sesMessageId: v.optional(v.string()),
+		sentAt: v.optional(v.number()),
+		failureCode: v.optional(v.string()),
+		createdAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_executionId_stepIndex', ['executionId', 'stepIndex'])
+		.index('by_orgId_sentAt', ['orgId', 'sentAt'])
+		.index('by_status_updatedAt', ['status', 'updatedAt']),
 
 	// ===========================================================================
 	// SMS + PATCH-THROUGH CALLING
@@ -2511,6 +3961,14 @@ export default defineSchema({
 		failedCount: v.number(),
 
 		status: smsBlastStatus,
+		// Durable cursor for the browser dispatch enumerator. Each cohort query
+		// scans one supporter page; recordDispatchBatch atomically advances this
+		// cursor after the carrier batch is recorded, so the next batch never
+		// rebuilds or offsets through the preceding cohort.
+		dispatchCursor: v.optional(v.string()),
+		dispatchScannedCount: v.optional(v.number()),
+		dispatchComplete: v.optional(v.boolean()),
+		recordedCount: v.optional(v.number()),
 
 		sentAt: v.optional(v.number()),
 		updatedAt: v.number()
@@ -2533,6 +3991,7 @@ export default defineSchema({
 		errorCode: v.optional(v.string())
 	})
 		.index('by_blastId', ['blastId'])
+		.index('by_blastId_supporterId', ['blastId', 'supporterId'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_twilioSid', ['twilioSid']),
 
@@ -2544,12 +4003,42 @@ export default defineSchema({
 		toNumber: v.optional(v.string()),
 		body: v.string(),
 		twilioSid: v.optional(v.string()),
-		receivedAt: v.number()
+		receivedAt: v.number(),
+		// Exactly-once marker for the writer-maintained organization summary.
+		summaryVersion: v.optional(v.number())
 	})
 		.index('by_orgId', ['orgId'])
 		.index('by_blastId', ['blastId'])
 		.index('by_supporterId', ['supporterId'])
 		.index('by_twilioSid', ['twilioSid']),
+
+	smsReplySummaries: defineTable({
+		orgId: v.id('organizations'),
+		replyCount: v.number(),
+		matchedSupporterCount: v.number(),
+		linkedBlastCount: v.number(),
+		latestReceivedAt: v.optional(v.number()),
+		version: v.number(),
+		updatedAt: v.number()
+	}).index('by_orgId', ['orgId']),
+
+	smsReplySummaryMigrations: defineTable({
+		key: v.literal('sms-reply-summary-v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('blocked'),
+			v.literal('migrated'),
+			v.literal('ready')
+		),
+		cursor: v.optional(v.string()),
+		scanned: v.number(),
+		projected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	patchThroughCalls: defineTable({
 		orgId: v.id('organizations'),
@@ -2598,6 +4087,8 @@ export default defineSchema({
 
 	bills: defineTable({
 		externalId: v.string(),
+		// Set iff org-minted; unset iff ingested. Read by tenancy filters/refusals and prune.
+		orgId: v.optional(v.id('organizations')),
 		jurisdiction: v.string(), // 'us-federal' | 'us-state-ca' | etc.
 		jurisdictionLevel: v.string(), // 'federal' | 'state' | 'local'
 		chamber: v.optional(v.string()), // 'house' | 'senate' | 'council'
@@ -2618,7 +4109,11 @@ export default defineSchema({
 		updatedAt: v.number()
 	})
 		.index('by_externalId', ['externalId'])
+		.index('by_orgId', ['orgId'])
 		.index('by_jurisdiction_status', ['jurisdiction', 'status'])
+		.index('by_jurisdiction_status_statusDate', ['jurisdiction', 'status', 'statusDate'])
+		.index('by_jurisdiction_statusDate', ['jurisdiction', 'statusDate'])
+		.index('by_status_statusDate', ['status', 'statusDate'])
 		.index('by_statusDate', ['statusDate'])
 		.searchIndex('search_bills', {
 			searchField: 'title',
@@ -2633,11 +4128,19 @@ export default defineSchema({
 	orgBillRelevances: defineTable({
 		orgId: v.id('organizations'),
 		billId: v.id('bills'),
-		score: v.float64(), // 0.0-1.0
+		// `scoreFact` is the truth. `presentScore` exists only to index a measured value;
+		// unscored authored matters carry an explicit BLOCKED fact, never a scalar sentinel.
+		scoreFact: v.union(
+			v.object({ state: v.literal('present'), value: v.float64() }),
+			v.object({ state: v.literal('absent') }),
+			v.object({ state: v.literal('withheld'), why: v.string() }),
+			v.object({ state: v.literal('blocked'), why: v.string() })
+		),
+		presentScore: v.optional(v.float64()),
 		matchedOn: v.array(v.string())
 	})
 		.index('by_orgId_billId', ['orgId', 'billId'])
-		.index('by_orgId_score', ['orgId', 'score']),
+		.index('by_orgId_presentScore', ['orgId', 'presentScore']),
 
 	legislativeAlerts: defineTable({
 		orgId: v.id('organizations'),
@@ -2676,7 +4179,7 @@ export default defineSchema({
 		orgId: v.id('organizations'),
 		deliveryId: v.optional(v.string()),
 
-		// Proof weight components
+		// Verification packet components
 		verifiedCount: v.number(),
 		totalCount: v.number(),
 		gds: v.optional(v.float64()),
@@ -2684,7 +4187,6 @@ export default defineSchema({
 		cai: v.optional(v.float64()),
 		temporalEntropy: v.optional(v.float64()),
 		districtCount: v.number(),
-		proofWeight: v.float64(),
 
 		// Cryptographic binding
 		attestationDigest: v.string(),
@@ -2705,13 +4207,12 @@ export default defineSchema({
 		anchorCid: v.optional(v.string()),
 		anchorRoot: v.optional(v.string()),
 
-		// Metadata. Left v.string() because no writer exists in the
-		// codebase yet — accountabilityReceipts is read-side-only
-		// today, populated by external/offline pipelines. The 'pending
-		// | etc.' comment was honest about the unknown; replacing it
-		// with a union would be premature guessing. Tighten when the
-		// writer lands and enumerates the value set.
+		// Metadata. The in-tree campaign writer currently emits
+		// `pending_response`, but legacy/external receipt pipelines may have
+		// persisted additional states. Keep this open until migration evidence
+		// enumerates those values; the compact projection still byte-bounds it.
 		status: v.string(),
+		coalitionMetricsVersion: v.optional(v.number()),
 		updatedAt: v.number(),
 
 		// ── FLATTENED: ReportResponse[] ──
@@ -2739,13 +4240,215 @@ export default defineSchema({
 		.index('by_orgId_billId_decisionMakerId', ['orgId', 'billId', 'decisionMakerId'])
 		.index('by_status', ['status'])
 		.index('by_causalityClass', ['causalityClass'])
-		.index('by_deliveryId', ['deliveryId'])
-		// Time-windowed scan for `listDmsWithReceiptsSince` (vote-tracker cron).
-		// `accountabilityReceipts` is append-only and grows unboundedly; the
-		// previous `.collect()` would hit Convex's row-scan cap somewhere
-		// between 5K-16K rows. Range scan via this index reads only rows in
-		// the requested window.
-		.index('by_proofDeliveredAt', ['proofDeliveredAt']),
+		.index('by_deliveryId', ['deliveryId']),
+
+	// Purpose-built accountability read plane. These rows contain only bounded
+	// display/proof fields; raw response arrays and wide source documents never
+	// cross profile, organization scorecard, public scorecard, or export reads.
+	accountabilityReceiptProjections: defineTable({
+		receiptId: v.id('accountabilityReceipts'),
+		orgId: v.id('organizations'),
+		campaignId: v.optional(v.id('campaigns')),
+		deliveryId: v.optional(v.string()),
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		dmName: v.string(),
+		billExternalId: v.string(),
+		billTitle: v.string(),
+		billStatus: v.string(),
+		billJurisdiction: v.string(),
+		publicEligible: v.boolean(),
+		verifiedCount: v.number(),
+		totalCount: v.number(),
+		districtCount: v.number(),
+		attestationDigest: v.string(),
+		proofDeliveredAt: v.number(),
+		proofVerifiedAt: v.optional(v.number()),
+		actionOccurredAt: v.optional(v.number()),
+		causalityClass: v.string(),
+		dmAction: v.optional(v.string()),
+		alignment: v.float64(),
+		anchorCid: v.optional(v.string()),
+		anchorRoot: v.optional(v.string()),
+		status: v.string(),
+		responseCount: v.number(),
+		hasResponse: v.boolean(),
+		deliveryOpened: v.boolean(),
+		deliveryVerified: v.boolean(),
+		replyReceived: v.boolean(),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_receiptId', ['receiptId'])
+		.index('by_decisionMakerId_proofDeliveredAt', [
+			'decisionMakerId',
+			'proofDeliveredAt',
+			'receiptId'
+		])
+		.index('by_orgId_proofDeliveredAt', ['orgId', 'proofDeliveredAt', 'receiptId'])
+		.index('by_orgId_campaignId_proofDeliveredAt', [
+			'orgId',
+			'campaignId',
+			'proofDeliveredAt',
+			'receiptId'
+		])
+		.index('by_orgId_decisionMakerId_proofDeliveredAt', [
+			'orgId',
+			'decisionMakerId',
+			'proofDeliveredAt',
+			'receiptId'
+		])
+		.index('by_decisionMakerId_publicEligible_proofDeliveredAt', [
+			'decisionMakerId',
+			'publicEligible',
+			'proofDeliveredAt',
+			'receiptId'
+		])
+		.index('by_decisionMakerId_billId_proofDeliveredAt', [
+			'decisionMakerId',
+			'billId',
+			'proofDeliveredAt',
+			'receiptId'
+		]),
+
+	accountabilityUserReceiptProjections: defineTable({
+		supporterId: v.id('supporters'),
+		identityCommitment: v.optional(v.string()),
+		receiptId: v.id('accountabilityReceipts'),
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		dmName: v.string(),
+		alignment: v.float64(),
+		causalityClass: v.string(),
+		proofDeliveredAt: v.number(),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_identityCommitment_proofDeliveredAt', [
+			'identityCommitment',
+			'proofDeliveredAt',
+			'receiptId'
+		])
+		.index('by_receiptId', ['receiptId'])
+		.index('by_supporterId_proofDeliveredAt', ['supporterId', 'proofDeliveredAt', 'receiptId'])
+		.index('by_identityCommitment_receiptId', ['identityCommitment', 'receiptId']),
+
+	accountabilityOrganizationAggregates: defineTable({
+		orgId: v.id('organizations'),
+		receiptCount: v.number(),
+		pendingCount: v.number(),
+		responseLoggedCount: v.number(),
+		anchorFieldCount: v.number(),
+		latestProofDeliveredAt: v.optional(v.number()),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	}).index('by_orgId', ['orgId']),
+
+	accountabilityOrgDmProjections: defineTable({
+		orgId: v.id('organizations'),
+		decisionMakerId: v.id('decisionMakers'),
+		name: v.string(),
+		type: v.string(),
+		title: v.optional(v.string()),
+		party: v.optional(v.string()),
+		district: v.optional(v.string()),
+		jurisdiction: v.optional(v.string()),
+		photoUrl: v.optional(v.string()),
+		followed: v.boolean(),
+		followReason: v.optional(v.string()),
+		note: v.optional(v.string()),
+		alertsEnabled: v.optional(v.boolean()),
+		followedAt: v.optional(v.number()),
+		receiptCount: v.number(),
+		alignedCount: v.number(),
+		opposedCount: v.number(),
+		pendingCount: v.number(),
+		responseLoggedCount: v.number(),
+		anchorFieldCount: v.number(),
+		latestProofDeliveredAt: v.optional(v.number()),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_orgId_decisionMakerId', ['orgId', 'decisionMakerId'])
+		.index('by_orgId_followed_decisionMakerId', ['orgId', 'followed', 'decisionMakerId']),
+
+	accountabilityDecisionMakerAggregates: defineTable({
+		decisionMakerId: v.id('decisionMakers'),
+		publicReceiptCount: v.number(),
+		publicVerifiedCount: v.number(),
+		publicCausalReceiptCount: v.number(),
+		uniquePublicBillCount: v.number(),
+		latestProofDeliveredAt: v.optional(v.number()),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_decisionMakerId', ['decisionMakerId'])
+		.index('by_latestProofDeliveredAt', ['latestProofDeliveredAt', 'decisionMakerId']),
+
+	accountabilityDecisionMakerBillProjections: defineTable({
+		decisionMakerId: v.id('decisionMakers'),
+		billId: v.id('bills'),
+		publicReceiptCount: v.number(),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	}).index('by_decisionMakerId_billId', ['decisionMakerId', 'billId']),
+
+	accountabilityScorecardProjections: defineTable({
+		decisionMakerId: v.id('decisionMakers'),
+		latestSnapshotId: v.id('scorecardSnapshots'),
+		periodStart: v.number(),
+		periodEnd: v.number(),
+		responsiveness: v.optional(v.float64()),
+		alignment: v.optional(v.float64()),
+		composite: v.optional(v.float64()),
+		deliveriesSent: v.number(),
+		deliveriesOpened: v.number(),
+		deliveriesVerified: v.number(),
+		repliesReceived: v.number(),
+		alignedVotes: v.number(),
+		totalScoredVotes: v.number(),
+		methodologyVersion: v.number(),
+		snapshotHash: v.string(),
+		version: v.number(),
+		projectionBytes: v.number(),
+		updatedAt: v.number()
+	}).index('by_decisionMakerId', ['decisionMakerId']),
+
+	accountabilityReadModelMigrations: defineTable({
+		key: v.literal('v1'),
+		status: v.union(
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('blocked')
+		),
+		runToken: v.string(),
+		phase: v.union(
+			v.literal('receipts'),
+			v.literal('follows'),
+			v.literal('scorecards'),
+			v.literal('complete')
+		),
+		cursor: v.optional(v.string()),
+		scanComplete: v.boolean(),
+		scanned: v.number(),
+		projected: v.number(),
+		userProjected: v.number(),
+		failureCode: v.optional(v.string()),
+		failureSourceId: v.optional(v.string()),
+		failurePhase: v.optional(
+			v.union(v.literal('receipts'), v.literal('follows'), v.literal('scorecards'))
+		),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
 
 	orgIssueDomains: defineTable({
 		orgId: v.id('organizations'),
@@ -2893,7 +4596,6 @@ export default defineSchema({
 		responsiveness: v.optional(v.float64()),
 		alignment: v.optional(v.float64()),
 		composite: v.optional(v.float64()),
-		proofWeightTotal: v.float64(),
 
 		// Input counts
 		deliveriesSent: v.number(),
@@ -2987,13 +4689,13 @@ export default defineSchema({
 		targetId: v.string(),
 		targetTitle: v.string(),
 		reasoning: v.string(),
-		proofWeight: v.float64(),
 
 		// User decision
 		decision: v.optional(v.string()), // 'approve' | 'reject'
 		decidedAt: v.optional(v.number())
 	})
 		.index('by_grantId', ['grantId'])
+		.index('by_grantId_decision', ['grantId', 'decision'])
 		.index('by_decision', ['decision']),
 
 	// ===========================================================================
@@ -3019,13 +4721,40 @@ export default defineSchema({
 	// cron uses this to resume from the previous tick's cursor instead
 	// of restarting at null every 30 minutes — without the checkpoint,
 	// for tables >10K rows the sweep would traverse the same prefix
-	// forever and never reach new strandeds. `wrapCount` increments
-	// when the sweep reaches `isDone` and resets to null; lets operators
-	// verify the sweep is making full passes through the table.
+	// forever and never reach new strandeds. Version 1 is a one-shot
+	// migration: reaching `isDone` permanently tombstones the sweep.
 	sweepCheckpoints: defineTable({
 		key: v.string(),
 		cursor: v.optional(v.string()),
 		wrapCount: v.number(),
+		// CAS authority prevents overlapping action ticks from rewinding the
+		// cursor or falsely completing an older page after a newer save.
+		cursorRevision: v.optional(v.number()),
+		activeRunToken: v.optional(v.string()),
+		// Legacy placeholder sweeps stay O(1) until an operator explicitly
+		// activates the exact indexed/bounded implementation version.
+		activeVersion: v.optional(v.number()),
+		activatedAt: v.optional(v.number()),
+		activationReference: v.optional(v.string()),
+		completedVersion: v.optional(v.number()),
+		completedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Durable, compact outcome of the bounded hourly boundary-cell sample.
+	// The monitor records an explicit capacity signal instead of scanning an
+	// unbounded trailing-day credential range when launch volume exceeds one
+	// reviewed page.
+	boundaryCellMonitorState: defineTable({
+		key: v.literal('rolling-24h-v1'),
+		status: v.union(v.literal('complete'), v.literal('capacity_exceeded')),
+		cutoff: v.number(),
+		asOf: v.number(),
+		scanned: v.number(),
+		boundaryCount: v.number(),
+		postH1Count: v.number(),
+		totalRecent: v.number(),
+		rate: v.optional(v.number()),
 		updatedAt: v.number()
 	}).index('by_key', ['key']),
 
@@ -3102,6 +4831,21 @@ export default defineSchema({
 		.index('by_nextRetryAt', ['nextRetryAt'])
 		.index('by_isDead', ['isDead']),
 
+	// Durable singleton evidence that a legacy/bypassed organization exceeded
+	// the hard subscription fan-out cap. queueEvent upserts at most one row per
+	// org and schedules a one-subscription repair step; it never creates one
+	// evidence row or one delivery per overflow subscription.
+	orgWebhookOverflowEvidence: defineTable({
+		orgId: v.id('organizations'),
+		cap: v.number(),
+		observedCountLowerBound: v.number(),
+		firstObservedAt: v.number(),
+		lastObservedAt: v.number(),
+		repairScheduledAt: v.optional(v.number()),
+		resolvedAt: v.optional(v.number()),
+		removedSubscriptions: v.number()
+	}).index('by_orgId', ['orgId']),
+
 	// Lightweight event notification table — shared by webhook dispatch
 	// (T9-3) and real-time SSE subscriptions v1 (T9-7). Each row is one
 	// emitted event for one org. Polling consumers (SSE handler) query
@@ -3112,7 +4856,9 @@ export default defineSchema({
 		event: v.string(),
 		payload: v.string(), // JSON-serialized event payload (same shape as webhook payload)
 		emittedAt: v.number()
-	}).index('by_orgId_emittedAt', ['orgId', 'emittedAt']),
+	})
+		.index('by_orgId_emittedAt', ['orgId', 'emittedAt'])
+		.index('by_emittedAt', ['emittedAt']),
 
 	// Persisted relatedness normalization (singleton, keyed like smtRoots/treeId).
 	// Holds the public-corpus centroid — the genre common-mode that mean-centering
@@ -3129,5 +4875,369 @@ export default defineSchema({
 		count: v.number(), // usable (embedded) templates the centroid was fit over
 		dim: v.number(), // embedding dimensionality
 		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Compact, embedding-free producer input for public discovery. Only current
+	// `(published, public)` templates have a row. The explicit template creation
+	// timestamp preserves the homepage's newest-first order across idempotent
+	// migrations and later source-row updates.
+	publicTemplateDiscoverySources: defineTable({
+		templateId: v.id('templates'),
+		generation: v.string(),
+		templateCreatedAt: v.number(),
+		isCwc: v.boolean(),
+		title: v.string(),
+		domain: v.string(),
+		countryCode: v.optional(v.string()),
+		projectionVersion: v.number(),
+		source: v.any(),
+		sourceBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_templateId', ['templateId'])
+		.index('by_generation_templateCreatedAt_templateId', [
+			'generation',
+			'templateCreatedAt',
+			'templateId'
+		])
+		.index('by_generation_isCwc_templateCreatedAt_templateId', [
+			'generation',
+			'isCwc',
+			'templateCreatedAt',
+			'templateId'
+		])
+		.searchIndex('search_title', {
+			searchField: 'title',
+			filterFields: ['generation', 'domain', 'countryCode']
+		}),
+
+	// Purpose-bound public detail/send projection. Keeping this separate from
+	// the 250-row discovery source scan makes repeated `/s/:slug` reads exact and
+	// embedding-free without inflating homepage/relation rebuild I/O.
+	publicTemplateDetailProjections: defineTable({
+		templateId: v.id('templates'),
+		slug: v.string(),
+		userId: v.optional(v.id('users')),
+		projectionVersion: v.number(),
+		detail: v.any(),
+		detailBytes: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_templateId', ['templateId'])
+		.index('by_slug', ['slug']),
+
+	// Lightweight inventory/dirty coordinate for producer-published anonymous
+	// template pages. The large detail, debate, and metric values deliberately do
+	// not live here: an ordinary global list revision pages only these small rows
+	// and rematerializes the handful whose per-template revision changed.
+	publicTemplatePageArtifactCoordinates: defineTable({
+		templateId: v.id('templates'),
+		userId: v.optional(v.id('users')),
+		generation: v.string(),
+		slug: v.string(),
+		projectionVersion: v.number(),
+		artifactRevision: v.number(),
+		detailUpdatedAt: v.number(),
+		aggregateUpdatedAt: v.number(),
+		updatedAt: v.number()
+	})
+		.index('by_templateId', ['templateId'])
+		.index('by_userId', ['userId'])
+		.index('by_slug', ['slug'])
+		.index('by_generation_slug', ['generation', 'slug']),
+
+	// Relation/search vector plane. Keeping topic vectors in a keyed row means a
+	// relation rebuild hydrates only the at-most-100 displayed IDs, never the
+	// candidate corpus or the templates' unrelated authoring/config fields.
+	publicTemplateTopicVectors: defineTable({
+		templateId: v.id('templates'),
+		generation: v.string(),
+		embedding: v.array(v.float64()),
+		embeddingVersion: v.string(),
+		updatedAt: v.number()
+	}).index('by_templateId', ['templateId']),
+
+	// Gemini embeds a bare normalized tag, so one vector per exact tag is the
+	// canonical representation. Template membership remains in the compact source
+	// row; unused vocabulary rows are harmless reusable cache entries.
+	publicTagEmbeddingVectors: defineTable({
+		tag: v.string(),
+		embedding: v.array(v.float64()),
+		embeddingVersion: v.string(),
+		updatedAt: v.number()
+	}).index('by_tag', ['tag']),
+
+	// Observable, self-paging source-plane cutover. `ready` is the irreversible
+	// producer switch for this schema version; legacy template vectors remain in
+	// place so code rollback is still possible.
+	publicDiscoverySourceMigrations: defineTable({
+		key: v.literal('v1'),
+		// A ready row is valid only for the exact compact source/detail projection
+		// contract currently served by request-path readers.
+		projectionVersion: v.optional(v.number()),
+		status: v.union(
+			v.literal('running'),
+			v.literal('migrated'),
+			v.literal('ready'),
+			v.literal('superseded')
+		),
+		runToken: v.string(),
+		cursor: v.optional(v.string()),
+		startedAt: v.number(),
+		completedAt: v.optional(v.number()),
+		listDirtyAtAtStart: v.optional(v.number()),
+		relationsDirtyAtAtStart: v.optional(v.number()),
+		scanned: v.number(),
+		eligible: v.number(),
+		sourcesWritten: v.number(),
+		// Additive page-artifact cutover proof. Missing on pre-rollout rows so
+		// activation/readiness fail closed until the bounded migration is rerun.
+		pageArtifactCoordinatesWritten: v.optional(v.number()),
+		topicVectorsWritten: v.number(),
+		tagVectorsWritten: v.number(),
+		rejected: v.number(),
+		// Version-4 cutover integrity: unsigned legacy recipients remain private,
+		// but their removal cannot be silently counted as a successful migration.
+		recipientIntentTemplates: v.optional(v.number()),
+		recipientIntentRecipients: v.optional(v.number()),
+		recipientProjectedRecipients: v.optional(v.number()),
+		recipientLossTemplates: v.optional(v.number()),
+		recipientLossRecipients: v.optional(v.number()),
+		recipientLossClassifiedTemplates: v.optional(v.number()),
+		recipientLossClassifiedRecipients: v.optional(v.number()),
+		failureCode: v.optional(v.string()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// One bounded audit row per migrated public template. Intent is represented
+	// only by a SHA-256 coordinate and counts; raw unsigned recipient PII never
+	// enters this operator-review plane.
+	publicRecipientMigrationReviews: defineTable({
+		templateId: v.id('templates'),
+		projectionVersion: v.number(),
+		runToken: v.string(),
+		intentHash: v.string(),
+		intentCount: v.number(),
+		projectedCount: v.number(),
+		disposition: v.union(
+			v.literal('no_intent'),
+			v.literal('re_attested'),
+			v.literal('pending'),
+			v.literal('intentionally_redacted')
+		),
+		operatorReference: v.optional(v.string()),
+		classifiedAt: v.optional(v.number()),
+		updatedAt: v.number()
+	})
+		.index('by_templateId', ['templateId'])
+		.index('by_disposition', ['disposition'])
+		.index('by_disposition_runToken', ['disposition', 'runToken']),
+
+	// Materialized public relation results. Homepage reads must never hydrate the
+	// embedding-heavy templates table: each list variant reads its matching compact
+	// relation row and returns honest empty shapes until the first rebuild publishes
+	// it. Both `all` and `excludeCwc` rows publish under one manifest revision.
+	// `public` is retained only so the first deploy accepts the legacy singleton;
+	// no current query or rebuild writes that key. `conceptEntries` is an array
+	// instead of an object keyed by raw author tags so arbitrary tag strings never
+	// become stored Convex field names.
+	templateRelationSnapshots: defineTable({
+		key: v.union(v.literal('public'), v.literal('all'), v.literal('excludeCwc')),
+		// Publication revision shared with `publicDiscoveryManifest`. Optional so
+		// the first deploy can migrate existing snapshot rows in place; every new
+		// rebuild writes it before marking relations ready.
+		revision: v.optional(v.number()),
+		twinEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				score: v.float64(),
+				kind: v.literal('twin')
+			})
+		),
+		conceptEdges: v.array(
+			v.object({
+				a: v.string(),
+				b: v.string(),
+				concept: v.string(),
+				kind: v.literal('concept')
+			})
+		),
+		conceptEntries: v.array(
+			v.object({
+				tag: v.string(),
+				concept: v.string()
+			})
+		),
+		sourceCap: v.number(),
+		sourceTemplateCount: v.number(),
+		embeddedTemplateCount: v.number(),
+		// Optional for the additive v1 source-plane rollout. Every new rebuild
+		// writes both fields; legacy rows remain readable during deployment.
+		tagVectorCandidateCount: v.optional(v.number()),
+		tagVectorCount: v.number(),
+		tagVectorShedCount: v.optional(v.number()),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Materialized `templates.listPublic` payloads. One row retains the normal
+	// public top-50 and one retains the feature-gated non-CWC top-50. Payloads are
+	// already projected/enriched, so request-path reads never hydrate source
+	// templates (and therefore never pay to read their server-only embeddings).
+	publicTemplateSnapshots: defineTable({
+		key: v.union(v.literal('all'), v.literal('excludeCwc')),
+		// Optional only for the live v3→v4 migration. Every v4 rebuild writes 4,
+		// and the pre-Pages readiness gate rejects legacy/missing versions.
+		projectionVersion: v.optional(v.number()),
+		// Both list variants receive the same revision in one transaction. Keep
+		// optional during the live-row migration; every rebuild supplies it.
+		revision: v.optional(v.number()),
+		templates: v.any(),
+		sourceCount: v.number(),
+		updatedAt: v.number()
+	}).index('by_key', ['key']),
+
+	// Small control-plane singleton for public discovery. Payloads remain in the
+	// two bounded snapshot tables above; this row only states whether each family
+	// has ever published successfully, which monotonically increasing revision is
+	// current, and the independent coalescing state for bounded list and relation
+	// refreshes.
+	//
+	// No row is the explicit cold-start state (`ready:false`, revision 0). A
+	// successful rebuild over a legitimately empty corpus creates/updates this row
+	// with `ready:true`, so consumers never have to infer readiness from `[]`.
+	publicDiscoveryManifest: defineTable({
+		key: v.literal('public'),
+		listReady: v.boolean(),
+		relationsReady: v.boolean(),
+		listRevision: v.number(),
+		relationsRevision: v.number(),
+		// Monotonic payload fallback floors. Destructive invalidation retires the
+		// current revision; every publication conservatively retires N-1. Optional
+		// only for the bounded legacy migration/read fallback.
+		listRetiredRevision: v.optional(v.number()),
+		relationsRetiredRevision: v.optional(v.number()),
+		// A retirement floor alone cannot distinguish an ordinary N→N+1 publish
+		// from a destructive false→ready interval that completed between edge
+		// observations. These per-family epochs advance only when ready authority is
+		// withdrawn and survive the replacement publication. Optional only so live
+		// pre-epoch rows project as epoch zero during the rolling migration.
+		listWithdrawalEpoch: v.optional(v.number()),
+		relationsWithdrawalEpoch: v.optional(v.number()),
+		// At most one producer push may be queued. The action atomically claims
+		// this token before I/O; a source commit racing the action can then enqueue
+		// exactly one successor instead of losing or multiplying notifications.
+		manifestControlPushToken: v.optional(v.string()),
+		// Bounded, singleton evidence for the last completed producer-control
+		// chain. Containment and exhausted retry envelopes remain observable after
+		// the token is terminally cleared; a later successful producer delivery
+		// replaces the evidence. No response body or unbounded attempt log is stored.
+		manifestControlPushLastOutcome: v.optional(
+			v.union(
+				v.literal('succeeded'),
+				v.literal('contained'),
+				v.literal('attemptsExhausted'),
+				v.literal('ageExhausted')
+			)
+		),
+		manifestControlPushLastOutcomeAt: v.optional(v.number()),
+		manifestControlPushLastOutcomeAttempt: v.optional(v.number()),
+		manifestControlPushLastOutcomeStartedAt: v.optional(v.number()),
+		listUpdatedAt: v.optional(v.number()),
+		// Earliest clock-only transition still capable of changing a published
+		// card (`isNew` expiry or rolling-arrival bucket shift). The daily native
+		// backstop reads this scalar and skips the corpus while it is in the future.
+		nextTemporalRebuildAt: v.optional(v.number()),
+		temporalScheduleVersion: v.optional(v.number()),
+		relationsUpdatedAt: v.optional(v.number()),
+		listDirtyAt: v.optional(v.number()),
+		listRefreshScheduledAt: v.optional(v.number()),
+		// Durable priority belongs to the generation, not to a queued function's
+		// arguments. `prompt` preserves the one-minute debounce but bypasses the
+		// ordinary six-hour cost floor; `urgent` is destructive fail-closed work.
+		listRefreshUrgency: v.optional(v.union(v.literal('prompt'), v.literal('urgent'))),
+		relationsDirtyAt: v.optional(v.number()),
+		relationsRefreshScheduledAt: v.optional(v.number()),
+		relationsRefreshUrgency: v.optional(v.literal('urgent')),
+		// Multi-mutation clear/reseed lease. While present, source writers roll
+		// back and every rebuild path rejects unless it carries this exact token.
+		// Operation and failure metadata are additive supervisor inputs; no reader
+		// may infer that expiry alone authorizes unlocking or publishing.
+		coordinatedRebuildToken: v.optional(v.string()),
+		coordinatedRebuildStartedAt: v.optional(v.number()),
+		coordinatedRebuildKind: v.optional(
+			v.union(v.literal('clearSeed'), v.literal('reseedTemplates'))
+		),
+		coordinatedRebuildLeaseExpiresAt: v.optional(v.number()),
+		coordinatedRebuildAttempt: v.optional(v.number()),
+		// Exact event-driven watchdog coordinate. The scheduled mutation must carry
+		// this timestamp together with the owner token and attempt; only an exact
+		// match may consume the slot, re-arm it after a lease renewal, or stamp the
+		// terminal failure. This keeps contained mode recoverable without a cron and
+		// prevents duplicate/delayed jobs from multiplying successor work.
+		coordinatedRebuildWatchdogScheduledAt: v.optional(v.number()),
+		coordinatedRebuildRetryAt: v.optional(v.number()),
+		coordinatedRebuildFailureAt: v.optional(v.number()),
+		coordinatedRebuildFailureCode: v.optional(v.string()),
+		// Durable producer-failure evidence. Scheduled rebuilds retain last-good
+		// payloads, stamp the first-class failure state, and enqueue an alert action;
+		// a later successful publication clears the corresponding pair.
+		listFailureAt: v.optional(v.number()),
+		listFailureCode: v.optional(v.string()),
+		relationsFailureAt: v.optional(v.number()),
+		relationsFailureCode: v.optional(v.string()),
+		// One-time cutover progress for stamping valid legacy topic vectors with
+		// the dedicated repair marker. Keeping this on the existing singleton
+		// makes self-paging completion observable without another table or scan.
+		topicEmbeddingMarkerMigrationStartedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationCompletedAt: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationScanned: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationMarked: v.optional(v.number()),
+		topicEmbeddingMarkerMigrationFailureCode: v.optional(v.string()),
+		// Exact one-template-per-transaction reconciliation for the legacy
+		// optional endorsement counter. A run token supersedes delayed jobs when
+		// an operator resumes or restarts the chain.
+		endorsementCountMigrationStatus: v.optional(
+			v.union(v.literal('running'), v.literal('complete'), v.literal('blocked'))
+		),
+		endorsementCountMigrationRunToken: v.optional(v.string()),
+		endorsementCountMigrationCursor: v.optional(v.string()),
+		endorsementCountMigrationStartedAt: v.optional(v.number()),
+		endorsementCountMigrationCompletedAt: v.optional(v.number()),
+		endorsementCountMigrationScannedTemplates: v.optional(v.number()),
+		endorsementCountMigrationRepairedTemplates: v.optional(v.number()),
+		endorsementCountMigrationEndorsementsCounted: v.optional(v.number()),
+		endorsementCountMigrationFailureCode: v.optional(v.string()),
+		endorsementCountMigrationFailureTemplateId: v.optional(v.id('templates'))
+	}).index('by_key', ['key']),
+
+	// Compact read authority for the Pages manifest-control heartbeat. The wide
+	// `publicDiscoveryManifest` row deliberately owns scheduler, failure, and
+	// migration state; reading it for a ten-scalar edge coordinate would charge
+	// all of that unrelated storage. This projection is activated by one bounded
+	// migration and mirrored transactionally by every coordinate-changing writer.
+	// Runtime code enforces a 4 KiB serialized-row ceiling before every write.
+	publicDiscoveryManifestAuthority: defineTable({
+		key: v.literal('public'),
+		projectionVersion: v.literal(1),
+		listReady: v.boolean(),
+		listRetiredRevision: v.number(),
+		listRevision: v.number(),
+		listUpdatedAt: v.union(v.number(), v.null()),
+		listWithdrawalEpoch: v.number(),
+		relationsReady: v.boolean(),
+		relationsRetiredRevision: v.number(),
+		relationsRevision: v.number(),
+		relationsUpdatedAt: v.union(v.number(), v.null()),
+		relationsWithdrawalEpoch: v.number()
+	}).index('by_key', ['key']),
+
+	// Distributed lease for the Cloudflare admin embedding repair route. Pages
+	// isolates do not share module memory, so the route claims this tiny row before
+	// spending Gemini calls. An expiry makes an evicted worker self-recovering.
+	embeddingBackfillLeases: defineTable({
+		key: v.literal('topic'),
+		token: v.string(),
+		expiresAt: v.number()
 	}).index('by_key', ['key'])
 });

@@ -104,9 +104,15 @@ describe('mDL live-smoke readiness', () => {
 				identityPatternDoc
 			].join('\n');
 
-		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=staging');
-		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=production');
-		expect(deployWorkflow).toContain('VITE_ENVIRONMENT=development');
+		expect(
+			deployWorkflow.match(
+				/environment = \{'production': 'production', 'staging': 'staging'\}\[/g
+			)
+		).toHaveLength(2);
+		expect(deployWorkflow.match(/output\.write\(f'VITE_ENVIRONMENT=\{environment\}\\n'\)/g)).toHaveLength(
+			2
+		);
+		expect(envExample).toContain('VITE_ENVIRONMENT=development');
 		for (const path of removedPaths) {
 			expect(existsSync(path)).toBe(false);
 		}

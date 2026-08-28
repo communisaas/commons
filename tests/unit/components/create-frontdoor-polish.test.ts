@@ -25,11 +25,28 @@ describe('AUTHOR — surfaced generate trigger, honest pre-signal, de-scarcified
 		expect(uoe).toMatch(/written-artifact[\s\S]*?from-participation-primary-600[\s\S]*?Generate/);
 	});
 
-	it('the auth pre-signal is guest-only and honestly worded (no "keep this draft" overclaim)', () => {
+	it('the guest path names the AI sign-in boundary and never offers an anonymous model call', () => {
+		const generateStart = uoe.indexOf('async function generateSuggestionWithTiming');
+		const generateEnd = uoe.indexOf('async function generateSuggestion():');
+		expect(generateStart).toBeGreaterThan(0);
+		expect(generateEnd).toBeGreaterThan(generateStart);
+		const generation = uoe.slice(generateStart, generateEnd);
 		expect(uoe).toContain('isGuest');
-		expect(uoe).toContain("when you're ready to send");
-		// sign-in does not "keep" the draft (localStorage already does; it can even orphan it)
-		expect(uoe).not.toContain('keep this draft');
+		expect(uoe).toContain('AI generation requires sign-in');
+		expect(uoe).toContain("if (isGuest) {\n\t\t\tstartAgentSignIn();\n\t\t\treturn;");
+		expect(generation).toContain('err instanceof ApiClientError && err.status === 401');
+		expect(generation).toContain('setAuthenticationRequired()');
+		expect(uoe).not.toContain("when you're ready to send");
+	});
+
+	it('saves and resumes the objective draft across the AI sign-in round trip', () => {
+		const creator = src('src/lib/components/template/TemplateCreator.svelte');
+		const home = src('src/routes/+page.svelte');
+		expect(uoe).toContain('onSaveDraft?.()');
+		expect(uoe).toContain('create=true&resumeDraft=');
+		expect(creator).toContain('{draftId}');
+		expect(creator).toContain('onSaveDraft={() =>');
+		expect(home).toContain('const claimed = await claimGuestDraftForUser(resumeDraftId, userId)');
 	});
 
 	it('refinement is reframed from scarcity to the free/unlimited inline edit', () => {

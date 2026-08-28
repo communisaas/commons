@@ -12,11 +12,27 @@ import type { FunctionReference } from 'convex/server';
 import { v } from 'convex/values';
 import { campaignStatus, donationStatus } from './_validators';
 import { requireOrgRole } from './_authHelpers';
+import { requireInternalSecret } from './_internalAuth';
 import { computeOrgScopedEmailHash } from './_orgHash';
+import { hashDistrictCode, hashPostalCode } from './lib/districtHash';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii, encryptForSupporterV2 } from './_orgKey';
 import { sendViaSesWithResult } from './email';
-import type { Id } from './_generated/dataModel';
+import type { Doc, Id } from './_generated/dataModel';
+import {
+	CAMPAIGN_ACTIVE_COUNTER_VERSION,
+	recordCampaignCreated,
+	recordCampaignStatusTransition
+} from './lib/campaignOrgCounters';
+import { syncPublicOrganizationDirectory } from './lib/publicOrganizationDirectory';
+import {
+	applyDonationConfirmationTransition,
+	donationConfirmationScopeKey,
+	DONATION_CONFIRMATION_SUMMARY_MIGRATION_KEY,
+	DONATION_CONFIRMATION_SUMMARY_VERSION,
+	emptyDonationConfirmationCounts,
+	getDonationConfirmationSummaryMigration
+} from './lib/donationConfirmationSummary';
 
 declare const process: { env: Record<string, string | undefined> };
 
@@ -29,6 +45,7 @@ const insertDonationRef = makeFunctionReference<'mutation'>(
 const setStripeSessionIdRef = makeFunctionReference<'mutation'>(
 	'donations:setStripeSessionId'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
+const DONATION_CONFIRMATION_MIGRATION_PAGE_SIZE = 64;
 
 // =============================================================================
 // DONATIONS — Queries, Mutations, Actions
@@ -118,103 +135,171 @@ export const getConfirmationSummary = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
-
-		let donations;
 		const campaignId = args.campaignId;
 		if (campaignId) {
 			const campaign = await ctx.db.get(campaignId);
 			if (!campaign || campaign.orgId !== org._id || campaign.type !== 'FUNDRAISER') {
 				throw new Error('Fundraiser not found');
 			}
-			donations = await ctx.db
-				.query('donations')
-				.withIndex('by_campaignId', (qb) => qb.eq('campaignId', campaignId))
-				.collect();
-		} else {
-			donations = await ctx.db
-				.query('donations')
-				.withIndex('by_orgId', (qb) => qb.eq('orgId', org._id))
-				.collect();
 		}
-
-		const completed = donations.filter((d) => d.status === 'completed');
-		let sent = 0;
-		let sending = 0;
-		let skipped = 0;
-		let failed = 0;
-		let notRecorded = 0;
-		let providerAccepted = 0;
-
-		for (const donation of completed) {
-			if (donation.confirmationEmailProviderMessageId) providerAccepted++;
-			switch (donation.confirmationEmailStatus) {
-				case 'sent':
-					sent++;
-					break;
-				case 'sending':
-					sending++;
-					break;
-				case 'skipped':
-					skipped++;
-					break;
-				case 'failed':
-					failed++;
-					break;
-				default:
-					notRecorded++;
-			}
+		const migration = await getDonationConfirmationSummaryMigration(ctx);
+		if (migration?.status !== 'ready') {
+			throw new Error('DONATION_CONFIRMATION_SUMMARIES_NOT_READY');
 		}
-
+		const scopeKey = donationConfirmationScopeKey({ orgId: org._id, campaignId });
+		const row = await ctx.db
+			.query('donationConfirmationSummaries')
+			.withIndex('by_scopeKey', (q) => q.eq('scopeKey', scopeKey))
+			.unique();
+		if (row && row.version !== DONATION_CONFIRMATION_SUMMARY_VERSION) {
+			throw new Error('DONATION_CONFIRMATION_SUMMARY_ROW_NOT_READY');
+		}
+		const counts = row ?? emptyDonationConfirmationCounts();
 		return {
-			completed: completed.length,
-			sent,
-			sending,
-			skipped,
-			failed,
-			notRecorded,
-			providerAccepted,
-			attempted: sent + sending + skipped + failed
+			completed: counts.completed,
+			sent: counts.sent,
+			sending: counts.sending,
+			skipped: counts.skipped,
+			failed: counts.failed,
+			notRecorded: counts.notRecorded,
+			providerAccepted: counts.providerAccepted,
+			attempted: counts.sent + counts.sending + counts.skipped + counts.failed
 		};
 	}
 });
 
+export const donationConfirmationSummaryMigrationStatus = internalQuery({
+	args: {},
+	handler: async (ctx) => await getDonationConfirmationSummaryMigration(ctx)
+});
+
+export const migrateDonationConfirmationSummaries = internalMutation({
+	args: {
+		cursor: v.optional(v.union(v.string(), v.null())),
+		restart: v.optional(v.boolean())
+	},
+	handler: async (ctx, args) => {
+		const now = Date.now();
+		let migration = await getDonationConfirmationSummaryMigration(ctx);
+		if (!migration) {
+			const id = await ctx.db.insert('donationConfirmationSummaryMigrations', {
+				key: DONATION_CONFIRMATION_SUMMARY_MIGRATION_KEY,
+				status: 'running',
+				scanned: 0,
+				projected: 0,
+				startedAt: now,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(id);
+		} else if (migration.status === 'ready') {
+			return migration;
+		} else if (args.restart && (args.cursor ?? null) === null) {
+			await ctx.db.patch(migration._id, {
+				status: 'running',
+				cursor: undefined,
+				scanned: 0,
+				projected: 0,
+				failureCode: undefined,
+				failureSourceId: undefined,
+				completedAt: undefined,
+				startedAt: now,
+				updatedAt: now
+			});
+			migration = await ctx.db.get(migration._id);
+		}
+		if (!migration) throw new Error('DONATION_CONFIRMATION_MIGRATION_STATE_MISSING');
+		if (migration.status === 'migrated') return migration;
+		if (migration.status === 'blocked' && !args.restart) return migration;
+		const expectedCursor = migration.cursor ?? null;
+		if ((args.cursor ?? null) !== expectedCursor) {
+			throw new Error('DONATION_CONFIRMATION_MIGRATION_CURSOR_MISMATCH');
+		}
+		const page = await ctx.db.query('donations').paginate({
+			numItems: DONATION_CONFIRMATION_MIGRATION_PAGE_SIZE,
+			cursor: expectedCursor,
+			maximumRowsRead: DONATION_CONFIRMATION_MIGRATION_PAGE_SIZE + 1,
+			maximumBytesRead: 4 * 1024 * 1024
+		});
+		let projected = 0;
+		let failureSourceId: string | undefined;
+		try {
+			for (const donation of page.page) {
+				failureSourceId = String(donation._id);
+				if (donation.confirmationSummaryVersion === DONATION_CONFIRMATION_SUMMARY_VERSION) continue;
+				const projectedDonation = {
+					...donation,
+					confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+				};
+				await applyDonationConfirmationTransition(ctx, null, projectedDonation, now);
+				await ctx.db.patch(donation._id, {
+					confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+				});
+				projected += 1;
+			}
+		} catch (error) {
+			const failureCode =
+				error instanceof Error ? error.message.slice(0, 200) : 'DONATION_SUMMARY_PROJECTION_FAILED';
+			await ctx.db.patch(migration._id, {
+				status: 'blocked',
+				failureCode,
+				failureSourceId,
+				updatedAt: now
+			});
+			return { ...migration, status: 'blocked' as const, failureCode, failureSourceId };
+		}
+		const patch = {
+			status: page.isDone ? ('migrated' as const) : ('running' as const),
+			cursor: page.isDone ? undefined : page.continueCursor,
+			scanned: migration.scanned + page.page.length,
+			projected: migration.projected + projected,
+			completedAt: page.isDone ? now : undefined,
+			updatedAt: now
+		};
+		await ctx.db.patch(migration._id, patch);
+		if (!page.isDone) {
+			await ctx.scheduler.runAfter(0, internal.donations.migrateDonationConfirmationSummaries, {
+				cursor: page.continueCursor
+			});
+		}
+		return { ...migration, ...patch };
+	}
+});
+
+export const activateDonationConfirmationSummaries = internalMutation({
+	args: {},
+	handler: async (ctx) => {
+		const migration = await getDonationConfirmationSummaryMigration(ctx);
+		if (migration?.status === 'ready') return migration;
+		if (
+			!migration ||
+			migration.status !== 'migrated' ||
+			migration.cursor !== undefined ||
+			migration.completedAt === undefined ||
+			migration.failureCode !== undefined
+		) {
+			throw new Error('DONATION_CONFIRMATION_MIGRATION_INCOMPLETE');
+		}
+		await ctx.db.patch(migration._id, { status: 'ready', updatedAt: Date.now() });
+		return { ...migration, status: 'ready' as const };
+	}
+});
+
 /**
- * Public donation list for a campaign. No auth required.
- * Returns completed donations only, no PII (no email, no name).
- * Used by: src/routes/d/[campaignId]/+page.server.ts
+ * Retired public donor-list surface.
+ *
+ * No in-tree route consumes this function. Keeping the old implementation
+ * direct-callable let any client repeatedly read every donation row — including
+ * encrypted donor PII — before an in-memory status filter and slice. Preserve
+ * the generated API symbol for an explicit compatibility error, but fail before
+ * the campaign or donation tables are touched.
  */
 export const listPublicByCampaign = query({
 	args: {
 		campaignId: v.id('campaigns'),
 		limit: v.optional(v.number())
 	},
-	handler: async (ctx, args) => {
-		const limit = Math.min(args.limit ?? 50, 100);
-
-		// Verify campaign exists and is a public active fundraiser
-		const campaign = await ctx.db.get(args.campaignId);
-		if (!campaign || campaign.type !== 'FUNDRAISER' || campaign.status !== 'ACTIVE') {
-			return [];
-		}
-
-		const donations = await ctx.db
-			.query('donations')
-			.withIndex('by_campaignId', (qb) => qb.eq('campaignId', args.campaignId))
-			.order('desc')
-			.collect();
-
-		// Only completed donations, no PII
-		return donations
-			.filter((d) => d.status === 'completed')
-			.slice(0, limit)
-			.map((d) => ({
-				_id: d._id,
-				amountCents: d.amountCents,
-				currency: d.currency,
-				recurring: d.recurring,
-				completedAt: d.completedAt ?? null,
-				_creationTime: d._creationTime
-			}));
+	handler: async () => {
+		throw new Error('PUBLIC_DONATION_LIST_RETIRED');
 	}
 });
 
@@ -293,6 +378,18 @@ export const create = internalMutation({
 		status: DONATION_STATUS_VALIDATOR
 	},
 	handler: async (ctx, args) => {
+		const now = Date.now();
+		await applyDonationConfirmationTransition(
+			ctx,
+			null,
+			{
+				orgId: args.orgId,
+				campaignId: args.campaignId,
+				status: args.status,
+				confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+			},
+			now
+		);
 		const id = await ctx.db.insert('donations', {
 			campaignId: args.campaignId,
 			orgId: args.orgId,
@@ -310,8 +407,9 @@ export const create = internalMutation({
 			districtHash: args.districtHash,
 			engagementTier: args.engagementTier,
 			status: args.status,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
 			completedAt: undefined,
-			updatedAt: Date.now()
+			updatedAt: now
 		});
 
 		return { id };
@@ -347,6 +445,7 @@ export const updateStatus = internalMutation({
 
 		const patch: Record<string, unknown> = {
 			status: args.status,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
 			updatedAt: Date.now()
 		};
 
@@ -381,6 +480,13 @@ export const updateStatus = internalMutation({
 			}
 		}
 
+		const projectedDonation = {
+			...donation,
+			...patch,
+			status: args.status,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+		} as Doc<'donations'>;
+		await applyDonationConfirmationTransition(ctx, donation, projectedDonation, Date.now());
 		await ctx.db.patch(args.donationId, patch);
 	}
 });
@@ -405,6 +511,18 @@ export const insertDonation = internalMutation({
 		status: DONATION_STATUS_VALIDATOR
 	},
 	handler: async (ctx, args) => {
+		const now = Date.now();
+		await applyDonationConfirmationTransition(
+			ctx,
+			null,
+			{
+				orgId: args.orgId,
+				campaignId: args.campaignId,
+				status: args.status,
+				confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+			},
+			now
+		);
 		const id = await ctx.db.insert('donations', {
 			campaignId: args.campaignId,
 			orgId: args.orgId,
@@ -419,8 +537,9 @@ export const insertDonation = internalMutation({
 			districtHash: args.districtHash,
 			engagementTier: args.engagementTier,
 			status: args.status,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
 			completedAt: undefined,
-			updatedAt: Date.now()
+			updatedAt: now
 		});
 		return { id };
 	}
@@ -452,6 +571,7 @@ export const getByStripeSessionId = internalQuery({
  */
 export const processCheckout = action({
 	args: {
+		_secret: v.string(),
 		campaignId: v.id('campaigns'),
 		email: v.string(),
 		name: v.string(),
@@ -464,6 +584,7 @@ export const processCheckout = action({
 		cancelUrl: v.string()
 	},
 	handler: async (ctx, args) => {
+		requireInternalSecret(args._secret);
 		// Validate amount
 		if (args.amountCents < 100 || args.amountCents > 100_000_000) {
 			throw new Error('Amount must be between $1.00 and $1,000,000.00');
@@ -500,9 +621,9 @@ export const processCheckout = action({
 		// Compute district hash
 		let districtHash: string | undefined;
 		if (args.districtCode) {
-			districtHash = await sha256Hex(args.districtCode.toLowerCase().trim());
+			districtHash = await hashDistrictCode(args.districtCode);
 		} else if (args.postalCode) {
-			districtHash = await sha256Hex(args.postalCode.toLowerCase().trim());
+			districtHash = await hashPostalCode(args.postalCode);
 		}
 
 		const engagementTier = args.districtCode ? 2 : args.postalCode ? 1 : 0;
@@ -535,8 +656,8 @@ export const processCheckout = action({
 		// An older two-phase pattern (insert placeholder ⇒ encrypt with
 		// post-insert id ⇒ patch) could strand rows on a crash between
 		// steps. Legacy donations (v=org-1) keep decrypting via the post-id
-		// AAD; the sweep cron still bounds any future regression that
-		// re-introduces the two-phase pattern.
+		// AAD; the explicitly activated one-shot sweep drains only stranded
+		// rows that predate this single-phase invariant.
 		const [encEmail, encName] = await Promise.all([
 			encryptForSupporterV2(normalizedEmail, orgKey, emailHash, 'email'),
 			encryptForSupporterV2(args.name.trim(), orgKey, emailHash, 'name')
@@ -680,24 +801,36 @@ export const listByOrgWithDonors = query({
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'member');
 		const limit = Math.min(args.limit ?? 20, 100);
-
-		const campaigns = await ctx.db
-			.query('campaigns')
-			.withIndex('by_orgId', (qb) => qb.eq('orgId', org._id))
-			.order('desc')
-			.collect();
-
-		// Filter to fundraisers + optional status
-		let fundraisers = campaigns.filter((c) => c.type === 'FUNDRAISER');
-		if (args.status) {
-			fundraisers = fundraisers.filter((c) => c.status === args.status);
+		const cursor = args.cursor ?? null;
+		if (cursor !== null && cursor.length > 2_048) {
+			throw new Error('FUNDRAISER_CURSOR_TOO_LARGE');
 		}
-
-		const items = fundraisers.slice(0, limit);
-		const hasMore = fundraisers.length > limit;
+		const page = args.status
+			? await ctx.db
+					.query('campaigns')
+					.withIndex('by_orgId_type_status', (q) =>
+						q.eq('orgId', org._id).eq('type', 'FUNDRAISER').eq('status', args.status!)
+					)
+					.order('desc')
+					.paginate({
+						numItems: limit,
+						cursor,
+						maximumRowsRead: limit + 1,
+						maximumBytesRead: 512 * 1024
+					})
+			: await ctx.db
+					.query('campaigns')
+					.withIndex('by_orgId_type', (q) => q.eq('orgId', org._id).eq('type', 'FUNDRAISER'))
+					.order('desc')
+					.paginate({
+						numItems: limit,
+						cursor,
+						maximumRowsRead: limit + 1,
+						maximumBytesRead: 512 * 1024
+					});
 
 		return {
-			data: items.map((c) => ({
+			data: page.page.map((c) => ({
 				_id: c._id,
 				title: c.title,
 				description: c.body ?? null,
@@ -710,7 +843,10 @@ export const listByOrgWithDonors = query({
 				createdAt: new Date(c._creationTime).toISOString(),
 				updatedAt: new Date(c.updatedAt).toISOString()
 			})),
-			meta: { hasMore }
+			meta: {
+				cursor: page.isDone ? null : page.continueCursor,
+				hasMore: !page.isDone
+			}
 		};
 	}
 });
@@ -756,8 +892,11 @@ export const createFundraiser = mutation({
 				? cleanReceiptPolicy(args.donationReceiptPolicy, userId)
 				: undefined,
 			targetCountry: org.countryCode,
+			orgCounterVersion: CAMPAIGN_ACTIVE_COUNTER_VERSION,
 			updatedAt: Date.now()
 		});
+		await recordCampaignCreated(ctx, org._id, 'DRAFT');
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		return { id };
 	}
@@ -826,7 +965,13 @@ export const updateFundraiser = mutation({
 					: cleanReceiptPolicy(args.donationReceiptPolicy, userId);
 		}
 
+		if (args.status !== undefined && args.status !== campaign.status) {
+			await recordCampaignStatusTransition(ctx, campaign, args.status);
+		}
 		await ctx.db.patch(args.campaignId, patch);
+		if (args.status !== undefined && args.status !== campaign.status) {
+			await syncPublicOrganizationDirectory(ctx, org._id);
+		}
 
 		const updated = await ctx.db.get(args.campaignId);
 		return {
@@ -860,10 +1005,12 @@ export const deleteFundraiser = mutation({
 			throw new Error('Fundraiser not found');
 		}
 
+		await recordCampaignStatusTransition(ctx, campaign, 'COMPLETE');
 		await ctx.db.patch(args.campaignId, {
 			status: 'COMPLETE',
 			updatedAt: Date.now()
 		});
+		await syncPublicOrganizationDirectory(ctx, org._id);
 
 		return { success: true };
 	}
@@ -876,7 +1023,9 @@ export const deleteFundraiser = mutation({
 export const listDonors = query({
 	args: {
 		orgSlug: v.string(),
-		campaignId: v.id('campaigns')
+		campaignId: v.id('campaigns'),
+		limit: v.optional(v.number()),
+		cursor: v.optional(v.union(v.string(), v.null()))
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
@@ -886,15 +1035,23 @@ export const listDonors = query({
 			throw new Error('Fundraiser not found');
 		}
 
+		const limit = Math.min(Math.max(Math.floor(args.limit ?? 100), 1), 100);
+		const cursor = args.cursor ?? null;
+		if (cursor !== null && cursor.length > 2_048) throw new Error('DONOR_CURSOR_TOO_LARGE');
 		const donations = await ctx.db
 			.query('donations')
-			.withIndex('by_campaignId', (qb) => qb.eq('campaignId', args.campaignId))
+			.withIndex('by_campaignId_status', (q) =>
+				q.eq('campaignId', args.campaignId).eq('status', 'completed')
+			)
 			.order('desc')
-			.collect();
+			.paginate({
+				numItems: limit,
+				cursor,
+				maximumRowsRead: limit + 1,
+				maximumBytesRead: 2 * 1024 * 1024
+			});
 
-		const completed = donations.filter((d) => d.status === 'completed').slice(0, 100);
-
-		const data = completed.map((d) => ({
+		const data = donations.page.map((d) => ({
 			_id: d._id,
 			encryptedName: d.encryptedName ?? null,
 			encryptedEmail: d.encryptedEmail ?? null,
@@ -915,21 +1072,15 @@ export const listDonors = query({
 			confirmationEmailProviderMessageId: d.confirmationEmailProviderMessageId ?? null
 		}));
 
-		return { data };
+		return {
+			data,
+			meta: {
+				cursor: donations.isDone ? null : donations.continueCursor,
+				hasMore: !donations.isDone
+			}
+		};
 	}
 });
-
-// =============================================================================
-// HELPERS
-// =============================================================================
-
-async function sha256Hex(data: string): Promise<string> {
-	const encoder = new TextEncoder();
-	const hash = await crypto.subtle.digest('SHA-256', encoder.encode(data));
-	return Array.from(new Uint8Array(hash))
-		.map((b) => b.toString(16).padStart(2, '0'))
-		.join('');
-}
 
 // =============================================================================
 // PLACEHOLDER DONATION CLEANUP (parallels supporters placeholder sweep)
@@ -938,13 +1089,10 @@ async function sha256Hex(data: string): Promise<string> {
 const SWEEP_KEY_STRANDED_DONATIONS = 'donations.strandedPlaceholders';
 
 /**
- * Internal query: collect a page of donations whose encryptedEmail is
- * still the empty-string placeholder set by the two-phase create
- * pattern (`donations.processCheckout` → `insertDonation` writes
- * `encryptedEmail: ""`, then `patchEncryptedPii` lands real ciphertext).
- * If the action crashes between those two mutations, the row is
- * stranded with empty ciphertext forever — same shape as the
- * supporters placeholder case.
+ * Internal query: collect one page of legacy/operator-bootstrap donations
+ * whose encryptedEmail is still empty. Current checkout writers encrypt
+ * before their first insert; this query exists solely for the explicitly
+ * activated, versioned one-shot cleanup.
  *
  * Uses cursor-based pagination across the donations table (no order
  * assumption) so the sweep can drain even very large tables across
@@ -957,10 +1105,20 @@ export const getStrandedDonationPlaceholders = internalQuery({
 		limit: v.number()
 	},
 	handler: async (ctx, { olderThanMs, paginationCursor, limit }) => {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+			throw new Error('STRANDED_DONATION_SWEEP_LIMIT_INVALID');
+		}
 		const cutoff = Date.now() - olderThanMs;
-		const result = await ctx.db
-			.query('donations')
-			.paginate({ numItems: limit * 10, cursor: paginationCursor ?? null });
+		const scanRows = limit * 10;
+		const result = await ctx.db.query('donations').paginate({
+			numItems: scanRows,
+			cursor: paginationCursor ?? null,
+			maximumRowsRead: scanRows + 1,
+			maximumBytesRead: 512 * 1024
+		});
+		if (result.pageStatus === 'SplitRequired') {
+			throw new Error('STRANDED_DONATION_SWEEP_PAGE_TOO_LARGE');
+		}
 		const stranded = result.page.filter(
 			(d) => (d.encryptedEmail === '' || d.encryptedEmail === undefined) && d._creationTime < cutoff
 		);
@@ -981,17 +1139,19 @@ export const getStrandedDonationPlaceholders = internalQuery({
 /**
  * Internal mutation: delete a stranded donation placeholder row.
  * OCC-guarded — re-reads inside the mutation transaction and refuses
- * if a follow-up patchEncryptedPii landed concurrent with the sweep's
- * pagination. Mirrors `supporters.deleteStrandedPlaceholder`.
+ * if an operator repair landed concurrent with the sweep's pagination.
+ * Mirrors `supporters.deleteStrandedPlaceholder`.
  */
 export const deleteStrandedDonationPlaceholder = internalMutation({
 	args: { donationId: v.id('donations') },
 	handler: async (ctx, { donationId }) => {
 		const current = await ctx.db.get(donationId);
 		if (!current) return { ok: false, reason: 'not_found' } as const;
+		if (current.status === 'completed') return { ok: false, reason: 'completed' } as const;
 		if (current.encryptedEmail && current.encryptedEmail !== '') {
 			return { ok: false, reason: 'not_placeholder' } as const;
 		}
+		await applyDonationConfirmationTransition(ctx, current, null, Date.now());
 		await ctx.db.delete(donationId);
 		return { ok: true } as const;
 	}
@@ -1000,13 +1160,9 @@ export const deleteStrandedDonationPlaceholder = internalMutation({
 /**
  * Cleanup action: sweep stranded donation placeholders.
  *
- * `processCheckout` uses a two-phase create: insert with placeholder
- * `encryptedEmail: ""`, then patch with real ciphertext via
- * `patchEncryptedPii`. If the action crashes between, the row is
- * permanently broken — empty ciphertext (undecryptable) + populated
- * `emailHash` (so it shows up in dedup checks for future donations
- * from the same email). Bounds the blast radius of a crash to "one
- * lost donation attempt" instead of "permanent zombie row".
+ * Current checkout writers encrypt before the first insert. This explicitly
+ * activated migration removes only legacy/bootstrap rows that predate that
+ * invariant and still contain empty ciphertext.
  *
  * Donation-specific preservation: rows in `pending` status that fail
  * could have a pending Stripe session in flight. We only sweep rows
@@ -1014,8 +1170,8 @@ export const deleteStrandedDonationPlaceholder = internalMutation({
  * row with empty ciphertext is forensic — the campaign counter
  * already bumped, the money already moved). Status `failed` and
  * `pending` past 30 min are safe to delete: Stripe sessions expire
- * after 24 h so a 30-min-old pending row that never got patched
- * is genuinely stranded.
+ * after 24 h; the 30-minute floor also avoids racing a coordinated legacy
+ * repair that is still in flight.
  */
 // =============================================================================
 // DONOR CONFIRMATION EMAILS
@@ -1089,13 +1245,16 @@ export const claimConfirmationEmailSend = internalMutation({
 			return { claimed: false, reason: 'in_flight' as const };
 		}
 
-		await ctx.db.patch(donationId, {
+		const patch = {
 			confirmationEmailStatus: 'sending',
 			confirmationEmailAttemptedAt: now,
 			confirmationEmailFailureReason: undefined,
 			confirmationEmailProvider: undefined,
-			confirmationEmailProviderMessageId: undefined
-		});
+			confirmationEmailProviderMessageId: undefined,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION
+		} as const;
+		await applyDonationConfirmationTransition(ctx, donation, { ...donation, ...patch }, now);
+		await ctx.db.patch(donationId, patch);
 
 		return { claimed: true, reason: 'claimed' as const };
 	}
@@ -1120,6 +1279,7 @@ export const recordConfirmationEmailResult = internalMutation({
 		const patch: Record<string, unknown> = {
 			confirmationEmailStatus: args.status,
 			confirmationEmailAttemptedAt: now,
+			confirmationSummaryVersion: DONATION_CONFIRMATION_SUMMARY_VERSION,
 			confirmationEmailFailureReason:
 				args.status === 'sent' ? undefined : (args.reason ?? args.status)
 		};
@@ -1132,6 +1292,12 @@ export const recordConfirmationEmailResult = internalMutation({
 			patch.confirmationEmailProviderMessageId = undefined;
 		}
 
+		await applyDonationConfirmationTransition(
+			ctx,
+			donation,
+			{ ...donation, ...patch, confirmationEmailStatus: args.status } as Doc<'donations'>,
+			now
+		);
 		await ctx.db.patch(args.donationId, patch);
 		return { recorded: true };
 	}
@@ -1333,6 +1499,22 @@ export const sweepStrandedDonations = internalAction({
 	handler: async (ctx) => {
 		const STRANDED_THRESHOLD_MS = 30 * 60 * 1000;
 		const BATCH = 50;
+		const activation: { active: boolean; status: 'running' | 'complete' | 'not_activated' } =
+			await ctx.runQuery(internal.supporters.strandedPlaceholderSweepActivation, {
+				key: SWEEP_KEY_STRANDED_DONATIONS
+			});
+		if (!activation.active) {
+			return {
+				status: activation.status,
+				deleted: 0,
+				preserved: 0,
+				skipped: 0,
+				totalSeen: 0,
+				pagesScanned: 0,
+				wrapCount: 0,
+				wrapped: false
+			};
+		}
 		// Completed/refunded rows that somehow lost their ciphertext are
 		// PRESERVED — the donation's financial state is real (money moved),
 		// and the row carries audit data (sentAt, stripePaymentIntentId,
@@ -1343,68 +1525,62 @@ export const sweepStrandedDonations = internalAction({
 		let preserved = 0;
 		let skipped = 0;
 		let totalSeen = 0;
-		let isDone = false;
-		let pagesScanned = 0;
 
 		const checkpoint: {
 			cursor?: string;
 			wrapCount: number;
+			cursorRevision: number;
+			runToken: string;
 			checkpointId: Id<'sweepCheckpoints'>;
 		} = await ctx.runMutation(internal.supporters.loadSweepCheckpoint, {
 			key: SWEEP_KEY_STRANDED_DONATIONS
 		});
-		let paginationCursor: string | undefined = checkpoint.cursor;
+		const result: {
+			items: Array<{
+				_id: Id<'donations'>;
+				orgId: Id<'organizations'>;
+				campaignId: Id<'campaigns'>;
+				status: string;
+				ageMs: number;
+			}>;
+			continueCursor: string;
+			isDone: boolean;
+		} = await ctx.runQuery(internal.donations.getStrandedDonationPlaceholders, {
+			olderThanMs: STRANDED_THRESHOLD_MS,
+			paginationCursor: checkpoint.cursor,
+			limit: BATCH
+		});
+		totalSeen = result.items.length;
 
-		while (!isDone && pagesScanned < 20) {
-			const result: {
-				items: Array<{
-					_id: Id<'donations'>;
-					orgId: Id<'organizations'>;
-					campaignId: Id<'campaigns'>;
-					status: string;
-					ageMs: number;
-				}>;
-				continueCursor: string;
-				isDone: boolean;
-			} = await ctx.runQuery(internal.donations.getStrandedDonationPlaceholders, {
-				olderThanMs: STRANDED_THRESHOLD_MS,
-				paginationCursor,
-				limit: BATCH
-			});
-			pagesScanned++;
-			isDone = result.isDone;
-			paginationCursor = result.continueCursor;
-			totalSeen += result.items.length;
-
-			for (const d of result.items) {
-				if (PRESERVE_STATUSES.has(d.status)) {
-					console.warn(
-						`[sweepStrandedDonations] PRESERVING completed/refunded donation ${d._id} (status=${d.status}, ageMs=${d.ageMs}) — financial audit trail must survive cleanup`
-					);
-					preserved++;
-					continue;
-				}
-				const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
-					internal.donations.deleteStrandedDonationPlaceholder,
-					{ donationId: d._id }
+		for (const d of result.items) {
+			if (PRESERVE_STATUSES.has(d.status)) {
+				console.warn(
+					`[sweepStrandedDonations] PRESERVING completed/refunded donation ${d._id} (status=${d.status}, ageMs=${d.ageMs}) — financial audit trail must survive cleanup`
 				);
-				if (deleteResult.ok) {
-					console.warn(
-						`[sweepStrandedDonations] Deleted stranded donation ${d._id} (orgId=${d.orgId}, campaignId=${d.campaignId}, status=${d.status}, ageMs=${d.ageMs}) — processCheckout crashed mid-flight`
-					);
-					deleted++;
-				} else {
-					skipped++;
-				}
+				preserved++;
+				continue;
 			}
-
-			if (deleted + preserved >= BATCH * 4) break;
+			const deleteResult: { ok: boolean; reason?: string } = await ctx.runMutation(
+				internal.donations.deleteStrandedDonationPlaceholder,
+				{ donationId: d._id }
+			);
+			if (deleteResult.ok) {
+				console.warn(
+					`[sweepStrandedDonations] Deleted stranded donation ${d._id} (orgId=${d.orgId}, campaignId=${d.campaignId}, status=${d.status}, ageMs=${d.ageMs}) — processCheckout crashed mid-flight`
+				);
+				deleted++;
+			} else {
+				skipped++;
+			}
 		}
 
 		await ctx.runMutation(internal.supporters.saveSweepCheckpoint, {
 			checkpointId: checkpoint.checkpointId,
-			cursor: paginationCursor,
-			wrapped: isDone
+			expectedCursor: checkpoint.cursor,
+			expectedRevision: checkpoint.cursorRevision,
+			runToken: checkpoint.runToken,
+			cursor: result.continueCursor,
+			wrapped: result.isDone
 		});
 
 		return {
@@ -1412,9 +1588,9 @@ export const sweepStrandedDonations = internalAction({
 			preserved,
 			skipped,
 			totalSeen,
-			pagesScanned,
-			wrapCount: isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
-			wrapped: isDone
+			pagesScanned: 1,
+			wrapCount: result.isDone ? checkpoint.wrapCount + 1 : checkpoint.wrapCount,
+			wrapped: result.isDone
 		};
 	}
 });

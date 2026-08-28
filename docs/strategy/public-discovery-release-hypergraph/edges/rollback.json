@@ -1,0 +1,14 @@
+{
+  "type": "rollback",
+  "edges": [
+    {"source": "PD-05", "target": "RB-10", "trigger": "Immutable or custom-domain containment proof fails, exact canonical state diverges, or post-proof reconciliation fails; restore the captured production deployment through the official Pages rollback API, verify ID and SHA, then reconcile."},
+    {"source": "PD-30", "target": "RB-20", "trigger": "Manifest-authority activation/status, rebuild, or readiness fails; retain the last good singleton and repair before any Pages producer/readiness or frontend upload."},
+    {"source": "PD-40", "target": "RB-30", "trigger": "Direct smoke observes an unbounded backend read path."},
+    {"source": "PD-50", "target": "RB-10", "trigger": "Before Q and again after capture before T mutation, a retained edge must reject missing/wrong proof capabilities and accept the retained-window value or promotion stops. Before C, qualification, Access, candidate, or trusted-edge proof failure contains pending P/Q and restores captured state. After C, release-origin, health, or compatibility failure restores only a retained-C-matching hidden Pages candidate first and captured trusted edge second, then repeats capability-gated release-origin proof: normal Pages proves exact tuple/origin absence; containment proves captured metadata plus deterministic 503 maintenance. The ledger is not rewound, and optional purge failure cannot block or establish recovery."},
+    {"source": "PD-60", "target": "RB-10", "trigger": "Trusted landing-cache single ownership, bounded isolate-local match/origin/write/L1 lanes, cacheable-submit-only pending admission, header replacement, eligibility, origin-start-anchored outer 60/300/360 zero-purge ceiling, or strict less-than-420-second manifest-publication convergence exposes a frontend, cost, freshness, or release-identity regression; use the retained-C Pages-first then edge rollback ordering, repeat the normal-or-containment capability-gated release-origin proof, and treat purge only as best-effort acceleration."},
+    {"source": "PD-60", "target": "RB-20", "trigger": "The cache generation contains a bad or unexpectedly empty payload."},
+    {"source": "FND-40C", "target": "RB-10", "trigger": "Cold-bootstrap deployment, authority, seed, completion, Queue, or cleanup proof fails; contain the exact bootstrap authority, recover outer Pages/trusted-edge/cron state when present, then use append-only custody to remove the owned exact route first and temporary script second without touching superseding state."},
+    {"source": "PD-70", "target": "RB-10", "trigger": "Live application smoke fails while backend evidence remains healthy."},
+    {"source": "PD-70", "target": "RB-30", "trigger": "Live observation shows database I/O scaling with page requests."}
+  ]
+}

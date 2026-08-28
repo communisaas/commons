@@ -11,9 +11,10 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError } from '$lib/server/api-v1/response';
+import { webhookPolicyError } from '$lib/server/api-v1/webhook-policy';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 
 export const GET: RequestHandler = async ({ request, params }) => {
@@ -63,8 +64,12 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		return apiError('BAD_REQUEST', 'url must be a string up to 2048 characters', 400);
 	}
 	if (events !== undefined) {
-		if (!Array.isArray(events) || events.length === 0 || events.length > 20) {
-			return apiError('BAD_REQUEST', 'events must be a non-empty array of at most 20', 400);
+		if (
+			!Array.isArray(events) ||
+			events.length === 0 ||
+			!events.every((event) => typeof event === 'string')
+		) {
+			return apiError('BAD_REQUEST', 'events must be a non-empty string array', 400);
 		}
 	}
 	if (enabled !== undefined && typeof enabled !== 'boolean') {
@@ -81,24 +86,14 @@ export const PATCH: RequestHandler = async ({ request, params }) => {
 		url,
 		events,
 		enabled,
-		description: description?.slice(0, 500)
+		description
 	});
 
-	if (result.error === 'not_found') {
-		return apiError('NOT_FOUND', 'Webhook not found', 404);
-	}
-	if (result.error === 'invalid_url') {
-		return apiError('BAD_REQUEST', 'url is malformed', 400);
-	}
-	if (result.error === 'invalid_url_scheme') {
-		return apiError('BAD_REQUEST', 'url scheme must be http or https', 400);
-	}
-	if (result.error === 'empty_events') {
-		return apiError('BAD_REQUEST', 'events array cannot be empty', 400);
-	}
-	if (result.error === 'unknown_event') {
-		return apiError('BAD_REQUEST', `Unknown event type: ${result.event}`, 400);
-	}
+	const policyError = webhookPolicyError(
+		result.error,
+		'event' in result ? result.event : undefined
+	);
+	if (policyError) return policyError;
 	if (!result.webhook) {
 		return apiError('SERVER_ERROR', 'Webhook could not be updated', 500);
 	}

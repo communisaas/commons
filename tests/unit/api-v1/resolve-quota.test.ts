@@ -4,7 +4,7 @@
  * Exercises the SUBSTRATE-SALE allowance gate layered in front of the resolver:
  * the handler reads the metering ledger for the current billing period via
  * `getUsageForPeriod` and compares the recorded `resolve_address` count to the
- * resolving plan's finite `maxResolvesMonth` allowance BEFORE invoking
+ * resolving plan's finite `addressResolvesMonth` allowance BEFORE invoking
  * resolveAddress. Over-quota is an honest typed 402 RESOLVE_QUOTA_EXCEEDED — no
  * resolve, no meter. The allowance is PER-PLAN (read from the slug), not a flat
  * number, so a paid plan at the inactive count still resolves.
@@ -107,8 +107,8 @@ const { POST: resolveAddressHandler } = await import(
 // HELPERS
 // =============================================================================
 
-const INACTIVE_ALLOWANCE = PLANS.inactive.maxResolvesMonth;
-const ORGANIZATION_ALLOWANCE = PLANS.organization.maxResolvesMonth;
+const INACTIVE_ALLOWANCE = PLANS.inactive.addressResolvesMonth;
+const ORGANIZATION_ALLOWANCE = PLANS.organization.addressResolvesMonth;
 
 function authContext(planSlug: string) {
 	return {
@@ -311,12 +311,12 @@ describe('POST /api/v1/resolve-address — plan-quota gate', () => {
 		expect(body.meta.requestId).toBe(meterArgs.requestId);
 	});
 
-	// D1 per-plan regression: the gate honors EACH plan's maxResolvesMonth at the
+	// D1 per-plan regression: the gate honors EACH plan's addressResolvesMonth at the
 	// boundary, including allowances (org 150k / coalition 500k) far above the old
 	// 16k ledger-scan cap. The count is mocked (counter-backed in production), so
 	// this asserts the gate arithmetic — not 150k real rows — across every plan.
 	for (const slug of ['starter', 'organization', 'coalition'] as const) {
-		const allowance = PLANS[slug].maxResolvesMonth;
+		const allowance = PLANS[slug].addressResolvesMonth;
 
 		it(`(f-${slug}) at allowance-1 (${allowance - 1}) → 200 + meters; at allowance (${allowance}) → 402, no resolve, no meter`, async () => {
 			// Just under the per-plan allowance → resolves and meters exactly once.

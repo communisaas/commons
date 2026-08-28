@@ -12,19 +12,65 @@ import { trackForRejection } from '$lib/services/rejectionMonitor';
 import { configure } from '$lib/core/shadow-atlas/ipfs-store';
 import { initCloudflareSentryHandle, sentryHandle, handleErrorWithSentry } from '@sentry/sveltekit';
 import * as Sentry from '@sentry/sveltekit';
-import { initConvex, serverQuery, serverMutation } from 'convex-sveltekit';
+import { initConvex, serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { mintConvexToken } from '$lib/server/convex-jwt';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { api } from '$lib/convex';
+import {
+	API_V1_EDGE_PROTOCOL_VERSION,
+	API_V1_EDGE_REQUEST_HEADER,
+	API_V1_RATE_TIER_HEADER,
+	getApiV1RateTierSignal,
+	withApiV1RateTierSignal
+} from '$lib/server/api-v1/rate-tier-signal';
+import { evaluateSessionWindow } from '$lib/server/session-authority';
+import {
+	querySessionAuthorityFromCookie,
+	resolveSessionCookieSigningSecrets,
+	sealSessionCookie
+} from '$lib/server/auth/session-cookie';
+import { dispatchRuntimeRequest } from '$lib/server/runtime-containment';
+import { handlePublicDiscoveryManifestRefreshCapability } from '$lib/server/public-discovery-manifest-refresh-hook';
+import {
+	classifyPublicTemplateCostPath,
+	PUBLIC_TEMPLATE_DETAIL_RATE_LIMIT
+} from '$lib/server/public-template-detail-path';
+import { createProductionHostAuthorityHandle } from '$lib/server/production-host-authority';
+import { handleConvexWorkBudgetResponses } from '$lib/server/convex-work-budget-response';
+
+const handleProductionHostAuthority = createProductionHostAuthorityHandle({
+	allowLocalDevelopment: dev
+});
 
 // ─── DUAL-STACK: Initialize Convex server-side client ───
 // Stores the deployment URL so serverQuery()/serverMutation()/serverAction()
 // can create ConvexHttpClient instances. The ConvexClient itself is disabled
 // (IS_BROWSER=false) — only the URL is needed for HTTP calls.
-if (typeof PUBLIC_CONVEX_URL === 'string' && PUBLIC_CONVEX_URL) {
-	initConvex(PUBLIC_CONVEX_URL);
+const APPROVED_CONVEX_RUNTIME_URLS = new Set([
+	PUBLIC_CONVEX_URL,
+	'https://outstanding-firefly-831.convex.cloud',
+	'https://quirky-chinchilla-352.convex.cloud'
+]);
+let convexInitializedUrl: string | null = null;
+function ensureConvexInitialized(configured: unknown): void {
+	if (typeof configured !== 'string' || !APPROVED_CONVEX_RUNTIME_URLS.has(configured)) {
+		throw new Error('PUBLIC_CONVEX_URL is not an approved runtime realm');
+	}
+	if (convexInitializedUrl !== null) {
+		if (convexInitializedUrl !== configured) {
+			throw new Error('Convex runtime realm changed inside one Worker isolate');
+		}
+		return;
+	}
+	initConvex(configured);
+	convexInitializedUrl = configured;
 }
+
+const handleConvexInitialization: Handle = async ({ event, resolve }) => {
+	ensureConvexInitialized(event.platform?.env?.PUBLIC_CONVEX_URL ?? PUBLIC_CONVEX_URL);
+	return resolve(event);
+};
 
 /**
  * Sentry error handler — captures unhandled errors with PII scrubbing.
@@ -83,32 +129,155 @@ const handlePlatformEnv: Handle = async ({ event, resolve }) => {
 };
 
 const SESSION_COOKIE = 'auth-session';
+const SESSION_AUTHORITY_INDEPENDENT_OPERATIONAL_PATHS = new Set([
+	'/api/live',
+	'/api/health',
+	'/api/containment-readiness'
+]);
 
-const handleAuth: Handle = async ({ event, resolve }) => {
+/**
+ * These exact operational handlers do not consume application identity.
+ * Liveness is dependency-free; readiness authenticates its own operator
+ * capability before performing any intended dependency work. A browser cookie
+ * must therefore never add a session-authority query ahead of either handler.
+ */
+export function bypassSessionAuthorityForOperationalPath(pathname: string): boolean {
+	return SESSION_AUTHORITY_INDEPENDENT_OPERATIONAL_PATHS.has(pathname);
+}
+
+/**
+ * Return the authenticated rate tier only to the dedicated API edge Worker.
+ * AsyncLocalStorage keeps concurrent requests isolated; direct Pages requests
+ * never receive the internal header unless they opt into the edge protocol.
+ */
+export const handleApiV1RateTierSignal: Handle = async ({ event, resolve }) => {
+	if (
+		!event.url.pathname.startsWith('/api/v1/') ||
+		event.request.headers.get(API_V1_EDGE_REQUEST_HEADER) !== API_V1_EDGE_PROTOCOL_VERSION
+	) {
+		return resolve(event);
+	}
+	return withApiV1RateTierSignal(async () => {
+		const response = await resolve(event);
+		const signal = getApiV1RateTierSignal();
+		if (signal) response.headers.set(API_V1_RATE_TIER_HEADER, signal);
+		return response;
+	});
+};
+
+/**
+ * Reject malformed or abusive anonymous template-detail traffic before auth
+ * can consult Convex and before a route can invoke Convex or Sharp. This
+ * per-isolate/optional-Redis limiter is defense-in-depth; the matching
+ * Cloudflare WAF rule remains the cross-isolate launch boundary.
+ */
+export const handlePublicTemplateDetailCostShield: Handle = async ({ event, resolve }) => {
+	const method = event.request.method;
+	if (method !== 'GET' && method !== 'HEAD') return resolve(event);
+
+	const route = classifyPublicTemplateCostPath(event.url.pathname);
+	if (!route) return resolve(event);
+	if (!route.validSlug) {
+		return new Response(method === 'HEAD' ? null : 'Not found', {
+			status: 404,
+			headers: { 'Cache-Control': 'private, no-store, max-age=0' }
+		});
+	}
+
+	const clientIP = event.getClientAddress();
+	const result = await getRateLimiter().check(
+		SlidingWindowRateLimiter.generateKey(PUBLIC_TEMPLATE_DETAIL_RATE_LIMIT, clientIP),
+		PUBLIC_TEMPLATE_DETAIL_RATE_LIMIT
+	);
+	const headers = createRateLimitHeaders(result);
+	if (!result.allowed) {
+		return new Response(
+			method === 'HEAD'
+				? null
+				: JSON.stringify({
+						error: 'Too many requests',
+						message: `Rate limit exceeded. Please try again in ${result.retryAfter} seconds.`,
+						retryAfter: result.retryAfter
+					}),
+			{
+				status: 429,
+				headers: {
+					...(method === 'HEAD' ? {} : { 'Content-Type': 'application/json' }),
+					'Cache-Control': 'private, no-store, max-age=0',
+					...headers
+				}
+			}
+		);
+	}
+
+	const response = await resolve(event);
+	for (const [name, value] of Object.entries(headers)) response.headers.set(name, value);
+	return response;
+};
+
+export const handleAuth: Handle = async ({ event, resolve }) => {
+	if (event.locals.publicDiscoveryManifestRefreshAuthenticated) return resolve(event);
+	if (bypassSessionAuthorityForOperationalPath(event.url.pathname)) {
+		event.locals.user = null;
+		event.locals.session = null;
+		event.locals.convexToken = undefined;
+		return resolve(event);
+	}
 	try {
-		const sessionId = event.cookies.get(SESSION_COOKIE);
-		if (!sessionId) {
+		const requestNow = Date.now();
+		const cookieValue = event.cookies.get(SESSION_COOKIE);
+		const cookieSecrets = cookieValue
+			? resolveSessionCookieSigningSecrets({
+					activeSecret: process.env.SESSION_COOKIE_SIGNING_SECRET,
+					previousSecret: process.env.SESSION_COOKIE_SIGNING_SECRET_PREVIOUS || undefined,
+					sessionCreationSecret: process.env.SESSION_CREATION_SECRET,
+					previousSessionCreationSecret: process.env.SESSION_CREATION_SECRET_PREVIOUS || undefined
+				})
+			: { activeSecret: undefined, previousSecret: undefined };
+		const cookieAuth = await querySessionAuthorityFromCookie({
+			cookieValue,
+			activeSecret: cookieSecrets.activeSecret,
+			previousSecret: cookieSecrets.previousSecret,
+			now: requestNow,
+			onInvalid: () => event.cookies.delete(SESSION_COOKIE, { path: '/' }),
+			queryAuthority: (verifiedSessionId) =>
+				serverQuery(api.sessionAuthority.get, {
+					_secret: getInternalSecret(),
+					sessionId: verifiedSessionId
+				})
+		});
+		if (cookieAuth.status !== 'verified') {
 			event.locals.user = null;
 			event.locals.session = null;
 			return resolve(event);
 		}
+		const { sessionId, authority: result } = cookieAuth;
 
-		const result = await serverQuery(api.authOps.validateSession, { _secret: getInternalSecret(), sessionId });
-
-		if (!result) {
+		if (result.status === 'invalid') {
 			event.cookies.delete(SESSION_COOKIE, { path: '/' });
 			event.locals.user = null;
 			event.locals.session = null;
 			return resolve(event);
 		}
+		if (result.status === 'not_ready') {
+			throw new Error(result.reason);
+		}
 
-		const { session, user, renewed } = result;
+		const { session, authority: user } = result;
+		const sessionWindow = evaluateSessionWindow(session, requestNow);
+		if (!sessionWindow.valid) {
+			event.cookies.delete(SESSION_COOKIE, { path: '/' });
+			event.locals.user = null;
+			event.locals.session = null;
+			return resolve(event);
+		}
+		const { renewed, effectiveExpiresAt, renewTo } = sessionWindow;
 		const userEmail = user.email;
 
 		if (!userEmail) {
 			console.warn(
 				'[hooks.server] Valid session resolved to user without email; clearing auth cookie for user=' +
-					(user._id as string).slice(0, 8) +
+					(user.userId as string).slice(0, 8) +
 					'...'
 			);
 			event.cookies.delete(SESSION_COOKIE, { path: '/' });
@@ -117,15 +286,23 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			return resolve(event);
 		}
 
-		if (renewed) {
-			// Extend cookie expiry to match renewed session
-			event.cookies.set(SESSION_COOKIE, session.id, {
+		if (renewed || cookieAuth.needsReseal || cookieAuth.cookieExpiresAt !== effectiveExpiresAt) {
+			// Renewal, rotation, and any expiry drift always re-emit an active-key
+			// envelope. A raw database id is never written to the cookie.
+			const signedCookie = await sealSessionCookie(
+				session.id as string,
+				effectiveExpiresAt,
+				cookieSecrets.activeSecret
+			);
+			event.cookies.set(SESSION_COOKIE, signedCookie, {
 				path: '/',
 				sameSite: 'lax',
 				httpOnly: true,
-				expires: new Date(session.expiresAt),
+				expires: new Date(effectiveExpiresAt),
 				secure: !dev
 			});
+		}
+		if (renewed) {
 			// Log Convex renewal failures rather than swallowing silently.
 			// The cookie expiry has been extended on the response, but if the
 			// Convex renewal fails (transient outage, schema drift, race
@@ -134,23 +311,25 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			// the same failure will repeat, masking a real outage. Logging
 			// restores observability without changing the request outcome
 			// (cookie was already set).
-			serverMutation(api.authOps.renewSession, { sessionId }).catch((err) => {
+			serverMutation(api.authOps.renewSession, {
+				_secret: getInternalSecret(),
+				sessionId,
+				renewTo: renewTo ?? undefined
+			}).catch((err) => {
 				console.warn(
-					'[hooks.server] Session renewal failed for sessionId=' +
-						sessionId.slice(0, 8) +
-						'...:',
+					'[hooks.server] Session renewal failed for sessionId=' + sessionId.slice(0, 8) + '...:',
 					err instanceof Error ? err.message : String(err)
 				);
 			});
 		}
 
 		event.locals.user = {
-			id: user._id as string,
+			id: user.userId as string,
 			email: userEmail,
 			name: user.name ?? null,
 			avatar: user.avatar ?? null,
 			// PII custody
-			email_hash: user.emailHash ?? null,
+			email_hash: null,
 			// Verification status
 			is_verified: user.isVerified,
 			verification_method: user.verificationMethod ?? null,
@@ -166,7 +345,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			}),
 			// Passkey
 			passkey_credential_id: user.passkeyCredentialId ?? null,
-			did_key: user.didKey ?? null,
+			did_key: null,
 			// ZK identity
 			identity_commitment: user.identityCommitment ?? null,
 			// District
@@ -174,33 +353,33 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 			district_verified: user.districtVerified ?? false,
 			address_verified_at: user.addressVerifiedAt ? new Date(user.addressVerifiedAt) : null,
 			// Profile
-			role: user.role ?? null,
-			organization: user.organization ?? null,
-			location: user.location ?? null,
-			connection: user.connection ?? null,
-			profile_completed_at: user.profileCompletedAt ? new Date(user.profileCompletedAt) : null,
-			profile_visibility: user.profileVisibility ?? 'private',
+			role: null,
+			organization: null,
+			location: null,
+			connection: null,
+			profile_completed_at: null,
+			profile_visibility: 'private',
 			// Reputation
 			trust_score: user.trustScore ?? 0,
-			reputation_tier: user.reputationTier ?? 'novice',
+			reputation_tier: 'new',
 			// Wallet
 			wallet_address: user.walletAddress ?? null,
-			wallet_type: user.walletType ?? null,
-			near_account_id: user.nearAccountId ?? null,
-			near_derived_scroll_address: user.nearDerivedScrollAddress ?? null,
+			wallet_type: null,
+			near_account_id: null,
+			near_derived_scroll_address: null,
 			// Timestamps
-			createdAt: new Date(user._creationTime),
-			updatedAt: new Date(user.updatedAt)
+			createdAt: new Date(user.userCreatedAt),
+			updatedAt: new Date(user.userCreatedAt)
 		};
 		event.locals.session = {
 			id: session.id as string,
 			userId: session.userId,
-			createdAt: new Date(0),
-			expiresAt: new Date(session.expiresAt)
+			createdAt: new Date(session.createdAt),
+			expiresAt: new Date(effectiveExpiresAt)
 		};
 
 		// Mint Convex JWT for authenticated server-side queries
-		if (event.locals.user && PUBLIC_CONVEX_URL) {
+		if (event.locals.user && (event.platform?.env?.PUBLIC_CONVEX_URL ?? PUBLIC_CONVEX_URL)) {
 			try {
 				const token = await mintConvexToken(event.locals.user);
 				if (token) {
@@ -209,7 +388,7 @@ const handleAuth: Handle = async ({ event, resolve }) => {
 						serverMutation(api.authOps.backfillTokenIdentifier, {}).catch((err) => {
 							console.warn(
 								'[hooks.server] tokenIdentifier backfill failed for user=' +
-									(user._id as string).slice(0, 8) +
+									(user.userId as string).slice(0, 8) +
 									'...:',
 								err instanceof Error ? err.message : String(err)
 							);
@@ -373,7 +552,8 @@ import { sequence } from '@sveltejs/kit/hooks';
  *   - Retry-After: Seconds to wait (only on 429)
  *
  * DESIGN NOTES:
- *   - Runs FIRST in the sequence to reject abusive requests early
+ *   - Runs after authentication so user-keyed rules receive the verified user ID
+ *   - Dedicated public cost shields run before authentication where pre-I/O rejection is required
  *   - Applies to mutating methods by default (POST, PUT, PATCH, DELETE)
  *   - Routes with `includeGet: true` also rate-limit GET requests (e.g., metrics, confirmation)
  *   - Webhook paths are exempted (server-to-server, HMAC-authenticated)
@@ -406,12 +586,10 @@ const handleRateLimit: Handle = async ({ event, resolve }) => {
 	// Note: event.getClientAddress() respects X-Forwarded-For behind reverse proxies
 	const clientIP = event.getClientAddress();
 
-	// Get user ID if available and config requires user-based limiting
-	// Note: Session may not be available yet (rate limit runs before auth)
-	// For user-based limits, we need to peek at the session cookie
+	// Get the verified user ID populated by handleAuth when a rule is user-keyed.
+	// Requests without an accepted session deliberately fall back to their IP.
 	let userId: string | undefined;
 	if (config.keyStrategy === 'user') {
-		// Try to get user from locals (if auth already ran) or session cookie
 		userId = locals.session?.userId;
 
 		// If no user ID for a user-keyed limit, fall back to IP
@@ -557,22 +735,41 @@ const handleSentryInit: Handle = async ({ event, resolve }) => {
 
 /**
  * Hook execution order:
- * 1. handleSentryInit - Initialize Sentry SDK from platform.env
- * 2. handlePlatformEnv - Copy platform.env to process.env + init IPFS CIDs
- * 3. sentryHandle - Wrap request for Sentry error/trace capture
- * 4. handleAuth - Validate session via Convex, populate locals.user/session
- * 5. handleRateLimit - Check rate limits (can use user ID from auth)
- * 6. handleCsrfGuard - CSRF protection for sensitive endpoints
- * 7. handleSecurityHeaders - Add COOP/COEP + CSP headers
- * 8. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
+ * 1. handleProductionHostAuthority - stop noncanonical production aliases before all I/O
+ * 2. handlePublicDiscoveryManifestRefreshCapability - reject refresh traffic before dependency I/O
+ * 3. handleConvexInitialization - Initialize Convex only after capability rejection
+ * 4. handleSentryInit - Initialize Sentry SDK from platform.env
+ * 5. handlePlatformEnv - Copy platform.env to process.env + init IPFS CIDs
+ * 6. handleConvexWorkBudgetResponses - Own typed denial for every downstream Convex reservation
+ * 7. sentryHandle - Wrap request for Sentry error/trace capture
+ * 8. handleApiV1RateTierSignal - Isolate the edge-only response hint
+ * 9. handlePublicTemplateDetailCostShield - Reject exact public-detail abuse before Convex I/O
+ * 10. handleAuth - Validate session via Convex, populate locals.user/session
+ * 11. handleRateLimit - Check remaining route limits (can use user ID from auth)
+ * 12. handleCsrfGuard - CSRF protection for sensitive endpoints
+ * 13. handleSecurityHeaders - Add COOP/COEP + CSP headers
+ * 14. handleRejectionMonitoring - Track rejection rates (async, zero latency impact)
  */
-export const handle = sequence(
+const applicationHandle = sequence(
+	handleProductionHostAuthority,
+	handlePublicDiscoveryManifestRefreshCapability,
+	handleConvexInitialization,
 	handleSentryInit,
 	handlePlatformEnv,
+	handleConvexWorkBudgetResponses,
 	sentryHandle(),
+	handleApiV1RateTierSignal,
+	handlePublicTemplateDetailCostShield,
 	handleAuth,
 	handleRateLimit,
 	handleCsrfGuard,
 	handleSecurityHeaders,
 	handleRejectionMonitoring
 );
+
+/**
+ * Runtime containment is the outermost boundary. In maintenance artifacts it
+ * returns before Convex initialization and before every application hook; only
+ * the two explicitly I/O-free operational routes reach SvelteKit routing.
+ */
+export const handle: Handle = (input) => dispatchRuntimeRequest(input, applicationHandle);

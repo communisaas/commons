@@ -1,6 +1,6 @@
 // CONVEX: Fully migrated — form actions use Convex supporter mutations
 import { error, fail, redirect } from '@sveltejs/kit';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad, Actions } from './$types';

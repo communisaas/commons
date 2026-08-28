@@ -1,5 +1,5 @@
 /**
- * Moderation Types - Permissive Civic Platform Architecture
+ * Moderation Types - Audience-Conditional Civic Platform Architecture
  *
  * Two-layer moderation system:
  *
@@ -7,14 +7,17 @@
  *    - Llama Prompt Guard 2 via GROQ
  *    - Protects AI agents from jailbreak/manipulation attacks
  *
- * 2. Content Safety (OPTIONAL, minimal)
+ * 2. Content Safety (required at delivery/authoring boundaries)
  *    - `openai/gpt-oss-safeguard-20b` via GROQ
- *    - Only blocks TRULY illegal content (S1: threats, S4: CSAM)
- *    - Does NOT block: political speech, defamation claims, electoral opinions
+ *    - An institutional audience retains the calibrated S1/S4-only policy
+ *    - A natural-person audience, and every unevaluable one, additionally
+ *      block S5, S7, and S10
  *
- * Design principle: Be PERMISSIVE with user speech.
- * Platform serves ANY decision-maker (Congress, corporations, HOAs, etc.)
- * Political speech, strong criticism, and controversial opinions are ALLOWED.
+ * Design principle: preserve the calibrated civic-speech policy only where a
+ * server-derived audience verdict establishes that the message lands in an
+ * institutional role mailbox rather than in front of a natural person. The
+ * axis lives in `./audience.ts`; this module owns only the hazard vocabulary
+ * and the two hazard sets that verdict selects between.
  *
  * @see https://console.groq.com/docs/model/openai/gpt-oss-safeguard-20b
  * @see https://huggingface.co/meta-llama/Llama-Prompt-Guard-2
@@ -41,14 +44,15 @@ export interface PromptGuardResult {
 }
 
 // ============================================================================
-// Content Safety (Layer 1 - OPTIONAL, minimal)
+// Content Safety (Layer 1 - REQUIRED unless a trusted caller explicitly skips it)
 // ============================================================================
 
 /**
  * MLCommons Hazard Categories (S1-S14)
  *
- * PERMISSIVE POLICY: Only S1 (violent threats) and S4 (CSAM) block content.
- * All other categories are logged but do NOT block submission.
+ * AUDIENCE-CONDITIONAL POLICY: S1 (violent threats) and S4 (CSAM) always block.
+ * S5 (defamation), S7 (privacy), and S10 (hate) additionally block unless a
+ * server-derived audience verdict establishes an institutional recipient.
  *
  * Rationale:
  * - S5 (Defamation): Political speech often contains accusations - ALLOW
@@ -92,16 +96,26 @@ export const HAZARD_DESCRIPTIONS: Record<MLCommonsHazard, string> = {
 };
 
 /**
- * BLOCKING hazards - content with these is rejected
+ * Institutional-audience blocking hazards - content with these is rejected.
  *
- * Only truly illegal content that creates legal liability:
+ * The floor, present in EVERY branch. Only truly illegal content that creates
+ * legal liability:
  * - S1: Violent threats (federal crime)
  * - S4: CSAM (federal crime, 18 USC 2252)
  */
 export const BLOCKING_HAZARDS: MLCommonsHazard[] = ['S1', 'S4'];
 
 /**
- * NON-BLOCKING hazards - logged for analytics but content proceeds
+ * Blocking hazards wherever a natural person may be on the receiving end —
+ * a person-form route, and every audience that could not be evaluated. This is
+ * the default: the permissive set must be earned by positive evidence.
+ */
+export const PERSON_BLOCKING_HAZARDS: MLCommonsHazard[] = ['S1', 'S4', 'S5', 'S7', 'S10'];
+
+/**
+ * NON-BLOCKING hazards under the institutional policy only: the complement of
+ * the calibrated institutional set. A person-form or unevaluable audience also
+ * blocks S5, S7, and S10 out of this list.
  *
  * These are flagged but ALLOWED because:
  * - Political speech is protected
@@ -127,11 +141,11 @@ export const NON_BLOCKING_HAZARDS: MLCommonsHazard[] = [
  * Safety result from the Layer 1 safety classifier.
  */
 export interface SafetyResult {
-	/** Content passed safety checks (no BLOCKING_HAZARDS detected) */
+	/** Content passed safety checks under the resolved audience policy. */
 	safe: boolean;
 	/** All detected hazard categories (may include non-blocking hazards) */
 	hazards: MLCommonsHazard[];
-	/** Subset of hazards that caused blocking (S1, S4 only) */
+	/** Subset of hazards that caused blocking under the resolved audience policy. */
 	blocking_hazards: MLCommonsHazard[];
 	/** Human-readable hazard descriptions */
 	hazard_descriptions: string[];
@@ -162,9 +176,14 @@ export interface ModerationResult {
 }
 
 /**
- * Input for template moderation
+ * Input for template moderation.
+ *
+ * Every author-written field that the public surfaces serve is required here:
+ * what a reader can see is what the classifiers reviewed.
  */
 export interface TemplateModerationInput {
 	title: string;
+	description: string;
+	preview: string;
 	message_body: string;
 }

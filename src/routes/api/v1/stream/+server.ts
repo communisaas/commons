@@ -1,5 +1,5 @@
 import { error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
@@ -58,7 +58,7 @@ export const GET: RequestHandler = async ({ request }) => {
 						_secret: getInternalSecret(),
 						orgId,
 						sinceMs,
-						limit: 100
+						limit: 50
 					});
 					for (const e of events) {
 						sinceMs = Math.max(sinceMs, e.emittedAt);

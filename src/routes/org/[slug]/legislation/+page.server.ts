@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 
 import type { PageServerLoad } from './$types';
@@ -29,11 +29,12 @@ export const load: PageServerLoad = async ({ parent }) => {
 				? {
 						...(w.bill as Record<string, unknown>),
 						id: (w.bill as Record<string, unknown>)._id,
-						statusDate: (w.bill as Record<string, unknown>).statusDate != null
-							? (typeof (w.bill as Record<string, unknown>).statusDate === 'number'
-								? new Date((w.bill as Record<string, unknown>).statusDate as number).toISOString()
-								: String((w.bill as Record<string, unknown>).statusDate))
-							: null
+						statusDate:
+							(w.bill as Record<string, unknown>).statusDate != null
+								? typeof (w.bill as Record<string, unknown>).statusDate === 'number'
+									? new Date((w.bill as Record<string, unknown>).statusDate as number).toISOString()
+									: String((w.bill as Record<string, unknown>).statusDate)
+								: null
 					}
 				: null
 		})),
@@ -46,11 +47,12 @@ export const load: PageServerLoad = async ({ parent }) => {
 				? {
 						...(r.bill as Record<string, unknown>),
 						id: (r.bill as Record<string, unknown>)._id,
-						statusDate: (r.bill as Record<string, unknown>).statusDate != null
-							? (typeof (r.bill as Record<string, unknown>).statusDate === 'number'
-								? new Date((r.bill as Record<string, unknown>).statusDate as number).toISOString()
-								: String((r.bill as Record<string, unknown>).statusDate))
-							: null
+						statusDate:
+							(r.bill as Record<string, unknown>).statusDate != null
+								? typeof (r.bill as Record<string, unknown>).statusDate === 'number'
+									? new Date((r.bill as Record<string, unknown>).statusDate as number).toISOString()
+									: String((r.bill as Record<string, unknown>).statusDate)
+								: null
 					}
 				: null
 		}))

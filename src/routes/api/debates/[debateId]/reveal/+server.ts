@@ -1,10 +1,20 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
 import { allowChainMisconfig } from '$lib/server/debate-chain-gate';
+import { readBoundedJson } from '$lib/server/bounded-json';
+import {
+	isBoundedHexBytes,
+	isBytes32,
+	isRecord,
+	isSafeUint
+} from '$lib/server/debate-input-validation';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+
+const DEBATE_REVEAL_REQUEST_MAX_BYTES = 96 * 1024;
 
 export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!FEATURES.DEBATE) {
@@ -21,7 +31,9 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	const { debateId } = params;
-	const body = await request.json();
+	const parsed = await readBoundedJson(request, DEBATE_REVEAL_REQUEST_MAX_BYTES);
+	if (!isRecord(parsed)) throw error(400, 'Invalid trade reveal request');
+	const body = parsed;
 
 	const {
 		epoch,
@@ -33,22 +45,24 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 		debateWeightPublicInputs
 	} = body;
 
+	if (!isSafeUint(epoch) || !isSafeUint(commitIndex) || !isSafeUint(argumentIndex)) {
+		throw error(400, 'epoch, commitIndex, and argumentIndex must be non-negative safe integers');
+	}
+
+	if (!isBytes32(nonce)) {
+		throw error(400, 'nonce must be a 0x-prefixed 32-byte hex string');
+	}
+
+	if (!isBoundedHexBytes(debateWeightProof)) {
+		throw error(400, 'debateWeightProof must be bounded hex bytes');
+	}
+
 	if (
-		epoch === undefined ||
-		commitIndex === undefined ||
-		argumentIndex === undefined ||
-		direction === undefined ||
-		!nonce
+		!Array.isArray(debateWeightPublicInputs) ||
+		debateWeightPublicInputs.length !== 2 ||
+		!debateWeightPublicInputs.every(isBytes32)
 	) {
-		throw error(400, 'Missing required fields');
-	}
-
-	if (!debateWeightProof || !debateWeightPublicInputs) {
-		throw error(400, 'Missing required fields: debateWeightProof, debateWeightPublicInputs');
-	}
-
-	if (!Array.isArray(debateWeightPublicInputs) || debateWeightPublicInputs.length !== 2) {
-		throw error(400, 'debateWeightPublicInputs must be an array of exactly 2 elements');
+		throw error(400, 'debateWeightPublicInputs must contain exactly 2 bytes32 values');
 	}
 
 	// Validate direction is 0 (BUY) or 1 (SELL)
@@ -57,7 +71,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	}
 
 	// Validate debate exists and is active
-	const debate = await serverQuery(api.debates.get, { debateId: debateId as Id<'debates'> });
+	const debate = await serverQuery(api.debates.get, {
+		_secret: getInternalSecret(),
+		debateId: debateId as Id<'debates'>
+	});
 
 	if (!debate) throw error(404, 'Debate not found');
 	if (debate.status !== 'active') throw error(400, 'Debate is not active');

@@ -1,9 +1,13 @@
 import { dev } from '$app/environment';
 import { error, json, type RequestEvent } from '@sveltejs/kit';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import type { RequestHandler } from './$types';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	resolveSessionCookieSigningSecrets,
+	sealSessionCookie
+} from '$lib/server/auth/session-cookie';
 
 const SESSION_COOKIE = 'auth-session';
 const SESSION_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
@@ -90,6 +94,12 @@ export const POST: RequestHandler = async (event) => {
 	if (!sessionSecret) {
 		throw error(503, 'SESSION_CREATION_SECRET not configured');
 	}
+	const cookieSecrets = resolveSessionCookieSigningSecrets({
+		activeSecret: envValue(event, 'SESSION_COOKIE_SIGNING_SECRET'),
+		previousSecret: envValue(event, 'SESSION_COOKIE_SIGNING_SECRET_PREVIOUS'),
+		sessionCreationSecret: sessionSecret,
+		previousSessionCreationSecret: envValue(event, 'SESSION_CREATION_SECRET_PREVIOUS')
+	});
 
 	const result = await serverMutation(api.authOps.upsertFromOAuth, {
 		_secret: getInternalSecret(),
@@ -110,7 +120,12 @@ export const POST: RequestHandler = async (event) => {
 		proof
 	});
 
-	event.cookies.set(SESSION_COOKIE, session.sessionId, {
+	const sessionCookie = await sealSessionCookie(
+		session.sessionId,
+		expiresAt,
+		cookieSecrets.activeSecret
+	);
+	event.cookies.set(SESSION_COOKIE, sessionCookie, {
 		path: '/',
 		secure: !dev,
 		httpOnly: true,

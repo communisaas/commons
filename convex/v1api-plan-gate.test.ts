@@ -33,9 +33,7 @@ const NOW = 1_750_000_000_000;
 
 describe('v1 API plan-status gate — real effectivePlanWithGrace', () => {
 	it('canceled subscription floors to inactive (stale plan never surfaces)', () => {
-		expect(effectivePlanWithGrace({ status: 'canceled', plan: 'coalition' }, NOW)).toBe(
-			'inactive'
-		);
+		expect(effectivePlanWithGrace({ status: 'canceled', plan: 'coalition' }, NOW)).toBe('inactive');
 	});
 
 	it('past_due inside the 7-day grace keeps the plan', () => {
@@ -72,9 +70,9 @@ describe('v1 API plan-status gate — real effectivePlanWithGrace', () => {
 describe('v1api.ts source — planSlug routes through the shared gate', () => {
 	const source = v1apiSource;
 
-	it('imports the helper from _brandingGate and calls it with (sub, Date.now())', () => {
+	it('imports the helper from _brandingGate and calls it with the mutation clock', () => {
 		expect(source).toContain("import { effectivePlanWithGrace } from './_brandingGate';");
-		expect(source).toContain('effectivePlanWithGrace(sub, Date.now())');
+		expect(source).toContain('effectivePlanWithGrace(sub, now)');
 	});
 
 	it('no longer resolves planSlug from the raw subscription row', () => {
@@ -82,10 +80,16 @@ describe('v1api.ts source — planSlug routes through the shared gate', () => {
 	});
 
 	it('keeps the subscriptions read unfiltered (canceled rows read, then floored)', () => {
-		// The by_orgId read must stay a plain `.first()` with no status filter —
-		// the floor is applied by the helper, not by skipping rows at the query.
+		// Read the unfiltered org key and fail closed on corrupt multiplicity. The
+		// floor is applied by the helper, not by skipping canceled rows at query time.
 		expect(source).toMatch(
-			/query\('subscriptions'\)\s*\.withIndex\('by_orgId', \(q\) => q\.eq\('orgId', org\._id\)\)\s*\.first\(\)/
+			/query\('subscriptions'\)\s*\.withIndex\('by_orgId', \(q\) => q\.eq\('orgId', apiKey\.orgId\)\)\s*\.take\(2\)/
 		);
+		expect(source).toContain("throw new Error('SUBSCRIPTION_CARDINALITY_REPAIR_REQUIRED')");
+		expect(source).toContain('const sub = subscriptionRows[0] ?? null');
+	});
+
+	it('does not read the heavyweight organization document on the hot path', () => {
+		expect(source).not.toContain('ctx.db.get(apiKey.orgId)');
 	});
 });

@@ -1,0 +1,12 @@
+{
+	"protocol": 1,
+	"scope": "Every executable TypeScript/JavaScript module below convex/, recursively; generated declarations and test modules are excluded, while comments are ignored because they are non-executable syntax.",
+	"approvedCapabilities": [],
+	"retiredCapabilities": [
+		"convex/templates.ts:generateQueryEmbedding",
+		"convex/templates.ts:GEMINI_API_KEY",
+		"convex/templates.ts:backfillTagEmbeddings",
+		"convex/intelligence.ts:ingest",
+		"convex/crons.ts:tag-concept-embedding-backfill"
+	]
+}

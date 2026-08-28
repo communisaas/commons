@@ -25,89 +25,221 @@ import {
 	logLLMOperation
 } from '$lib/server/llm-cost-protection';
 import { moderatePromptOnly } from '$lib/core/server/moderation';
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import type { Id } from '$convex/_generated/dataModel';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { issuePublicRecipientProvenance } from '$convex/lib/publicRecipientProvenance';
+import { computeGlobalEmailHash } from '$convex/_orgHash';
+import { RECIPIENT_SUPPRESSION_BATCH_MAX } from '$convex/lib/contactAuthority';
+import { requireAuthenticatedAgentRequest } from '$lib/server/agent-request-authority';
+import {
+	agentPromptGuardContent,
+	readBoundedAgentRequest
+} from '$lib/server/agent-request-envelope';
+import { present, type Fact } from '$lib/core/fact';
+import { paidProviderMonthlyCeilingWasReached } from '$lib/server/paid-provider-budget-client';
+import { tallyContactRoutes } from '$lib/core/agents/contact-route-verdict';
+import { reachCensus } from '$lib/core/agents/reach-census';
+import { classifySeatRoute } from '$lib/core/agents/seat-route';
+import { captureWithContext } from '$lib/server/monitoring/sentry';
+import {
+	coerceStage,
+	describeResolveFailure,
+	readProviderAttribution,
+	type ResolveFailureBudget,
+	type ResolveFailureStage
+} from '$lib/core/agents/resolve-failure';
 
-interface RequestBody {
-	subject_line: string;
-	core_message: string;
-	topics: string[];
-	voice_sample?: string;
-	target_type?: string;
-	target_entity?: string;
-	audience_guidance?: string;
-	/**
-	 * Transparency level for the RESOLVE tool-loop reasoning. STUDIO sets this
-	 * true to surface the agent's real planning (light filter); the public
-	 * citizen flow keeps the strict filter. Never fabricates reasoning.
-	 */
-	verbose?: boolean;
+type AgenticProviderBalance = Readonly<{ balanceUnits: number; allowance: number }>;
+
+function captureResolveFailure(
+	error: unknown,
+	context: Readonly<{
+		stage: ResolveFailureStage;
+		budget: ResolveFailureBudget;
+		userId: string;
+		level: 'error' | 'warning';
+		traceId?: string;
+	}>
+) {
+	const report = describeResolveFailure({
+		stage: context.stage,
+		error,
+		budget: context.budget,
+		providerAttribution: readProviderAttribution(error)
+	});
+	// The provider exception is used only to choose frozen tokens. Capturing a
+	// new token-only exception prevents provider bodies or echoed prompt text
+	// from entering Sentry as the exception message.
+	const operatorError = new Error(report.signature);
+	operatorError.name = 'ResolveFailure';
+	captureWithContext(operatorError, {
+		userId: context.userId,
+		action: 'stream-decision-makers',
+		level: context.level,
+		detail: {
+			stage: report.stage,
+			signature: report.signature,
+			budget: report.budget,
+			provider: report.provider ?? 'unobserved',
+			providerAttribution: report.providerAttribution,
+			...(context.traceId ? { traceId: context.traceId } : {})
+		}
+	});
+	return report;
+}
+
+function unavailableCapacityResponse(balance: Fact<AgenticProviderBalance>): Response {
+	switch (balance.state) {
+		case 'absent':
+			return new Response(
+				JSON.stringify({
+					error: 'No settled agentic resolve capacity is available for this organization',
+					code: 'AGENTIC_RESOLVE_PAYMENT_REQUIRED'
+				}),
+				{ status: 402, headers: { 'Content-Type': 'application/json' } }
+			);
+		case 'blocked':
+			return new Response(
+				JSON.stringify({
+					error: 'Agentic capacity could not be confirmed for this organization',
+					code: 'AGENTIC_CAPACITY_BLOCKED'
+				}),
+				{ status: 503, headers: { 'Content-Type': 'application/json' } }
+			);
+		case 'withheld':
+			return new Response(
+				JSON.stringify({
+					error: 'Agentic capacity is not available through this route',
+					code: 'AGENTIC_CAPACITY_WITHHELD'
+				}),
+				{ status: 403, headers: { 'Content-Type': 'application/json' } }
+			);
+		case 'present':
+			throw new Error('AGENTIC_CAPACITY_RESPONSE_CALLED_FOR_PRESENT_FACT');
+	}
 }
 
 export const POST: RequestHandler = async (event) => {
-	// Paid individuals (Voice/Advocate) are not hard-blocked by the free
-	// daily-global abuse breaker — their monthly authored cap is the real bound.
-	// Resolve the paid signal before the rate-limit check (best-effort; a lookup
-	// failure falls back to the free ceiling, never elevates).
-	let paidIndividual = false;
-	if (event.locals.session?.userId) {
-		try {
-			paidIndividual = (await serverQuery(api.subscriptions.hasActivePaidIndividual, {})) === true;
-		} catch (err) {
-			console.warn('[stream-decision-makers] paid-individual lookup failed, using free ceiling:', err);
+	const authenticatedUserId = requireAuthenticatedAgentRequest(event);
+	if (authenticatedUserId instanceof Response) return authenticatedUserId;
+	const requestEnvelope = await readBoundedAgentRequest(event, 'stream-decision-makers');
+	if (requestEnvelope instanceof Response) return requestEnvelope;
+	const body = requestEnvelope;
+
+	type AgenticAdmission = Awaited<
+		ReturnType<typeof serverQuery<typeof api.metering.agenticResolveAdmission>>
+	>;
+	let agenticAdmission: AgenticAdmission;
+	try {
+		agenticAdmission = await serverQuery(api.metering.agenticResolveAdmission, {
+			_secret: getInternalSecret(),
+			userId: authenticatedUserId as Id<'users'>,
+			orgSlug: body.org_slug
+		});
+	} catch (error) {
+		captureResolveFailure(error, {
+			stage: 'admission',
+			budget: 'metering-unavailable',
+			userId: authenticatedUserId,
+			level: 'error'
+		});
+		// Fail closed on the ORG lane only. The person lane declares no org, and
+		// `agenticResolveAdmission` returns {scope:'individual'} before touching a
+		// row when no slug is declared — so its answer is DISCARDED below. Denying
+		// someone who needs no metering, because a read we never use was briefly
+		// unavailable, inverts M1's rule: membership grants capacity, it never
+		// withholds admission.
+		if (!body.org_slug) {
+			agenticAdmission = { scope: 'individual' } as AgenticAdmission;
+		} else {
+			return new Response(
+				JSON.stringify({
+					error: 'Agentic capacity metering temporarily unavailable',
+					code: 'METERING_UNAVAILABLE'
+				}),
+				{
+					status: 503,
+					headers: { 'Content-Type': 'application/json' }
+				}
+			);
 		}
 	}
+	let paidOrgGrant:
+		| {
+				orgId: Id<'organizations'>;
+				balanceUnits: number;
+				periodStart: number;
+				periodEnd: number;
+		  }
+		| undefined;
+	if (agenticAdmission.scope === 'org') {
+		const balance = agenticAdmission.providerBalance;
+		if (balance.state !== 'present') {
+			if (balance.state === 'blocked') {
+				captureResolveFailure(new Error('unclassified'), {
+					stage: 'budget',
+					budget: 'denied-unconfirmed',
+					userId: authenticatedUserId,
+					level: 'warning'
+				});
+			}
+			return unavailableCapacityResponse(balance);
+		}
+		if (!agenticAdmission.allowed) {
+			return new Response(
+				JSON.stringify({
+					error: 'Agentic resolve quota exhausted for this plan period',
+					code: 'AGENTIC_RESOLVE_QUOTA_EXCEEDED'
+				}),
+				{
+					status: 402,
+					headers: { 'Content-Type': 'application/json' }
+				}
+			);
+		}
+		paidOrgGrant = {
+			orgId: agenticAdmission.orgId,
+			balanceUnits: balance.value.balanceUnits,
+			periodStart: agenticAdmission.billingPeriodStart,
+			periodEnd: agenticAdmission.billingPeriodEnd
+		};
+	}
 
-	const rateLimitCheck = await enforceLLMRateLimit(event, 'decision-makers', { paidIndividual });
+	const rateLimitCheck = await enforceLLMRateLimit(event, 'decision-makers', paidOrgGrant);
 	if (!rateLimitCheck.allowed) {
+		if (
+			rateLimitCheck.providerCeiling &&
+			paidProviderMonthlyCeilingWasReached(rateLimitCheck.providerCeiling)
+		) {
+			captureResolveFailure(new Error('quota exhausted'), {
+				stage: 'budget',
+				budget: 'denied-platform-ceiling',
+				userId: authenticatedUserId,
+				level: 'warning'
+			});
+			return new Response(
+				JSON.stringify({
+					error:
+						"Agentic resolution is temporarily paused because the platform's monthly provider-spend ceiling was reached. Your organization's allowance was not consumed.",
+					code: 'AGENTIC_PLATFORM_CAPACITY_BLOCKED',
+					resetAt: rateLimitCheck.resetAt.toISOString()
+				}),
+				{
+					status: 503,
+					headers: { 'Content-Type': 'application/json' }
+				}
+			);
+		}
 		return rateLimitResponse(rateLimitCheck);
 	}
 	const userContext = getUserContext(event);
 	const startTime = Date.now();
 
-	let body: RequestBody;
-	try {
-		body = (await event.request.json()) as RequestBody;
-	} catch {
-		return new Response(JSON.stringify({ error: 'Invalid JSON in request body' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
 	const { subject_line, core_message, topics, voice_sample, audience_guidance } = body;
 
-	if (!subject_line?.trim()) {
-		return new Response(JSON.stringify({ error: 'Subject line is required' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	if (!core_message?.trim()) {
-		return new Response(JSON.stringify({ error: 'Core message is required' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	if (!topics || topics.length === 0) {
-		return new Response(JSON.stringify({ error: 'At least one topic is required' }), {
-			status: 400,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	// Auth check
-	const session = event.locals.session;
-	if (!session?.userId) {
-		return new Response(JSON.stringify({ error: 'Authentication required' }), {
-			status: 401,
-			headers: { 'Content-Type': 'application/json' }
-		});
-	}
-
-	const userId = session.userId;
+	const userId = authenticatedUserId;
 	const traceId = crypto.randomUUID();
 
 	console.log('[stream-decision-makers] trace:', {
@@ -128,8 +260,11 @@ export const POST: RequestHandler = async (event) => {
 	// The raw input was already checked at the subject-line step, so we use a higher
 	// threshold here (0.8) to avoid false positives on AI-generated descriptions
 	// while still catching clear attacks (which score 0.9+).
-	const contentToCheck = `${subject_line}\n${core_message}\n${topics.join(' ')}${audience_guidance ? `\n${audience_guidance}` : ''}`;
-	const injectionCheck = await moderatePromptOnly(contentToCheck, 0.8);
+	const injectionCheck = await moderatePromptOnly(
+		agentPromptGuardContent('stream-decision-makers', body),
+		0.8,
+		{ signal: event.request.signal }
+	);
 
 	if (!injectionCheck.safe) {
 		console.log('[stream-decision-makers] Prompt injection detected:', {
@@ -165,7 +300,9 @@ export const POST: RequestHandler = async (event) => {
 	const abortController = new AbortController();
 	const serverTimeout = setTimeout(() => abortController.abort(), 480_000);
 	event.request.signal.addEventListener('abort', () => {
-		console.debug(`[stream-decision-makers] Client disconnected, aborting resolution (trace: ${traceId})`);
+		console.debug(
+			`[stream-decision-makers] Client disconnected, aborting resolution (trace: ${traceId})`
+		);
 		abortController.abort();
 	});
 
@@ -178,6 +315,7 @@ export const POST: RequestHandler = async (event) => {
 
 	(async () => {
 		let streamSuccess = false;
+		let lastStage: ResolveFailureStage = 'research';
 		let resultTokenUsage: import('$lib/core/agents/types').TokenUsage | undefined;
 		let resultExternalCounts: import('$lib/core/agents/types').ExternalApiCounts | undefined;
 
@@ -202,7 +340,23 @@ export const POST: RequestHandler = async (event) => {
 				signal: abortController.signal
 			};
 
+			if (agenticAdmission.scope === 'org') {
+				await serverMutation(api.metering.recordUsage, {
+					_secret: getInternalSecret(),
+					orgId: agenticAdmission.orgId,
+					meter: 'agentic_resolve',
+					quantity: 1,
+					occurredAt: Date.now(),
+					requestId: traceId,
+					billingPeriodStart: agenticAdmission.billingPeriodStart
+				});
+			}
 			const result = await resolveDecisionMakers(context, (segment: SegmentOrRevealEvent) => {
+				if ('phase' in segment && typeof segment.phase === 'string') {
+					lastStage = coerceStage(segment.phase);
+				} else if (segment.type === 'verification') {
+					lastStage = 'verification';
+				}
 				// Route progressive reveal events to their own SSE event types
 				if (segment.type === 'identity-found') {
 					emitter.send('identity-found', segment.metadata.identities);
@@ -216,36 +370,108 @@ export const POST: RequestHandler = async (event) => {
 			});
 
 			resultTokenUsage = result.tokenUsage;
-			resultExternalCounts = result.metadata?.externalCounts as import('$lib/core/agents/types').ExternalApiCounts | undefined;
+			resultExternalCounts = result.metadata?.externalCounts as
+				| import('$lib/core/agents/types').ExternalApiCounts
+				| undefined;
+			lastStage = 'suppression';
 
-			// Build response - source is the email source (verified)
+			// A mailbox that asked to be left alone is dropped BEFORE anything is
+			// minted for it. Doing it here rather than downstream is what makes the
+			// removal stick: no provenance MAC ever exists for a suppressed address,
+			// so no later surface can admit it on a signature this route issued.
+			// Addresses are emitted raw on this path, so they are normalized to the
+			// same trim+lowercase the global email hash uses, or the key misses.
+			const resolvedAddresses = result.decisionMakers.map((dm) =>
+				(dm.email ?? '').trim().toLowerCase()
+			);
+			const suppressionCandidates = [
+				...new Set(resolvedAddresses.filter((email) => email.length > 0 && email.includes('@')))
+			].slice(0, RECIPIENT_SUPPRESSION_BATCH_MAX);
+			let suppressedAddresses = new Set<string>();
+			if (suppressionCandidates.length > 0) {
+				const hashes = await Promise.all(suppressionCandidates.map(computeGlobalEmailHash));
+				// One batched query for the whole roster, never one per recipient.
+				const denied = new Set(
+					await serverQuery(api.email.filterSuppressedContactHashes, {
+						_secret: getInternalSecret(),
+						contactHashes: hashes
+					})
+				);
+				suppressedAddresses = new Set(
+					suppressionCandidates.filter((_, index) => denied.has(hashes[index]))
+				);
+			}
+			result.decisionMakers = result.decisionMakers.filter(
+				(_, index) => !suppressedAddresses.has(resolvedAddresses[index])
+			);
+			const contactRouteCounts = tallyContactRoutes(
+				result.decisionMakers.map((dm) => dm.contactRoute)
+			);
+			result.metadata = { ...result.metadata, contactRouteCounts };
+			const contactableTargets = result.decisionMakers.filter(
+				(dm) => typeof dm.email === 'string' && dm.email.trim().length > 0
+			).length;
+			const unroutedTargets = result.decisionMakers.length - contactableTargets;
+			const reachCensusFact = present(
+				reachCensus(
+					result.decisionMakers.map((dm) => ({
+						contactRoute: dm.contactRoute,
+						seatRoute: classifySeatRoute(dm.email, { candidateName: dm.name }),
+						routeProvenance: dm.routeProvenance
+					}))
+				)
+			);
+
+			lastStage = 'completion';
+			// Build response - source is the email source (verified). The public
+			// recipient proof is author-bound and covers every field the anonymous
+			// detail projection may publish; mutable client flags alone grant nothing.
+			const provenanceIssuedAt = Date.now();
+			const provenanceSecret = getInternalSecret();
+			const decisionMakers = await Promise.all(
+				result.decisionMakers.map(async (dm) => {
+					const publicRecipientProvenance = await issuePublicRecipientProvenance(
+						dm,
+						String(userId),
+						provenanceSecret,
+						provenanceIssuedAt
+					);
+					return {
+						name: dm.name,
+						title: dm.title,
+						organization: dm.organization,
+						email: dm.email || '',
+						contactRoute: dm.contactRoute ?? { status: 'unknown' },
+						deliveryTier: dm.deliveryTier ?? null,
+						reasoning: dm.reasoning,
+						sourceUrl: dm.emailSource || dm.source || '',
+						sourceTitle: dm.emailSourceTitle || '',
+						provenance: dm.provenance,
+						discovered: dm.discovered || false,
+						isAiResolved: dm.isAiResolved === true,
+						emailGrounded: dm.emailGrounded === true,
+						emailSource: dm.emailSource || '',
+						confidence: dm.confidence,
+						contactNotes: dm.contactNotes,
+						// Phase 4: Accountability & Classification
+						accountabilityOpener: dm.accountabilityOpener || null,
+						roleCategory: dm.roleCategory || null,
+						relevanceRank: dm.relevanceRank ?? null,
+						publicActions: dm.publicActions || [],
+						personalPrompt: dm.personalPrompt || null,
+						...(publicRecipientProvenance ? { publicRecipientProvenance } : {})
+					};
+				})
+			);
 			const response = {
-				decision_makers: result.decisionMakers.map((dm) => ({
-					name: dm.name,
-					title: dm.title,
-					organization: dm.organization,
-					email: dm.email || '',
-					reasoning: dm.reasoning,
-					sourceUrl: dm.emailSource || dm.source || '',
-					sourceTitle: dm.emailSourceTitle || '',
-					provenance: dm.provenance,
-					discovered: dm.discovered || false,
-					emailGrounded: dm.emailGrounded || false,
-					emailSource: dm.emailSource || '',
-					confidence: dm.confidence,
-					contactNotes: dm.contactNotes,
-					// Phase 4: Accountability & Classification
-					accountabilityOpener: dm.accountabilityOpener || null,
-					roleCategory: dm.roleCategory || null,
-					relevanceRank: dm.relevanceRank ?? null,
-					publicActions: dm.publicActions || [],
-					personalPrompt: dm.personalPrompt || null
-				})),
+				decision_makers: decisionMakers,
 				research_summary: result.researchSummary || 'Decision-makers resolved successfully.',
 				pipeline_stats: {
-					total_resolved: result.decisionMakers.length + ((result.metadata?.droppedEmailless as number) || 0),
-					candidates_found: result.decisionMakers.length,
-					verified_emails: result.decisionMakers.length,
+					total_resolved: result.decisionMakers.length,
+					contactable_targets: contactableTargets,
+					unrouted_targets: unroutedTargets,
+					contact_routes: result.metadata.contactRouteCounts,
+					reach_census: reachCensusFact,
 					total_latency_ms: result.latencyMs
 				}
 			};
@@ -255,22 +481,31 @@ export const POST: RequestHandler = async (event) => {
 
 			console.log('[stream-decision-makers] Resolution complete:', {
 				userId,
-				contactable: result.decisionMakers.length,
-				droppedEmailless: (result.metadata?.droppedEmailless as number) || 0,
+				totalResolved: result.decisionMakers.length,
+				contactable: contactableTargets,
+				contactRoutes: contactRouteCounts,
 				latencyMs: Date.now() - startTime
 			});
 
 			// Trace resolution outcome — the data SSE streams vanish after delivery
 			console.log('[stream-decision-makers] result:', {
 				traceId,
-				contactable: result.decisionMakers.length,
-				droppedEmailless: (result.metadata?.droppedEmailless as number) || 0,
+				totalResolved: result.decisionMakers.length,
+				contactable: contactableTargets,
+				contactRoutes: contactRouteCounts,
 				provider: result.provider,
-				latencyMs: result.latencyMs,
+				latencyMs: result.latencyMs
 			});
 		} catch (error) {
 			console.error('[stream-decision-makers] Resolution failed:', error);
-			emitter.error(error instanceof Error ? error.message : 'Resolution failed');
+			const report = captureResolveFailure(error, {
+				stage: abortController.signal.aborted ? 'timeout' : lastStage,
+				budget: agenticAdmission.scope === 'org' ? 'granted-org' : 'granted-individual',
+				userId,
+				level: 'error',
+				traceId
+			});
+			emitter.error(report.message, report.code);
 		} finally {
 			clearInterval(heartbeat);
 			clearTimeout(serverTimeout);

@@ -28,6 +28,7 @@
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/stores';
 	import { Artifact, Datum } from '$lib/design';
 	import { SPRINGS, TIMING, EASING } from '$lib/design/motion';
 	import { getOrgOS, isRunning } from './orgOS.svelte';
@@ -46,6 +47,7 @@
 		saveStudioProcessAsCampaignDraft
 	} from '$lib/components/org/studio/studio-draft-bridge';
 	import { congressionalDeliveryAvailable } from '$lib/congressional-readiness';
+	import { isPresent } from '$lib/core/fact';
 	import type { OrgSpacesData } from './spaces';
 
 	let {
@@ -72,11 +74,17 @@
 
 	const os = getOrgOS();
 	const composeHref = '/?create=true';
+	// Scoping identity for the org delivery handoffs: the active session's
+	// (already public) user id. The parked drafts are keyed to this operator;
+	// with no id resolved the handoffs bail rather than write an ownerless
+	// draft another account on the same browser could read.
+	const operatorId = $derived(
+		(($page.data.user as Record<string, unknown> | null)?.id as string | undefined) ?? ''
+	);
 	// SSR-safe reduced-motion read (mirrors Datum.svelte) — gates the fly entrances
 	// so motion-sensitive users get the content without the 8px slide.
 	const prefersReducedMotion =
-		typeof window !== 'undefined' &&
-		window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 	const orgEmailHref = $derived(`${os.base}/emails/compose`);
 
 	// ─── Authoring runtime ground (from the layout's real env probes) ───
@@ -114,7 +122,12 @@
 	const activeStage = $derived(proc?.activeStage ?? null);
 	const stageLabel = $derived(proc?.stageLabel ?? '');
 	const decisionMakers = $derived(proc?.decisionMakers ?? []);
-	const droppedEmailless = $derived(proc?.droppedEmailless ?? 0);
+	const reachCensus = $derived(
+		proc?.reachCensus && isPresent(proc.reachCensus) ? proc.reachCensus.value : null
+	);
+	const resolutionRouteDetail = $derived(
+		proc?.resolutionStopReason === null && !reachCensus ? (proc.resolutionStopDetail ?? null) : null
+	);
 	const sources = $derived(proc?.sources ?? []);
 	const composedMessage = $derived(proc?.composedMessage ?? '');
 	const messageParagraphs = $derived(
@@ -124,20 +137,17 @@
 	// Show the process subject (not the live input) above the authored message.
 	const procSubject = $derived(proc?.intent.subjectLine ?? '');
 
-	// A loop that closed without output explains itself in one plain line. A
-	// failed run gets a plain sentence — the raw failure detail rides in the
-	// line's tooltip, never in the headline.
+	// A loop that closed without output explains itself in one visible line.
+	// Server admission failures are already user-facing sentences, so preserve
+	// them verbatim instead of collapsing distinct remedies into a retry claim.
 	const closedLoopSentence = $derived(
 		proc && !composedMessage
 			? proc.status === 'error'
-				? 'The run stopped before finishing — start it again.'
+				? proc.errorMessage?.trim() || 'The run stopped before finishing.'
 				: proc.status === 'stopped'
 					? (proc.resolutionStopDetail ?? 'This loop stopped before composing a message.')
 					: null
 			: null
-	);
-	const closedLoopDetail = $derived(
-		proc && !composedMessage && proc.status === 'error' ? proc.errorMessage : null
 	);
 
 	const activeMessageJob = $derived(proc?.activeMessageJob ?? null);
@@ -196,11 +206,16 @@
 		// Hand the intent to the OS runner. It spawns + focuses the process and
 		// drives the stream independently of this component. STUDIO immediately
 		// reflects the new focused process via os.focusedProcess.
-		startAuthoringProcess(os, {
+		const intent = {
 			subjectLine: subjectLine.trim(),
 			coreMessage: coreMessage.trim(),
 			audienceGuidance: audienceGuidance.trim()
-		});
+		};
+		// STUDIO only ever mounts inside an org room, and declaring that room is
+		// what puts this run on the org's metered lane. It travels per run rather
+		// than on the intent, which is persisted to device-local storage.
+		const orgSlug = $page.params.slug;
+		startAuthoringProcess(os, intent, orgSlug ? { orgSlug } : undefined);
 	}
 
 	function stopLoop() {
@@ -217,22 +232,26 @@
 		window.location.href = `${composeHref}&resumeDraft=${encodeURIComponent(draftId)}`;
 	}
 
-	function takeToOrgEmail() {
+	async function takeToOrgEmail() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
-		const draftId = saveStudioProcessAsOrgEmailDraft(proc);
+		if (!operatorId) return;
+		const draftId = await saveStudioProcessAsOrgEmailDraft(proc, operatorId);
+		if (!draftId) return;
 		// Same-origin org route — goto() keeps the OS kernel/process registry alive.
 		goto(`${orgEmailHref}?studioDraft=${encodeURIComponent(draftId)}`);
 	}
 
-	function takeToCongressional() {
+	async function takeToCongressional() {
 		if (!proc || proc.status !== 'composed' || !composedMessage.trim()) return;
+		if (!operatorId) return;
 		// Carry the authored artifact (title + composed message + derived targets +
 		// carried counts) into the new-campaign surface instead of dropping it on a
 		// blank form. `type` stays for graceful degradation if the draft expired.
 		// That surface owns target chambers, the tiered floor explainer, and the
 		// confirm step before any CWC send. Same-origin org route — goto() keeps
 		// the kernel alive.
-		const draftId = saveStudioProcessAsCampaignDraft(proc);
+		const draftId = await saveStudioProcessAsCampaignDraft(proc, operatorId);
+		if (!draftId) return;
 		goto(`${os.base}/campaigns/new?type=CONGRESSIONAL&studioDraft=${encodeURIComponent(draftId)}`);
 	}
 </script>
@@ -323,16 +342,16 @@
 	<StudioReasoning {entries} {activeStage} {stageLabel} />
 
 	{#if closedLoopSentence}
-		<p class="loop-boundary" role="status" title={closedLoopDetail ?? undefined}>
-			{closedLoopSentence}
-		</p>
+		<p class="loop-boundary" role="status">{closedLoopSentence}</p>
 	{/if}
 
 	{#if activeTraceId}
 		<section
 			class="trace"
 			aria-label="Run replay"
-			in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+			in:fly={prefersReducedMotion
+				? { duration: 0 }
+				: { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
 		>
 			<header class="trace-head">
 				<div>
@@ -399,29 +418,26 @@
 
 	<!-- The loop's products: resolved audience, source ground, authored message -->
 	<div class="studio-products">
-		{#if decisionMakers.length > 0 || droppedEmailless > 0}
+		{#if decisionMakers.length > 0}
 			<section
 				class="dm"
 				aria-label="Resolved decision-makers"
-				in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+				in:fly={prefersReducedMotion
+					? { duration: 0 }
+					: { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
 			>
 				<header class="dm-head">
 					<span class="dm-title">Resolved decision-makers</span>
-					<span class="dm-count">
-						<Datum value={decisionMakers.length} animate spring={SPRINGS.METRIC} class="dm-count-num" />
-						<span class="dm-count-label">contactable</span>
-						{#if droppedEmailless > 0}
-							<span class="dm-dropped"
-								>· <Datum value={droppedEmailless} class="dm-dropped-num" /> dropped, no public email</span
-							>
-						{/if}
-					</span>
 				</header>
+				{#if resolutionRouteDetail}
+					<p class="dm-route-detail">{resolutionRouteDetail}</p>
+				{/if}
 				<ul class="dm-list">
 					{#each decisionMakers as dm (dm.name + dm.organization)}
 						<li class="dm-item">
 							<span class="dm-name">{dm.name}</span>
-							<span class="dm-role">{dm.title}{dm.organization ? ` · ${dm.organization}` : ''}</span>
+							<span class="dm-role">{dm.title}{dm.organization ? ` · ${dm.organization}` : ''}</span
+							>
 							{#if dm.email}
 								<span class="dm-email">{dm.email}</span>
 							{:else}
@@ -433,15 +449,50 @@
 			</section>
 		{/if}
 
+		<!-- reach-census:start -->
+		{#if reachCensus && reachCensus.observed > 0}
+			<section class="reach-census" data-reach-census aria-label="Delivery reach census">
+				<header class="reach-census-head">
+					<span class="reach-census-title">Delivery reach census</span>
+					<span class="reach-census-observed">
+						<Datum value={reachCensus.observed} class="reach-census-observed-num" />
+						observed candidates
+					</span>
+				</header>
+				<ul class="reach-census-rows">
+					{#each reachCensus.rows as row (row.key)}
+						<li class="reach-census-row">
+							<span>{row.label}</span>
+							<Datum value={row.count} class="reach-census-row-count" />
+						</li>
+					{/each}
+				</ul>
+				<p class="reach-census-note">
+					These rows record only measured address form and page association or a named resolution
+					limit; they do not classify who an address reaches or say anyone read the message.
+				</p>
+			</section>
+		{/if}
+		<!-- reach-census:end -->
+
 		{#if sources.length > 0}
-			<div in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
+			<div
+				in:fly={prefersReducedMotion
+					? { duration: 0 }
+					: { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+			>
 				<StudioSources {sources} />
 			</div>
 		{/if}
 
 		{#if composedMessage}
 			<!-- AUTHOR output — the white specimen. Every citation traces to a real URL. -->
-			<div class="specimen" in:fly={prefersReducedMotion ? { duration: 0 } : { y: 8, duration: TIMING.SLOW, easing: cubicOut }}>
+			<div
+				class="specimen"
+				in:fly={prefersReducedMotion
+					? { duration: 0 }
+					: { y: 8, duration: TIMING.SLOW, easing: cubicOut }}
+			>
 				<span class="specimen-label">Authored message</span>
 				<Artifact padding="default">
 					{#if procSubject}
@@ -842,25 +893,77 @@
 		text-transform: uppercase;
 		color: var(--text-primary, oklch(0.25 0.01 60));
 	}
-	.dm-count {
+	.dm-route-detail {
+		margin: 0;
+		max-width: 72ch;
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.5;
+		color: var(--text-secondary, #4b5563);
+	}
+	.reach-census {
+		display: flex;
+		flex-direction: column;
+		gap: 0.625rem;
+		padding: 0.875rem 0;
+		border-top: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+		border-bottom: 1px solid var(--surface-border, oklch(0.9 0.008 60 / 0.8));
+	}
+	.reach-census-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 1rem;
+		flex-wrap: wrap;
+	}
+	.reach-census-title {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.8125rem;
+		font-weight: 600;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+		color: var(--text-primary, oklch(0.25 0.01 60));
+	}
+	.reach-census-observed,
+	.reach-census-row,
+	.reach-census-note {
+		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
+		font-size: 0.75rem;
+		line-height: 1.5;
+		color: var(--text-secondary, #4b5563);
+	}
+	.reach-census-observed {
 		display: inline-flex;
 		align-items: baseline;
 		gap: 0.3rem;
 	}
-	.dm :global(.dm-count-num) {
+	.reach-census :global(.reach-census-observed-num) {
 		font-size: 0.8125rem;
 		font-weight: 600;
 		color: var(--text-primary, oklch(0.25 0.01 60));
 	}
-	.dm-count-label,
-	.dm-dropped {
-		font-family: 'Satoshi', ui-sans-serif, system-ui, sans-serif;
-		font-size: 0.6875rem;
-		color: var(--text-tertiary, #6b7280);
+	.reach-census-rows {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
 	}
-	.dm :global(.dm-dropped-num) {
-		font-size: 0.6875rem;
-		color: var(--text-tertiary, #9ca3af);
+	.reach-census-row {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) auto;
+		gap: 1rem;
+		align-items: baseline;
+	}
+	.reach-census :global(.reach-census-row-count) {
+		font-size: 0.75rem;
+		font-weight: 600;
+		color: var(--text-primary, oklch(0.25 0.01 60));
+	}
+	.reach-census-note {
+		margin: 0.125rem 0 0;
+		max-width: 72ch;
 	}
 	.dm-list {
 		list-style: none;

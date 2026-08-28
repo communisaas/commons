@@ -1,114 +1,47 @@
 /**
- * v1 listSupporters truncation-signal contract.
- *
- * convex/v1api.ts `listSupporters` scans a bounded window
- * (SUPPORTER_SCAN_LIMIT rows) ordered newest-first. An org with more rows than
- * the cap saturates the window and the oldest rows fall outside it. When that
- * happens the returned `total` reflects only the scanned window, not the org's
- * true count — so the response carries `truncated: true` and the `scanLimit`
- * that produced it, letting an integrator tell a capped page from a complete
- * enumeration instead of trusting `total` as authoritative.
- *
- * convex-test isn't wired in this repo, so this mirrors the handler's
- * scan/filter/derive logic against an in-memory list (same MockConvex pattern
- * as reconcile-skip-counter.test.ts) and pins the envelope shape the HTTP
- * route at src/routes/api/v1/supporters/+server.ts forwards into `meta`.
+ * API v1 People browsing reuses the same opaque database-cursor foundation as
+ * the operator UI. The filename is retained so the old scan-window regression
+ * remains discoverable, but truncation is no longer an accepted behavior.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
-const SUPPORTER_SCAN_LIMIT = 10_000;
+const v1Source = readFileSync(path.resolve(process.cwd(), 'convex/v1api.ts'), 'utf8');
+const routeSource = readFileSync(
+	path.resolve(process.cwd(), 'src/routes/api/v1/supporters/+server.ts'),
+	'utf8'
+);
 
-interface SupporterRow {
-	_id: string;
-	verified: boolean;
-}
-
-/**
- * Mirror of convex/v1api.ts `listSupporters`: take(scanLimit) over rows ordered
- * desc, derive `truncated` from window saturation, apply filters, paginate by
- * cursor, and return total = filtered window length.
- */
-function listSupporters(
-	allRowsNewestFirst: SupporterRow[],
-	args: { limit: number; cursor?: string; verified?: boolean }
-) {
-	const scanLimit = SUPPORTER_SCAN_LIMIT;
-	const scanned = allRowsNewestFirst.slice(0, scanLimit);
-	const truncated = scanned.length >= scanLimit;
-
-	let filtered = scanned;
-	if (args.verified !== undefined) {
-		filtered = filtered.filter((s) => s.verified === args.verified);
-	}
-
-	const total = filtered.length;
-
-	let startIdx = 0;
-	if (args.cursor) {
-		const idx = filtered.findIndex((s) => s._id === args.cursor);
-		if (idx >= 0) startIdx = idx + 1;
-	}
-	const page = filtered.slice(startIdx, startIdx + args.limit + 1);
-	const hasMore = page.length > args.limit;
-	const items = page.slice(0, args.limit);
-	const nextCursor = hasMore && items.length > 0 ? items[items.length - 1]._id : null;
-
-	return { items, cursor: nextCursor, hasMore, total, truncated, scanLimit };
-}
-
-function makeRows(n: number): SupporterRow[] {
-	return Array.from({ length: n }, (_, i) => ({ _id: `sup_${i}`, verified: i % 2 === 0 }));
-}
-
-describe('v1 listSupporters truncation signal', () => {
-	it('flags truncated + carries scanLimit when the org exceeds the scan cap', () => {
-		const result = listSupporters(makeRows(15_000), { limit: 50 });
-		expect(result.truncated).toBe(true);
-		expect(result.scanLimit).toBe(SUPPORTER_SCAN_LIMIT);
-		// total reflects only the scanned window, never the true 15K.
-		expect(result.total).toBe(SUPPORTER_SCAN_LIMIT);
-		expect(result.total).not.toBe(15_000);
+describe('v1 supporter cursor pagination', () => {
+	it('does not rebuild or truncate a 10000-row supporter window', () => {
+		const body = v1Source.slice(
+			v1Source.indexOf('export const listSupporters = query'),
+			v1Source.indexOf('export const getSupporterById = query')
+		);
+		expect(body).toContain('readSupporterBrowsePage(ctx');
+		expect(body).not.toContain('SUPPORTER_SCAN_LIMIT');
+		expect(body).not.toMatch(/\.take\(10_?000/);
+		expect(body).not.toMatch(/findIndex\([^)]*cursor/);
+		expect(body).not.toContain('truncated');
+		expect(body).not.toContain('scanLimit');
 	});
 
-	it('reports a complete enumeration as not truncated', () => {
-		const result = listSupporters(makeRows(42), { limit: 50 });
-		expect(result.truncated).toBe(false);
-		expect(result.scanLimit).toBe(SUPPORTER_SCAN_LIMIT);
-		expect(result.total).toBe(42);
-		expect(result.hasMore).toBe(false);
+	it('uses exact indexed lookup for an email hash and direct IDs for item operations', () => {
+		const supporterSection = v1Source.slice(
+			v1Source.indexOf('// SUPPORTERS (v1 API)'),
+			v1Source.indexOf('// TAGS (v1 API)')
+		);
+		expect(supporterSection).toContain(".withIndex('by_orgId_emailHash'");
+		expect(supporterSection).toContain("ctx.db.normalizeId('supporters', supporterId)");
+		expect(supporterSection).not.toMatch(/\.withIndex\('by_orgId'[^;]+\.find\(/s);
 	});
 
-	it('treats an org sitting exactly on the cap as truncated (cannot prove completeness)', () => {
-		const result = listSupporters(makeRows(SUPPORTER_SCAN_LIMIT), { limit: 50 });
-		expect(result.truncated).toBe(true);
-	});
-
-	it('handles the zero-supporter org', () => {
-		const result = listSupporters([], { limit: 50 });
-		expect(result.truncated).toBe(false);
-		expect(result.total).toBe(0);
-		expect(result.items).toHaveLength(0);
-		expect(result.cursor).toBeNull();
-	});
-
-	it('still derives truncation from the raw window even when filters shrink total below the cap', () => {
-		// 15K rows, half verified → filtered total ~5K, but the scan still
-		// saturated, so the page is not a complete enumeration of verified rows.
-		const result = listSupporters(makeRows(15_000), { limit: 50, verified: true });
-		expect(result.truncated).toBe(true);
-		expect(result.total).toBeLessThan(SUPPORTER_SCAN_LIMIT);
-	});
-
-	it('paginates within the in-window set via cursor', () => {
-		const rows = makeRows(120);
-		const first = listSupporters(rows, { limit: 50 });
-		expect(first.items).toHaveLength(50);
-		expect(first.hasMore).toBe(true);
-		expect(first.cursor).toBe('sup_49');
-
-		const second = listSupporters(rows, { limit: 50, cursor: first.cursor! });
-		expect(second.items[0]._id).toBe('sup_50');
-		expect(second.truncated).toBe(false);
+	it('omits unknown filtered totals instead of scanning to manufacture them', () => {
+		expect(v1Source).toContain('Filtered cardinalities intentionally remain unknown');
+		expect(routeSource).toContain('result.total === undefined');
+		expect(routeSource).not.toContain('result.truncated');
+		expect(routeSource).not.toContain('result.scanLimit');
 	});
 });

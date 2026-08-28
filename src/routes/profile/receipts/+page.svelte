@@ -28,16 +28,17 @@
 	<header>
 		<h1>Your receipts</h1>
 		<p class="lede">
-			Records of verified actions you've taken and the decision-makers' responses.
-			Only receipts meeting the platform's K-anonymity floor (≥ 5 verified
-			contributors) appear here.
+			Records of verified actions you've taken and the decision-makers' responses. Only receipts
+			meeting the platform's K-anonymity floor (≥ 5 verified contributors) appear here.
 		</p>
 	</header>
 
-	{#if data.total === 0}
+	{#if data.items.length === 0}
 		<div class="empty">
-			<p>No receipts yet. Once your verified actions are delivered and
-			a decision-maker responds, the receipt appears here.</p>
+			<p>
+				No receipts yet. Once your verified actions are delivered and a decision-maker responds, the
+				receipt appears here.
+			</p>
 		</div>
 	{:else}
 		<table>
@@ -66,6 +67,9 @@
 				{/each}
 			</tbody>
 		</table>
+		{#if data.nextCursor}
+			<a class="next-page" href="?cursor={encodeURIComponent(data.nextCursor)}">Older receipts →</a>
+		{/if}
 	{/if}
 </section>
 
@@ -127,5 +131,10 @@
 	.alignment-opposed {
 		background: var(--red-100, #fee2e2);
 		color: var(--red-800, #991b1b);
+	}
+	.next-page {
+		display: inline-block;
+		margin-top: 1rem;
+		font-weight: 600;
 	}
 </style>

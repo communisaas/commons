@@ -1,0 +1,589 @@
+{
+	"protocol": 1,
+	"scope": "commons-prod-and-preview-only",
+	"quotaAuthority": "Convex native actual-I/O limits are the final deployment backstop; exhaustive shared-team numeric headroom is an external operator gate or requires quota isolation.",
+	"sharedTeamQuotaGate": {
+		"teamDatabaseIoEntitlementBytes": 1073741824,
+		"deploymentApiDatabaseIoGbBytes": 1073741824,
+		"acceptedAuthorities": ["signed-operator-attestation", "quota-isolation"],
+		"attestationCredentialLocation": "operator-local-only",
+		"attestationRequiredFields": [
+			"teamId",
+			"projectInventoryWithDispositionAndMaximumRemainingDatabaseIoBytes",
+			"teamUsageState",
+			"billingPeriodStart",
+			"billingPeriodEnd",
+			"databaseIoBytesUsed",
+			"databaseIoBytesLimit",
+			"databaseIoBytesHeadroom",
+			"observedAt",
+			"expiresAt",
+			"signature"
+		],
+		"maximumDashboardObservationLagMs": 600000,
+		"requiredTeamUsageState": "Default",
+		"containedCronRemainingAllowanceBytes": 0,
+		"headroomEquation": "pagesAllocationBytes + commonsNativeRemainingAllowanceBytes + sum(siblingMaximumRemainingDatabaseIoBytes) <= databaseIoBytesHeadroom",
+		"ciMayHoldDashboardUserToken": false,
+		"isolationAlternative": "Commons production and preview deployments have a quota authority that is not shared with sibling projects."
+	},
+	"oneShotMigrationPolicy": {
+		"runtimePlaceholderWriterFiles": ["convex/supporters.ts", "convex/donations.ts"],
+		"operatorBootstrapException": "convex/seed.ts must finish before sweep version 1 is activated; completed version 1 cannot be reopened."
+	},
+	"ownership": {
+		"rule": "The handler module in each inventory row is the code owner; local function-reference aliases resolve to the module named by makeFunctionReference.",
+		"operatorPolicyOwner": "launch-operator"
+	},
+	"containedDisposition": {
+		"registeredCronJobs": [],
+		"preservedNativeMechanisms": ["write-site-scheduled-continuations"],
+		"writeSiteScheduledContracts": {
+			"public-discovery-coordinated-rebuild-watchdog": {
+				"handler": "internal.observability.superviseCoordinatedPublicDiscoveryRebuildWatchdog",
+				"trigger": "coordinated-rebuild-acquisition-only",
+				"ownerCoordinates": [
+					"coordinatedRebuildToken",
+					"coordinatedRebuildAttempt",
+					"coordinatedRebuildWatchdogScheduledAt"
+				],
+				"idleCalls": 0,
+				"maxImmediateCalls": 2,
+				"maxRowsRead": 1,
+				"maxSuccessorsPerInvocation": 1,
+				"minimumOwnerLeaseMs": 1800000,
+				"canUnlockPublishOrRetry": false,
+				"proof": [
+					"convex/lib/publicDiscovery.ts:invalidatePublicDiscoveryForCoordinatedRebuild",
+					"convex/lib/publicDiscovery.ts:supervisePublicDiscoveryCoordinatedRebuildWatchdog",
+					"convex/observability.ts:superviseCoordinatedPublicDiscoveryRebuildWatchdog"
+				]
+			}
+		},
+		"intentionallyAbsentCapabilities": [
+			"periodic privacy and TTL cleanup",
+			"periodic orphan and stuck-work recovery sweeps",
+			"periodic revocation reconciliation and alerting",
+			"daily public-discovery temporal refresh",
+			"all operational and speculative producers"
+		]
+	},
+	"essentialActivationAuthority": {
+		"acceptedAuthorities": ["quota-isolation", "paid-no-shared-hard-disable"],
+		"sharedFreeHeadroomAttestationIsSufficient": false
+	},
+	"launchDispositionByTier": {
+		"essential": "not-registered-contained",
+		"operational": "not-registered-contained",
+		"speculative": "not-registered-contained"
+	},
+	"profile": {
+		"prelaunch": "contained",
+		"expectedJobs": 37,
+		"expectedContainedRegisteredJobs": 0,
+		"expectedEssentialJobs": 25,
+		"expectedOperationalJobs": 9,
+		"expectedSpeculativeJobs": 3,
+		"maximumEssentialRootTicksPerBackendDay": 1278,
+		"maximumEssentialIdleFunctionCallsPerBackendDay": 2335,
+		"maximumEssentialIdleFunctionCallsPerTwoBackend31DayMonth": 144770,
+		"maximumContainedRootTicksPerBackendDay": 0,
+		"maximumContainedDatabaseIoBytesPerTwoBackend31DayMonth": 0,
+		"maximumDatabaseReadBytesPerConvexFunction": 16777216
+	},
+	"jobs": [
+		{
+			"name": "cleanup-rate-limit-buckets",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 2, minuteUTC: 47 }",
+			"handler": "internal._rateLimit.cleanupExpired"
+		},
+		{
+			"name": "supervise-public-discovery-rebuild-lease",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.observability.superviseCoordinatedPublicDiscoveryRebuildLease"
+		},
+		{
+			"name": "subscription-past-due-grace-sweep",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 49 }",
+			"handler": "sweepPastDueGraceRef"
+		},
+		{
+			"name": "plan-usage-stale-sweep",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 43 }",
+			"handler": "sweepStalePlanUsageRef"
+		},
+		{
+			"name": "plan-usage-reservation-lease-sweep",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "sweepStalePlanUsageReservationsRef"
+		},
+		{
+			"name": "drain-contact-authority-fanout",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "drainContactFanoutQueueRef"
+		},
+		{
+			"name": "resume-contact-authority-migration",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "runContactAuthorityMigrationPageRef"
+		},
+		{
+			"name": "legislation-sync",
+			"tier": "speculative",
+			"method": "interval",
+			"schedule": "{ hours: 6 }",
+			"handler": "internal.legislation.syncPipeline"
+		},
+		{
+			"name": "process-bounces",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 5 }",
+			"handler": "internal.email.processBounceReports"
+		},
+		{
+			"name": "vote-tracker",
+			"tier": "speculative",
+			"method": "interval",
+			"schedule": "{ hours: 2 }",
+			"handler": "internal.legislation.trackVotes"
+		},
+		{
+			"name": "alert-digest",
+			"tier": "operational",
+			"method": "weekly",
+			"schedule": "{ dayOfWeek: 'monday', hourUTC: 14, minuteUTC: 0 }",
+			"handler": "internal.email.sendAlertDigests"
+		},
+		{
+			"name": "cleanup-witness",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 1, minuteUTC: 11 }",
+			"handler": "internal.submissions.cleanupExpiredWitnesses"
+		},
+		{
+			"name": "debate-resolution",
+			"tier": "operational",
+			"method": "daily",
+			"schedule": "{ hourUTC: 2, minuteUTC: 0 }",
+			"handler": "internal.debates.resolveExpiredDebates"
+		},
+		{
+			"name": "analytics-snapshot",
+			"tier": "operational",
+			"method": "daily",
+			"schedule": "{ hourUTC: 0, minuteUTC: 5 }",
+			"handler": "internal.analytics.materializeSnapshot",
+			"codeTombstoned": true
+		},
+		{
+			"name": "analytics-snapshot-supervisor",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.analytics.superviseSnapshotRuns",
+			"codeTombstoned": true
+		},
+		{
+			"name": "intelligence-cleanup",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 0, minuteUTC: 15 }",
+			"handler": "internal.intelligence.markExpired"
+		},
+		{
+			"name": "ab-winner",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.email.pickAbWinners"
+		},
+		{
+			"name": "scorecard-compute",
+			"tier": "speculative",
+			"method": "weekly",
+			"schedule": "{ dayOfWeek: 'sunday', hourUTC: 3, minuteUTC: 0 }",
+			"handler": "internal.legislation.computeScorecards"
+		},
+		{
+			"name": "workflow-scheduler",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.workflows.processScheduled"
+		},
+		{
+			"name": "contact-cache-cleanup",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 1, minuteUTC: 30 }",
+			"handler": "internal.resolvedContacts.cleanupExpired"
+		},
+		{
+			"name": "process-scheduled-blasts",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.blasts.processScheduledBlasts"
+		},
+		{
+			"name": "cleanup-sealed-keys",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 7 }",
+			"handler": "internal.blastCleanup.cleanupStaleSealedKeys"
+		},
+		{
+			"name": "sweep-stuck-processing",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 5 }",
+			"handler": "internal.submissions.sweepStuckProcessing"
+		},
+		{
+			"name": "retry-failed-anchors",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 5 }",
+			"handler": "internal.submissions.retryFailedAnchors"
+		},
+		{
+			"name": "reschedule-stuck-revocations",
+			"tier": "essential",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.users.rescheduleStuckRevocations"
+		},
+		{
+			"name": "reconcile-revocation-smt-root",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 13 }",
+			"handler": "internal.revocations.reconcileSMTRoot"
+		},
+		{
+			"name": "cleanup-message-generation-jobs",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 21 }",
+			"handler": "internal.messageJobs.cleanupExpired"
+		},
+		{
+			"name": "monitor-boundary-cell-rate",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 47 }",
+			"handler": "internal.observability.monitorBoundaryCellRate"
+		},
+		{
+			"name": "alert-pipe-heartbeat",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 12, minuteUTC: 23 }",
+			"handler": "internal.observability.heartbeatAlertPipe"
+		},
+		{
+			"name": "sweep-stranded-placeholders",
+			"tier": "essential",
+			"method": "cron",
+			"schedule": "'17,47 * * * *'",
+			"handler": "internal.supporters.sweepStrandedPlaceholders"
+		},
+		{
+			"name": "sweep-stranded-donations",
+			"tier": "essential",
+			"method": "cron",
+			"schedule": "'23,53 * * * *'",
+			"handler": "internal.donations.sweepStrandedDonations"
+		},
+		{
+			"name": "agent-traces-expire",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 37 }",
+			"handler": "internal.agentTraces.expire"
+		},
+		{
+			"name": "webhook-retry",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 1 }",
+			"handler": "internal.orgWebhooks.retryPendingDeliveries"
+		},
+		{
+			"name": "org-events-expire",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 47 }",
+			"handler": "internal.orgWebhooks.expireOldEvents"
+		},
+		{
+			"name": "org-webhook-deliveries-expire",
+			"tier": "essential",
+			"method": "hourly",
+			"schedule": "{ minuteUTC: 53 }",
+			"handler": "internal.orgWebhooks.expireOldDeliveryHistory"
+		},
+		{
+			"name": "public-homepage-snapshot-rebuild",
+			"tier": "essential",
+			"method": "daily",
+			"schedule": "{ hourUTC: 4, minuteUTC: 17 }",
+			"handler": "internal.templates.rebuildHomepageSnapshotsForCron"
+		},
+		{
+			"name": "drain-usage",
+			"tier": "operational",
+			"method": "interval",
+			"schedule": "{ minutes: 15 }",
+			"handler": "internal.metering.drainUsageToProvider"
+		}
+	],
+	"essentialContracts": {
+		"cleanup-rate-limit-buckets": {
+			"ticksPerDay": 1,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 501,
+			"idleMode": "empty_index",
+			"proof": ["convex/_rateLimit.ts:cleanupExpired"]
+		},
+		"supervise-public-discovery-rebuild-lease": {
+			"ticksPerDay": 96,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 1,
+			"idleMode": "compact_singleton",
+			"proof": ["convex/observability.ts:superviseCoordinatedPublicDiscoveryRebuildLease"]
+		},
+		"subscription-past-due-grace-sweep": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 256,
+			"idleMode": "empty_index",
+			"proof": ["convex/subscriptions.ts:sweepPastDueGrace"]
+		},
+		"plan-usage-stale-sweep": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 128,
+			"idleMode": "readiness_singleton_then_page",
+			"proof": ["convex/planUsage.ts:sweepStale"]
+		},
+		"plan-usage-reservation-lease-sweep": {
+			"ticksPerDay": 96,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 128,
+			"idleMode": "empty_index",
+			"proof": ["convex/planUsage.ts:sweepStaleReservations"]
+		},
+		"drain-contact-authority-fanout": {
+			"ticksPerDay": 96,
+			"idleCalls": 2,
+			"maxImmediateCalls": 3,
+			"maxRowsRead": 64,
+			"idleMode": "five_indexed_firsts",
+			"proof": [
+				"convex/webhooks.ts:drainContactFanoutQueue",
+				"convex/webhooks.ts:getNextContactFanoutJob",
+				"convex/webhooks.ts:processContactFanoutPage"
+			]
+		},
+		"resume-contact-authority-migration": {
+			"ticksPerDay": 96,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 301,
+			"idleMode": "migration_singleton",
+			"proof": ["convex/webhooks.ts:runContactAuthorityMigrationPage"]
+		},
+		"cleanup-witness": {
+			"ticksPerDay": 1,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 33,
+			"idleMode": "empty_index",
+			"proof": ["convex/submissions.ts:cleanupExpiredWitnesses"]
+		},
+		"intelligence-cleanup": {
+			"ticksPerDay": 1,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 101,
+			"idleMode": "empty_index",
+			"proof": ["convex/intelligence.ts:markExpired"]
+		},
+		"workflow-scheduler": {
+			"ticksPerDay": 96,
+			"idleCalls": 2,
+			"maxImmediateCalls": 102,
+			"maxRowsRead": 51,
+			"idleMode": "empty_index",
+			"proof": ["convex/workflows.ts:processScheduled", "convex/workflows.ts:getPausedExecutions"]
+		},
+		"contact-cache-cleanup": {
+			"ticksPerDay": 1,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 101,
+			"idleMode": "empty_index",
+			"proof": ["convex/resolvedContacts.ts:cleanupExpired"]
+		},
+		"process-scheduled-blasts": {
+			"ticksPerDay": 96,
+			"idleCalls": 1,
+			"maxImmediateCalls": 78,
+			"maxRowsRead": 52,
+			"idleMode": "pre_io_code_tombstone",
+			"proof": ["convex/blasts.ts:processScheduledBlasts"]
+		},
+		"cleanup-sealed-keys": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 100,
+			"idleMode": "empty_index",
+			"proof": ["convex/blastCleanup.ts:cleanupStaleSealedKeys"]
+		},
+		"sweep-stuck-processing": {
+			"ticksPerDay": 288,
+			"idleCalls": 3,
+			"maxImmediateCalls": 153,
+			"maxRowsRead": 150,
+			"idleMode": "two_empty_indexes",
+			"proof": [
+				"convex/submissions.ts:sweepStuckProcessing",
+				"convex/submissions.ts:listStuckProcessing",
+				"convex/submissions.ts:listStuckAnchorPending"
+			]
+		},
+		"reschedule-stuck-revocations": {
+			"ticksPerDay": 96,
+			"idleCalls": 2,
+			"maxImmediateCalls": 2,
+			"maxRowsRead": 100,
+			"idleMode": "empty_index",
+			"proof": [
+				"convex/users.ts:rescheduleStuckRevocations",
+				"convex/users.ts:listStuckRevocations"
+			]
+		},
+		"reconcile-revocation-smt-root": {
+			"ticksPerDay": 24,
+			"idleCalls": 3,
+			"maxImmediateCalls": 6,
+			"maxRowsRead": 4,
+			"idleMode": "compact_singletons",
+			"proof": [
+				"convex/revocations.ts:reconcileSMTRoot",
+				"convex/revocations.ts:getRevocationRootInternal"
+			]
+		},
+		"cleanup-message-generation-jobs": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 100,
+			"idleMode": "empty_index",
+			"proof": ["convex/messageJobs.ts:cleanupExpired"]
+		},
+		"monitor-boundary-cell-rate": {
+			"ticksPerDay": 24,
+			"idleCalls": 3,
+			"maxImmediateCalls": 3,
+			"maxRowsRead": 251,
+			"idleMode": "bounded_page_and_compact_result",
+			"proof": [
+				"convex/observability.ts:monitorBoundaryCellRate",
+				"convex/observability.ts:getBoundaryCellRate24h",
+				"convex/observability.ts:recordBoundaryCellRateResult"
+			]
+		},
+		"alert-pipe-heartbeat": {
+			"ticksPerDay": 1,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 0,
+			"idleMode": "no_database",
+			"proof": ["convex/observability.ts:heartbeatAlertPipe"]
+		},
+		"sweep-stranded-placeholders": {
+			"ticksPerDay": 48,
+			"idleCalls": 2,
+			"maxImmediateCalls": 55,
+			"maxRowsRead": 501,
+			"idleMode": "one_shot_activation_singleton",
+			"proof": [
+				"convex/supporters.ts:sweepStrandedPlaceholders",
+				"convex/supporters.ts:strandedPlaceholderSweepActivation",
+				"convex/supporters.ts:getStrandedPlaceholderSupporters"
+			]
+		},
+		"sweep-stranded-donations": {
+			"ticksPerDay": 48,
+			"idleCalls": 2,
+			"maxImmediateCalls": 55,
+			"maxRowsRead": 501,
+			"idleMode": "one_shot_activation_singleton",
+			"proof": [
+				"convex/donations.ts:sweepStrandedDonations",
+				"convex/supporters.ts:strandedPlaceholderSweepActivation",
+				"convex/donations.ts:getStrandedDonationPlaceholders"
+			]
+		},
+		"agent-traces-expire": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 1000,
+			"idleMode": "empty_index",
+			"proof": ["convex/agentTraces.ts:expire"]
+		},
+		"org-events-expire": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 501,
+			"idleMode": "empty_index",
+			"proof": ["convex/orgWebhooks.ts:expireOldEvents"]
+		},
+		"org-webhook-deliveries-expire": {
+			"ticksPerDay": 24,
+			"idleCalls": 1,
+			"maxImmediateCalls": 1,
+			"maxRowsRead": 501,
+			"idleMode": "oldest_fixed_page",
+			"proof": ["convex/orgWebhooks.ts:expireOldDeliveryHistory"]
+		},
+		"public-homepage-snapshot-rebuild": {
+			"ticksPerDay": 1,
+			"idleCalls": 2,
+			"maxImmediateCalls": 3,
+			"maxRowsRead": 4096,
+			"idleMode": "dirty_failure_temporal_singleton",
+			"proof": [
+				"convex/templates.ts:rebuildHomepageSnapshotsForCron",
+				"convex/templates.ts:publicDiscoveryCronAttemptState",
+				"convex/templates.ts:nextPublicTemplateTemporalRebuildAt"
+			]
+		}
+	}
+}

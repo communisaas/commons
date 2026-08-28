@@ -3,7 +3,7 @@
  */
 // CONVEX: Keep SvelteKit — uses getNetworkStats which aggregates across multiple server modules
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
@@ -31,10 +31,10 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	// in a coalition can't budget-starve the others. Quota pooling (Mode B)
 	// is product-definition-first; defer until the first paying coalition
 	// customer surfaces a real need.
-	const networkRl = await getRateLimiter().check(
-		`network-stats:${params.id}`,
-		{ maxRequests: 5, windowMs: 60_000 }
-	);
+	const networkRl = await getRateLimiter().check(`network-stats:${params.id}`, {
+		maxRequests: 5,
+		windowMs: 60_000
+	});
 	if (!networkRl.allowed) {
 		return apiError(
 			'RATE_LIMITED',
@@ -55,9 +55,12 @@ export const GET: RequestHandler = async ({ params, request }) => {
 	}
 
 	// API-key auth carries no user identity; the route proved org membership
-	// above, so it presents the internal secret to the gated Convex query.
+	// above, so it presents the internal secret to the gated Convex query. The
+	// key already established which org is reading, so it names that org — the
+	// empirical readings are withheld unless that org's own plan is paid.
 	const stats = await serverQuery(api.networks.getStats, {
 		networkId: params.id as Id<'orgNetworks'>,
+		readerOrgId: auth.orgId as Id<'organizations'>,
 		_secret: getInternalSecret()
 	});
 	return apiOk(stats);

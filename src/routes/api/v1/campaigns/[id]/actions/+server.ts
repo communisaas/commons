@@ -6,7 +6,7 @@ import { authenticateApiKey, requireScope } from '$lib/server/api-v1/auth';
 import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -29,7 +29,8 @@ export const GET: RequestHandler = async ({ request, params, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		verified: verified === 'true' ? true : verified === 'false' ? false : undefined});
+		verified: verified === 'true' ? true : verified === 'false' ? false : undefined
+	});
 
 	if (!result) return apiError('NOT_FOUND', 'Campaign not found', 404);
 

@@ -4,7 +4,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -21,7 +21,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	});
 
 	const stats = await serverQuery(api.networks.getStats, {
-		networkId: params.networkId as Id<'orgNetworks'>
+		networkId: params.networkId as Id<'orgNetworks'>,
+		orgSlug: params.slug
 	});
 
 	return json({ data: stats });

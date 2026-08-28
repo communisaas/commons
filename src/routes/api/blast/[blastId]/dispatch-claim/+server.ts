@@ -1,10 +1,20 @@
 import { json, error } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { signDispatchClaim } from '$lib/server/email/dispatch-claim';
+import { FEATURES } from '$lib/config/features';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
+
+type EncryptedSupporterPage = {
+	recipients: Array<{ emailHash: string }>;
+	continueCursor: string | null;
+	isDone: boolean;
+	scannedCount: number;
+	maxRecipients: number;
+	maxScanned: number;
+};
 
 // Issue a server-signed dispatch claim binding (orgId, blastId, allowed
 // recipient email hashes) for the Lambda bulk-send path. cure: without
@@ -20,6 +30,11 @@ import type { RequestHandler } from './$types';
 // next (filter applied), so the dispatch envelope and the actual send list
 // agree by construction.
 export const GET: RequestHandler = async ({ params, locals, url }) => {
+	// Launch tombstone. A signed claim without a ledger reservation still mints
+	// carrier authority, so deny before auth, Convex cohort reads, or signing.
+	if (!FEATURES.EMAIL_SERVER_DISPATCH) {
+		throw error(503, 'Bulk email dispatch is disabled');
+	}
 	if (!locals.user) {
 		throw error(401, 'Authentication required');
 	}
@@ -37,6 +52,15 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 	// signDispatchClaim so a direct API call can't mint send authority past quota.
 	// inactive ⇒ maxEmails:0 ⇒ refused; exhausted ⇒ refused; null ⇒ fail closed.
 	const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug });
+	if (!limits.usageReady) {
+		if (limits.usageRepairRequired) {
+			await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug });
+		}
+		throw error(503, {
+			message: 'Billing usage is being rebuilt. No send authority was issued; retry shortly.',
+			code: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+		});
+	}
 	if (!limits?.current || limits.current.emailsSent >= limits.limits.maxEmails) {
 		const subscribeGate = (limits?.limits.maxEmails ?? 0) <= 0;
 		throw error(403, {
@@ -47,18 +71,31 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		});
 	}
 
-	const supporters = await serverQuery(api.blasts.getEncryptedSupportersForBlast, {
-		orgSlug,
-		blastId: params.blastId as Id<'emailBlasts'>
-	});
-	if (!Array.isArray(supporters)) {
-		throw error(500, 'Recipient resolution returned non-array');
+	let cursor: string | null = null;
+	let scanned = 0;
+	const allowedHashes: string[] = [];
+	for (;;) {
+		const page: EncryptedSupporterPage = await serverQuery(
+			api.blasts.getEncryptedSupportersForBlast,
+			{
+				orgSlug,
+				blastId: params.blastId as Id<'emailBlasts'>,
+				cursor
+			}
+		);
+		scanned += page.scannedCount;
+		allowedHashes.push(...page.recipients.map((supporter) => supporter.emailHash));
+		if (scanned > page.maxScanned || allowedHashes.length > page.maxRecipients) {
+			throw error(400, 'Cohort exceeds the exact 10000-row audience envelope — narrow filters');
+		}
+		if (page.isDone) break;
+		if (!page.continueCursor || page.continueCursor === cursor || scanned >= page.maxScanned) {
+			throw error(400, 'Cohort scan exceeds the exact 10000-row audience envelope');
+		}
+		cursor = page.continueCursor;
 	}
-	if (supporters.length === 0) {
+	if (allowedHashes.length === 0) {
 		throw error(400, 'No recipients match the blast filter');
-	}
-	if (supporters.length > 10000) {
-		throw error(400, 'Cohort exceeds 10000 recipients — split blasts');
 	}
 
 	// Pull orgId via the editor-gated lookup (intentional). The editor
@@ -73,7 +110,6 @@ export const GET: RequestHandler = async ({ params, locals, url }) => {
 		throw error(404, 'Blast not found');
 	}
 
-	const allowedHashes = supporters.map((s) => s.emailHash);
 	const claim = signDispatchClaim(
 		{
 			orgId: String(blast.orgId),

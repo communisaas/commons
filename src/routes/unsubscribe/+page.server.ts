@@ -1,6 +1,6 @@
 import { fail } from '@sveltejs/kit';
 import { api } from '$lib/convex';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { Id } from '$convex/_generated/dataModel';
 import type { PageServerLoad, Actions } from './$types';

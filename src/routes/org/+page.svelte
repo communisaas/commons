@@ -1,10 +1,7 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import type { VerificationPacket } from '$lib/types/verification-packet';
 	import { goto } from '$app/navigation';
 	import { Datum } from '$lib/design';
-	import VerificationPacketComponent from '$lib/components/org/VerificationPacket.svelte';
-	import { participationDepth } from '$lib/components/org/participation-depth';
 	import ProofClaim from '$lib/components/crypto/ProofClaim.svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
 	import { PLATFORM_EXPORT_PROFILES } from '$lib/data/platform-export-profiles';
@@ -15,109 +12,18 @@
 	let { data }: { data: PageData } = $props();
 
 	const user = $derived(data.user);
-	const orgs = $derived((user?.orgMemberships ?? []).filter((org) => org !== null));
-
-	// Specimen: real CA-11 (San Francisco)
-	// Boundary: simplified from Census TIGER/Line 119th Congress (689 → 47 vertices)
-	// H3 cells: computed via latLngToCell(lat, lng, 7) from real SF neighborhoods
-	const ca11Boundary: GeoJSON.Polygon = {
-		type: 'Polygon',
-		coordinates: [
-			[
-				[-122.612, 37.815],
-				[-122.504, 37.708],
-				[-122.486, 37.708],
-				[-122.481, 37.708],
-				[-122.469, 37.708],
-				[-122.467, 37.712],
-				[-122.466, 37.722],
-				[-122.462, 37.722],
-				[-122.453, 37.723],
-				[-122.449, 37.723],
-				[-122.446, 37.727],
-				[-122.44, 37.73],
-				[-122.435, 37.732],
-				[-122.432, 37.732],
-				[-122.426, 37.732],
-				[-122.42, 37.732],
-				[-122.413, 37.733],
-				[-122.407, 37.735],
-				[-122.403, 37.731],
-				[-122.4, 37.721],
-				[-122.399, 37.718],
-				[-122.397, 37.713],
-				[-122.395, 37.708],
-				[-122.379, 37.708],
-				[-122.29, 37.721],
-				[-122.31, 37.754],
-				[-122.335, 37.793],
-				[-122.349, 37.816],
-				[-122.358, 37.842],
-				[-122.399, 37.904],
-				[-122.428, 37.904],
-				[-122.42, 37.863],
-				[-122.42, 37.861],
-				[-122.47, 37.833],
-				[-122.478, 37.833],
-				[-122.478, 37.831],
-				[-122.478, 37.825],
-				[-122.483, 37.826],
-				[-122.492, 37.825],
-				[-122.5, 37.822],
-				[-122.502, 37.822],
-				[-122.512, 37.825],
-				[-122.523, 37.825],
-				[-122.526, 37.821],
-				[-122.529, 37.818],
-				[-122.529, 37.815],
-				[-122.612, 37.815]
-			]
-		]
-	};
-
-	const specimenPacket: VerificationPacket = {
-		verified: 248,
-		total: 248,
-		verifiedPct: 100,
-		districtCount: 1,
-		authorship: { individual: 196, shared: 52, unknown: 0, explicit: true },
-		dateRange: { earliest: '2026-02-12', latest: '2026-03-04', spanDays: 21 },
-		identityBreakdown: { govId: 156, addressVerified: 92, emailOnly: 0, unverified: 0 },
-		gds: 0.94,
-		ald: 0.79,
-		temporalEntropy: 3.2,
-		burstVelocity: 1.8,
-		cai: 0.72,
-		tiers: [
-			{ tier: 0, label: participationDepth(0), count: 68 },
-			{ tier: 1, label: participationDepth(1), count: 85 },
-			{ tier: 2, label: participationDepth(2), count: 62 },
-			{ tier: 3, label: participationDepth(3), count: 33 }
-		],
-		geography: [{ hash: 'ca11', count: 248 }],
-		cells: [
-			{ h3: '87283082cffffff', count: 56 }, // Mission + Noe Valley
-			{ h3: '87283082dffffff', count: 39 }, // Castro + Haight
-			{ h3: '87283082affffff', count: 32 }, // SOMA
-			{ h3: '872830958ffffff', count: 20 }, // Sunset
-			{ h3: '872830828ffffff', count: 18 }, // Tenderloin
-			{ h3: '87283095bffffff', count: 16 }, // Richmond
-			{ h3: '87283082bffffff', count: 16 }, // North Beach
-			{ h3: '87283082effffff', count: 15 }, // Potrero Hill
-			{ h3: '872830876ffffff', count: 14 }, // Marina
-			{ h3: '872830825ffffff', count: 12 }, // Bayview
-			{ h3: '872830952ffffff', count: 10 } // Excelsior
-		],
-		temporal: {
-			bins: [2, 4, 8, 14, 18, 25, 30, 42, 38, 35, 28, 22, 18, 12, 8, 5, 3],
-			startMs: new Date('2026-02-12T00:00:00Z').getTime(),
-			binWidthMs: 3600000 * 24
-		},
-		driftCount: null,
-		driftPct: null,
-		debate: null,
-		lastUpdated: '2026-03-04T18:00:00Z'
-	};
+	const membershipPage = $derived(data.membershipPage ?? null);
+	const orgs = $derived(
+		(membershipPage?.data ?? user?.orgMemberships ?? []).filter((org) => org !== null)
+	);
+	const membershipOverflow = $derived(
+		membershipPage
+			? {
+					hasMore: membershipPage.hasMore,
+					cursor: membershipPage.cursor
+				}
+			: (user?.orgMembershipsOverflow ?? null)
+	);
 
 	// Creation form state (returning users)
 	let showCreate = $state(false);
@@ -285,7 +191,7 @@
 						<div class="org-card__info">
 							<span class="org-card__name">{org.orgName}</span>
 							<span class="org-card__meta">
-								{org.role}{#if org.activeCampaignCount > 0}
+								{org.role}{#if (org.activeCampaignCount ?? 0) > 0}
 									&middot; {org.activeCampaignCount} active
 								{/if}
 							</span>
@@ -294,6 +200,12 @@
 					</a>
 				{/each}
 			</div>
+
+			{#if membershipOverflow?.hasMore && membershipOverflow.cursor}
+				<a class="create-link" href="/org?cursor={encodeURIComponent(membershipOverflow.cursor)}">
+					More organizations
+				</a>
+			{/if}
 
 			{#if showCreate}
 				<form
@@ -471,7 +383,7 @@
 			</section>
 
 			<!-- ═══════════════════════════════════════════
-			     BEAT 3 — THE MECHANISM (specimen + staff-filter mapping)
+			     BEAT 3 — THE MECHANISM (staff-filter mapping)
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--mechanism" aria-labelledby="mechanism-heading">
 				<h2 id="mechanism-heading" class="beat__heading">What Commons delivers instead</h2>
@@ -481,17 +393,7 @@
 				</p>
 
 				<div class="mechanism__layout">
-					<div class="mechanism__specimen-block">
-						<p class="mechanism__provenance">Example packet &middot; CA-11 &middot; Feb 2026</p>
-
-						<VerificationPacketComponent
-							packet={specimenPacket}
-							boundary={ca11Boundary}
-							interactive
-						/>
-					</div>
-
-					<!-- Staff-filter mapping: each specimen field → the question it answers, with a citation -->
+					<!-- Staff-filter mapping: each staffer intake question → the packet field that answers it, with a citation -->
 					<dl
 						class="filter-map"
 						aria-label="How each field maps to the staff intake filter it answers"
@@ -547,7 +449,7 @@
 			<!-- ═══════════════════════════════════════════
 			     BEAT 3½ — THE PROOF (how each row is signed)
 			     Three cryptographic claims. Private vs public.
-			     Bridges the specimen to the protocol.
+			     Bridges the packet to the protocol.
 			     ═══════════════════════════════════════════ -->
 			<section class="beat beat--proof" aria-labelledby="proof-heading">
 				<h2 id="proof-heading" class="beat__heading">What the packet actually proves.</h2>
@@ -625,7 +527,8 @@
 					<div class="platform__tile">
 						<span class="platform__tile-name">Events</span>
 						<span class="platform__tile-desc"
-							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays gated.</span
+							>Public RSVP records and a limited set of attendance artifacts; proof ceremony stays
+							gated.</span
 						>
 					</div>
 					<div class="platform__tile">
@@ -995,7 +898,7 @@
 	/* Differentiated beat gaps — the narrative arc specifies cognitive pacing.
 	   hero→evidence: tight coupling (same argument, different angle)
 	   evidence→mechanism: moderate (from problem to proposal)
-	   mechanism→reach: large (from specimen to system)
+	   mechanism→reach: large (from packet to system)
 	   reach→window: moderate (from system to market moment)
 	   window→price: largest (biggest cognitive pivot — now the commercial frame)
 	   price→CTA: tight (action follows price directly) */
@@ -1356,8 +1259,8 @@
 	}
 
 	/* ═══════════════════════════════════════════
-	   BEAT 3 — MECHANISM (specimen + filter map)
-	   Side-by-side at lg: specimen (left) + filter map (right)
+	   BEAT 3 — MECHANISM (staff-filter map)
+	   Single column: the filter map is the layout's only child.
 	   ═══════════════════════════════════════════ */
 	.mechanism__layout {
 		display: grid;
@@ -1365,352 +1268,7 @@
 		gap: 2.5rem;
 	}
 
-	@media (min-width: 1024px) {
-		.mechanism__layout {
-			grid-template-columns: 5fr 4fr;
-			gap: 2.5rem;
-			align-items: start;
-		}
-	}
-
-	.mechanism__specimen-block {
-		margin-bottom: 0;
-		max-width: none;
-	}
-
-	.mechanism__provenance {
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.6875rem;
-		font-weight: 400;
-		line-height: 1.5;
-		color: oklch(0.58 0.008 250);
-		margin: 0 0 0.625rem;
-		letter-spacing: 0.02em;
-	}
-
-	.specimen {
-		margin: 0;
-		padding: 0;
-		background: #ffffff;
-		border: 1px solid oklch(0.84 0.008 250);
-		box-shadow:
-			0 1px 2px oklch(0.15 0.01 250 / 0.05),
-			0 4px 16px oklch(0.15 0.01 250 / 0.07);
-		font-family: 'JetBrains Mono', monospace;
-		font-size: 0.75rem;
-		line-height: 1.6;
-		color: oklch(0.3 0.02 250);
-	}
-
-	@media (min-width: 640px) {
-		.specimen {
-			font-size: 0.8125rem;
-		}
-	}
-
-	.specimen__title {
-		padding: 0.625rem 1.25rem;
-		font-size: 0.5625rem;
-		font-weight: 600;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-		color: oklch(0.5 0.012 250);
-		border-bottom: 1px solid oklch(0.91 0.006 250);
-		background: oklch(0.985 0.002 250);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__title {
-			padding: 0.75rem 2rem;
-			font-size: 0.625rem;
-		}
-	}
-
-	.specimen__meta {
-		padding: 1.125rem 1.25rem 0;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__meta {
-			padding: 1.375rem 2rem 0;
-		}
-	}
-
-	.specimen__row {
-		display: flex;
-		gap: 0.75rem;
-		margin-bottom: 0.125rem;
-	}
-
-	@media (max-width: 479px) {
-		.specimen__row {
-			flex-direction: column;
-			gap: 0;
-		}
-	}
-
-	.specimen__label {
-		color: oklch(0.55 0.01 250);
-		min-width: 5.5rem;
-		flex-shrink: 0;
-	}
-
-	.specimen__value {
-		color: oklch(0.2 0.02 250);
-		font-weight: 500;
-	}
-
-	.specimen__divider {
-		height: 1px;
-		background: oklch(0.91 0.006 250);
-		margin: 0.875rem 1.25rem;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__divider {
-			margin: 1rem 2rem;
-		}
-	}
-
-	.specimen__hero {
-		padding: 1rem 1.25rem 1.25rem;
-		display: flex;
-		align-items: baseline;
-		gap: 0.75rem;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__hero {
-			padding: 1.5rem 2rem 1.75rem;
-		}
-	}
-
-	.specimen__count {
-		font-size: 2.5rem;
-		font-weight: 700;
-		color: oklch(0.35 0.12 165);
-		line-height: 1;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__count {
-			font-size: 3.25rem;
-		}
-	}
-
-	.specimen__count-label {
-		font-size: 0.6875rem;
-		color: oklch(0.48 0.01 250);
-		font-weight: 400;
-		line-height: 1.35;
-	}
-
-	.specimen__evidence {
-		padding: 0 1.25rem;
-		display: flex;
-		flex-direction: column;
-		gap: 0.4375rem;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__evidence {
-			padding: 0 2rem;
-		}
-	}
-
-	/* ═══ Self-labeling stacked segments ═══
-	   The bar IS the legend. Each segment contains its label + count.
-	   Depth = visual weight: darker segment = deeper verification.
-	   No separate legend. No chart convention. The visualization
-	   is the information. */
-	.specimen__section-label {
-		font-size: 0.5625rem;
-		font-weight: 600;
-		letter-spacing: 0.1em;
-		text-transform: uppercase;
-		color: oklch(0.5 0.012 250);
-		margin: 0.25rem 0 0.375rem;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__section-label {
-			font-size: 0.625rem;
-		}
-	}
-
-	.specimen__section-label:first-child {
-		margin-top: 0;
-	}
-
-	.specimen__stack {
-		display: flex;
-		height: 2rem;
-		border-radius: 3px;
-		overflow: hidden;
-		gap: 1px;
-		background: oklch(0.91 0.005 250);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__stack {
-			height: 2.25rem;
-		}
-	}
-
-	.specimen__stack-seg {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 0.5rem;
-		min-width: 3rem;
-		overflow: hidden;
-		gap: 0.25rem;
-	}
-
-	.specimen__stack-name {
-		font-size: 0.5625rem;
-		font-weight: 500;
-		letter-spacing: 0.02em;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		min-width: 0;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__stack-name {
-			font-size: 0.625rem;
-		}
-	}
-
-	.specimen__stack-count {
-		font-weight: 700;
-		font-size: 0.75rem;
-		flex-shrink: 0;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__stack-count {
-			font-size: 0.8125rem;
-		}
-	}
-
-	/* Deep: government ID, individual voice — proven, authoritative */
-	.specimen__stack-seg--deep {
-		background: oklch(0.38 0.1 170);
-		color: oklch(0.97 0.005 170);
-	}
-
-	/* Mid: address verified — moderate depth, supportive */
-	.specimen__stack-seg--mid {
-		background: oklch(0.92 0.04 175);
-		color: oklch(0.25 0.03 250);
-	}
-
-	/* Muted: shared template — absence of original voice */
-	.specimen__stack-seg--muted {
-		background: oklch(0.94 0.005 250);
-		color: oklch(0.4 0.015 250);
-	}
-
-	/* District map — real MapLibre + Protomaps tiles */
-	.specimen__map-container {
-		height: 160px;
-		margin: 0.25rem 0;
-		border-radius: 3px;
-		overflow: hidden;
-		border: 1px solid oklch(0.91 0.006 250);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__map-container {
-			height: 200px;
-		}
-	}
-
-	.specimen__geo-meta {
-		font-size: 0.625rem;
-		color: oklch(0.5 0.01 250);
-		padding-top: 0.25rem;
-		margin: 0;
-	}
-
-	@media (min-width: 640px) {
-		.specimen__geo-meta {
-			font-size: 0.6875rem;
-		}
-	}
-
-	/* Temporal arrival — Pulse sparkline with date context */
-	.specimen__temporal-row {
-		display: flex;
-		align-items: flex-end;
-		gap: 0.75rem;
-		padding: 0.25rem 0 0;
-	}
-
-	@media (max-width: 479px) {
-		.specimen__temporal-row {
-			flex-direction: column;
-			align-items: flex-start;
-			gap: 0.25rem;
-		}
-	}
-
-	.specimen__temporal-caption {
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-	}
-
-	.specimen__temporal-range {
-		font-size: 0.6875rem;
-		font-weight: 500;
-		color: oklch(0.32 0.015 250);
-	}
-
-	.specimen__temporal-detail {
-		font-size: 0.5625rem;
-		color: oklch(0.52 0.008 250);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__temporal-range {
-			font-size: 0.75rem;
-		}
-		.specimen__temporal-detail {
-			font-size: 0.625rem;
-		}
-	}
-
-	.specimen__seal {
-		margin-top: 1rem;
-		padding: 0.75rem 1.25rem;
-		border-top: 1px solid oklch(0.88 0.01 165 / 0.4);
-		background: oklch(0.97 0.008 165 / 0.35);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__seal {
-			padding: 0.875rem 2rem;
-		}
-	}
-
-	.specimen__seal-text {
-		font-size: 0.6875rem;
-		letter-spacing: 0.03em;
-		text-transform: uppercase;
-		font-weight: 500;
-		color: oklch(0.4 0.05 165);
-	}
-
-	@media (min-width: 640px) {
-		.specimen__seal-text {
-			font-size: 0.75rem;
-		}
-	}
-
-	/* ═══ FILTER MAP — specimen field → staff question → citation ═══
+	/* ═══ FILTER MAP — staff question → packet field → citation ═══
 	   Mobile: stronger row separation, field owns its own line, question is the visual peak.
 	   Desktop: rows can breathe wider, same stacking. */
 	.filter-map {

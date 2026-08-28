@@ -4,7 +4,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -14,7 +14,10 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!FEATURES.SMS) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
-	const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1), 100);
+	const limit = Math.min(
+		Math.max(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 1),
+		100
+	);
 
 	const messages = await serverQuery(api.sms.getBlastMessages, {
 		slug: params.slug,
@@ -28,9 +31,7 @@ export const GET: RequestHandler = async ({ params, url, locals }) => {
 			to: m.encryptedTo ? '[encrypted]' : null,
 			status: m.status,
 			errorCode: m.errorCode,
-			supporter: m.encryptedName
-				? { name: '[encrypted]' }
-				: null,
+			supporter: m.encryptedName ? { name: '[encrypted]' } : null,
 			createdAt: new Date(m._creationTime).toISOString()
 		})),
 		meta: { hasMore: false }

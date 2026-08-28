@@ -1,18 +1,24 @@
 /**
  * Verification Packet Computation
  *
- * Computes staffer-legible + coordination audit metrics from raw campaign actions.
- * Cached in Cloudflare KV with 30s TTL.
+ * Materializes staffer-legible proof and coordination metrics from the compact
+ * Convex campaign read model. The authenticated bundle is cached for 30 seconds
+ * in bounded isolate memory and Cloudflare's zero-cost Cache API; KV/R2 are not
+ * used for this private surface.
  *
  * Called from:
  * - src/routes/org/[slug]/campaigns/[id]/+page.server.ts (page load)
- * - src/routes/api/org/[slug]/campaigns/[campaignId]/stream/+server.ts (SSE initial + poll)
+ * - src/routes/api/org/[slug]/campaigns/[campaignId]/stream/+server.ts (SSE initial + 30s poll)
  */
 
-import { serverQuery } from 'convex-sveltekit';
-import { api } from '$lib/convex';
+import { serverQuery } from '$lib/server/convex-work-budget';
+import { api, getRuntimeConvexUrl } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
-import { fetchAllPacketActions } from './packet-actions';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import {
+	materializeCampaignReadModel,
+	type CampaignReadModelBundle
+} from '$lib/server/campaign-read-model';
 import type {
 	VerificationPacket,
 	TierCount,
@@ -39,14 +45,12 @@ interface RawAction {
 	atlasVersion?: string | null;
 }
 
-interface KVLike {
-	get(key: string): Promise<string | null>;
-	put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-}
-
 // ── Constants ──
 
 const CACHE_TTL_SECONDS = 30;
+const CACHE_TTL_MS = CACHE_TTL_SECONDS * 1000;
+const CACHE_SCHEMA_VERSION = 'v1';
+const MEMORY_CACHE_MAX_ENTRIES = 64;
 const K_ANONYMITY_THRESHOLD = 5;
 // Cell-level identity/authorship sub-buckets are NOT emitted on CellWeight.
 // Any deterministic per-cell category count is bypassable by an adversary that
@@ -65,48 +69,146 @@ const TIER_LABELS: Record<number, string> = {
 
 // ── Public API ──
 
+type CampaignBundleCacheContext = {
+	url: URL;
+	platform?: App.Platform;
+	fresh?: boolean;
+};
+
+type CampaignBundleEnvelope = {
+	cachedAt: number;
+	value: CampaignReadModelBundle;
+};
+
+type CloudflareCacheStorage = CacheStorage & { default?: Cache };
+
+const memoryBundles = new Map<string, CampaignBundleEnvelope>();
+const bundleFlights = new Map<string, Promise<CampaignReadModelBundle>>();
+
+function defaultCache(): Cache | undefined {
+	if (typeof caches === 'undefined') return undefined;
+	return (caches as CloudflareCacheStorage).default;
+}
+
+function cacheIdentity(
+	campaignId: Id<'campaigns'>,
+	orgId: Id<'organizations'>,
+	context: CampaignBundleCacheContext
+): string {
+	const configured = context.platform?.env?.PUBLIC_CONVEX_URL;
+	const backend = typeof configured === 'string' && configured ? configured : getRuntimeConvexUrl();
+	return `${context.url.origin.toLowerCase()}|${backend}|${orgId}|${campaignId}`;
+}
+
+function cacheRequest(identity: string, context: CampaignBundleCacheContext): Request {
+	const key = new URL(context.url.origin);
+	key.pathname = `/.internal-cache/campaign-read-model/${CACHE_SCHEMA_VERSION}/${encodeURIComponent(identity)}`;
+	return new Request(key, { method: 'GET' });
+}
+
+function validEnvelope(raw: unknown, now: number): CampaignBundleEnvelope | null {
+	if (!raw || typeof raw !== 'object') return null;
+	const candidate = raw as Partial<CampaignBundleEnvelope>;
+	if (
+		typeof candidate.cachedAt !== 'number' ||
+		candidate.cachedAt > now + 60_000 ||
+		now - candidate.cachedAt > CACHE_TTL_MS ||
+		!candidate.value ||
+		typeof candidate.value !== 'object' ||
+		typeof candidate.value.revision !== 'number'
+	) {
+		return null;
+	}
+	return candidate as CampaignBundleEnvelope;
+}
+
+function remember(identity: string, envelope: CampaignBundleEnvelope): void {
+	memoryBundles.delete(identity);
+	memoryBundles.set(identity, envelope);
+	while (memoryBundles.size > MEMORY_CACHE_MAX_ENTRIES) {
+		const oldest = memoryBundles.keys().next();
+		if (oldest.done) break;
+		memoryBundles.delete(oldest.value);
+	}
+}
+
+/**
+ * Call only after the route has established org membership. Cache hits never
+ * substitute for authorization; they only suppress a second Convex read.
+ */
+export async function loadCampaignReadModelBundleCached(
+	campaignId: Id<'campaigns'>,
+	orgId: Id<'organizations'>,
+	context: CampaignBundleCacheContext
+): Promise<CampaignReadModelBundle> {
+	const identity = cacheIdentity(campaignId, orgId, context);
+	const now = Date.now();
+	if (!context.fresh) {
+		const memory = validEnvelope(memoryBundles.get(identity), now);
+		if (memory) return memory.value;
+
+		const existingFlight = bundleFlights.get(identity);
+		if (existingFlight) return existingFlight;
+	}
+
+	const flight = (async () => {
+		const edge = defaultCache();
+		const request = cacheRequest(identity, context);
+		if (edge && !context.fresh) {
+			try {
+				const response = await edge.match(request);
+				if (response) {
+					const envelope = validEnvelope(await response.json(), Date.now());
+					if (envelope) {
+						remember(identity, envelope);
+						return envelope.value;
+					}
+				}
+			} catch {
+				// Corrupt/missing edge entries are ordinary misses.
+			}
+		}
+
+		const source = await serverQuery(api.campaigns.getReadModelBundle, {
+			_secret: getInternalSecret(),
+			campaignId,
+			orgId
+		});
+		const value = materializeCampaignReadModel(source.state, source.debate);
+		const envelope: CampaignBundleEnvelope = { cachedAt: Date.now(), value };
+		remember(identity, envelope);
+		if (edge) {
+			try {
+				await edge.put(
+					request,
+					new Response(JSON.stringify(envelope), {
+						headers: {
+							'Content-Type': 'application/json',
+							'Cache-Control': `public, max-age=${CACHE_TTL_SECONDS}`
+						}
+					})
+				);
+			} catch {
+				// Cache API is a best-effort zero-cost optimization.
+			}
+		}
+		return value;
+	})();
+	if (context.fresh) return flight;
+	bundleFlights.set(identity, flight);
+	try {
+		return await flight;
+	} finally {
+		bundleFlights.delete(identity);
+	}
+}
+
 export async function computeVerificationPacketCached(
 	campaignId: Id<'campaigns'>,
 	orgId: Id<'organizations'>,
-	kv?: KVLike
+	context: CampaignBundleCacheContext
 ): Promise<VerificationPacket> {
-	const cacheKey = `packet:${orgId}:${campaignId}`;
-
-	// Check cache
-	if (kv) {
-		try {
-			const cached = await kv.get(cacheKey);
-			if (cached) return JSON.parse(cached) as VerificationPacket;
-		} catch {
-			// Cache miss or parse error — compute fresh
-		}
-	}
-
-	// Fetch raw actions from Convex — paginated under the hood so a large
-	// campaign never hits the per-query doc cap (cured).
-	const actions = await fetchAllPacketActions(campaignId);
-
-	// NEW-E-3: fetch debate snapshot when campaign has a linked debate.
-	// Query returns null when no debate is set; computePacket emits debate=null
-	// in that case, so the field is honest about "no debate" vs "debate not
-	// loaded yet."
-	const debate = await serverQuery(api.campaigns.getDebateSnapshotForCampaign, {
-		campaignId
-	});
-
-	// Compute packet
-	const packet = computePacket(actions, debate);
-
-	// Write to cache
-	if (kv) {
-		try {
-			await kv.put(cacheKey, JSON.stringify(packet), { expirationTtl: CACHE_TTL_SECONDS });
-		} catch {
-			// Non-fatal: packet computation succeeded, cache write failed
-		}
-	}
-
-	return packet;
+	return (await loadCampaignReadModelBundleCached(campaignId, orgId, context)).packet;
 }
 
 // ── Pure computation (exported for testing) ──
@@ -437,15 +539,12 @@ function computeVelocityFromBins(bins: number[]): number | null {
  * Coordination Authenticity Index: (tier3 + tier4) / max(tier1, 1).
  * High = campaign backed by deeply engaged participants.
  *
- * Lag bound (T10-1 + T10-4): the engagementTier on each action is the value
- * stamped at action-time. Reputation promotion runs as a nightly cron
- * (recomputeAllReputationTiers, 03:11 UTC), so a user who crosses an
- * action-count threshold on day N appears in CAI at their old tier until the
- * cron writes the new tier on day N+1. The cross-check at /api/submissions/create
- * (T10-2) tolerates ±1 drift specifically to absorb this lag. The drift is
- * bounded by the cron interval, never worse than 24h — the index is meaningful
- * for "is this campaign drawing on deep engagement vs new users?" questions,
- * not for real-time second-order accounting.
+ * Transactional bound (T10-1 + T10-4): a registered user's verified action
+ * increments actionCount, derives reputationTier, and stamps the resulting
+ * engagementTier on the immutable action in one Convex mutation. CAI therefore
+ * observes the exact threshold-crossing tier for that action without a
+ * recurring repair or propagation-lag window. Anonymous/unverified actions
+ * retain their submission-local tier semantics.
  */
 function computeCAI(actions: RawAction[]): number | null {
 	if (actions.length < 2) return null;
@@ -488,7 +587,11 @@ function emptyPacket(lastUpdated: string): VerificationPacket {
 		verifiedPct: 0,
 		districtCount: 0,
 		authorship: { individual: 0, shared: 0, unknown: 0, explicit: false },
-		dateRange: { earliest: lastUpdated.split('T')[0], latest: lastUpdated.split('T')[0], spanDays: 0 },
+		dateRange: {
+			earliest: lastUpdated.split('T')[0],
+			latest: lastUpdated.split('T')[0],
+			spanDays: 0
+		},
 		identityBreakdown: null,
 		gds: null,
 		ald: null,

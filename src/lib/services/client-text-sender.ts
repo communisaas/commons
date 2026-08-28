@@ -31,8 +31,9 @@ export type ClientTextDispatchOptions = {
 	blastId: string;
 	orgKey: CryptoKey;
 	encryptedRecipients: EncryptedTextRecipient[];
-	expectedTotalRecipients?: number;
-	finalBatch?: boolean;
+	pageCursor: string | null;
+	expectedTotalRecipients: number;
+	finalBatch: boolean;
 	onProgress?: (progress: TextDispatchProgress) => void;
 };
 
@@ -46,6 +47,7 @@ export async function sendTextBatchFromClient(
 		blastId,
 		orgKey,
 		encryptedRecipients,
+		pageCursor,
 		expectedTotalRecipients,
 		finalBatch,
 		onProgress
@@ -98,7 +100,12 @@ export async function sendTextBatchFromClient(
 	}
 
 	if (failures.length > 0) {
-		onProgress?.({ total, ready: decryptedRecipients.length, failed: failures.length, status: 'error' });
+		onProgress?.({
+			total,
+			ready: decryptedRecipients.length,
+			failed: failures.length,
+			status: 'error'
+		});
 		throw new Error(
 			`${failures.length} phone${failures.length === 1 ? '' : 's'} could not be prepared for carrier dispatch.`
 		);
@@ -114,6 +121,7 @@ export async function sendTextBatchFromClient(
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
 			action: 'send',
+			pageCursor,
 			expectedTotalRecipients,
 			finalBatch,
 			decryptedRecipients
@@ -129,7 +137,9 @@ export async function sendTextBatchFromClient(
 			failed: decryptedRecipients.length,
 			status: 'error'
 		});
-		throw new Error(`${body?.message ?? body?.error ?? `Text dispatch failed (${response.status})`}${missing}`);
+		throw new Error(
+			`${body?.message ?? body?.error ?? `Text dispatch failed (${response.status})`}${missing}`
+		);
 	}
 
 	const result = (await response.json()) as TextDispatchResult;

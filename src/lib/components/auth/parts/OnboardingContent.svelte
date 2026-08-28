@@ -2,6 +2,7 @@
 	import { fly } from 'svelte/transition';
 	import { Users, HelpCircle, Mail, CheckCircle2 } from '@lucide/svelte';
 	import { getJurisdictionLabels } from '$lib/core/locale/jurisdiction';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
 	// import Button from '$lib/components/ui/Button.svelte';
 
 	const labels = getJurisdictionLabels();
@@ -27,7 +28,7 @@
 	let showDetails = $state(false);
 
 	// Detect template type for customized messaging
-	const isCongressional = $derived(template?.deliveryMethod === 'cwc');
+	const isCongressional = $derived(isCongressionalDelivery(template?.deliveryMethod));
 	const isDirectOutreach = $derived(template?.deliveryMethod === 'email');
 
 	// Check if user has seen onboarding before

@@ -12,8 +12,8 @@
 	);
 
 	// H6 — single source of truth: data.credential.tierDisplay is computed
-	// server-side via formatTierDisplay() so this page, AttestationFooter, and
-	// the email footer can all share the same epistemic copy. We keep the
+	// server-side via formatTierDisplay() so this page and the email footer
+	// can share the same epistemic copy. We keep the
 	// method-conditional flags here ONLY for the auxiliary fine-print under
 	// each headline, which is method-specific (the tierDisplay.description
 	// is a slightly different framing than the receipt-page paragraph).

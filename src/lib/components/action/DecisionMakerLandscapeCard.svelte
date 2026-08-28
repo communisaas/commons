@@ -12,6 +12,8 @@
 	 */
 	import { Mail, ChevronRight, ExternalLink } from '@lucide/svelte';
 	import type { LandscapeMember } from '$lib/utils/landscapeMerge';
+	import { routeEvidenceFor } from '$lib/core/agents/target-order';
+	import { describeMeasuredRoute } from '$lib/core/agents/reach-census';
 
 	function extractDomain(url: string): string {
 		try {
@@ -33,6 +35,7 @@
 		member,
 		contacted = false,
 		departing = false,
+		priorContact = false,
 		onWriteTo,
 		showRoleBadge = false,
 		canReportBounce = false,
@@ -43,6 +46,13 @@
 		member: LandscapeMember;
 		contacted: boolean;
 		departing: boolean;
+		/**
+		 * This viewer told us, on an earlier visit, that they wrote to this person.
+		 * Nobody observed that send — it is their own claim, so the copy attributes
+		 * it to them and never reads as a receipt. It annotates the write
+		 * affordance; it deliberately does not gate it (see `isActive`).
+		 */
+		priorContact?: boolean;
 		onWriteTo: (member: LandscapeMember) => void;
 		showRoleBadge?: boolean;
 		canReportBounce?: boolean;
@@ -59,6 +69,55 @@
 	const canFlagBounce = $derived(
 		canReportBounce && member.deliveryRoute === 'email' && !!member.email
 	);
+
+	/**
+	 * How this address was published, said in one sentence.
+	 *
+	 * Both halves are reused, not authored here: `routeEvidenceFor`
+	 * (`$lib/core/agents/target-order`) derives the two measured facts, and
+	 * `describeMeasuredRoute` (`$lib/core/agents/reach-census`) picks the sentence
+	 * from the census's own closed label vocabulary, so a row and the census can
+	 * never describe the same measurement in two different words.
+	 *
+	 * A delivery tier is deliberately NOT read, and the identifier is deliberately
+	 * absent from this file. The public detail reader's key allowlist for a
+	 * recipient row (`convex/lib/publicTemplateDiscoverySource.ts`) rejects the
+	 * whole projection when that key appears, and
+	 * `convex/lib/publicRecipientProvenance.ts` never signs it — so on the
+	 * anonymous path no such field exists, and rendering off it would be reading a
+	 * value nobody attested.
+	 *
+	 * The sentence is rendered unconditionally because every row that reaches this
+	 * file has a measured route, and that is enforced upstream, not here:
+	 *
+	 * (a) The public detail reader admits no ungrounded or sourceless recipient row
+	 *     (`convex/lib/publicTemplateDiscoverySource.ts:757-768`): the whole
+	 *     projection is rejected unless `emailGrounded === true` and `emailSource`
+	 *     round-trips through `publicHttpUrl` (https only, `:261-271`). Pinned by
+	 *     `tests/unit/routes/public-detail-route-evidence.test.ts`.
+	 * (b) District rows never arrive here at all: `RoleGroup.svelte:60` sends every
+	 *     `member.source === 'district'` row to `DistrictOfficialCard`. Pinned by
+	 *     `tests/unit/components/landscape-card-measured-route.test.ts`.
+	 *
+	 * A branch on the unrouted provenance class would therefore be a guard that
+	 * cannot fire — an assertion that cannot fail. If the projection ever loosened, the
+	 * census's own `route-unmeasured` label ('Address publication route not
+	 * established this run') is the correct, honest output for a template row that
+	 * went through a resolution run without a route being established; silence
+	 * would hide the loosening rather than report it.
+	 *
+	 * This is copy. It gates nothing: no affordance, count, ordering or send path
+	 * reads it.
+	 */
+	const routeEvidence = $derived(
+		routeEvidenceFor({
+			name: member.name,
+			email: member.email ?? undefined,
+			emailGrounded: member.emailGrounded,
+			emailSource: member.emailSource ?? undefined
+		})
+	);
+	const measuredRoute = $derived(describeMeasuredRoute(routeEvidence));
 
 	function handleClick() {
 		if (isActive) {
@@ -117,6 +176,11 @@
 					Write to them
 					<ChevronRight class="h-3.5 w-3.5 transition-all duration-150 opacity-0 -translate-x-1" />
 				</span>
+				{#if priorContact}
+					<!-- Their own past claim, beside the still-live affordance — never
+					     instead of it, and never phrased as a delivery we observed. -->
+					<span class="text-xs text-slate-400">You said you wrote to them</span>
+				{/if}
 			{/if}
 		{/if}
 
@@ -132,6 +196,8 @@
 				<ExternalLink class="h-2.5 w-2.5" />
 			</a>
 		{/if}
+
+		<span class="text-xs text-slate-400">{measuredRoute}</span>
 	</div>
 {/snippet}
 

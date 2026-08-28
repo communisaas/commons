@@ -18,7 +18,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Hoisted mock variables (must be declared before vi.mock)
 // ============================================================================
 
-const mockLimit = vi.hoisted(() => vi.fn());
+const { mockLimit, mockReservePaidProviderBudget } = vi.hoisted(() => ({
+	mockLimit: vi.fn(),
+	mockReservePaidProviderBudget: vi.fn()
+}));
 
 // ============================================================================
 // Module mocks
@@ -29,6 +32,10 @@ vi.mock('$lib/server/rate-limiter', () => ({
 		limit: (...args: unknown[]) => mockLimit(...args)
 	},
 	InMemoryRateLimiter: vi.fn()
+}));
+
+vi.mock('$lib/server/paid-provider-budget-client', () => ({
+	reservePaidProviderBudget: (...args: unknown[]) => mockReservePaidProviderBudget(...args)
 }));
 
 // Mock $lib/core/agents/types — passthrough functions used by computeCostUsd
@@ -124,6 +131,7 @@ describe('llm-cost-protection', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mockLimit.mockReset();
+		mockReservePaidProviderBudget.mockReset();
 	});
 
 	// -----------------------------------------------------------------------
@@ -166,6 +174,27 @@ describe('llm-cost-protection', () => {
 
 			expect(ctx.tier).toBe('verified');
 			expect(ctx.isVerified).toBe(true);
+		});
+
+		it('maps only an exact Cloudflare-configured user ID to the protected operator budget tier', () => {
+			const event = createMockEvent({ userId: 'launch-operator', trustTier: 1 });
+			event.platform = {
+				env: { PAID_PROVIDER_OPERATOR_USER_IDS: 'launch-operator,backup-operator' }
+			};
+
+			const ctx = getUserContext(event);
+
+			expect(ctx.tier).toBe('authenticated');
+			expect(ctx.providerTier).toBe('operator');
+		});
+
+		it('fails closed to the ordinary tier when the operator allowlist is malformed', () => {
+			const event = createMockEvent({ userId: 'launch-operator', trustTier: 1 });
+			event.platform = {
+				env: { PAID_PROVIDER_OPERATOR_USER_IDS: 'launch-operator, backup-operator' }
+			};
+
+			expect(getUserContext(event).providerTier).toBe('authenticated');
 		});
 
 		it('returns authenticated tier for users with trust_tier = 0', () => {
@@ -300,9 +329,7 @@ describe('llm-cost-protection', () => {
 			expect(result.reason).toContain('Generating messages requires an account');
 		});
 
-		it('allows subject-line for guest users (3/hr quota)', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
-
+		it('blocks subject-line for guest users before the isolate-local limiter', async () => {
 			const ctx = {
 				userId: null,
 				isAuthenticated: false,
@@ -313,8 +340,10 @@ describe('llm-cost-protection', () => {
 
 			const result = await checkRateLimit('subject-line', ctx);
 
-			expect(result.allowed).toBe(true);
-			expect(result.limit).toBe(3);
+			expect(result.allowed).toBe(false);
+			expect(result.limit).toBe(0);
+			expect(result.reason).toContain('requires an account');
+			expect(mockLimit).not.toHaveBeenCalled();
 		});
 
 		it('verified users get 5/hr quota for subject-line', async () => {
@@ -483,9 +512,7 @@ describe('llm-cost-protection', () => {
 			);
 		});
 
-		it('constructs correct rate limit key with IP for guests', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
-
+		it('does not construct a resettable IP key for blocked guests', async () => {
 			const ctx = {
 				userId: null,
 				isAuthenticated: false,
@@ -496,16 +523,7 @@ describe('llm-cost-protection', () => {
 
 			await checkRateLimit('subject-line', ctx);
 
-			expect(mockLimit).toHaveBeenCalledWith(
-				'llm:subject-line:ip:10.0.0.1',
-				3,
-				3600000
-			);
-			expect(mockLimit).toHaveBeenCalledWith(
-				'llm:daily:ip:10.0.0.1',
-				3,
-				86400000
-			);
+			expect(mockLimit).not.toHaveBeenCalled();
 		});
 
 		it('decision-makers rate limit reason mentions lookup', async () => {
@@ -610,6 +628,74 @@ describe('llm-cost-protection', () => {
 			expect(result).toHaveProperty('remaining');
 			expect(result).toHaveProperty('limit');
 			expect(result).toHaveProperty('resetAt');
+		});
+
+		it('uses the shared atomic provider coordinator whenever Cloudflare platform env exists', async () => {
+			mockReservePaidProviderBudget.mockResolvedValue({
+				allowed: true,
+				remaining: 1,
+				limit: 2,
+				resetAt: new Date('2026-07-20T13:00:00.000Z'),
+				status: 200
+			});
+			const event = createMockEvent({ userId: 'user_atomic', trustTier: 1 });
+			event.platform = { env: {} };
+			vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+			const result = await enforceLLMRateLimit(event, 'decision-makers');
+
+			expect(result).toMatchObject({ allowed: true, limit: 2, remaining: 1 });
+			expect(mockReservePaidProviderBudget).toHaveBeenCalledWith({
+				event,
+				identifier: 'user_atomic',
+				operation: 'decision-makers',
+				tier: 'authenticated'
+			});
+			expect(mockLimit).not.toHaveBeenCalled();
+		});
+
+		it('maps a missing or unavailable production coordinator to fail-closed 503', async () => {
+			mockReservePaidProviderBudget.mockResolvedValue({
+				allowed: false,
+				remaining: 0,
+				limit: 0,
+				resetAt: new Date('2026-07-20T13:00:00.000Z'),
+				status: 503,
+				reason: 'AI capacity is temporarily unavailable. Please try again shortly.'
+			});
+			const event = createMockEvent({ userId: 'user_atomic', trustTier: 2 });
+			event.platform = { env: {} };
+			vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+			const check = await enforceLLMRateLimit(event, 'message-generation');
+
+			expect(check).toMatchObject({ allowed: false, status: 503, tier: 'verified' });
+			expect(rateLimitResponse(check).status).toBe(503);
+		});
+
+		it('sends the server-derived operator tier without changing the public account tier', async () => {
+			mockReservePaidProviderBudget.mockResolvedValue({
+				allowed: true,
+				remaining: 2,
+				limit: 3,
+				resetAt: new Date('2026-07-20T13:00:00.000Z'),
+				status: 200
+			});
+			const event = createMockEvent({ userId: 'launch-operator', trustTier: 1 });
+			event.platform = {
+				env: { PAID_PROVIDER_OPERATOR_USER_IDS: 'launch-operator' }
+			};
+			vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+			const result = await enforceLLMRateLimit(event, 'decision-makers');
+
+			expect(result.tier).toBe('authenticated');
+			expect(mockReservePaidProviderBudget).toHaveBeenCalledWith({
+				event,
+				identifier: 'launch-operator',
+				operation: 'decision-makers',
+				tier: 'operator'
+			});
 		});
 	});
 
@@ -824,6 +910,24 @@ describe('llm-cost-protection', () => {
 			expect(withThinking!.totalCostUsd).toBeCloseTo(0.008, 6);
 			expect(withThinking!.components.geminiThinking).toBeCloseTo(0.006, 6);
 		});
+
+		it('uses current Exa prices and tracks Free-plan providers as usage meters', () => {
+			const breakdown = computeCostUsd(undefined, {
+				exaSearches: 1,
+				firecrawlReads: 1,
+				groundingSearches: 0,
+				groqModerations: 2
+			});
+
+			// $0.007 search + conservative $0.001 contents fallback page.
+			expect(breakdown!.components.exaSearch).toBe(0.007);
+			expect(breakdown!.components.exaContents).toBe(0.001);
+			expect(breakdown!.components.firecrawlRead).toBe(0);
+			expect(breakdown!.components.groqModeration).toBe(0);
+			expect(breakdown!.totalCostUsd).toBe(0.008);
+			expect(breakdown!.externalCounts.firecrawlReads).toBe(1);
+			expect(breakdown!.externalCounts.groqModerations).toBe(2);
+		});
 	});
 
 	// -----------------------------------------------------------------------
@@ -929,9 +1033,7 @@ describe('llm-cost-protection', () => {
 	// -----------------------------------------------------------------------
 
 	describe('tiered quota verification', () => {
-		it('guest subject-line quota is 3/hr', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
-
+		it('guest subject-line quota is zero', async () => {
 			const ctx = {
 				userId: null,
 				isAuthenticated: false,
@@ -940,14 +1042,10 @@ describe('llm-cost-protection', () => {
 				identifier: 'ip:1.2.3.4'
 			};
 
-			await checkRateLimit('subject-line', ctx);
+			const result = await checkRateLimit('subject-line', ctx);
 
-			// Verify the rate limiter was called with max=3 and 1-hour window
-			expect(mockLimit).toHaveBeenCalledWith(
-				expect.stringContaining('subject-line'),
-				3,
-				3600000
-			);
+			expect(result).toMatchObject({ allowed: false, limit: 0, remaining: 0 });
+			expect(mockLimit).not.toHaveBeenCalled();
 		});
 
 		it('authenticated daily global quota is 10/day', async () => {
@@ -991,9 +1089,7 @@ describe('llm-cost-protection', () => {
 			);
 		});
 
-		it('guest daily global quota is 3/day', async () => {
-			mockLimit.mockResolvedValue(mockLimitResult(true, 2, 3));
-
+		it('blocked guests never consume a per-isolate daily token', async () => {
 			const ctx = {
 				userId: null,
 				isAuthenticated: false,
@@ -1004,11 +1100,7 @@ describe('llm-cost-protection', () => {
 
 			await checkRateLimit('subject-line', ctx);
 
-			expect(mockLimit).toHaveBeenCalledWith(
-				'llm:daily:ip:1.2.3.4',
-				3,
-				86400000
-			);
+			expect(mockLimit).not.toHaveBeenCalled();
 		});
 
 		it('authenticated message-generation quota is 3/hr', async () => {

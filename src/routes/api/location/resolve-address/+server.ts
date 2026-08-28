@@ -3,6 +3,7 @@ import { dev } from '$app/environment';
 import type { RequestHandler } from './$types';
 import { z } from 'zod';
 import { resolveAddress } from '$lib/core/shadow-atlas/client';
+import { DISTRICT_COVERAGE } from '$lib/core/shadow-atlas/coverage';
 import { issueAddressResolutionToken } from '$lib/server/auth/address-resolution-token';
 
 /**
@@ -56,9 +57,22 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		// ================================================================
 		const result = await resolveAddress({ street, city, state, zip, country });
 
-		// Extract district code from Shadow Atlas response
-		const districtCode = result.officials?.district_code ?? null;
-		const stateCode = result.officials?.state ?? state.toUpperCase();
+		// District code comes from the resolver's own district hit first, officials
+		// second. `getOfficials` sets `district_code: districtCode` FROM `district.id`
+		// (src/lib/core/shadow-atlas/client.ts:1342), so the two sources are
+		// byte-identical whenever officials resolve; this ordering changes behaviour
+		// only on the path where the officials fetch was swallowed as non-fatal.
+		//
+		// INVARIANT: an officials-fetch failure is a retrieval failure (BLOCKED), not
+		// an absence of representation (ABSENT). The two must never be collapsed —
+		// losing the roster must never be reported to the person as "no district".
+		const districtCode = result.district?.id ?? result.officials?.district_code ?? null;
+		// Keep `state` coherent with whichever source produced `districtCode`. On the
+		// officials-failure path the district id is now the only evidence, and the old
+		// fallback would pair a resolved code like 'IL-18' with the user-typed 'IA'.
+		// Officials-first precedence leaves every pre-existing response byte-identical.
+		const stateCode =
+			result.officials?.state ?? result.district?.id?.split('-')[0] ?? state.toUpperCase();
 
 		// Privacy: log only district code, never address
 		console.info(`[resolve-address] Resolved via Shadow Atlas district=${districtCode}`);
@@ -104,10 +118,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 			district: districtCode
 				? {
 						code: districtCode,
-						name: result.district?.name ?? `Congressional District`,
+						// No fabricated label: when the resolver did not name the
+						// district, say so with null rather than inventing one.
+						name: result.district?.name ?? null,
 						state: stateCode
 					}
 				: null,
+			// Additive multi-type view — key names and shapes copied verbatim from the
+			// paid lane (src/routes/api/v1/resolve-address/+server.ts). Every populated,
+			// served boundary type for the resolved cell, in the canonical slot order
+			// resolveAddress returned (congressional first). These entries ride the
+			// SINGLE chunk fetch already performed for the congressional lookup, so
+			// this adds no atlas work: no extra read, no extra network call.
+			districts: result.districts ?? [],
+			// Static machine-readable coverage disclosure. `coverage` NEVER ships
+			// without `districts`: an absent 'partial' type is a possible ingest gap,
+			// not evidence that the district does not exist, so the reader must always
+			// hold the disclosure alongside the list to interpret an absence honestly.
+			coverage: DISTRICT_COVERAGE,
 			officials: result.officials?.officials.map((o) => ({
 				name: o.name,
 				office: o.office,

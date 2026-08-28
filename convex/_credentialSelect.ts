@@ -20,8 +20,8 @@
  * `_creationTime` as deterministic tiebreak for same-millisecond issuances.
  */
 
-import type { QueryCtx } from "./_generated/server";
-import type { Doc, Id } from "./_generated/dataModel";
+import type { QueryCtx } from './_generated/server';
+import type { Doc, Id } from './_generated/dataModel';
 
 /**
  * Return the single authoritative active districtCredential row for a user,
@@ -35,26 +35,24 @@ import type { Doc, Id } from "./_generated/dataModel";
  * support" decision.
  */
 export async function selectActiveCredentialForUser(
-  ctx: QueryCtx,
-  userId: Id<"users">,
-): Promise<Doc<"districtCredentials"> | null> {
-  const now = Date.now();
-  // Index range eliminates expired rows at the storage layer so the collect is
-  // O(active-or-future-expiring), not O(lifetime-reissues). Long-tenured users
-  // with many revoked rows would otherwise see this scale with history length.
-  // `revokedAt` is not indexed — filter in-memory on the narrower result.
-  const credentials = await ctx.db
-    .query("districtCredentials")
-    .withIndex("by_userId_expiresAt", (q) =>
-      q.eq("userId", userId).gt("expiresAt", now),
-    )
-    .collect();
-  const active = credentials.filter((c) => !c.revokedAt);
-  if (active.length === 0) return null;
-  // Primary: highest issuedAt. Tiebreak: highest _creationTime (monotonic
-  // within-table, set by Convex at insert — cannot collide).
-  active.sort(
-    (a, b) => b.issuedAt - a.issuedAt || b._creationTime - a._creationTime,
-  );
-  return active[0];
+	ctx: QueryCtx,
+	userId: Id<'users'>,
+	asOf: number
+): Promise<Doc<'districtCredentials'> | null> {
+	// The exact revokedAt=undefined prefix excludes every retired credential at
+	// the storage layer. Ordering by issuedAt (then Convex's implicit
+	// _creationTime suffix) gives one deterministic winner at constant
+	// cardinality even if a legacy/concurrent-write drift left multiple rows
+	// unrevoked. We deliberately do not fall back to an older row when the
+	// canonical newest issuance is expired: resurrecting an older credential
+	// would be a fail-open interpretation of inconsistent history.
+	const credential = await ctx.db
+		.query('districtCredentials')
+		.withIndex('by_userId_revokedAt_issuedAt', (q) =>
+			q.eq('userId', userId).eq('revokedAt', undefined)
+		)
+		.order('desc')
+		.first();
+	if (!credential || credential.expiresAt <= asOf) return null;
+	return credential;
 }

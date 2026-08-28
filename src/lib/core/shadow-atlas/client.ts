@@ -26,7 +26,7 @@ import {
 	clearCache,
 	ContentNotFoundError,
 	type CellDistricts,
-	type OfficialsFileIPFS,
+	type OfficialsFileIPFS
 } from './ipfs-store';
 import type { ResolutionProvenance } from './provenance';
 import { AddressIndexSchemaError } from './ipfs-store';
@@ -36,16 +36,17 @@ import {
 	geocodeAddress,
 	matchClassPrecision,
 	ADDRESS_NOT_FOUND_MESSAGE,
-	type GeocodeResult,
+	type GeocodeResult
 } from './geocoder';
 import {
 	deserializeCellTreeSnapshot,
 	computeClientCellProof,
 	validateSnapshotRoot,
 	type CellTreeSnapshot,
-	type CellTreeSnapshotWire,
+	type CellTreeSnapshotWire
 } from './cell-tree-snapshot';
 import { applyStalenessGuard } from './redraw-guard';
+import { readBoundedResponseJson } from '$lib/server/bounded-response.mjs';
 
 // Server config (used by engagement reads)
 const SHADOW_ATLAS_URL = env.SHADOW_ATLAS_API_URL || 'http://localhost:3000';
@@ -54,13 +55,49 @@ const SHADOW_ATLAS_REGISTRATION_TOKEN = env.SHADOW_ATLAS_REGISTRATION_TOKEN || '
 if (SHADOW_ATLAS_URL.includes('localhost') && !import.meta.env.DEV) {
 	console.warn(
 		'[shadow-atlas] SHADOW_ATLAS_API_URL points to localhost in a non-dev environment. ' +
-		'Set SHADOW_ATLAS_API_URL to the production Shadow Atlas endpoint.'
+			'Set SHADOW_ATLAS_API_URL to the production Shadow Atlas endpoint.'
 	);
 }
 
 // Write relay (Phase B1) — registration, replacement, engagement writes
 const WRITE_RELAY_URL = env.WRITE_RELAY_URL || SHADOW_ATLAS_URL;
 const WRITE_RELAY_TOKEN = env.WRITE_RELAY_TOKEN || SHADOW_ATLAS_REGISTRATION_TOKEN;
+const ENGAGEMENT_HTTP_TIMEOUT_MS = 8_000;
+const ENGAGEMENT_RESPONSE_MAX_BYTES = 32 * 1024;
+const ENGAGEMENT_MAX_LEAF_INDEX = 2 ** 24 - 1;
+const TREE1_HTTP_TIMEOUT_MS = 8_000;
+const TREE1_RESPONSE_MAX_BYTES = 32 * 1024;
+const ENGAGEMENT_IDENTITY = /^(?:0x)?[0-9a-fA-F]{64}$/u;
+const ENGAGEMENT_SIGNER = /^0x[0-9a-fA-F]{40}$/u;
+
+function engagementRecord(value: unknown): Record<string, unknown> | null {
+	return value !== null && typeof value === 'object' && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: null;
+}
+
+function engagementInteger(
+	value: unknown,
+	label: string,
+	minimum: number,
+	maximum: number
+): number {
+	if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+		throw new Error(`Shadow Atlas returned invalid ${label}`);
+	}
+	return value as number;
+}
+
+function normalizedEngagementIdentity(value: string): string {
+	const digits = value.startsWith('0x') ? value.slice(2) : value;
+	return `0x${digits.toLowerCase()}`;
+}
+
+function assertEngagementIdentity(value: string): void {
+	if (!ENGAGEMENT_IDENTITY.test(value)) {
+		throw new Error('Shadow Atlas engagement identity must be a 32-byte hex field');
+	}
+}
 
 /**
  * Circuit depth (must match VITE_CIRCUIT_DEPTH used by prover-client.ts).
@@ -70,7 +107,7 @@ const CIRCUIT_DEPTH: number = (() => {
 	const d = env.VITE_CIRCUIT_DEPTH;
 	if (!d) return 20;
 	const p = parseInt(d, 10);
-	return (p === 18 || p === 20 || p === 22 || p === 24) ? p : 20;
+	return p === 18 || p === 20 || p === 22 || p === 24 ? p : 20;
 })();
 
 import { BN254_MODULUS } from '$lib/core/crypto/bn254';
@@ -88,16 +125,14 @@ import { BN254_MODULUS } from '$lib/core/crypto/bn254';
  * @throws {Error} If format is invalid or value >= BN254_MODULUS
  */
 export function validateBN254Hex(value: string, label: string): void {
-	if (typeof value !== 'string' || !/^0x[0-9a-fA-F]+$/.test(value)) {
+	if (typeof value !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(value)) {
 		throw new Error(
 			`BR5-009: Invalid ${label} from Shadow Atlas: expected 0x-hex, got "${String(value).slice(0, 20)}"`
 		);
 	}
 	const bigVal = BigInt(value);
 	if (bigVal >= BN254_MODULUS) {
-		throw new Error(
-			`BR5-009: ${label} from Shadow Atlas exceeds BN254 field modulus`
-		);
+		throw new Error(`BR5-009: ${label} from Shadow Atlas exceeds BN254 field modulus`);
 	}
 }
 
@@ -122,18 +157,62 @@ export function validateBN254HexArray(values: string[], label: string): void {
  * Used to convert substrate's district ID format (cd-0601) to commons' (CA-01).
  */
 const FIPS_TO_STATE: Record<string, string> = {
-	'01': 'AL', '02': 'AK', '04': 'AZ', '05': 'AR', '06': 'CA',
-	'08': 'CO', '09': 'CT', '10': 'DE', '11': 'DC', '12': 'FL',
-	'13': 'GA', '15': 'HI', '16': 'ID', '17': 'IL', '18': 'IN',
-	'19': 'IA', '20': 'KS', '21': 'KY', '22': 'LA', '23': 'ME',
-	'24': 'MD', '25': 'MA', '26': 'MI', '27': 'MN', '28': 'MS',
-	'29': 'MO', '30': 'MT', '31': 'NE', '32': 'NV', '33': 'NH',
-	'34': 'NJ', '35': 'NM', '36': 'NY', '37': 'NC', '38': 'ND',
-	'39': 'OH', '40': 'OK', '41': 'OR', '42': 'PA', '44': 'RI',
-	'45': 'SC', '46': 'SD', '47': 'TN', '48': 'TX', '49': 'UT',
-	'50': 'VT', '51': 'VA', '53': 'WA', '54': 'WV', '55': 'WI',
-	'56': 'WY', '60': 'AS', '66': 'GU', '69': 'MP', '72': 'PR',
-	'78': 'VI',
+	'01': 'AL',
+	'02': 'AK',
+	'04': 'AZ',
+	'05': 'AR',
+	'06': 'CA',
+	'08': 'CO',
+	'09': 'CT',
+	'10': 'DE',
+	'11': 'DC',
+	'12': 'FL',
+	'13': 'GA',
+	'15': 'HI',
+	'16': 'ID',
+	'17': 'IL',
+	'18': 'IN',
+	'19': 'IA',
+	'20': 'KS',
+	'21': 'KY',
+	'22': 'LA',
+	'23': 'ME',
+	'24': 'MD',
+	'25': 'MA',
+	'26': 'MI',
+	'27': 'MN',
+	'28': 'MS',
+	'29': 'MO',
+	'30': 'MT',
+	'31': 'NE',
+	'32': 'NV',
+	'33': 'NH',
+	'34': 'NJ',
+	'35': 'NM',
+	'36': 'NY',
+	'37': 'NC',
+	'38': 'ND',
+	'39': 'OH',
+	'40': 'OK',
+	'41': 'OR',
+	'42': 'PA',
+	'44': 'RI',
+	'45': 'SC',
+	'46': 'SD',
+	'47': 'TN',
+	'48': 'TX',
+	'49': 'UT',
+	'50': 'VT',
+	'51': 'VA',
+	'53': 'WA',
+	'54': 'WV',
+	'55': 'WI',
+	'56': 'WY',
+	'60': 'AS',
+	'66': 'GU',
+	'69': 'MP',
+	'72': 'PR',
+	'78': 'VI'
 };
 
 /**
@@ -151,7 +230,7 @@ function convertDistrictId(substrateId: string): string {
 	if (!stateCode) return substrateId;
 
 	// At-large districts: 00 (single-district states) and 98 (non-voting delegates: DC, AS, GU, MP, PR, VI) → AL
-	const district = (districtNum === '00' || districtNum === '98') ? 'AL' : districtNum;
+	const district = districtNum === '00' || districtNum === '98' ? 'AL' : districtNum;
 	return `${stateCode}-${district}`;
 }
 
@@ -162,21 +241,62 @@ function convertDistrictId(substrateId: string): string {
  */
 function buildDistrictName(districtCode: string): string {
 	const STATE_NAMES: Record<string, string> = {
-		AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas',
-		CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware',
-		DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii',
-		ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa',
-		KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine',
-		MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota',
-		MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska',
-		NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico',
-		NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio',
-		OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island',
-		SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas',
-		UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington',
-		WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming',
-		AS: 'American Samoa', GU: 'Guam', MP: 'Northern Mariana Islands',
-		PR: 'Puerto Rico', VI: 'U.S. Virgin Islands',
+		AL: 'Alabama',
+		AK: 'Alaska',
+		AZ: 'Arizona',
+		AR: 'Arkansas',
+		CA: 'California',
+		CO: 'Colorado',
+		CT: 'Connecticut',
+		DE: 'Delaware',
+		DC: 'District of Columbia',
+		FL: 'Florida',
+		GA: 'Georgia',
+		HI: 'Hawaii',
+		ID: 'Idaho',
+		IL: 'Illinois',
+		IN: 'Indiana',
+		IA: 'Iowa',
+		KS: 'Kansas',
+		KY: 'Kentucky',
+		LA: 'Louisiana',
+		ME: 'Maine',
+		MD: 'Maryland',
+		MA: 'Massachusetts',
+		MI: 'Michigan',
+		MN: 'Minnesota',
+		MS: 'Mississippi',
+		MO: 'Missouri',
+		MT: 'Montana',
+		NE: 'Nebraska',
+		NV: 'Nevada',
+		NH: 'New Hampshire',
+		NJ: 'New Jersey',
+		NM: 'New Mexico',
+		NY: 'New York',
+		NC: 'North Carolina',
+		ND: 'North Dakota',
+		OH: 'Ohio',
+		OK: 'Oklahoma',
+		OR: 'Oregon',
+		PA: 'Pennsylvania',
+		RI: 'Rhode Island',
+		SC: 'South Carolina',
+		SD: 'South Dakota',
+		TN: 'Tennessee',
+		TX: 'Texas',
+		UT: 'Utah',
+		VT: 'Vermont',
+		VA: 'Virginia',
+		WA: 'Washington',
+		WV: 'West Virginia',
+		WI: 'Wisconsin',
+		WY: 'Wyoming',
+		AS: 'American Samoa',
+		GU: 'Guam',
+		MP: 'Northern Mariana Islands',
+		PR: 'Puerto Rico',
+		VI: 'U.S. Virgin Islands'
 	};
 
 	const parts = districtCode.split('-');
@@ -288,7 +408,7 @@ function slotToDistrict(slotValue: string, slotIndex: number): District {
 			id: districtCode,
 			name: buildDistrictName(districtCode),
 			jurisdiction,
-			districtType: jurisdiction,
+			districtType: jurisdiction
 		};
 	}
 
@@ -297,7 +417,7 @@ function slotToDistrict(slotValue: string, slotIndex: number): District {
 		id: slotValue,
 		name: `${meta?.label ?? jurisdiction}: ${slotValue}`,
 		jurisdiction,
-		districtType: jurisdiction,
+		districtType: jurisdiction
 	};
 }
 
@@ -335,7 +455,7 @@ function cellDistrictsToDistrict(cellDistricts: CellDistricts): District {
 		id: districtCode,
 		name: buildDistrictName(districtCode),
 		jurisdiction: 'congressional',
-		districtType: 'congressional',
+		districtType: 'congressional'
 	};
 }
 
@@ -386,7 +506,7 @@ function slotsToResolvedDistricts(slots: (string | null)[]): ResolvedDistrictEnt
 				geoid,
 				name: buildDistrictName(code),
 				jurisdiction,
-				district_type: jurisdiction,
+				district_type: jurisdiction
 			});
 		} else {
 			out.push({
@@ -394,7 +514,7 @@ function slotsToResolvedDistricts(slots: (string | null)[]): ResolvedDistrictEnt
 				geoid,
 				name: `${meta?.label ?? jurisdiction} ${geoid}`,
 				jurisdiction,
-				district_type: jurisdiction,
+				district_type: jurisdiction
 			});
 		}
 	}
@@ -427,7 +547,7 @@ export class AtlasInfraError extends Error {
  */
 async function lookupCellSlots(
 	lat: number,
-	lng: number,
+	lng: number
 ): Promise<{ cellIndex: string; slots: (string | null)[] }> {
 	if (lat < -90 || lat > 90) {
 		throw new Error(`Invalid latitude: ${lat}. Must be between -90 and 90.`);
@@ -453,7 +573,7 @@ async function lookupCellSlots(
 			throw new AtlasInfraError(
 				`Atlas chunk fetch failed for cell ${cellIndex}: ` +
 					(err instanceof Error ? err.message : String(err)),
-				{ cause: err },
+				{ cause: err }
 			);
 		}
 	}
@@ -461,7 +581,7 @@ async function lookupCellSlots(
 	if (!slots) {
 		throw new Error(
 			`No district data for H3 cell ${cellIndex} at (${lat.toFixed(4)}, ${lng.toFixed(4)}). ` +
-			'Location may be outside US coverage area.'
+				'Location may be outside US coverage area.'
 		);
 	}
 
@@ -496,7 +616,7 @@ export async function lookupDistrict(lat: number, lng: number): Promise<District
 			// Merkle proof: null until cipher integrates client-side path computation.
 			// Callers already handle null proof (serve-only mode).
 			merkleProof: null,
-			cell_id: cellIndex,
+			cell_id: cellIndex
 		};
 	} catch (error) {
 		// Infra faults propagate unwrapped so callers can discriminate them from misses.
@@ -543,7 +663,7 @@ export async function lookupAllDistricts(lat: number, lng: number): Promise<Mult
 		if (!cellDistricts) {
 			throw new Error(
 				`No district data for H3 cell ${cellIndex} at (${lat.toFixed(4)}, ${lng.toFixed(4)}). ` +
-				'Location may be outside US coverage area.'
+					'Location may be outside US coverage area.'
 			);
 		}
 
@@ -572,6 +692,68 @@ export interface RegistrationResult {
 	receipt?: { data: string; sig: string };
 }
 
+function parseRegistrationResult(value: unknown, label: 'registration' | 'replacement'): RegistrationResult {
+	const result = engagementRecord(value);
+	const data = engagementRecord(result?.data);
+	if (result?.success !== true || !data) {
+		throw new Error(`Shadow Atlas returned invalid ${label} response`);
+	}
+	const leafIndex = engagementInteger(
+		data.leafIndex,
+		`${label} leaf index`,
+		0,
+		ENGAGEMENT_MAX_LEAF_INDEX
+	);
+	if (
+		typeof data.userRoot !== 'string' ||
+		!Array.isArray(data.userPath) ||
+		data.userPath.some((field) => typeof field !== 'string') ||
+		!Array.isArray(data.pathIndices) ||
+		data.pathIndices.some((bit) => bit !== 0 && bit !== 1)
+	) {
+		throw new Error(`Shadow Atlas returned invalid ${label} proof`);
+	}
+	const userPath = data.userPath as string[];
+	const pathIndices = data.pathIndices as number[];
+	if (userPath.length !== CIRCUIT_DEPTH || pathIndices.length !== CIRCUIT_DEPTH) {
+		throw new Error(
+			`Invalid proof length: userPath=${userPath.length}, pathIndices=${pathIndices.length}. Expected ${CIRCUIT_DEPTH}.`
+		);
+	}
+	if (leafIndex >= 2 ** userPath.length) {
+		throw new Error(`Shadow Atlas returned out-of-range ${label} leaf index`);
+	}
+	if (pathIndices.some((bit, index) => bit !== Math.floor(leafIndex / 2 ** index) % 2)) {
+		throw new Error(`Shadow Atlas returned inconsistent ${label} path indices`);
+	}
+	validateBN254Hex(data.userRoot, 'userRoot');
+	validateBN254HexArray(userPath, 'userPath');
+
+	let receipt: RegistrationResult['receipt'];
+	if (data.receipt !== undefined) {
+		const candidate = engagementRecord(data.receipt);
+		if (
+			!candidate ||
+			Object.keys(candidate).some((key) => key !== 'data' && key !== 'sig') ||
+			typeof candidate.data !== 'string' ||
+			typeof candidate.sig !== 'string' ||
+			candidate.data.length > 4_096 ||
+			candidate.sig.length > 4_096
+		) {
+			throw new Error(`Shadow Atlas returned invalid ${label} receipt`);
+		}
+		receipt = { data: candidate.data, sig: candidate.sig };
+	}
+
+	return {
+		leafIndex,
+		userRoot: data.userRoot,
+		userPath,
+		pathIndices,
+		...(receipt ? { receipt } : {})
+	};
+}
+
 /**
  * Register a precomputed leaf hash in Tree 1.
  *
@@ -584,12 +766,15 @@ export interface RegistrationResult {
  * @returns Registration result with Merkle proof + optional signed receipt
  * @throws Error if registration fails
  */
-export async function registerLeaf(leaf: string, options?: { attestationHash?: string; idempotencyKey?: string }): Promise<RegistrationResult> {
+export async function registerLeaf(
+	leaf: string,
+	options?: { attestationHash?: string; idempotencyKey?: string }
+): Promise<RegistrationResult> {
 	const url = `${WRITE_RELAY_URL}/v1/register`;
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'voter-protocol-v1',
+		'X-Client-Version': 'voter-protocol-v1'
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -607,42 +792,20 @@ export async function registerLeaf(leaf: string, options?: { attestationHash?: s
 		method: 'POST',
 		headers,
 		body: JSON.stringify(requestBody),
-		signal: AbortSignal.timeout(15_000),
+		signal: AbortSignal.timeout(TREE1_HTTP_TIMEOUT_MS)
 	});
 
 	if (!response.ok) {
-		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
-		}));
-
-		const code = errorData.error?.code || 'UNKNOWN';
-		const msg = errorData.error?.message || response.statusText;
-		throw new Error(`Shadow Atlas registration failed [${code}]: ${msg}`);
+		throw new Error(`Shadow Atlas registration failed with status ${response.status}`);
 	}
-
-	const result = await response.json();
-
-	if (!result.success || !result.data) {
-		throw new Error('Shadow Atlas returned invalid registration response');
-	}
-
-	const { leafIndex, userRoot, userPath, pathIndices, receipt } = result.data;
-
-	if (leafIndex === undefined || !userRoot || !userPath || !pathIndices) {
-		throw new Error('Shadow Atlas registration response missing required fields');
-	}
-
-	if (userPath.length !== CIRCUIT_DEPTH || pathIndices.length !== CIRCUIT_DEPTH) {
-		throw new Error(
-			`Invalid proof length: userPath=${userPath.length}, pathIndices=${pathIndices.length}. Expected ${CIRCUIT_DEPTH}.`
-		);
-	}
-
-	// BR5-009: Validate all field elements are within BN254 scalar field
-	validateBN254Hex(userRoot, 'userRoot');
-	validateBN254HexArray(userPath, 'userPath');
-
-	return { leafIndex, userRoot, userPath, pathIndices, receipt };
+	return parseRegistrationResult(
+		await readBoundedResponseJson(
+			response,
+			'Shadow Atlas registration response',
+			TREE1_RESPONSE_MAX_BYTES
+		),
+		'registration'
+	);
 }
 
 /**
@@ -663,13 +826,13 @@ export async function registerLeaf(leaf: string, options?: { attestationHash?: s
 export async function replaceLeaf(
 	newLeaf: string,
 	oldLeafIndex: number,
-	options?: { idempotencyKey?: string },
+	options?: { idempotencyKey?: string }
 ): Promise<RegistrationResult> {
 	const url = `${WRITE_RELAY_URL}/v1/register/replace`;
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'voter-protocol-v1',
+		'X-Client-Version': 'voter-protocol-v1'
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -682,42 +845,20 @@ export async function replaceLeaf(
 		method: 'POST',
 		headers,
 		body: JSON.stringify({ newLeaf, oldLeafIndex }),
-		signal: AbortSignal.timeout(15_000),
+		signal: AbortSignal.timeout(TREE1_HTTP_TIMEOUT_MS)
 	});
 
 	if (!response.ok) {
-		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
-		}));
-
-		const code = errorData.error?.code || 'UNKNOWN';
-		const msg = errorData.error?.message || response.statusText;
-		throw new Error(`Shadow Atlas leaf replacement failed [${code}]: ${msg}`);
+		throw new Error(`Shadow Atlas leaf replacement failed with status ${response.status}`);
 	}
-
-	const result = await response.json();
-
-	if (!result.success || !result.data) {
-		throw new Error('Shadow Atlas returned invalid replacement response');
-	}
-
-	const { leafIndex, userRoot, userPath, pathIndices } = result.data;
-
-	if (leafIndex === undefined || !userRoot || !userPath || !pathIndices) {
-		throw new Error('Shadow Atlas replacement response missing required fields');
-	}
-
-	if (userPath.length !== CIRCUIT_DEPTH || pathIndices.length !== CIRCUIT_DEPTH) {
-		throw new Error(
-			`Invalid proof length: userPath=${userPath.length}, pathIndices=${pathIndices.length}. Expected ${CIRCUIT_DEPTH}.`
-		);
-	}
-
-	// BR5-009: Validate all field elements are within BN254 scalar field
-	validateBN254Hex(userRoot, 'userRoot');
-	validateBN254HexArray(userPath, 'userPath');
-
-	return { leafIndex, userRoot, userPath, pathIndices };
+	return parseRegistrationResult(
+		await readBoundedResponseJson(
+			response,
+			'Shadow Atlas replacement response',
+			TREE1_RESPONSE_MAX_BYTES
+		),
+		'replacement'
+	);
 }
 
 // ============================================================================
@@ -803,13 +944,17 @@ export async function getCellProof(cellId: string): Promise<CellProofResult> {
  */
 export async function registerEngagement(
 	signerAddress: string,
-	identityCommitment: string,
+	identityCommitment: string
 ): Promise<{ leafIndex: number; engagementRoot: string } | { alreadyRegistered: true }> {
+	if (!ENGAGEMENT_SIGNER.test(signerAddress)) {
+		throw new Error('Shadow Atlas engagement signer must be a 20-byte EVM address');
+	}
+	assertEngagementIdentity(identityCommitment);
 	const url = `${WRITE_RELAY_URL}/v1/engagement/register`;
 
 	const headers: Record<string, string> = {
 		'Content-Type': 'application/json',
-		'X-Client-Version': 'voter-protocol-v1',
+		'X-Client-Version': 'voter-protocol-v1'
 	};
 	if (WRITE_RELAY_TOKEN) {
 		headers['Authorization'] = `Bearer ${WRITE_RELAY_TOKEN}`;
@@ -819,7 +964,7 @@ export async function registerEngagement(
 		method: 'POST',
 		headers,
 		body: JSON.stringify({ signerAddress, identityCommitment }),
-		signal: AbortSignal.timeout(15_000),
+		signal: AbortSignal.timeout(ENGAGEMENT_HTTP_TIMEOUT_MS)
 	});
 
 	if (!response.ok) {
@@ -830,24 +975,35 @@ export async function registerEngagement(
 			return { alreadyRegistered: true };
 		}
 
-		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
-		}));
-
-		const code = errorData.error?.code || 'UNKNOWN';
-		const msg = errorData.error?.message || response.statusText;
-		throw new Error(`Shadow Atlas engagement registration failed [${code}]: ${msg}`);
+		throw new Error(`Shadow Atlas engagement registration failed with status ${response.status}`);
 	}
 
-	const result = await response.json();
+	const result = engagementRecord(
+		await readBoundedResponseJson(
+			response,
+			'Shadow Atlas engagement registration response',
+			ENGAGEMENT_RESPONSE_MAX_BYTES
+		)
+	);
+	const data = engagementRecord(result?.data);
 
-	if (!result.success || !result.data) {
+	if (result?.success !== true || !data) {
 		throw new Error('Shadow Atlas returned invalid engagement registration response');
 	}
+	const leafIndex = engagementInteger(
+		data.leafIndex,
+		'engagement registration leaf index',
+		0,
+		ENGAGEMENT_MAX_LEAF_INDEX
+	);
+	if (typeof data.engagementRoot !== 'string') {
+		throw new Error('Shadow Atlas returned invalid engagement registration root');
+	}
+	validateBN254Hex(data.engagementRoot, 'engagementRoot');
 
 	return {
-		leafIndex: result.data.leafIndex,
-		engagementRoot: result.data.engagementRoot,
+		leafIndex,
+		engagementRoot: data.engagementRoot
 	};
 }
 
@@ -887,50 +1043,78 @@ export interface EngagementMetricsResult {
  * @throws Error if leaf not found or request fails
  */
 export async function getEngagementPath(leafIndex: number): Promise<EngagementPathResult> {
+	engagementInteger(leafIndex, 'engagement path leaf index', 0, ENGAGEMENT_MAX_LEAF_INDEX);
 	const url = `${SHADOW_ATLAS_URL}/v1/engagement-path/${leafIndex}`;
 
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'voter-protocol-v1',
+			'X-Client-Version': 'voter-protocol-v1'
 		},
-		signal: AbortSignal.timeout(10_000),
+		signal: AbortSignal.timeout(ENGAGEMENT_HTTP_TIMEOUT_MS)
 	});
 
 	if (!response.ok) {
-		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
-		}));
-
-		const code = errorData.error?.code || 'UNKNOWN';
-		const msg = errorData.error?.message || response.statusText;
-		throw new Error(`Shadow Atlas engagement path failed [${code}]: ${msg}`);
+		throw new Error(`Shadow Atlas engagement path failed with status ${response.status}`);
 	}
 
-	const result = await response.json();
+	const result = engagementRecord(
+		await readBoundedResponseJson(
+			response,
+			'Shadow Atlas engagement path response',
+			ENGAGEMENT_RESPONSE_MAX_BYTES
+		)
+	);
+	const data = engagementRecord(result?.data);
 
-	if (!result.success || !result.data) {
+	if (result?.success !== true || !data) {
 		throw new Error('Shadow Atlas returned invalid engagement path response');
 	}
 
-	const { engagementRoot, engagementPath, pathIndices, tier, actionCount, diversityScore } = result.data;
+	const { engagementRoot, engagementPath, pathIndices } = data;
 
-	if (!engagementRoot || !engagementPath || !pathIndices) {
+	if (
+		typeof engagementRoot !== 'string' ||
+		!Array.isArray(engagementPath) ||
+		!Array.isArray(pathIndices) ||
+		!engagementPath.every((entry) => typeof entry === 'string') ||
+		!pathIndices.every((entry) => entry === 0 || entry === 1)
+	) {
 		throw new Error('Shadow Atlas engagement path response missing required fields');
 	}
 
 	if (engagementPath.length !== CIRCUIT_DEPTH || pathIndices.length !== CIRCUIT_DEPTH) {
 		throw new Error(
 			`Invalid engagement proof length: engagementPath=${engagementPath.length}, ` +
-			`pathIndices=${pathIndices.length}. Expected ${CIRCUIT_DEPTH}.`
+				`pathIndices=${pathIndices.length}. Expected ${CIRCUIT_DEPTH}.`
 		);
 	}
 
 	// BR5-009: Validate all field elements are within BN254 scalar field
 	validateBN254Hex(engagementRoot, 'engagementRoot');
-	validateBN254HexArray(engagementPath, 'engagementPath');
+	validateBN254HexArray(engagementPath as string[], 'engagementPath');
+	const tier = engagementInteger(data.tier, 'engagement tier', 0, 4);
+	const actionCount = engagementInteger(
+		data.actionCount,
+		'engagement action count',
+		0,
+		Number.MAX_SAFE_INTEGER
+	);
+	const diversityScore = engagementInteger(
+		data.diversityScore,
+		'engagement diversity score',
+		0,
+		Number.MAX_SAFE_INTEGER
+	);
 
-	return { engagementRoot, engagementPath, pathIndices, tier, actionCount, diversityScore };
+	return {
+		engagementRoot,
+		engagementPath: engagementPath as string[],
+		pathIndices: pathIndices as number[],
+		tier,
+		actionCount,
+		diversityScore
+	};
 }
 
 /**
@@ -940,36 +1124,76 @@ export async function getEngagementPath(leafIndex: number): Promise<EngagementPa
  * @returns Engagement metrics including tier, action count, diversity score, and leaf index
  * @throws Error if identity not found or request fails
  */
-export async function getEngagementMetrics(identityCommitment: string): Promise<EngagementMetricsResult> {
+export async function getEngagementMetrics(
+	identityCommitment: string
+): Promise<EngagementMetricsResult | null> {
+	assertEngagementIdentity(identityCommitment);
 	// Ensure 0x prefix for URL path
-	const icForUrl = identityCommitment.startsWith('0x') ? identityCommitment : '0x' + identityCommitment;
+	const icForUrl = identityCommitment.startsWith('0x')
+		? identityCommitment
+		: '0x' + identityCommitment;
 	const url = `${SHADOW_ATLAS_URL}/v1/engagement-metrics/${icForUrl}`;
 
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'voter-protocol-v1',
+			'X-Client-Version': 'voter-protocol-v1'
 		},
-		signal: AbortSignal.timeout(10_000),
+		signal: AbortSignal.timeout(ENGAGEMENT_HTTP_TIMEOUT_MS)
 	});
 
 	if (!response.ok) {
-		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
-		}));
-
-		const code = errorData.error?.code || 'UNKNOWN';
-		const msg = errorData.error?.message || response.statusText;
-		throw new Error(`Shadow Atlas engagement metrics failed [${code}]: ${msg}`);
+		if (response.status === 404) return null;
+		throw new Error(`Shadow Atlas engagement metrics failed with status ${response.status}`);
 	}
 
-	const result = await response.json();
+	const result = engagementRecord(
+		await readBoundedResponseJson(
+			response,
+			'Shadow Atlas engagement metrics response',
+			ENGAGEMENT_RESPONSE_MAX_BYTES
+		)
+	);
+	const data = engagementRecord(result?.data);
 
-	if (!result.success || !result.data) {
+	if (result?.success !== true || !data) {
 		throw new Error('Shadow Atlas returned invalid engagement metrics response');
 	}
-
-	return result.data;
+	if (
+		typeof data.identityCommitment !== 'string' ||
+		normalizedEngagementIdentity(data.identityCommitment) !==
+			normalizedEngagementIdentity(identityCommitment)
+	) {
+		throw new Error('Shadow Atlas returned metrics for a different identity');
+	}
+	return {
+		identityCommitment: normalizedEngagementIdentity(data.identityCommitment),
+		tier: engagementInteger(data.tier, 'engagement tier', 0, 4),
+		actionCount: engagementInteger(
+			data.actionCount,
+			'engagement action count',
+			0,
+			Number.MAX_SAFE_INTEGER
+		),
+		diversityScore: engagementInteger(
+			data.diversityScore,
+			'engagement diversity score',
+			0,
+			Number.MAX_SAFE_INTEGER
+		),
+		tenureMonths: engagementInteger(
+			data.tenureMonths,
+			'engagement tenure',
+			0,
+			Number.MAX_SAFE_INTEGER
+		),
+		leafIndex: engagementInteger(
+			data.leafIndex,
+			'engagement metrics leaf index',
+			0,
+			ENGAGEMENT_MAX_LEAF_INDEX
+		)
+	};
 }
 
 /**
@@ -1003,22 +1227,26 @@ export interface EngagementBreakdownResult {
  * @param identityCommitment - Hex-encoded identity commitment (with 0x prefix)
  * @returns Detailed breakdown or null if identity not found
  */
-export async function getEngagementBreakdown(identityCommitment: string): Promise<EngagementBreakdownResult | null> {
-	const icForUrl = identityCommitment.startsWith('0x') ? identityCommitment : '0x' + identityCommitment;
+export async function getEngagementBreakdown(
+	identityCommitment: string
+): Promise<EngagementBreakdownResult | null> {
+	const icForUrl = identityCommitment.startsWith('0x')
+		? identityCommitment
+		: '0x' + identityCommitment;
 	const url = `${SHADOW_ATLAS_URL}/v1/engagement-breakdown/${icForUrl}`;
 
 	const response = await fetch(url, {
 		headers: {
 			Accept: 'application/json',
-			'X-Client-Version': 'voter-protocol-v1',
+			'X-Client-Version': 'voter-protocol-v1'
 		},
-		signal: AbortSignal.timeout(10_000),
+		signal: AbortSignal.timeout(10_000)
 	});
 
 	if (!response.ok) {
 		if (response.status === 404) return null;
 		const errorData = await response.json().catch(() => ({
-			error: { code: 'NETWORK_ERROR', message: response.statusText },
+			error: { code: 'NETWORK_ERROR', message: response.statusText }
 		}));
 		const code = errorData.error?.code || 'UNKNOWN';
 		const msg = errorData.error?.message || response.statusText;
@@ -1096,7 +1324,7 @@ export async function getOfficials(districtCode: string): Promise<OfficialsRespo
 		}
 
 		return {
-			officials: officialsFile.officials.map(o => ({
+			officials: officialsFile.officials.map((o) => ({
 				bioguide_id: o.id,
 				name: o.name,
 				party: o.party,
@@ -1109,13 +1337,13 @@ export async function getOfficials(districtCode: string): Promise<OfficialsRespo
 				website_url: o.website_url,
 				cwc_code: null,
 				is_voting: o.is_voting,
-				delegate_type: o.delegate_type,
+				delegate_type: o.delegate_type
 			})),
 			district_code: districtCode,
 			state: districtCode.split('-')[0],
 			special_status: null,
 			source: 'congress-legislators',
-			cached: true,
+			cached: true
 		};
 	} catch (error) {
 		if (error instanceof Error) {
@@ -1144,7 +1372,7 @@ export async function getOfficials(districtCode: string): Promise<OfficialsRespo
 export async function resolveLocation(
 	lat: number,
 	lng: number,
-	includeOfficials = true,
+	includeOfficials = true
 ): Promise<{ district: DistrictLookupResult; officials: OfficialsResponse | null }> {
 	const districtResult = await lookupDistrict(lat, lng);
 
@@ -1302,7 +1530,7 @@ export async function resolveAddress(address: {
 		if (err instanceof Error && err.message === ADDRESS_NOT_FOUND_MESSAGE) throw err;
 		throw new AtlasInfraError(
 			`Atlas address-index fetch failed: ${err instanceof Error ? err.message : String(err)}`,
-			{ cause: err },
+			{ cause: err }
 		);
 	}
 
@@ -1327,7 +1555,7 @@ export async function resolveAddress(address: {
 				id: primary.id,
 				name: primary.name,
 				jurisdiction: primary.jurisdiction,
-				district_type: primary.district_type,
+				district_type: primary.district_type
 			};
 		} else {
 			// Chunk exists but carries no congressional assignment: the PRIMARY miss
@@ -1382,16 +1610,14 @@ export async function resolveAddress(address: {
 	// provenance is structured, not a single conflated tag.
 	const provenance: ResolutionProvenance = {
 		source: 'atlas-address-index',
-		tigerVintage: tigerVintage ?? 'unknown',
+		tigerVintage: tigerVintage ?? 'unknown'
 	};
 
 	// A clean district hit is trusted to the geocode's PRECISION: boundary-version
 	// confidence (1.0 enacted) capped by the matchClass precision factor — a range- or
 	// ZIP-grade match can straddle a district line, so it never claims 1.0. A district
 	// miss stays a loud, low-confidence (0) geocode-only result.
-	const confidence = districtMissed
-		? 0
-		: Math.min(districtConfidence(), precisionFactor);
+	const confidence = districtMissed ? 0 : Math.min(districtConfidence(), precisionFactor);
 
 	const base: AddressResolutionResult = {
 		geocode: {
@@ -1401,7 +1627,7 @@ export async function resolveAddress(address: {
 			// The matchClass precision factor IS the geocode confidence — precision
 			// of the placement, not prominence of the match.
 			confidence: precisionFactor,
-			country: countryCode,
+			country: countryCode
 		},
 		district,
 		districts,
@@ -1411,7 +1637,7 @@ export async function resolveAddress(address: {
 		confidence,
 		boundaryAsOf,
 		officialsAsOf,
-		warning: null,
+		warning: null
 	};
 
 	// Redraw/staleness guard — layers a loud warning + lowers confidence when the atlas
@@ -1420,4 +1646,3 @@ export async function resolveAddress(address: {
 	// the resolved address. Reuses the already-fetched manifest (no second fetch).
 	return applyStalenessGuard(base, manifest, { state });
 }
-

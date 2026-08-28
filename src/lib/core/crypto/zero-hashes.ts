@@ -14,15 +14,14 @@
  *
  * EMPTY_TREE_ROOT for depth N = ZERO_HASHES[N].
  *
- * Environment: `poseidon2Hash2` from `$lib/core/crypto/poseidon` works in
- * both Node (vitest, Convex actions with the bb.js polyfill) and the
- * browser (production proof generation). This module has no server-only
+ * Environment: `poseidon2Hash2` from `$lib/core/crypto/poseidon` uses a
+ * zero-dependency, pure-TypeScript permutation and works in Node, workers,
+ * and browsers without WASM or polyfills. This module has no server-only
  * imports and is safe to bundle for the client.
  *
  * Caching: a single in-flight Promise is reused so concurrent callers share
- * one Poseidon2 init. On rejection the cache is cleared so the next caller
- * can retry — bb.js init failures (transient WASM load errors) do not
- * permanently brick the helper.
+ * one recurrence. On rejection the cache is cleared so an exceptional hash
+ * failure does not permanently poison the helper.
  */
 
 import { poseidon2Hash2 } from './poseidon';
@@ -60,7 +59,7 @@ export async function getZeroHashes(depth: number): Promise<string[]> {
 		return arr;
 	})();
 	compute.catch(() => {
-		// Defensive: a transient bb.js init failure must not poison the cache.
+		// Defensive: an exceptional hash failure must not poison the cache.
 		inFlight.delete(depth);
 	});
 	inFlight.set(depth, compute);

@@ -1,0 +1,4 @@
+# Trusted Cloudflare Queue Free-envelope operator Ed25519 keys are enrolled by
+# an explicit protected-main change. Format:
+# principal namespaces="commons-cloudflare-queue-free-envelope-v1" ssh-ed25519 AAAA...
+# Never store a private key or Cloudflare observer credential in GitHub.

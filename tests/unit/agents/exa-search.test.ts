@@ -1,6 +1,8 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
 const mockSearch = vi.fn();
+const mockGetContents = vi.fn();
+const observedRateLimiterContexts: string[] = [];
 // `scrape` is the v4+ Firecrawl SDK method; `scrapeUrl` is the legacy
 // alias. Production code calls `firecrawl.scrape(url, { formats: [...] })`
 // (see exa-search.ts:253), so the mock client must expose `scrape`.
@@ -9,15 +11,21 @@ const mockScrape = vi.fn();
 // Mock rate limiter that executes immediately without throttling
 const createMockRateLimiter = () => ({
 	execute: async <T>(fn: () => Promise<T>, _context: string) => {
+		observedRateLimiterContexts.push(_context);
 		try {
 			const data = await fn();
 			return { success: true, data, attempts: 1, wasRateLimited: false };
 		} catch (error) {
+			const status =
+				error && typeof error === 'object' && 'status' in error
+					? (error as { status?: unknown }).status
+					: undefined;
 			return {
 				success: false,
 				error: error instanceof Error ? error.message : String(error),
 				attempts: 1,
-				wasRateLimited: false
+				wasRateLimited: false,
+				completionUnknown: typeof status !== 'number'
 			};
 		}
 	},
@@ -34,38 +42,42 @@ const mockSearchRateLimiter = createMockRateLimiter();
 const mockFirecrawlRateLimiter = createMockRateLimiter();
 
 vi.mock('$lib/server/exa', () => ({
-	getExaClient: () => ({
-		search: mockSearch
-	}),
-	getSearchRateLimiter: () => mockSearchRateLimiter
+	requestExa: (
+		endpoint: '/search' | '/contents',
+		body: Record<string, unknown>,
+		_options?: unknown
+	) => {
+		if (endpoint === '/contents') {
+			return mockGetContents(body.urls, { text: body.text, highlights: body.highlights });
+		}
+		const { query, ...searchOptions } = body;
+		return mockSearch(query, { ...searchOptions, contents: false });
+	},
+	getSearchRateLimiter: () => mockSearchRateLimiter,
+	getContentsRateLimiter: () => mockSearchRateLimiter
 }));
 
 vi.mock('$lib/server/firecrawl', () => ({
-	getFirecrawlClient: () => ({
-		scrape: mockScrape
-	}),
+	requestFirecrawlScrape: (url: string, options: unknown) => mockScrape(url, options),
 	getFirecrawlRateLimiter: () => mockFirecrawlRateLimiter
 }));
 
-// extractContactHints is used by prunePageContent — provide the real implementation
-vi.mock('$lib/core/agents/agents/decision-maker', () => ({
-	extractContactHints: (text: string) => {
-		const emailRe = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-		const phoneRe = /(?:\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
-		const socialRe = /https?:\/\/(?:www\.)?(?:twitter|x|linkedin|facebook)\.com\/[^\s)"\]]+/gi;
-		return {
-			emails: [...new Set(text.match(emailRe) || [])],
-			phones: [...new Set(text.match(phoneRe) || [])],
-			socialUrls: [...new Set(text.match(socialRe) || [])].slice(0, 5)
-		};
-	}
-}));
+// prunePageContent must exercise the production extractor, not a stale test copy.
+vi.mock('$lib/core/agents/agents/decision-maker', async () => {
+	const actual = await vi.importActual<
+		typeof import('$lib/core/agents/agents/decision-maker')
+	>('$lib/core/agents/agents/decision-maker');
+	return { extractContactHints: actual.extractContactHints };
+});
 
 import { searchWeb, readPage, prunePageContent } from '$lib/core/agents/exa-search';
 
 describe('searchWeb', () => {
 	beforeEach(() => {
 		mockSearch.mockReset();
+		mockGetContents.mockReset();
+		mockGetContents.mockResolvedValue({ results: [] });
+		observedRateLimiterContexts.length = 0;
 	});
 
 	it('calls exa.search with metadata-only (contents: false)', async () => {
@@ -80,13 +92,15 @@ describe('searchWeb', () => {
 		expect(options.type).toBe('auto');
 	});
 
-	it('defaults to 25 results', async () => {
+	it('defaults to and hard-caps the base 10-result price tier', async () => {
 		mockSearch.mockResolvedValue({ results: [] });
 
 		await searchWeb('test query');
 
-		const options = mockSearch.mock.calls[0][1];
-		expect(options.numResults).toBe(25);
+		expect(mockSearch.mock.calls[0][1].numResults).toBe(10);
+
+		await searchWeb('oversized result request', { maxResults: 25 });
+		expect(mockSearch.mock.calls[1][1].numResults).toBe(10);
 	});
 
 	it('respects custom maxResults', async () => {
@@ -96,6 +110,15 @@ describe('searchWeb', () => {
 
 		const options = mockSearch.mock.calls[0][1];
 		expect(options.numResults).toBe(10);
+	});
+
+	it('rejects blank or control-only queries before provider admission', async () => {
+		await expect(searchWeb(' \r\n\t\u0000 ')).rejects.toThrow(
+			'Search query must contain visible text'
+		);
+
+		expect(mockSearch).not.toHaveBeenCalled();
+		expect(observedRateLimiterContexts).toEqual([]);
 	});
 
 	it('returns correctly shaped search hits', async () => {
@@ -130,19 +153,118 @@ describe('searchWeb', () => {
 		expect(hits[1].publishedDate).toBeUndefined();
 	});
 
+	it('caps provider over-return and validates every result field at the shared boundary', async () => {
+		const apiKey = `fc-${'k'.repeat(40)}`;
+		mockSearch.mockResolvedValue({
+			results: Array.from({ length: 40 }, (_, index) => ({
+				url: `https://example.com/result/${index}?page=${index}&api_key=${apiKey}#private`,
+				title: `Result ${index}\r\n${apiKey}\u0000${'\ud83d\udea8'.repeat(1_000)}`,
+				publishedDate: `2026-07-${String(index + 1).padStart(2, '0')}${'x'.repeat(1_000)}`,
+				author: `Author ${index}${'\ud83d\udea8'.repeat(1_000)}`,
+				score: index === 0 ? Number.POSITIVE_INFINITY : index
+			}))
+		});
+
+		const hits = await searchWeb('bounded provider results', { maxResults: 3 });
+
+		expect(hits).toHaveLength(3);
+		expect(mockSearch.mock.calls[0][1].numResults).toBe(3);
+		for (const hit of hits) {
+			expect(new TextEncoder().encode(hit.url).byteLength).toBeLessThanOrEqual(512);
+			expect(new TextEncoder().encode(hit.title).byteLength).toBeLessThanOrEqual(240);
+			expect(new TextEncoder().encode(hit.author ?? '').byteLength).toBeLessThanOrEqual(160);
+			expect(new TextEncoder().encode(hit.publishedDate ?? '').byteLength).toBeLessThanOrEqual(64);
+			expect(hit.url).not.toContain(apiKey);
+			expect(hit.url).not.toContain('#private');
+			expect(hit.title).not.toContain(apiKey);
+			expect(hit.title).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+		}
+		expect(hits[0].score).toBeUndefined();
+	});
+
+	it('drops malformed, credential-bearing, and non-HTTP provider result URLs', async () => {
+		mockSearch.mockResolvedValue({
+			results: [
+				{ url: 'not a url', title: 'bad' },
+				{ url: 'file:///etc/passwd', title: 'bad' },
+				{ url: 'https://user:password@example.com/private', title: 'bad' },
+				{ url: 'https://example.com/valid', title: 'good' }
+			]
+		});
+
+		const hits = await searchWeb('validate URLs');
+
+		expect(hits).toEqual([
+			{
+				url: 'https://example.com/valid',
+				title: 'good'
+			}
+		]);
+	});
+
 	it('throws when search fails', async () => {
 		mockSearch.mockRejectedValue(new Error('Rate limited'));
 
 		await expect(searchWeb('test')).rejects.toThrow('Search failed');
+	});
+
+	it('does not expose provider credentials or control text in its outward error', async () => {
+		const googleKey = `AIza${'a'.repeat(35)}`;
+		mockSearch.mockRejectedValue(
+			new Error(`upstream\r\n${googleKey}\u0000 ${'\ud83d\udea8'.repeat(10_000)}`)
+		);
+
+		let failure: Error | undefined;
+		try {
+			await searchWeb('test');
+		} catch (error) {
+			if (error instanceof Error) failure = error;
+		}
+
+		expect(failure).toBeInstanceOf(Error);
+		const message = failure?.message ?? '';
+		expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(512);
+		expect(message).not.toContain(googleKey);
+		expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+	});
+
+	it('logs only a bounded query label, never raw user query text', async () => {
+		const secret = `Bearer ${'q'.repeat(40)}`;
+		const query = `mayor contact\r\n${secret}\u0000${'private'.repeat(2_000)}`;
+		mockSearch.mockResolvedValue({ results: [] });
+		const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+		try {
+			await searchWeb(query);
+			const lines = debug.mock.calls.map((call) => call.map(String).join(' '));
+			const diagnostics = [...lines, ...observedRateLimiterContexts];
+
+			expect(diagnostics.join(' ')).not.toContain('mayor contact');
+			expect(diagnostics.join(' ')).not.toContain(secret);
+			const querySize = diagnostics
+				.map((line) => /queryChars=(\d+)/u.exec(line)?.[1])
+				.find(Boolean);
+			expect(Number(querySize)).toBeGreaterThan(0);
+			expect(Number(querySize)).toBeLessThanOrEqual(512);
+			expect(diagnostics.every((line) => line.length <= 256)).toBe(true);
+			expect(diagnostics.every((line) => !/[\u0000-\u001f\u007f-\u009f]/u.test(line))).toBe(
+				true
+			);
+		} finally {
+			debug.mockRestore();
+		}
 	});
 });
 
 describe('readPage', () => {
 	beforeEach(() => {
 		mockScrape.mockReset();
+		mockGetContents.mockReset();
+		mockGetContents.mockResolvedValue({ results: [] });
+		observedRateLimiterContexts.length = 0;
 	});
 
-	it('calls firecrawl.scrapeUrl with markdown+links+rawHtml format', async () => {
+	it('calls the abortable Firecrawl transport with markdown+links+rawHtml format', async () => {
 		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: '# Test Page\nSome content',
@@ -154,7 +276,7 @@ describe('readPage', () => {
 
 		expect(mockScrape).toHaveBeenCalledTimes(1);
 		const [url, options] = mockScrape.mock.calls[0];
-		expect(url).toBe('https://example.com');
+		expect(url).toBe('https://example.com/');
 		expect(options.formats).toEqual(['markdown', 'links', 'rawHtml']);
 	});
 
@@ -177,6 +299,58 @@ describe('readPage', () => {
 		expect(result!.text).toContain('mayor@portlandoregon.gov');
 		// mailto emails are extracted to highlights
 		expect(result!.highlights).toEqual(['mayor@portlandoregon.gov']);
+		expect(result!.recordBlocks).toEqual({
+			state: 'blocked',
+			why: 'firecrawl_returned_no_raw_html'
+		});
+	});
+
+	it('logs bounded URL and title labels without credentials or provider-controlled text', async () => {
+		const apiKey = `fc-${'k'.repeat(40)}`;
+		const pathSecret = `private-path-${'p'.repeat(40)}`;
+		const url = `https://example.com/public/${pathSecret}?api_key=${apiKey}#private`;
+		const titleSecret = `provider title\r\n${apiKey}\u0000${'oversized'.repeat(2_000)}`;
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Safe rendered page content. '.repeat(20),
+			links: [],
+			metadata: { title: titleSecret, statusCode: 200 }
+		});
+		const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+		try {
+			const result = await readPage(url);
+			expect(result?.url).toBe(`https://example.com/public/${pathSecret}`);
+			expect(new TextEncoder().encode(result?.title ?? '').byteLength).toBeLessThanOrEqual(240);
+			expect(result?.title).not.toContain(apiKey);
+			expect(result?.title).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+
+			const lines = debug.mock.calls.map((call) => call.map(String).join(' '));
+			const diagnostics = [...lines, ...observedRateLimiterContexts];
+			const combined = diagnostics.join(' ');
+
+			expect(combined).toContain('https://example.com');
+			expect(combined).toContain(`titleChars=${result?.title.length}`);
+			expect(combined).not.toContain(pathSecret);
+			expect(combined).not.toContain(apiKey);
+			expect(combined).not.toContain('provider title');
+			expect(combined).not.toContain('api_key=');
+			expect(combined).not.toContain('#private');
+			expect(diagnostics.every((line) => line.length <= 256)).toBe(true);
+			expect(diagnostics.every((line) => !/[\u0000-\u001f\u007f-\u009f]/u.test(line))).toBe(
+				true
+			);
+		} finally {
+			debug.mockRestore();
+		}
+	});
+
+	it('rejects URL userinfo before starting a paid page read', async () => {
+		const result = await readPage('https://user:password@example.com/private');
+
+		expect(result).toBeNull();
+		expect(mockScrape).not.toHaveBeenCalled();
+		expect(observedRateLimiterContexts).toEqual([]);
 	});
 
 	it('captures emails from JS-rendered pages that Exa would miss', async () => {
@@ -184,7 +358,8 @@ describe('readPage', () => {
 		// emails in mailto: links and contact widgets are captured inline
 		mockScrape.mockResolvedValue({
 			success: true,
-			markdown: 'The Federal Trade Commission\n\nContact us: [opa@ftc.gov](mailto:opa@ftc.gov)\n\nOffice of Public Affairs',
+			markdown:
+				'The Federal Trade Commission\n\nContact us: [opa@ftc.gov](mailto:opa@ftc.gov)\n\nOffice of Public Affairs',
 			links: ['mailto:opa@ftc.gov', 'https://ftc.gov/about'],
 			metadata: { title: 'About the FTC', statusCode: 200 }
 		});
@@ -240,6 +415,137 @@ describe('readPage', () => {
 		expect(result!.text.length).toBe(200000);
 	});
 
+	it('re-enforces the 200K cap after contact enrichment', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'X'.repeat(200000),
+			links: ['mailto:mayor@city.gov'],
+			rawHtml: '<p>clerk@city.gov</p>',
+			metadata: { title: 'Full Page', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/full');
+
+		expect(result?.text).toHaveLength(200000);
+		expect(result?.highlights).toEqual([]);
+	});
+
+	it('validates Firecrawl shapes and caps inspected links plus extracted emails', async () => {
+		const links: unknown[] = [
+			{ href: 'mailto:object@city.gov' },
+			42,
+			`mailto:${'x'.repeat(1_000)}@city.gov`,
+			...Array.from({ length: 500 }, (_, index) => `mailto:person${index}@city.gov`)
+		];
+		const rawHtml = Array.from(
+			{ length: 500 },
+			(_, index) => `<p>html${index}@agency.gov</p>`
+		).join('');
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official public contact directory. '.repeat(20),
+			links,
+			rawHtml,
+			metadata: { title: 'Directory', statusCode: '200' }
+		});
+
+		const result = await readPage('https://city.gov/directory');
+
+		expect(result).not.toBeNull();
+		expect(result?.highlights).toHaveLength(64);
+		expect(result?.highlights?.every((email) => new TextEncoder().encode(email).byteLength <= 254)).toBe(
+			true
+		);
+		expect(result?.highlights).not.toContain('object@city.gov');
+		expect(result?.text.length).toBeLessThanOrEqual(200000);
+		expect(result?.statusCode).toBeUndefined();
+	});
+
+	it('retains only same-institution links from the scraped link graph', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official public contact directory. '.repeat(20),
+			links: [
+				'mailto:mayor@city.gov',
+				'https://vendor.example.com/analytics',
+				'https://clerk.city.gov/records',
+				'/departments',
+				'https://notcity.gov/impostor',
+				'https://city.gov/directory'
+			],
+			rawHtml: '<p>Directory</p>',
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/directory');
+
+		expect(result?.links).toEqual([
+			'https://clerk.city.gov/records',
+			'https://city.gov/departments'
+		]);
+		expect(result?.highlights).toContain('mayor@city.gov');
+	});
+
+	it('omits the links key entirely when Firecrawl returns no link array', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official public contact directory. '.repeat(20),
+			rawHtml: '<p>Directory</p>',
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/directory');
+
+		expect(result).not.toBeNull();
+		// Key ABSENT, not `links: undefined` and not `[]` — no link graph was evaluable
+		// on this path, which is a different fact from "evaluated, nothing survived".
+		expect(result && Object.prototype.hasOwnProperty.call(result, 'links')).toBe(false);
+		expect(result?.links).toBeUndefined();
+	});
+
+	it('keeps the links key present and empty when a link graph was scanned with zero survivors', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official public contact directory. '.repeat(20),
+			links: [],
+			rawHtml: '<p>Directory</p>',
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+
+		const empty = await readPage('https://city.gov/directory');
+
+		expect(empty).not.toBeNull();
+		expect(empty && Object.prototype.hasOwnProperty.call(empty, 'links')).toBe(true);
+		expect(empty?.links).toEqual([]);
+
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official public contact directory. '.repeat(20),
+			links: ['https://vendor.example.com/analytics', 'https://notcity.gov/impostor'],
+			rawHtml: '<p>Directory</p>',
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+
+		const filtered = await readPage('https://city.gov/directory');
+
+		expect(filtered).not.toBeNull();
+		expect(filtered && Object.prototype.hasOwnProperty.call(filtered, 'links')).toBe(true);
+		expect(filtered?.links).toEqual([]);
+	});
+
+	it('falls back safely when Firecrawl fields and Exa contents results have invalid shapes', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: { text: 'not a string' },
+			links: 'mailto:bad@city.gov',
+			rawHtml: { html: '<p>bad@city.gov</p>' },
+			metadata: 'not metadata'
+		});
+		mockGetContents.mockResolvedValue({ results: { 0: { text: 'not an array' } } });
+
+		await expect(readPage('https://city.gov/malformed')).resolves.toBeNull();
+	});
+
 	it('returns null when scrape has no markdown content', async () => {
 		mockScrape.mockResolvedValue({
 			success: true,
@@ -249,6 +555,62 @@ describe('readPage', () => {
 
 		const result = await readPage('https://example.com');
 		expect(result).toBeNull();
+	});
+
+	it('uses only the text content type for the Exa fallback', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: '',
+			metadata: { title: 'Empty', statusCode: 200 }
+		});
+		mockGetContents.mockResolvedValue({
+			results: [
+				{
+					text: `Official contact: mayor@city.gov. ${'Current office information. '.repeat(10)}`,
+					title: 'Official contact'
+				}
+			]
+		});
+
+		const result = await readPage('https://city.gov/contact');
+
+		expect(mockGetContents).toHaveBeenCalledWith(['https://city.gov/contact'], {
+			text: true,
+			highlights: undefined
+		});
+		expect(result?.highlights).toEqual(['mayor@city.gov']);
+	});
+
+	it('leaves links undefined on the Exa contents fallback', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: '',
+			metadata: { title: 'Empty', statusCode: 200 }
+		});
+		mockGetContents.mockResolvedValue({
+			results: [
+				{
+					text: `Official contact: mayor@city.gov. ${'Current office information. '.repeat(10)}`,
+					title: 'Official contact'
+				}
+			]
+		});
+
+		const result = await readPage('https://city.gov/contact');
+
+		expect(result).not.toBeNull();
+		// `undefined`, not `[]` — the fallback path retrieved no link graph at all,
+		// which is a different fact from "retrieved one and nothing survived".
+		expect(result?.links).toBeUndefined();
+		expect(result && Object.prototype.hasOwnProperty.call(result, 'links')).toBe(false);
+		expect(result?.recordBlocks).toEqual({
+			state: 'blocked',
+			why: 'exa_contents_returned_no_raw_html'
+		});
+		expect(result && Object.prototype.hasOwnProperty.call(result, 'blocks')).toBe(false);
+		expect(
+			result && Object.prototype.hasOwnProperty.call(result, 'institutionBoundAddresses')
+		).toBe(false);
 	});
 
 	it('returns null when scrape fails', async () => {
@@ -268,10 +630,22 @@ describe('readPage', () => {
 		expect(result).toBeNull();
 	});
 
+	it('does not start Exa fallback when Firecrawl completion is ambiguous', async () => {
+		mockScrape.mockRejectedValue(
+			Object.assign(new Error('request timed out'), { code: 'ETIMEDOUT' })
+		);
+
+		const result = await readPage('https://example.com/slow');
+
+		expect(result).toBeNull();
+		expect(mockGetContents).not.toHaveBeenCalled();
+	});
+
 	it('handles missing metadata gracefully', async () => {
 		// Body must be ≥200 chars to clear the isUnusablePage gate on metadata-less pages
 		// (no statusCode, no title → only the text-length/email check can save it).
-		const body = '# Content here\n\n' + 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(6);
+		const body =
+			'# Content here\n\n' + 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(6);
 		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: body,
@@ -290,7 +664,8 @@ describe('readPage', () => {
 			success: true,
 			markdown: 'Mayor Mike Johnston\nContact the office for inquiries.',
 			links: [],
-			rawHtml: '<html><body><p><strong>Media inquiries only</strong><br/>720-805-8487<br/>MOComms@denvergov.org</p></body></html>',
+			rawHtml:
+				'<html><body><p><strong>Media inquiries only</strong><br/>720-805-8487<br/>MOComms@denvergov.org</p></body></html>',
 			metadata: { title: 'Contact', statusCode: 200 }
 		});
 
@@ -299,6 +674,150 @@ describe('readPage', () => {
 		expect(result!.text).toContain('MOComms@denvergov.org');
 		expect(result!.text).toContain('CONTACT EMAILS (from page HTML)');
 		expect(result!.highlights).toContain('MOComms@denvergov.org');
+	});
+
+	it('carries producer-shaped record blocks from Firecrawl raw HTML as a present Fact', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official staff directory for the public works department.',
+			links: [],
+			rawHtml: `<div class="staff-row">
+				<span>Name: Dana Reyes</span><span>Public Works Director</span>
+				<a href="mailto:dana.reyes@city.gov">dana.reyes@city.gov</a>
+			</div>`,
+			metadata: { title: 'Staff directory', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/directory');
+
+		expect(result?.recordBlocks).toMatchObject({
+			state: 'present',
+			value: {
+				truncated: false,
+				institutionBoundAddresses: [],
+					blocks: [
+						{
+							address: 'dana.reyes@city.gov',
+							bindingScope: 'office',
+							names: ['Dana Reyes'],
+							titleLine: 'Public Works Director',
+							bindingRejectedReason: 'person-evidence-insufficient'
+						}
+					]
+				}
+			});
+		});
+
+		it('keeps six office-title second-field costumes office-scoped through the real producer', async () => {
+			const rows = [
+				['Fire Marshal', '(555) 555-1212', 'fire.marshal@county.gov'],
+				['Code Enforcement', 'Room 214', 'code.enforcement@city.gov'],
+				['Public Works', 'Mon-Fri 8:00-4:30', 'public.works@city.gov'],
+				['City Attorney', 'Legal Department', 'city.attorney@townname.gov'],
+				['Building Inspector', '123 Main Street', 'building.inspector@borough.gov'],
+				['District Ranger', 'Fax: (555) 555-0100', 'district.ranger@parks.gov']
+			] as const;
+			mockScrape.mockResolvedValue({
+				success: true,
+				markdown: 'Official municipal directory. '.repeat(12),
+				links: [],
+				rawHtml: rows
+					.map(
+						([officeTitle, ordinaryField, address]) =>
+							`<div><span>${officeTitle}</span><span>${ordinaryField}</span><a href="mailto:${address}">${address}</a></div>`
+					)
+					.join(''),
+				metadata: { title: 'Municipal directory', statusCode: 200 }
+			});
+
+			const result = await readPage('https://city.gov/office-directory');
+			expect(result?.recordBlocks.state).toBe('present');
+			if (result?.recordBlocks.state !== 'present') throw new Error('expected record blocks');
+			expect(
+				result.recordBlocks.value.blocks.map(({ address, names, titleLine, bindingScope }) => ({
+					address,
+					names,
+					titleLine,
+					bindingScope
+				}))
+			).toEqual(
+				rows.map(([officeTitle, ordinaryField, address]) => ({
+					address,
+					names: [officeTitle],
+					titleLine: ordinaryField,
+					bindingScope: 'office'
+				}))
+			);
+		});
+
+	it('distinguishes an observed empty record scan from a truncated partial scan', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official directory content. '.repeat(12),
+			links: [],
+			rawHtml: '<p>Directory with no published address</p>',
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+		const empty = await readPage('https://city.gov/empty-directory');
+		expect(empty?.recordBlocks).toEqual({ state: 'absent' });
+
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official directory content. '.repeat(12),
+			links: [],
+			rawHtml: `<div>Dana Reyes <a href="mailto:dana.reyes@city.gov">Email</a></div>${'x'.repeat(500_000)}`,
+			metadata: { title: 'Directory', statusCode: 200 }
+		});
+		const partial = await readPage('https://city.gov/large-directory');
+		expect(partial?.recordBlocks).toMatchObject({
+			state: 'present',
+			value: { truncated: true }
+		});
+	});
+
+	it('keeps a truncated zero-record scan distinct from a completed absent scan', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Official directory content. '.repeat(12),
+			links: [],
+			rawHtml: `<div>${'No published address. '.repeat(30_000)}</div>`,
+			metadata: { title: 'Large directory', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/large-empty-directory');
+
+		expect(result?.recordBlocks).toEqual({
+			state: 'present',
+			value: {
+				blocks: [],
+				institutionBoundAddresses: [],
+				truncated: true
+			}
+		});
+	});
+
+	it('does not append addresses found only in scripts, styles, JSON-LD, or comments', async () => {
+		mockScrape.mockResolvedValue({
+			success: true,
+			markdown: 'Planning office contact information.',
+			links: [],
+			rawHtml: `<html><body>
+				<script>var tracker = "tracker@vendor.io";</script>
+				<script type="application/ld+json">{"email":"schema@site.org"}</script>
+				<style>/* ui@site.org */</style>
+				<!-- hidden@site.org -->
+				<a href="mailto:planning@city.gov">planning@city.gov</a>
+			</body></html>`,
+			metadata: { title: 'Planning contact', statusCode: 200 }
+		});
+
+		const result = await readPage('https://city.gov/planning');
+
+		expect(result!.text).toContain('planning@city.gov');
+		expect(result!.text).not.toContain('tracker@vendor.io');
+		expect(result!.text).not.toContain('schema@site.org');
+		expect(result!.text).not.toContain('ui@site.org');
+		expect(result!.text).not.toContain('hidden@site.org');
 	});
 
 	it('does not duplicate emails already in markdown', async () => {
@@ -329,7 +848,8 @@ describe('readPage', () => {
 			success: true,
 			markdown: 'Some content here',
 			links: [],
-			rawHtml: '<html><body><img src="logo@2x.png"/><a href="mailto:noreply@system.gov">No reply</a><p>real@agency.gov</p></body></html>',
+			rawHtml:
+				'<html><body><img src="logo@2x.png"/><a href="mailto:noreply@system.gov">No reply</a><p>real@agency.gov</p></body></html>',
 			metadata: { title: 'Page', statusCode: 200 }
 		});
 
@@ -344,7 +864,8 @@ describe('readPage', () => {
 		// Body must be ≥200 chars so isUnusablePage doesn't drop the page —
 		// no mailto links and no rawHtml means highlights stays empty, which
 		// trips the short-text-no-email branch unless we pad the body.
-		const body = 'Content without HTML. ' + 'This page intentionally has no raw HTML returned. '.repeat(6);
+		const body =
+			'Content without HTML. ' + 'This page intentionally has no raw HTML returned. '.repeat(6);
 		mockScrape.mockResolvedValue({
 			success: true,
 			markdown: body,
@@ -355,6 +876,10 @@ describe('readPage', () => {
 		const result = await readPage('https://example.com');
 
 		expect(result!.text).toBe(body);
+		expect(result!.recordBlocks).toEqual({
+			state: 'blocked',
+			why: 'firecrawl_returned_no_raw_html'
+		});
 	});
 
 	// Affirmative gate tests — prove `isUnusablePage` filters what the comment
@@ -526,7 +1051,13 @@ describe('prunePageContent', () => {
 		// Boilerplate must be far from protected content to not get context-expanded
 		const filler1 = 'D'.repeat(8000);
 		const filler2 = 'D'.repeat(8000);
-		const text = [boilerplate, filler1, content, filler2, 'Subscribe to our newsletter for updates'].join('\n\n');
+		const text = [
+			boilerplate,
+			filler1,
+			content,
+			filler2,
+			'Subscribe to our newsletter for updates'
+		].join('\n\n');
 
 		const result = prunePageContent(text);
 
@@ -565,9 +1096,7 @@ describe('prunePageContent', () => {
 	});
 
 	it('respects PRUNE_TARGET_CHARS budget', () => {
-		const paragraphs = Array.from({ length: 50 }, (_, i) =>
-			`Paragraph ${i}: ${'G'.repeat(500)}`
-		);
+		const paragraphs = Array.from({ length: 50 }, (_, i) => `Paragraph ${i}: ${'G'.repeat(500)}`);
 		paragraphs[25] = 'Contact: test@example.gov';
 		const text = paragraphs.join('\n\n');
 
@@ -582,7 +1111,7 @@ describe('prunePageContent', () => {
 		// This is hard to trigger since protected paragraphs are always kept,
 		// but we test by verifying the function never drops an email.
 		const emails = Array.from({ length: 20 }, (_, i) => `user${i}@test.gov`);
-		const paragraphs = emails.map(e => `Contact: ${e}\n${'H'.repeat(800)}`);
+		const paragraphs = emails.map((e) => `Contact: ${e}\n${'H'.repeat(800)}`);
 		const text = paragraphs.join('\n\n');
 
 		const result = prunePageContent(text);

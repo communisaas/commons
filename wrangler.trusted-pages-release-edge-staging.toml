@@ -1,0 +1,13 @@
+name = "commons-trusted-pages-edge-staging"
+main = "workers/trusted-pages-release-edge-entry.ts"
+compatibility_date = "2026-07-20"
+compatibility_flags = ["global_fetch_strictly_public"]
+workers_dev = false
+preview_urls = false
+
+[vars]
+PUBLIC_RELEASE_TRANSACTION_ID = "__PUBLIC_RELEASE_TRANSACTION_ID__"
+
+[[routes]]
+pattern = "staging.commons.email/*"
+zone_name = "commons.email"

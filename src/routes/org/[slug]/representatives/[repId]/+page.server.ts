@@ -1,7 +1,7 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
 
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 
@@ -54,7 +54,6 @@ export const load: PageServerLoad = async ({ params, parent }) => {
 		})),
 		receipts: result.receipts.map((r: Record<string, unknown>) => ({
 			id: r._id,
-			proofWeight: r.proofWeight,
 			dmAction: r.dmAction,
 			alignment: r.alignment,
 			causalityClass: r.causalityClass,

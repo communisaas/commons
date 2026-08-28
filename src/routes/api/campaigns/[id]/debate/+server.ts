@@ -1,6 +1,6 @@
 import { json, error } from '@sveltejs/kit';
 // CONVEX: Keep SvelteKit
-import { serverAction, serverQuery } from 'convex-sveltekit';
+import { serverAction, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -64,8 +64,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	let durationSeconds = 7 * 24 * 60 * 60; // default: 7 days
 	if (rawDuration !== undefined && rawDuration !== null) {
 		const durationDays = rawDuration / (24 * 60 * 60);
-		if (!Number.isFinite(rawDuration) || !Number.isInteger(durationDays) || durationDays < 1 || durationDays > 30) {
-			throw error(400, 'duration must represent a whole number of days between 1 and 30 (in seconds)');
+		if (
+			!Number.isFinite(rawDuration) ||
+			!Number.isInteger(durationDays) ||
+			durationDays < 1 ||
+			durationDays > 30
+		) {
+			throw error(
+				400,
+				'duration must represent a whole number of days between 1 and 30 (in seconds)'
+			);
 		}
 		durationSeconds = rawDuration;
 	}
@@ -73,7 +81,12 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Validate jurisdictionSizeHint — finite integer 1–10000
 	let jurisdictionHint = 100; // default
 	if (rawJurisdiction !== undefined && rawJurisdiction !== null) {
-		if (!Number.isFinite(rawJurisdiction) || !Number.isInteger(rawJurisdiction) || rawJurisdiction < 1 || rawJurisdiction > 10000) {
+		if (
+			!Number.isFinite(rawJurisdiction) ||
+			!Number.isInteger(rawJurisdiction) ||
+			rawJurisdiction < 1 ||
+			rawJurisdiction > 10000
+		) {
 			throw error(400, 'jurisdictionSizeHint must be an integer between 1 and 10000');
 		}
 		jurisdictionHint = rawJurisdiction;

@@ -11,16 +11,12 @@ function source(rel: string): string {
 }
 
 describe('class-of-vulnerability cures, third sweep (source-text pins)', () => {
-	it('recordBlastReceiptsInternal cohort-cap uses .take(ceiling + 1)', () => {
+	it('recordBlastReceipts uses an exact O(1) count projection with a hard plan-derived cap', () => {
 		const svelte = source('convex/blasts.ts');
-		// .take(ceiling + 1) replaces .collect() at both cap-check sites.
-		expect(svelte).toContain('.take(ceiling + 1)');
-		// .collect() on emailDeliveryReceipts by_blastId must be gone
-		// from the cap-check pattern (still allowed elsewhere if any).
-		const capChecks = svelte.match(
-			/by_blastId.*\n.*\.collect\(\)/g,
-		);
-		expect(capChecks).toBeNull();
+		expect(svelte).toContain('BLAST_RECEIPT_HARD_CAP = RECIPIENT_COHORT_CAP * 2');
+		expect(svelte).toContain('readReceiptCountAuthority(blast)');
+		expect(svelte).toContain('receiptCount: existingCount + written');
+		expect(svelte).not.toContain('.take(ceiling + 1)');
 	});
 
 	it('seed.insertSupporterBatch uses validated orgId arg, not s.orgId', () => {

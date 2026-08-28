@@ -1,11 +1,12 @@
 <script lang="ts">
 	import { FEATURES } from '$lib/config/features';
+	import { browser } from '$app/environment';
 	import { page } from '$app/stores';
 	import type { LayoutData } from './$types';
 	import type { Snippet } from 'svelte';
 	import OrgMantle from '$lib/components/org/OrgMantle.svelte';
 	import OrgShell from '$lib/components/org/os/OrgShell.svelte';
-	import Spotlight, { type SpotlightDestination } from '$lib/components/org/os/Spotlight.svelte';
+	import Spotlight from '$lib/components/org/os/Spotlight.svelte';
 	import {
 		setOrgOS,
 		spaceForPath,
@@ -13,7 +14,7 @@
 		rendersSpaceForUrl,
 		fullViewHref
 	} from '$lib/components/org/os/orgOS.svelte';
-	import type { WorkspaceMark } from '$lib/components/org/WorkspaceSwitcher.svelte';
+	import type { SpotlightDestination, WorkspaceMark } from '$lib/components/org/os/navigationTypes';
 	import type { WatermarkTier } from '$lib/components/org/MantleWatermark.svelte';
 	import { orgLimitSentence, PLATFORM_SYNC_PATH_SENTENCE } from '$lib/data/org-limit-sentences';
 
@@ -41,6 +42,31 @@
 	const initialBase = `/org/${data.org.slug}`;
 	const os = setOrgOS(spaceForPath($page.url.pathname, initialBase), initialBase);
 
+	// Bind the kernel's process registry to the signed-in operator. Studio
+	// processes carry reasoning traces, resolved decision-maker contacts and
+	// composed messages; scoping their device-local cache to the operator keeps
+	// two staff members sharing one browser from restoring each other's drafts.
+	// Owner binding is a post-init setter because setContext must stay
+	// synchronous during init while the hash derivation is async.
+	$effect(() => {
+		if (!browser) return;
+		const userId = (data.user as Record<string, unknown> | null)?.id as string | undefined;
+		let cancelled = false;
+		(async () => {
+			const { deriveOwnerHash } = await import('$lib/stores/templateDraft');
+			if (cancelled) return;
+			if (!userId) {
+				os.setOwner(null);
+				return;
+			}
+			const hash = await deriveOwnerHash(userId);
+			if (!cancelled) os.setOwner(hash);
+		})().catch(() => {});
+		return () => {
+			cancelled = true;
+		};
+	});
+
 	// A canonical space path (/studio, /supporters, /representatives, org root) is
 	// OWNED by a mounted OrgShell space — we show the shell and suppress the
 	// redundant route page. A deep route (/campaigns, /settings, /legislation, …)
@@ -60,7 +86,7 @@
 	// ─── Limit sentences for bounded actions ──────────────────────────
 	// One plain-language sentence per bounded action, conditioned on the real
 	// env probes in the operating slice. An unloaded slice carries no note —
-	// unread is not a boundary reading.
+	// Shell readiness remains present on deep routes; activity histories do not.
 	const emailDelivery = $derived(data.spaces.operating?.emailDelivery ?? null);
 	const textDelivery = $derived(data.spaces.operating?.textDelivery ?? null);
 	const callRouting = $derived(data.spaces.operating?.callRouting ?? null);
@@ -86,7 +112,8 @@
 	// destinations on the marks, folded routes in Spotlight, so every route
 	// stays reachable. Feature-gated routes render as plain links when the
 	// feature is on and are absent when it is off. Count badges read real
-	// loaded slices; a null slice renders no badge — null is unread, not zero.
+	// compact context counters where they exist. Feature-only counts remain null
+	// until their owned canonical slice is loaded — null is unread, not zero.
 	// The Studio badge is the kernel's live count of running authoring
 	// processes, read inside the switcher itself.
 	const marks = $derived<WorkspaceMark[]>([
@@ -100,7 +127,7 @@
 				{
 					href: `${base}/campaigns`,
 					label: 'Action records',
-					count: data.spaces.return?.stats.activeCampaigns ?? null
+					count: data.navBadges.campaigns
 				},
 				{ href: `${base}/emails`, label: 'Email delivery', note: emailHeldNote },
 				...(FEATURES.SMS
@@ -118,12 +145,12 @@
 			id: 'base',
 			label: 'People',
 			href: `${base}/supporters`,
-			count: data.spaces.base?.total ?? null,
+			count: data.navBadges.supporters,
 			secondary: [
 				{
 					href: fullViewHref(`${base}/supporters`),
 					label: 'Supporter list',
-					count: data.spaces.base?.total ?? null
+					count: data.navBadges.supporters
 				},
 				{
 					href: `${base}/supporters/import#csv-intake`,
@@ -157,7 +184,7 @@
 							{
 								href: `${base}/legislation`,
 								label: 'Bills',
-								count: data.spaces.landscape?.bills.length ?? null
+								count: data.spaces.landscape?.bills?.length ?? null
 							},
 							{
 								href: `${base}/scorecards`,
@@ -175,7 +202,7 @@
 			// responses, and the Verification Packet live as artifact — demoted from
 			// the front door so authoring leads.
 			href: pathForSpace('return', base),
-			count: data.spaces.return?.stats.activeCampaigns ?? null,
+			count: data.navBadges.campaigns,
 			secondary: [
 				{
 					href: data.spaces.return?.topCampaignId
@@ -233,15 +260,7 @@
 		thisWeek: number | null;
 		lastWeek: number | null;
 		tiers: WatermarkTier[];
-	}>(
-		data.watermark
-			? {
-					thisWeek: data.watermark.thisWeek,
-					lastWeek: data.watermark.lastWeek,
-					tiers: data.watermark.tiers
-				}
-			: { thisWeek: null, lastWeek: null, tiers: [] }
-	);
+	}>({ thisWeek: null, lastWeek: null, tiers: [] });
 
 	const orgIdentity = $derived({
 		name: data.org.name,

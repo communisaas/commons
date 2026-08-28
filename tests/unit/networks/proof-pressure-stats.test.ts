@@ -2,12 +2,11 @@
  * Coalition proof-pressure + stats wiring contract.
  *
  * The network detail page, the public coalition stats API, and the org report
- * route all read LIVE aggregates from convex/networks.ts — none of them may
+ * route all read revisioned aggregates from convex/networks.ts — none may
  * regress to hardcoded zero placeholders or 501 stubs. Proof pressure is
- * receipt-backed: per decision-maker it sums each member org's STRONGEST
- * receipt weight (an org cannot inflate pressure by splitting deliveries),
- * with a bounded row limit. The public stats route proves active network
- * membership before returning anything.
+ * receipt-backed on the write plane: per decision-maker it sums each member
+ * org's STRONGEST receipt weight, then generation-swaps a bounded result. The
+ * hot query must never revisit raw receipts/actions/supporters.
  *
  * Pure source-contract pins — no Convex runtime.
  */
@@ -30,34 +29,40 @@ function section(src: string, start: string, end: string): string {
 }
 
 const networks = source('convex/networks.ts');
+const coalitionMetrics = source('convex/lib/coalitionMetrics.ts');
 const pageServer = source('src/routes/org/[slug]/networks/[networkId]/+page.server.ts');
 const publicStatsRoute = source('src/routes/api/v1/networks/[id]/stats/+server.ts');
 const orgReportRoute = source('src/routes/api/org/[slug]/networks/[networkId]/report/+server.ts');
 
-describe('convex aggregates exist and read real receipts', () => {
+describe('convex aggregates are compact and receipt-backed', () => {
 	it('exports getStats and getProofPressure as queries', () => {
 		expect(networks).toContain('export const getStats = query');
 		expect(networks).toContain('export const getProofPressure = query');
 	});
 
-	it('proof pressure reads accountability receipts per member org', () => {
-		const proofPressure = section(networks, 'export const getProofPressure = query', 'return rows');
-		expect(proofPressure).toContain(".query('accountabilityReceipts')");
-		expect(proofPressure).toContain("withIndex('by_orgId'");
+	it('proof pressure reads only the active compact generation', () => {
+		const proofPressure = networks.slice(networks.indexOf('export const getProofPressure = query'));
+		expect(proofPressure).toContain('readCoalitionPressure(ctx, networkId, limit ?? 12)');
+		expect(proofPressure).not.toContain(".query('accountabilityReceipts')");
+		expect(proofPressure).not.toContain(".query('campaignActions')");
+		expect(proofPressure).not.toContain(".query('supporters')");
 	});
 
-	it('sums each org\'s strongest receipt weight (split deliveries cannot inflate)', () => {
-		expect(networks).toContain('Math.max(entry.orgWeights.get(orgKey) ?? 0, receipt.proofWeight)');
+	it('sums verified action counts across orgs, never a composite score', () => {
+		expect(coalitionMetrics).toContain("finiteNonnegative(receipt.verifiedCount,");
+		expect(networks).toContain(
+			'(current?.verifiedActionEvidence ?? 0) + source.verifiedActionEvidence'
+		);
 	});
 
-	it('exposes the cross-org evidence scalars', () => {
+	it('exposes the cross-org evidence counts', () => {
 		expect(networks).toContain('verifiedActionEvidence');
 		expect(networks).toContain('districtSignalCount');
-		expect(networks).toContain('combinedProofWeight');
 	});
 
 	it('caps the row limit', () => {
-		expect(networks).toContain('Math.min(Math.floor(limit ?? 12), 25)');
+		expect(coalitionMetrics).toContain('COALITION_MAX_PRESSURE_ROWS');
+		expect(coalitionMetrics).toContain('Math.min(Math.max(Math.floor(limit), 1)');
 	});
 });
 
@@ -107,16 +112,24 @@ describe('org report route', () => {
 describe('convex-layer access gate (route gates alone are bypassable)', () => {
 	it('both aggregates gate on requireNetworkAccess before reading anything', () => {
 		const stats = section(networks, 'export const getStats = query', 'export const getProofPressure');
-		expect(stats).toContain('await requireNetworkAccess(ctx, networkId, _secret);');
+		expect(stats).toContain('await requireNetworkAccess(ctx, networkId, orgSlug, _secret);');
 		const pressure = networks.slice(networks.indexOf('export const getProofPressure = query'));
-		expect(pressure).toContain('await requireNetworkAccess(ctx, networkId, _secret);');
+		expect(pressure).toContain('await requireNetworkAccess(ctx, networkId, orgSlug, _secret);');
 	});
 
 	it('the gate accepts a signed-in member or the internal secret, nothing else', () => {
-		const gate = section(networks, 'async function requireNetworkAccess', 'function coalitionFloor5');
+		const gate = section(networks, 'async function requireNetworkAccess', 'Constant-read coalition stats');
 		expect(gate).toContain('requireInternalSecret(secret);');
-		expect(gate).toContain('await requireAuth(');
+		expect(gate).toContain("await requireOrgRole(ctx, orgSlug, 'member')");
+		expect(gate).toContain("withIndex('by_networkId_orgId'");
 		expect(gate).toContain("Access denied — no active membership in this network");
+	});
+
+	it('invalid internal credentials are rejected before database access', () => {
+		const gate = section(networks, 'async function requireNetworkAccess', 'Constant-read coalition stats');
+		expect(gate.indexOf('requireInternalSecret(secret);')).toBeLessThan(
+			gate.indexOf('ctx.db')
+		);
 	});
 
 	it('the API-key route presents the internal secret (it carries no user identity)', () => {

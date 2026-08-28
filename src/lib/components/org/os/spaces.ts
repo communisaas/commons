@@ -36,7 +36,6 @@ export type ReturnSpaceReceiptSummary = {
 	pendingCount: number;
 	responseLoggedCount: number;
 	anchorFieldCount: number;
-	proofWeightTotal: number;
 	latestProofDeliveredAt: string | null;
 	sampleLimit: number;
 };
@@ -46,35 +45,38 @@ export type ReturnSpaceData = {
 		imported: number;
 		postalResolved: number;
 		identityVerified: number;
-		districtVerified: number;
+		/** Page-owned set cardinality; null when the shell did not read action history. */
+		districtVerified: number | null;
 	};
 	tiers: Array<{ tier: number; label: string; count: number }>;
-	growth: { thisWeek: number; lastWeek: number };
-	campaigns: ReturnSpaceCampaign[];
+	growth: { thisWeek: number; lastWeek: number } | null;
+	/** Null when the bounded card page hit its byte budget; never a fake empty list. */
+	campaigns: ReturnSpaceCampaign[] | null;
 	topCampaignId: string | null;
 	packet: VerificationPacket | null;
 	stats: {
 		supporters: number;
 		campaigns: number;
-		activeCampaigns: number;
+		/** Null until the write-maintained campaign counter migration is ready. */
+		activeCampaigns: number | null;
 		members: number;
 		sentEmails: number;
 	};
-	receipts: ReturnSpaceReceiptSummary;
+	/** Null while the compact accountability read model is not ready. */
+	receipts: ReturnSpaceReceiptSummary | null;
 };
 
-// ─── People: proof-weighted reach ─────────────────────────────────────────
+// ─── People: verified reach ───────────────────────────────────────────────
 
 export type BaseSpaceData = {
 	total: number;
 	imported: number;
 	sourceCounts: Record<string, number>;
 	postalResolved: number;
-	districtVerified: number;
-	// True when the district-of-record scan hit its cap, so districtVerified is a
-	// floor (">= N"), not an exact count. Threaded from the bounded
-	// getDistrictVerifiedCount query so a >10K-action org can render "10,000+".
-	districtVerifiedTruncated: boolean;
+	/** Page-owned set cardinality; null when the shell did not read action history. */
+	districtVerified: number | null;
+	/** Compatibility signal; the v2 exact projection always returns false. */
+	districtVerifiedTruncated: boolean | null;
 	identityVerified: number;
 	emailHealth: {
 		subscribed: number;
@@ -151,18 +153,21 @@ export type LandscapeScorecard = {
 	avgResponseTime: number | null;
 	lastContactDate: string | null;
 	score: number | null;
-	proofWeighted: null;
 };
 
 export type LandscapeSpaceData = {
 	legislationEnabled: boolean;
-	followed: LandscapeDecisionMaker[];
-	followedCount: number;
-	bills: LandscapeBill[];
+	/** Null while the compact projection is not ready or exceeded its byte page. */
+	followed: LandscapeDecisionMaker[] | null;
+	followedCount: number | null;
+	/** True when the compact shell page contains the first 12 rather than the whole set. */
+	followedCountTruncated: boolean;
+	/** Null means page-owned and unread, distinct from an exact empty collection. */
+	bills: LandscapeBill[] | null;
 	relevantBillCount: number | null;
 	positionedBillCount: number | null;
-	scorecards: LandscapeScorecard[];
-	scorecardSnapshotCount: number;
+	scorecards: LandscapeScorecard[] | null;
+	scorecardSnapshotCount: number | null;
 	scorecardAvg: number | null;
 };
 
@@ -216,13 +221,14 @@ export type PlatformApiSyncGroundData = {
 };
 
 export type TextDeliveryGroundData = {
-	draftCount: number;
-	plannedRecipientCount: number;
-	sentCount: number;
-	deliveredCount: number;
-	failedCount: number;
-	messageCount: number;
-	replyCount: number;
+	/** Activity history is page-owned; null is unread, never a fabricated zero. */
+	draftCount: number | null;
+	plannedRecipientCount: number | null;
+	sentCount: number | null;
+	deliveredCount: number | null;
+	failedCount: number | null;
+	messageCount: number | null;
+	replyCount: number | null;
 	dispatchRuntimeReady: boolean;
 	dispatchRuntimeMissing: string[];
 	dispatchRuntimeDependency: string;
@@ -232,8 +238,9 @@ export type TextDeliveryGroundData = {
 };
 
 export type CallRoutingGroundData = {
-	callCount: number;
-	completedCallCount: number;
+	/** Call history is page-owned; null is unread, never a fabricated zero. */
+	callCount: number | null;
+	completedCallCount: number | null;
 	campaignCount: number;
 	twilioConfigured: boolean;
 	canManageCalls: boolean;

@@ -9,6 +9,7 @@
 import { ConvexHttpClient } from "convex/browser";
 
 const CONVEX_URL = process.env.PUBLIC_CONVEX_URL || "https://outstanding-firefly-831.convex.cloud";
+const INTERNAL_API_SECRET = process.env.INTERNAL_API_SECRET;
 const client = new ConvexHttpClient(CONVEX_URL);
 
 let passed = 0;
@@ -22,6 +23,17 @@ function assert(condition, label) {
     console.error(`  ✗ ${label}`);
     failed++;
   }
+}
+
+async function listPublicTemplates(api) {
+  if (typeof INTERNAL_API_SECRET !== "string" || INTERNAL_API_SECRET.length < 32) {
+    throw new Error("INTERNAL_API_SECRET must be configured for the server-gated discovery smoke");
+  }
+  const snapshot = await client.query(api.templates.publicDiscoveryList, {
+    _secret: INTERNAL_API_SECRET,
+    excludeCwc: false,
+  });
+  return snapshot.templates;
 }
 
 async function run() {
@@ -47,8 +59,8 @@ async function run() {
   console.log("\n2. Public template listing (schema validation)");
   try {
     const { api } = await import("../../convex/_generated/api.js");
-    const templates = await client.query(api.templates.listPublic, {});
-    assert(Array.isArray(templates), `listPublic returned array with ${templates.length} items`);
+    const templates = await listPublicTemplates(api);
+    assert(Array.isArray(templates), `publicDiscoveryList returned ${templates.length} items`);
     if (templates.length > 0) {
       const t = templates[0];
       assert(t.slug !== undefined, `Template has slug: ${t.slug}`);
@@ -56,7 +68,7 @@ async function run() {
       assert(t.email === undefined, "No plaintext email on template");
     }
   } catch (err) {
-    assert(false, `listPublic threw: ${err.message}`);
+    assert(false, `publicDiscoveryList threw: ${err.message}`);
   }
 
   // =========================================================================
@@ -67,7 +79,7 @@ async function run() {
     const { api } = await import("../../convex/_generated/api.js");
 
     // First find a template to get a campaign
-    const templates = await client.query(api.templates.listPublic, {});
+    const templates = await listPublicTemplates(api);
     const withCampaign = templates.find(t => t.campaign_id);
 
     if (!withCampaign) {
@@ -113,7 +125,7 @@ async function run() {
   try {
     const { api } = await import("../../convex/_generated/api.js");
     // We need a campaign ID — use a fundraiser campaign if available
-    const templates = await client.query(api.templates.listPublic, {});
+    await listPublicTemplates(api);
     // listPublicByCampaign needs a valid campaign ID. Skip if none available.
     console.log("  ⚠ Skipping — requires campaign ID (public donation endpoint is safe by design: verified in code review)");
     passed++;

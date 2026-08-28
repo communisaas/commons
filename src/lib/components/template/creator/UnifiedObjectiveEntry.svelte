@@ -1,8 +1,10 @@
 <script lang="ts">
 	import type { TemplateCreationContext } from '$lib/types/template';
 	import { Sparkles, ArrowRight } from '@lucide/svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/stores';
-	import { api } from '$lib/core/api/client';
+	import { api, ApiClientError } from '$lib/core/api/client';
+	import { canonicalizeTemplateSlug } from '$convex/lib/templateInputBudget';
 	import { slide, fade } from 'svelte/transition';
 	import { onMount, tick } from 'svelte';
 	import { AI_SUGGESTION_TIMING } from '$lib/constants/ai-timing';
@@ -52,6 +54,10 @@
 		} | null;
 		/** Exposes template link readiness: true = valid & available, false = invalid/taken, null = checking */
 		slugReady?: boolean | null;
+		/** Draft identity used to resume the objective after OAuth. */
+		draftId?: string;
+		/** Persists the latest objective immediately before OAuth navigation. */
+		onSaveDraft?: () => void;
 	}
 
 	import { normalizeTopics } from '$lib/utils/topic-normalization';
@@ -62,7 +68,9 @@
 		onAccept,
 		pendingSuggestion = $bindable(null),
 		initialSuggestion = null,
-		slugReady = $bindable(null)
+		slugReady = $bindable(null),
+		draftId,
+		onSaveDraft
 	}: Props = $props();
 
 	// State
@@ -77,7 +85,7 @@
 				interactionId: string;
 		  }
 		| { status: 'ready'; suggestion: AISuggestion }
-		| { status: 'error'; message: string };
+		| { status: 'error'; message: string; requiresAuth?: boolean };
 
 	interface AISuggestion {
 		subject_line: string;
@@ -153,7 +161,6 @@
 	let isMac = $state(false);
 	const shortcutKey = $derived(isMac ? 'Cmd' : 'Ctrl');
 
-
 	// Settled state: rawInput transforms from editable workspace to grounded artifact
 	// When user has accepted an AI suggestion, the original input is "settled" - read-only reference
 	const isSettled = $derived(data.aiGenerated === true && !!data.title?.trim());
@@ -166,9 +173,29 @@
 	);
 
 	// Honest "no logged-in user" check — null user = guest per +layout.server.ts.
-	// Drives a quiet pre-signal only; it adds no auth gate and does not move the
-	// downstream send/verify wall (that fires after investment in TemplateModal).
+	// The server independently requires a session before any metered agent work.
 	const isGuest = $derived(!$page.data.user);
+
+	const AUTH_REQUIRED_MESSAGE =
+		'Sign in to use AI generation. Your draft will be here when you return.';
+
+	function startAgentSignIn(): void {
+		// Persist synchronously so even the last keystroke survives the OAuth round trip.
+		onSaveDraft?.();
+
+		const returnTo = draftId
+			? `/?create=true&resumeDraft=${encodeURIComponent(draftId)}`
+			: '/?create=true';
+		void goto(`/auth/google?returnTo=${encodeURIComponent(returnTo)}`);
+	}
+
+	function setAuthenticationRequired(): void {
+		suggestionState = {
+			status: 'error',
+			message: AUTH_REQUIRED_MESSAGE,
+			requiresAuth: true
+		};
+	}
 
 	// Auto-scroll thought container when new thoughts arrive
 	$effect(() => {
@@ -208,7 +235,9 @@
 				data.title = currentSuggestion.subject_line;
 			}
 			if (currentSuggestion.url_slug) {
-				data.slug = currentSuggestion.url_slug;
+				data.slug =
+					canonicalizeTemplateSlug(currentSuggestion.url_slug) ||
+					canonicalizeTemplateSlug(currentSuggestion.subject_line);
 			}
 			if (currentSuggestion.core_message) {
 				data.description = currentSuggestion.core_message;
@@ -274,27 +303,11 @@
 		}
 	}
 
-	async function generateSuggestionWithTiming(
-		text: string,
-		clarificationAnswers?: ClarificationAnswers,
-		interactionId?: string
-	): Promise<void> {
+	async function generateSuggestionWithTiming(text: string): Promise<void> {
 		const requestId = crypto.randomUUID();
 		currentRequestId = requestId;
 
 		const startTime = Date.now();
-
-		// For clarification answers, use non-streaming API (simpler flow)
-		if (clarificationAnswers || interactionId) {
-			await generateWithNonStreaming(
-				text,
-				requestId,
-				startTime,
-				clarificationAnswers,
-				interactionId
-			);
-			return;
-		}
 
 		// Use streaming for initial generation - show thoughts in real-time
 		try {
@@ -346,7 +359,7 @@
 								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
 								const newSuggestion: AISuggestion = {
 									...(raw as unknown as AISuggestion),
-									detected_location: (ctx?.detected_location as string) ?? null,
+									detected_location: (ctx?.detected_location as string) ?? null
 								};
 								suggestionCache.set(text.trim().toLowerCase(), newSuggestion);
 								suggestionHistory = [...suggestionHistory, newSuggestion];
@@ -369,112 +382,14 @@
 			);
 		} catch (err) {
 			if (requestId === currentRequestId) {
-				suggestionState = {
-					status: 'error',
-					message: err instanceof Error ? err.message : 'Something broke. Try again.'
-				};
-			}
-		}
-	}
-
-	/**
-	 * Non-streaming generation for clarification follow-ups
-	 * (Multi-turn context requires the standard API)
-	 */
-	async function generateWithNonStreaming(
-		text: string,
-		requestId: string,
-		startTime: number,
-		clarificationAnswers?: ClarificationAnswers,
-		interactionId?: string
-	): Promise<void> {
-		// Delay showing "thinking" to prevent flash
-		const thinkingTimer = setTimeout(() => {
-			if (currentRequestId === requestId) {
-				suggestionState = { status: 'thinking', startTime };
-			}
-		}, AI_SUGGESTION_TIMING.MIN_THINKING_DURATION);
-
-		try {
-			rateLimiter.recordCall();
-
-			const payload: {
-				message: string;
-				interactionId?: string;
-				clarificationAnswers?: ClarificationAnswers;
-			} = { message: text };
-
-			if (interactionId) {
-				payload.interactionId = interactionId;
-			}
-
-			if (clarificationAnswers) {
-				payload.clarificationAnswers = clarificationAnswers;
-			}
-
-			const response = await api.post('/agents/generate-subject', payload, {
-				timeout: AI_SUGGESTION_TIMING.SUGGESTION_TIMEOUT,
-				retries: AI_SUGGESTION_TIMING.MAX_RETRIES,
-				showToast: false,
-				skipErrorLogging: true
-			});
-
-			clearTimeout(thinkingTimer);
-
-			// Ignore stale responses
-			if (requestId !== currentRequestId) {
-				return;
-			}
-
-			if (response.success && response.data) {
-				// Check if agent needs clarification
-				const clarificationData = response.data as ClarificationResponseData;
-				if (clarificationData.needs_clarification) {
+				if (err instanceof ApiClientError && err.status === 401) {
+					setAuthenticationRequired();
+				} else {
 					suggestionState = {
-						status: 'clarifying',
-						questions: clarificationData.clarification_questions || [],
-						inferredContext: clarificationData.inferred_context || defaultInferredContext,
-						interactionId: clarificationData.interactionId || crypto.randomUUID()
+						status: 'error',
+						message: err instanceof Error ? err.message : 'Something broke. Try again.'
 					};
-
-					// Store complete context for reconstruction on answer submission
-					conversationContext = {
-						originalDescription: text,
-						questionsAsked: clarificationData.clarification_questions || [],
-						inferredContext: clarificationData.inferred_context || defaultInferredContext
-					};
-
-					showAISuggest = true;
-					return;
 				}
-
-				// Cache result
-				suggestionCache.set(text.trim().toLowerCase(), response.data as AISuggestion);
-
-				const newSuggestion = response.data as AISuggestion;
-
-				// Add to history (temporal substrate)
-				suggestionHistory = [...suggestionHistory, newSuggestion];
-				selectedIterationIndex = suggestionHistory.length - 1; // Auto-select latest
-
-				suggestionState = { status: 'ready', suggestion: newSuggestion };
-				showAISuggest = true;
-				lastGeneratedText = text;
-				attemptCount++;
-			} else {
-				throw new Error(response.error || 'Generation failed');
-			}
-		} catch (err) {
-			clearTimeout(thinkingTimer);
-
-			if (requestId === currentRequestId) {
-				const isTimeout = err instanceof Error && err.name === 'AbortError';
-				suggestionState = {
-					status: 'error',
-					message: isTimeout
-						? 'AI took too long. Try again or write your own.'
-						: err instanceof Error ? err.message : 'Something broke. Try again.'
-				};
 			}
 		}
 	}
@@ -482,6 +397,10 @@
 	async function generateSuggestion(): Promise<void> {
 		// Prevent concurrent generation (race condition: rapid clicks or re-renders)
 		if (isGenerating || attemptCount >= 5) return;
+		if (isGuest) {
+			startAgentSignIn();
+			return;
+		}
 
 		isGenerating = true;
 
@@ -504,11 +423,20 @@
 
 	function acceptSuggestion() {
 		if (currentSuggestion) {
-			const { subject_line, core_message, url_slug, topics, domain, voice_sample, detected_location } = currentSuggestion;
+			const {
+				subject_line,
+				core_message,
+				url_slug,
+				topics,
+				domain,
+				voice_sample,
+				detected_location
+			} = currentSuggestion;
 			data.title = subject_line || '';
 			// Fallback chain for core_message: use raw input if agent didn't provide one
 			data.description = core_message || data.rawInput || '';
-			data.slug = url_slug || '';
+			data.slug =
+				canonicalizeTemplateSlug(url_slug || '') || canonicalizeTemplateSlug(subject_line || '');
 			// Fallback chain for voice_sample: prefer agent-extracted, then raw input
 			data.voiceSample = voice_sample || data.rawInput || '';
 			// Normalize topics, filtering out any leaked location names
@@ -594,7 +522,9 @@
 		if (field === 'subject') editingSubjectLine = false;
 		else editingCoreMessage = false;
 		// Reset after blur has fired (DOM removal → blur is synchronous in same microtask)
-		tick().then(() => { editCancelled = false; });
+		tick().then(() => {
+			editCancelled = false;
+		});
 	}
 
 	function handleSubjectLineKeydown(event: KeyboardEvent) {
@@ -700,7 +630,9 @@
 		}
 
 		// Initialize raw input display mode: quote view when text exists, textarea when empty
-		isEditingRawInput = !((data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH);
+		isEditingRawInput = !(
+			(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH
+		);
 
 		return () => {
 			if (debounceTimer) clearTimeout(debounceTimer);
@@ -820,7 +752,7 @@
 								const ctx = raw.inferred_context as Record<string, unknown> | undefined;
 								const newSuggestion: AISuggestion = {
 									...(raw as unknown as AISuggestion),
-									detected_location: (ctx?.detected_location as string) ?? null,
+									detected_location: (ctx?.detected_location as string) ?? null
 								};
 								suggestionCache.set(data.rawInput.trim().toLowerCase(), newSuggestion);
 								suggestionHistory = [...suggestionHistory, newSuggestion];
@@ -844,10 +776,15 @@
 			);
 		} catch (err) {
 			if (requestId === currentRequestId) {
-				suggestionState = {
-					status: 'error',
-					message: err instanceof Error ? err.message : 'Something broke after clarification. Try again.'
-				};
+				if (err instanceof ApiClientError && err.status === 401) {
+					setAuthenticationRequired();
+				} else {
+					suggestionState = {
+						status: 'error',
+						message:
+							err instanceof Error ? err.message : 'Something broke after clarification. Try again.'
+					};
+				}
 			}
 		} finally {
 			isGenerating = false;
@@ -874,16 +811,29 @@
 			aria-label="Your original concern"
 		>
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-3">
-				<span class="text-xs font-medium uppercase tracking-wide text-slate-500">Your concern</span>
+			<div
+				class="flex items-center justify-between border-b border-slate-100 bg-slate-50/50 px-4 py-3"
+			>
+				<span class="text-xs font-medium tracking-wide text-slate-500 uppercase">Your concern</span>
 				<button
 					type="button"
 					onclick={() => (showEditConfirm = !showEditConfirm)}
 					class="inline-flex items-center gap-1 text-sm text-slate-500 transition-colors hover:text-slate-700"
 					aria-expanded={showEditConfirm}
 				>
-					<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+					<svg
+						class="h-3.5 w-3.5"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						aria-hidden="true"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+						/>
 					</svg>
 					Edit
 				</button>
@@ -891,7 +841,9 @@
 
 			<!-- Content: The original input displayed as quotation -->
 			<div class="px-4 py-4">
-				<blockquote class="border-l-2 border-slate-200 pl-3 text-base leading-relaxed text-slate-700">
+				<blockquote
+					class="border-l-2 border-slate-200 pl-3 text-base leading-relaxed text-slate-700"
+				>
 					"{data.rawInput}"
 				</blockquote>
 			</div>
@@ -964,20 +916,35 @@
 	{:else if hasExistingText && !isEditingRawInput && !manualMode}
 		<!-- WRITTEN STATE: Pre-existing text displayed as quote artifact -->
 		<div
-			class="written-artifact rounded-lg border border-participation-primary-200 bg-gradient-to-br from-participation-primary-50/40 to-white shadow-sm"
+			class="written-artifact border-participation-primary-200 from-participation-primary-50/40 rounded-lg border bg-gradient-to-br to-white shadow-sm"
 			role="region"
 			aria-label="Your concern"
 		>
 			<!-- Header -->
-			<div class="flex items-center justify-between border-b border-participation-primary-100 bg-participation-primary-50/30 px-4 py-3">
-				<span class="text-xs font-medium uppercase tracking-wide text-participation-primary-600/70">Your concern</span>
+			<div
+				class="border-participation-primary-100 bg-participation-primary-50/30 flex items-center justify-between border-b px-4 py-3"
+			>
+				<span class="text-participation-primary-600/70 text-xs font-medium tracking-wide uppercase"
+					>Your concern</span
+				>
 				<button
 					type="button"
 					onclick={startEditingRawInput}
-					class="inline-flex items-center gap-1 text-sm text-participation-primary-500 transition-colors hover:text-participation-primary-700"
+					class="text-participation-primary-500 hover:text-participation-primary-700 inline-flex items-center gap-1 text-sm transition-colors"
 				>
-					<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-						<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+					<svg
+						class="h-3.5 w-3.5"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						aria-hidden="true"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							stroke-width="2"
+							d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
+						/>
 					</svg>
 					Edit
 				</button>
@@ -985,7 +952,9 @@
 
 			<!-- Content: blockquote -->
 			<div class="px-4 py-4">
-				<blockquote class="border-l-2 border-participation-primary-300 pl-3 text-base leading-relaxed text-slate-700">
+				<blockquote
+					class="border-participation-primary-300 border-l-2 pl-3 text-base leading-relaxed text-slate-700"
+				>
 					"{data.rawInput}"
 				</blockquote>
 			</div>
@@ -994,21 +963,25 @@
 			<!-- (a) Mirror the ACTIVE-state primary trigger so the Generate -->
 			<!-- affordance stays prominent when a draft lands in the WRITTEN -->
 			<!-- artifact view (onblur, or returning with an autosaved draft). -->
-			<div class="border-t border-participation-primary-100 bg-participation-primary-50/20 px-4 py-3">
+			<div
+				class="border-participation-primary-100 bg-participation-primary-50/20 border-t px-4 py-3"
+			>
 				{#if !isGenerating}
 					<button
 						type="button"
 						onclick={() => generateSuggestion()}
-						class="inline-flex w-full transform-gpu items-center justify-center gap-2 rounded-lg
-						bg-gradient-to-r from-participation-primary-600 to-participation-primary-500 px-4 py-2.5 text-sm font-semibold text-white
-						shadow-participation-primary transition-all duration-200
-						hover:from-participation-primary-700 hover:to-participation-primary-600 hover:shadow-lg
-						active:scale-[0.97]
-						focus:outline-none focus:ring-2 focus:ring-participation-primary-500 focus:ring-offset-2"
+						class="from-participation-primary-600 to-participation-primary-500 shadow-participation-primary hover:from-participation-primary-700 hover:to-participation-primary-600 focus:ring-participation-primary-500 inline-flex
+						w-full transform-gpu items-center justify-center gap-2 rounded-lg bg-gradient-to-r px-4
+						py-2.5 text-sm font-semibold
+						text-white transition-all duration-200
+						hover:shadow-lg
+						focus:ring-2 focus:ring-offset-2 focus:outline-none active:scale-[0.97]"
 					>
 						<Sparkles class="h-4 w-4" aria-hidden="true" />
-						Generate
-						<kbd class="hidden rounded bg-white/20 px-1 py-0.5 font-mono text-xs md:inline">{shortcutKey}+Enter</kbd>
+						{isGuest ? 'Sign in to generate' : 'Generate'}
+						<kbd class="hidden rounded bg-white/20 px-1 py-0.5 font-mono text-xs md:inline"
+							>{shortcutKey}+Enter</kbd
+						>
 					</button>
 				{/if}
 				<div class="mt-2 flex items-center justify-end">
@@ -1022,10 +995,10 @@
 							hasAutoTriggered = false;
 							isEditingRawInput = true;
 						}}
-						class="transform-gpu rounded-md px-2 py-1 text-xs text-participation-primary-400
-							transition-all duration-150
-							hover:bg-participation-primary-100/60 hover:text-participation-primary-600
-							active:scale-[0.97] active:bg-participation-primary-200/60"
+						class="text-participation-primary-400 hover:bg-participation-primary-100/60 hover:text-participation-primary-600 active:bg-participation-primary-200/60 transform-gpu rounded-md
+							px-2 py-1
+							text-xs transition-all
+							duration-150 active:scale-[0.97]"
 					>
 						Start fresh
 					</button>
@@ -1048,10 +1021,10 @@
 				rows="5"
 				disabled={isGenerating}
 				tabindex={0}
-				class="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-3
-	             text-base text-slate-900 transition-colors duration-200
-	             placeholder:italic placeholder:text-slate-500 focus:border-participation-primary-500 focus:bg-white focus:outline-none
-	             focus:ring-2 focus:ring-participation-primary-500
+				class="focus:border-participation-primary-500 focus:ring-participation-primary-500 w-full rounded-lg border-2 border-slate-200 bg-slate-50
+	             px-4 py-3 text-base text-slate-900
+	             transition-colors duration-200 placeholder:text-slate-500 placeholder:italic focus:bg-white
+	             focus:ring-2 focus:outline-none
 	             disabled:cursor-not-allowed disabled:opacity-60"
 			></textarea>
 
@@ -1064,15 +1037,15 @@
 					onpointerdown={(e) => e.preventDefault()}
 					onclick={() => generateSuggestion()}
 					tabindex={0}
-					class="mt-3 inline-flex w-full transform-gpu items-center justify-center gap-2 rounded-lg
-		             bg-gradient-to-r from-participation-primary-600 to-participation-primary-500 px-4 py-2.5 text-sm font-semibold text-white
-		             shadow-participation-primary transition-all duration-200
-		             hover:from-participation-primary-700 hover:to-participation-primary-600 hover:shadow-lg
-		             active:scale-[0.97]
-		             focus:outline-none focus:ring-2 focus:ring-participation-primary-500 focus:ring-offset-2"
+					class="from-participation-primary-600 to-participation-primary-500 shadow-participation-primary hover:from-participation-primary-700 hover:to-participation-primary-600 focus:ring-participation-primary-500 mt-3 inline-flex
+		             w-full transform-gpu items-center justify-center gap-2 rounded-lg bg-gradient-to-r px-4
+		             py-2.5 text-sm font-semibold
+		             text-white transition-all duration-200
+		             hover:shadow-lg
+		             focus:ring-2 focus:ring-offset-2 focus:outline-none active:scale-[0.97]"
 				>
 					<Sparkles class="h-4 w-4" aria-hidden="true" />
-					Generate
+					{isGuest ? 'Sign in to generate' : 'Generate'}
 				</button>
 			{/if}
 
@@ -1087,25 +1060,27 @@
 					<!-- (handler at handleTextareaKeydown). The primary button above -->
 					<!-- now owns the click affordance, so no duplicate Generate span. -->
 					<div
-						class="flex items-center gap-1.5 {(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH ? 'text-participation-primary-600' : 'text-slate-400'}"
+						class="flex items-center gap-1.5 {(data.rawInput || '').trim().length >=
+						AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH
+							? 'text-participation-primary-600'
+							: 'text-slate-400'}"
 					>
 						<Sparkles class="h-3 w-3" aria-hidden="true" />
 						<kbd
-							class="hidden rounded px-1 py-0.5 font-mono md:inline {(data.rawInput || '').trim().length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH ? 'bg-participation-primary-100 text-participation-primary-700' : 'bg-slate-100 text-slate-400'}"
-							>{shortcutKey}+Enter</kbd
+							class="hidden rounded px-1 py-0.5 font-mono md:inline {(data.rawInput || '').trim()
+								.length >= AI_SUGGESTION_TIMING.MIN_INPUT_LENGTH
+								? 'bg-participation-primary-100 text-participation-primary-700'
+								: 'bg-slate-100 text-slate-400'}">{shortcutKey}+Enter</kbd
 						>
 					</div>
 				{/if}
 			</div>
 
-			<!-- (b) Quiet, guest-only pre-signal. One line, muted, no box/wall. -->
-			<!-- Truthful: the OAuth wall fires downstream at send/verify, never -->
-			<!-- in this objective step. Leads on the unambiguously-true benefit -->
-			<!-- (sign-in is the send gate); drafts already persist via localStorage -->
-			<!-- (templateDraftStore), so we don't claim sign-in is what "keeps" them. -->
+			<!-- Guest AI is intentionally closed until admission is globally coordinated. -->
+			<!-- Manual writing remains available without an account. -->
 			{#if isGuest}
 				<p class="mt-2 text-xs text-slate-400">
-					You'll sign in once, when you're ready to send.
+					AI generation requires sign-in. You can keep writing manually without an account.
 				</p>
 			{/if}
 		</div>
@@ -1114,7 +1089,7 @@
 	<!-- Streaming thoughts (perceptual engineering: scannable research log) -->
 	{#if !isSettled && suggestionState.status === 'streaming' && !showAISuggest}
 		<div
-			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-3 "
+			class="border-participation-primary-200/60 bg-participation-primary-50 mt-4 rounded-md border p-3"
 			transition:fade={{ duration: 200 }}
 			role="status"
 			aria-live="polite"
@@ -1124,15 +1099,20 @@
 			<div class="mb-2 flex items-center justify-between">
 				<div class="flex items-center gap-2">
 					<span class="relative flex h-2 w-2" aria-hidden="true">
-						<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-participation-primary-400 opacity-75"></span>
-						<span class="relative inline-flex h-2 w-2 rounded-full bg-participation-primary-500"></span>
+						<span
+							class="bg-participation-primary-400 absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+						></span>
+						<span class="bg-participation-primary-500 relative inline-flex h-2 w-2 rounded-full"
+						></span>
 					</span>
-					<span class="text-xs font-medium text-participation-primary-600/70">Analyzing your message...</span>
+					<span class="text-participation-primary-600/70 text-xs font-medium"
+						>Analyzing your message...</span
+					>
 				</div>
 				<button
 					type="button"
 					onclick={writeManually}
-					class="text-xs text-participation-primary-400 transition-colors hover:text-participation-primary-600"
+					class="text-participation-primary-400 hover:text-participation-primary-600 text-xs transition-colors"
 				>
 					I'll write my own
 				</button>
@@ -1141,12 +1121,16 @@
 			<!-- Thought log - left-justified, scannable -->
 			<div bind:this={thoughtContainerRef} class="max-h-32 space-y-1 overflow-y-auto" role="log">
 				{#if suggestionState.thoughts.length === 0}
-					<p class="py-2 text-sm italic text-participation-primary-400">understanding your concern...</p>
+					<p class="text-participation-primary-400 py-2 text-sm italic">
+						understanding your concern...
+					</p>
 				{:else}
 					{#each suggestionState.thoughts as thought, i}
 						<p
 							class="border-l-2 py-0.5 pl-2 text-sm transition-all duration-150
-							{i === suggestionState.thoughts.length - 1 ? 'border-participation-primary-400 bg-participation-primary-100/40 text-participation-primary-900' : 'border-transparent text-participation-primary-700/60'}"
+							{i === suggestionState.thoughts.length - 1
+								? 'border-participation-primary-400 bg-participation-primary-100/40 text-participation-primary-900'
+								: 'text-participation-primary-700/60 border-transparent'}"
 							style="animation: thoughtAppear 0.2s ease-out forwards; opacity: 0;"
 						>
 							{thought}
@@ -1160,15 +1144,20 @@
 	<!-- Fallback thinking indicator (for non-streaming paths like clarification follow-up) -->
 	{#if !isSettled && suggestionState.status === 'thinking' && !showAISuggest}
 		<div
-			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-3 "
+			class="border-participation-primary-200/60 bg-participation-primary-50 mt-4 rounded-md border p-3"
 			transition:fade={{ duration: 150 }}
 		>
 			<div class="flex items-center gap-2">
 				<span class="relative flex h-2 w-2">
-					<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-participation-primary-400 opacity-75"></span>
-					<span class="relative inline-flex h-2 w-2 rounded-full bg-participation-primary-500"></span>
+					<span
+						class="bg-participation-primary-400 absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+					></span>
+					<span class="bg-participation-primary-500 relative inline-flex h-2 w-2 rounded-full"
+					></span>
 				</span>
-				<span class="text-xs font-medium text-participation-primary-600/70">Refining with your clarifications...</span>
+				<span class="text-participation-primary-600/70 text-xs font-medium"
+					>Refining with your clarifications...</span
+				>
 			</div>
 		</div>
 	{/if}
@@ -1188,17 +1177,17 @@
 	<!-- Refined suggestion surface -->
 	{#if showAISuggest && currentSuggestion}
 		<div
-			class="mt-4 rounded-md border border-participation-primary-200/60 bg-participation-primary-50 p-4 "
+			class="border-participation-primary-200/60 bg-participation-primary-50 mt-4 rounded-md border p-4"
 			transition:slide={{ duration: 200 }}
 		>
 			<!-- Iteration timeline (perceptual temporal navigation) -->
 			{#if suggestionHistory.length > 1}
-				<div class="mb-4 flex items-center gap-3 border-b border-participation-primary-200 pb-3">
+				<div class="border-participation-primary-200 mb-4 flex items-center gap-3 border-b pb-3">
 					<button
 						type="button"
 						onclick={navigatePrevious}
 						disabled={selectedIterationIndex === 0}
-						class="text-participation-primary-600 transition-opacity hover:text-participation-primary-700 disabled:cursor-not-allowed disabled:opacity-30"
+						class="text-participation-primary-600 hover:text-participation-primary-700 transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
 						aria-label="Previous iteration"
 					>
 						<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1223,7 +1212,7 @@
 								<div
 									class="h-2.5 w-2.5 rounded-full transition-all duration-200
 									{index === selectedIterationIndex
-										? 'scale-125 bg-participation-primary-600 ring-2 ring-participation-primary-600 ring-offset-2 ring-offset-participation-primary-50'
+										? 'bg-participation-primary-600 ring-participation-primary-600 ring-offset-participation-primary-50 scale-125 ring-2 ring-offset-2'
 										: index === suggestionHistory.length - 1
 											? 'bg-participation-primary-400 hover:bg-participation-primary-500'
 											: 'bg-participation-primary-300 hover:bg-participation-primary-400'}"
@@ -1231,7 +1220,7 @@
 
 								<!-- Tooltip on hover -->
 								<div
-									class="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100"
+									class="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 rounded bg-slate-900 px-2 py-1 text-xs whitespace-nowrap text-white opacity-0 transition-opacity group-hover:opacity-100"
 								>
 									{index === suggestionHistory.length - 1 ? 'Latest' : `Try ${index + 1}`}
 								</div>
@@ -1243,7 +1232,7 @@
 						type="button"
 						onclick={navigateNext}
 						disabled={selectedIterationIndex === suggestionHistory.length - 1}
-						class="text-participation-primary-600 transition-opacity hover:text-participation-primary-700 disabled:cursor-not-allowed disabled:opacity-30"
+						class="text-participation-primary-600 hover:text-participation-primary-700 transition-opacity disabled:cursor-not-allowed disabled:opacity-30"
 						aria-label="Next iteration"
 					>
 						<svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -1290,19 +1279,30 @@
 				<div class="mb-4" role="status" aria-live="polite" aria-label="Regenerating">
 					<div class="mb-2 flex items-center gap-2">
 						<span class="relative flex h-2 w-2" aria-hidden="true">
-							<span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-participation-primary-400 opacity-75"></span>
-							<span class="relative inline-flex h-2 w-2 rounded-full bg-participation-primary-500"></span>
+							<span
+								class="bg-participation-primary-400 absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"
+							></span>
+							<span class="bg-participation-primary-500 relative inline-flex h-2 w-2 rounded-full"
+							></span>
 						</span>
-						<span class="text-xs font-medium text-participation-primary-600/70">Rethinking...</span>
+						<span class="text-participation-primary-600/70 text-xs font-medium">Rethinking...</span>
 					</div>
-					<div bind:this={thoughtContainerRef} class="max-h-32 space-y-1 overflow-y-auto" role="log">
+					<div
+						bind:this={thoughtContainerRef}
+						class="max-h-32 space-y-1 overflow-y-auto"
+						role="log"
+					>
 						{#if suggestionState.thoughts.length === 0}
-							<p class="py-2 text-sm italic text-participation-primary-400">finding a new angle...</p>
+							<p class="text-participation-primary-400 py-2 text-sm italic">
+								finding a new angle...
+							</p>
 						{:else}
 							{#each suggestionState.thoughts as thought, i}
 								<p
 									class="border-l-2 py-0.5 pl-2 text-sm transition-all duration-150
-										{i === suggestionState.thoughts.length - 1 ? 'border-participation-primary-400 bg-participation-primary-100/40 text-participation-primary-900' : 'border-transparent text-participation-primary-700/60'}"
+										{i === suggestionState.thoughts.length - 1
+										? 'border-participation-primary-400 bg-participation-primary-100/40 text-participation-primary-900'
+										: 'text-participation-primary-700/60 border-transparent'}"
 									style="animation: thoughtAppear 0.2s ease-out forwards; opacity: 0;"
 								>
 									{thought}
@@ -1315,9 +1315,9 @@
 				<!-- Current suggestion content — inline-editable -->
 				<div class="md:mb-1">
 					<div class="mb-1 flex items-center gap-2">
-						<Sparkles class="h-4 w-4 text-participation-primary-600" aria-hidden="true" />
+						<Sparkles class="text-participation-primary-600 h-4 w-4" aria-hidden="true" />
 						<span
-							class="text-xs font-semibold uppercase tracking-wide text-participation-primary-700"
+							class="text-participation-primary-700 text-xs font-semibold tracking-wide uppercase"
 						>
 							Refined Subject Line
 						</span>
@@ -1330,14 +1330,14 @@
 							value={currentSuggestion.subject_line}
 							onblur={(e) => commitSubjectLineEdit(e.currentTarget.value)}
 							onkeydown={handleSubjectLineKeydown}
-							class="w-full rounded-md border-2 border-participation-primary-300 bg-white px-3 py-2
-								text-lg font-bold leading-tight text-slate-900
-								focus:border-participation-primary-500 focus:outline-none focus:ring-2 focus:ring-participation-primary-500/30"
+							class="border-participation-primary-300 focus:border-participation-primary-500 focus:ring-participation-primary-500/30 w-full rounded-md border-2 bg-white
+								px-3 py-2 text-lg leading-tight
+								font-bold text-slate-900 focus:ring-2 focus:outline-none"
 						/>
 					{:else}
 						<button
 							type="button"
-							class="w-full cursor-text rounded px-2 py-1.5 text-left text-lg font-bold leading-tight text-slate-900
+							class="w-full cursor-text rounded px-2 py-1.5 text-left text-lg leading-tight font-bold text-slate-900
 								transition-colors duration-150
 								hover:bg-white/50
 								md:px-1 md:py-0.5"
@@ -1349,7 +1349,7 @@
 					{/if}
 				</div>
 
-				<div class="mb-4 space-y-2 text-sm text-participation-primary-900/80">
+				<div class="text-participation-primary-900/80 mb-4 space-y-2 text-sm">
 					{#if editingCoreMessage}
 						<div>
 							<strong class="mb-1 block font-semibold">Core message:</strong>
@@ -1359,9 +1359,9 @@
 								onblur={(e) => commitCoreMessageEdit(e.currentTarget.value)}
 								onkeydown={handleCoreMessageKeydown}
 								rows="3"
-								class="w-full rounded-md border-2 border-participation-primary-300 bg-white px-3 py-2
-									text-base md:text-sm text-slate-900
-									focus:border-participation-primary-500 focus:outline-none focus:ring-2 focus:ring-participation-primary-500/30"
+								class="border-participation-primary-300 focus:border-participation-primary-500 focus:ring-participation-primary-500/30 w-full rounded-md border-2 bg-white
+									px-3 py-2 text-base
+									text-slate-900 focus:ring-2 focus:outline-none md:text-sm"
 							></textarea>
 						</div>
 					{:else}
@@ -1371,7 +1371,9 @@
 								hover:bg-white/50
 								md:px-1 md:py-0.5"
 							onclick={() => startEditingField('core')}
-							onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') startEditingField('core'); }}
+							onkeydown={(e) => {
+								if (e.key === 'Enter' || e.key === ' ') startEditingField('core');
+							}}
 							role="button"
 							tabindex={0}
 							title="Tap to edit core message"
@@ -1382,21 +1384,24 @@
 					{/if}
 					<div class="flex flex-wrap gap-1.5">
 						{#each currentSuggestion.topics as topic}
-							<span class="rounded-full bg-participation-primary-100/70 px-2 py-0.5 text-xs text-participation-primary-800">{topic}</span>
+							<span
+								class="bg-participation-primary-100/70 text-participation-primary-800 rounded-full px-2 py-0.5 text-xs"
+								>{topic}</span
+							>
 						{/each}
 					</div>
 					<!-- Audience guidance — optional steering for decision-maker agent -->
-					<div class="mt-3 border-t border-participation-primary-200/30 pt-2">
+					<div class="border-participation-primary-200/30 mt-3 border-t pt-2">
 						<textarea
 							bind:value={audienceGuidance}
 							placeholder="Who should hear this? e.g. &quot;EPA and state agencies&quot; or &quot;Portland city council housing committee&quot;"
 							rows="2"
-							class="w-full resize-none rounded-md border border-participation-primary-200/40 bg-white/50 px-3 py-2
-								text-sm text-slate-700 placeholder:text-slate-400/60
-								focus:border-participation-primary-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-participation-primary-400/30
-								transition-colors duration-150"
+							class="border-participation-primary-200/40 focus:border-participation-primary-400 focus:ring-participation-primary-400/30 w-full resize-none rounded-md border bg-white/50
+								px-3 py-2 text-sm
+								text-slate-700 transition-colors duration-150 placeholder:text-slate-400/60 focus:bg-white
+								focus:ring-1 focus:outline-none"
 						></textarea>
-						<p class="mt-0.5 text-[11px] text-participation-primary-600/40">
+						<p class="text-participation-primary-600/40 mt-0.5 text-[11px]">
 							optional — we'll discover decision-makers either way
 						</p>
 					</div>
@@ -1408,12 +1413,12 @@
 					type="button"
 					onclick={acceptSuggestion}
 					tabindex={0}
-					class="inline-flex w-full transform-gpu items-center justify-center gap-2 rounded-lg
-                 bg-gradient-to-r from-participation-primary-600 to-participation-primary-500 px-4 py-2.5 text-sm font-semibold text-white
-                 shadow-participation-primary transition-all duration-200
-                 hover:from-participation-primary-700 hover:to-participation-primary-600 hover:shadow-lg
-                 active:scale-[0.97]
-                 focus:outline-none focus:ring-2 focus:ring-participation-primary-500 focus:ring-offset-2"
+					class="from-participation-primary-600 to-participation-primary-500 shadow-participation-primary hover:from-participation-primary-700 hover:to-participation-primary-600 focus:ring-participation-primary-500 inline-flex
+                 w-full transform-gpu items-center justify-center gap-2 rounded-lg bg-gradient-to-r px-4
+                 py-2.5 text-sm font-semibold
+                 text-white transition-all duration-200
+                 hover:shadow-lg
+                 focus:ring-2 focus:ring-offset-2 focus:outline-none active:scale-[0.97]"
 				>
 					Use this
 					<ArrowRight class="h-4 w-4" />
@@ -1422,7 +1427,7 @@
 				<!-- (c) Lead on the free, unlimited path: editing the subject/message -->
 				<!-- inline above is always available. Regen is the secondary path -->
 				<!-- (real LLM cost, hence the cap) — framed as optional, not depleting. -->
-				<p class="text-xs text-participation-primary-600/50">
+				<p class="text-participation-primary-600/50 text-xs">
 					Tweak the subject or message above — edit it directly, free and unlimited.
 				</p>
 
@@ -1433,17 +1438,17 @@
 							onclick={generateSuggestion}
 							disabled={isGenerating}
 							tabindex={0}
-							class="inline-flex transform-gpu items-center gap-2 rounded-md px-2 py-1
-								text-sm font-medium text-participation-primary-700
-								transition-all duration-150
-								hover:bg-participation-primary-100/60 hover:text-participation-primary-900
-								active:scale-[0.97] active:bg-participation-primary-200/60
-								focus:outline-none focus:underline
+							class="text-participation-primary-700 hover:bg-participation-primary-100/60 hover:text-participation-primary-900 active:bg-participation-primary-200/60 inline-flex transform-gpu items-center
+								gap-2 rounded-md px-2
+								py-1 text-sm
+								font-medium transition-all
+								duration-150 focus:underline
+								focus:outline-none active:scale-[0.97]
 								disabled:cursor-not-allowed disabled:opacity-50"
 						>
 							{#if isGenerating}
 								<div
-									class="h-3.5 w-3.5 animate-spin rounded-full border-2 border-participation-primary-600 border-t-transparent"
+									class="border-participation-primary-600 h-3.5 w-3.5 animate-spin rounded-full border-2 border-t-transparent"
 									aria-hidden="true"
 								></div>
 							{:else}
@@ -1462,11 +1467,11 @@
 						type="button"
 						onclick={writeManually}
 						tabindex={0}
-						class="transform-gpu rounded-md px-2 py-1 text-sm text-participation-primary-600
-							transition-all duration-150
-							hover:bg-participation-primary-100/60 hover:text-participation-primary-800
-							active:scale-[0.97] active:bg-participation-primary-200/60
-							focus:outline-none focus:underline"
+						class="text-participation-primary-600 hover:bg-participation-primary-100/60 hover:text-participation-primary-800 active:bg-participation-primary-200/60 transform-gpu rounded-md
+							px-2 py-1
+							text-sm transition-all
+							duration-150 focus:underline
+							focus:outline-none active:scale-[0.97]"
 					>
 						I'll write it
 					</button>
@@ -1482,13 +1487,32 @@
 			transition:slide={{ duration: 200 }}
 		>
 			<p class="text-sm text-red-700">{suggestionState.message}</p>
-			<button
-				type="button"
-				onclick={generateSuggestion}
-				class="mt-2 text-sm font-medium text-red-600 underline hover:text-red-800"
-			>
-				Hit me again
-			</button>
+			{#if suggestionState.requiresAuth}
+				<div class="mt-2 flex flex-wrap items-center gap-3">
+					<button
+						type="button"
+						onclick={startAgentSignIn}
+						class="text-sm font-medium text-red-700 underline hover:text-red-900"
+					>
+						Sign in to generate
+					</button>
+					<button
+						type="button"
+						onclick={writeManually}
+						class="text-sm text-slate-600 underline hover:text-slate-800"
+					>
+						Write manually
+					</button>
+				</div>
+			{:else}
+				<button
+					type="button"
+					onclick={generateSuggestion}
+					class="mt-2 text-sm font-medium text-red-600 underline hover:text-red-800"
+				>
+					Hit me again
+				</button>
+			{/if}
 		</div>
 	{/if}
 
@@ -1505,10 +1529,10 @@
 						type="text"
 						bind:value={data.title}
 						placeholder="Make housing affordable in California"
-						class="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-2
-                     text-base text-slate-900 transition-colors duration-200
-                     placeholder:text-slate-500 focus:border-participation-primary-500 focus:bg-white
-                     focus:outline-none focus:ring-2 focus:ring-participation-primary-500"
+						class="focus:border-participation-primary-500 focus:ring-participation-primary-500 w-full rounded-lg border-2 border-slate-200 bg-slate-50
+                     px-4 py-2 text-base text-slate-900
+                     transition-colors duration-200 placeholder:text-slate-500
+                     focus:bg-white focus:ring-2 focus:outline-none"
 					/>
 				</div>
 
@@ -1521,10 +1545,10 @@
 						bind:value={data.description}
 						placeholder="Brief description of your core message..."
 						rows="3"
-						class="w-full rounded-lg border-2 border-slate-200 bg-slate-50 px-4 py-2
-                     text-base text-slate-900 transition-colors duration-200
-                     placeholder:text-slate-500 focus:border-participation-primary-500 focus:bg-white
-                     focus:outline-none focus:ring-2 focus:ring-participation-primary-500"
+						class="focus:border-participation-primary-500 focus:ring-participation-primary-500 w-full rounded-lg border-2 border-slate-200 bg-slate-50
+                     px-4 py-2 text-base text-slate-900
+                     transition-colors duration-200 placeholder:text-slate-500
+                     focus:bg-white focus:ring-2 focus:outline-none"
 					></textarea>
 				</div>
 

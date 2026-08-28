@@ -18,6 +18,7 @@ function handler<TArgs, TResult>(
 function makeDonation(overrides: Record<string, unknown> = {}) {
 	return {
 		_id: 'don-1',
+		orgId: 'org-1',
 		campaignId: 'camp-1',
 		supporterId: 'sup-1',
 		status: 'pending',
@@ -37,38 +38,42 @@ function makeCampaign(overrides: Record<string, unknown> = {}) {
 	};
 }
 
-function createQueryChain(options: { collect?: unknown[]; first?: unknown }) {
+function createQueryChain(options: { collect?: unknown[]; first?: unknown; unique?: unknown }) {
 	const collect = vi.fn().mockResolvedValue(options.collect ?? []);
 	const first = vi.fn().mockResolvedValue(options.first ?? null);
+	const unique = vi.fn().mockResolvedValue(options.unique ?? null);
 	const filter = vi.fn().mockReturnValue({ collect });
-	const withIndex = vi.fn().mockReturnValue({ filter, collect, first });
+	const withIndex = vi.fn().mockReturnValue({ filter, collect, first, unique });
 	return {
 		query: vi.fn().mockReturnValue({ withIndex }),
 		withIndex,
 		filter,
 		collect,
-		first
+		first,
+		unique
 	};
 }
 
 describe('completeDonation', () => {
 	let patch: ReturnType<typeof vi.fn>;
 	let get: ReturnType<typeof vi.fn>;
+	let insert: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
 		patch = vi.fn().mockResolvedValue(undefined);
 		get = vi.fn().mockResolvedValue(makeCampaign());
+		insert = vi.fn().mockResolvedValue('summary-new');
 	});
 
 	it('completes a pending donation and stores Stripe IDs', async () => {
 		const donation = makeDonation();
-		const chain = createQueryChain({ collect: [donation] });
+		const chain = createQueryChain({ first: donation });
 		const ctx = {
-				db: { query: chain.query, patch, get },
-				runMutation: vi.fn().mockResolvedValue(null),
-				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
-			};
+			db: { query: chain.query, patch, get, insert },
+			runMutation: vi.fn().mockResolvedValue(null),
+			scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+		};
 
 		const result = await handler<
 			{
@@ -91,27 +96,61 @@ describe('completeDonation', () => {
 			supporterId: 'sup-1'
 		});
 		expect(chain.query).toHaveBeenCalledWith('donations');
-		expect(chain.withIndex).toHaveBeenCalledWith('by_status', expect.any(Function));
-		expect(chain.filter).toHaveBeenCalledWith(expect.any(Function));
+		expect(chain.withIndex).toHaveBeenCalledWith('by_stripeSessionId', expect.any(Function));
+		expect(chain.first).toHaveBeenCalled();
 		expect(patch).toHaveBeenCalledWith(
 			'don-1',
 			expect.objectContaining({
 				status: 'completed',
 				stripePaymentIntentId: 'pi_test',
 				stripeSubscriptionId: 'sub_test',
+				confirmationSummaryVersion: 1,
 				completedAt: expect.any(Number),
 				updatedAt: expect.any(Number)
 			})
 		);
+		expect(insert).toHaveBeenCalledWith(
+			'donationConfirmationSummaries',
+			expect.objectContaining({
+				scopeKey: 'org:org-1',
+				completed: 1,
+				notRecorded: 1,
+				version: 1
+			})
+		);
+		expect(insert).toHaveBeenCalledWith(
+			'donationConfirmationSummaries',
+			expect.objectContaining({
+				scopeKey: 'campaign:camp-1',
+				completed: 1,
+				notRecorded: 1,
+				version: 1
+			})
+		);
+		expect(ctx.runMutation).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ orgId: 'org-1', event: 'donation.completed' })
+		);
+		expect(ctx.runMutation).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				orgId: 'org-1',
+				triggerType: 'donation_completed',
+				supporterId: 'sup-1'
+			})
+		);
+		expect(ctx.scheduler.runAfter).toHaveBeenCalledWith(0, expect.anything(), {
+			donationId: 'don-1'
+		});
 	});
 
 	it('increments campaign totals when the donation has a campaign', async () => {
-		const chain = createQueryChain({ collect: [makeDonation()] });
+		const chain = createQueryChain({ first: makeDonation() });
 		const ctx = {
-				db: { query: chain.query, patch, get },
-				runMutation: vi.fn().mockResolvedValue(null),
-				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
-			};
+			db: { query: chain.query, patch, get, insert },
+			runMutation: vi.fn().mockResolvedValue(null),
+			scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+		};
 
 		await handler<
 			{ donationId: string; stripePaymentIntentId?: string },
@@ -133,12 +172,12 @@ describe('completeDonation', () => {
 	});
 
 	it('is idempotent when no pending donation matches', async () => {
-		const chain = createQueryChain({ collect: [] });
+		const chain = createQueryChain({ first: null });
 		const ctx = {
-				db: { query: chain.query, patch, get },
-				runMutation: vi.fn().mockResolvedValue(null),
-				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
-			};
+			db: { query: chain.query, patch, get, insert },
+			runMutation: vi.fn().mockResolvedValue(null),
+			scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+		};
 
 		const result = await handler<{ donationId: string }, { processed: boolean }>(
 			completeDonation
@@ -152,12 +191,12 @@ describe('completeDonation', () => {
 
 	it('does not increment counters when the campaign is missing', async () => {
 		get.mockResolvedValue(null);
-		const chain = createQueryChain({ collect: [makeDonation()] });
+		const chain = createQueryChain({ first: makeDonation() });
 		const ctx = {
-				db: { query: chain.query, patch, get },
-				runMutation: vi.fn().mockResolvedValue(null),
-				scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
-			};
+			db: { query: chain.query, patch, get, insert },
+			runMutation: vi.fn().mockResolvedValue(null),
+			scheduler: { runAfter: vi.fn().mockResolvedValue(null) }
+		};
 
 		await handler<{ donationId: string }, { processed: boolean }>(completeDonation)(ctx, {
 			donationId: 'cs_test'

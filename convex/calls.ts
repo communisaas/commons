@@ -9,6 +9,7 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import { requireOrgRole } from "./_authHelpers";
+import { hashDistrictCode, hashPostalCode } from "./lib/districtHash";
 
 /**
  * List patch-through calls for an org, with supporter join.
@@ -81,6 +82,11 @@ export const validateCampaign = query({
 
 /**
  * Create a patch-through call record.
+ *
+ * Geographic provenance is derived from the supporter row this org already
+ * holds, never accepted from the caller: `districtHash` shares a column with
+ * the keyed HMAC producers in `./lib/districtHash`, so an ingested value would
+ * let a caller write arbitrary buckets into every geographic aggregate.
  */
 export const createCall = mutation({
   args: {
@@ -90,7 +96,6 @@ export const createCall = mutation({
     targetPhone: v.string(),
     targetName: v.optional(v.string()),
     campaignId: v.optional(v.id("campaigns")),
-    districtHash: v.optional(v.string()),
     encryptedCallerPhone: v.optional(v.string()),
     encryptedTargetPhone: v.optional(v.string()),
     callerPhoneHash: v.optional(v.string()),
@@ -98,6 +103,20 @@ export const createCall = mutation({
   },
   handler: async (ctx, args) => {
     const { org } = await requireOrgRole(ctx, args.slug, "editor");
+
+    const supporter = await ctx.db.get(args.supporterId);
+    if (!supporter || supporter.orgId !== org._id) {
+      throw new Error("Supporter does not belong to this organization");
+    }
+
+    const code = supporter.congressionalDistrict?.trim().toUpperCase();
+    let districtHash: string | undefined;
+    if (code && /^[A-Z]{2}-(\d{2}|AL)$/.test(code)) {
+      districtHash = await hashDistrictCode(code);
+    } else if (supporter.postalCode) {
+      districtHash = await hashPostalCode(supporter.postalCode);
+    }
+
     const id = await ctx.db.insert("patchThroughCalls", {
       orgId: org._id,
       supporterId: args.supporterId,
@@ -107,7 +126,7 @@ export const createCall = mutation({
       targetPhoneHash: args.targetPhoneHash ?? undefined,
       targetName: args.targetName ?? undefined,
       campaignId: args.campaignId ?? undefined,
-      districtHash: args.districtHash ?? undefined,
+      districtHash,
       status: "initiated",
     });
     return { _id: id };

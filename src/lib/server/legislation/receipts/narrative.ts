@@ -9,7 +9,6 @@ export interface NarrativeInput {
 	proofVerifiedAt: Date | null;
 	verifiedCount: number | null;
 	districtCount: number | null;
-	proofWeight: number;
 	causalityClass: string;
 }
 
@@ -25,9 +24,8 @@ export function generateNarrative(receipt: NarrativeInput): string {
 	const countLabel = receipt.verifiedCount !== null ? `${receipt.verifiedCount}` : 'fewer than 5';
 	const districtLabel = receipt.districtCount !== null ? `${receipt.districtCount}` : 'fewer than 3';
 	const proofClause = `after ${verifyWord} proof from ${countLabel} constituents across ${districtLabel} districts`;
-	const weightClause = `(proof weight: ${receipt.proofWeight.toFixed(2)}, causality: ${receipt.causalityClass})`;
 
-	return `${receipt.dmName} ${action} this bill ${proofClause} ${weightClause}`;
+	return `${receipt.dmName} ${action} this bill ${proofClause} (causality: ${receipt.causalityClass})`;
 }
 
 function formatAction(action: string): string {

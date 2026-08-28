@@ -146,6 +146,11 @@
 				title={studioDraftOrigin.processTitle}
 			>
 				This draft came from your organization's Studio. Edits and publishing happen here.
+				{#if studioDraftOrigin.scopeBasis}
+					<span class="mt-1 block">
+						{#if studioDraftOrigin.scopeLabel}Scope: {studioDraftOrigin.scopeLabel} — {/if}{studioDraftOrigin.scopeBasis}
+					</span>
+				{/if}
 			</div>
 		{/if}
 	</Artifact>

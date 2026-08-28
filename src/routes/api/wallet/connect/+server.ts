@@ -19,7 +19,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { verifyMessage, getAddress, isAddress } from 'ethers';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { nonceStore, cleanupExpiredNonces } from '../_nonce-store';
 
@@ -103,7 +103,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 	try {
 		const result = await serverMutation(api.users.connectWallet, {
 			address: checksummedAddress,
-			walletType: 'evm',
+			walletType: 'evm'
 		});
 
 		return json({

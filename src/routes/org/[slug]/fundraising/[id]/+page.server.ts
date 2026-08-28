@@ -1,6 +1,6 @@
 // CONVEX: Keep SvelteKit — donation list with server-side display
 import { error, fail, redirect } from '@sveltejs/kit';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';

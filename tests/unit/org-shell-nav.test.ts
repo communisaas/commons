@@ -12,9 +12,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type {
 	SecondaryLink,
+	SpotlightDestination,
 	WorkspaceMark
-} from '$lib/components/org/WorkspaceSwitcher.svelte';
-import type { SpotlightDestination } from '$lib/components/org/os/Spotlight.svelte';
+} from '$lib/components/org/os/navigationTypes';
 import { rankSpotlightMatches, spotlightScore } from '$lib/components/org/os/orgOS.svelte';
 
 const SWITCHER = 'src/lib/components/org/WorkspaceSwitcher.svelte';
@@ -204,9 +204,13 @@ describe('the org layout', () => {
 		expect(layout).not.toMatch(GATE_MACHINERY);
 	});
 
-	it('derives count badges from the real loaded slices', () => {
-		expect(layout).toContain('data.spaces.base?.total ?? null');
-		expect(layout).toContain('data.spaces.return?.stats.activeCampaigns ?? null');
+	it('derives shared badges from compact context counters, not nullable parent slices', () => {
+		expect(layout).toContain('count: data.navBadges.supporters');
+		expect(layout).toContain('count: data.navBadges.campaigns');
+		expect(layout).not.toContain('data.spaces.base?.total');
+		expect(layout).not.toContain('data.spaces.return?.stats.activeCampaigns');
+		// Power does not yet have a write-maintained org scalar, so unread remains
+		// null rather than triggering a follow-history read on every route.
 		expect(layout).toContain('data.spaces.landscape?.followedCount ?? null');
 	});
 

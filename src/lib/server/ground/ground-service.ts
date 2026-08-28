@@ -1,4 +1,4 @@
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import type { FunctionArgs } from 'convex/server';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
@@ -9,6 +9,7 @@ import {
 	issueDistrictCredential
 } from '$lib/core/identity/district-credential';
 import { TIER_CREDENTIAL_TTL } from '$lib/core/identity/credential-policy';
+import type { DerivedContainmentEntry } from '$lib/server/identity/verify-commitment';
 
 export type GroundVerificationMethod = 'civic_api' | 'postal' | 'shadow_atlas';
 
@@ -54,6 +55,7 @@ export interface GroundVerificationInput {
 	officials_as_of?: string | null;
 	tiger_vintage?: string;
 	resolution_confidence?: number;
+	derived_containment?: DerivedContainmentEntry[];
 }
 
 export interface GroundCredentialResult {
@@ -98,8 +100,8 @@ function extractDistrictCredentialId(result: unknown): string | null {
 export async function verifyGroundCommitmentAuthenticity(
 	userId: string,
 	input: GroundVerificationInput
-): Promise<void> {
-	if (!input.district_commitment) return;
+): Promise<DerivedContainmentEntry[]> {
+	if (!input.district_commitment) return [];
 
 	if (!input.coordinates) {
 		throw new GroundServiceError(
@@ -111,11 +113,12 @@ export async function verifyGroundCommitmentAuthenticity(
 
 	try {
 		const { verifyDistrictCommitment } = await import('$lib/server/identity/verify-commitment');
-		await verifyDistrictCommitment({
+		const result = await verifyDistrictCommitment({
 			lat: input.coordinates.lat,
 			lng: input.coordinates.lng,
 			clientCommitment: input.district_commitment
 		});
+		return result.containment;
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		if (msg.includes('COMMITMENT_AUTHENTICITY_MISMATCH')) {
@@ -134,10 +137,13 @@ export async function verifyGroundCommitmentAuthenticity(
 			msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT')
 		) {
 			const isTimeout = msg.includes('COMMITMENT_VERIFY_IPFS_TIMEOUT');
-			console.error(`[ground] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`, {
-				userId,
-				detail: msg.slice(0, 200)
-			});
+			console.error(
+				`[ground] IPFS ${isTimeout ? 'timeout' : 'unavailable'} for authenticity check`,
+				{
+					userId,
+					detail: msg.slice(0, 200)
+				}
+			);
 			throw new GroundServiceError(
 				503,
 				isTimeout ? 'COMMITMENT_VERIFY_IPFS_TIMEOUT' : 'COMMITMENT_VERIFY_IPFS_UNAVAILABLE',
@@ -169,6 +175,48 @@ export async function issueGroundCredential(
 	const expiresAt = issuedAt + TIER_CREDENTIAL_TTL[2];
 	const isCommitmentOnly =
 		input.verification_method === 'shadow_atlas' && Boolean(input.district_commitment);
+	const derivedContainment = input.derived_containment ?? [];
+	const derivedStateSenate = derivedContainment.find((entry) => entry.slot === 2)?.districtId;
+	const derivedStateAssembly = derivedContainment.find((entry) => entry.slot === 3)?.districtId;
+	const stateSenateDistrict = derivedStateSenate ?? input.state_senate_district;
+	const stateAssemblyDistrict = derivedStateAssembly ?? input.state_assembly_district;
+	const rawCountyId = derivedContainment.find((entry) => entry.slot === 4)?.districtId;
+	const countyFips =
+		typeof rawCountyId === 'string' && /^county-\d{5}$/.test(rawCountyId)
+			? rawCountyId.slice('county-'.length)
+			: undefined;
+	const congressionalDistrictSource =
+		typeof input.district === 'string' && input.district.trim().length > 0
+			? ('self-reported' as const)
+			: undefined;
+	const stateSenateDistrictSource =
+		typeof stateSenateDistrict === 'string' && stateSenateDistrict.trim().length > 0
+			? derivedStateSenate !== undefined
+				? ('atlas-derived' as const)
+				: ('self-reported' as const)
+			: undefined;
+	const stateAssemblyDistrictSource =
+		typeof stateAssemblyDistrict === 'string' && stateAssemblyDistrict.trim().length > 0
+			? derivedStateAssembly !== undefined
+				? ('atlas-derived' as const)
+				: ('self-reported' as const)
+			: undefined;
+	const countyFipsSource = countyFips !== undefined ? ('atlas-derived' as const) : undefined;
+
+	if (
+		derivedStateSenate !== undefined &&
+		input.state_senate_district !== undefined &&
+		input.state_senate_district !== derivedStateSenate
+	) {
+		console.warn('[ground] client district disagrees with atlas-derived slot', { slot: 2 });
+	}
+	if (
+		derivedStateAssembly !== undefined &&
+		input.state_assembly_district !== undefined &&
+		input.state_assembly_district !== derivedStateAssembly
+	) {
+		console.warn('[ground] client district disagrees with atlas-derived slot', { slot: 3 });
+	}
 
 	const userDidKey = await serverQuery(api.users.getDidKey, { userId: userId as Id<'users'> });
 	const credential = input.district
@@ -176,8 +224,8 @@ export async function issueGroundCredential(
 				userId,
 				didKey: userDidKey?.didKey ?? null,
 				congressional: input.district,
-				stateSenate: input.state_senate_district,
-				stateAssembly: input.state_assembly_district,
+				stateSenate: stateSenateDistrict,
+				stateAssembly: stateAssemblyDistrict,
 				verificationMethod: input.verification_method
 			})
 		: null;
@@ -189,8 +237,8 @@ export async function issueGroundCredential(
 		_secret: getInternalSecret(),
 		userId: userId as Id<'users'>,
 		district: input.district,
-		stateSenateDistrict: input.state_senate_district,
-		stateAssemblyDistrict: input.state_assembly_district,
+		stateSenateDistrict,
+		stateAssemblyDistrict,
 		verificationMethod: input.verification_method,
 		credentialHash: credentialHash ?? undefined,
 		districtHash: districtHash ?? undefined,
@@ -218,6 +266,11 @@ export async function issueGroundCredential(
 		cellStraddles: input.cell_straddles,
 		cellAnchorMode: input.cell_anchor_mode,
 		atlasVersion: input.atlas_version,
+		...(countyFips !== undefined ? { countyFips } : {}),
+		...(congressionalDistrictSource !== undefined ? { congressionalDistrictSource } : {}),
+		...(stateSenateDistrictSource !== undefined ? { stateSenateDistrictSource } : {}),
+		...(stateAssemblyDistrictSource !== undefined ? { stateAssemblyDistrictSource } : {}),
+		...(countyFipsSource !== undefined ? { countyFipsSource } : {}),
 		// B3 — freshness provenance pass-through. Convex's validator drops
 		// `undefined` (legacy callers preserve the "unknown" semantics), while a
 		// `null` from the resolver is forwarded verbatim as "honestly unknown".
@@ -258,7 +311,10 @@ export async function getMyGroundState(): Promise<unknown> {
 }
 
 export async function getMyGroundRestoreState(): Promise<unknown> {
-	return serverQuery(api.ground.getMyGroundRestoreState, {});
+	return serverQuery(api.ground.getMyGroundRestoreState, {
+		_secret: getInternalSecret(),
+		asOf: Date.now()
+	});
 }
 
 export async function persistGroundBundle(input: {

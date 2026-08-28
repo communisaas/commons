@@ -1,5 +1,5 @@
 /**
- * Unified Moderation Pipeline - Permissive Civic Platform
+ * Unified Moderation Pipeline - Audience-Conditional Civic Platform
  *
  * Two-layer moderation optimized for multi-stakeholder civic engagement:
  *
@@ -8,16 +8,16 @@
  *   - Protects AI agents from manipulation attacks
  *   - 99.8% AUC for jailbreak detection
  *
- * Layer 1: `openai/gpt-oss-safeguard-20b` (via GROQ) - OPTIONAL
+ * Layer 1: `openai/gpt-oss-safeguard-20b` (via GROQ) - REQUIRED unless explicitly skipped by a trusted caller
  *   - MLCommons S1-S14 hazard taxonomy
- *   - PERMISSIVE: Only S1 (threats) and S4 (CSAM) block content
- *   - Political speech, defamation claims, electoral opinions ALLOWED
+ *   - S1 (threats) and S4 (CSAM) always block content
+ *   - S5, S7, and S10 additionally block a person-form or unevaluable audience
  *
- * Design principle: Be PERMISSIVE with user speech.
- * Platform serves ANY decision-maker (Congress, corporations, HOAs, etc.)
- * The real threat is prompt injection, not controversial opinions.
+ * The calibrated permissive policy requires a server-derived `institutional`
+ * audience verdict (`./audience.ts`). No verdict is the stricter policy.
  */
 
+import type { AudienceVerdict } from './audience';
 import { classifySafety } from './llama-guard';
 import { detectPromptInjection } from './prompt-guard';
 import type {
@@ -28,14 +28,21 @@ import type {
 } from './types';
 
 // Re-export types for external consumers
-export type {
-	ModerationResult,
-	SafetyResult,
-	PromptGuardResult,
-	TemplateModerationInput
-};
+export type { ModerationResult, SafetyResult, PromptGuardResult, TemplateModerationInput };
 export type { MLCommonsHazard } from './types';
-export { HAZARD_DESCRIPTIONS, BLOCKING_HAZARDS, NON_BLOCKING_HAZARDS } from './types';
+export {
+	HAZARD_DESCRIPTIONS,
+	BLOCKING_HAZARDS,
+	NON_BLOCKING_HAZARDS,
+	PERSON_BLOCKING_HAZARDS
+} from './types';
+export {
+	AUDIENCE_ROSTER_MAX,
+	blockingHazardsForAudience,
+	deriveAudience,
+	publishedRosterRoutes
+} from './audience';
+export type { AudienceForm, AudienceRoute, AudienceVerdict } from './audience';
 export { classifySafety } from './llama-guard';
 export { detectPromptInjection, isPromptInjection } from './prompt-guard';
 
@@ -49,6 +56,33 @@ export interface ModerationOptions {
 	skipSafety?: boolean;
 	/** Prompt injection threshold (default: 0.5, higher = more permissive) */
 	injectionThreshold?: number;
+	/** Abort both Groq calls when the owning request/job is cancelled. */
+	signal?: AbortSignal;
+	/** Server-derived audience verdict. Absent stays strict. */
+	audience?: AudienceVerdict;
+}
+
+/**
+ * Compose the exact string the moderation layers review.
+ *
+ * Invariant: every non-blank author field appears in the returned content at
+ * least once, and nothing is ever truncated. A field is skipped only when its
+ * full trimmed text is already present in what has accumulated, so the omitted
+ * bytes are still classified — no author string can escape review by being made
+ * a substring of another.
+ */
+export function buildTemplateModerationContent(input: TemplateModerationInput): string {
+	const segments: string[] = [];
+	let content = '';
+
+	for (const field of ['title', 'message_body', 'description', 'preview'] as const) {
+		const value = input[field].trim();
+		if (!value || content.includes(value)) continue;
+		segments.push(value);
+		content = segments.join('\n\n');
+	}
+
+	return content;
 }
 
 /**
@@ -56,7 +90,7 @@ export interface ModerationOptions {
  *
  * Pipeline order:
  * 1. Prompt injection detection (blocks agent manipulation)
- * 2. Content safety (only S1/S4 block - threats, CSAM)
+ * 2. Content safety (blocking policy resolved from the audience verdict)
  *
  * @param template - Template content to moderate
  * @param options - Moderation options
@@ -68,15 +102,20 @@ export async function moderateTemplate(
 ): Promise<ModerationResult> {
 	const startTime = Date.now();
 
-	// Combine title and body for comprehensive analysis
-	const content = `${template.title}\n\n${template.message_body}`;
+	// Combine every publicly-served author field for comprehensive analysis
+	const content = buildTemplateModerationContent(template);
 
 	// =========================================================================
 	// Layer 0: Prompt Injection Detection (REQUIRED)
 	// Protects AI agents from manipulation attacks
 	// =========================================================================
 	if (!options.skipPromptGuard) {
-		const promptGuard = await detectPromptInjection(content, options.injectionThreshold);
+		const promptGuard = await detectPromptInjection(content, options.injectionThreshold, {
+			signal: options.signal
+		});
+		if (promptGuard.score < 0) {
+			throw new Error('Prompt-injection moderation is unavailable');
+		}
 
 		if (!promptGuard.safe) {
 			const latencyMs = Date.now() - startTime;
@@ -97,18 +136,19 @@ export async function moderateTemplate(
 	}
 
 	// =========================================================================
-	// Layer 1: Content Safety (OPTIONAL, PERMISSIVE)
-	// Only S1 (threats) and S4 (CSAM) actually block content
+	// Layer 1: Content Safety (AUDIENCE-CONDITIONAL, FAIL-CLOSED AVAILABILITY)
 	// =========================================================================
 	let safety: SafetyResult | undefined;
 
 	if (!options.skipSafety) {
-		safety = await classifySafety(content);
+		safety = await classifySafety(content, {
+			signal: options.signal,
+			audience: options.audience
+		});
 
-		// Only block on BLOCKING_HAZARDS (S1, S4)
 		if (!safety.safe) {
 			const latencyMs = Date.now() - startTime;
-			console.log('[moderation] Template REJECTED - illegal content detected:', {
+			console.log('[moderation] Template REJECTED - blocking content detected:', {
 				blocking_hazards: safety.blocking_hazards,
 				all_hazards: safety.hazards,
 				latencyMs
@@ -163,8 +203,14 @@ export async function moderateTemplate(
  * @param content - User input to check
  * @returns PromptGuardResult with score and classification
  */
-export async function moderatePromptOnly(content: string, threshold?: number): Promise<PromptGuardResult> {
-	return detectPromptInjection(content, threshold);
+export async function moderatePromptOnly(
+	content: string,
+	threshold?: number,
+	options: { signal?: AbortSignal } = {}
+): Promise<PromptGuardResult> {
+	const result = await detectPromptInjection(content, threshold, options);
+	if (result.score < 0) throw new Error('Prompt-injection moderation is unavailable');
+	return result;
 }
 
 /**
@@ -179,7 +225,10 @@ export async function moderatePromptOnly(content: string, threshold?: number): P
  * @param text - User-supplied personalization text
  * @returns ModerationResult (approved/rejected with reason)
  */
-export async function moderatePersonalization(text: string): Promise<ModerationResult> {
+export async function moderatePersonalization(
+	text: string,
+	options: { signal?: AbortSignal; audience?: AudienceVerdict } = {}
+): Promise<ModerationResult> {
 	const startTime = Date.now();
 
 	// Skip empty text — nothing to moderate
@@ -192,7 +241,10 @@ export async function moderatePersonalization(text: string): Promise<ModerationR
 	}
 
 	// Layer 0: Prompt injection detection
-	const promptGuard = await detectPromptInjection(text);
+	const promptGuard = await detectPromptInjection(text, undefined, options);
+	if (promptGuard.score < 0) {
+		throw new Error('Prompt-injection moderation is unavailable');
+	}
 
 	if (!promptGuard.safe) {
 		const latencyMs = Date.now() - startTime;
@@ -210,8 +262,8 @@ export async function moderatePersonalization(text: string): Promise<ModerationR
 		};
 	}
 
-	// Layer 1: Content safety (only S1/S4 block)
-	const safety = await classifySafety(text);
+	// Layer 1: Content safety under the resolved audience policy
+	const safety = await classifySafety(text, options);
 
 	if (!safety.safe) {
 		const latencyMs = Date.now() - startTime;
@@ -244,4 +296,3 @@ export async function moderatePersonalization(text: string): Promise<ModerationR
 		latency_ms: latencyMs
 	};
 }
-

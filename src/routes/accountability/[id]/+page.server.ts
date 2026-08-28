@@ -1,9 +1,10 @@
 import { error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { canonicalizeOrRedirect } from '$lib/server/canonical-slug';
 import type { PageServerLoad } from './$types';
+import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
 type PublicBill = {
 	_id: string;
@@ -15,7 +16,6 @@ type PublicBill = {
 
 type PublicReceipt = {
 	_id: string;
-	proofWeight: number;
 	verifiedCount: number | null;
 	causalityClass: string;
 	dmAction: string | null;
@@ -35,18 +35,17 @@ export const load: PageServerLoad = async ({ params }) => {
 
 	const { id } = params;
 
-	const result = await serverQuery(api.legislation.getDmPublicProfile, { identifier: id });
+	const result = await serverQuery(api.legislation.getDmPublicProfile, {
+		_secret: getInternalSecret(),
+		identifier: id
+	});
 
 	// `getDmPublicProfile` now returns identity even when no receipts exist
 	// (so the public /dm/[id] route can render an identity-only state). The
 	// accountability detail view requires receipts; 404 explicitly when empty.
 	if (!result || result.bills.length === 0) throw error(404, 'No accountability records found');
 
-	canonicalizeOrRedirect(
-		result.canonicalSlug,
-		id,
-		(slug) => `/accountability/${slug}`
-	);
+	canonicalizeOrRedirect(result.canonicalSlug, id, (slug) => `/accountability/${slug}`);
 
 	return {
 		routeIdentifier: id,
@@ -66,7 +65,6 @@ export const load: PageServerLoad = async ({ params }) => {
 					},
 					receipts: (entry.receipts as PublicReceipt[]).map((receipt) => ({
 						id: receipt._id,
-						proofWeight: receipt.proofWeight,
 						verifiedCount: receipt.verifiedCount,
 						causalityClass: receipt.causalityClass,
 						dmAction: receipt.dmAction,
@@ -75,7 +73,6 @@ export const load: PageServerLoad = async ({ params }) => {
 						actionOccurredAt: isoDate(receipt.actionOccurredAt),
 						attestationDigest: receipt.attestationDigest
 					})),
-					maxProofWeight: entry.maxProofWeight,
 					totalVerified: entry.totalVerified,
 					latestAction: entry.latestAction
 				};

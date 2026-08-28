@@ -20,6 +20,10 @@
  *                        The serializable ledger is cached device-locally so a
  *                        refresh does not erase emitted reasoning/output; active
  *                        streams are restored as detached, not as still running.
+ *                        That cache is keyed to the signed-in operator, so two
+ *                        staff of one org sharing a browser never restore each
+ *                        other's drafts, and an unbound kernel neither reads
+ *                        nor writes it.
  *
  *   · signal log       — ambient org events that scroll past in the menu bar.
  *
@@ -40,14 +44,17 @@
 
 import { getContext, setContext } from 'svelte';
 import { browser } from '$app/environment';
-import type {
-	ReasoningEntry,
-	ReasoningStage
-} from '$lib/components/org/studio/StudioReasoning.svelte';
-import type { StudioSource } from '$lib/components/org/studio/StudioSources.svelte';
-import type { GeoScope } from '$lib/core/agents/types';
+import type { ReasoningEntry, ReasoningStage } from '$lib/components/org/studio/types';
+import type { GeoScope, Source } from '$lib/core/agents/types';
 import type { ActiveMessageJob } from '$lib/core/agents/message-job-recovery';
 import type { ResolutionStopReason, StudioProcessEvidence } from '$lib/types/studio-process';
+import type { ProcessedDecisionMaker } from '$lib/types/template';
+import { blocked, type Fact } from '$lib/core/fact';
+import {
+	cloneReachCensusFact,
+	parseReachCensusFact,
+	type ReachCensus
+} from '$lib/core/agents/reach-census';
 
 // ─── Spaces ──────────────────────────────────────────────────────────
 export type SpaceId = 'studio' | 'base' | 'landscape' | 'return';
@@ -185,12 +192,7 @@ export interface AuthoringIntent {
 	audienceGuidance: string;
 }
 
-export interface ResolvedDecisionMaker {
-	name: string;
-	title: string;
-	organization: string;
-	email?: string;
-}
+export type ResolvedDecisionMaker = ProcessedDecisionMaker;
 
 export type GeographicScopeSource =
 	| 'pending'
@@ -211,6 +213,7 @@ export interface OrgProcess {
 	entries: ReasoningEntry[];
 	decisionMakers: ResolvedDecisionMaker[];
 	droppedEmailless: number;
+	reachCensus: Fact<ReachCensus>;
 	resolutionStopReason: ResolutionStopReason | null;
 	resolutionStopDetail: string | null;
 	/** Scope actually sent into source discovery/message generation. */
@@ -227,7 +230,7 @@ export interface OrgProcess {
 	sourceEvidenceCandidateCount: number | null;
 	sourceEvidenceFailedCount: number | null;
 	sourceEvidenceSearchQueryCount: number | null;
-	sources: StudioSource[];
+	sources: Source[];
 	composedMessage: string;
 	/** Recoverable message-generation handle for this device-local OS process. */
 	activeMessageJob: ActiveMessageJob | null;
@@ -271,8 +274,12 @@ export function isRunning(p: OrgProcess): boolean {
 	return RUNNING_STATUSES.includes(p.status);
 }
 
-function studioProcessStorageKey(base: string): string {
-	return `commons_org_os_processes:${base || 'unknown'}`;
+/** Device-local process records are scoped to the authenticated operator FIRST,
+ * then the org base. Two staff of the same org sharing one browser therefore
+ * cannot read each other's in-flight authoring loops. Only the derived owner
+ * hash appears here — never a raw user id or email. */
+function studioProcessStorageKey(ownerHash: string, base: string): string {
+	return `commons_org_os_processes:${ownerHash}:${base || 'unknown'}`;
 }
 
 function toStoredProcess(proc: OrgProcess): StoredOrgProcess {
@@ -286,6 +293,7 @@ function toStoredProcess(proc: OrgProcess): StoredOrgProcess {
 		entries: proc.entries.map((entry) => ({ ...entry })),
 		decisionMakers: proc.decisionMakers.map((dm) => ({ ...dm })),
 		droppedEmailless: proc.droppedEmailless,
+		reachCensus: cloneReachCensusFact(proc.reachCensus),
 		resolutionStopReason: proc.resolutionStopReason,
 		resolutionStopDetail: proc.resolutionStopDetail,
 		geographicScope: proc.geographicScope ? ({ ...proc.geographicScope } as GeoScope) : null,
@@ -349,6 +357,10 @@ function restoreProcess(raw: Partial<StoredOrgProcess>, restoredAt: number): Org
 			? (raw.decisionMakers as ResolvedDecisionMaker[])
 			: [],
 		droppedEmailless: Number.isFinite(raw.droppedEmailless) ? Number(raw.droppedEmailless) : 0,
+		reachCensus: parseReachCensusFact(
+			raw.reachCensus,
+			'Restored process did not record a well-formed reach census'
+		),
 		resolutionStopReason:
 			wasRunning && !raw.composedMessage
 				? 'stopped'
@@ -387,7 +399,7 @@ function restoreProcess(raw: Partial<StoredOrgProcess>, restoredAt: number): Org
 		sourceEvidenceSearchQueryCount: Number.isFinite(raw.sourceEvidenceSearchQueryCount)
 			? Number(raw.sourceEvidenceSearchQueryCount)
 			: null,
-		sources: Array.isArray(raw.sources) ? (raw.sources as StudioSource[]) : [],
+		sources: Array.isArray(raw.sources) ? (raw.sources as Source[]) : [],
 		composedMessage: raw.composedMessage ?? '',
 		activeMessageJob: raw.activeMessageJob ?? null,
 		restoredFromDevice: true,
@@ -406,12 +418,19 @@ function restoreProcess(raw: Partial<StoredOrgProcess>, restoredAt: number): Org
 	};
 }
 
-function loadStoredProcessRegistry(base: string): {
+function loadStoredProcessRegistry(
+	ownerHash: string | null,
+	base: string
+): {
 	processes: OrgProcess[];
 	focusedProcessId: string | null;
 } {
+	// No bound operator means no readable registry. Fail closed: an unidentified
+	// kernel reads nothing at all — not even the recovery arms below, which would
+	// otherwise clear a key it has no claim to.
+	if (!ownerHash) return { processes: [], focusedProcessId: null };
 	if (!browser) return { processes: [], focusedProcessId: null };
-	const key = studioProcessStorageKey(base);
+	const key = studioProcessStorageKey(ownerHash, base);
 	try {
 		const stored = localStorage.getItem(key);
 		if (!stored) return { processes: [], focusedProcessId: null };
@@ -442,12 +461,17 @@ function loadStoredProcessRegistry(base: string): {
 }
 
 function saveStoredProcessRegistry(
+	ownerHash: string | null,
 	base: string,
 	processes: OrgProcess[],
 	focusedProcessId: string | null
 ): void {
+	// The single choke point for every write. It precedes the empty-registry
+	// delete below on purpose: an unidentified kernel must not erase a stored
+	// registry that belongs to some other operator either.
+	if (!ownerHash) return;
 	if (!browser) return;
-	const key = studioProcessStorageKey(base);
+	const key = studioProcessStorageKey(ownerHash, base);
 	try {
 		if (processes.length === 0) {
 			localStorage.removeItem(key);
@@ -472,7 +496,7 @@ function paragraphCount(message: string): number {
 	return message.split(/\n{2,}/).filter((paragraph) => paragraph.trim()).length;
 }
 
-function evaluatedSourceCount(sources: StudioSource[]): number {
+function evaluatedSourceCount(sources: Source[]): number {
 	return sources.filter(
 		(source) =>
 			!source.credibility_rationale?.startsWith('Evaluation unavailable') &&
@@ -488,16 +512,22 @@ export interface OrgSignalEvent {
 }
 
 // ─── The store ───────────────────────────────────────────────────────
-function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
+export function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 	let activeSpace = $state<SpaceId>(initialSpace);
 	let baseRoute = $state(base);
-	const restoredRegistry = loadStoredProcessRegistry(base);
+
+	// The operator this registry belongs to, as a derived hash. Plain non-rune
+	// state: it is never rendered, only read by the persistence layer. Null until
+	// the shell binds an authenticated identity — construction happens before the
+	// identity is known, so nothing is restored here.
+	let ownerHash: string | null = null;
 
 	// Process registry. An array (not a map) so ordering is stable and the rune
 	// tracks structural mutation; processes are replaced (not deep-patched) so
-	// downstream $derived recomputes cleanly.
-	let processes = $state<OrgProcess[]>(restoredRegistry.processes);
-	let focusedProcessId = $state<string | null>(restoredRegistry.focusedProcessId);
+	// downstream $derived recomputes cleanly. Seeded empty; the bound operator's
+	// stored records are adopted by setOwner, and every consumer reads reactively.
+	let processes = $state<OrgProcess[]>([]);
+	let focusedProcessId = $state<string | null>(null);
 
 	// Ambient org events. Newest first, capped so the menu bar log stays light.
 	let signal = $state<OrgSignalEvent[]>([]);
@@ -528,7 +558,7 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 	}
 
 	function persistProcesses(): void {
-		saveStoredProcessRegistry(baseRoute, processes, focusedProcessId);
+		saveStoredProcessRegistry(ownerHash, baseRoute, processes, focusedProcessId);
 	}
 
 	return {
@@ -539,9 +569,31 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 		get base() {
 			return baseRoute;
 		},
+		/** The operator hash this registry is bound to, or null while unbound. */
+		get ownerHash(): string | null {
+			return ownerHash;
+		},
 		setBase(b: string) {
 			baseRoute = b;
 			persistProcesses();
+		},
+		/** Bind the registry to one authenticated operator. Re-binding to the same
+		 * hash is inert, so the effect that drives this can re-fire on every org
+		 * navigation without killing an in-flight authoring loop. A CHANGE of
+		 * identity aborts running work and empties the live registry before the new
+		 * hash is assigned — the clear deliberately does not persist, or it would
+		 * destroy the outgoing operator's own stored records. */
+		setOwner(next: string | null): void {
+			if (next === ownerHash) return;
+			for (const p of processes) p.abort?.abort();
+			processes = [];
+			focusedProcessId = null;
+			ownerHash = next;
+			if (ownerHash) {
+				const restored = loadStoredProcessRegistry(ownerHash, baseRoute);
+				processes = restored.processes;
+				focusedProcessId = restored.focusedProcessId;
+			}
 		},
 		/** Switch the focused space. Does NOT navigate — the caller updates the URL
 		 * via shallow routing for addressability. Instant + stateful: every space
@@ -651,6 +703,7 @@ function createOrgOS(initialSpace: SpaceId = 'return', base = '') {
 				entries: [],
 				decisionMakers: [],
 				droppedEmailless: 0,
+				reachCensus: blocked('Resolution has not completed for this process'),
 				resolutionStopReason: null,
 				resolutionStopDetail: null,
 				geographicScope: null,

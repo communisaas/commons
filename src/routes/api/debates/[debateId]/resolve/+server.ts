@@ -1,7 +1,7 @@
 // Chain is authoritative for winner determination. Cannot move to Convex.
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import {
 	resolveDebate as resolveDebateOnChain,
@@ -35,7 +35,10 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		throw error(403, 'Tier 3+ verification required to resolve debates');
 	}
 
-	const debate = await serverQuery(api.debates.getPublicDetail, { identifier: debateId });
+	const debate = await serverQuery(api.debates.getPublicDetail, {
+		_secret: getInternalSecret(),
+		identifier: debateId
+	});
 
 	if (!debate) {
 		throw error(404, 'Debate not found');
@@ -112,6 +115,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		await serverMutation(api.debates.updateStatus, {
 			_secret: getInternalSecret(),
 			debateId: debate._id,
+			expectedStatus: 'active',
 			status: 'resolved',
 			winningArgumentIndex: winningIndex,
 			winningStance: winningStance,

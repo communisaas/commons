@@ -7,7 +7,7 @@ import { requirePublicApi } from '$lib/server/api-v1/gate';
 import { checkApiPlanRateLimit } from '$lib/server/api-v1/rate-limit';
 import { apiOk, apiError, parsePagination } from '$lib/server/api-v1/response';
 import { FEATURES } from '$lib/config/features';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 import type { RequestHandler } from './$types';
@@ -31,7 +31,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 		orgId: auth.orgId,
 		limit,
 		cursor: cursor ?? undefined,
-		enabled: enabledFilter === 'true' ? true : enabledFilter === 'false' ? false : undefined});
+		enabled: enabledFilter === 'true' ? true : enabledFilter === 'false' ? false : undefined
+	});
 
 	const data = result.items.map((w: any) => ({
 		id: w._id,

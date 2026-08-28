@@ -7,7 +7,7 @@
 import { json, error } from '@sveltejs/kit';
 import { env as privateEnv } from '$env/dynamic/private';
 import { z } from 'zod';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { FEATURES } from '$lib/config/features';
@@ -40,12 +40,10 @@ const DecryptedRecipientSchema = z
 const SendBodySchema = z
 	.object({
 		action: z.literal('send'),
-		expectedTotalRecipients: z.number().int().min(1).max(1_000_000).optional(),
-		finalBatch: z.boolean().optional(),
-		decryptedRecipients: z
-			.array(DecryptedRecipientSchema)
-			.min(1)
-			.max(MAX_DECRYPTED_SMS_DISPATCH)
+		pageCursor: z.union([z.string().max(2048), z.null()]),
+		expectedTotalRecipients: z.number().int().min(1).max(10_000),
+		finalBatch: z.boolean(),
+		decryptedRecipients: z.array(DecryptedRecipientSchema).min(1).max(MAX_DECRYPTED_SMS_DISPATCH)
 	})
 	.strict();
 
@@ -68,6 +66,7 @@ function textDispatchBoundary(readiness = getTextDispatchReadiness(textDispatchE
 			missing: readiness.missing,
 			runtimeFlag: readiness.runtimeFlag,
 			runnerImplemented: readiness.runnerImplemented,
+			oneShotClaimsReady: readiness.oneShotClaimsReady,
 			clientDecryptorMounted: readiness.clientDecryptorMounted,
 			clientBatchRouteMounted: readiness.clientBatchRouteMounted,
 			runtimeMessage: readiness.message
@@ -140,6 +139,29 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		const allowedSupporterIds = new Set(
 			dispatchCohort.recipients.map((recipient) => String(recipient._id))
 		);
+		if (parsed.data.pageCursor !== dispatchCohort.pageCursor) {
+			return json(
+				{
+					error: 'text_dispatch_cursor_stale',
+					message: 'The saved text-audience cursor advanced; reload the next batch before sending.',
+					blockedVerb: 'carrier_delivery',
+					preservedArtifact: 'sms_draft'
+				},
+				{ status: 409 }
+			);
+		}
+		if (recipients.length !== dispatchCohort.recipients.length) {
+			return json(
+				{
+					error: 'text_dispatch_page_incomplete',
+					message:
+						'Carrier delivery requires every recipient in the current bounded audience page.',
+					blockedVerb: 'carrier_delivery',
+					preservedArtifact: 'sms_draft'
+				},
+				{ status: 409 }
+			);
+		}
 		for (const recipient of recipients) {
 			if (!allowedSupporterIds.has(recipient.supporterId)) {
 				return json(
@@ -154,10 +176,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 				);
 			}
 		}
-		if (
-			parsed.data.finalBatch === true &&
-			(dispatchCohort.hasMore || recipients.length !== dispatchCohort.remainingCount)
-		) {
+		if (parsed.data.finalBatch !== dispatchCohort.scanDone) {
 			return json(
 				{
 					error: 'text_dispatch_final_batch_not_current',
@@ -169,15 +188,26 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 				{ status: 409 }
 			);
 		}
+		if (parsed.data.expectedTotalRecipients !== dispatchCohort.eligibleCount) {
+			return json(
+				{
+					error: 'text_dispatch_expected_total_mismatch',
+					message: 'Text dispatch expected total must match the saved audience snapshot.',
+					blockedVerb: 'carrier_delivery',
+					preservedArtifact: 'sms_draft'
+				},
+				{ status: 409 }
+			);
+		}
 		if (
-			parsed.data.expectedTotalRecipients !== undefined &&
-			parsed.data.expectedTotalRecipients < dispatchCohort.dispatchedCount + recipients.length
+			dispatchCohort.scanDone &&
+			dispatchCohort.dispatchedCount + recipients.length !== dispatchCohort.eligibleCount
 		) {
 			return json(
 				{
-					error: 'text_dispatch_expected_total_too_small',
+					error: 'text_dispatch_cohort_drift',
 					message:
-						'Text dispatch expected total cannot be lower than the already recorded and current eligible batch.',
+						'The eligible phone cohort changed after this draft was counted; recount it before launch.',
 					blockedVerb: 'carrier_delivery',
 					preservedArtifact: 'sms_draft'
 				},
@@ -187,12 +217,31 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 
 		// Check SMS quota before sending
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (!limits.usageReady) {
+			if (limits.usageRepairRequired) {
+				await serverMutation(api.subscriptions.requestPlanUsageRepair, {
+					orgSlug: params.slug
+				});
+			}
+			throw error(503, {
+				message: 'Billing usage is being rebuilt. No text was sent; retry shortly.',
+				code: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			});
+		}
 		if (limits && limits.current.smsSent + recipients.length > limits.limits.maxSms) {
 			throw error(
 				403,
 				'SMS delivery limit reached for the current billing period. Upgrade your plan to dispatch more.'
 			);
 		}
+
+		// Recheck the committed global/scoped STOP authority immediately before
+		// the first carrier call. The earlier cohort read protects selection; this
+		// boundary closes the browser-decryption window before Twilio admission.
+		await serverQuery(api.sms.assertDispatchRecipientsAuthorized, {
+			slug: params.slug,
+			supporterIds: recipients.map((recipient) => recipient.supporterId as Id<'supporters'>)
+		});
 
 		const results = [];
 		for (const recipient of recipients) {
@@ -210,6 +259,7 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		const recorded = await serverMutation(api.sms.recordDispatchBatch, {
 			slug: params.slug,
 			blastId: params.id as Id<'smsBlasts'>,
+			pageCursor: parsed.data.pageCursor,
 			expectedTotalRecipients: parsed.data.expectedTotalRecipients,
 			finalBatch: parsed.data.finalBatch,
 			results
@@ -292,8 +342,8 @@ export const DELETE: RequestHandler = async ({ params, locals }) => {
 	});
 	if (!existing) throw error(404, 'SMS draft not found');
 
-	if (existing.blast.status === 'sending') {
-		throw error(400, 'Cannot delete a blast that is currently sending');
+	if (existing.blast.status !== 'draft') {
+		throw error(400, 'Only an empty text delivery draft can be deleted');
 	}
 
 	await serverMutation(api.sms.deleteBlast, {

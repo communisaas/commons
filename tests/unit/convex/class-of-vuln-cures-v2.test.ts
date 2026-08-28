@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { normalizeEmailAudienceFilter } from '../../../convex/_audienceFilters';
 
 function source(rel: string): string {
 	return fs.readFileSync(path.resolve(process.cwd(), rel), 'utf8');
@@ -31,26 +32,42 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 
 	it('email.getBlastRecipients has runtime filter validation (no unchecked cast)', () => {
 		const svelte = source('convex/email.ts');
+		const normalizer = source('convex/_audienceFilters.ts');
 		// The unchecked `as typeof filter` cast must be gone (file-wide).
 		expect(svelte).not.toMatch(/blast\.recipientFilter as typeof filter/);
-		// Shape validation now lives in readSafeRecipientFilter: fail-closed
-		// object check + per-field validation.
+		// Shape validation is centralized in the shared email/SMS audience
+		// normalizer. readSafeRecipientFilter must delegate to that fail-closed
+		// boundary rather than maintaining a second hand-rolled shape check.
 		const readSafeStart = svelte.indexOf('function readSafeRecipientFilter');
 		expect(readSafeStart).toBeGreaterThan(-1);
-		const readSafe = svelte.slice(readSafeStart, readSafeStart + 2000);
-		expect(readSafe).toContain("if (!raw || typeof raw !== 'object') return {};");
-		expect(readSafe).toMatch(/cleanStringArray\(\s*candidate\.tagIds/);
-		expect(readSafe).toMatch(/tagId\.length > 0 && tagId\.length <= 64/);
-		expect(readSafe).toMatch(/candidate\.verified === ['"]any['"]/);
-		expect(readSafe).toMatch(/candidate\.verified === ['"]verified['"]/);
-		expect(readSafe).toMatch(/candidate\.verified === ['"]unverified['"]/);
-		// Per-item validation: cleanStringArray rejects non-arrays and filters
-		// each item through the predicate (replaces Array.isArray + .every pin).
-		const cleanStart = svelte.indexOf('function cleanStringArray');
-		expect(cleanStart).toBeGreaterThan(-1);
-		const clean = svelte.slice(cleanStart, cleanStart + 800);
-		expect(clean).toContain('if (!Array.isArray(value)) return undefined;');
-		expect(clean).toMatch(/typeof item === ['"]string['"] && predicate\(item\)/);
+		const readSafe = svelte.slice(readSafeStart, readSafeStart + 300);
+		expect(readSafe).toContain('return normalizeEmailAudienceFilter(raw)');
+		expect(normalizer).toContain("throw new Error('EMAIL_AUDIENCE_FILTER_INVALID')");
+		expect(normalizer).toContain("candidate.segmentIds");
+		expect(normalizer).toContain("candidate.verified !== 'any'");
+		expect(normalizer).toContain('MAX_AUDIENCE_FILTER_BYTES');
+
+		// Behavioral proof: malformed legacy/caller shapes fail closed instead of
+		// widening to every subscribed supporter, while a valid closed shape is
+		// normalized without changing its audience axes.
+		expect(() => normalizeEmailAudienceFilter([])).toThrow('EMAIL_AUDIENCE_FILTER_INVALID');
+		expect(() => normalizeEmailAudienceFilter({ tagIds: 'not-an-array' })).toThrow(
+			'EMAIL_AUDIENCE_TAG_FILTERS_INVALID'
+		);
+		expect(() => normalizeEmailAudienceFilter({ verified: 'maybe' })).toThrow(
+			'EMAIL_AUDIENCE_VERIFICATION_FILTER_INVALID'
+		);
+		expect(
+			normalizeEmailAudienceFilter({
+				tagIds: ['tag-id'],
+				segmentIds: ['segment-id'],
+				verified: 'verified'
+			})
+		).toEqual({
+			tagIds: ['tag-id'],
+			segmentIds: ['segment-id'],
+			verified: 'verified'
+		});
 		// getBlastRecipients validates the persisted filter at recipient-load
 		// (org-scoped lookup, fail-closed) and applies it via the shared
 		// _emailRecipientFilter module. The recipient scan is now PAGINATED
@@ -69,15 +86,28 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 
 	it('email recipient resolution paginates the supporter roster (no unbounded .collect())', () => {
 		const svelte = source('convex/email.ts');
+		const blasts = source('convex/blasts.ts');
 		// The whole-roster `.query('supporters')....collect()` send-path scans are
 		// replaced by the shared bounded/paginated resolvers. None of the four
 		// send-path resolution helpers may `.collect()` supporters directly.
 		const helper = source('convex/_emailRecipientFilter.ts');
 		expect(helper).toContain('export async function pageFilteredRecipients');
-		expect(helper).toContain('export async function collectFilteredRecipients');
-		expect(helper).toContain('export async function countFilteredRecipients');
 		// The page primitive paginates rather than collects.
-		expect(helper).toMatch(/\.paginate\(\{ cursor, numItems: scanPageSize \}\)/);
+		expect(helper).toContain('const pagination = {');
+		expect(helper).toContain('cursor,');
+		expect(helper).toContain('numItems: Math.trunc(scanPageSize)');
+		expect(helper).toContain('.paginate(pagination)');
+		expect(helper).toContain('maximumRowsRead: Math.trunc(scanPageSize) + 1');
+		expect(helper).toContain('maximumBytesRead: RECIPIENT_MAX_BYTES_PER_PAGE');
+		// Count, exact-hash, internal-send, and client-direct send paths all
+		// consume the same cursor-bearing page primitive. No helper may hide a
+		// whole-cohort collection inside a single Convex transaction.
+		expect(svelte).toContain('export const countRecipientsForFilter = query');
+		expect(svelte).toContain('export const resolveRecipientHashesForFilter = query');
+		expect(svelte).toContain('export const getBlastRecipients = internalQuery');
+		expect(blasts).toContain('export const getEncryptedSupportersForBlast = query');
+		expect(svelte).toContain('continueCursor: page.continueCursor');
+		expect(blasts).toContain('continueCursor: page.continueCursor');
 		// The recipient-resolution send paths no longer scan the whole org roster
 		// via `by_orgId` + `.collect()` (the >16K scan-cliff). The remaining
 		// supporter reads in email.ts are bounded single-key lookups
@@ -86,12 +116,17 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 		expect(svelte).not.toMatch(
 			/\.withIndex\('by_orgId',[\s\S]{0,80}?\.collect\(\)/
 		);
+		expect(blasts).not.toMatch(
+			/\.withIndex\('by_orgId',[\s\S]{0,80}?\.collect\(\)/
+		);
 	});
 
 	it('sms.createBlast/updateBlast has body cap + status enum', () => {
 		const svelte = source('convex/sms.ts');
 		expect(svelte).toMatch(/MAX_SMS_BODY_LENGTH\s*=\s*2048/);
-		expect(svelte).toMatch(/ALLOWED_SMS_BLAST_STATUSES.*=\s*\["draft",\s*"sending",\s*"sent",\s*"failed"\]/);
+		expect(svelte).toMatch(
+			/ALLOWED_SMS_BLAST_STATUSES.*=\s*\[['"]draft['"],\s*['"]sending['"],\s*['"]sent['"],\s*['"]failed['"]\]/
+		);
 		expect(svelte).toContain('SMS_BODY_TOO_LARGE');
 		expect(svelte).toContain('FROM_NUMBER_TOO_LARGE');
 		expect(svelte).toContain('TOTAL_RECIPIENTS_TOO_LARGE');
@@ -142,7 +177,7 @@ describe('class-of-vulnerability cures, second sweep (source-text pins)', () => 
 
 	it('importBatch pre-validates cross-org tagIds + logs row errors', () => {
 		const svelte = source('convex/supporters.ts');
-		const start = svelte.indexOf('export const importBatch = mutation');
+		const start = svelte.indexOf('export const importBatch = internalMutation');
 		expect(start).toBeGreaterThan(-1);
 		const next = svelte.indexOf('export const ', start + 30);
 		const importB = svelte.slice(start, next > 0 ? next : start + 9000);

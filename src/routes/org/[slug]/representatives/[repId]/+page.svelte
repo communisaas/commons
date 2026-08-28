@@ -35,7 +35,6 @@
 
 	type ProofReceipt = {
 		id: string;
-		proofWeight: number;
 		dmAction?: string | null;
 		alignment?: string | null;
 		causalityClass?: string | null;
@@ -89,7 +88,6 @@
 				date: r.proofDeliveredAt,
 				id: r.id,
 				bill: r.bill,
-				proofWeight: r.proofWeight,
 				dmAction: r.dmAction,
 				alignment: r.alignment,
 				causalityClass: r.causalityClass,
@@ -415,16 +413,10 @@
 			<h2 class="text-text-secondary mb-3 text-sm font-medium tracking-wider uppercase">
 				Accountability Summary
 			</h2>
-			<div class="grid grid-cols-2 gap-4 sm:grid-cols-4">
+			<div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
 				<div>
 					<p class="text-text-primary text-2xl font-semibold">{data.accountability.receiptCount}</p>
 					<p class="text-text-quaternary mt-0.5 text-xs">Proof receipts</p>
-				</div>
-				<div>
-					<p class="text-text-primary text-2xl font-semibold">
-						{data.accountability.avgProofWeight}
-					</p>
-					<p class="text-text-quaternary mt-0.5 text-xs">Avg proof weight</p>
 				</div>
 				<div>
 					<p class="text-2xl font-semibold text-green-400">{data.accountability.alignedCount}</p>
@@ -522,13 +514,11 @@
 										</span>
 									</div>
 									<p class="text-text-quaternary mt-1 text-xs">
-										Weight: {(item.proofWeight as number).toFixed(2)}
 										{#if item.dmAction}
-											<span class="mx-1">&middot;</span>
 											Action: {item.dmAction}
 										{/if}
 										{#if item.causalityClass && item.causalityClass !== 'pending'}
-											<span class="mx-1">&middot;</span>
+											{#if item.dmAction}<span class="mx-1">&middot;</span>{/if}
 											{item.causalityClass}
 										{/if}
 									</p>

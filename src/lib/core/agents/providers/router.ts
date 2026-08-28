@@ -15,6 +15,7 @@ import type {
 	ProviderRegistration,
 	RouterOptions
 } from './types';
+import { attributeProviderFailure } from '../resolve-failure';
 
 // ============================================================================
 // Router Implementation
@@ -96,6 +97,7 @@ export class DecisionMakerRouter {
 			return result;
 		} catch (error) {
 			console.error(`[router] Provider ${provider.name} failed:`, error);
+			attributeProviderFailure(provider.name, error);
 
 			if (options?.allowFallback) {
 				return await this.attemptFallback(context, provider, options);
@@ -115,6 +117,9 @@ export class DecisionMakerRouter {
 		timeoutMs: number = 600_000 // 10 minutes — 4-stage pipeline with parallel chunks runs 120-240s typical
 	): Promise<DecisionMakerResult> {
 		const controller = new AbortController();
+		const abortFromOwner = () => controller.abort(context.signal?.reason);
+		if (context.signal?.aborted) abortFromOwner();
+		else context.signal?.addEventListener('abort', abortFromOwner, { once: true });
 		const timeout = setTimeout(
 			() => controller.abort(new Error(`Resolution timeout after ${timeoutMs}ms`)),
 			timeoutMs
@@ -124,6 +129,7 @@ export class DecisionMakerRouter {
 			return await provider.resolve({ ...context, signal: controller.signal });
 		} finally {
 			clearTimeout(timeout);
+			context.signal?.removeEventListener('abort', abortFromOwner);
 		}
 	}
 

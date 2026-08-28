@@ -127,8 +127,9 @@ export interface ComponentTemplate {
 	subject?: string | null;
 	message_body?: string;
 	preview?: string;
-	recipient_config?: UnknownRecord;
+	recipient_config?: UnknownRecord | null;
 	recipientEmails?: string[];
+	recipient_count?: number;
 	metrics: { sent?: number; delivered?: number; views?: number };
 	[key: string]: unknown;
 }

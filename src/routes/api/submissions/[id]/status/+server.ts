@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { computePseudonymousId } from '$lib/core/privacy/pseudonymous-id';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
 
@@ -25,7 +25,8 @@ export const GET: RequestHandler = async ({ locals, params }) => {
 	const result = await serverQuery(api.v1api.getSubmissionStatus, {
 		_secret: getInternalSecret(),
 		submissionId: id,
-		pseudonymousId: callerPseudoId});
+		pseudonymousId: callerPseudoId
+	});
 
 	if (!result) {
 		throw error(404, 'Submission not found');

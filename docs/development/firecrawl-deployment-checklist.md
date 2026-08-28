@@ -43,16 +43,13 @@
        https://api.firecrawl.dev/v1/account
   ```
 
-#### Staging
+#### Staging and production
 
-- [ ] **Set `FIRECRAWL_API_KEY` in staging Convex deployment**
-- [ ] **Test with real organization discovery**
-
-#### Production
-
-- [ ] **Set `FIRECRAWL_API_KEY` as a Cloudflare Pages secret**
-- [ ] **Set `FIRECRAWL_API_KEY` in the production Convex deployment** (`npx convex env set`)
-- [ ] **Enable production error logging**
+- [ ] **Do not persist `FIRECRAWL_API_KEY` in Convex or Pages project defaults**
+- [ ] **Use the protected release posture in `docs/ops/PAID-PROVIDER-POSTURE.md`**
+- [ ] **Prove the exact Firecrawl account is Free with billing/PAYG disabled**
+- [ ] **Test real discovery only through the budget-gated deployed runtime**
+- [ ] **Enable production error logging without logging credentials**
 
 ### 3. Testing
 

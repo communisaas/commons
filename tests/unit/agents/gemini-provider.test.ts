@@ -15,6 +15,9 @@ import { vi, describe, it, expect, beforeEach, afterEach, type Mock } from 'vite
 
 const mockGenerateContent = vi.hoisted(() => vi.fn());
 const mockGenerateContentStream = vi.hoisted(() => vi.fn());
+const mockBuildContactSynthesisPrompt = vi.hoisted(() =>
+	vi.fn().mockReturnValue('contact synthesis prompt')
+);
 
 // Mock the Google GenAI SDK
 vi.mock('@google/genai', () => {
@@ -40,14 +43,27 @@ vi.mock('$lib/core/agents/agents/decision-maker', () => ({
 vi.mock('$lib/core/agents/exa-search', () => ({
 	searchWeb: vi.fn().mockResolvedValue([]),
 	readPage: vi.fn().mockResolvedValue(null),
-	prunePageContent: vi.fn().mockImplementation((text: string) => text)
+	prunePageContent: vi.fn().mockImplementation((text: string) => text),
+	providerUrlLogLabel: vi.fn().mockReturnValue('https://safe.example pathChars=1'),
+	isUsableContactEmail: vi.fn(
+		(email: string) => !/(?:no-?reply|example\.com|sentry\.io|localhost)/iu.test(email)
+	),
+	normalizeExternalHttpUrl: vi.fn((value: unknown) => {
+		if (typeof value !== 'string') return null;
+		try {
+			const parsed = new URL(value);
+			return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.toString() : null;
+		} catch {
+			return null;
+		}
+	})
 }));
 
 // Mock contact cache
 vi.mock('$lib/core/agents/utils/contact-cache', () => ({
 	getCachedContacts: vi.fn().mockResolvedValue([]),
 	upsertResolvedContacts: vi.fn().mockResolvedValue(undefined),
-	normalizeOrgKey: (key: string) => key.trim().toUpperCase().replace(/\s+/g, ':'),
+	normalizeOrgKey: (key: string) => key.trim().toUpperCase().replace(/\s+/g, ':')
 }));
 
 // Mock thought emitter
@@ -58,21 +74,28 @@ vi.mock('$lib/core/thoughts/emitter', () => ({
 }));
 
 // Mock prompts module (decision-maker prompts)
-vi.mock('$lib/core/agents/prompts/decision-maker', () => ({
-	ROLE_DISCOVERY_PROMPT: 'system prompt',
-	buildRoleDiscoveryPrompt: vi.fn().mockReturnValue('role prompt'),
-	IDENTITY_EXTRACTION_PROMPT: 'identity system {CURRENT_DATE}',
-	buildIdentityExtractionPrompt: vi.fn().mockReturnValue('identity prompt'),
-	SINGLE_CONTACT_PROMPT: 'single contact {MAX_SEARCHES} {MAX_PAGE_READS} {DOMAIN_HINT} {CURRENT_DATE}',
-	buildSingleContactPrompt: vi.fn().mockReturnValue('single contact prompt'),
-	generateDomainHintForOrg: vi.fn().mockReturnValue(''),
-	PAGE_SELECTION_PROMPT: 'page selection {CURRENT_DATE} {MAX_PAGES_TOTAL}',
-	buildPageSelectionPrompt: vi.fn().mockReturnValue('page selection prompt'),
-	CONTACT_SYNTHESIS_PROMPT: 'contact synthesis {CURRENT_DATE} {DOMAIN_CONTEXT}',
-	buildContactSynthesisPrompt: vi.fn().mockReturnValue('contact synthesis prompt'),
-	detectOrgTypes: vi.fn().mockReturnValue([]),
-	generateDomainContext: vi.fn().mockReturnValue('')
-}));
+vi.mock('$lib/core/agents/prompts/decision-maker', async () => {
+	const actual = await vi.importActual<
+		typeof import('$lib/core/agents/prompts/decision-maker')
+	>('$lib/core/agents/prompts/decision-maker');
+	return {
+		ROLE_DISCOVERY_PROMPT: 'system prompt',
+		buildRoleDiscoveryPrompt: vi.fn().mockReturnValue('role prompt'),
+		IDENTITY_EXTRACTION_PROMPT: 'identity system {CURRENT_DATE}',
+		buildIdentityExtractionPrompt: vi.fn().mockReturnValue('identity prompt'),
+		SINGLE_CONTACT_PROMPT:
+			'single contact {MAX_SEARCHES} {MAX_PAGE_READS} {DOMAIN_HINT} {CURRENT_DATE}',
+		buildSingleContactPrompt: vi.fn().mockReturnValue('single contact prompt'),
+		generateDomainHintForOrg: vi.fn().mockReturnValue(''),
+		PAGE_SELECTION_PROMPT: 'page selection {CURRENT_DATE} {MAX_PAGES_TOTAL}',
+		buildPageSelectionPrompt: vi.fn().mockReturnValue('page selection prompt'),
+		CONTACT_SYNTHESIS_PROMPT: actual.CONTACT_SYNTHESIS_PROMPT,
+		buildContactSynthesisPrompt: mockBuildContactSynthesisPrompt,
+		renderRecordBlockSection: actual.renderRecordBlockSection,
+		detectOrgTypes: actual.detectOrgTypes,
+		generateDomainContext: actual.generateDomainContext
+	};
+});
 
 // ============================================================================
 // Import SUT (after mocks are registered)
@@ -80,28 +103,76 @@ vi.mock('$lib/core/agents/prompts/decision-maker', () => ({
 
 import {
 	getGeminiClient,
-	generate,
-	generateStream,
-	generateStreamWithThoughts,
-	generateWithThoughts,
-	interact,
+	generate as generateRaw,
+	generateStream as generateStreamRaw,
+	generateStreamWithThoughts as generateStreamWithThoughtsRaw,
+	generateWithThoughts as generateWithThoughtsRaw,
+	interact as interactRaw,
 	extractTokenUsage,
-	GEMINI_CONFIG
+	GEMINI_CONFIG,
+	isRetryableGeminiError
 } from '$lib/core/agents/gemini-client';
-import { GeminiDecisionMakerProvider, isSentinelName } from '$lib/core/agents/providers/gemini-provider';
+import {
+	allowlistedPageSelections,
+	GeminiDecisionMakerProvider,
+	isSentinelName,
+	normalizeAndCapIdentityFanout
+} from '$lib/core/agents/providers/gemini-provider';
+import { renderRecordBlockSection } from '$lib/core/agents/prompts/decision-maker';
+import { extractContactHints } from '$lib/core/agents/agents/decision-maker';
+import { readPage, searchWeb } from '$lib/core/agents/exa-search';
+import { MAX_DECISION_MAKER_FANOUT } from '$lib/core/agents/cogs-fanout';
+import {
+	DECISION_MAKER_PROVIDER_LIMITS,
+	GEMINI_STAGE_ENVELOPES
+} from '$lib/core/agents/provider-call-envelope';
 import type { ResolveContext } from '$lib/core/agents/providers/types';
+import type { GenerateOptions } from '$lib/core/agents/types';
+
+type TestGenerateOptions = Omit<GenerateOptions, 'stage'>;
+
+function testOptions(options: TestGenerateOptions = {}): GenerateOptions {
+	return { stage: 'delegation-policy', ...options };
+}
+
+function generate(prompt: string, options: TestGenerateOptions = {}) {
+	return generateRaw(prompt, testOptions(options));
+}
+
+function generateStream(prompt: string, options: TestGenerateOptions = {}) {
+	return generateStreamRaw(prompt, testOptions(options));
+}
+
+function generateStreamWithThoughts<T>(prompt: string, options: TestGenerateOptions = {}) {
+	return generateStreamWithThoughtsRaw<T>(prompt, testOptions(options));
+}
+
+function generateWithThoughts<T>(
+	prompt: string,
+	options: TestGenerateOptions = {},
+	onThought?: (thought: string) => void
+) {
+	return generateWithThoughtsRaw<T>(prompt, testOptions(options), onThought);
+}
+
+function interact(input: string, options: TestGenerateOptions = {}) {
+	return interactRaw(input, testOptions(options));
+}
 
 // ============================================================================
 // Helpers
 // ============================================================================
 
 /** Build a minimal Gemini SDK response */
-function makeResponse(text: string, opts: {
-	usageMetadata?: Record<string, number>;
-	finishReason?: string;
-	candidates?: unknown[];
-	functionCalls?: unknown[];
-} = {}) {
+function makeResponse(
+	text: string,
+	opts: {
+		usageMetadata?: Record<string, number>;
+		finishReason?: string;
+		candidates?: unknown[];
+		functionCalls?: unknown[];
+	} = {}
+) {
 	return {
 		text,
 		usageMetadata: opts.usageMetadata ?? {
@@ -109,29 +180,44 @@ function makeResponse(text: string, opts: {
 			candidatesTokenCount: 50,
 			totalTokenCount: 150
 		},
-		candidates: opts.candidates ?? [{
-			content: { parts: [{ text }] },
-			finishReason: opts.finishReason ?? 'STOP'
-		}],
+		candidates: opts.candidates ?? [
+			{
+				content: { parts: [{ text }] },
+				finishReason: opts.finishReason ?? 'STOP'
+			}
+		],
 		functionCalls: opts.functionCalls ?? undefined
 	};
 }
 
 /** Build an async iterable for stream mocking */
-function makeStream(chunks: Array<{ text?: string; thought?: boolean; groundingMetadata?: unknown; usageMetadata?: unknown }>) {
+function makeStream(
+	chunks: Array<{
+		text?: string;
+		thought?: boolean;
+		groundingMetadata?: unknown;
+		usageMetadata?: unknown;
+	}>
+) {
 	return {
 		[Symbol.asyncIterator]: async function* () {
 			for (const chunk of chunks) {
-				const parts = chunk.text ? [{
-					text: chunk.text,
-					...(chunk.thought ? { thought: true } : {})
-				}] : [];
+				const parts = chunk.text
+					? [
+							{
+								text: chunk.text,
+								...(chunk.thought ? { thought: true } : {})
+							}
+						]
+					: [];
 				yield {
 					text: chunk.text,
-					candidates: [{
-						content: { parts },
-						groundingMetadata: chunk.groundingMetadata
-					}],
+					candidates: [
+						{
+							content: { parts },
+							groundingMetadata: chunk.groundingMetadata
+						}
+					],
 					usageMetadata: chunk.usageMetadata
 				};
 			}
@@ -156,7 +242,7 @@ describe('Gemini Client — Singleton & Configuration', () => {
 
 	it('GEMINI_CONFIG has sensible defaults', () => {
 		expect(GEMINI_CONFIG.defaults.temperature).toBe(0.3);
-		expect(GEMINI_CONFIG.defaults.maxOutputTokens).toBe(65536);
+		expect(GEMINI_CONFIG.defaults.maxOutputTokens).toBe(4096);
 		expect(GEMINI_CONFIG.defaults.thinkingLevel).toBe('low');
 	});
 
@@ -244,45 +330,69 @@ describe('generate — happy path', () => {
 		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
 		await generate('test', { temperature: 0.9, maxOutputTokens: 1024 });
 
-		expect(mockGenerateContent).toHaveBeenCalledWith(expect.objectContaining({
-			config: expect.objectContaining({
-				temperature: 0.9,
-				maxOutputTokens: 1024
+		expect(mockGenerateContent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				config: expect.objectContaining({
+					temperature: 0.9,
+					maxOutputTokens: 1024
+				})
 			})
-		}));
+		);
 	});
 
-	it('uses GEMINI_CONFIG defaults when options are omitted', async () => {
+	it('uses the reviewed stage output ceiling when options are omitted', async () => {
 		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
 		await generate('test');
 
-		expect(mockGenerateContent).toHaveBeenCalledWith(expect.objectContaining({
-			config: expect.objectContaining({
-				temperature: 0.3,
-				maxOutputTokens: 65536
+		expect(mockGenerateContent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				config: expect.objectContaining({
+					temperature: 0.3,
+					maxOutputTokens: 2048
+				})
 			})
-		}));
+		);
 	});
 
 	it('passes systemInstruction when provided', async () => {
 		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
 		await generate('test', { systemInstruction: 'You are a helper' });
 
-		expect(mockGenerateContent).toHaveBeenCalledWith(expect.objectContaining({
-			config: expect.objectContaining({
-				systemInstruction: 'You are a helper'
+		expect(mockGenerateContent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				config: expect.objectContaining({
+					systemInstruction: 'You are a helper'
+				})
 			})
-		}));
+		);
 	});
 
 	it('sends prompt as contents', async () => {
 		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
 		await generate('my test prompt');
 
-		expect(mockGenerateContent).toHaveBeenCalledWith(expect.objectContaining({
-			contents: 'my test prompt',
-			model: GEMINI_CONFIG.model
-		}));
+		expect(mockGenerateContent).toHaveBeenCalledWith(
+			expect.objectContaining({
+				contents: 'my test prompt',
+				model: GEMINI_CONFIG.model
+			})
+		);
+	});
+
+	it('enforces prompt/output ceilings before any SDK call', async () => {
+		await expect(generate('x'.repeat(16 * 1024 + 1))).rejects.toThrow(/prompt exceeds/u);
+		await expect(generate('test', { maxOutputTokens: 2_049 })).rejects.toThrow(/output exceeds/u);
+		expect(mockGenerateContent).not.toHaveBeenCalled();
+	});
+
+	it('disables SDK retries and forwards timeout plus cancellation', async () => {
+		const controller = new AbortController();
+		mockGenerateContent.mockResolvedValueOnce(makeResponse('result'));
+		await generate('test', { signal: controller.signal });
+
+		const config = mockGenerateContent.mock.calls[0][0].config;
+		expect(config.httpOptions).toEqual({ timeout: 30_000, retryOptions: { attempts: 1 } });
+		expect(config.abortSignal).toBe(controller.signal);
 	});
 });
 
@@ -348,28 +458,24 @@ describe('generate — retry logic', () => {
 		vi.restoreAllMocks();
 	});
 
-	it('retries on RESOURCE_EXHAUSTED and succeeds on third attempt', async () => {
+	it('retries a classified transient response at most once', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
 		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
 			.mockRejectedValueOnce(rateLimitError)
 			.mockResolvedValueOnce(makeResponse('finally'));
 
 		const result = await generate('test');
 
 		expect(result.text).toBe('finally');
-		expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 	});
 
-	it('throws after max retries (3) on persistent rate limiting', async () => {
+	it('throws after the two-attempt stage ceiling on persistent rate limiting', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
-		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
-			.mockRejectedValueOnce(rateLimitError)
-			.mockRejectedValueOnce(rateLimitError);
+		mockGenerateContent.mockRejectedValueOnce(rateLimitError).mockRejectedValueOnce(rateLimitError);
 
-		await expect(generate('test')).rejects.toThrow(/Failed to generate content after 3 attempts/);
-		expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+		await expect(generate('test')).rejects.toThrow(/Failed to generate content after 2 attempts/);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
 	});
 
 	it('does not retry on INVALID_ARGUMENT (immediate failure)', async () => {
@@ -388,31 +494,76 @@ describe('generate — retry logic', () => {
 		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 
-	it('retries on unknown errors and recovers', async () => {
+	it('does not retry an ambiguous unknown error', async () => {
 		mockGenerateContent
 			.mockRejectedValueOnce(new Error('Network error'))
 			.mockResolvedValueOnce(makeResponse('recovered'));
 
-		const result = await generate('test');
-
-		expect(result.text).toBe('recovered');
-		expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+		await expect(generate('test')).rejects.toThrow(/Network error/);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 
-	it('calls setTimeout with exponential backoff delays (1s, 2s)', async () => {
+	it('bounds and sanitizes provider-controlled terminal errors', async () => {
+		const googleKey = `AIza${'a'.repeat(35)}`;
+		mockGenerateContent.mockRejectedValueOnce(
+			new Error(`provider\r\nkey=${googleKey}\u0000 ${'\ud83d\udea8'.repeat(10_000)}`)
+		);
+
+		let failure: Error | undefined;
+		try {
+			await generate('test');
+		} catch (error) {
+			if (error instanceof Error) failure = error;
+		}
+
+		expect(failure).toBeInstanceOf(Error);
+		const message = failure?.message ?? '';
+		expect(new TextEncoder().encode(message).byteLength).toBeLessThanOrEqual(512);
+		expect(message).not.toContain(googleKey);
+		expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+	});
+
+	it('classifies only explicit provider transients and never aborts or local errors', () => {
+		expect(isRetryableGeminiError(Object.assign(new Error('busy'), { status: 503 }))).toBe(true);
+		expect(
+			isRetryableGeminiError(Object.assign(new Error('quota'), { code: 'RESOURCE_EXHAUSTED' }))
+		).toBe(true);
+		expect(isRetryableGeminiError(new DOMException('cancelled', 'AbortError'))).toBe(false);
+		expect(isRetryableGeminiError(new SyntaxError('bad json'))).toBe(false);
+		expect(isRetryableGeminiError(new Error('Network error'))).toBe(false);
+	});
+
+	it('uses one bounded backoff before the sole transient retry', async () => {
 		const rateLimitError = Object.assign(new Error('Rate limited'), { code: 'RESOURCE_EXHAUSTED' });
 		mockGenerateContent
-			.mockRejectedValueOnce(rateLimitError)
 			.mockRejectedValueOnce(rateLimitError)
 			.mockResolvedValueOnce(makeResponse('ok'));
 
 		await generate('test');
 
 		const setTimeoutCalls = (globalThis.setTimeout as unknown as Mock).mock.calls;
-		// First retry: 1000 * 2^0 = 1000
-		expect(setTimeoutCalls[0][1]).toBe(1000);
-		// Second retry: 1000 * 2^1 = 2000
-		expect(setTimeoutCalls[1][1]).toBe(2000);
+		expect(setTimeoutCalls).toHaveLength(1);
+		expect(setTimeoutCalls[0][1]).toBe(500);
+	});
+
+	it('does not start a retry when the request is aborted during backoff', async () => {
+		const controller = new AbortController();
+		const rateLimitError = Object.assign(new Error('Rate limited'), {
+			code: 'RESOURCE_EXHAUSTED'
+		});
+		mockGenerateContent
+			.mockRejectedValueOnce(rateLimitError)
+			.mockResolvedValueOnce(makeResponse('must not run'));
+		(globalThis.setTimeout as unknown as Mock).mockImplementationOnce(() => {
+			controller.abort(new DOMException('request closed', 'AbortError'));
+			return 0 as unknown as ReturnType<typeof setTimeout>;
+		});
+
+		await expect(generate('test', { signal: controller.signal })).rejects.toMatchObject({
+			name: 'AbortError'
+		});
+		expect(mockGenerateContent).toHaveBeenCalledTimes(1);
 	});
 });
 
@@ -437,7 +588,8 @@ describe('generate — truncation and JSON recovery', () => {
 
 	it('recovers partial JSON from truncated response', async () => {
 		// Simulate a truncated response with partial JSON that contains extractable fields
-		const truncatedJson = '{"subject_line": "Test Subject", "core_message": "Test message", "topics": ["env';
+		const truncatedJson =
+			'{"subject_line": "Test Subject", "core_message": "Test message", "topics": ["env';
 		mockGenerateContent.mockResolvedValueOnce({
 			...makeResponse(truncatedJson, { finishReason: 'MAX_TOKENS' }),
 			text: truncatedJson
@@ -455,7 +607,9 @@ describe('generate — truncation and JSON recovery', () => {
 	it('recovers empty object from garbled text with braces (best-effort recovery)', async () => {
 		// The recovery system tries to extract anything with braces.
 		// When text has no useful structure, it recovers an empty or minimal object.
-		const garbled = '{{not valid}}';
+		const privateProviderOutput = 'PRIVATE_PROVIDER_OUTPUT_MUST_NOT_BE_LOGGED';
+		const garbled = `{{not valid ${privateProviderOutput}}}`;
+		const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 		mockGenerateContent.mockResolvedValueOnce({
 			...makeResponse(garbled),
 			text: garbled
@@ -466,6 +620,8 @@ describe('generate — truncation and JSON recovery', () => {
 			responseSchema: { type: 'object' }
 		});
 		expect(result.text).toBeDefined();
+		expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(privateProviderOutput);
+		errorSpy.mockRestore();
 	});
 
 	it('returns non-JSON response without schema validation', async () => {
@@ -487,10 +643,7 @@ describe('generateStream', () => {
 
 	it('yields thought chunks for thought parts', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(
-			makeStream([
-				{ text: 'thinking about the problem', thought: true },
-				{ text: 'final answer' }
-			])
+			makeStream([{ text: 'thinking about the problem', thought: true }, { text: 'final answer' }])
 		);
 
 		const chunks = [];
@@ -513,7 +666,7 @@ describe('generateStream', () => {
 			chunks.push(chunk);
 		}
 
-		const textChunks = chunks.filter(c => c.type === 'text');
+		const textChunks = chunks.filter((c) => c.type === 'text');
 		expect(textChunks).toHaveLength(2);
 	});
 
@@ -527,7 +680,7 @@ describe('generateStream', () => {
 			chunks.push(chunk);
 		}
 
-		const complete = chunks.find(c => c.type === 'complete');
+		const complete = chunks.find((c) => c.type === 'complete');
 		expect(complete?.content).toBe('Hello World');
 	});
 
@@ -544,30 +697,47 @@ describe('generateStream', () => {
 		expect(chunks[0].content).toContain('Stream crashed');
 	});
 
-	it('configures thinking budget based on thinkingLevel', async () => {
+	it('bounds and sanitizes stream error chunks', async () => {
+		const googleKey = `AIza${'a'.repeat(35)}`;
+		mockGenerateContentStream.mockRejectedValueOnce(
+			new Error(`stream\r\n${googleKey}\u0000 ${'x'.repeat(10_000)}`)
+		);
+
+		const chunks = [];
+		for await (const chunk of generateStream('test')) chunks.push(chunk);
+
+		expect(new TextEncoder().encode(chunks[0].content).byteLength).toBeLessThanOrEqual(512);
+		expect(chunks[0].content).not.toContain(googleKey);
+		expect(chunks[0].content).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+	});
+
+	it('caps high thinking at the reviewed stage budget', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
 
 		// Consume the generator
-		for await (const _ of generateStream('test', { thinkingLevel: 'high' })) {}
+		for await (const _ of generateStream('test', { thinkingLevel: 'high' })) {
+		}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(8192);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 
 	it('uses low thinking budget for thinkingLevel=low', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
-		for await (const _ of generateStream('test', { thinkingLevel: 'low' })) {}
+		for await (const _ of generateStream('test', { thinkingLevel: 'low' })) {
+		}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(1024);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 
-	it('uses medium thinking budget by default', async () => {
+	it('uses the bounded low thinking budget by default', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: 'result' }]));
-		for await (const _ of generateStream('test')) {}
+		for await (const _ of generateStream('test')) {
+		}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
-		expect(callConfig.thinkingConfig.thinkingBudget).toBe(4096);
+		expect(callConfig.thinkingConfig.thinkingBudget).toBe(512);
 	});
 });
 
@@ -586,7 +756,9 @@ describe('generateStreamWithThoughts', () => {
 
 		const gen = generateStreamWithThoughts('test', { systemInstruction: 'Be helpful' });
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
 		expect(callConfig.systemInstruction).toContain('Be helpful');
@@ -599,7 +771,9 @@ describe('generateStreamWithThoughts', () => {
 
 		const gen = generateStreamWithThoughts<{ subject_line: string }>('test');
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.parseSuccess).toBe(true);
@@ -620,7 +794,9 @@ describe('generateStreamWithThoughts', () => {
 
 		const gen = generateStreamWithThoughts('test', { enableGrounding: true });
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.groundingMetadata).toBeDefined();
@@ -631,14 +807,22 @@ describe('generateStreamWithThoughts', () => {
 	it('captures token usage from stream (latest wins)', async () => {
 		mockGenerateContentStream.mockResolvedValueOnce(
 			makeStream([
-				{ text: 'part1', usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 } },
-				{ text: 'part2', usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 } }
+				{
+					text: 'part1',
+					usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5, totalTokenCount: 15 }
+				},
+				{
+					text: 'part2',
+					usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 50, totalTokenCount: 150 }
+				}
 			])
 		);
 
 		const gen = generateStreamWithThoughts('test');
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.tokenUsage?.totalTokens).toBe(150); // Latest chunk wins
@@ -651,7 +835,9 @@ describe('generateStreamWithThoughts', () => {
 
 		const gen = generateStreamWithThoughts<{ foo: string }>('test');
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.parseSuccess).toBe(false);
@@ -674,7 +860,30 @@ describe('generateStreamWithThoughts', () => {
 		expect(result.parseError).toContain('API down');
 
 		// Should have yielded an error chunk
-		expect(chunks.some(c => c.type === 'error')).toBe(true);
+		expect(chunks.some((c) => c.type === 'error')).toBe(true);
+	});
+
+	it('uses the same bounded sanitized text for stream errors and parse errors', async () => {
+		const bearer = `Bearer ${'b'.repeat(48)}`;
+		mockGenerateContentStream.mockRejectedValueOnce(
+			new Error(`provider\r\n${bearer}\u0000 ${'\ud83d\udea8'.repeat(10_000)}`)
+		);
+
+		const gen = generateStreamWithThoughts('test');
+		const chunks = [];
+		let iterResult = await gen.next();
+		while (!iterResult.done) {
+			chunks.push(iterResult.value);
+			iterResult = await gen.next();
+		}
+
+		const errorChunk = chunks.find((chunk) => chunk.type === 'error');
+		expect(errorChunk?.content).toBe(iterResult.value.parseError);
+		expect(new TextEncoder().encode(iterResult.value.parseError ?? '').byteLength).toBeLessThanOrEqual(
+			512
+		);
+		expect(iterResult.value.parseError).not.toContain(bearer);
+		expect(iterResult.value.parseError).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
 	});
 
 	it('enables grounding in config when enableGrounding is set', async () => {
@@ -682,7 +891,9 @@ describe('generateStreamWithThoughts', () => {
 
 		const gen = generateStreamWithThoughts('test', { enableGrounding: true });
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const callConfig = mockGenerateContentStream.mock.calls[0][0].config;
 		expect(callConfig.tools).toEqual([{ googleSearch: {} }]);
@@ -780,6 +991,30 @@ describe('interact', () => {
 	});
 });
 
+describe('record-block Fact rendering', () => {
+	it('renders present, absent, withheld, and blocked as four distinct final-consumer strings', () => {
+		const rendered = {
+			present: renderRecordBlockSection({
+				state: 'present',
+				value: { records: ['clerk@city.gov | office | City Clerk | Clerk Office'], truncated: false }
+			}),
+			absent: renderRecordBlockSection({ state: 'absent' }),
+			withheld: renderRecordBlockSection({ state: 'withheld', why: 'privacy policy' }),
+			blocked: renderRecordBlockSection({ state: 'blocked', why: 'raw HTML unavailable' })
+		};
+
+		expect(new Set(Object.values(rendered)).size).toBe(4);
+		expect(rendered.present).toBe(
+			'Record blocks (extractor observations — classify person vs office; never mix different records):\n  clerk@city.gov | office | City Clerk | Clerk Office\n'
+		);
+		expect(rendered.absent).toBe(
+			'Record blocks: ABSENT — raw HTML was retrieved and fully scanned; no eligible record was published.\n'
+		);
+		expect(rendered.withheld).toBe('Record blocks: WITHHELD — privacy policy.\n');
+		expect(rendered.blocked).toBe('Record blocks: BLOCKED — raw HTML unavailable.\n');
+	});
+});
+
 // ============================================================================
 // Tests: GeminiDecisionMakerProvider
 // ============================================================================
@@ -792,6 +1027,12 @@ describe('GeminiDecisionMakerProvider', () => {
 		provider = new GeminiDecisionMakerProvider();
 		mockGenerateContent.mockReset();
 		mockGenerateContentStream.mockReset();
+		mockBuildContactSynthesisPrompt.mockReset().mockReturnValue('contact synthesis prompt');
+		vi.mocked(searchWeb).mockReset().mockResolvedValue([]);
+		vi.mocked(readPage).mockReset().mockResolvedValue(null);
+		vi.mocked(extractContactHints)
+			.mockReset()
+			.mockReturnValue({ emails: [], phones: [], socialUrls: [] });
 	});
 
 	describe('canResolve', () => {
@@ -816,7 +1057,13 @@ describe('GeminiDecisionMakerProvider', () => {
 		});
 
 		it('accepts any targetType (open-ended resolver)', () => {
-			for (const targetType of ['congress', 'corporate', 'nonprofit', 'school_board', 'custom_xyz']) {
+			for (const targetType of [
+				'congress',
+				'corporate',
+				'nonprofit',
+				'school_board',
+				'custom_xyz'
+			]) {
 				const ctx: ResolveContext = {
 					targetType,
 					subjectLine: 'Test',
@@ -838,11 +1085,221 @@ describe('GeminiDecisionMakerProvider', () => {
 		});
 	});
 
-	describe('resolve — error handling', () => {
-		it('returns empty result on phase 1 JSON extraction failure', async () => {
-			mockGenerateContentStream.mockResolvedValue(
-				makeStream([{ text: 'NOT VALID JSON AT ALL %%^&' }])
+	it('bounds contact hints at the synthesis call site and stays inside the real prompt envelope', async () => {
+		const actualPrompts = await vi.importActual<
+			typeof import('$lib/core/agents/prompts/decision-maker')
+		>('$lib/core/agents/prompts/decision-maker');
+		mockBuildContactSynthesisPrompt.mockImplementation(
+			actualPrompts.buildContactSynthesisPrompt
+		);
+
+		const limits = DECISION_MAKER_PROVIDER_LIMITS;
+		const fill = (bytes: number, prefix = '') =>
+			`${prefix}${'x'.repeat(Math.max(0, bytes - prefix.length))}`;
+		const organizations = [
+			fill(512, 'City of '),
+			fill(512, 'Workers Union '),
+			fill(512, 'Example Inc ')
+		];
+		const roles = organizations.map((organization, index) => ({
+			position: `Role ${index}`,
+			organization,
+			jurisdiction: 'Test',
+			reasoning: fill(1_024),
+			search_query: `role ${index}`
+		}));
+		const identities = roles.map((role, index) => ({
+			position: role.position,
+			name: fill(256, `Person ${index} `),
+			title: fill(512, `Title ${index} `),
+			organization: role.organization,
+			search_evidence: fill(1_024)
+		}));
+		const urls = Array.from({ length: limits.maxPagesPerSynthesisChunk }, (_, index) =>
+			fill(512, `https://example${index}.gov/`)
+		);
+		const hits = urls.map((url, index) => ({
+			url,
+			title: fill(240, `Page ${index} `),
+			score: 1
+		}));
+
+		const emailLengths = Array(limits.maxContactHintEmailsPerPage).fill(5) as number[];
+		let emailBytesLeft = limits.maxContactHintBytesPerPage - 5 * emailLengths.length;
+		for (let index = 0; index < emailLengths.length && emailBytesLeft > 0; index++) {
+			const added = Math.min(limits.maxEmailBytes - emailLengths[index], emailBytesLeft);
+			emailLengths[index] += added;
+			emailBytesLeft -= added;
+		}
+		const worstEmails = emailLengths.map((length) => `${'a'.repeat(length - 5)}@x.co`);
+		const worstPhones = Array.from({ length: limits.maxContactHintPhonesPerPage }, () =>
+			fill(limits.maxPhoneBytes)
+		);
+		const worstSocialUrls = Array.from(
+			{ length: limits.maxContactHintSocialUrlsPerPage },
+			() => fill(limits.maxSocialUrlBytes)
+		);
+		const producerBlocks = Array.from(
+			{ length: limits.maxRecordBlocksPerPage - 1 },
+			(_, index) => ({
+				address: `person${index}@city.gov`,
+				addressOrigin: 'mailto' as const,
+				names: [`Person ${index}`],
+				labels: [],
+					titleLine: fill(256, `Director ${index} `),
+					bindingScope: 'office' as const
+				})
 			);
+
+		vi.mocked(searchWeb).mockResolvedValue(hits);
+		vi.mocked(readPage).mockImplementation(async (url) => ({
+			url,
+			title: fill(240),
+			text: fill(limits.maxPageBytesPerSynthesisChunk),
+			recordBlocks: {
+				state: 'present',
+				value: {
+					blocks: producerBlocks,
+					institutionBoundAddresses: ['records@city.gov', 'clerk@city.gov'],
+					truncated: false
+				}
+			}
+		}) as never);
+		vi.mocked(extractContactHints).mockReturnValue({
+			emails: worstEmails,
+			phones: worstPhones,
+			socialUrls: worstSocialUrls
+		});
+
+		mockGenerateContentStream
+			.mockResolvedValueOnce(makeStream([{ text: JSON.stringify({ roles }) }]))
+			.mockResolvedValueOnce(
+				makeStream([{ text: JSON.stringify({ identities, research_summary: 'identities' }) }])
+			)
+			.mockResolvedValueOnce(
+				makeStream([
+					{
+						text: JSON.stringify({
+							page_selections: identities.map((_, identityIndex) => ({
+								identity_index: identityIndex,
+								person_name: `Person ${identityIndex}`,
+								organization: `Organization ${identityIndex}`,
+								selected_pages: urls
+									.slice(identityIndex * 2, identityIndex * 2 + 2)
+									.map((url) => ({ url, reason: 'contact', url_hint: 'contact_page' }))
+							}))
+						})
+					}
+				])
+			);
+		mockGenerateContent
+			.mockResolvedValueOnce(
+				makeResponse(
+					JSON.stringify({
+						plans: identities.map((_, identityIndex) => ({
+							identity_index: identityIndex,
+							search_query: `contact ${identityIndex}`,
+							include_domains: [],
+							reasoning: 'bounded test'
+						}))
+					})
+				)
+			)
+			.mockResolvedValueOnce(
+				makeResponse(JSON.stringify({ decision_makers: [], research_summary: 'complete' }))
+			);
+
+		await provider.resolve({
+			targetType: 'test',
+			subjectLine: fill(800),
+			coreMessage: fill(limits.maxIssueCoreMessageBytes),
+			topics: Array.from({ length: limits.maxIssueTopics }, () => fill(256))
+		});
+
+		const byteLength = (value: string) => new TextEncoder().encode(value).byteLength;
+		const synthesisPromptArgs = mockBuildContactSynthesisPrompt.mock.calls[0];
+		expect(synthesisPromptArgs).toBeDefined();
+		const boundedPages = synthesisPromptArgs[1];
+		expect(boundedPages).toHaveLength(limits.maxPagesPerSynthesisChunk);
+		for (const page of boundedPages) {
+			expect(page.contactHints.emails).toEqual(worstEmails);
+			expect(page.recordBlocks).toMatchObject({
+				state: 'present',
+				value: { truncated: true }
+			});
+			if (page.recordBlocks.state === 'present') {
+				expect(page.recordBlocks.value.records).toHaveLength(limits.maxRecordBlocksPerPage);
+				expect(page.recordBlocks.value.records).toContain(
+					'records@city.gov | institution | (office) |'
+				);
+				expect(
+					page.recordBlocks.value.records.every(
+						(record: string) => byteLength(record) <= limits.maxRecordBlockBytes
+					)
+				).toBe(true);
+			}
+		}
+
+		const synthesisRequest = mockGenerateContent.mock.calls
+			.map(([request]) => request as {
+				contents: string;
+				config: { systemInstruction?: string; responseSchema?: unknown };
+			})
+			.find((request) => {
+				const schema = request.config.responseSchema as
+					| { properties?: { decision_makers?: unknown } }
+					| undefined;
+				return schema?.properties?.decision_makers !== undefined;
+			});
+			expect(synthesisRequest).toBeDefined();
+			expect(synthesisRequest!.contents).toContain(
+				'Record blocks (extractor observations — classify person vs office; never mix different records):'
+			);
+			expect(synthesisRequest!.contents).toContain('records@city.gov | institution | (office) |');
+			expect(synthesisRequest!.contents).toContain('Record-block scan: PARTIAL');
+			expect(synthesisRequest!.contents.indexOf('Record blocks (extractor observations')).toBeLessThan(
+				synthesisRequest!.contents.indexOf('Content:')
+			);
+			expect(actualPrompts.CONTACT_SYNTHESIS_PROMPT).toContain(
+				'all are office-scoped. Use "person" only when the SAME block and page publish it as that person\'s contact'
+			);
+
+		const currentDate = new Date().toLocaleDateString('en-US', {
+			year: 'numeric',
+			month: 'long',
+			day: 'numeric'
+		});
+		const worstDateSystemInstruction = synthesisRequest!.config.systemInstruction!.replace(
+			currentDate,
+			'September 30, 2026'
+		);
+		const synthesisUserBytes = byteLength(synthesisRequest!.contents);
+		const synthesisSystemBytes = byteLength(worstDateSystemInstruction);
+		const synthesisResponseSchemaBytes = byteLength(
+			JSON.stringify(synthesisRequest!.config.responseSchema)
+		);
+		const totalPromptBytes =
+			synthesisUserBytes + synthesisSystemBytes + synthesisResponseSchemaBytes;
+
+		expect({ synthesisUserBytes, synthesisSystemBytes, synthesisResponseSchemaBytes }).toEqual({
+			synthesisUserBytes: 56_748,
+			synthesisSystemBytes: 7_314,
+			synthesisResponseSchemaBytes: 640
+		});
+		expect(totalPromptBytes).toBe(64_702);
+		expect(totalPromptBytes).toBeLessThan(
+			GEMINI_STAGE_ENVELOPES['decision-contact-synthesis'].maxPromptBytes
+		);
+	});
+
+	describe('resolve — error handling', () => {
+		it('returns empty result on phase 1 JSON extraction failure without logging model text', async () => {
+			const googleKey = `AIza${'a'.repeat(35)}`;
+			const modelSecret = `private-model-output-${'p'.repeat(40)}`;
+			mockGenerateContentStream.mockResolvedValue(
+				makeStream([{ text: `NOT VALID JSON ${modelSecret}\r\n${googleKey}\u0000` }])
+			);
+			const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
 			const ctx: ResolveContext = {
 				targetType: 'congress',
@@ -851,16 +1308,31 @@ describe('GeminiDecisionMakerProvider', () => {
 				topics: ['policy']
 			};
 
-			const result = await provider.resolve(ctx);
-			expect(result.decisionMakers).toEqual([]);
-			expect(result.provider).toBe('gemini-search');
+			try {
+				const result = await provider.resolve(ctx);
+				const diagnostics = errorSpy.mock.calls.map((call) =>
+					call
+						.map((value) =>
+							typeof value === 'string' ? value : JSON.stringify(value)
+						)
+						.join(' ')
+				);
+
+				expect(result.decisionMakers).toEqual([]);
+				expect(result.provider).toBe('gemini-search');
+				expect(diagnostics.join(' ')).not.toContain(modelSecret);
+				expect(diagnostics.join(' ')).not.toContain(googleKey);
+				expect(diagnostics.every((line) => !/[\u0000-\u001f\u007f-\u009f]/u.test(line))).toBe(
+					true
+				);
+			} finally {
+				errorSpy.mockRestore();
+			}
 		});
 
 		it('returns empty result when phase 1 finds zero roles', async () => {
 			// Phase 1 returns valid JSON but with empty roles array
-			mockGenerateContentStream.mockResolvedValue(
-				makeStream([{ text: '{"roles": []}' }])
-			);
+			mockGenerateContentStream.mockResolvedValue(makeStream([{ text: '{"roles": []}' }]));
 
 			const ctx: ResolveContext = {
 				targetType: 'congress',
@@ -893,7 +1365,10 @@ describe('GeminiDecisionMakerProvider', () => {
 
 	describe('processOneCandidate — email grounding', () => {
 		// Access private method for unit testing email verification
-		function processOneCandidate(candidate: Record<string, unknown>, pages: Array<{ url: string; title: string; text: string }>) {
+		function processOneCandidate(
+			candidate: Record<string, unknown>,
+			pages: Array<{ url: string; title: string; text: string }>
+		) {
 			return (provider as any).processOneCandidate(candidate, pages);
 		}
 
@@ -926,6 +1401,62 @@ describe('GeminiDecisionMakerProvider', () => {
 			expect(result.emailGrounded).toBe(true);
 			expect(result.email).toBe('mayor@city.gov');
 			expect(result.emailSource).toBe('https://city.gov/staff');
+		});
+
+		it('passes the candidate name when classifying a lexicon-colliding personal mailbox', () => {
+			const result = processOneCandidate(
+				{
+					name: 'Sarah Press',
+					title: 'President',
+					organization: 'Example Utility',
+					reasoning: 'Leads the institution.',
+					email: 'press@utility.com',
+					email_source: 'https://utility.com/leadership',
+					recency_check: 'Current'
+				},
+				[
+					{
+						url: 'https://utility.com/leadership',
+						title: 'Leadership',
+						text: 'Sarah Press, President — press@utility.com'
+					}
+				]
+			);
+
+			expect(result.emailGrounded).toBe(true);
+			expect(result.deliveryTier).toBe('C');
+			expect(result.seatRoute).toBeUndefined();
+		});
+
+		it('logs email-grounding outcomes without candidate PII or source URLs', () => {
+			const privateName = `Private Person ${'n'.repeat(30)}`;
+			const privateEmail = `private-${'e'.repeat(30)}@city.gov`;
+			const privateUrl = `https://city.gov/private-${'p'.repeat(40)}?token=secret`;
+			const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+			try {
+				processOneCandidate(
+					{
+						name: privateName,
+						title: 'Private Title',
+						organization: 'Private Organization',
+						reasoning: 'Has authority',
+						email: privateEmail,
+						email_source: privateUrl,
+						recency_check: 'Current'
+					},
+					[{ url: privateUrl, title: 'Private Page', text: `Contact ${privateEmail}` }]
+				);
+				const diagnostics = debug.mock.calls.map((call) => call.map(String).join(' '));
+
+				expect(diagnostics.join(' ')).toContain('grounded=true');
+				expect(diagnostics.join(' ')).not.toContain(privateName);
+				expect(diagnostics.join(' ')).not.toContain(privateEmail);
+				expect(diagnostics.join(' ')).not.toContain(privateUrl);
+				expect(diagnostics.join(' ')).not.toContain('Private Title');
+			} finally {
+				debug.mockRestore();
+			}
 		});
 
 		it('marks email as ungrounded when not found in any page', () => {
@@ -1095,15 +1626,91 @@ describe('GeminiDecisionMakerProvider', () => {
 		});
 	});
 
+	describe('processOneCandidate — reach claim and its basis', () => {
+		function processOneCandidate(
+			candidate: Record<string, unknown>,
+			pages: Array<{ url: string; title: string; text: string }>
+		) {
+			return (provider as any).processOneCandidate(candidate, pages);
+		}
+
+		const clerkPage = {
+			url: 'https://county.example/clerk',
+			title: 'Office of the County Clerk',
+			text: 'Office of the County Clerk\nRecords requests: clerk@county.example'
+		};
+
+		const seatCandidate = {
+			name: 'County Clerk',
+			title: 'Clerk',
+			organization: 'Example County',
+			reasoning: 'Custodian of the record.',
+			email: 'clerk@county.example',
+			email_source: 'https://county.example/clerk',
+			reaches: 'seat',
+			reaches_label: 'Office of the County Clerk'
+		};
+
+		it('emits a seat claim only alongside the grounding basis that supports it', () => {
+			const result = processOneCandidate(seatCandidate, [clerkPage]);
+
+			expect(result.emailReachesClaim).toBe('seat');
+			expect(result.emailReachesLabel).toBe('Office of the County Clerk');
+			expect(result.publicEmailGrounding).toEqual({
+				version: 1,
+				method: 'page-read',
+				source: 'https://county.example/clerk'
+			});
+		});
+
+		it('never emits a seat claim for a cache hit, which read no page this run', () => {
+			const result = processOneCandidate({ ...seatCandidate, cacheHit: true }, []);
+
+			expect(result.emailGrounded).toBe(true);
+			expect(result.emailReachesClaim).toBe('general');
+			expect(result.emailReachesLabel).toBeUndefined();
+			expect(result.publicEmailGrounding).toBeUndefined();
+		});
+
+		it('drops the claim and its label when the email itself is stripped', () => {
+			const result = processOneCandidate(
+				{ ...seatCandidate, email: 'fabricated@county.example', reaches: 'person' },
+				[clerkPage]
+			);
+
+			expect(result.emailClaimStripped).toBe(true);
+			expect(result.email).toBeUndefined();
+			expect(result.emailReachesClaim).toBeUndefined();
+			expect(result.emailReachesLabel).toBeUndefined();
+		});
+	});
+
 	describe('processDecisionMakers — filtering', () => {
-		function processDecisionMakers(candidates: Array<Record<string, unknown>>, pages: Array<{ url: string; title: string; text: string }>) {
+		function processDecisionMakers(
+			candidates: Array<Record<string, unknown>>,
+			pages: Array<{ url: string; title: string; text: string }>
+		) {
 			return (provider as any).processDecisionMakers(candidates, pages);
 		}
 
 		it('filters out unnamed candidates (name is UNKNOWN)', () => {
 			const candidates = [
-				{ name: 'UNKNOWN', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' },
-				{ name: 'Jane Doe', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' }
+				{
+					name: 'UNKNOWN',
+					title: 'CEO',
+					organization: 'Corp',
+					reasoning: '',
+					email: '',
+					recency_check: ''
+				},
+				{
+					name: 'Jane Doe',
+					title: 'CEO',
+					organization: 'Corp',
+					reasoning: '',
+					email: '',
+					recency_check: ''
+				}
 			];
 			const result = processDecisionMakers(candidates, []);
 			expect(result).toHaveLength(1);
@@ -1112,7 +1719,14 @@ describe('GeminiDecisionMakerProvider', () => {
 
 		it('filters out candidates with name N/A', () => {
 			const candidates = [
-				{ name: 'N/A', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' }
+				{
+					name: 'N/A',
+					title: 'CEO',
+					organization: 'Corp',
+					reasoning: '',
+					email: '',
+					recency_check: ''
+				}
 			];
 			const result = processDecisionMakers(candidates, []);
 			expect(result).toHaveLength(0);
@@ -1120,7 +1734,14 @@ describe('GeminiDecisionMakerProvider', () => {
 
 		it('filters out candidates with empty name', () => {
 			const candidates = [
-				{ name: '', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' }
+				{
+					name: '',
+					title: 'CEO',
+					organization: 'Corp',
+					reasoning: '',
+					email: '',
+					recency_check: ''
+				}
 			];
 			const result = processDecisionMakers(candidates, []);
 			expect(result).toHaveLength(0);
@@ -1185,13 +1806,13 @@ describe('Safety & Edge Cases', () => {
 
 	it('generateStreamWithThoughts extracts JSON wrapped in markdown code blocks', async () => {
 		const wrappedJson = '```json\n{"result": "success"}\n```';
-		mockGenerateContentStream.mockResolvedValueOnce(
-			makeStream([{ text: wrappedJson }])
-		);
+		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: wrappedJson }]));
 
 		const gen = generateStreamWithThoughts<{ result: string }>('test');
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.parseSuccess).toBe(true);
@@ -1200,13 +1821,13 @@ describe('Safety & Edge Cases', () => {
 
 	it('generateStreamWithThoughts handles JSON surrounded by preamble text', async () => {
 		const withPreamble = 'Here is the analysis:\n\n{"result": "found"}\n\nHope this helps!';
-		mockGenerateContentStream.mockResolvedValueOnce(
-			makeStream([{ text: withPreamble }])
-		);
+		mockGenerateContentStream.mockResolvedValueOnce(makeStream([{ text: withPreamble }]));
 
 		const gen = generateStreamWithThoughts<{ result: string }>('test');
 		let iterResult = await gen.next();
-		while (!iterResult.done) { iterResult = await gen.next(); }
+		while (!iterResult.done) {
+			iterResult = await gen.next();
+		}
 
 		const result = iterResult.value;
 		expect(result.parseSuccess).toBe(true);
@@ -1256,6 +1877,103 @@ describe('isSentinelName', () => {
 	});
 });
 
+describe('identity extraction fanout', () => {
+	const identity = (index: number) => ({
+		position: `Position ${index}`,
+		name: index === 0 ? 'Vacant' : `Person ${index}`,
+		title: `Title ${index}`,
+		organization: `Organization ${index}`,
+		search_evidence: `Evidence ${index}`
+	});
+
+	it('caps untrusted model output to the reviewed role and provider-call envelope', () => {
+		const identities = Array.from({ length: MAX_DECISION_MAKER_FANOUT + 8 }, (_, index) =>
+			identity(index)
+		);
+
+		expect(normalizeAndCapIdentityFanout(identities, identities.length)).toHaveLength(
+			MAX_DECISION_MAKER_FANOUT
+		);
+		expect(normalizeAndCapIdentityFanout(identities, 3)).toHaveLength(3);
+		expect(normalizeAndCapIdentityFanout(identities, 3)[0].name).toBe('UNKNOWN');
+	});
+
+	it('rejects an invalid upstream role cardinality', () => {
+		expect(() => normalizeAndCapIdentityFanout([identity(0)], -1)).toThrow(RangeError);
+	});
+});
+
+describe('page selection call envelope', () => {
+	const identitySearchResults = [
+		{
+			hits: [
+				{ url: 'https://city.gov/contact' },
+				{ url: 'https://city.gov/staff' },
+				{ url: 'https://city.gov/about' }
+			]
+		},
+		{
+			hits: [
+				{ url: 'https://agency.gov/leadership' },
+				{ url: 'https://city.gov/contact' }
+			]
+		}
+	];
+
+	it('accepts only exact normalized Exa hits and caps per-identity/global fanout', () => {
+		const selections = [
+			{
+				identity_index: 0,
+				person_name: 'Person 0',
+				organization: 'City',
+				selected_pages: [
+					{ url: 'https://city.gov/contact', reason: 'contact', url_hint: 'contact_page' },
+					{ url: 'https://attacker.invalid/minted', reason: 'minted', url_hint: 'other' },
+					{ url: 'https://city.gov/staff', reason: 'staff', url_hint: 'contact_page' }
+				]
+			},
+			{
+				identity_index: 1,
+				person_name: 'Person 1',
+				organization: 'Agency',
+				selected_pages: [
+					{
+						url: 'https://agency.gov/leadership',
+						reason: 'leadership',
+						url_hint: 'about_page'
+					},
+					{ url: 'https://city.gov/staff', reason: 'cross identity', url_hint: 'other' }
+				]
+			}
+		];
+
+		const selected = allowlistedPageSelections(selections, identitySearchResults, 2);
+
+		expect([...selected.keys()]).toEqual([
+			'https://city.gov/contact',
+			'https://agency.gov/leadership'
+		]);
+		expect([...selected.get('https://city.gov/contact')!]).toEqual([0]);
+		expect([...selected.get('https://agency.gov/leadership')!]).toEqual([1]);
+	});
+
+	it('rejects invalid identity indexes and a non-positive page budget', () => {
+		const invalid = [
+			{
+				identity_index: 99,
+				person_name: 'Minted',
+				organization: 'Minted',
+				selected_pages: [
+					{ url: 'https://city.gov/contact', reason: 'bad index', url_hint: 'other' }
+				]
+			}
+		];
+
+		expect(allowlistedPageSelections(invalid, identitySearchResults, 2).size).toBe(0);
+		expect(allowlistedPageSelections([], identitySearchResults, 0).size).toBe(0);
+	});
+});
+
 // ============================================================================
 // processDecisionMakers — sentinel filtering (extended)
 // ============================================================================
@@ -1266,13 +1984,23 @@ describe('processDecisionMakers — sentinel filtering', () => {
 		provider = new GeminiDecisionMakerProvider();
 	});
 
-	function processDecisionMakers(candidates: Array<Record<string, unknown>>, pages: Array<{ url: string; title: string; text: string }>) {
+	function processDecisionMakers(
+		candidates: Array<Record<string, unknown>>,
+		pages: Array<{ url: string; title: string; text: string }>
+	) {
 		return (provider as any).processDecisionMakers(candidates, pages);
 	}
 
 	it('filters out "Vacant" named candidates', () => {
 		const candidates = [
-			{ name: 'Vacant', title: 'Superintendent', organization: 'SFDPW', reasoning: '', email: 'someone@sfdpw.org', recency_check: '' }
+			{
+				name: 'Vacant',
+				title: 'Superintendent',
+				organization: 'SFDPW',
+				reasoning: '',
+				email: 'someone@sfdpw.org',
+				recency_check: ''
+			}
 		];
 		const result = processDecisionMakers(candidates, []);
 		expect(result).toHaveLength(0);
@@ -1280,8 +2008,22 @@ describe('processDecisionMakers — sentinel filtering', () => {
 
 	it('filters out "TBD" and "Pending" named candidates', () => {
 		const candidates = [
-			{ name: 'TBD', title: 'CEO', organization: 'Corp', reasoning: '', email: '', recency_check: '' },
-			{ name: 'Pending', title: 'CTO', organization: 'Corp', reasoning: '', email: '', recency_check: '' }
+			{
+				name: 'TBD',
+				title: 'CEO',
+				organization: 'Corp',
+				reasoning: '',
+				email: '',
+				recency_check: ''
+			},
+			{
+				name: 'Pending',
+				title: 'CTO',
+				organization: 'Corp',
+				reasoning: '',
+				email: '',
+				recency_check: ''
+			}
 		];
 		const result = processDecisionMakers(candidates, []);
 		expect(result).toHaveLength(0);
@@ -1289,8 +2031,22 @@ describe('processDecisionMakers — sentinel filtering', () => {
 
 	it('keeps real names while filtering sentinels', () => {
 		const candidates = [
-			{ name: 'Vacant', title: 'Superintendent', organization: 'SFDPW', reasoning: '', email: '', recency_check: '' },
-			{ name: 'Cynthia Chono', title: 'Deputy Director', organization: 'SFDPW', reasoning: 'Oversees ops', email: 'cynthia.chono@sfdpw.org', recency_check: 'Current' }
+			{
+				name: 'Vacant',
+				title: 'Superintendent',
+				organization: 'SFDPW',
+				reasoning: '',
+				email: '',
+				recency_check: ''
+			},
+			{
+				name: 'Cynthia Chono',
+				title: 'Deputy Director',
+				organization: 'SFDPW',
+				reasoning: 'Oversees ops',
+				email: 'cynthia.chono@sfdpw.org',
+				recency_check: 'Current'
+			}
 		];
 		const result = processDecisionMakers(candidates, []);
 		expect(result).toHaveLength(1);

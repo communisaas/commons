@@ -1,0 +1,305 @@
+{
+	"type": "blocks",
+	"edges": [
+		{
+			"source": "FND-10",
+			"target": "FND-60",
+			"reason": "Launch proof is invalid while producer reads can cross the transaction byte ceiling."
+		},
+		{
+			"source": "FND-15",
+			"target": "FND-60",
+			"reason": "Authenticated template screens cannot retain unbounded reads of embedding-bearing authoring rows."
+		},
+		{
+			"source": "FND-20",
+			"target": "FND-60",
+			"reason": "Launch proof must include a hard relation CPU and tag-cardinality bound."
+		},
+		{
+			"source": "FND-25",
+			"target": "FND-60",
+			"reason": "Recipient-page traffic cannot retain growing duplicate scans that bypass the public-discovery cache."
+		},
+		{
+			"source": "FND-26",
+			"target": "FND-60",
+			"reason": "Every cookie-bearing request cannot hydrate a wide mutable profile or depend on a database clock before serving any route."
+		},
+		{
+			"source": "FND-27",
+			"target": "FND-60",
+			"reason": "Campaign navigation cannot rebuild verification, analytics, and debate state from every historical action on each request."
+		},
+		{
+			"source": "FND-28",
+			"target": "FND-60",
+			"reason": "Every authenticated organization route cannot inherit unrelated history scans from a shared layout megafetch."
+		},
+		{
+			"source": "FND-29",
+			"target": "FND-60",
+			"reason": "Anonymous recipient and debate traffic cannot enumerate every historical argument or paginate only after a full collection."
+		},
+		{
+			"source": "FND-31",
+			"target": "FND-60",
+			"reason": "A free API key cannot receive unlimited reads or rewrite its authentication row on every request before endpoint work."
+		},
+		{
+			"source": "FND-32",
+			"target": "FND-60",
+			"reason": "Anonymous catalogs, published artifacts, and live polls cannot retain whole-table collections or sub-K disclosure."
+		},
+		{
+			"source": "FND-33",
+			"target": "FND-60",
+			"reason": "A single supporter page or export batch cannot reread ten thousand encrypted people and expand an unbounded tag join."
+		},
+		{
+			"source": "FND-34",
+			"target": "FND-60",
+			"reason": "Coalition detail and API traffic cannot reconstruct every member supporter, action, receipt, and bill history per request."
+		},
+		{
+			"source": "FND-36",
+			"target": "FND-60",
+			"reason": "A shared-Free launch cannot publish while either deployment still registers recurring jobs or retains active durable work; cancellation cannot stand in for completion of an already-running action, and no deployment may cross resume until the provider-audit-backed pause epoch, both bounded inventories, and every reachable-root bound are clean."
+		},
+		{
+			"source": "FND-37",
+			"target": "FND-60",
+			"reason": "Profile receipts and organization scorecards cannot traverse supporter, action, delivery, and receipt history through per-row collections."
+		},
+		{
+			"source": "FND-38",
+			"target": "FND-60",
+			"reason": "An enabled API request cannot rebuild ten-thousand-row windows, hydrate embedding-bearing documents, or multiply the organization budget by minting keys."
+		},
+		{
+			"source": "FND-39",
+			"target": "FND-60",
+			"reason": "An organization event cannot expand into an unbounded number of delivery rows or target untrusted private-network destinations."
+		},
+		{
+			"source": "FND-41",
+			"target": "FND-60",
+			"reason": "A compose, count, or dispatch transaction cannot scan an entire sparse audience or rebuild the same ten-thousand-recipient cohort for every batch."
+		},
+		{
+			"source": "FND-42",
+			"target": "FND-60",
+			"reason": "Explicit network and representative pages cannot reintroduce unbounded limits, whole-follow collections, or per-card roster joins after the shared shell is fixed."
+		},
+		{
+			"source": "FND-43",
+			"target": "FND-60",
+			"reason": "A routine plan check cannot synchronously repair itself by reading tens of thousands of historical action and blast rows."
+		},
+		{
+			"source": "FND-44",
+			"target": "FND-60",
+			"reason": "Finite configuration, operator trace replay, and outcome summaries cannot retain unenforced cardinality or rebuild workflow, donation, and SMS history on each request."
+		},
+		{
+			"source": "FND-45",
+			"target": "FND-60",
+			"reason": "Profile and recipient traffic cannot scan credential or relation history, return ambiguous ground state, or cache a time-sensitive credential decision past expiry."
+		},
+		{
+			"source": "FND-46",
+			"target": "FND-60",
+			"reason": "Email quota cannot be a check-then-send race, and an uncertain carrier acceptance cannot become a silent release or blind resend."
+		},
+		{
+			"source": "FND-47",
+			"target": "FND-60",
+			"reason": "A global STOP or complaint cannot lose to a stale organization cohort, and SMS cannot reach Twilio without durable per-recipient linearization or a non-overridable launch hold."
+		},
+		{
+			"source": "FND-48",
+			"target": "FND-60",
+			"reason": "Analytics cannot accept abuse-amplifiable raw writes or publish a differential-privacy claim without durable sensitivity, budget, noise, and cleanup evidence."
+		},
+		{
+			"source": "FND-49",
+			"target": "FND-60",
+			"reason": "A migration, seed, cleanup, audit, or operator request cannot replace bounded serving reads with an unbounded maintenance transaction or silently skipped cursor range."
+		},
+		{
+			"source": "FND-30",
+			"target": "FND-60",
+			"reason": "Launch proof must establish refresh urgency, cache-cost, and crash-recovery invariants."
+		},
+		{
+			"source": "FND-35",
+			"target": "FND-60",
+			"reason": "Launch proof is invalid if anonymous readiness can trigger dependency I/O; if an unpinned SvelteKit route, hook, transitive server import, component SSR path, instrumentation module, or build config can execute after T; if preview receives an application capability binding; or if exact-SHA readiness, source-setting, exhaustive-inventory, and post-upload reconciliation can fail open. Live reviewed-SHA promotion remains gated by PD-00, PD-50, and PD-70."
+		},
+		{
+			"source": "FND-35C",
+			"target": "FND-60",
+			"reason": "Launch proof must include a trusted-generated, binding-free, zero-dependency containment path without conflating that bootstrap with normal application readiness."
+		},
+		{
+			"source": "FND-35D",
+			"target": "FND-60",
+			"reason": "Normal launch cannot expose Pages directly or through a stale alias/overlapping Access app, drift runtime flags, accept a reusable/JWT-only origin credential, serve provisional or unproved post-C release authority, split cache ownership, stampede cold origin, cache personalized variants, depend on purge, retain stale landing content without a ceiling, or claim external Access/topology state from source tests."
+		},
+		{
+			"source": "FND-40",
+			"target": "FND-60",
+			"reason": "Paid public actions cannot remain an unauthenticated cost-amplification surface, and a failed Queue handoff cannot silently preserve stale landing authority beyond its bounded publication window."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-60",
+			"reason": "Launch cannot rely on cache, actor-local throttles, request dedupe after provider work, point-in-time Convex or Queue Free receipts, or estimated Pages/Queue/provider weights alone. One atomic cross-realm provider boundary must constrain every authenticated entrypoint, retain the operator demonstration inside the hard cap, replay existing jobs before provider admission, and classify the exact indirect-source bytes before generation; team-global Convex and Queue admission layers preserve the remaining reviewed slices. Full normal release remains blocked until live budget/phase proofs plus paid/no-shared-hard-disable or quota-isolation authority close duplicate delivery, browser-direct, native, and sibling-project gaps."
+		},
+		{
+			"source": "FND-40C",
+			"target": "FND-60",
+			"reason": "A cold discovery corpus cannot make every normal release unbounded, bypass Access, hide a transient Queue producer outside signed authority, or leave an orphaned exact-path Worker after timeout or cancellation."
+		},
+		{
+			"source": "FND-50",
+			"target": "FND-60",
+			"reason": "Legacy rows must preserve projection correctness before adversarial verification."
+		},
+		{
+			"source": "FND-51",
+			"target": "FND-60",
+			"reason": "Launch proof is invalid while a browser can bypass the bounded HTTP boundary and invoke submission proof, database, or scheduler work directly."
+		},
+		{
+			"source": "FND-52",
+			"target": "FND-60",
+			"reason": "Authenticated segment, supporter-import, and legislation actions cannot turn one shared-budget admission into a corpus-wide scan, encryption loop, or vector-search fan-out."
+		},
+		{
+			"source": "FND-53",
+			"target": "FND-60",
+			"reason": "Position-recipient retries and concurrent tabs cannot multiply delivery rows or admit unbounded identity-owned work."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-60",
+			"reason": "Launch cannot retain a Convex-side Gemini credential or paid-provider search path outside the one Pages budget authority."
+		},
+		{
+			"source": "FND-55",
+			"target": "FND-60",
+			"reason": "Shadow Atlas SSR, retries, and concurrent clients cannot repeat registration writes and read fan-out without one durable identity-scoped lease and cooldown."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-51",
+			"reason": "The direct submission cure reuses the stable shared work authority and must retain exactly one bounded maximum-class server dispatch."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-52",
+			"reason": "Fixed bulk action slices depend on the shared maximum-class admission remaining stable across production and preview."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-53",
+			"reason": "Durable position replay closes the per-feature gap after the stable shared Pages-to-Convex admission succeeds."
+		},
+		{
+			"source": "FND-54",
+			"target": "FND-40B",
+			"reason": "The paid-provider gate must enumerate only the nine Pages operations and prove zero executable Convex provider egress."
+		},
+		{
+			"source": "FND-40B",
+			"target": "FND-55",
+			"reason": "Shadow Atlas replay coalescing extends the stable shared dispatch boundary across the external registration and proof handoff."
+		},
+		{
+			"source": "FND-51",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun the direct-submission authority proof."
+		},
+		{
+			"source": "FND-52",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must preserve the bounded bulk-operation contracts and maximum work classes."
+		},
+		{
+			"source": "FND-53",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must preserve shared batch/mailto cardinality, durable admission, and cross-writer replay idempotency."
+		},
+		{
+			"source": "FND-54",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun the zero-Convex-provider-egress ratchet and keyword-only search tests."
+		},
+		{
+			"source": "FND-55",
+			"target": "PD-10",
+			"reason": "Exact-SHA verification must rerun Shadow Atlas replay, lease, at-most-once-write, and bounded transport tests."
+		},
+		{
+			"source": "FND-60",
+			"target": "PD-10",
+			"reason": "Only a SHA that closes every foundational launch gate may enter exact-SHA release verification."
+		},
+		{
+			"source": "FND-35C",
+			"target": "PD-05",
+			"reason": "An emergency artifact cannot be trusted unless trusted generation, interception, no-I/O readiness, mode authorization, forward recovery, and prune ordering fail closed in executable proof."
+		},
+		{
+			"source": "FND-60",
+			"target": "PD-05",
+			"reason": "Containment is an external production mutation and requires the exact reviewed context even though it deliberately does not require Convex readiness."
+		},
+		{
+			"source": "PD-05",
+			"target": "PD-00",
+			"reason": "Convex billing reactivation cannot begin before frontend containment and both exact deployments are paused; queued scheduled jobs run on resume."
+		},
+		{
+			"source": "PD-00",
+			"target": "PD-20",
+			"reason": "Neither deployment may resume until provider audit plus current-state fences prove a resume-free user-pause epoch, in-progress actions have completion/support evidence, the reviewed contained SHA is deployed while paused, and exact cron plus indexed active-work inventories are clean; the post-resume proof must show exact running state."
+		},
+		{
+			"source": "PD-10",
+			"target": "PD-20",
+			"reason": "Only the verified exact SHA may become the backend producer."
+		},
+		{
+			"source": "PD-20",
+			"target": "PD-30",
+			"reason": "The schema/functions and one-time compact manifest-authority activation must exist, with ready/matching byte-bound proof, before materialization or any Pages producer/readiness traffic."
+		},
+		{
+			"source": "PD-30",
+			"target": "PD-40",
+			"reason": "Direct smoke needs a committed ready snapshot revision."
+		},
+		{
+			"source": "PD-40",
+			"target": "PD-50",
+			"reason": "Frontend upload is held until bounded backend reads are observed."
+		},
+		{
+			"source": "FND-35D",
+			"target": "PD-50",
+			"reason": "FND-35D supplies the source-enforced trusted-edge, Access-safe adapter, terminal-ledger, cache, and rollback mechanisms. PD-50 itself holds frontend promotion until live Access/topology/secrets, denial, candidate, post-C, cache, and normal-or-containment rollback evidence is attached."
+		},
+		{
+			"source": "PD-50",
+			"target": "PD-60",
+			"reason": "Warm only after the exact candidate, Access topology, trusted production edge, terminal C, distinct-capability uncached release-origin proof with origin stripping, health, hidden-origin denial, and post-upload inventory all pass."
+		},
+		{
+			"source": "PD-60",
+			"target": "PD-70",
+			"reason": "Live observation begins after bounded landing-cache convergence, never before terminal authority."
+		}
+	]
+}

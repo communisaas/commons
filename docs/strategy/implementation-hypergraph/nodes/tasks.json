@@ -1988,7 +1988,7 @@
 			"depends_on": ["T7-1"],
 			"status": "deferred",
 			"deferred_at": "2026-05-27T20:49:08Z",
-			"deferred_reason": "Cross-org reputation portability \u2014 depends on T10-1 (reputation cron) wiring through users.identityCommitment AND on T10-9 (atlasVersion) flowing end-to-end. Both substrates are in place but the writer side hasn't been wired yet through ZK submission paths.",
+			"deferred_reason": "Cross-org reputation portability \u2014 depends on T10-1 transactional reputation identity wiring through users.identityCommitment AND on T10-9 (atlasVersion) flowing end-to-end. Both substrates are in place but the portable aggregation surface remains deferred.",
 			"revisit_when": "userId + atlasVersion threaded from /api/submissions/create"
 		},
 		{
@@ -2861,25 +2861,24 @@
 				"days": 1
 			},
 			"chokepoint": false,
-			"description": "Hybrid model: on-action increment users.actionCount inside createCampaignAction for ZK paths (where userId is known); nightly cron recomputeAllReputationTiers sweeps all users via threshold table.",
+			"description": "Transactional model: a registered verified action increments users.actionCount, derives reputationTier, and stamps the resulting immutable engagement attribution inside createCampaignAction. A bounded internal mutation remains only for explicit legacy repair.",
 			"files_touch": [
 				"convex/schema.ts",
 				"convex/authOps.ts",
 				"convex/campaigns.ts",
-				"convex/crons.ts",
 				"convex/users.ts"
 			],
 			"files_create": [],
 			"key_decisions": [
-				"Hybrid over pure-cron or pure-on-action (covers ZK + non-ZK + legacy)",
+				"Pure on-action derivation for steady state; explicit bounded repair for legacy rows",
 				"Add actionCount field to users table (doesn't currently exist)"
 			],
-			"risks": ["Cron over large user count requires Convex pagination"],
-			"acceptance_criteria": "After 5 ZK actions from one user, reputationTier=active or higher. Cron promotes all users without 'verified'/'novice' strings.",
+			"risks": ["Every user actionCount writer must pair the canonical reputationTier in the same mutation"],
+			"acceptance_criteria": "The exact 5/25/100/500 threshold-crossing actions commit the corresponding user tier and immutable engagement attribution atomically; no reputation cron is registered.",
 			"depends_on": ["T10-3"],
 			"status": "completed",
 			"completed_at": "2026-05-27T20:08:16Z",
-			"completion_notes": "Hybrid reputation-tier promotion shipped. users.actionCount field added (optional v.number). createCampaignAction takes optional userId arg; when present + args.verified, increments user.actionCount on the action insert. New users.recomputeAllReputationTiers internalMutation chunks through users (default 500/run), recomputes reputationTier from actionCount via REPUTATION_THRESHOLDS table (0=new, 5=active, 25=established, 100=veteran, 500=pillar \u2014 labels mirror existing engagement-tier vocabulary because UI already labels reputationTier with them). Cron #26 runs daily 03:11 UTC. Idempotent \u2014 only patches rows where stored value differs. Sweeps legacy 'verified'/'novice' rows the T10-3 cleanup retired without backfill. Discovery: userId on createCampaignAction call sites is not yet wired through from ZK paths \u2014 substrate ready but on-action increment fires only when callers pass userId."
+			"completion_notes": "Launch-hardened transactional reputation promotion shipped. users.actionCount remains optional for legacy rows. createCampaignAction uses the shared 0/5/25/100/500 threshold function to patch actionCount + reputationTier before inserting the immutable action, then uses the post-increment engagement tier for read models, org histograms, webhooks, and workflows. The native reputation cron was removed; users.recomputeAllReputationTiers is an operator-invoked, bounded one-time legacy repair only."
 		},
 		{
 			"id": "T10-2",
@@ -2896,13 +2895,13 @@
 			"description": "In /api/submissions/create after line 219, cross-check rawInputsArray[30] against server-derived tier from reputationTier. If differs by >1, reject with HTTP 422. Non-ZK actions: clamp at server (Math.min(args.engagementTier, derivedServerTier+1)).",
 			"files_touch": ["src/routes/api/submissions/create/+server.ts", "convex/campaigns.ts"],
 			"files_create": [],
-			"key_decisions": ["1-level tolerance prevents false rejections during cron lag window"],
+			"key_decisions": ["1-level tolerance covers proof freshness across an adjacent OCC-serialized threshold crossing"],
 			"risks": [],
 			"acceptance_criteria": "Submission with publicInputs[30]=4 while user is 'new' returns 422. Legitimate veteran with tier 3 in circuit is accepted.",
 			"depends_on": ["T10-1", "T10-3"],
 			"status": "completed",
 			"completed_at": "2026-05-27T20:08:16Z",
-			"completion_notes": "engagementTier server-side cross-check shipped at /api/submissions/create after the authorityLevel validation. New users.getMyActionCount query returns the caller's actionCount. Server-derived tier computed via inline threshold ladder (same boundaries as T10-1: 500/100/25/5/0). claimedTier - serverTier > 1 \u2192 HTTP 422 TIER_MISMATCH. \u00b11 drift tolerated for cron-lag (T10-4 documents the bound)."
+			"completion_notes": "engagementTier server-side cross-check shipped at /api/submissions/create after authorityLevel validation. users.getMyActionCount returns the caller's durable count and the route uses the same shared 500/100/25/5/0 derivation as the transactional writer. claimedTier - serverTier > 1 \u2192 HTTP 422 TIER_MISMATCH; one adjacent tier is tolerated for proof freshness across concurrent serialized actions."
 		},
 		{
 			"id": "T10-3",
@@ -2916,7 +2915,7 @@
 				"days": 0.1
 			},
 			"chokepoint": false,
-			"description": "Change authOps.ts:295 default from 'verified' to 'new'. Change users.ts:75 fallback from 'novice' to 'new'. Sweeps existing rows via T10-1 cron on first run.",
+			"description": "Change authOps.ts:295 default from 'verified' to 'new'. Change users.ts:75 fallback from 'novice' to 'new'. Existing legacy rows can be reconciled by the explicit bounded T10-1 repair.",
 			"files_touch": ["convex/authOps.ts", "convex/users.ts", "convex/seed.ts"],
 			"files_create": [],
 			"key_decisions": ["Option A (fix at signup) over Option B (shim tierMap)"],
@@ -2925,7 +2924,7 @@
 			"depends_on": [],
 			"status": "completed",
 			"completed_at": "2026-05-27T19:47:49Z",
-			"completion_notes": "authOps.ts:295 baseReputationTier default changed from 'verified'/'novice' branch to flat 'new' (reputation is behavioral, separate from trustTier). users.ts:75 fallback updated 'novice' \u2192 'new'. Reputation promotions remain T10-1's cron concern; no new inserts will write 'verified' or 'novice'. 0 svelte-check errors."
+			"completion_notes": "authOps.ts:295 baseReputationTier default changed from 'verified'/'novice' branch to flat 'new' (reputation is behavioral, separate from trustTier). users.ts:75 fallback updated 'novice' \u2192 'new'. Transactional action writers own promotion; no new inserts write 'verified' or 'novice'."
 		},
 		{
 			"id": "T10-4",
@@ -2939,7 +2938,7 @@
 				"days": 0.1
 			},
 			"chokepoint": false,
-			"description": "Editorial only \u2014 after T10-1 and T10-3 land, computeCAI inputs reflect real engagement. Add comment to function documenting nightly cron lag bound.",
+			"description": "After T10-1 and T10-3 land, computeCAI inputs reflect the immutable post-increment engagement tier. Document the transactional no-lag bound.",
 			"files_touch": ["src/lib/server/verification-packet.ts"],
 			"files_create": [],
 			"key_decisions": ["No code change; comment documents now-honest inputs"],
@@ -2948,7 +2947,7 @@
 			"depends_on": ["T10-1", "T10-3"],
 			"status": "completed",
 			"completed_at": "2026-05-27T20:08:16Z",
-			"completion_notes": "Editorial: computeCAI docstring expanded with the lag-bound explanation (action stamps engagementTier at action-time; reputation cron promotes nightly at 03:11 UTC; CAI lags by up to one cron interval; T10-2 cross-check tolerates \u00b11 to absorb this). No code change."
+			"completion_notes": "computeCAI now documents the transactional bound: actionCount, reputationTier, and immutable action engagementTier advance in one mutation, so threshold crossings have no recurring-propagation lag."
 		},
 		{
 			"id": "T10-5",

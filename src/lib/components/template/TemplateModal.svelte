@@ -40,6 +40,24 @@
 		isModalOpen as _isModalOpen
 	} from '$lib/stores/modalSystem.svelte';
 	import { analyzeEmailFlow, launchEmail } from '$lib/services/emailService';
+	import {
+		describeDoNotContactFailure,
+		fetchDoNotContactUrls,
+		type DoNotContactLinks
+	} from '$lib/utils/do-not-contact-links';
+	import { absent, type Fact } from '$lib/core/fact';
+	import {
+		RECEIPT_HEADING,
+		RECEIPT_TIME_LABEL,
+		resolveSendLane,
+		sendEvidence,
+		SELF_REPORTED_SEND_BASIS,
+		SENDER_TEXT_NOT_CARRIED_REASON,
+		SERVER_ACCEPTED_SEND_BASIS,
+		type SendEvidence
+	} from '$lib/services/send-lane';
+	import { isCongressionalDelivery } from '$convex/lib/templateDeliveryMethod';
+	import { recipientEmailsFromConfig } from '$lib/types/template';
 	// import TemplatePreview from '$lib/components/landing/template/TemplatePreview.svelte';
 	import SubmissionStatus from '$lib/components/submission/SubmissionStatus.svelte';
 
@@ -67,12 +85,15 @@
 	let {
 		template,
 		user = null,
+		personalConnection = undefined,
 		initialState = undefined,
 		onclose,
 		onused
 	}: {
 		template: ComponentTemplate;
 		user?: { id: string; name: string; trust_tier?: number } | null;
+		/** The sender's own words, moderated by the surface that opened this modal. */
+		personalConnection?: string;
 		initialState?: string;
 		onclose?: () => void;
 		onused?: (data: { templateId: string; action: 'mailto_opened' }) => void;
@@ -83,9 +104,22 @@
 
 	// Modal States - access from modalActions (not a store, just a getter)
 	const currentState = $derived(modalActions.modalState);
-	const isAuthenticatedCongressional = $derived(
-		template.deliveryMethod === 'cwc' && Boolean(user)
-	);
+	// The affordance and the routing read ONE decision, so they cannot desync.
+	const sendLane = $derived(resolveSendLane(template, user));
+	const isAuthenticatedCongressional = $derived(sendLane === 'cwc_zkp');
+	// The receipt branches on WHO WITNESSED the send, never on the delivery method:
+	// a lane added later without an evidence row is a compile error, not a silent
+	// optimistic default.
+	const sendEvidenceKind = $derived(sendEvidence(template, user));
+	// The sentence under the receipt's headline, stating the basis for it. Both
+	// sentences are OWNED by `$lib/services/send-lane` and only routed here — the
+	// surface references the identifiers, it never re-types the strings.
+	// Keyed on the whole `SendEvidence` union on purpose: a third kind of witness
+	// is a compile error here, not a receipt that quietly keeps the old wording.
+	const RECEIPT_BASIS: Record<SendEvidence, string> = {
+		self_reported: SELF_REPORTED_SEND_BASIS,
+		server_accepted: SERVER_ACCEPTED_SEND_BASIS
+	};
 
 	const jurisdictionLabels = getJurisdictionLabels();
 
@@ -176,9 +210,7 @@
 
 	function deliveryMethodLabel(method: string | undefined): string {
 		if (method === 'cwc') return `Through the ${jurisdictionLabels.legislativeAdjective} message system (CWC)`;
-		if (method === 'certified') return 'Through certified delivery';
 		if (method === 'email') return 'Direct email to the recipient';
-		if (method === 'auth') return 'Through the authenticated message channel';
 		return 'Through the configured delivery channel';
 	}
 
@@ -328,12 +360,18 @@
 			return;
 		}
 
-		// Congressional templates: guests get mailto relay, authenticated get ZKP/CWC
-		if (template.deliveryMethod === 'cwc') {
-			if (!user) {
-				console.log('[TemplateModal] Guest on congressional template — mailto relay');
-				handleUnifiedEmailFlow();
-			} else if ((user.trust_tier ?? 0) >= 2) {
+		// Congressional templates: guests get mailto relay, authenticated get ZKP/CWC.
+		// Same lane decision the preview affordance reads, so the two cannot drift.
+		const lane = resolveSendLane(template, user);
+
+		if (lane === 'mailto_congressional_relay') {
+			console.log('[TemplateModal] Guest on congressional template — mailto relay');
+			handleUnifiedEmailFlow();
+			return;
+		}
+
+		if (lane === 'cwc_zkp') {
+			if ((user?.trust_tier ?? 0) >= 2) {
 				// Tier 2+ means district proof exists. Delivery still needs the address
 				// locally available, PRF-unlockable, or re-entered for the government POST.
 				await hydrateGroundForDelivery();
@@ -341,7 +379,7 @@
 			} else {
 				// Tier 1 (OAuth-only): needs address verification before ZKP
 				console.log(
-					`[TemplateModal] Tier ${user.trust_tier ?? 1} user on congressional — showing trust upgrade`
+					`[TemplateModal] Tier ${user?.trust_tier ?? 1} user on congressional — showing trust upgrade`
 				);
 				trustUpgradePhase = 'choice';
 				modalActions.setState('trust-upgrade');
@@ -392,6 +430,24 @@
 
 		// Use unified email service
 		const currentUser = $page.data?.user || user;
+		const directRecipients = isCongressionalDelivery(template.deliveryMethod)
+			? []
+			: recipientEmailsFromConfig(template.recipient_config);
+		// Start the link request alongside the existing credential lookup.
+		// Congressional/no-recipient lanes do no network work at all.
+		const doNotContactUrlsPromise: Promise<Fact<DoNotContactLinks>> =
+			directRecipients.length > 0
+				? fetchDoNotContactUrls(template.slug, directRecipients)
+				: Promise.resolve(absent());
+
+		// The district this page already resolved for the viewer. `App.PageData` is
+		// deliberately open, so the key is narrowed at runtime rather than asserted —
+		// routes that resolve no district simply have nothing here.
+		const attestationDistrict =
+			typeof $page.data?.userDistrictCode === 'string' &&
+			$page.data.userDistrictCode.trim() !== ''
+				? $page.data.userDistrictCode
+				: null;
 
 		// Populate credentialHash from IndexedDB for Tier 2+ users
 		// so the email footer can include the verify URL
@@ -408,9 +464,36 @@
 			}
 		}
 
+		// Opt this lane into the attestation footer. The surface a sender reaches this
+		// modal from — the template page — renders that footer, so a send from here
+		// must carry it or the recipient receives less than the sender was shown. The
+		// district suffix comes from the district this page resolved for the viewer —
+		// the same value the preview footer reads. Where no district was resolved the
+		// footer degrades to the method label alone, which still states honestly what
+		// was verified.
+		const doNotContactUrlsFact = await doNotContactUrlsPromise;
+		if (directRecipients.length > 0 && doNotContactUrlsFact.state !== 'present') {
+			submissionError = describeDoNotContactFailure(doNotContactUrlsFact);
+			modalActions.setState('error');
+			return;
+		}
+		const doNotContactUrls =
+			doNotContactUrlsFact.state === 'present' ? doNotContactUrlsFact.value : undefined;
+
 		const flow = analyzeEmailFlow(template, enrichedUser, {
-			trustTier: enrichedUser?.trust_tier ?? 0
+			trustTier: enrichedUser?.trust_tier ?? 0,
+			personalConnection,
+			attestation: { districtCode: attestationDistrict },
+			doNotContactUrls
 		});
+
+		// A message that cannot be assembled is said out loud. Without this the modal
+		// sits in its loading state forever and the sender learns nothing.
+		if (flow.error) {
+			submissionError = flow.error.message;
+			modalActions.setState('error');
+			return;
+		}
 
 		// Store mailto URL for later use
 		if (flow.mailtoUrl) {
@@ -457,8 +540,11 @@
 		let hasDetectedSwitch = false;
 		const detectionStartTime = Date.now();
 
-		// Helper to transition to appropriate state
-		const handleDetection = (detected: boolean) => {
+		// Helper to transition to appropriate state.
+		// Two outcomes, and neither is "it failed": either the browser saw the tab
+		// lose focus (the hand-off was observed), or the window never changed and
+		// we know nothing about what the OS did with the mailto.
+		const handleDetection = (outcome: 'handoff_observed' | 'handoff_unobserved') => {
 			if (!hasDetectedSwitch) {
 				hasDetectedSwitch = true;
 
@@ -472,27 +558,27 @@
 					mailAppVisibilityHandler = null;
 				}
 
-				if (detected) {
-					// Email client likely opened - show confirmation
+				if (outcome === 'handoff_observed') {
+					// The window lost focus: something took the hand-off. Ask whether it sent.
 					modalActions.setState('confirmation');
 				} else {
-					// No detection - show retry option
-					modalActions.setState('retry_needed');
+					// Nothing was observed. Say so, and leave every continuation open.
+					modalActions.setState('handoff_unobserved');
 				}
 			}
 		};
 
 		// Detect when user leaves browser (mail app opens)
 		mailAppBlurHandler = () => {
-			// Any blur within 3 seconds means email client opened
+			// A blur within 3 seconds is the hand-off being observed
 			if (Date.now() - detectionStartTime < 3000) {
-				handleDetection(true);
+				handleDetection('handoff_observed');
 			}
 		};
 
 		mailAppVisibilityHandler = () => {
 			if (document.hidden && Date.now() - detectionStartTime < 3000) {
-				handleDetection(true);
+				handleDetection('handoff_observed');
 			}
 		};
 
@@ -500,15 +586,12 @@
 		window.addEventListener('blur', mailAppBlurHandler);
 		document.addEventListener('visibilitychange', mailAppVisibilityHandler);
 
-		// OPTIMISTIC APPROACH: Assume mailto: worked unless we have evidence it didn't
-		// Wait 2 seconds - if user never left the window, they might not have an email client configured
+		// Wait 2 seconds. If the window never changed, nothing was observed — which is
+		// neither a send nor a failure, and gets its own state rather than a guess.
 		coordinated.setTimeout(
 			() => {
 				if (!hasDetectedSwitch) {
-					// CHANGED: Default to success (assume mailto: worked)
-					// Only show error if window NEVER lost focus during the entire flow
-					// This prevents false-negatives when user quickly returns to browser
-					handleDetection(true);
+					handleDetection('handoff_unobserved');
 				}
 			},
 			2000,
@@ -602,7 +685,7 @@
 		};
 
 		// For authenticated users on CWC templates: attest address, then require proof.
-		if (user?.id && template.deliveryMethod === 'cwc') {
+		if (user?.id && isCongressionalDelivery(template.deliveryMethod)) {
 			if (
 				typeof data.districtCommitment !== 'string' ||
 				!data.districtCommitment ||
@@ -849,6 +932,16 @@
 			return;
 		}
 
+		// This route carries a proof, not a body: nothing the sender typed travels
+		// with it. If any surface ever forgets to suppress the field, refuse the send
+		// with a reason rather than stripping the words on the way out.
+		if (personalConnection?.trim()) {
+			proofSubmissionBlocked = SENDER_TEXT_NOT_CARRIED_REASON;
+			submissionError = proofSubmissionBlocked;
+			modalActions.setState('error');
+			return;
+		}
+
 		if (!requireCongressionalDeliveryAddress()) {
 			return;
 		}
@@ -980,7 +1073,7 @@
 	async function handleSendConfirmation(sent: boolean) {
 		if (sent) {
 			// Check if Congressional message (Phase 1: only these are verified)
-			const isCongressional = template.deliveryMethod === 'cwc';
+			const isCongressional = isCongressionalDelivery(template.deliveryMethod);
 
 			// DEMO MODE: For guest users on non-Congressional (mailto) templates,
 			// skip onboarding and go straight to celebration for viral QR code flow
@@ -1265,7 +1358,8 @@
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
 				{#if isAuthenticatedCongressional}
 					{jurisdictionLabels.legislativeBody} requires your name, email, and address for official delivery. We decrypt
-					the address only for this send.
+					the address only for this send. This route sends the campaign letter as written — it
+					carries no note of your own.
 				{:else}
 					Confirm to track this action.
 				{/if}
@@ -1293,8 +1387,12 @@
 				</Button>
 			</div>
 		</div>
-	{:else if currentState === 'retry_needed'}
-		<!-- Retry Needed State - Email client didn't open -->
+	{:else if currentState === 'handoff_unobserved'}
+		<!--
+			Nothing was observed. The browser never changed focus, which is evidence of
+			nothing at all — not a send, not a failure. It reads as not-known, and every
+			continuation stays open, including the one where the message already went.
+		-->
 		<div class="relative p-6 text-center sm:p-8" in:scale={{ duration: 500, easing: backOut }}>
 			<!-- Close Button -->
 			<button
@@ -1305,14 +1403,17 @@
 			</button>
 
 			<div
-				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 sm:mb-6 sm:h-20 sm:w-20"
+				class="mb-4 inline-flex h-16 w-16 items-center justify-center rounded-full border border-slate-200 bg-slate-50 sm:mb-6 sm:h-20 sm:w-20"
 			>
-				<ExternalLink class="h-8 w-8 text-amber-600 sm:h-10 sm:w-10" />
+				<ExternalLink class="h-8 w-8 text-slate-700 sm:h-10 sm:w-10" />
 			</div>
-			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">Email client didn't open</h3>
+			<h3 class="mb-2 text-xl font-bold text-slate-900 sm:text-2xl">
+				We couldn't tell whether your email app opened
+			</h3>
 			<p class="mb-4 text-sm text-slate-600 sm:mb-6 sm:text-base">
-				Your email app may not be configured. Would you like to try again or copy the message
-				instead?
+				Your message was handed to your email app. The browser cannot see what happened after
+				that, so all of these are still true: it may be waiting in your app, it may have gone
+				already, or nothing may have opened at all.
 			</p>
 
 			<div class="flex flex-col gap-3">
@@ -1324,6 +1425,16 @@
 				>
 					<Send class="mr-2 h-5 w-5" />
 					Try opening email again
+				</Button>
+
+				<Button
+					variant="secondary"
+					size="lg"
+					classNames="w-full"
+					onclick={() => handleSendConfirmation(true)}
+				>
+					<CheckCircle2 class="mr-2 h-5 w-5" />
+					I sent it
 				</Button>
 
 				<button
@@ -1351,8 +1462,10 @@
 							<CheckCircle2 class="h-5 w-5 text-slate-700" />
 						</div>
 						<div>
-							<h2 class="text-lg font-semibold text-slate-900">Sent</h2>
-							<p class="text-sm text-slate-600">Your message has been sent.</p>
+							<h2 class="text-lg font-semibold text-slate-900">
+								{RECEIPT_HEADING[sendEvidenceKind]}
+							</h2>
+							<p class="text-sm text-slate-600">{RECEIPT_BASIS[sendEvidenceKind]}</p>
 						</div>
 					</div>
 					<button
@@ -1377,9 +1490,11 @@
 							<dd class="mt-1 text-slate-900">{template.title}</dd>
 						</div>
 						<div>
-							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">When</dt>
+							<dt class="text-xs font-medium tracking-wide text-slate-500 uppercase">
+								{RECEIPT_TIME_LABEL[sendEvidenceKind]}
+							</dt>
 							<dd class="mt-1 font-mono tabular-nums text-slate-900">
-								Sent {formatSentAt(sentAt)}
+								{formatSentAt(sentAt)}
 							</dd>
 						</div>
 						<div>
@@ -1407,12 +1522,12 @@
 				{#if !user}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
-							{template.deliveryMethod === 'cwc'
+							{isCongressionalDelivery(template.deliveryMethod)
 								? 'Verified-constituent delivery requires an account.'
 								: 'Track delivery and review past sends with an account.'}
 						</p>
 						<p class="mb-3 text-xs text-slate-700">
-							{template.deliveryMethod === 'cwc'
+							{isCongressionalDelivery(template.deliveryMethod)
 								? `Verified messages route through CWC with constituent-status confirmation. Account creation is free.`
 								: 'An account lets you track delivery and review past sends. Account creation is free.'}
 						</p>
@@ -1450,7 +1565,7 @@
 							Verify address
 						</button>
 					</div>
-				{:else if user && (user.trust_tier ?? 0) === 2 && template.deliveryMethod === 'cwc'}
+				{:else if user && (user.trust_tier ?? 0) === 2 && isCongressionalDelivery(template.deliveryMethod)}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
 							Identity verification enables cryptographic delivery.
@@ -1478,7 +1593,7 @@
 							Verify identity
 						</button>
 					</div>
-				{:else if user && (user.trust_tier ?? 0) === 3 && template.deliveryMethod === 'cwc'}
+				{:else if user && (user.trust_tier ?? 0) === 3 && isCongressionalDelivery(template.deliveryMethod)}
 					<div class="rounded-lg border border-slate-200 bg-slate-50 p-4">
 						<p class="mb-1 text-sm font-semibold text-slate-900">
 							Identity verified. Proof delivery is available on the next send.
@@ -2031,7 +2146,7 @@
 		templateSlug={template.slug}
 		cellId={verifiedCellId}
 		minimumTier={REQUIRED_CONGRESSIONAL_PROOF_TIER}
-		electedTarget={template.deliveryMethod === 'cwc'}
+		electedTarget={isCongressionalDelivery(template.deliveryMethod)}
 		userTrustTier={user.trust_tier ?? 1}
 		bind:showModal={showVerificationGate}
 		onverified={(data) => handleVerificationComplete(data)}

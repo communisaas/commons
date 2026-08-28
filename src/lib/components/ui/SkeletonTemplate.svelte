@@ -16,7 +16,7 @@
 		Outer: card-topic flex w-full items-start justify-between gap-3 rounded-md p-3 md:p-4
 		Inner: target badge → title (h3 text-base, line-height 24px) → description (text-xs/md:text-sm, 2 lines)
 		       → domain tag (.topic-ground)
-		MessageMetrics is conditional on engagement (most templates have none pre-launch) — omitted.
+		Engagement metrics are conditional (most templates have none pre-launch) — omitted.
 	-->
 	<div
 		class="card-topic card-weight-light relative flex w-full items-start justify-between gap-3 rounded-md p-3 text-left md:p-4 {classNames}"

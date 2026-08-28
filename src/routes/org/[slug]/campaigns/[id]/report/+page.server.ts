@@ -1,12 +1,11 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { env } from '$env/dynamic/public';
 import type { PageServerLoad, Actions } from './$types';
-import { serverQuery, serverMutation } from 'convex-sveltekit';
+import { serverQuery, serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { computeVerificationPacketCached } from '$lib/server/verification-packet';
 import { renderReport } from '$lib/server/email/report-template';
-import { computeProofWeight } from '$lib/server/legislation/receipts/proof-weight';
 import { DELIVERY_QUOTA_SUBSCRIBE_GATE } from '$lib/data/org-limit-sentences';
 
 const baseUrl = env.PUBLIC_BASE_URL?.replace(/\/$/, '') ?? 'https://commons.email';
@@ -26,7 +25,7 @@ function requireRole(role: string, required: string): void {
 	}
 }
 
-export const load: PageServerLoad = async ({ params, parent, locals, platform }) => {
+export const load: PageServerLoad = async ({ params, parent, locals, platform, url }) => {
 	if (!locals.user) throw redirect(302, '/auth/login');
 	const { org } = await parent();
 	const ctx = await serverQuery(api.organizations.getOrgContext, { slug: params.slug });
@@ -42,13 +41,10 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 	}
 
 	// Compute full packet for the report email template
-	const packetKV = platform?.env?.PACKET_CACHE_KV as
-		| {
-				get(key: string): Promise<string | null>;
-				put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-		  }
-		| undefined;
-	const fullPacket = await computeVerificationPacketCached(preview.campaign._id, org.id, packetKV);
+	const fullPacket = await computeVerificationPacketCached(preview.campaign._id, org.id, {
+		url,
+		platform
+	});
 
 	const rendered = await renderReport({
 		campaignId: String(preview.campaign._id),
@@ -64,10 +60,16 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 		whiteLabel: org.whiteLabel ?? false
 	});
 	const renderedHtml = rendered.html;
+	const deliveryCursor = url.searchParams.get('deliveryCursor');
+	if (deliveryCursor && deliveryCursor.length > 2_048) {
+		throw error(400, 'Invalid delivery cursor');
+	}
 
 	const pastDeliveries = await serverQuery(api.campaigns.getPastDeliveries, {
 		campaignId: params.id as Id<'campaigns'>,
-		orgSlug: params.slug
+		orgSlug: params.slug,
+		cursor: deliveryCursor,
+		limit: 25
 	});
 
 	return {
@@ -88,7 +90,15 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 			.filter((target: { email: string }) => target.email),
 		packet: fullPacket,
 		renderedHtml,
-		pastDeliveries: (pastDeliveries ?? []).map((delivery: Record<string, unknown>) => ({
+		deliveryPagination: {
+			isFirstPage: deliveryCursor === null,
+			hasMore: pastDeliveries?.hasMore ?? false,
+			firstPageUrl: url.pathname,
+			nextPageUrl: pastDeliveries?.cursor
+				? `${url.pathname}?deliveryCursor=${encodeURIComponent(pastDeliveries.cursor)}`
+				: null
+		},
+		pastDeliveries: (pastDeliveries?.data ?? []).map((delivery: Record<string, unknown>) => ({
 			id: asString(delivery._id ?? delivery.id),
 			receiptId: typeof delivery.receiptId === 'string' ? delivery.receiptId : null,
 			decisionMakerId:
@@ -111,14 +121,14 @@ export const load: PageServerLoad = async ({ params, parent, locals, platform })
 						(blocker): blocker is string => typeof blocker === 'string'
 					)
 				: [],
-			proofStrength: typeof delivery.proofWeight === 'number'
-				? {
-						weight: asNumber(delivery.proofWeight),
-						verified: asNumber(delivery.verifiedCount),
-						total: asNumber(delivery.totalCount),
-						districtCount: asNumber(delivery.districtCount)
-					}
-				: null,
+			proofStrength:
+				typeof delivery.verifiedCount === 'number'
+					? {
+							verified: asNumber(delivery.verifiedCount),
+							total: asNumber(delivery.totalCount),
+							districtCount: asNumber(delivery.districtCount)
+						}
+					: null,
 			packetDigest: typeof delivery.packetDigest === 'string' ? delivery.packetDigest : null,
 			attestationDigest:
 				typeof delivery.attestationDigest === 'string' ? delivery.attestationDigest : null,
@@ -172,6 +182,15 @@ export const actions: Actions = {
 		// the page show the prompt. An active plan that exhausted its period
 		// quota (maxEmails > 0) keeps the plain upgrade sentence with no code.
 		const limits = await serverQuery(api.subscriptions.checkPlanLimits, { orgSlug: params.slug });
+		if (!limits.usageReady) {
+			if (limits.usageRepairRequired) {
+				await serverMutation(api.subscriptions.requestPlanUsageRepair, { orgSlug: params.slug });
+			}
+			return fail(503, {
+				error: 'Billing usage is being rebuilt. The report was not sent; retry shortly.',
+				errorCode: limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY'
+			});
+		}
 		if (limits && limits.current && limits.current.emailsSent >= limits.limits.maxEmails) {
 			if (limits.limits.maxEmails <= 0) {
 				return fail(403, {
@@ -186,67 +205,38 @@ export const actions: Actions = {
 		}
 
 		// Render the full report email HTML so the decision-maker gets the same quality as the preview
-		const packetKV = platform?.env?.PACKET_CACHE_KV as
-			| {
-					get(key: string): Promise<string | null>;
-					put(key: string, value: string, options?: { expirationTtl?: number }): Promise<void>;
-			  }
-			| undefined;
 		let renderedHtml: string | undefined;
 		let packetDigest: string | undefined;
-		let proofWeight: number | undefined;
-		let packetSummary:
-			| {
-					verified: number;
-					total: number;
-					districtCount: number;
-					gds: number | null;
-					ald: number | null;
-					cai: number | null;
-					temporalEntropy: number | null;
-			  }
-			| undefined;
 		try {
 			const preview = await serverQuery(api.campaigns.getReportPreview, {
 				campaignId: params.id as Id<'campaigns'>,
 				orgSlug: params.slug
 			});
-			if (preview) {
-				const fullPacket = await computeVerificationPacketCached(
-					preview.campaign._id,
-					ctx.org._id,
-					packetKV
-				);
-				const rendered = await renderReport({
-					campaignId: String(preview.campaign._id),
-					campaignTitle: preview.campaign.title,
-					orgName: ctx.org.name ?? params.slug,
-					packet: fullPacket,
-					verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
-					// D-09: org branding threaded into the SENT email (this rendered
-					// HTML is what `sendReport` persists + dispatches via SES).
-					branding: {
-						accent: ctx.org.brandingAccent ?? null,
-						logoUrl: ctx.org.logoUrl ?? null
-					},
-					// D-10: white-label de-brands the footer on the sent report.
-					whiteLabel: ctx.org.whiteLabel ?? false
-				});
-				renderedHtml = rendered.html;
-				packetDigest = rendered.attestationHash;
-				proofWeight = computeProofWeight(fullPacket);
-				packetSummary = {
-					verified: fullPacket.verified,
-					total: fullPacket.total,
-					districtCount: fullPacket.districtCount,
-					gds: fullPacket.gds ?? null,
-					ald: fullPacket.ald ?? null,
-					cai: fullPacket.cai ?? null,
-					temporalEntropy: fullPacket.temporalEntropy ?? null
-				};
-			}
+			if (!preview) return fail(404, { error: 'Campaign not found. Nothing was sent.' });
+			const fullPacket = await computeVerificationPacketCached(preview.campaign._id, ctx.org._id, {
+				url: new URL(request.url),
+				platform,
+				fresh: true
+			});
+			const rendered = await renderReport({
+				campaignId: String(preview.campaign._id),
+				campaignTitle: preview.campaign.title,
+				orgName: ctx.org.name ?? params.slug,
+				packet: fullPacket,
+				verificationUrl: `${baseUrl}/v/${preview.campaign._id}`,
+				// D-09: org branding threaded into the SENT email (this rendered
+				// HTML is what `sendReport` persists + dispatches via SES).
+				branding: {
+					accent: ctx.org.brandingAccent ?? null,
+					logoUrl: ctx.org.logoUrl ?? null
+				},
+				// D-10: white-label de-brands the footer on the sent report.
+				whiteLabel: ctx.org.whiteLabel ?? false
+			});
+			renderedHtml = rendered.html;
+			packetDigest = rendered.attestationHash;
 		} catch {
-			// Non-fatal: dispatch will use fallback template
+			return fail(500, { error: 'Could not build the report packet. Nothing was sent.' });
 		}
 
 		const result = await serverMutation(api.campaigns.sendReport, {
@@ -254,12 +244,30 @@ export const actions: Actions = {
 			orgSlug: params.slug,
 			targetEmails: selectedEmails,
 			renderedHtml,
-			packetDigest,
-			proofWeight,
-			packetSummary
+			packetDigest
 		});
 
 		if (result.error) {
+			if (result.error === 'CAMPAIGN_REPORT_PACKET_STALE') {
+				return fail(400, {
+					error:
+						'Campaign activity changed while this report was being prepared. Reload the page and send again.'
+				});
+			}
+			if (result.error === 'CAMPAIGN_REPORT_PACKET_HTML_UNBOUND') {
+				return fail(400, {
+					error:
+						"The rendered report did not match the server's packet. Reload the page and send again."
+				});
+			}
+			if (
+				result.error === 'CAMPAIGN_READ_MODEL_NOT_READY' ||
+				result.error === 'CAMPAIGN_READ_MODEL_MISSING'
+			) {
+				return fail(503, {
+					error: 'Campaign metrics are still being built. Nothing was sent; retry shortly.'
+				});
+			}
 			return fail(400, { error: result.error });
 		}
 

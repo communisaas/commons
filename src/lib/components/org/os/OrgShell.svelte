@@ -19,20 +19,20 @@
 
   The shell creates the OS instance (`setOrgOS`) and publishes it on context so
   the Mantle's WorkspaceSwitcher, the spaces, and any chrome read the same
-  kernel. Switching is a pure state toggle (`orgOS.switchSpace`); the URL is
-  updated via SHALLOW routing for addressability — never a navigation that would
-  remount.
+  kernel. Switching updates the kernel immediately, then performs a same-layout
+  navigation so the server lazily hydrates only the newly visible workspace.
+  SvelteKit preserves this layout instance, so the mounted spaces do not remount.
 
   Honesty: hidden spaces are display:none, NOT removed — their state (and the
   Studio process view) is real and preserved. People, Power, and Results render only
-  REAL data threaded from the layout load (`spaces` prop), loaded ONCE per real
-  navigation — a space switch never re-fetches. STUDIO streams only what its real
-  SSE process emitted.
+  REAL data threaded from the layout load (`spaces` prop). Each slice loads on
+  first focus and is retained in this mounted layout for later switches. STUDIO
+  streams only what its real SSE process emitted.
 -->
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { browser } from '$app/environment';
-	import { replaceState, afterNavigate } from '$app/navigation';
+	import { goto, afterNavigate } from '$app/navigation';
 	import { getOrgOS, spaceForPath, pathForSpace, SPACE_LABELS, type SpaceId } from './orgOS.svelte';
 	import { spaceSwitchDirection } from './perceptual';
 	import StudioSpace from './StudioSpace.svelte';
@@ -47,16 +47,27 @@
 		role,
 		spaces
 	}: {
-		/** `/org/[slug]` — the addressable root for shallow URL updates. */
+		/** `/org/[slug]` — the addressable root for same-layout navigation. */
 		base: string;
 		/** Owner/editor can publish; members watch. Display gate for STUDIO Send. */
 		canPublish: boolean;
 		/** Exact membership role for owner-only authority readouts. */
 		role: string;
-		/** Per-space data loaded ONCE by the org layout. A space switch is a pure
-		 * state toggle, so this is read from props — never re-fetched on switch. */
+		/** The one slice hydrated by the current org-layout navigation. Previously
+		 * loaded slices are retained below for this mounted shell session. */
 		spaces: OrgSpacesData;
 	} = $props();
+
+	// Server navigation returns only the newly visible slice. Retain slices that
+	// were already loaded so all four mounted workspaces keep their real state
+	// while later switches avoid re-fetching until the next full page session.
+	let hydratedSpaces = $state<OrgSpacesData>({ ...spaces });
+	$effect(() => {
+		if (spaces.return !== null) hydratedSpaces.return = spaces.return;
+		if (spaces.base !== null) hydratedSpaces.base = spaces.base;
+		if (spaces.landscape !== null) hydratedSpaces.landscape = spaces.landscape;
+		if (spaces.operating !== null) hydratedSpaces.operating = spaces.operating;
+	});
 
 	// The OS kernel was created by the layout (setOrgOS) so the Mantle's
 	// WorkspaceSwitcher and these spaces share one instance. We read it here.
@@ -74,40 +85,39 @@
 
 	// ADDRESSABILITY — two directions, kept from fighting each other:
 	//
-	//  (1) space → URL: when the operator switches spaces (os.switchSpace, a pure
-	//      state toggle with NO navigation), rewrite the URL via SHALLOW routing so
-	//      a refresh/share lands on the same space. This is the ONLY writer of the
-	//      URL here, and it never remounts a space.
+	//  (1) space → URL: when the operator switches spaces, perform a same-layout
+	//      navigation. The layout instance and all four mounted components remain
+	//      alive, while the server load lazily hydrates only the newly visible
+	//      workspace instead of megafetching every product domain up front.
 	//
 	//  (2) URL → space: only on a REAL navigation (a deep-route link, or browser
 	//      back/forward) do we reconcile the active space to the URL. Using
-	//      afterNavigate — not a reactive effect — means our own shallow URL
-	//      rewrites in (1) do NOT trigger a space reconcile, so a deliberate switch
-	//      is never reverted by a stale URL read.
+	//      afterNavigate also reconciles browser history and deep-route arrivals.
 	let mounted = $state(false);
 	onMount(() => {
 		mounted = true;
 	});
 
-	// (1) space → URL. Guarded so we only rewrite when the URL's owning space
+	// (1) space → URL. Guarded so we only navigate when the URL's owning space
 	// actually differs from the active space (spaceForPath collapses deep routes
 	// into one space, so e.g. /campaigns must not be clobbered back to /studio).
 	$effect(() => {
 		if (!mounted) return;
 		// Depend ONLY on activeSpace. The current path is read NON-reactively from
 		// window.location — NOT from the $page store — on purpose: reading the page
-		// store here makes the effect re-run on the very replaceState it performs,
-		// an infinite read-write loop (effect_update_depth_exceeded). This effect
+		// store here makes the effect re-run on the navigation it performs. This effect
 		// must fire on a SPACE SWITCH, never on a URL change.
 		const space = os.activeSpace;
 		const current = window.location.pathname;
 		if (spaceForPath(current, base) !== space) {
-			try {
-				replaceState(pathForSpace(space, base), {});
-			} catch {
-				// replaceState throws if the router isn't ready; the state toggle
-				// already happened, so only addressability is affected and self-heals.
-			}
+			void goto(pathForSpace(space, base), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			}).catch(() => {
+				// The state toggle already happened; a later navigation/refresh
+				// reconciles the URL and retries the lazy server slice.
+			});
 		}
 	});
 
@@ -160,7 +170,7 @@
 		aria-hidden={!show('studio')}
 		aria-label="{SPACE_LABELS.studio} workspace"
 	>
-		<StudioSpace {canPublish} {spaces} />
+		<StudioSpace {canPublish} spaces={hydratedSpaces} />
 	</div>
 
 	<div
@@ -169,7 +179,7 @@
 		aria-hidden={!show('base')}
 		aria-label="{SPACE_LABELS.base} workspace"
 	>
-		<BaseSpace data={spaces.base} {base} />
+		<BaseSpace data={hydratedSpaces.base} {base} />
 	</div>
 
 	<div
@@ -178,7 +188,7 @@
 		aria-hidden={!show('landscape')}
 		aria-label="{SPACE_LABELS.landscape} workspace"
 	>
-		<LandscapeSpace data={spaces.landscape} {base} />
+		<LandscapeSpace data={hydratedSpaces.landscape} {base} />
 	</div>
 
 	<div
@@ -187,7 +197,7 @@
 		aria-hidden={!show('return')}
 		aria-label="{SPACE_LABELS.return} workspace"
 	>
-		<ReturnSpace data={spaces.return} {base} />
+		<ReturnSpace data={hydratedSpaces.return} {base} />
 	</div>
 </div>
 

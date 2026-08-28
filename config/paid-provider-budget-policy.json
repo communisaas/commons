@@ -1,0 +1,150 @@
+{
+	"version": 1,
+	"protocol": "1",
+	"authorityId": "shared-paid-provider-01",
+	"caps": {
+		"globalDailyUnits": 1000,
+		"globalMonthlyUnits": 2632,
+		"publicDailyUnits": 750,
+		"publicMonthlyUnits": 1800,
+		"publicMonthlyUnitsOperatorCeiling": 2184,
+		"actorDailyReservations": {
+			"authenticated": 10,
+			"verified": 15,
+			"operator": 15
+		},
+		"actorMonthlyPublicUnits": {
+			"authenticated": 263,
+			"verified": 486
+		}
+	},
+	"operations": {
+		"subject-line": {
+			"weightUnits": 20,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "gemini": 1, "groq": 1 },
+			"publicDailyUnits": 200,
+			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
+			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
+		},
+		"decision-makers": {
+			"weightUnits": 166,
+			"maxProviderCallsPerReservation": 162,
+			"providerCallBundle": {
+				"dnsMx": 12,
+				"exaContents": 32,
+				"exaSearch": 72,
+				"firecrawl": 32,
+				"gemini": 13,
+				"groq": 1
+			},
+			"publicDailyUnits": 600,
+			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
+			"hourlyReservations": { "authenticated": 2, "verified": 3, "operator": 3 }
+		},
+		"message-generation": {
+			"weightUnits": 50,
+			"maxProviderCallsPerReservation": 38,
+			"providerCallBundle": {
+				"exaContents": 12,
+				"exaSearch": 9,
+				"firecrawl": 12,
+				"gemini": 2,
+				"groq": 3
+			},
+			"publicDailyUnits": 300,
+			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
+			"hourlyReservations": { "authenticated": 3, "verified": 5, "operator": 5 }
+		},
+		"embeddings": {
+			"weightUnits": 1,
+			"maxProviderCallsPerReservation": 1,
+			"providerCallBundle": { "gemini": 1 },
+			"publicDailyUnits": 200,
+			"publicMonthlyUnits": 1800,
+			"publicMonthlyTracksPool": true,
+			"hourlyReservations": { "authenticated": 20, "verified": 20, "operator": 20 }
+		},
+		"moderation-personalization": {
+			"weightUnits": 2,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 10, "verified": 15, "operator": 15 }
+		},
+		"moderation-check": {
+			"weightUnits": 2,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 5, "verified": 5, "operator": 5 }
+		},
+		"template-authoring": {
+			"weightUnits": 5,
+			"maxProviderCallsPerReservation": 3,
+			"providerCallBundle": { "gemini": 1, "groq": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 3, "verified": 5, "operator": 5 }
+		},
+		"delegation-policy": {
+			"weightUnits": 20,
+			"maxProviderCallsPerReservation": 2,
+			"providerCallBundle": { "gemini": 2 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 2, "verified": 3, "operator": 3 }
+		},
+		"embedding-backfill": {
+			"weightUnits": 100,
+			"maxProviderCallsPerReservation": 21,
+			"providerCallBundle": { "gemini": 21 },
+			"publicDailyUnits": 100,
+			"publicMonthlyUnits": 1500,
+			"hourlyReservations": { "authenticated": 1, "verified": 1, "operator": 1 }
+		}
+	},
+	"paidOrgCapacity": {
+		"operation": "decision-makers",
+		"providerUnitsPerResolve": 166,
+		"providerCostMicrousdPerResolve": 580000,
+		"revenueAllocationBasisPoints": 3000,
+		"billingAuthority": "settled-subscription-payment-only"
+	},
+	"providerEconomics": {
+		"exa": {
+			"freeMonthlyCreditMicrousd": 10000000,
+			"searchMicrousd": 7000,
+			"contentsPageMicrousd": 1000,
+			"launchBillingAuthority": "operator-authorized-pay-as-you-go",
+			"monthlyPaidOrgSpendCeilingMicrousd": 100000000,
+			"operatorActivationDependency": "Paid billing must be enabled in the Exa dashboard before authorized requests can spend."
+		},
+		"firecrawl": {
+			"freeMonthlyCredits": 1000,
+			"scrapeCreditsPerAttempt": 1,
+			"launchBillingAuthority": "operator-authorized-pay-as-you-go",
+			"monthlyPaidOrgSpendCeilingCredits": 6000,
+			"operatorActivationDependency": "Paid billing must be enabled in the Firecrawl dashboard before authorized requests can spend."
+		},
+		"gemini": {
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		},
+		"groq": {
+			"launchBillingAuthority": "free-plan-billing-disabled-no-payg"
+		}
+	},
+	"cloudflareEnvelope": {
+		"workerDailyRequestFreeLimit": 100000,
+		"durableObjectDailyRequestFreeLimit": 100000,
+		"sqliteDailyRowsReadFreeLimit": 5000000,
+		"sqliteDailyRowsWrittenFreeLimit": 100000,
+		"sqliteRowsReadPerAttempt": 9,
+		"sqliteRowsWrittenPerAdmission": 9
+	}
+}

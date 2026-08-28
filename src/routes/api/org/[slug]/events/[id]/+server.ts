@@ -5,7 +5,7 @@
 
 import { json, error } from '@sveltejs/kit';
 import { FEATURES } from '$lib/config/features';
-import { serverMutation } from 'convex-sveltekit';
+import { serverMutation } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import type { RequestHandler } from './$types';
@@ -21,7 +21,8 @@ export const PATCH: RequestHandler = async ({ params, request, locals }) => {
 		orgSlug: params.slug,
 		...body,
 		startAt: body.startAt ? new Date(body.startAt).getTime() : undefined,
-		endAt: body.endAt !== undefined ? (body.endAt ? new Date(body.endAt).getTime() : null) : undefined
+		endAt:
+			body.endAt !== undefined ? (body.endAt ? new Date(body.endAt).getTime() : null) : undefined
 	});
 	return json({ id: params.id, updatedAt: new Date().toISOString() });
 };

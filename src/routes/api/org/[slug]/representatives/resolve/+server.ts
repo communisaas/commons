@@ -1,6 +1,7 @@
 import { json, error } from '@sveltejs/kit';
-import { serverQuery } from 'convex-sveltekit';
+import { serverQuery } from '$lib/server/convex-work-budget';
 import { api } from '$lib/convex';
+import { FEATURES } from '$lib/config/features';
 import { getOfficials } from '$lib/core/shadow-atlas/client';
 import { buildCohortRoster, type ResolvedDistrict } from '$lib/core/targets/cohort-roster';
 import type { RequestHandler } from './$types';
@@ -21,12 +22,15 @@ import type { RequestHandler } from './$types';
 const MAX_DISTRICT_FANOUT = 600;
 
 export const POST: RequestHandler = async ({ params, locals }) => {
+	if (!FEATURES.CONGRESSIONAL) throw error(404, 'Not found');
 	if (!locals.user) throw error(401, 'Authentication required');
 
 	// Membership-gated + org-scoped: cohortDistrictHistogram calls requireOrgRole
 	// (member+) keyed on the slug's org, so a non-member / cross-org caller throws
 	// → 403. Returns COUNTS ONLY — no supporter PII crosses this boundary.
-	let histogram: Awaited<ReturnType<typeof serverQuery<typeof api.targets.cohortDistrictHistogram>>>;
+	let histogram: Awaited<
+		ReturnType<typeof serverQuery<typeof api.targets.cohortDistrictHistogram>>
+	>;
 	try {
 		histogram = await serverQuery(api.targets.cohortDistrictHistogram, { orgSlug: params.slug });
 	} catch {

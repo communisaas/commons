@@ -17,11 +17,19 @@
  *   - Returns 3-6 EvaluatedSource[] for the message writer.
  */
 
-import { searchWeb, readPage, pruneSourceContent, extractProvenance } from '../exa-search';
+import {
+	searchWeb,
+	readPage,
+	pruneSourceContent,
+	extractProvenance,
+	providerUrlLogLabel
+} from '../exa-search';
 import type { ExaSearchHit } from '../exa-search';
+import { sanitizeProviderErrorMessage } from '../provider-error';
 import { evaluateSources } from './source-evaluator';
 import type { TokenUsage, SourceCandidate, EvaluatedSource } from '../types';
 import { traceEvent } from '$lib/server/agent-trace';
+import type { ProviderVisibleSourceStage } from './message-source-ground';
 
 // ============================================================================
 // Types
@@ -95,6 +103,11 @@ export interface SourceDiscoveryOptions {
 	onPhase?: (phase: 'discover' | 'validate' | 'complete', message: string) => void;
 	/** Trace ID for observability — enables fire-and-forget trace events */
 	traceId?: string;
+	/** Fail-closed classification of exact indirect-source text before source evaluation. */
+	classifyProviderVisibleSources: (
+		providerVisibleText: string,
+		stage: ProviderVisibleSourceStage
+	) => Promise<void>;
 }
 
 // ============================================================================
@@ -271,7 +284,10 @@ export async function discoverSources(
 			allHits.push({ ...hit, stratum: 'gov' });
 		}
 	} else {
-		console.warn('[source-discovery] Gov search failed:', govResults.reason);
+		console.warn(
+			'[source-discovery] Gov search failed:',
+			sanitizeProviderErrorMessage(govResults.reason)
+		);
 	}
 
 	if (newsResults.status === 'fulfilled') {
@@ -280,7 +296,10 @@ export async function discoverSources(
 			allHits.push({ ...hit, stratum: 'news' });
 		}
 	} else {
-		console.warn('[source-discovery] News search failed:', newsResults.reason);
+		console.warn(
+			'[source-discovery] News search failed:',
+			sanitizeProviderErrorMessage(newsResults.reason)
+		);
 	}
 
 	if (generalResults.status === 'fulfilled') {
@@ -289,7 +308,10 @@ export async function discoverSources(
 			allHits.push({ ...hit, stratum: 'general' });
 		}
 	} else {
-		console.warn('[source-discovery] General search failed:', generalResults.reason);
+		console.warn(
+			'[source-discovery] General search failed:',
+			sanitizeProviderErrorMessage(generalResults.reason)
+		);
 	}
 
 	console.debug('[source-discovery] Phase 1a complete:', {
@@ -401,9 +423,13 @@ export async function discoverSources(
 			discoveredSource.publisher = provenance.publisher;
 		} else {
 			const error =
-				pageResult.status === 'rejected' ? String(pageResult.reason) : 'No content returned';
+				pageResult.status === 'rejected'
+					? sanitizeProviderErrorMessage(pageResult.reason)
+					: 'No content returned';
 			failed.push({ source: discoveredSource, error });
-			console.warn(`[source-discovery] Page fetch failed: ${candidate.url} - ${error}`);
+			console.warn(
+				`[source-discovery] Page fetch failed: ${providerUrlLogLabel(candidate.url)} - ${error}`
+			);
 		}
 	}
 
@@ -420,10 +446,13 @@ export async function discoverSources(
 			candidatesFetched: candidates.length,
 			failedFetches: failed.length,
 			failureSamples: failed.slice(0, 5).map((f) => ({
-				url: f.source.url,
+				url: providerUrlLogLabel(f.source.url),
 				error: f.error
 			})),
-			candidateUrls: candidates.map((c) => ({ url: c.url, stratum: c.stratum }))
+			candidateUrls: candidates.map((c) => ({
+				url: providerUrlLogLabel(c.url),
+				stratum: c.stratum
+			}))
 		});
 	}
 
@@ -461,7 +490,8 @@ export async function discoverSources(
 					locality: geographicScope.locality
 				}
 			: undefined,
-		decisionMakers: options.decisionMakers
+		decisionMakers: options.decisionMakers,
+		classifyProviderVisibleSources: options.classifyProviderVisibleSources
 	};
 
 	let evaluated: EvaluatedSource[];
@@ -474,6 +504,7 @@ export async function discoverSources(
 		evaluated = evalResult.sources;
 		evaluationTokenUsage = evalResult.tokenUsage;
 	} catch (error) {
+		if (error instanceof Error && error.name === 'SourceEvaluationSafetyError') throw error;
 		console.error(
 			'[source-discovery] Source evaluation failed, using candidates as fallback:',
 			error

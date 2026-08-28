@@ -186,12 +186,12 @@
       },
       "chokepoint": false,
       "carryover_from": "(v1 substrate gap from T10-1)",
-      "description": "createCampaignAction accepts optional userId. Submissions.create + downstream processCampaignSubmission do NOT pass it. Wire userId through from /api/submissions/create \u2192 submissions.create \u2192 action insert. Then the T10-1 reputation cron has real data to promote on.",
-      "acceptance_criteria": "After 5 ZK actions from one user, reputationTier=active. Verified by running the nightly cron against a seeded user.",
+      "description": "createCampaignAction accepts optional userId. Submissions.create + downstream processCampaignSubmission do NOT pass it. Wire userId through from /api/submissions/create \u2192 submissions.create \u2192 action insert so T10-1 can update actionCount, reputationTier, and action attribution in one mutation.",
+      "acceptance_criteria": "The fifth verified action from one user commits actionCount=5, reputationTier=active, and engagementTier=1 attribution atomically.",
       "depends_on": [],
       "status": "completed",
       "completed_at": "2026-05-27T23:11:22Z",
-      "completion_notes": "userId threaded through ZK + non-ZK submission flow. (1) getUserTrustTier internalQuery in convex/campaigns.ts now returns user._id alongside trustTier+engagementTier. (2) UserTrustTier type extended with userId: Id<'users'>. (3) createCampaignActionRef FunctionReference cast extended with userId?: Id<'users'> + atlasVersion?: string (was missing both \u2014 codegen-cast drift from v1). (4) processCampaignSubmission's createCampaignAction call now passes userId: userData?.userId \u2014 undefined for anonymous email submissions (still safe per createCampaignAction's optional arg guard). T10-1 reputation cron now has real data: each verified action from a registered user increments users.actionCount; nightly recomputeAllReputationTiers walks the threshold table to promote reputationTier. 0 svelte-check errors."
+      "completion_notes": "userId threaded through ZK + non-ZK submission flow. (1) getUserTrustTier internalQuery in convex/campaigns.ts returns user._id alongside trustTier+engagementTier. (2) UserTrustTier carries userId. (3) createCampaignActionRef carries userId + atlasVersion. (4) processCampaignSubmission passes userData?.userId while anonymous-email submissions stay null. Launch hardening subsequently made T10-1 transactional: every registered verified action updates users.actionCount + reputationTier and stamps the post-increment engagement tier before immutable attribution."
     },
     {
       "id": "NEW-E-2",
@@ -1511,7 +1511,7 @@
       ],
       "status": "deferred",
       "deferred_at": "2026-05-27T23:23:56Z",
-      "deferred_reason": "Per-supporter bill alerts \u2014 depends on NEW-T6-6 (state bill source, deferred) + alert-spam dedup via reputation cron (ready). Multi-week M-tier with partnership cross-dep.",
+      "deferred_reason": "Per-supporter bill alerts \u2014 depends on NEW-T6-6 (state bill source, deferred) + alert-spam dedup via transactional reputation state (ready). Multi-week M-tier with partnership cross-dep.",
       "revisit_when": "NEW-T6-6 lands + per-user bill-tag UX defined"
     },
     {

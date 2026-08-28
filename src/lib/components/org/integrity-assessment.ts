@@ -1,7 +1,99 @@
+import { absent, present, withheld, type Fact } from '$lib/core/fact';
 import type { IntegrityMetrics } from '$lib/types/verification-packet';
 
 /** Burst velocity above this reads as a rate spike worth a second look. */
 export const BURST_VELOCITY_REVIEW_THRESHOLD = 5;
+
+/**
+ * Action count below which the coordination audit renders no ratio at all.
+ *
+ * This is a declared display floor, not a fitted statistic — it carries no
+ * significance level, no power calculation, and no confidence interval. Its
+ * only claim is the plain one: under this many actions a sameness ratio or a
+ * peak-versus-average ratio is decided by a handful of rows, so printing it
+ * would show a figure that reads as a measurement without being one.
+ */
+export const DIAGNOSTIC_ACTION_FLOOR = 25;
+
+export const ACTION_FLOOR_WITHHELD_REASON = 'Not enough actions to read a pattern.';
+export const TEMPORAL_WINDOW_WITHHELD_REASON =
+	'Actions arrived within an hour of each other. Timing readings are withheld until the observed window spans at least one hour.';
+
+/**
+ * Apply the display floor to an already-classified fact. Only a present value
+ * can become withheld; absent, blocked, and already-withheld facts keep their
+ * original meaning and reason.
+ */
+export function floorGatedReading(reading: Fact<number>, actionCount: number): Fact<number> {
+	if (reading.state !== 'present') return reading;
+	if (actionCount < DIAGNOSTIC_ACTION_FLOOR) return withheld(ACTION_FLOOR_WITHHELD_REASON);
+	return reading;
+}
+
+export interface CoordinationReadingFacts {
+	gds: Fact<number>;
+	sameness: Fact<number>;
+	timing: Fact<number>;
+	arrival: Fact<number>;
+	cai: Fact<number>;
+}
+
+function observedReading(value: number | null): Fact<number> {
+	return value === null ? absent() : present(value);
+}
+
+function temporalReading(value: number | null, actionCount: number): Fact<number> {
+	if (value !== null) return present(value);
+	if (actionCount < 2) return absent();
+	return withheld(TEMPORAL_WINDOW_WITHHELD_REASON);
+}
+
+/**
+ * Convert nullable packet fields into facts at the component boundary. A
+ * temporal null after two actions means the observed window is too short to
+ * publish, while a null before two actions means no reading was computed.
+ */
+export function coordinationReadingFacts(
+	metrics: IntegrityMetrics,
+	actionCount: number
+): CoordinationReadingFacts {
+	return {
+		gds: observedReading(metrics.gds),
+		sameness: floorGatedReading(
+			observedReading(metrics.ald === null ? null : 1 - metrics.ald),
+			actionCount
+		),
+		timing: temporalReading(metrics.temporalEntropy, actionCount),
+		arrival: floorGatedReading(temporalReading(metrics.burstVelocity, actionCount), actionCount),
+		cai: observedReading(metrics.cai)
+	};
+}
+
+export function factStatusLabel(reading: Fact<unknown>): string {
+	switch (reading.state) {
+		case 'present':
+			return 'Available';
+		case 'absent':
+			return 'Not computed';
+		case 'withheld':
+			return 'Withheld';
+		case 'blocked':
+			return 'Blocked';
+	}
+}
+
+export function factExplanation(reading: Fact<unknown>): string | null {
+	switch (reading.state) {
+		case 'present':
+			return null;
+		case 'absent':
+			return 'No reading was computed from the recorded fields.';
+		case 'withheld':
+			return reading.why;
+		case 'blocked':
+			return `Reading blocked before computation: ${reading.why}`;
+	}
+}
 
 export function hasBurstWarning(metrics: IntegrityMetrics): boolean {
 	return (

@@ -9,8 +9,10 @@
  */
 
 import { api } from '$lib/convex';
-import { serverMutation, serverQuery } from 'convex-sveltekit';
+import { serverMutation, serverQuery } from '$lib/server/convex-work-budget';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+
+const RESOLVED_CONTACT_LOOKUP_CAP = 12;
 
 export interface ResolvedContact {
 	orgKey: string;
@@ -38,32 +40,38 @@ export async function getCachedContacts(
 	pairs: Array<{ organization: string; title: string }>
 ): Promise<ResolvedContact[]> {
 	if (pairs.length === 0) return [];
+	if (pairs.length > RESOLVED_CONTACT_LOOKUP_CAP) {
+		throw new Error(`Resolved contact lookup exceeds ${RESOLVED_CONTACT_LOOKUP_CAP} pairs`);
+	}
 
 	try {
-		const normalizedPairs = pairs.map(p => ({
+		const normalizedPairs = pairs.map((p) => ({
 			orgKey: normalizeOrgKey(p.organization),
-			title: p.title,
+			title: p.title
 		}));
 
 		const results = await serverQuery(api.resolvedContacts.getCached, {
 			_secret: getInternalSecret(),
-			pairs: normalizedPairs,
+			nowBucket: Math.floor(Date.now() / 60_000) * 60_000,
+			pairs: normalizedPairs
 		});
 
-		return (results || []).map((r: {
-			orgKey: string;
-			name: string | null;
-			title: string | null;
-			email: string;
-			emailSource: string | null;
-		}) => ({
-			orgKey: r.orgKey,
-			name: r.name ?? '',
-			title: r.title ?? '',
-			email: r.email,
-			emailSource: r.emailSource,
-			resolvedBy: 'cache',
-		}));
+		return (results || []).map(
+			(r: {
+				orgKey: string;
+				name: string | null;
+				title: string | null;
+				email: string;
+				emailSource: string | null;
+			}) => ({
+				orgKey: r.orgKey,
+				name: r.name ?? '',
+				title: r.title ?? '',
+				email: r.email,
+				emailSource: r.emailSource,
+				resolvedBy: 'cache'
+			})
+		);
 	} catch (err) {
 		console.warn('[contact-cache] getCachedContacts failed (non-fatal):', err);
 		return [];
@@ -85,19 +93,19 @@ export async function upsertResolvedContacts(
 ): Promise<void> {
 	if (contacts.length === 0) return;
 
-	const withEmail = contacts.filter(c => c.email?.includes('@'));
+	const withEmail = contacts.filter((c) => c.email?.includes('@'));
 	if (withEmail.length === 0) return;
 
 	try {
 		await serverMutation(api.resolvedContacts.upsert, {
 			_secret: getInternalSecret(),
-			contacts: withEmail.map(c => ({
+			contacts: withEmail.map((c) => ({
 				orgKey: normalizeOrgKey(c.organization),
 				title: c.title,
 				name: c.name,
 				email: c.email,
-				emailSource: c.emailSource,
-			})),
+				emailSource: c.emailSource
+			}))
 		});
 	} catch (err) {
 		console.warn('[contact-cache] upsertResolvedContacts failed (non-fatal):', err);
@@ -122,11 +130,11 @@ export async function updateContactVerification(
 	try {
 		await serverMutation(api.resolvedContacts.updateVerification, {
 			_secret: getInternalSecret(),
-			updates: updates.map(u => ({
+			updates: updates.map((u) => ({
 				orgKey: normalizeOrgKey(u.organization),
 				title: u.title,
-				verificationStatus: u.verificationStatus,
-			})),
+				verificationStatus: u.verificationStatus
+			}))
 		});
 	} catch (err) {
 		console.warn('[contact-cache] updateContactVerification failed (non-fatal):', err);

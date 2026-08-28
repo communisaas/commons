@@ -8,25 +8,57 @@ import {
 import { internal } from './_generated/api';
 import { makeFunctionReference } from 'convex/server';
 import type { FunctionReference } from 'convex/server';
-import type { Id } from './_generated/dataModel';
-import type { MutationCtx } from './_generated/server';
+import type { Doc, Id } from './_generated/dataModel';
+import type { MutationCtx, QueryCtx } from './_generated/server';
 import { v } from 'convex/values';
 import { recipientFilterValidator } from './_validators';
 import { requireOrgRole, requireAuth } from './_authHelpers';
 import { requireInternalSecret } from './_internalAuth';
 import { getOrgKeyForAction } from './_orgKeyUnseal';
 import { decryptOrgPii } from './_orgKey';
-import { computeOrgScopedEmailHash } from './_orgHash';
+import { computeGlobalEmailHash, computeOrgScopedEmailHash } from './_orgHash';
 import {
-	collectFilteredRecipients,
-	countFilteredRecipients,
+	countRecipientPage,
 	pageFilteredRecipients,
-	RECIPIENT_COHORT_CAP
+	RECIPIENT_COHORT_CAP,
+	RECIPIENT_SCAN_CAP,
+	RECIPIENT_SCAN_PAGE
 } from './_emailRecipientFilter';
-import { applyEmailMergeFields, buildEmailTierContext } from './_emailMergeFields';
+import { normalizeEmailAudienceFilter } from './_audienceFilters';
+import { applyEmailMergeFields, buildEmailTierContext } from './lib/emailMergeFields';
 import { applySupporterStatsDelta, type CountableSupporter } from './_supporterStats';
+import { requireAudienceDispatchJobsReady } from './lib/audienceDispatchGate';
+import {
+	assertAbMetadataInput,
+	assertEmailDraftInput,
+	assertEmailDraftPatch
+} from './lib/emailInputBudget';
+import {
+	applyManualEmailSuppressionAuthority,
+	applyRecipientRequestSuppressionAuthority,
+	bumpContactAuthorityEpoch,
+	enqueueContactFanoutJob,
+	filterSuppressedEmailContactHashes,
+	RECIPIENT_SUPPRESSION_BATCH_MAX
+} from './lib/contactAuthority';
+import { syncCompactPublicDiscoveryProjection } from './lib/publicTemplateDiscoverySource';
+import {
+	AB_WINNER_CANDIDATE_READ_MAX,
+	syncEmailAbWinnerCandidate
+} from './lib/emailAbWinnerCandidate';
 
 declare const process: { env: Record<string, string | undefined> };
+
+// Launch tombstone for the legacy Convex batch sender. It has no atomic
+// reservation/CAS across its multi-action SES boundary. Keep every entry and
+// progress writer fail-closed until that path is rebuilt on the shared ledger.
+export const EMAIL_SERVER_DISPATCH_LAUNCH_ENABLED = false;
+
+function requireEmailServerDispatchLaunchEnabled(): void {
+	if (!EMAIL_SERVER_DISPATCH_LAUNCH_ENABLED) {
+		throw new Error('EMAIL_SERVER_DISPATCH_DISABLED');
+	}
+}
 
 const emailEncoder = new TextEncoder();
 const MIN_UNSUBSCRIBE_SECRET_BYTES = 32;
@@ -103,9 +135,6 @@ const getBlastByIdRef = makeFunctionReference<'query'>(
 const getBlastRecipientsRef = makeFunctionReference<'query'>(
 	'email:getBlastRecipients'
 ) as unknown as FunctionReference<'query', 'internal'>;
-const countBlastRecipientsRef = makeFunctionReference<'query'>(
-	'email:countBlastRecipients'
-) as unknown as FunctionReference<'query', 'internal'>;
 const updateBlastStatusRef = makeFunctionReference<'mutation'>(
 	'email:updateBlastStatus'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
@@ -130,13 +159,58 @@ const resolveBounceReportRef = makeFunctionReference<'mutation'>(
 const suppressReportedBounceRef = makeFunctionReference<'mutation'>(
 	'email:suppressReportedBounce'
 ) as unknown as FunctionReference<'mutation', 'internal'>;
+const assertEmailSendAdmissionsRef = makeFunctionReference<'query'>(
+	'webhooks:assertEmailSendAdmissions'
+) as unknown as FunctionReference<
+	'query',
+	'internal',
+	{ supporterIds: Id<'supporters'>[] },
+	{ allowedSupporterIds: Id<'supporters'>[] }
+>;
+const drainContactFanoutQueueRef = makeFunctionReference<'action'>(
+	'webhooks:drainContactFanoutQueue'
+) as unknown as FunctionReference<'action', 'internal', Record<string, never>, unknown>;
+const reprojectSuppressedRecipientTemplatesRef = makeFunctionReference<'mutation'>(
+	'email:reprojectSuppressedRecipientTemplates'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ contactHash: string; cursor?: string | null },
+	unknown
+>;
+const enqueuePlanUsageRepairRef = makeFunctionReference<'mutation'>(
+	'planUsage:enqueueForOrg'
+) as unknown as FunctionReference<
+	'mutation',
+	'internal',
+	{ orgId: Id<'organizations'>; retryBlocked?: boolean },
+	unknown
+>;
 
 const EMAIL_HASH_RE = /^[a-f0-9]{64}$/;
 const MAX_HASH_FILTER_ITEMS = 10_000;
 const MAX_AB_COHORT_RECIPIENTS = 10_000;
+const MAX_AB_GROUP_BLASTS = 3;
 const USER_BOUNCE_REPORT_THRESHOLD = 2;
 const USER_BOUNCE_REPORT_SCAN_LIMIT = 500;
+// One consensus transaction resolves at most this many reports. Together with
+// the compact suppression, authority and fanout rows this leaves large margin
+// below Convex's transaction write ceiling. Remaining reports are picked up by
+// the next cron pass against the already-durable suppression.
+const USER_BOUNCE_REPORT_WRITE_CAP = 100;
+// Must match the SvelteKit route's UX sentence. The mutation independently
+// enforces this in the same transaction so parallel/direct calls cannot race it.
+const MAX_ACTIVE_BOUNCE_REPORTS_PER_USER = 10;
 const USER_BOUNCE_SUPPRESSION_MS = 30 * 24 * 60 * 60 * 1000;
+// Re-projection after a recipient-request suppression. There is no index on a
+// published address, so the sweep pages the detail projections and re-runs the
+// single-row projection writer for every row that carries the hash. Small page,
+// smaller re-sync cap: each re-sync rewrites three rows in the same transaction.
+const RECIPIENT_SUPPRESSION_REPROJECT_PAGE = 25;
+const RECIPIENT_SUPPRESSION_REPROJECT_CAP = 8;
+// Opaque per-request marker recorded on the authority row so an operator can see
+// a burst without learning anything about a person.
+const RECIPIENT_SUPPRESSION_REQUEST_ID_RE = /^[a-z0-9-]{1,64}$/;
 
 type RecipientFilterShape = {
 	tagIds?: Id<'tags'>[];
@@ -159,35 +233,7 @@ function cleanStringArray(
 }
 
 function readSafeRecipientFilter(raw: unknown): RecipientFilterShape {
-	if (!raw || typeof raw !== 'object') return {};
-	const candidate = raw as Record<string, unknown>;
-	const safeFilter: RecipientFilterShape = {};
-	const tagIds = cleanStringArray(
-		candidate.tagIds,
-		(tagId) => tagId.length > 0 && tagId.length <= 64
-	);
-	if (tagIds) safeFilter.tagIds = tagIds as Id<'tags'>[];
-	const segmentIds = cleanStringArray(
-		candidate.segmentIds,
-		(segmentId) => segmentId.length > 0 && segmentId.length <= 64
-	);
-	if (segmentIds) safeFilter.segmentIds = segmentIds as Id<'segments'>[];
-	if (
-		candidate.verified === 'any' ||
-		candidate.verified === 'verified' ||
-		candidate.verified === 'unverified'
-	) {
-		safeFilter.verified = candidate.verified;
-	}
-	const includeEmailHashes = cleanStringArray(candidate.includeEmailHashes, (hash) =>
-		EMAIL_HASH_RE.test(hash)
-	);
-	if (includeEmailHashes) safeFilter.includeEmailHashes = includeEmailHashes;
-	const excludeEmailHashes = cleanStringArray(candidate.excludeEmailHashes, (hash) =>
-		EMAIL_HASH_RE.test(hash)
-	);
-	if (excludeEmailHashes) safeFilter.excludeEmailHashes = excludeEmailHashes;
-	return safeFilter;
+	return normalizeEmailAudienceFilter(raw) as RecipientFilterShape;
 }
 
 function withIncludedHashes(
@@ -195,6 +241,44 @@ function withIncludedHashes(
 	includeEmailHashes: string[]
 ): RecipientFilterShape {
 	return { includeEmailHashes };
+}
+
+async function readBoundedAbGroup(
+	ctx: { db: QueryCtx['db'] },
+	orgId: Id<'organizations'>,
+	abParentId: string
+) {
+	const rows = await ctx.db
+		.query('emailBlasts')
+		.withIndex('by_orgId_abParentId', (qb) => qb.eq('orgId', orgId).eq('abParentId', abParentId))
+		.take(MAX_AB_GROUP_BLASTS + 1);
+	if (rows.length > MAX_AB_GROUP_BLASTS) {
+		throw new Error('EMAIL_AB_GROUP_CARDINALITY_REPAIR_REQUIRED');
+	}
+	return rows;
+}
+
+function readExactAbHashes(values: string[], label: string): string[] {
+	if (values.length > MAX_HASH_FILTER_ITEMS) {
+		throw new Error(`${label}_TOO_MANY (max ${MAX_HASH_FILTER_ITEMS})`);
+	}
+	const unique = new Set<string>();
+	for (const value of values) {
+		if (!EMAIL_HASH_RE.test(value)) throw new Error(`${label}_INVALID`);
+		if (unique.has(value)) throw new Error(`${label}_DUPLICATE`);
+		unique.add(value);
+	}
+	return [...unique];
+}
+
+function assertDisjointAbCohorts(cohorts: string[][]): void {
+	const all = cohorts.flat();
+	if (all.length > MAX_AB_COHORT_RECIPIENTS) {
+		throw new Error(`EMAIL_AB_COHORT_TOO_LARGE (max ${MAX_AB_COHORT_RECIPIENTS})`);
+	}
+	if (new Set(all).size !== all.length) {
+		throw new Error('EMAIL_AB_COHORTS_OVERLAP');
+	}
 }
 
 function sameHashSnapshot(a: string[] | undefined, b: string[]): boolean {
@@ -251,12 +335,7 @@ async function materializeAbRemainderDraft(
 		throw new Error('A/B winner has not been recorded yet');
 	}
 
-	const variants = (
-		await ctx.db
-			.query('emailBlasts')
-			.withIndex('by_abParentId', (qb) => qb.eq('abParentId', winnerCandidate.abParentId!))
-			.collect()
-	)
+	const variants = (await readBoundedAbGroup(ctx, orgId, winnerCandidate.abParentId))
 		.filter((blast) => blast.orgId === orgId && blast.isAbTest)
 		.sort((a, b) => {
 			if (a.abVariant === 'A' && b.abVariant !== 'A') return -1;
@@ -321,6 +400,7 @@ async function materializeAbRemainderDraft(
 		status: 'draft',
 		recipientFilter: { includeEmailHashes: cohort.remainderEmailHashes },
 		totalRecipients: cohort.remainderEmailHashes.length,
+		receiptCount: 0,
 		verificationContext: undefined,
 		totalSent: 0,
 		totalBounced: 0,
@@ -364,6 +444,7 @@ async function queueExactServerDispatch(
 	queued: boolean;
 	totalRecipients: number;
 }> {
+	requireAudienceDispatchJobsReady();
 	const blast = await ctx.db.get(args.blastId);
 	if (!blast || blast.orgId !== args.orgId) {
 		throw new Error(`${args.label} blast not found in this organization`);
@@ -385,25 +466,14 @@ async function queueExactServerDispatch(
 		};
 	}
 
-	// Sub-class (A) must-enumerate: resolve the still-subscribed subset of the
-	// stored cohort via a bounded paginated scan keyed by the exact hash set
-	// (≤ MAX_AB_COHORT_RECIPIENTS hashes, so the cohort is itself bounded).
-	// Replaces a .collect() of the whole supporter roster passed in by the
-	// caller — that scan threw past the per-read doc cap on a large org.
-	const { recipients } = await collectFilteredRecipients(
-		ctx,
-		args.orgId,
-		{ includeEmailHashes: args.expectedEmailHashes },
-		MAX_AB_COHORT_RECIPIENTS
-	);
-	if (recipients.length === 0) {
+	if (args.expectedEmailHashes.length === 0) {
 		throw new Error(`${args.label} has no currently subscribed recipients`);
 	}
 
 	await ctx.db.patch(args.blastId, {
 		status: 'scheduled',
 		sendMode: 'server',
-		totalRecipients: recipients.length,
+		totalRecipients: args.expectedEmailHashes.length,
 		updatedAt: Date.now()
 	});
 
@@ -416,7 +486,7 @@ async function queueExactServerDispatch(
 		blastId: args.blastId,
 		status: 'scheduled',
 		queued: true,
-		totalRecipients: recipients.length
+		totalRecipients: args.expectedEmailHashes.length
 	};
 }
 
@@ -497,10 +567,7 @@ export const getAbTestGroup = query({
 				? blast.abParentId
 				: String(blast._id);
 
-		const siblings = await ctx.db
-			.query('emailBlasts')
-			.withIndex('by_abParentId', (qb) => qb.eq('abParentId', groupId))
-			.collect();
+		const siblings = await readBoundedAbGroup(ctx, org._id, groupId);
 
 		const variantsById = new Map([[String(blast._id), blast]]);
 		for (const sibling of siblings) {
@@ -564,34 +631,32 @@ export const getAbTestGroup = query({
 export const resolveRecipientHashesForFilter = query({
 	args: {
 		orgSlug: v.string(),
-		recipientFilter: v.optional(recipientFilterValidator)
+		recipientFilter: v.optional(recipientFilterValidator),
+		cursor: v.optional(v.union(v.string(), v.null()))
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 		const filter = readSafeRecipientFilter(args.recipientFilter);
-
-		// Sub-class (A) must-enumerate: the A/B cohort snapshot needs the actual
-		// matching hashes. Paginated bounded scan — never an unbounded .collect()
-		// over the supporter roster (throws past the per-read doc cap once an org
-		// passes ~16K supporters). Cohort is capped at MAX_AB_COHORT_RECIPIENTS;
-		// `limited` surfaces a saturated floor.
-		const { recipients: filtered, truncated } = await collectFilteredRecipients(
+		const page = await pageFilteredRecipients(
 			ctx,
 			org._id,
 			filter,
-			MAX_AB_COHORT_RECIPIENTS
+			args.cursor ?? null,
+			RECIPIENT_SCAN_PAGE
 		);
-
-		const emailHashes = filtered
+		const emailHashes = page.recipients
 			.map((s) => s.emailHash)
 			.filter((hash) => EMAIL_HASH_RE.test(hash))
 			.sort();
 
 		return {
 			emailHashes,
-			totalCount: emailHashes.length,
-			limited: truncated,
-			maxSupported: MAX_AB_COHORT_RECIPIENTS
+			pageCount: emailHashes.length,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			scannedCount: page.scannedCount,
+			maxSupported: MAX_AB_COHORT_RECIPIENTS,
+			maxScanned: RECIPIENT_SCAN_CAP
 		};
 	}
 });
@@ -603,29 +668,28 @@ export const resolveRecipientHashesForFilter = query({
 export const countRecipientsForFilter = query({
 	args: {
 		orgSlug: v.string(),
-		recipientFilter: v.optional(recipientFilterValidator)
+		recipientFilter: v.optional(recipientFilterValidator),
+		cursor: v.optional(v.union(v.string(), v.null()))
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
 		const filter = readSafeRecipientFilter(args.recipientFilter);
-
-		// Sub-class (B) pure count + per-source breakdown. The unfiltered org
-		// counter (supporterStats.emailSubscribed) gives only the total, and its
-		// sourceCounts tally ALL email statuses — not the subscribed-only source
-		// breakdown the composer renders. So a bounded paginated count is used:
-		// it returns both the total and the subscribed source breakdown without
-		// ever a single unbounded .collect() (which throws past the per-read doc
-		// cap on a large roster). Count saturates at RECIPIENT_COHORT_CAP.
-		const { totalCount, sourceCounts, truncated } = await countFilteredRecipients(
+		const page = await pageFilteredRecipients(
 			ctx,
 			org._id,
 			filter,
-			RECIPIENT_COHORT_CAP
+			args.cursor ?? null,
+			RECIPIENT_SCAN_PAGE
 		);
+		const { totalCount, sourceCounts } = countRecipientPage(page.recipients);
 		return {
-			totalCount,
+			pageCount: totalCount,
 			sourceCounts,
-			truncated
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			scannedCount: page.scannedCount,
+			maxRecipients: RECIPIENT_COHORT_CAP,
+			maxScanned: RECIPIENT_SCAN_CAP
 		};
 	}
 });
@@ -645,6 +709,7 @@ export const getBlastForEditor = query({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) return null;
 		return { orgId: blast.orgId, blastId: blast._id };
@@ -727,10 +792,12 @@ export const applyUnsubscribeByBlastEmail = mutation({
 		if (supporter.emailStatus === 'unsubscribed' || supporter.emailStatus === 'complained') {
 			return { applied: true, reason: 'already-unsubscribed' as const };
 		}
+		const now = Date.now();
 		await ctx.db.patch(supporter._id, {
 			emailStatus: 'unsubscribed',
-			updatedAt: Date.now()
+			updatedAt: now
 		});
+		await bumpContactAuthorityEpoch(ctx, now);
 		// emailStatus transition → update the org's breakdown counters.
 		await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
 			...(supporter as CountableSupporter),
@@ -793,7 +860,29 @@ export const createBlast = mutation({
 		abParentId: v.optional(v.string())
 	},
 	handler: async (ctx, args) => {
+		assertEmailDraftInput(args);
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		if (
+			args.isAbTest !== undefined ||
+			args.abTestConfig !== undefined ||
+			args.abVariant !== undefined ||
+			args.abParentId !== undefined
+		) {
+			throw new Error('EMAIL_AB_DRAFTS_REQUIRE_ATOMIC_CREATOR');
+		}
+		if (args.sendMode !== undefined && args.sendMode !== 'client-direct') {
+			throw new Error('EMAIL_SEND_MODE_INVALID');
+		}
+		const recipientFilter =
+			args.recipientFilter === undefined
+				? undefined
+				: normalizeEmailAudienceFilter(args.recipientFilter);
+		if (args.campaignId !== undefined) {
+			const campaign = await ctx.db.get(args.campaignId);
+			if (!campaign || campaign.orgId !== org._id) {
+				throw new Error('EMAIL_CAMPAIGN_NOT_IN_ORGANIZATION');
+			}
+		}
 
 		const id = await ctx.db.insert('emailBlasts', {
 			orgId: org._id,
@@ -803,8 +892,9 @@ export const createBlast = mutation({
 			fromName: args.fromName,
 			fromEmail: args.fromEmail,
 			status: 'draft',
-			recipientFilter: args.recipientFilter,
+			recipientFilter,
 			totalRecipients: 0,
+			receiptCount: 0,
 			verificationContext: undefined,
 			totalSent: 0,
 			totalBounced: 0,
@@ -814,10 +904,10 @@ export const createBlast = mutation({
 			sentAt: undefined,
 			updatedAt: Date.now(),
 			sendMode: args.sendMode,
-			isAbTest: args.isAbTest ?? false,
-			abTestConfig: args.abTestConfig,
-			abVariant: args.abVariant,
-			abParentId: args.abParentId,
+			isAbTest: false,
+			abTestConfig: undefined,
+			abVariant: undefined,
+			abParentId: undefined,
 			abWinnerPickedAt: undefined,
 			batches: undefined
 		});
@@ -850,15 +940,41 @@ export const createAbTestDrafts = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		assertEmailDraftInput({
+			subject: args.subjectA,
+			bodyHtml: args.bodyHtmlA,
+			fromName: args.fromName,
+			fromEmail: args.fromEmail
+		});
+		assertEmailDraftInput({
+			subject: args.subjectB,
+			bodyHtml: args.bodyHtmlB,
+			fromName: args.fromName,
+			fromEmail: args.fromEmail
+		});
+		assertAbMetadataInput(args.abParentId, args.abTestConfig);
 		const baseFilter = readSafeRecipientFilter(args.recipientFilter);
-		const variantAEmailHashes =
-			cleanStringArray(args.variantAEmailHashes, (hash) => EMAIL_HASH_RE.test(hash)) ?? [];
-		const variantBEmailHashes =
-			cleanStringArray(args.variantBEmailHashes, (hash) => EMAIL_HASH_RE.test(hash)) ?? [];
-		const remainderEmailHashes =
-			cleanStringArray(args.remainderEmailHashes, (hash) => EMAIL_HASH_RE.test(hash)) ?? [];
+		const variantAEmailHashes = readExactAbHashes(
+			args.variantAEmailHashes,
+			'EMAIL_AB_VARIANT_A_HASHES'
+		);
+		const variantBEmailHashes = readExactAbHashes(
+			args.variantBEmailHashes,
+			'EMAIL_AB_VARIANT_B_HASHES'
+		);
+		const remainderEmailHashes = readExactAbHashes(
+			args.remainderEmailHashes,
+			'EMAIL_AB_REMAINDER_HASHES'
+		);
+		assertDisjointAbCohorts([variantAEmailHashes, variantBEmailHashes, remainderEmailHashes]);
 		if (variantAEmailHashes.length === 0 || variantBEmailHashes.length === 0) {
 			throw new Error('A/B variants require at least one recipient each');
+		}
+		if (args.campaignId !== undefined) {
+			const campaign = await ctx.db.get(args.campaignId);
+			if (!campaign || campaign.orgId !== org._id) {
+				throw new Error('EMAIL_CAMPAIGN_NOT_IN_ORGANIZATION');
+			}
 		}
 		const now = Date.now();
 
@@ -898,6 +1014,7 @@ export const createAbTestDrafts = mutation({
 			status: 'draft',
 			recipientFilter: withIncludedHashes(baseFilter, variantAEmailHashes),
 			totalRecipients: variantAEmailHashes.length,
+			receiptCount: 0,
 			verificationContext: undefined,
 			totalSent: 0,
 			totalBounced: 0,
@@ -924,6 +1041,7 @@ export const createAbTestDrafts = mutation({
 			status: 'draft',
 			recipientFilter: withIncludedHashes(baseFilter, variantBEmailHashes),
 			totalRecipients: variantBEmailHashes.length,
+			receiptCount: 0,
 			verificationContext: undefined,
 			totalSent: 0,
 			totalBounced: 0,
@@ -961,7 +1079,14 @@ export const updateBlast = mutation({
 	},
 	handler: async (ctx, args) => {
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
-
+		assertEmailDraftPatch(args);
+		if (args.status !== undefined && args.status !== 'draft') {
+			throw new Error('EMAIL_DRAFT_STATUS_INVALID');
+		}
+		const recipientFilter =
+			args.recipientFilter === undefined
+				? undefined
+				: normalizeEmailAudienceFilter(args.recipientFilter);
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) {
 			throw new Error('Blast not found');
@@ -976,7 +1101,7 @@ export const updateBlast = mutation({
 		if (args.bodyHtml !== undefined) patch.bodyHtml = args.bodyHtml;
 		if (args.fromName !== undefined) patch.fromName = args.fromName;
 		if (args.fromEmail !== undefined) patch.fromEmail = args.fromEmail;
-		if (args.recipientFilter !== undefined) patch.recipientFilter = args.recipientFilter;
+		if (recipientFilter !== undefined) patch.recipientFilter = recipientFilter;
 		if (args.status !== undefined) patch.status = args.status;
 
 		await ctx.db.patch(args.blastId, patch);
@@ -998,7 +1123,9 @@ export const enqueueServerDispatch = mutation({
 		blastId: v.id('emailBlasts')
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast || blast.orgId !== org._id) {
 			throw new Error('Blast not found in this organization');
@@ -1007,25 +1134,22 @@ export const enqueueServerDispatch = mutation({
 			throw new Error('Only draft blasts can be queued for server dispatch');
 		}
 
-		// Sub-class (A) must-enumerate: bounded paginated scan resolves the
-		// matching cohort to set totalRecipients. The actual per-recipient send
-		// re-resolves the cohort page-by-page in sendBlastBatch (cursor-paged),
-		// so this read only needs the count + non-empty guard. Capped so it never
-		// hits the per-read doc cap the prior .collect() would on a large roster.
-		const { recipients, truncated } = await collectFilteredRecipients(
-			ctx,
-			org._id,
-			readSafeRecipientFilter(blast.recipientFilter),
-			RECIPIENT_COHORT_CAP
-		);
-		if (recipients.length === 0) {
+		// The composer counted the cohort through cursor-per-transaction pages
+		// before creating the blast. Never rebuild that scan inside this mutation;
+		// the sender re-checks current subscription/filter state one page at a time.
+		const filter = normalizeEmailAudienceFilter(blast.recipientFilter);
+		void filter;
+		if (blast.totalRecipients <= 0) {
 			throw new Error('No subscribed recipients match this blast filter');
+		}
+		if (blast.totalRecipients > RECIPIENT_COHORT_CAP) {
+			throw new Error('EMAIL_AUDIENCE_COHORT_TOO_LARGE');
 		}
 
 		await ctx.db.patch(args.blastId, {
 			status: 'scheduled',
 			sendMode: 'server',
-			totalRecipients: recipients.length,
+			totalRecipients: blast.totalRecipients,
 			updatedAt: Date.now()
 		});
 
@@ -1034,7 +1158,7 @@ export const enqueueServerDispatch = mutation({
 			blastId: args.blastId
 		});
 
-		return { scheduled: true, totalRecipients: recipients.length, truncated };
+		return { scheduled: true, totalRecipients: blast.totalRecipients, truncated: false };
 	}
 });
 
@@ -1051,7 +1175,9 @@ export const enqueueAbTestDispatch = mutation({
 		blastId: v.id('emailBlasts')
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 		const seedBlast = await ctx.db.get(args.blastId);
 		if (!seedBlast || seedBlast.orgId !== org._id || !seedBlast.isAbTest) {
 			throw new Error('A/B test group not found in this organization');
@@ -1068,12 +1194,9 @@ export const enqueueAbTestDispatch = mutation({
 			throw new Error('A/B cohort snapshot not found');
 		}
 
-		const variants = (
-			await ctx.db
-				.query('emailBlasts')
-				.withIndex('by_abParentId', (qb) => qb.eq('abParentId', groupId))
-				.collect()
-		).filter((blast) => blast.orgId === org._id && blast.isAbTest);
+		const variants = (await readBoundedAbGroup(ctx, org._id, groupId)).filter(
+			(blast) => blast.orgId === org._id && blast.isAbTest
+		);
 		const variantA = variants.find((blast) => blast.abVariant === 'A');
 		const variantB = variants.find((blast) => blast.abVariant === 'B');
 		if (!variantA || !variantB) {
@@ -1137,7 +1260,9 @@ export const enqueueAbRemainderDispatch = mutation({
 		winnerBlastId: v.id('emailBlasts')
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
 		const { org } = await requireOrgRole(ctx, args.orgSlug, 'editor');
+		requireAudienceDispatchJobsReady();
 		const remainder = await materializeAbRemainderDraft(ctx, org._id, args.winnerBlastId);
 		const remainderBlast = await ctx.db.get(remainder.blastId);
 		if (!remainderBlast?.abParentId) {
@@ -1189,6 +1314,7 @@ export const updateBlastStatus = internalMutation({
 		batches: v.optional(v.any())
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return;
 
@@ -1205,6 +1331,20 @@ export const updateBlastStatus = internalMutation({
 		if (args.batches !== undefined) patch.batches = args.batches;
 
 		await ctx.db.patch(args.blastId, patch);
+		await syncEmailAbWinnerCandidate(ctx, {
+			blastId: blast._id,
+			orgId: blast.orgId,
+			status: args.status,
+			isAbTest: blast.isAbTest,
+			abParentId: blast.abParentId,
+			abVariant: blast.abVariant,
+			abWinnerPickedAt: blast.abWinnerPickedAt,
+			abTestConfig: blast.abTestConfig,
+			totalSent: args.totalSent ?? blast.totalSent,
+			totalOpened: blast.totalOpened,
+			totalClicked: blast.totalClicked,
+			sentAt: args.sentAt ?? blast.sentAt
+		});
 
 		// When blast transitions to "sent", increment org-level email counter.
 		// Idempotent: only increment on actual status transition (not re-finalization).
@@ -1235,6 +1375,8 @@ export const getBlastRecipients = internalQuery({
 		blastId: v.optional(v.id('emailBlasts'))
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
+		requireAudienceDispatchJobsReady();
 		// Server-side mirror of the blast recipientFilter shape validation.
 		// When a blastId is supplied, the persisted recipientFilter is
 		// enforced here at recipient-load. Without blastId the entire
@@ -1280,7 +1422,8 @@ export const getBlastRecipients = internalQuery({
 export const countBlastRecipients = internalQuery({
 	args: {
 		orgId: v.id('organizations'),
-		blastId: v.optional(v.id('emailBlasts'))
+		blastId: v.optional(v.id('emailBlasts')),
+		cursor: v.optional(v.union(v.string(), v.null()))
 	},
 	handler: async (ctx, args) => {
 		let filter: RecipientFilterShape = {};
@@ -1291,13 +1434,19 @@ export const countBlastRecipients = internalQuery({
 			}
 			filter = readSafeRecipientFilter(blast.recipientFilter);
 		}
-		const { totalCount, truncated } = await countFilteredRecipients(
+		const page = await pageFilteredRecipients(
 			ctx,
 			args.orgId,
 			filter,
-			RECIPIENT_COHORT_CAP
+			args.cursor ?? null,
+			RECIPIENT_SCAN_PAGE
 		);
-		return { totalCount, truncated };
+		return {
+			pageCount: page.recipients.length,
+			continueCursor: page.continueCursor,
+			isDone: page.isDone,
+			scannedCount: page.scannedCount
+		};
 	}
 });
 
@@ -1323,6 +1472,8 @@ export const sendBlast = internalAction({
 		blastId: v.id('emailBlasts')
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
+		requireAudienceDispatchJobsReady();
 		// Defense-in-depth: check email quota before sending
 		const blastForQuota = await ctx.runQuery(getBlastByIdRef, {
 			blastId: args.blastId
@@ -1331,6 +1482,16 @@ export const sendBlast = internalAction({
 			const limits = await ctx.runQuery(internal.subscriptions.checkPlanLimitsByOrgId, {
 				orgId: blastForQuota.orgId
 			});
+			if (limits && !limits.usageReady) {
+				if (limits.usageRepairRequired) {
+					await ctx.runMutation(enqueuePlanUsageRepairRef, { orgId: blastForQuota.orgId });
+				}
+				await ctx.runMutation(updateBlastStatusRef, {
+					blastId: args.blastId,
+					status: 'failed'
+				});
+				throw new Error(limits.usageFailureCode ?? 'PLAN_USAGE_NOT_READY');
+			}
 			if (limits && limits.current.emailsSent >= limits.limits.maxEmails) {
 				await ctx.runMutation(updateBlastStatusRef, {
 					blastId: args.blastId,
@@ -1352,21 +1513,10 @@ export const sendBlast = internalAction({
 		});
 		if (!blast) throw new Error('Blast not found');
 
-		// Bounded count for totalRecipients — pass blastId so the persisted
-		// recipientFilter is enforced at load. Counts via the paginated scan,
-		// never a .collect() (cured).
-		const { totalCount } = await ctx.runQuery(countBlastRecipientsRef, {
-			orgId: blast.orgId,
-			blastId: args.blastId
-		});
-
-		await ctx.runMutation(updateBlastStatusRef, {
-			blastId: args.blastId,
-			status: 'sending',
-			totalRecipients: totalCount
-		});
-
-		if (totalCount === 0) {
+		// totalRecipients was resolved by the cursor-per-transaction composer
+		// boundary. Do not perform a second full-roster count before sending.
+		const totalCount = blast.totalRecipients;
+		if (totalCount <= 0) {
 			await ctx.runMutation(updateBlastStatusRef, {
 				blastId: args.blastId,
 				status: 'sent',
@@ -1400,6 +1550,8 @@ export const sendBlastBatch = internalAction({
 		cursor: v.union(v.string(), v.null())
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
+		requireAudienceDispatchJobsReady();
 		const BATCH_SIZE = 100;
 
 		// Load blast
@@ -1436,7 +1588,7 @@ export const sendBlastBatch = internalAction({
 			// next batch exactly where this one stopped (clean page boundary — no
 			// skips, no re-scan of the whole roster).
 			const {
-				recipients: batch,
+				recipients: loadedBatch,
 				continueCursor,
 				isDone
 			} = await ctx.runQuery(getBlastRecipientsRef, {
@@ -1445,6 +1597,21 @@ export const sendBlastBatch = internalAction({
 				cursor: args.cursor,
 				blastId: args.blastId
 			});
+			// Re-check the global authority in the last Convex read immediately
+			// before this action decrypts or reaches SES. Cohort selection already
+			// checks it, but a STOP/complaint may land after that earlier page read.
+			// The authority row, not the eventually-consistent supporter projection,
+			// is the send-admission truth.
+			let batch = loadedBatch;
+			if (batch.length > 0) {
+				const admission = await ctx.runQuery(assertEmailSendAdmissionsRef, {
+					supporterIds: batch.map((recipient: { _id: Id<'supporters'> }) => recipient._id)
+				});
+				const allowed = new Set(admission.allowedSupporterIds.map(String));
+				batch = batch.filter((recipient: { _id: Id<'supporters'> }) =>
+					allowed.has(String(recipient._id))
+				);
+			}
 
 			// A page can match zero recipients (all filtered out) yet NOT be the
 			// last page. Only finalize when the scan is exhausted; otherwise resume
@@ -1567,7 +1734,9 @@ export const sendBlastBatch = internalAction({
 						// member-readable receipt (listReceiptsForBlast), and SES 4xx
 						// rejection bodies (suppression list / unverified identity) echo
 						// the recipient PLAINTEXT email, which members otherwise never see.
-						console.error(`[sendBlastBatch] SES send failed: status=${result.status ?? 'transport'}`);
+						console.error(
+							`[sendBlastBatch] SES send failed: status=${result.status ?? 'transport'}`
+						);
 					}
 					receipts.push({
 						recipientEmailHash,
@@ -1662,6 +1831,7 @@ export const incrementBlastCounters = internalMutation({
 		bouncedDelta: v.number()
 	},
 	handler: async (ctx, args) => {
+		requireEmailServerDispatchLaunchEnabled();
 		const blast = await ctx.db.get(args.blastId);
 		if (!blast) return;
 
@@ -1720,6 +1890,9 @@ function htmlToPlainText(html: string): string {
 
 export type SesSendResult = {
 	ok: boolean;
+	// True means the request may have crossed the carrier boundary without an
+	// exact acceptance receipt. Callers must hold/block quota, never release it.
+	ambiguous: boolean;
 	messageId?: string;
 	status?: number;
 	error?: string;
@@ -1841,13 +2014,25 @@ export async function sendViaSesWithResult(
 			console.warn(`[sendViaSes] SES rejected: status=${response.status} body=${truncated}`);
 			return {
 				ok: false,
+				ambiguous: true,
 				status: response.status,
 				error: truncated || `status_${response.status}`
 			};
 		}
 		const payload = (await response.json().catch(() => null)) as { MessageId?: unknown } | null;
-		const messageId = typeof payload?.MessageId === 'string' ? payload.MessageId : undefined;
-		return { ok: true, status: response.status, messageId };
+		const messageId =
+			typeof payload?.MessageId === 'string' && payload.MessageId.length > 0
+				? payload.MessageId
+				: undefined;
+		if (!messageId) {
+			return {
+				ok: false,
+				ambiguous: true,
+				status: response.status,
+				error: 'SES_ACCEPTANCE_RECEIPT_MISSING'
+			};
+		}
+		return { ok: true, ambiguous: false, status: response.status, messageId };
 	} catch (err) {
 		// Transport failure (timeout, DNS, network) — distinct from SES-rejected.
 		// Same PII guard.
@@ -1856,6 +2041,7 @@ export async function sendViaSesWithResult(
 		);
 		return {
 			ok: false,
+			ambiguous: true,
 			error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)
 		};
 	}
@@ -1925,12 +2111,31 @@ export const processBounceReports = internalAction({
 		for (const [emailHash, reports] of reportGroups) {
 			const reporterCount = new Set(reports.map((report) => report.reportedBy)).size;
 			if (reporterCount < USER_BOUNCE_REPORT_THRESHOLD) continue;
+			// Preserve at least one report from each distinct reporter before filling
+			// the fixed write envelope. That keeps the consensus evidence in the
+			// bounded mutation even when one reporter generated most of the group.
+			const selected: typeof reports = [];
+			const selectedIds = new Set<string>();
+			const seenReporters = new Set<string>();
+			for (const report of reports) {
+				if (seenReporters.has(report.reportedBy)) continue;
+				seenReporters.add(report.reportedBy);
+				selected.push(report);
+				selectedIds.add(String(report._id));
+				if (selected.length === USER_BOUNCE_REPORT_WRITE_CAP) break;
+			}
+			for (const report of reports) {
+				if (selected.length === USER_BOUNCE_REPORT_WRITE_CAP) break;
+				if (selectedIds.has(String(report._id))) continue;
+				selected.push(report);
+				selectedIds.add(String(report._id));
+			}
 
 			const result = (await ctx.runMutation(suppressReportedBounceRef, {
 				emailHash,
 				domain: reports.find((report) => report.domain.trim())?.domain ?? 'unknown',
-				reportIds: reports.map((report) => report._id),
-				reporterCount
+				reportIds: selected.map((report) => report._id),
+				reporterCount: new Set(selected.map((report) => report.reportedBy)).size
 			})) as { reportsResolved: number };
 			processed += result.reportsResolved;
 			suppressed++;
@@ -1975,8 +2180,7 @@ export const getStaleBounceReports = internalQuery({
 	handler: async (ctx, { threshold }) => {
 		return await ctx.db
 			.query('bounceReports')
-			.withIndex('by_resolved', (q) => q.eq('resolved', false))
-			.filter((q) => q.lt(q.field('_creationTime'), threshold))
+			.withIndex('by_resolved', (q) => q.eq('resolved', false).lt('_creationTime', threshold))
 			.take(100);
 	}
 });
@@ -2001,69 +2205,110 @@ export const suppressReportedBounce = internalMutation({
 		reporterCount: v.number()
 	},
 	handler: async (ctx, { emailHash, domain, reportIds, reporterCount }) => {
+		if (!EMAIL_HASH_RE.test(emailHash)) throw new Error('BOUNCE_REPORT_EMAIL_HASH_INVALID');
+		if (domain.length < 1 || domain.length > 253 || /[\r\n\x00-\x1f\x7f]/.test(domain)) {
+			throw new Error('BOUNCE_REPORT_DOMAIN_INVALID');
+		}
+		if (reportIds.length < 1 || reportIds.length > USER_BOUNCE_REPORT_WRITE_CAP) {
+			throw new Error('BOUNCE_REPORT_WRITE_CAP_EXCEEDED');
+		}
+		if (new Set(reportIds.map(String)).size !== reportIds.length) {
+			throw new Error('BOUNCE_REPORT_IDS_DUPLICATE');
+		}
+		if (
+			!Number.isSafeInteger(reporterCount) ||
+			reporterCount < 1 ||
+			reporterCount > USER_BOUNCE_REPORT_WRITE_CAP
+		) {
+			throw new Error('BOUNCE_REPORT_REPORTER_COUNT_INVALID');
+		}
 		const now = Date.now();
 		const expiresAt = now + USER_BOUNCE_SUPPRESSION_MS;
+		const eligibleReports: Array<Doc<'bounceReports'>> = [];
+		for (const reportId of reportIds) {
+			const report = await ctx.db.get(reportId);
+			if (!report || report.resolved || report.emailHash !== emailHash) continue;
+			eligibleReports.push(report);
+		}
+		if (eligibleReports.length === 0) {
+			return {
+				insertedSuppression: false,
+				supportersUpdated: 0,
+				reportsResolved: 0,
+				fanoutQueued: false
+			};
+		}
 		const activeSuppression = await ctx.db
 			.query('suppressedEmails')
-			.withIndex('by_emailHash', (q) => q.eq('emailHash', emailHash))
-			.filter((q) => q.gt(q.field('expiresAt'), now))
+			.withIndex('by_emailHash_expiresAt', (q) => q.eq('emailHash', emailHash).gt('expiresAt', now))
 			.first();
+		const actualReporterCount = new Set(eligibleReports.map((report) => report.reportedBy)).size;
+		if (!activeSuppression && actualReporterCount < USER_BOUNCE_REPORT_THRESHOLD) {
+			return {
+				insertedSuppression: false,
+				supportersUpdated: 0,
+				reportsResolved: 0,
+				fanoutQueued: false
+			};
+		}
 
+		let suppressionId = activeSuppression?._id;
 		if (!activeSuppression) {
-			await ctx.db.insert('suppressedEmails', {
+			suppressionId = await ctx.db.insert('suppressedEmails', {
 				emailHash,
-				domain: domain || 'unknown',
+				domain: eligibleReports.find((report) => report.domain.trim())?.domain.trim() || domain,
 				reason: 'bounce_report',
 				source: 'user_report',
 				reacherData: {
-					reportCount: reportIds.length,
-					reporterCount,
+					reportCount: eligibleReports.length,
+					reporterCount: actualReporterCount,
 					suppressedBy: 'verified_user_report_consensus',
 					suppressedAt: now
 				},
 				expiresAt
 			});
 		}
-
-		const supporters = await ctx.db
-			.query('supporters')
-			.withIndex('by_globalEmailHash', (q) => q.eq('globalEmailHash', emailHash))
-			.collect();
-		let supportersUpdated = 0;
-		for (const supporter of supporters) {
-			if (supporter.emailStatus === 'complained') continue;
-			await ctx.db.patch(supporter._id, {
-				emailStatus: 'bounced',
-				softBounceCount: Math.max(supporter.softBounceCount ?? 0, USER_BOUNCE_REPORT_THRESHOLD),
-				updatedAt: now
+		if (!suppressionId) throw new Error('BOUNCE_SUPPRESSION_INSERT_FAILED');
+		const sourceEventId = String(suppressionId);
+		const fanout = await enqueueContactFanoutJob(ctx, {
+			kind: 'email_set_bounced',
+			contactHash: emailHash,
+			idempotencyKey: `bounce-consensus:${sourceEventId}`,
+			providerEventId: sourceEventId,
+			now
+		});
+		if (!fanout.existing) {
+			const authority = await applyManualEmailSuppressionAuthority(ctx, {
+				contactHash: emailHash,
+				sourceEventId,
+				now
 			});
-			// emailStatus → bounced is a counted transition (no-op if it was
-			// already bounced, since the buckets net to zero). Cross-org lookup,
-			// so each row updates its own org's breakdown.
-			if (supporter.emailStatus !== 'bounced') {
-				await applySupporterStatsDelta(ctx, supporter.orgId, supporter as CountableSupporter, {
-					...(supporter as CountableSupporter),
-					emailStatus: 'bounced'
-				});
-			}
-			supportersUpdated++;
+			await ctx.db.patch(fanout.jobId, {
+				targetEmailStatus: authority.state === 'email_complained' ? 'complained' : 'bounced',
+				targetSoftBounceCount: Math.max(
+					authority.softBounceCount ?? 0,
+					USER_BOUNCE_REPORT_THRESHOLD
+				),
+				authorityUpdatedAt: authority.updatedAt
+			});
 		}
 
 		let reportsResolved = 0;
-		for (const reportId of reportIds) {
-			const report = await ctx.db.get(reportId);
-			if (!report || report.resolved || report.emailHash !== emailHash) continue;
-			await ctx.db.patch(reportId, {
+		for (const report of eligibleReports) {
+			await ctx.db.patch(report._id, {
 				resolved: true,
 				probeResult: 'suppressed_by_consensus'
 			});
 			reportsResolved++;
 		}
+		if (!fanout.existing) await ctx.scheduler.runAfter(0, drainContactFanoutQueueRef, {});
 
 		return {
 			insertedSuppression: !activeSuppression,
-			supportersUpdated,
-			reportsResolved
+			supportersUpdated: 0,
+			reportsResolved,
+			fanoutQueued: !fanout.existing,
+			fanoutJobId: fanout.jobId
 		};
 	}
 });
@@ -2082,34 +2327,30 @@ export const sendAlertDigests = internalAction({
 });
 
 /**
- * Find unresolved A/B test groups for the winner picker. Returns sibling
- * blasts (sharing abParentId) where neither has abWinnerPickedAt set and both
- * are in 'sent' status. Bounded scan (status='sent' is an indexed filter).
+ * Find unresolved A/B test candidates from the compact scalar projection.
+ * `emailBlasts` is deliberately not queried here: its bodyHtml and recipient
+ * filter can be hundreds of KiB per row even though the picker needs neither.
  */
 export const _findAbCandidates = internalQuery({
 	args: {},
 	handler: async (ctx) => {
-		const sentBlasts = await ctx.db
-			.query('emailBlasts')
-			.withIndex('by_status', (q) => q.eq('status', 'sent'))
-			.order('desc')
-			.take(500);
-		return sentBlasts
-			.filter((b) => b.isAbTest && !b.abWinnerPickedAt && (b.abParentId || b._id))
-			.map((b) => ({
-				_id: b._id,
-				orgId: b.orgId,
-				campaignId: b.campaignId ?? null,
-				abParentId: b.abParentId ?? null,
-				abVariant: b.abVariant ?? null,
-				subject: b.subject,
-				bodyHtml: b.bodyHtml,
-				totalSent: b.totalSent,
-				totalOpened: b.totalOpened,
-				totalClicked: b.totalClicked,
-				sentAt: b.sentAt ?? null,
-				abTestConfig: b.abTestConfig ?? null
-			}));
+		const candidates = await ctx.db
+			.query('emailAbWinnerCandidates')
+			.withIndex('by_sentAt')
+			.order('asc')
+			.take(AB_WINNER_CANDIDATE_READ_MAX);
+		return candidates.map((candidate) => ({
+			_id: candidate.blastId,
+			orgId: candidate.orgId,
+			abParentId: candidate.abParentId,
+			abVariant: candidate.abVariant ?? null,
+			totalSent: candidate.totalSent,
+			totalOpened: candidate.totalOpened,
+			totalClicked: candidate.totalClicked,
+			sentAt: candidate.sentAt,
+			winnerMetric: candidate.winnerMetric ?? null,
+			testDurationMs: candidate.testDurationMs
+		}));
 	}
 });
 
@@ -2141,6 +2382,20 @@ export const _markAbWinner = internalMutation({
 				},
 				updatedAt: args.pickedAt
 			});
+			await syncEmailAbWinnerCandidate(ctx, {
+				blastId: blast._id,
+				orgId: blast.orgId,
+				status: blast.status,
+				isAbTest: blast.isAbTest,
+				abParentId: blast.abParentId,
+				abVariant: blast.abVariant,
+				abWinnerPickedAt: args.pickedAt,
+				abTestConfig: blast.abTestConfig,
+				totalSent: blast.totalSent,
+				totalOpened: blast.totalOpened,
+				totalClicked: blast.totalClicked,
+				sentAt: blast.sentAt
+			});
 		}
 		return { winnerId: args.winnerId };
 	}
@@ -2166,13 +2421,12 @@ export const pickAbWinners = internalAction({
 		// Group by abParentId (or self if it's the parent of its own group).
 		const groups = new Map<string, typeof candidates>();
 		for (const b of candidates) {
-			const key = b.abParentId ?? String(b._id);
+			const key = `${b.orgId}:${b.abParentId}`;
 			const arr = groups.get(key) ?? [];
 			arr.push(b);
 			groups.set(key, arr);
 		}
 
-		const DEFAULT_TIMEOUT_MS = 48 * 60 * 60 * 1000;
 		const Z_CRITICAL = 1.96; // two-tailed p<0.05
 		let checked = 0;
 		let picked = 0;
@@ -2184,24 +2438,16 @@ export const pickAbWinners = internalAction({
 			// Take first two siblings — multi-variant beyond 2 deferred to later.
 			const a = group[0];
 			const b = group[1];
-			const rawConfig =
-				(a.abTestConfig && typeof a.abTestConfig === 'object'
-					? (a.abTestConfig as Record<string, unknown>)
-					: null) ??
-				(b.abTestConfig && typeof b.abTestConfig === 'object'
-					? (b.abTestConfig as Record<string, unknown>)
-					: null);
-			const rawWinnerMetric = rawConfig?.winnerMetric;
-			const winnerMetric =
-				readSupportedAbWinnerMetric(rawWinnerMetric) ??
-				(rawWinnerMetric === undefined ? 'open' : null);
-			if (!winnerMetric) continue;
-			const timeoutMs =
-				typeof rawConfig?.testDurationMs === 'number' &&
-				Number.isFinite(rawConfig.testDurationMs) &&
-				rawConfig.testDurationMs > 0
-					? rawConfig.testDurationMs
-					: DEFAULT_TIMEOUT_MS;
+			if (
+				a.winnerMetric === null ||
+				b.winnerMetric === null ||
+				a.winnerMetric !== b.winnerMetric ||
+				a.testDurationMs !== b.testDurationMs
+			) {
+				continue;
+			}
+			const winnerMetric = a.winnerMetric;
+			const timeoutMs = a.testDurationMs;
 			const n1 = a.totalSent || 1;
 			const n2 = b.totalSent || 1;
 			const successesA = winnerMetric === 'click' ? a.totalClicked : a.totalOpened;
@@ -2244,8 +2490,8 @@ export const countActiveReports = query({
 		}
 		const reports = await ctx.db
 			.query('bounceReports')
-			.filter((q) => q.and(q.eq(q.field('reportedBy'), userId), q.eq(q.field('resolved'), false)))
-			.collect();
+			.withIndex('by_reportedBy_resolved', (q) => q.eq('reportedBy', userId).eq('resolved', false))
+			.take(MAX_ACTIVE_BOUNCE_REPORTS_PER_USER + 1);
 		return reports.length;
 	}
 });
@@ -2262,8 +2508,9 @@ export const findUnresolvedReport = query({
 		requireInternalSecret(_secret);
 		const report = await ctx.db
 			.query('bounceReports')
-			.withIndex('by_emailHash_resolved', (q) => q.eq('emailHash', emailHash).eq('resolved', false))
-			.filter((q) => q.eq(q.field('reportedBy'), userId))
+			.withIndex('by_reportedBy_emailHash_resolved', (q) =>
+				q.eq('reportedBy', userId).eq('emailHash', emailHash).eq('resolved', false)
+			)
 			.first();
 		return report ? { _id: report._id } : null;
 	}
@@ -2284,6 +2531,29 @@ export const createBounceReport = mutation({
 	},
 	handler: async (ctx, { _secret, emailHash, domain, reportedBy }) => {
 		requireInternalSecret(_secret);
+		if (!EMAIL_HASH_RE.test(emailHash)) throw new Error('BOUNCE_REPORT_EMAIL_HASH_INVALID');
+		if (reportedBy.length === 0 || reportedBy.length > 128) {
+			throw new Error('BOUNCE_REPORT_REPORTER_INVALID');
+		}
+		if (domain.length === 0 || domain.length > 253 || /[\r\n\0]/.test(domain)) {
+			throw new Error('BOUNCE_REPORT_DOMAIN_INVALID');
+		}
+		const existing = await ctx.db
+			.query('bounceReports')
+			.withIndex('by_reportedBy_emailHash_resolved', (q) =>
+				q.eq('reportedBy', reportedBy).eq('emailHash', emailHash).eq('resolved', false)
+			)
+			.first();
+		if (existing) return { id: existing._id, duplicate: true as const };
+		const active = await ctx.db
+			.query('bounceReports')
+			.withIndex('by_reportedBy_resolved', (q) =>
+				q.eq('reportedBy', reportedBy).eq('resolved', false)
+			)
+			.take(MAX_ACTIVE_BOUNCE_REPORTS_PER_USER);
+		if (active.length >= MAX_ACTIVE_BOUNCE_REPORTS_PER_USER) {
+			throw new Error('BOUNCE_REPORT_USER_CAP_REACHED');
+		}
 		const id = await ctx.db.insert('bounceReports', {
 			emailHash,
 			domain,
@@ -2291,6 +2561,242 @@ export const createBounceReport = mutation({
 			resolved: false
 		});
 
-		return { id };
+		return { id, duplicate: false as const };
+	}
+});
+
+/** A challenge is good for a day; mirrors `CHALLENGE_TTL_MS` on the SvelteKit side. */
+const RECIPIENT_SUPPRESSION_CHALLENGE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Challenge issuances per contact hash per day. The bound is per TARGET rather
+ * than per caller because the caller is anonymous by design and the thing being
+ * rationed is mail arriving at one mailbox. It lives here, in a durable row,
+ * because the request-layer rate limiter is per-isolate memory: a per-hash key
+ * there would be fiction the moment a second isolate served the request.
+ */
+const RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW = 3;
+
+const PUBLIC_TEMPLATE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,127}$/;
+
+/**
+ * Record that a mailbox-control challenge was mailed to an address.
+ *
+ * Only `sha256(nonce)` arrives here; the nonce itself exists in the target
+ * mailbox and nowhere else, so this table is useless to anyone who reads it.
+ *
+ * `{ issued: false }` when the target is over its daily cap, and nothing is
+ * inserted. The caller renders identical copy either way, so the return value
+ * never becomes an oracle about whether an address is real or already asked.
+ */
+export const issueRecipientSuppressionChallenge = mutation({
+	args: {
+		_secret: v.string(),
+		contactHash: v.string(),
+		slug: v.string(),
+		tokenHash: v.string(),
+		issuedAt: v.number(),
+		expiresAt: v.number(),
+		requestId: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, contactHash, slug, tokenHash, issuedAt, expiresAt, requestId }) => {
+		requireInternalSecret(_secret);
+		if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		if (!EMAIL_HASH_RE.test(tokenHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_HASH_INVALID');
+		}
+		if (!PUBLIC_TEMPLATE_SLUG_RE.test(slug)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_SLUG_INVALID');
+		}
+		if (requestId !== undefined && !RECIPIENT_SUPPRESSION_REQUEST_ID_RE.test(requestId)) {
+			throw new Error('RECIPIENT_SUPPRESSION_REQUEST_ID_INVALID');
+		}
+
+		const windowStart = issuedAt - RECIPIENT_SUPPRESSION_CHALLENGE_WINDOW_MS;
+		const recent = await ctx.db
+			.query('recipientSuppressionChallenges')
+			.withIndex('by_contactHash_issuedAt', (q) =>
+				q.eq('contactHash', contactHash).gt('issuedAt', windowStart)
+			)
+			.take(RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW);
+		if (recent.length >= RECIPIENT_SUPPRESSION_CHALLENGE_MAX_PER_WINDOW) {
+			return { issued: false as const };
+		}
+
+		await ctx.db.insert('recipientSuppressionChallenges', {
+			contactHash,
+			slug,
+			tokenHash,
+			issuedAt,
+			expiresAt,
+			...(requestId ? { requestId } : {})
+		});
+		return { issued: true as const };
+	}
+});
+
+/**
+ * Suppress an email contact because the mailbox itself asked to be left alone.
+ *
+ * Internal-only, and gated on a challenge row. The authority is `challengeNonceHash`
+ * — the hash of a one-use nonce that was mailed TO the address — not possession
+ * of a link, which the sender of a message holds before its recipient does. The
+ * mailbox being suppressed is read OFF THE ROW, so nothing a caller supplies
+ * decides whose address is removed; an optional `contactHash` is accepted only
+ * so a caller that knows which mailbox it means can be held to it.
+ *
+ * The row is marked consumed and the authority written in the same transaction,
+ * so a replayed nonce is refused by construction rather than by a time-of-check
+ * window.
+ *
+ * For a live challenge the response is byte-identical for a hash that is known,
+ * unknown, or already suppressed. Nothing here may reveal whether an address was
+ * ever resolved, appears in a template, or already asked once — a differing
+ * status, body, or error shape would turn this endpoint into an
+ * address-enumeration oracle. The challenge-state errors are the deliberate
+ * exception: they are keyed to the caller's own nonce, which the caller already
+ * holds, and to no address.
+ */
+export const suppressRecipientByRequest = mutation({
+	args: {
+		_secret: v.string(),
+		challengeNonceHash: v.string(),
+		contactHash: v.optional(v.string()),
+		requestId: v.optional(v.string())
+	},
+	handler: async (ctx, { _secret, challengeNonceHash, contactHash, requestId }) => {
+		requireInternalSecret(_secret);
+		if (contactHash !== undefined && !EMAIL_HASH_RE.test(contactHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		}
+		if (!EMAIL_HASH_RE.test(challengeNonceHash)) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_HASH_INVALID');
+		}
+		if (requestId !== undefined && !RECIPIENT_SUPPRESSION_REQUEST_ID_RE.test(requestId)) {
+			throw new Error('RECIPIENT_SUPPRESSION_REQUEST_ID_INVALID');
+		}
+
+		const now = Date.now();
+		const challenge = await ctx.db
+			.query('recipientSuppressionChallenges')
+			.withIndex('by_tokenHash', (q) => q.eq('tokenHash', challengeNonceHash))
+			.first();
+		if (!challenge) throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_NOT_FOUND');
+		if (challenge.expiresAt <= now) throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_EXPIRED');
+		if (challenge.consumedAt !== undefined) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_CONSUMED');
+		}
+		if (contactHash !== undefined && contactHash !== challenge.contactHash) {
+			throw new Error('RECIPIENT_SUPPRESSION_CHALLENGE_MISMATCH');
+		}
+
+		// Consume first, in the same transaction as the write below. A replay
+		// cannot observe an unconsumed row and a half-applied suppression.
+		await ctx.db.patch(challenge._id, { consumedAt: now });
+
+		await applyRecipientRequestSuppressionAuthority(ctx, {
+			contactHash: challenge.contactHash,
+			sourceEventId: requestId,
+			now
+		});
+		// A suppression that only affects future work is not a route off the
+		// platform: already-published projections have to be rebuilt filtered.
+		await ctx.scheduler.runAfter(0, reprojectSuppressedRecipientTemplatesRef, {
+			contactHash: challenge.contactHash,
+			cursor: null
+		});
+		return { suppressed: true as const };
+	}
+});
+
+/**
+ * The denied subset of a batch of global email hashes.
+ *
+ * Internal-only for the same reason as the mutation: an anonymous caller could
+ * otherwise probe whether a guessed address is suppressed.
+ */
+export const filterSuppressedContactHashes = query({
+	args: { _secret: v.string(), contactHashes: v.array(v.string()) },
+	handler: async (ctx, { _secret, contactHashes }) => {
+		requireInternalSecret(_secret);
+		if (contactHashes.length > RECIPIENT_SUPPRESSION_BATCH_MAX) {
+			throw new Error('RECIPIENT_SUPPRESSION_BATCH_TOO_LARGE');
+		}
+		for (const contactHash of contactHashes) {
+			if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		}
+		return [...(await filterSuppressedEmailContactHashes(ctx, contactHashes))];
+	}
+});
+
+/**
+ * Rebuild every published projection that carries a now-suppressed address.
+ *
+ * There is no index on a published address, so this pages the detail projections
+ * and re-runs the single-row projection writer for each match. Re-running the
+ * writer rather than deleting the rows is deliberate: the writer applies the
+ * suppression filter, keeps the discovery source, detail projection and page
+ * artifact coordinate consistent by construction — so no orphaned coordinate can
+ * fail a materialization batch — and bumps the artifact revision so the cached
+ * page rolls instead of the template dropping out of discovery until some later
+ * rebuild.
+ *
+ * Idempotent: a re-projected row no longer carries the address, so a second pass
+ * over the same page matches nothing.
+ */
+export const reprojectSuppressedRecipientTemplates = internalMutation({
+	args: { contactHash: v.string(), cursor: v.optional(v.union(v.string(), v.null())) },
+	handler: async (ctx, { contactHash, cursor }) => {
+		if (!EMAIL_HASH_RE.test(contactHash)) throw new Error('RECIPIENT_SUPPRESSION_HASH_INVALID');
+		const page = await ctx.db.query('publicTemplateDetailProjections').paginate({
+			cursor: cursor ?? null,
+			numItems: RECIPIENT_SUPPRESSION_REPROJECT_PAGE
+		});
+		let reprojected = 0;
+		let capped = false;
+		for (const row of page.page) {
+			if (reprojected >= RECIPIENT_SUPPRESSION_REPROJECT_CAP) {
+				capped = true;
+				break;
+			}
+			const recipientConfig = (row.detail as { recipient_config?: unknown } | null)
+				?.recipient_config as { emails?: unknown; decisionMakers?: unknown } | null | undefined;
+			if (!recipientConfig) continue;
+			const addresses = new Set<string>();
+			if (Array.isArray(recipientConfig.emails)) {
+				for (const email of recipientConfig.emails) {
+					if (typeof email === 'string') addresses.add(email);
+				}
+			}
+			if (Array.isArray(recipientConfig.decisionMakers)) {
+				for (const decisionMaker of recipientConfig.decisionMakers) {
+					const email = (decisionMaker as { email?: unknown } | null)?.email;
+					if (typeof email === 'string') addresses.add(email);
+				}
+			}
+			let matches = false;
+			for (const address of addresses) {
+				if ((await computeGlobalEmailHash(address)) === contactHash) {
+					matches = true;
+					break;
+				}
+			}
+			if (!matches) continue;
+			const template = await ctx.db.get(row.templateId);
+			if (!template) continue;
+			await syncCompactPublicDiscoveryProjection(ctx, template);
+			reprojected++;
+		}
+		// Capping mid-page reschedules the SAME cursor rather than skipping the
+		// rows it did not reach. The pass is idempotent, so re-reading them costs a
+		// scan and never a duplicate write.
+		const done = !capped && page.isDone;
+		if (!done) {
+			await ctx.scheduler.runAfter(0, reprojectSuppressedRecipientTemplatesRef, {
+				contactHash,
+				cursor: capped ? (cursor ?? null) : page.continueCursor
+			});
+		}
+		return { reprojected, done };
 	}
 });

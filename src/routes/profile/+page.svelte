@@ -6,14 +6,7 @@
 	 * Mobile: stacked, intimate. Desktop: zones spread, space composed.
 	 * The signal bar is the visual spine. Everything else is typography and space.
 	 */
-	import {
-		User as UserIcon,
-		ExternalLink,
-		ChevronRight,
-		Edit3,
-		Download,
-		Trash2
-	} from '@lucide/svelte';
+	import { User as UserIcon, ExternalLink, ChevronRight, Edit3 } from '@lucide/svelte';
 	import { spring } from 'svelte/motion';
 	import { fly } from 'svelte/transition';
 	import { onMount } from 'svelte';
@@ -70,9 +63,7 @@
 	const templatesDataPromise = $derived(data.streamed?.templatesData);
 	const representativesPromise = $derived(data.streamed?.representatives);
 	const groundState = $derived(data.groundState);
-	const groundDistrict = $derived(
-		localGroundDistrict ?? groundState?.credential?.district ?? null
-	);
+	const groundDistrict = $derived(localGroundDistrict ?? groundState?.credential?.district ?? null);
 	const groundH3Cell = $derived(groundState?.cell?.h3Cell ?? null);
 
 	const trustTier = $derived(user?.trust_tier ?? 0);
@@ -165,13 +156,15 @@
 		invalidateAll();
 	}
 
-	function normalizeRepresentatives(reps: Array<{
-		name: string;
-		party?: string | null;
-		chamber?: string;
-		state?: string | null;
-		district?: string | null;
-	}>): ProfileRepresentative[] {
+	function normalizeRepresentatives(
+		reps: Array<{
+			name: string;
+			party?: string | null;
+			chamber?: string;
+			state?: string | null;
+			district?: string | null;
+		}>
+	): ProfileRepresentative[] {
 		return reps.map((rep) => ({
 			name: rep.name,
 			party: rep.party ?? undefined,
@@ -206,12 +199,14 @@
 	const CHAMBER_ORDER: Record<string, number> = { house: 0, senate: 1 };
 
 	function sortedRepresentatives(reps: ProfileRepresentative[]): ProfileRepresentative[] {
-		return [...reps].slice(0, 3).sort((a, b) => {
-			const aOrd = CHAMBER_ORDER[a.chamber?.toLowerCase() ?? ''] ?? 9;
-			const bOrd = CHAMBER_ORDER[b.chamber?.toLowerCase() ?? ''] ?? 9;
-			if (aOrd !== bOrd) return aOrd - bOrd;
-			return a.name.localeCompare(b.name);
-		});
+		return [...reps]
+			.sort((a, b) => {
+				const aOrd = CHAMBER_ORDER[a.chamber?.toLowerCase() ?? ''] ?? 9;
+				const bOrd = CHAMBER_ORDER[b.chamber?.toLowerCase() ?? ''] ?? 9;
+				if (aOrd !== bOrd) return aOrd - bOrd;
+				return a.name.localeCompare(b.name);
+			})
+			.slice(0, 3);
 	}
 
 	async function refreshLocalRepresentatives(): Promise<void> {
@@ -520,7 +515,7 @@
 			{/if}
 		</div>
 
-		<div class="lg:col-span-7 space-y-10">
+		<div class="space-y-10 lg:col-span-7">
 			<GroundSpatialProof districtCode={groundDistrict} h3Cell={groundH3Cell} />
 
 			{#await representativesPromise}
@@ -588,33 +583,41 @@
 						<span class="text-participation-primary-600 font-mono text-3xl font-bold lg:text-4xl">
 							{templatesData.templateStats.totalSent}
 						</span>
-						<span class="block text-xs font-medium text-slate-500">sent</span>
+						<span class="block text-xs font-medium text-slate-500">
+							{templatesData.pagination.isCompleteCorpus ? 'sent' : 'sent on page'}
+						</span>
 					</div>
 					<div>
 						<span class="font-mono text-3xl font-bold text-emerald-600 lg:text-4xl">
 							{templatesData.templateStats.totalDelivered}
 						</span>
-						<span class="block text-xs font-medium text-slate-500">delivered</span>
+						<span class="block text-xs font-medium text-slate-500">
+							{templatesData.pagination.isCompleteCorpus ? 'delivered' : 'delivered on page'}
+						</span>
 					</div>
 				{/if}
 				<div>
 					<span class="font-mono text-3xl font-bold text-slate-800 lg:text-4xl">
 						{templatesData.templateStats.total}
 					</span>
-					<span class="block text-xs font-medium text-slate-500">templates</span>
+					<span class="block text-xs font-medium text-slate-500">
+						{templatesData.pagination.isCompleteCorpus ? 'templates' : 'templates shown'}
+					</span>
 				</div>
 				<div>
 					<span class="font-mono text-3xl font-bold text-emerald-600 lg:text-4xl">
 						{templatesData.templateStats.totalUses}
 					</span>
-					<span class="block text-xs font-medium text-slate-500">adopted</span>
+					<span class="block text-xs font-medium text-slate-500">
+						{templatesData.pagination.isCompleteCorpus ? 'adopted' : 'adopted on page'}
+					</span>
 				</div>
 			</div>
 
 			<!-- Template list — readable width, left-aligned -->
 			{#if templatesData.templates.length > 0}
 				<div class="mt-8 max-w-2xl">
-					{#each templatesData.templates.slice(0, 5) as template, i}
+					{#each templatesData.templates as template, i}
 						<div
 							class="flex items-center justify-between py-3 {i > 0
 								? 'border-t border-dotted border-slate-200'
@@ -646,17 +649,27 @@
 						</div>
 					{/each}
 
-					{#if templatesData.templates.length > 5}
+					{#if templatesData.pagination.nextPageUrl || !templatesData.pagination.isFirstPage}
 						<div class="border-t border-dotted border-slate-200 pt-3">
-							<a
-								href="/browse"
-								class="group text-participation-primary-600 hover:text-participation-primary-700 inline-flex items-center gap-1 text-sm font-medium transition-colors"
-							>
-								View all templates
-								<ChevronRight
-									class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
-								/>
-							</a>
+							{#if !templatesData.pagination.isFirstPage}
+								<a
+									href={templatesData.pagination.firstPageUrl}
+									class="text-participation-primary-600 hover:text-participation-primary-700 text-sm font-medium transition-colors"
+								>
+									Newest templates
+								</a>
+							{/if}
+							{#if templatesData.pagination.nextPageUrl}
+								<a
+									href={templatesData.pagination.nextPageUrl}
+									class="group text-participation-primary-600 hover:text-participation-primary-700 ml-4 inline-flex items-center gap-1 text-sm font-medium transition-colors"
+								>
+									Older templates
+									<ChevronRight
+										class="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5"
+									/>
+								</a>
+							{/if}
 						</div>
 					{/if}
 				</div>
@@ -722,12 +735,6 @@
 			onclick={() => openEditModal('profile')}
 		>
 			<Edit3 class="mr-1 inline h-3.5 w-3.5" />Edit profile
-		</button>
-		<button class="font-medium text-slate-600 transition-colors hover:text-slate-900">
-			<Download class="mr-1 inline h-3.5 w-3.5" />Export data
-		</button>
-		<button class="font-medium text-red-500/80 transition-colors hover:text-red-600">
-			<Trash2 class="mr-1 inline h-3.5 w-3.5" />Delete account
 		</button>
 	</div>
 </section>
@@ -821,9 +828,7 @@
 	>
 		<div class="mx-auto flex min-h-full w-full max-w-xl flex-col px-4 py-5 sm:px-6 lg:px-8">
 			<div class="flex items-center justify-between border-b border-dotted border-slate-300 pb-3">
-				<p class="font-mono text-[11px] font-semibold text-slate-500 uppercase">
-					Address restore
-				</p>
+				<p class="font-mono text-[11px] font-semibold text-slate-500 uppercase">Address restore</p>
 				<button
 					type="button"
 					onclick={handleAddressRestoreClose}
@@ -868,8 +873,8 @@
 
 	.ground-rep__chamber {
 		font-family:
-			'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
-			'Liberation Mono', 'Courier New', monospace;
+			'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono',
+			'Courier New', monospace;
 		font-size: 0.625rem;
 		font-weight: 500;
 		text-transform: uppercase;

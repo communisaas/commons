@@ -19,7 +19,7 @@ describe('SendConfirmation — honest peak', () => {
 		expect(sc).not.toMatch(/\b(delivered|received by|reached their inbox)\b/i);
 	});
 
-	it('guards against double-submit — onConfirmSent (now the delivery-record POST) fires once', () => {
+	it('guards against double-submit — onConfirmSent fires once', () => {
 		// a rapid double-click before `stage` flips must not double-fire onConfirmSent
 		expect(sc).toContain('hasConfirmed');
 		expect(sc).toMatch(/if \(hasConfirmed\) return/);
@@ -67,6 +67,25 @@ describe('SendConfirmation wiring — /s/[slug] honesty + lifecycle', () => {
 	it('a send sets in-flight then opens the peak (never optimistic contacted)', () => {
 		expect(slug).toMatch(
 			/departingRecipients = new Set\(\[\.\.\.departingRecipients, member\.id\]\)[\s\S]{0,700}sendConfirmation = \{/
+		);
+	});
+
+	it('keeps mailto sending while the recording endpoint receives no recipient PII', () => {
+		// Both send lanes launch through the ASSEMBLED url — `result.url`/`url` were
+		// renamed to `assembly.url` when the page's send lanes were made to agree
+		// with what it displays. Assert the count so a lane cannot quietly lose its
+		// launch and still satisfy a `toContain`.
+		expect(slug.match(/window\.location\.href = assembly\.url/g) ?? []).toHaveLength(2);
+		// The recording endpoint is LIVE again. It was paused for launch containment
+		// "while durable bounded admission is being hardened"; that hardening landed,
+		// so asserting the call's absence now pins a stub rather than a boundary.
+		// What must still hold — and what this now checks directly — is the PII
+		// boundary: only the canonical public name and the delivery method are
+		// posted. The recipient email stays in the local mailto flow and never
+		// enters the tracking request or Convex delivery history.
+		expect(slug).toContain("fetch('/api/deliveries/record'");
+		expect(slug).toMatch(
+			/sendConfirmation\.recipients\.map\(\(\{\s*name,\s*deliveryMethod\s*\}\)/
 		);
 	});
 

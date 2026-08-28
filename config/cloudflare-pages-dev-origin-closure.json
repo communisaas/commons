@@ -1,0 +1,40 @@
+{
+	"version": 1,
+	"accountId": "019d1184e655db74b7589794a2a2a533",
+	"pagesProject": "communique-site",
+	"pagesDevHost": "communique-site.pages.dev",
+	"canonicalHost": "commons.email",
+	"redirectList": {
+		"name": "commons_pages_dev_origin_closure_v1",
+		"kind": "redirect",
+		"items": [
+			{
+				"source_url": "communique-site.pages.dev",
+				"target_url": "https://commons.email",
+				"status_code": 301,
+				"include_subdomains": true,
+				"subpath_matching": true,
+				"preserve_query_string": true,
+				"preserve_path_suffix": true
+			}
+		]
+	},
+	"entrypoint": {
+		"kind": "root",
+		"phase": "http_request_redirect",
+		"requiredFirstRule": {
+			"ref": "commons_pages_dev_origin_closure_v1",
+			"description": "Close direct communique-site.pages.dev cost-bearing origins",
+			"enabled": true,
+			"action": "redirect",
+			"expression": "(http.request.full_uri in $commons_pages_dev_origin_closure_v1)",
+			"action_parameters": {
+				"from_list": {
+					"name": "commons_pages_dev_origin_closure_v1",
+					"key": "http.request.full_uri"
+				}
+			}
+		}
+	},
+	"releaseProbeBypassPaths": []
+}

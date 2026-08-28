@@ -15,24 +15,24 @@
  *     CANNOT be a scalar counter — a supporter active in two districts would be
  *     double-counted. It is computed on demand here via a BOUNDED scan over the
  *     `by_campaignId_verified` index (verified actions only, capped), mirroring
- *     `_dashboardStats.computeDistrictVerified`. When the cap saturates,
- *     `truncated` is surfaced so the consumer presents a floor.
+ *     the campaign report's existing bounded fallback. Org-wide supporter
+ *     cardinality is separate and uses the exact v2 supporter-audience scalar.
  */
 
-import type { QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { QueryCtx } from './_generated/server';
+import type { Id } from './_generated/dataModel';
 
 /** Cap on the per-campaign verified-action district scan. Bounded so it never hits the doc cap. */
 export const CAMPAIGN_DISTRICT_SCAN_CAP = 10_000;
 
 export interface CampaignDistrictSets {
-  /** Distinct districtHashes across verified actions, bounded by the scan cap. */
-  verifiedDistricts: number;
-  /** Distinct districtHashes across tier-3+ verified actions, bounded by the scan cap. */
-  tier3VerifiedDistricts: number;
-  /** True when the verified-action scan saturated the cap (counts are then floors). */
-  truncated: boolean;
-  scanLimit: number;
+	/** Distinct districtHashes across verified actions, bounded by the scan cap. */
+	verifiedDistricts: number;
+	/** Distinct districtHashes across tier-3+ verified actions, bounded by the scan cap. */
+	tier3VerifiedDistricts: number;
+	/** True when the verified-action scan saturated the cap (counts are then floors). */
+	truncated: boolean;
+	scanLimit: number;
 }
 
 /**
@@ -43,29 +43,31 @@ export interface CampaignDistrictSets {
  * districts. `truncated` is true when the scan saturates the cap.
  */
 export async function computeCampaignDistrictSets(
-  ctx: QueryCtx,
-  campaignId: Id<"campaigns">,
+	ctx: QueryCtx,
+	campaignId: Id<'campaigns'>
 ): Promise<CampaignDistrictSets> {
-  const scanned = await ctx.db
-    .query("campaignActions")
-    .withIndex("by_campaignId_verified", (idx) => idx.eq("campaignId", campaignId).eq("verified", true))
-    .take(CAMPAIGN_DISTRICT_SCAN_CAP + 1);
+	const scanned = await ctx.db
+		.query('campaignActions')
+		.withIndex('by_campaignId_verified', (idx) =>
+			idx.eq('campaignId', campaignId).eq('verified', true)
+		)
+		.take(CAMPAIGN_DISTRICT_SCAN_CAP + 1);
 
-  const truncated = scanned.length > CAMPAIGN_DISTRICT_SCAN_CAP;
-  const verifiedDistrictSet = new Set<string>();
-  const tier3DistrictSet = new Set<string>();
-  for (const action of scanned.slice(0, CAMPAIGN_DISTRICT_SCAN_CAP)) {
-    if (!action.districtHash) continue;
-    verifiedDistrictSet.add(action.districtHash);
-    if ((action.trustTier ?? 0) >= 3) {
-      tier3DistrictSet.add(action.districtHash);
-    }
-  }
+	const truncated = scanned.length > CAMPAIGN_DISTRICT_SCAN_CAP;
+	const verifiedDistrictSet = new Set<string>();
+	const tier3DistrictSet = new Set<string>();
+	for (const action of scanned.slice(0, CAMPAIGN_DISTRICT_SCAN_CAP)) {
+		if (!action.districtHash) continue;
+		verifiedDistrictSet.add(action.districtHash);
+		if ((action.trustTier ?? 0) >= 3) {
+			tier3DistrictSet.add(action.districtHash);
+		}
+	}
 
-  return {
-    verifiedDistricts: verifiedDistrictSet.size,
-    tier3VerifiedDistricts: tier3DistrictSet.size,
-    truncated,
-    scanLimit: CAMPAIGN_DISTRICT_SCAN_CAP,
-  };
+	return {
+		verifiedDistricts: verifiedDistrictSet.size,
+		tier3VerifiedDistricts: tier3DistrictSet.size,
+		truncated,
+		scanLimit: CAMPAIGN_DISTRICT_SCAN_CAP
+	};
 }

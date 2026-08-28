@@ -1,0 +1,4 @@
+# Trusted Convex team-quota operator Ed25519 public keys are enrolled here by
+# an explicit protected-main change. Format:
+# principal namespaces="commons-convex-team-quota-v1" ssh-ed25519 AAAA...
+# Never store a private key or a dashboard access token in GitHub.

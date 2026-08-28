@@ -1,6 +1,5 @@
 import * as Sentry from '@sentry/sveltekit';
 import { initConvex } from 'convex-sveltekit';
-import { PUBLIC_CONVEX_URL } from '$env/static/public';
 import { env as publicEnv } from '$env/dynamic/public';
 import type { HandleClientError } from '@sveltejs/kit';
 
@@ -29,10 +28,12 @@ if (dsn) {
 	});
 }
 
-// Initialize Convex client early so transport.decode can subscribe
-// before any component mounts.
-if (PUBLIC_CONVEX_URL) {
-	initConvex(PUBLIC_CONVEX_URL);
+// Resolve the browser realm from the deployment's runtime environment. This
+// must remain dynamic: the exact production artifact is exercised first on
+// the isolated staging authority, whose browser must never inherit the
+// production Convex capability from build-time substitution.
+if (publicEnv.PUBLIC_CONVEX_URL) {
+	initConvex(publicEnv.PUBLIC_CONVEX_URL);
 }
 
 export const handleError = Sentry.handleErrorWithSentry(
