@@ -213,18 +213,27 @@
 			<Footer />
 		</div>
 	{:else if isHomepage}
-		<!-- Homepage: No wrapper padding - page manages its own spacing for sticky behavior -->
+		<!-- Homepage: no wrapper padding, the page manages its own spacing for
+		     sticky behaviour. The footer still renders: the disclosure it carries
+		     has to be reachable from the front door, which is the one page a
+		     stranger is guaranteed to see. The page's own `creation-footer` is
+		     part of the composer, not site chrome, and carries no legal link. -->
 		<div class="relative min-h-screen">
 			<ErrorBoundary fallback="detailed" showRetry={true}>
 				{@render children()}
 			</ErrorBoundary>
+			<Footer />
 		</div>
 	{:else if isVerificationPage}
-		<!-- Verification certificate: standalone, no wrapper padding, no footer -->
+		<!-- Verification certificate: standalone, no wrapper padding. The footer
+		     is the exception to that standalone framing, and deliberately: this is
+		     the page an outside party lands on to check someone else's claim, so
+		     it is where knowing how their data is handled matters most. -->
 		<div class="pt-[48px]">
 			<ErrorBoundary fallback="detailed" showRetry={true}>
 				{@render children()}
 			</ErrorBoundary>
+			<Footer />
 		</div>
 	{:else}
 		<!-- Other pages: Header padding for fixed IdentityStrip -->
