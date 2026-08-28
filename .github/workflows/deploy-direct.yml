@@ -417,8 +417,14 @@ jobs:
         # the Cloudflare token; esbuild reads and bundles these files, it does not
         # run them. That is weaker than never having the files present, and it is
         # stated plainly rather than described as full isolation.
-        run: npm ci --ignore-scripts
-        working-directory: gate
+        # Installed AT the artifact root, not in the checkout: wrangler runs from
+        # $ARTIFACT_ROOT, and node resolution walks up from the cwd — an install
+        # under gate/ is invisible from there, which is how the 364 unresolved
+        # imports survived the first attempt at this.
+        run: |
+          set -euo pipefail
+          cp gate/package.json gate/package-lock.json "$ARTIFACT_ROOT/"
+          npm ci --ignore-scripts --prefix "$ARTIFACT_ROOT"
 
       - name: Install trusted deployment tooling without lifecycle scripts
         run: npm ci --ignore-scripts --prefix gate/.github/release-gate
