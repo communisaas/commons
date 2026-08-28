@@ -127,6 +127,28 @@ async function fetchWithRetry(
 // =============================================================================
 
 // Google OAuth response type guard
+/**
+ * The provider's own statement about whether it verified the address.
+ *
+ * Google returns `verified_email` from the v2 userinfo endpoint and
+ * `email_verified` from the OIDC one; LinkedIn returns `email_verified`. Read
+ * whichever is present and preserve the difference between an explicit `false`
+ * and an absent claim — collapsing them here would put the decision back in the
+ * caller's default, which is where it was being silently answered "yes".
+ */
+function providerEmailVerified(user: unknown): boolean | undefined {
+	const record = user as Record<string, unknown> | null;
+	if (!record || typeof record !== 'object') return undefined;
+	for (const key of ['email_verified', 'verified_email'] as const) {
+		const value = record[key];
+		if (typeof value === 'boolean') return value;
+		// Some providers serialise the flag as a string.
+		if (value === 'true') return true;
+		if (value === 'false') return false;
+	}
+	return undefined;
+}
+
 function isGoogleUser(
 	user: unknown
 ): user is { id: string; email: string; name: string; picture?: string } {
@@ -328,7 +350,8 @@ function createGoogleConfig(): OAuthCallbackConfig {
 				id: rawUser.id,
 				email: rawUser.email,
 				name: rawUser.name,
-				avatar: rawUser.picture
+				avatar: rawUser.picture,
+				emailVerified: providerEmailVerified(rawUser)
 			};
 		},
 
@@ -506,7 +529,8 @@ function createLinkedInConfig(): OAuthCallbackConfig {
 				id: rawUser.sub, // LinkedIn uses 'sub' as the user ID
 				email: rawUser.email,
 				name: rawUser.name,
-				avatar: rawUser.picture
+				avatar: rawUser.picture,
+				emailVerified: providerEmailVerified(rawUser)
 			};
 		},
 
