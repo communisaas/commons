@@ -8,10 +8,16 @@ name: Direct Deploy to Cloudflare Pages
 # 2026-08-13 it replaced the 436-line single-job deploy that had been shipping,
 # and commons.email served a six-week-old bundle the entire time.
 #
-# This is that working deploy, restored verbatim except for the trigger. It uses
-# only CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID and INTERNAL_API_SECRET, all of
-# which exist, and it still proves the release end to end: production is gated on
-# /api/health returning status "ok", which cannot happen unless Convex answers.
+# This is that working deploy, restored verbatim except for the trigger. It proves
+# the release without exposing an internal API credential to the candidate build:
+# both Pages URLs must return this run's exact release identity from public
+# /api/live, and the immutable URL must serve the HTML shell plus one built asset.
+#
+# RUNBOOK COVERAGE NOTE: authenticated /api/health dependency readiness (Convex,
+# Atlas, and projections) and internal mDL readiness now run outside CI from
+# trusted operator custody. This workflow intentionally proves public liveness,
+# release identity, and browser delivery only; it does not silently substitute a
+# shallow public check for those deep operational checks.
 #
 # It is manual-dispatch ONLY. The original auto-deployed on every green CI run
 # for production/main/staging; restoring that alongside a second deploy workflow
@@ -37,35 +43,197 @@ on:
         default: ''
 
 concurrency:
-  # Shares deploy.yml's concurrency group so the two can never publish at once.
-  group: deploy-${{ inputs.branch }}
+  # Every workflow that mutates this Pages project must share ONE group, or they
+  # are not serialised at all: deploy.yml and pages-exposure-guard.yml both use
+  # `cloudflare-pages-publication`, and this file previously claimed to share it
+  # while actually keying on the branch. Two branches deploying at once, or the
+  # exposure reconciler running mid-publication, is last-writer-wins against a
+  # single Cloudflare project.
+  group: cloudflare-pages-publication
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  resolve-build-vars:
+    # This job is the only credentialed input resolver. It executes no repository
+    # code or package lifecycle; the build receives only the public values below.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     env:
       DEPLOY_BRANCH: ${{ inputs.branch }}
       DEPLOY_REF: ${{ inputs.ref || inputs.branch }}
-      # The manifest refresh writer refuses to mint a gate grant unless
-      # platform.env.PUBLIC_RELEASE_TRANSACTION_ID matches
-      # ^[1-9][0-9]*-[1-9][0-9]*$ (public-discovery-manifest-refresh-hook.ts).
-      # Unset, every refresh 503s, R2 manifest state stays unseeded, and
-      # /api/templates serves STATE_NOT_SEEDED on a live site.
-      PUBLIC_RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
       contents: read
+    outputs:
+      deploy_sha: ${{ steps.source.outputs.deploy_sha }}
+      atlas_base_url: ${{ steps.atlas.outputs.atlas_base_url }}
+      vite_atlas_base_url: ${{ steps.atlas.outputs.vite_atlas_base_url }}
+      expected_cell_map_root: ${{ steps.atlas.outputs.expected_cell_map_root }}
+      expected_cell_map_depth: ${{ steps.atlas.outputs.expected_cell_map_depth }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ env.DEPLOY_REF }}
-          # This job holds the Cloudflare token and the internal secret. The
-          # checkout credential has no business surviving into that work.
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Resolve deploy SHA
-        run: echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Resolve exact source SHA
+        id: source
+        run: |
+          deploy_sha=$(git rev-parse HEAD)
+          if ! [[ "$deploy_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Resolved deploy SHA is not a full commit SHA."
+            exit 1
+          fi
+
+          # A stolen token with actions:write could otherwise dispatch this
+          # workflow against an arbitrary ref and have the credentialed job
+          # publish that tree. Production sources must come from reviewed
+          # history.
+          #
+          # The lane is `main`, not the `production` branch. `branch=production`
+          # names the CLOUDFLARE PAGES branch that owns commons.email; the source
+          # is dispatched as a main SHA. Gating on origin/production would refuse
+          # every deploy this pipeline actually performs — origin/production has
+          # not moved and does not contain main's history.
+          if [ "$DEPLOY_BRANCH" = "production" ]; then
+            source_ref=refs/remotes/origin/main
+            if ! git rev-parse --verify "${source_ref}^{commit}" >/dev/null 2>&1; then
+              echo "::error::Cannot verify production source ancestry because ${source_ref} is unavailable."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$deploy_sha" "$source_ref"; then
+              echo "::error::Refusing production deploy: resolved SHA ${deploy_sha} is not contained in ${source_ref}."
+              exit 1
+            fi
+          fi
+
+          echo "deploy_sha=$deploy_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Validate committed Shadow Atlas vars against Pages
+        id: atlas
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CF_PAGES_PROJECT: communique-site
+        run: |
+          set -euo pipefail
+
+          # wrangler.toml in the resolved source commit is authoritative. Read it
+          # before the live project so dashboard/API state can only confirm the
+          # commit, never replace a version or trust pin selected by the commit.
+          committed=$(python3 <<'PYTHON'
+          import json
+          import tomllib
+
+          with open('wrangler.toml', 'rb') as source:
+              config = tomllib.load(source)
+
+          values = config.get('vars', {})
+          required = (
+              'ATLAS_BASE_URL',
+              'VITE_ATLAS_BASE_URL',
+              'EXPECTED_CELL_MAP_ROOT',
+              'EXPECTED_CELL_MAP_DEPTH',
+          )
+          committed = {}
+          for key in required:
+              value = values.get(key)
+              if not isinstance(value, str) or not value:
+                  raise SystemExit(f'committed wrangler.toml is missing non-empty {key}')
+              committed[key] = value
+          print(json.dumps(committed, separators=(',', ':')))
+          PYTHON
+          )
+
+          atlas_url=$(printf '%s' "$committed" | jq -er '.ATLAS_BASE_URL')
+          vite_atlas_url=$(printf '%s' "$committed" | jq -er '.VITE_ATLAS_BASE_URL')
+          cell_map_root=$(printf '%s' "$committed" | jq -er '.EXPECTED_CELL_MAP_ROOT')
+          cell_map_depth=$(printf '%s' "$committed" | jq -er '.EXPECTED_CELL_MAP_DEPTH')
+
+          if [ "$DEPLOY_BRANCH" = "production" ]; then
+            if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
+              echo "::error::Committed production ATLAS_BASE_URL must be versioned, got: $atlas_url"
+              exit 1
+            fi
+            if ! [[ "$cell_map_root" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::Committed EXPECTED_CELL_MAP_ROOT is missing or invalid."
+              exit 1
+            fi
+            if ! [[ "$cell_map_depth" =~ ^(18|20|22|24)$ ]]; then
+              echo "::error::Committed EXPECTED_CELL_MAP_DEPTH is missing or invalid."
+              exit 1
+            fi
+          fi
+
+          response=$(curl -fsS \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}")
+
+          if ! printf '%s' "$response" | jq -e '.success == true and (.result | type == "object")' >/dev/null; then
+            echo "::error::Cloudflare Pages project lookup did not return a successful result."
+            exit 1
+          fi
+
+          live_atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.ATLAS_BASE_URL.value // empty')
+          live_vite_atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.VITE_ATLAS_BASE_URL.value // empty')
+          live_cell_map_root=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_ROOT.value // empty')
+          live_cell_map_depth=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_DEPTH.value // empty')
+
+          drift=false
+          if [ "$live_atlas_url" != "$atlas_url" ]; then
+            echo "::error::Cloudflare Pages config drift for ATLAS_BASE_URL: committed wrangler.toml has '${atlas_url}', live project has '${live_atlas_url:-<missing>}'."
+            drift=true
+          fi
+          if [ "$live_vite_atlas_url" != "$vite_atlas_url" ]; then
+            echo "::error::Cloudflare Pages config drift for VITE_ATLAS_BASE_URL: committed wrangler.toml has '${vite_atlas_url}', live project has '${live_vite_atlas_url:-<missing>}'."
+            drift=true
+          fi
+          if [ "$live_cell_map_root" != "$cell_map_root" ]; then
+            echo "::error::Cloudflare Pages config drift for EXPECTED_CELL_MAP_ROOT: committed wrangler.toml has '${cell_map_root}', live project has '${live_cell_map_root:-<missing>}'."
+            drift=true
+          fi
+          if [ "$live_cell_map_depth" != "$cell_map_depth" ]; then
+            echo "::error::Cloudflare Pages config drift for EXPECTED_CELL_MAP_DEPTH: committed wrangler.toml has '${cell_map_depth}', live project has '${live_cell_map_depth:-<missing>}'."
+            drift=true
+          fi
+          if [ "$drift" = "true" ]; then
+            echo "::error::Committed wrangler.toml is authoritative. Reconcile the live Pages values to the commit before deploying."
+            exit 1
+          fi
+
+          {
+            echo "atlas_base_url=$atlas_url"
+            echo "vite_atlas_base_url=$vite_atlas_url"
+            echo "expected_cell_map_root=$cell_map_root"
+            echo "expected_cell_map_depth=$cell_map_depth"
+          } >> "$GITHUB_OUTPUT"
+          echo "Validated live Pages config against committed ATLAS_BASE_URL=$atlas_url"
+
+  build:
+    needs: resolve-build-vars
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_BRANCH: ${{ inputs.branch }}
+      DEPLOY_SHA: ${{ needs.resolve-build-vars.outputs.deploy_sha }}
+      PUBLIC_RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+      ATLAS_BASE_URL: ${{ needs.resolve-build-vars.outputs.atlas_base_url }}
+      VITE_ATLAS_BASE_URL: ${{ needs.resolve-build-vars.outputs.vite_atlas_base_url }}
+      EXPECTED_CELL_MAP_ROOT: ${{ needs.resolve-build-vars.outputs.expected_cell_map_root }}
+      EXPECTED_CELL_MAP_DEPTH: ${{ needs.resolve-build-vars.outputs.expected_cell_map_depth }}
+    permissions:
+      contents: read
+    outputs:
+      artifact_id: ${{ steps.upload_release.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ needs.resolve-build-vars.outputs.deploy_sha }}
+          persist-credentials: false
+
+      - name: Prove build checkout identity
+        run: test "$(git rev-parse HEAD)" = "$DEPLOY_SHA"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
@@ -73,55 +241,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-
-      - name: Load Shadow Atlas build vars
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
-          CF_PAGES_PROJECT: communique-site
-        run: |
-          response=$(curl -fsS \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}")
-
-          atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.ATLAS_BASE_URL.value // empty')
-          vite_atlas_url=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.VITE_ATLAS_BASE_URL.value // empty')
-          cell_map_root=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_ROOT.value // empty')
-          cell_map_depth=$(printf '%s' "$response" | jq -r '.result.deployment_configs.production.env_vars.EXPECTED_CELL_MAP_DEPTH.value // empty')
-
-          if [ -z "$atlas_url" ]; then
-            echo "::error::ATLAS_BASE_URL is not set on Cloudflare Pages project ${CF_PAGES_PROJECT}."
-            exit 1
-          fi
-          if [ -z "$vite_atlas_url" ]; then
-            vite_atlas_url="$atlas_url"
-          fi
-          if [ "$DEPLOY_BRANCH" = "production" ]; then
-            if ! [[ "$atlas_url" =~ ^https://atlas\.commons\.email/v[0-9]{8}$ ]]; then
-              echo "::error::Production ATLAS_BASE_URL must be versioned, got: $atlas_url"
-              exit 1
-            fi
-            if ! [[ "$cell_map_root" =~ ^0x[0-9a-fA-F]{64}$ ]]; then
-              echo "::error::EXPECTED_CELL_MAP_ROOT is missing or invalid on Cloudflare Pages project ${CF_PAGES_PROJECT}."
-              exit 1
-            fi
-            if ! [[ "$cell_map_depth" =~ ^(18|20|22|24)$ ]]; then
-              echo "::error::EXPECTED_CELL_MAP_DEPTH is missing or invalid on Cloudflare Pages project ${CF_PAGES_PROJECT}."
-              exit 1
-            fi
-          fi
-
-          if [ -z "$cell_map_root" ] || [ -z "$cell_map_depth" ]; then
-            echo "::warning::Cell map root/depth are not pinned for ${DEPLOY_BRANCH}; non-production health may warn."
-          fi
-
-          echo "ATLAS_BASE_URL=$atlas_url" >> "$GITHUB_ENV"
-          echo "VITE_ATLAS_BASE_URL=$vite_atlas_url" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_ROOT=$cell_map_root" >> "$GITHUB_ENV"
-          echo "EXPECTED_CELL_MAP_DEPTH=$cell_map_depth" >> "$GITHUB_ENV"
-          echo "Using ATLAS_BASE_URL=$atlas_url"
-          echo "Using VITE_ATLAS_BASE_URL=$vite_atlas_url"
 
       - name: Resolve build environment
         run: |
@@ -142,23 +261,19 @@ jobs:
               ;;
           esac
 
-      - name: Sync Shadow Atlas vars into Wrangler config
+      - name: Materialize per-release Wrangler vars
         run: |
           node <<'NODE'
           const fs = require('node:fs');
           const path = 'wrangler.toml';
           const updates = {
-            ATLAS_BASE_URL: process.env.ATLAS_BASE_URL,
-            VITE_ATLAS_BASE_URL: process.env.VITE_ATLAS_BASE_URL,
-            EXPECTED_CELL_MAP_ROOT: process.env.EXPECTED_CELL_MAP_ROOT,
-            EXPECTED_CELL_MAP_DEPTH: process.env.EXPECTED_CELL_MAP_DEPTH,
             PUBLIC_CONVEX_URL: process.env.PUBLIC_CONVEX_URL,
             PUBLIC_RELEASE_TRANSACTION_ID: process.env.PUBLIC_RELEASE_TRANSACTION_ID,
           };
 
           for (const [key, value] of Object.entries(updates)) {
             if (!value) {
-              throw new Error(`${key} is missing; refusing to deploy stale Shadow Atlas vars.`);
+              throw new Error(`${key} is missing; refusing to materialize per-release config.`);
             }
           }
 
@@ -191,13 +306,13 @@ jobs:
           fs.writeFileSync(path, lines.join('\n'));
           NODE
 
-          echo "Synced Shadow Atlas runtime vars into wrangler.toml for this deploy."
+          echo "Materialized per-release vars; committed Shadow Atlas pins remain unchanged."
 
-      - name: Validate Wrangler Shadow Atlas vars
+      - name: Validate committed and per-release Wrangler vars
         run: |
           for key in ATLAS_BASE_URL VITE_ATLAS_BASE_URL EXPECTED_CELL_MAP_ROOT EXPECTED_CELL_MAP_DEPTH PUBLIC_RELEASE_TRANSACTION_ID; do
             if ! grep -q "^${key} = " wrangler.toml; then
-              echo "::error::wrangler.toml is missing ${key} after sync."
+              echo "::error::wrangler.toml is missing ${key}."
               exit 1
             fi
           done
@@ -207,10 +322,117 @@ jobs:
         env:
           PUBLIC_CONVEX_URL: ${{ env.PUBLIC_CONVEX_URL }}
           VITE_ENVIRONMENT: ${{ env.VITE_ENVIRONMENT }}
+          VITE_RELEASE_SHA: ${{ env.DEPLOY_SHA }}
           VITE_ATLAS_BASE_URL: ${{ env.VITE_ATLAS_BASE_URL }}
           ATLAS_BASE_URL: ${{ env.ATLAS_BASE_URL }}
           EXPECTED_CELL_MAP_ROOT: ${{ env.EXPECTED_CELL_MAP_ROOT }}
           EXPECTED_CELL_MAP_DEPTH: ${{ env.EXPECTED_CELL_MAP_DEPTH }}
+
+      - name: Assemble release artifact
+        run: |
+          set -euo pipefail
+          rm -rf release-artifact
+          mkdir -p release-artifact/.svelte-kit
+          cp -R .svelte-kit/cloudflare release-artifact/.svelte-kit/cloudflare
+          cp wrangler.toml release-artifact/wrangler.toml
+          jq -n \
+            --arg sourceSha "$DEPLOY_SHA" \
+            --arg transactionId "$PUBLIC_RELEASE_TRANSACTION_ID" \
+            --arg branch "$DEPLOY_BRANCH" \
+            '{schemaVersion:1,sourceSha:$sourceSha,releaseTransactionId:$transactionId,branch:$branch}' \
+            > release-artifact/release-metadata.json
+
+      - name: Upload built Pages release
+        id: upload_release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pages-direct-${{ needs.resolve-build-vars.outputs.deploy_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-artifact/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 1
+
+  deploy:
+    needs: [resolve-build-vars, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DEPLOY_BRANCH: ${{ inputs.branch }}
+      DEPLOY_SHA: ${{ needs.resolve-build-vars.outputs.deploy_sha }}
+      ARTIFACT_ROOT: ${{ github.workspace }}/pages-release
+      ATLAS_BASE_URL: ${{ needs.resolve-build-vars.outputs.atlas_base_url }}
+      VITE_ATLAS_BASE_URL: ${{ needs.resolve-build-vars.outputs.vite_atlas_base_url }}
+      EXPECTED_CELL_MAP_ROOT: ${{ needs.resolve-build-vars.outputs.expected_cell_map_root }}
+      EXPECTED_CELL_MAP_DEPTH: ${{ needs.resolve-build-vars.outputs.expected_cell_map_depth }}
+      PUBLIC_CONVEX_URL: ${{ inputs.branch == 'production' && 'https://quirky-chinchilla-352.convex.cloud' || 'https://outstanding-firefly-831.convex.cloud' }}
+      # The manifest refresh writer refuses to mint a gate grant unless
+      # platform.env.PUBLIC_RELEASE_TRANSACTION_ID matches
+      # ^[1-9][0-9]*-[1-9][0-9]*$ (public-discovery-manifest-refresh-hook.ts).
+      # Unset, every refresh 503s, R2 manifest state stays unseeded, and
+      # /api/templates serves STATE_NOT_SEEDED on a live site.
+      PUBLIC_RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout immutable deployment tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: gate
+          # This job holds Cloudflare and release-control credentials. The
+          # checkout credential has no business surviving into that work.
+          persist-credentials: false
+
+      - name: Setup trusted deployment Node.js runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: 'gate/.node-version'
+          cache: npm
+          cache-dependency-path: 'gate/.github/release-gate/package-lock.json'
+
+      - name: Install trusted deployment tooling without lifecycle scripts
+        run: npm ci --ignore-scripts --prefix gate/.github/release-gate
+
+      - name: Download built Pages release
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          artifact-ids: ${{ needs.build.outputs.artifact_id }}
+          path: ${{ env.ARTIFACT_ROOT }}
+
+      - name: Verify release artifact identity and public config
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOY_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test -d "$ARTIFACT_ROOT/.svelte-kit/cloudflare"
+          jq -e \
+            --arg sha "$DEPLOY_SHA" \
+            --arg transaction "$PUBLIC_RELEASE_TRANSACTION_ID" \
+            --arg branch "$DEPLOY_BRANCH" \
+            '.schemaVersion == 1 and .sourceSha == $sha and .releaseTransactionId == $transaction and .branch == $branch' \
+            "$ARTIFACT_ROOT/release-metadata.json" >/dev/null
+
+          python3 - "$ARTIFACT_ROOT/wrangler.toml" <<'PYTHON'
+          import os
+          import sys
+          import tomllib
+
+          with open(sys.argv[1], 'rb') as source:
+              config = tomllib.load(source)
+          values = config.get('vars', {})
+          expected = {
+              'ATLAS_BASE_URL': os.environ['ATLAS_BASE_URL'],
+              'VITE_ATLAS_BASE_URL': os.environ['VITE_ATLAS_BASE_URL'],
+              'EXPECTED_CELL_MAP_ROOT': os.environ['EXPECTED_CELL_MAP_ROOT'],
+              'EXPECTED_CELL_MAP_DEPTH': os.environ['EXPECTED_CELL_MAP_DEPTH'],
+              'PUBLIC_RELEASE_TRANSACTION_ID': os.environ['PUBLIC_RELEASE_TRANSACTION_ID'],
+          }
+          if config.get('name') != 'communique-site':
+              raise SystemExit('release artifact targets an unexpected Pages project')
+          for key, expected_value in expected.items():
+              if str(values.get(key, '')) != expected_value:
+                  raise SystemExit(f'release artifact has unexpected {key}')
+          PYTHON
 
       - name: Resolve deployment URL
         run: |
@@ -221,11 +443,104 @@ jobs:
             *) echo "DEPLOY_PUBLIC_URL=https://${DEPLOY_BRANCH}.communique-site.pages.dev" >> "$GITHUB_ENV" ;;
           esac
 
+      - name: Record the deployment we are about to replace
+        # Publication happens before any gate can observe the result, so without
+        # this the only thing a red gate produces is a red run over a live bad
+        # deploy. Capturing the outgoing production deployment id is what makes
+        # the rollback below possible.
+        if: env.DEPLOY_BRANCH == 'production'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CF_PAGES_PROJECT: communique-site
+        run: |
+          set -uo pipefail
+          previous=$(curl -sS --max-time 30 \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments?env=production&per_page=1" \
+            | jq -r '[.result[] | select(.latest_stage.status == "success")][0].id // empty')
+          if [ -z "$previous" ]; then
+            echo "::warning::No previous successful production deployment found; rollback will be unavailable."
+          else
+            echo "Previous production deployment: ${previous}"
+          fi
+          echo "PREVIOUS_PRODUCTION_DEPLOYMENT=${previous}" >> "$GITHUB_ENV"
+
       - name: Deploy
         run: |
           set -o pipefail
           deploy_output=$(mktemp)
-          npx wrangler pages deploy .svelte-kit/cloudflare --project-name communique-site --branch "$DEPLOY_BRANCH" --commit-hash "$DEPLOY_SHA" 2>&1 | tee "$deploy_output"
+          (
+            # Publish using the gate checkout's wrangler.toml, not the copy the
+            # build job produced. Cloudflare treats this file as the whole Pages
+            # project configuration — compatibility flags, KV/R2/Durable Object/
+            # Queue bindings, and every var — so shipping the artifact's copy
+            # would let anything that ran during `npm ci` rewrite the bindings
+            # and capabilities of the deployed Worker. The credential never
+            # entered the build job; its AUTHORITY would have.
+            #
+            # The committed Shadow Atlas values are re-applied here from the
+            # resolver job's outputs, so the trusted file carries the same
+            # commit-authoritative configuration the build was compiled against.
+            cp "$GITHUB_WORKSPACE/gate/wrangler.toml" "$ARTIFACT_ROOT/wrangler.toml"
+            (
+              cd "$ARTIFACT_ROOT"
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = 'wrangler.toml';
+          const updates = {
+            ATLAS_BASE_URL: process.env.ATLAS_BASE_URL,
+            VITE_ATLAS_BASE_URL: process.env.VITE_ATLAS_BASE_URL,
+            EXPECTED_CELL_MAP_ROOT: process.env.EXPECTED_CELL_MAP_ROOT,
+            EXPECTED_CELL_MAP_DEPTH: process.env.EXPECTED_CELL_MAP_DEPTH,
+            PUBLIC_CONVEX_URL: process.env.PUBLIC_CONVEX_URL,
+            PUBLIC_RELEASE_TRANSACTION_ID: process.env.PUBLIC_RELEASE_TRANSACTION_ID,
+          };
+
+          for (const [key, value] of Object.entries(updates)) {
+            if (!value) {
+              throw new Error(`${key} is missing; refusing to deploy incomplete trusted config.`);
+            }
+          }
+
+          const lines = fs.readFileSync(path, 'utf8').split(/\r?\n/);
+          const start = lines.findIndex((line) => line.trim() === '[vars]');
+          if (start === -1) {
+            throw new Error('wrangler.toml has no [vars] section.');
+          }
+
+          let end = lines.length;
+          for (let i = start + 1; i < lines.length; i += 1) {
+            if (/^\s*\[/.test(lines[i])) {
+              end = i;
+              break;
+            }
+          }
+
+          const block = lines.slice(start + 1, end);
+          for (const [key, value] of Object.entries(updates)) {
+            const rendered = `${key} = ${JSON.stringify(value)}`;
+            const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+            if (existing >= 0) {
+              block[existing] = rendered;
+            } else {
+              block.push(rendered);
+            }
+          }
+
+          lines.splice(start + 1, end - start - 1, ...block);
+          fs.writeFileSync(path, lines.join('\n'));
+          NODE
+
+          echo "Materialized commit-authoritative and per-release vars in trusted wrangler.toml."
+            )
+
+            cd "$ARTIFACT_ROOT"
+            "$GITHUB_WORKSPACE/gate/.github/release-gate/node_modules/.bin/wrangler" pages deploy .svelte-kit/cloudflare \
+              --project-name communique-site \
+              --branch "$DEPLOY_BRANCH" \
+              --commit-hash "$DEPLOY_SHA"
+          ) 2>&1 | tee "$deploy_output"
           deployment_url=$(sed -nE 's/.*Take a peek over at (https:\/\/[a-z0-9-]+\.communique-site\.pages\.dev).*/\1/p' "$deploy_output" | head -n 1)
 
           if [ -z "$deployment_url" ]; then
@@ -267,67 +582,160 @@ jobs:
             echo "::warning::Cloudflare cache purge response did not report success; deployment health check will still run."
           fi
 
-      - name: Verify deployment health
+      - name: Verify immutable release liveness
+        # /api/live is public and I/O-free. It proves process liveness and binds
+        # the response to this exact build and run without giving candidate code
+        # an internal credential. A wrong SHA or transaction is normal Pages
+        # propagation and consumes the existing retry window; only an answer
+        # carrying this release's identity can fail immediately as unhealthy.
         run: |
-          strict_atlas=false
-          if [ "$DEPLOY_BRANCH" = "production" ]; then
-            strict_atlas=true
-          fi
-
           for attempt in {1..12}; do
-            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_HEALTH_URL/api/health"); then
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+                 "$DEPLOY_HEALTH_URL/api/live"); then
               http_status=$(printf '%s\n' "$response" | tail -n 1)
               body=$(printf '%s\n' "$response" | sed '$d')
 
               if echo "$body" | jq -e . >/dev/null 2>&1; then
-                echo "$body"
+                served_sha=$(printf '%s' "$body" | jq -r '.release.sha // "absent"')
+                served_transaction=$(printf '%s' "$body" | jq -r '.release.transactionId // "absent"')
 
-                if [ "$strict_atlas" = "true" ]; then
-                  if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null; then
-                    exit 0
-                  fi
-                elif echo "$body" | jq -e '.convex == true and .atlas.configured == true and .atlas.manifest == true and .atlas.districtIndex == true' >/dev/null; then
-                  if ! echo "$body" | jq -e '.atlas.rootPinned == true and .atlas.depthPinned == true' >/dev/null; then
-                    echo "::warning::Non-production deploy health has atlas content reachable but root/depth are not pinned yet."
-                  fi
+                if [ "$served_sha" != "$DEPLOY_SHA" ] || [ "$served_transaction" != "$PUBLIC_RELEASE_TRANSACTION_ID" ]; then
+                  echo "Immutable URL serving ${served_sha}/${served_transaction}, expected ${DEPLOY_SHA}/${PUBLIC_RELEASE_TRANSACTION_ID} — waiting for propagation."
+                elif [ "$http_status" = "200" ] \
+                     && echo "$body" | jq -e '.status == "ok"' >/dev/null \
+                     && echo "$body" | jq -e --arg sha "$DEPLOY_SHA" '.release.sha == $sha' >/dev/null \
+                     && echo "$body" | jq -e --arg tx "$PUBLIC_RELEASE_TRANSACTION_ID" '.release.transactionId == $tx' >/dev/null; then
+                  echo "$body"
                   exit 0
+                else
+                  echo "$body"
+                  echo "::error::Immutable URL is serving this release but reports unhealthy."
+                  exit 1
                 fi
               else
-                echo "Deployment health endpoint returned HTTP ${http_status} and a non-JSON body:"
+                echo "Immutable liveness endpoint returned HTTP ${http_status} and a non-JSON body:"
                 printf '%s\n' "$body" | head -c 4000
                 printf '\n'
               fi
             else
-              echo "Deployment health check failed on attempt ${attempt} before an HTTP response."
+              echo "Immutable liveness check failed on attempt ${attempt} before an HTTP response."
             fi
 
-            echo "Deployment health check failed on attempt ${attempt}; retrying..."
+            echo "Immutable liveness check failed on attempt ${attempt}; retrying..."
             sleep 10
           done
           exit 1
 
+      - name: Verify immutable application shell and asset
+        # Browser delivery is checked only on the immutable pages.dev URL. It is
+        # outside the canonical WAF, so a challenge cannot make this gate flaky.
+        run: |
+          set -euo pipefail
+          root_body=$(mktemp)
+          root_headers=$(mktemp)
+          trap 'rm -f "$root_body" "$root_headers"' EXIT
+
+          if ! root_status=$(curl -sS --max-time 20 \
+               -D "$root_headers" -o "$root_body" -w "%{http_code}" \
+               "${DEPLOY_HEALTH_URL}/"); then
+            echo "::error::Immutable application root was unreachable."
+            exit 1
+          fi
+          if [ "$root_status" != "200" ]; then
+            echo "::error::Immutable application root returned HTTP ${root_status}; expected 200."
+            exit 1
+          fi
+
+          root_content_type=$(awk 'tolower($1) == "content-type:" { print $2 }' "$root_headers" | tail -n 1 | tr -d '\r')
+          case "$root_content_type" in
+            text/html|text/html\;*) ;;
+            *)
+              echo "::error::Immutable application root returned content-type '${root_content_type:-<missing>}'; expected HTML."
+              exit 1
+              ;;
+          esac
+
+          asset_path=$(python3 - "$root_body" <<'PYTHON'
+          import sys
+          from html.parser import HTMLParser
+
+          class AssetParser(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True)
+                  self.assets = []
+
+              def handle_starttag(self, _tag, attrs):
+                  for name, value in attrs:
+                      if name not in {'href', 'src'} or not value:
+                          continue
+                      if value.startswith('/_app/immutable/'):
+                          self.assets.append(value)
+                      elif value.startswith('./_app/immutable/'):
+                          self.assets.append('/' + value[2:])
+                      elif value.startswith('_app/immutable/'):
+                          self.assets.append('/' + value)
+
+          parser = AssetParser()
+          with open(sys.argv[1], encoding='utf-8') as source:
+              parser.feed(source.read())
+          if parser.assets:
+              print(parser.assets[0])
+          PYTHON
+          )
+          if [ -z "$asset_path" ]; then
+            echo "::error::Immutable application HTML references no /_app/immutable/ asset."
+            exit 1
+          fi
+
+          if ! asset_status=$(curl -sS --max-time 20 -o /dev/null -w "%{http_code}" \
+               "${DEPLOY_HEALTH_URL}${asset_path}"); then
+            echo "::error::Referenced immutable asset ${asset_path} was unreachable."
+            exit 1
+          fi
+          if [ "$asset_status" != "200" ]; then
+            echo "::error::Referenced immutable asset ${asset_path} returned HTTP ${asset_status}; expected 200."
+            exit 1
+          fi
+          echo "Immutable application shell and asset ${asset_path} are fetchable."
+
       - name: Probe production domain health
+        # The canonical WAF may challenge the runner, but an unobserved release is
+        # not verified. Wrong SHA/transaction answers consume the propagation
+        # retry window; an answer from this exact release fails if it is unhealthy.
         if: env.DEPLOY_BRANCH == 'production'
         run: |
           domain_challenged=false
           domain_hard_failure=false
           for attempt in {1..12}; do
-            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" "$DEPLOY_PUBLIC_URL/api/health"); then
+            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
+                 "$DEPLOY_PUBLIC_URL/api/live"); then
               http_status=$(printf '%s\n' "$response" | tail -n 1)
               body=$(printf '%s\n' "$response" | sed '$d')
 
-              if [ "$http_status" = "200" ] && echo "$body" | jq -e '.status == "ok"' >/dev/null 2>&1; then
-                echo "$body"
-                exit 0
-              fi
-
               if echo "$body" | jq -e . >/dev/null 2>&1; then
-                echo "$body"
-                echo "::error::Production domain health endpoint returned JSON but not status ok."
-                exit 1
-              fi
-
-              if [ "$http_status" = "403" ] && printf '%s' "$body" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
+                served_sha=$(printf '%s' "$body" | jq -r '.release.sha // "absent"')
+                served_transaction=$(printf '%s' "$body" | jq -r '.release.transactionId // "absent"')
+                if [ "$served_sha" != "$DEPLOY_SHA" ] || [ "$served_transaction" != "$PUBLIC_RELEASE_TRANSACTION_ID" ]; then
+                  # The canonical domain still routing to the previous deployment
+                  # is the NORMAL state for the first seconds after publication,
+                  # and it is indistinguishable at this instant from the stale
+                  # bundle this gate exists to catch. The difference is only
+                  # visible over time, so wait it out — the loop below is the
+                  # whole apparatus for that. Failing here on attempt one made
+                  # propagation itself a deploy failure.
+                  echo "Canonical domain serving ${served_sha}/${served_transaction}, expected ${DEPLOY_SHA}/${PUBLIC_RELEASE_TRANSACTION_ID} — waiting for propagation."
+                elif [ "$http_status" = "200" ] \
+                     && echo "$body" | jq -e '.status == "ok"' >/dev/null 2>&1 \
+                     && echo "$body" | jq -e --arg sha "$DEPLOY_SHA" '.release.sha == $sha' >/dev/null 2>&1 \
+                     && echo "$body" | jq -e --arg tx "$PUBLIC_RELEASE_TRANSACTION_ID" '.release.transactionId == $tx' >/dev/null 2>&1; then
+                  echo "$body"
+                  exit 0
+                else
+                  echo "$body"
+                  echo "::error::Production domain is serving this release but reports unhealthy."
+                  exit 1
+                fi
+              elif [ "$http_status" = "403" ] && printf '%s' "$body" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
                 domain_challenged=true
               else
                 domain_hard_failure=true
@@ -342,21 +750,33 @@ jobs:
 
             if [ "$attempt" = "12" ]; then
               if [ "$domain_challenged" = "true" ] && [ "$domain_hard_failure" = "false" ]; then
-                echo "::warning::Production domain health was blocked by a Cloudflare challenge from the GitHub runner; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
-                exit 0
+                # A challenge is an UNKNOWN, and an unknown release is not a
+                # verified one. Exiting 0 here is how a deploy that never proved
+                # anything about the canonical domain reported success.
+                echo "::error::Production domain health could not be observed — Cloudflare challenged the runner. The release is unverified on ${DEPLOY_PUBLIC_URL}; verify from an allowed vantage point or roll back."
+                exit 1
               fi
               if [ "$domain_hard_failure" = "true" ]; then
                 echo "::error::Production domain health returned an unexpected response."
                 exit 1
               fi
-              echo "::warning::Production domain health could not be verified from GitHub-hosted runners; complete external release smoke against ${DEPLOY_PUBLIC_URL}/api/health."
-              exit 0
+              echo "::error::Production domain health could not be verified from this runner. The release is unverified on ${DEPLOY_PUBLIC_URL}; verify externally or roll back."
+              exit 1
             fi
 
             sleep 10
           done
 
       - name: Probe production browser-mediated mDL route
+        # ADVISORY, not a gate. The umbrella MDL flag is false
+        # (src/lib/config/features.ts:189), so this probes a surface no user
+        # can reach. The health and canonical probes above apply the rule that
+        # an unobserved release is not a verified one; escalating it here would
+        # let a Cloudflare challenge against a disabled feature's route fail an
+        # otherwise-verified deploy. Marking it advisory makes the category
+        # honest rather than leaving two probes silently exiting 0 beside two
+        # that fail closed.
+        continue-on-error: true
         if: env.DEPLOY_BRANCH == 'production'
         run: |
           route_challenged=false
@@ -404,56 +824,80 @@ jobs:
             sleep 10
           done
 
-      - name: Probe production mDL readiness
+      - name: Finalize the public-discovery release authority
+        # The discovery manifest can only be refreshed while a release authority
+        # for this exact (sourceSha, transactionId, phase) is live. Arming one
+        # and stopping there is worse than never arming: it expires, the object
+        # self-contains, the tuple becomes terminal, and hours later public
+        # discovery starts serving 503 AUTHORITY_EXPIRED with nothing pointing
+        # back to the deploy that caused it. So the sequence completes here, or
+        # it does not start.
+        #
+        # Runs AFTER every verification gate, not before. Committing an authority
+        # for a build that has not been observed means a subsequent rollback
+        # leaves the previous worker's SHA mismatched against a finalized tuple,
+        # and public discovery starts serving AUTHORITY_EXPIRED hours later with
+        # nothing pointing back at the deploy that caused it.
+        #
+        # A 409 on a tuple that has already reached a terminal state is DESIGNED
+        # behaviour, not corruption — every deploy mints a fresh transaction id
+        # and therefore a fresh tuple.
+        #
+        # Never fails the job: publication has already succeeded by this point,
+        # and a stale template list is a far smaller harm than a red deploy on a
+        # site that is actually live.
         if: env.DEPLOY_BRANCH == 'production'
+        continue-on-error: true
         env:
-          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          RELEASE_CONTROL_SECRET: ${{ secrets.RELEASE_CONTROL_SECRET }}
+          RELEASE_TRANSACTION_ID: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          if [ -z "${INTERNAL_API_SECRET:-}" ]; then
-            echo "::error::INTERNAL_API_SECRET is not configured as a GitHub secret."
-            exit 1
+          set -uo pipefail
+          if [ -z "${RELEASE_CONTROL_SECRET:-}" ]; then
+            echo "::warning::RELEASE_CONTROL_SECRET is not configured; discovery will expire."
+            exit 0
           fi
 
-          readiness_challenged=false
-          readiness_hard_failure=false
-          for attempt in {1..12}; do
-            if response=$(curl -sS --max-time 20 -w "\n%{http_code}" \
-              -H "X-Internal-Secret: ${INTERNAL_API_SECRET}" \
-              -H "X-Readiness-Origin: ${DEPLOY_PUBLIC_URL}" \
-              "${DEPLOY_HEALTH_URL}/api/internal/identity/mdl-readiness"); then
-              http_status=$(printf '%s\n' "${response}" | tail -n 1)
-              body=$(printf '%s\n' "${response}" | sed '$d')
+          lease=$(python3 -c 'import uuid; print(uuid.uuid4())')
+          not_after=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.UTC)+datetime.timedelta(minutes=45)).strftime('%Y-%m-%dT%H:%M:%S.')+'000Z')")
 
-              if [ "${http_status}" = "200" ] && echo "${body}" | jq -e '.status == "ok"' >/dev/null 2>&1; then
-                echo "${body}" | jq '{status, blockers, warnings}'
-                exit 0
-              fi
-
-              if echo "${body}" | jq -e . >/dev/null 2>&1; then
-                echo "${body}" | jq '{status, blockers, warnings, checks: [.checks[]? | select(.status != "ok")]}'
-                readiness_hard_failure=true
-              else
-                if [ "${http_status}" = "403" ] && printf '%s' "${body}" | grep -Eiq 'Just a moment|cf_chl|challenge-platform'; then
-                  readiness_challenged=true
-                else
-                  readiness_hard_failure=true
-                fi
-                echo "Production mDL readiness attempt ${attempt} returned HTTP ${http_status} and a non-JSON body:"
-                printf '%s\n' "${body}" | head -c 4000
-                printf '\n'
-              fi
-            else
-              echo "Production mDL readiness attempt ${attempt} failed before an HTTP response."
-              readiness_hard_failure=true
+          for action in arm qualify finalize; do
+            body=$(jq -n \
+              --arg a "$action" --arg l "$lease" --arg n "$not_after" \
+              --arg p activate-production --arg s "$DEPLOY_SHA" --arg t "$RELEASE_TRANSACTION_ID" \
+              '{action:$a,leaseId:$l,notAfter:$n,phase:$p,sourceSha:$s,transactionId:$t}')
+            code=$(curl -sS -o /tmp/authority-response.json -w '%{http_code}' --max-time 30 \
+              -X POST "https://release-control.commons.email/control-og-release-authority" \
+              -H "x-public-release-control-secret: ${RELEASE_CONTROL_SECRET}" \
+              -H 'content-type: application/json' \
+              --data-binary "$body") || code=000
+            echo "release authority ${action}: HTTP ${code}"
+            if [ "$code" != "200" ]; then
+              echo "::warning::release authority ${action} returned ${code}; discovery may serve a stale generation."
+              head -c 400 /tmp/authority-response.json || true
+              exit 0
             fi
-
-            if [ "${attempt}" = "12" ]; then
-              if [ "${readiness_challenged}" = "true" ] && [ "${readiness_hard_failure}" = "false" ]; then
-                echo "::error::Production mDL readiness was blocked by a Cloudflare challenge from the GitHub runner."
-              fi
-              echo "::error::Production browser-mediated mDL did not pass internal readiness."
-              exit 1
-            fi
-
-            sleep 10
           done
+          echo "Release authority committed for ${RELEASE_TRANSACTION_ID}."
+
+      - name: Roll back to the last verified deployment
+        # Every gate above runs after publication, so a failure means a bad build
+        # is already live. A red run is not a remedy; restoring the deployment we
+        # recorded before publishing is. Runs only when something actually failed.
+        if: failure() && env.DEPLOY_BRANCH == 'production' && env.PREVIOUS_PRODUCTION_DEPLOYMENT != ''
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
+          CF_PAGES_PROJECT: communique-site
+        run: |
+          set -uo pipefail
+          echo "::warning::A release gate failed. Restoring ${PREVIOUS_PRODUCTION_DEPLOYMENT}."
+          code=$(curl -sS -o /tmp/rollback.json -w '%{http_code}' --max-time 60 -X POST \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments/${PREVIOUS_PRODUCTION_DEPLOYMENT}/rollback") || code=000
+          if [ "$code" = "200" ]; then
+            echo "::error::Release failed its gates and production was rolled back to ${PREVIOUS_PRODUCTION_DEPLOYMENT}. The authority finalize step did NOT run, so discovery is untouched."
+          else
+            echo "::error::Release failed its gates AND rollback returned ${code}. Production may be serving an unverified build — intervene manually."
+            head -c 400 /tmp/rollback.json || true
+          fi
