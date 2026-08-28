@@ -14,7 +14,14 @@ export const getDelivery = query({
 	args: { deliveryId: v.string(), _secret: v.string() },
 	handler: async (ctx, { deliveryId, _secret }) => {
 		requireInternalSecret(_secret);
-		const delivery = await ctx.db.get(deliveryId as Id<'campaignDeliveries'>);
+		// A caller-supplied string is not an id. `as Id<...>` only silences the
+		// compiler; at runtime ctx.db.get throws on a malformed one, and these
+		// arrive straight from a URL a staffer pasted. normalizeId returns null
+		// instead, which is the same answer as "no such record" and is what the
+		// callers already handle.
+		const normalizedDeliveryId = ctx.db.normalizeId('campaignDeliveries', deliveryId);
+		if (!normalizedDeliveryId) return null;
+		const delivery = await ctx.db.get(normalizedDeliveryId);
 		if (!delivery) return null;
 
 		const campaign = delivery.campaignId ? await ctx.db.get(delivery.campaignId) : null;
@@ -36,7 +43,9 @@ export const getCampaignForVerify = query({
 	args: { campaignId: v.string(), _secret: v.string() },
 	handler: async (ctx, { campaignId, _secret }) => {
 		requireInternalSecret(_secret);
-		const campaign = await ctx.db.get(campaignId as Id<'campaigns'>);
+		const normalizedCampaignId = ctx.db.normalizeId('campaigns', campaignId);
+		if (!normalizedCampaignId) return null;
+		const campaign = await ctx.db.get(normalizedCampaignId);
 		if (!campaign) return null;
 		return { _id: campaign._id, title: campaign.title };
 	}
@@ -87,7 +96,9 @@ export const getReceipt = query({
 	args: { receiptId: v.string(), _secret: v.string() },
 	handler: async (ctx, { receiptId, _secret }) => {
 		requireInternalSecret(_secret);
-		const receipt = await ctx.db.get(receiptId as Id<'accountabilityReceipts'>);
+		const normalizedReceiptId = ctx.db.normalizeId('accountabilityReceipts', receiptId);
+		if (!normalizedReceiptId) return null;
+		const receipt = await ctx.db.get(normalizedReceiptId);
 		if (!receipt) return null;
 
 		// Get associated bill if any

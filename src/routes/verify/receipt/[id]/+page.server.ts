@@ -12,10 +12,24 @@ export const load: PageServerLoad = async ({ params }) => {
 		throw error(404, 'Not found');
 	}
 
-	const receipt = await serverQuery(api.verify.getReceipt, {
-		_secret: getInternalSecret(),
-		receiptId: params.id
-	});
+	// A malformed id now comes back as null from the query rather than throwing
+	// (convex/verify.ts normalizes it), so "no such receipt" is a 404. Anything
+	// else reaching here is the backend being unavailable, which is a different
+	// answer than "does not exist" and must not be reported as one — an
+	// unguarded await surfaced both as a raw 500.
+	let receipt: Awaited<ReturnType<typeof serverQuery<typeof api.verify.getReceipt>>>;
+	try {
+		receipt = await serverQuery(api.verify.getReceipt, {
+			_secret: getInternalSecret(),
+			receiptId: params.id
+		});
+	} catch (cause) {
+		console.error(
+			'[verify/receipt] receipt lookup failed:',
+			cause instanceof Error ? cause.message : String(cause)
+		);
+		throw error(503, 'Receipt verification is temporarily unavailable');
+	}
 
 	if (!receipt) {
 		throw error(404, 'Receipt not found');
