@@ -42,6 +42,15 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 		expect(raw).toContain('merge-multiple: true');
 	});
 
+	it('carries the worker’s sibling closure across the job boundary', () => {
+		// _worker.js imports ../output/server/index.js and
+		// ../cloudflare-tmp/manifest.js. In one job those siblings just existed;
+		// split across jobs they must be uploaded, or wrangler fails to bundle
+		// with "Could not resolve" after the deployment has already been recorded.
+		expect(raw).toContain('for sibling in output/server cloudflare-tmp; do');
+		expect(raw).toContain('the worker closure would be incomplete');
+	});
+
 	it('publishes the trusted wrangler config, never the artifact’s copy', () => {
 		// Cloudflare treats wrangler.toml as the whole project configuration —
 		// bindings, compatibility flags, every var. Shipping the build job's copy

@@ -334,6 +334,20 @@ jobs:
           rm -rf release-artifact
           mkdir -p release-artifact/.svelte-kit
           cp -R .svelte-kit/cloudflare release-artifact/.svelte-kit/cloudflare
+          # The generated _worker.js does not stand alone: it imports
+          # ../output/server/index.js and ../cloudflare-tmp/manifest.js, which
+          # are SIBLINGS of .svelte-kit/cloudflare. In a single-job workflow they
+          # were simply present in the workspace; across a job boundary they have
+          # to travel with the artifact or wrangler cannot bundle the worker.
+          for sibling in output/server cloudflare-tmp; do
+            if [ -d ".svelte-kit/${sibling}" ]; then
+              mkdir -p "release-artifact/.svelte-kit/$(dirname "$sibling")"
+              cp -R ".svelte-kit/${sibling}" "release-artifact/.svelte-kit/${sibling}"
+            else
+              echo "::error::Build output is missing .svelte-kit/${sibling}; the worker closure would be incomplete."
+              exit 1
+            fi
+          done
           cp wrangler.toml release-artifact/wrangler.toml
           jq -n \
             --arg sourceSha "$DEPLOY_SHA" \
