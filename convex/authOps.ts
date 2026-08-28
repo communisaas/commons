@@ -143,16 +143,36 @@ export const upsertFromOAuth = mutation({
 		const db = authOpsDb(ctx);
 		const now = Date.now();
 
-		// SHA-256(email.toLowerCase().trim()) — canonical pattern shared with
-		// waitlist (src/routes/api/waitlist/+server.ts:18) and bounce reports.
-		// user.emailHash is the dedup key for the email-sybil throttle at
-		// convex/users.ts:747-758 + :992-998; leaving it unset on signup
-		// silently neutered the gate. Set on every code path below (new user,
-		// existing-account backfill, existing-user-by-email backfill).
+		// user.emailHash is the dedup key for the email-sybil ceiling in
+		// `verifyAddress` (convex/users.ts:894 reads the siblings, :948-954
+		// throws ADDRESS_VERIFICATION_EMAIL_SYBIL, :1210 projects the same count
+		// read-only). It caps distinct userIds sharing one mailbox inside a
+		// trailing 180-day window; leaving it unset on signup silently neutered
+		// the gate, so it is set on every path below.
+		//
+		// The hash is taken over a CANONICAL mailbox, not the raw string. The
+		// gate's own rationale is that throwaway-account farms bypass the
+		// per-userId throttle — and a plus-tag is the cheapest possible farm:
+		// one real inbox, unlimited addresses, each landing in its own bucket
+		// and clearing the ceiling independently.
+		const canonicalMailbox = (email: string): string => {
+			const trimmed = email.toLowerCase().trim();
+			const at = trimmed.lastIndexOf('@');
+			if (at <= 0) return trimmed;
+			const local = trimmed.slice(0, at);
+			const domain = trimmed.slice(at + 1);
+			// Sub-addressing is near-universal (Gmail, Outlook, Fastmail, most
+			// self-hosted). Dot-insensitivity is NOT — it is a Gmail behaviour,
+			// and stripping dots globally would merge two genuinely different
+			// mailboxes on hosts that treat them as distinct. Only the tag goes.
+			const plus = local.indexOf('+');
+			return `${plus >= 0 ? local.slice(0, plus) : local}@${domain}`;
+		};
+
 		const emailHashFor = async (email: string): Promise<string> => {
 			const buf = await crypto.subtle.digest(
 				'SHA-256',
-				new TextEncoder().encode(email.toLowerCase().trim())
+				new TextEncoder().encode(canonicalMailbox(email))
 			);
 			return Array.from(new Uint8Array(buf))
 				.map((b) => b.toString(16).padStart(2, '0'))
