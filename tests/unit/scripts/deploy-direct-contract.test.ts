@@ -31,6 +31,34 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 			expect(build, `build job must not see ${secret}`).not.toContain(secret);
 		}
 		expect(JSON.stringify(wf.jobs.deploy)).toContain('CLOUDFLARE_API_TOKEN');
+
+		// The deploy job does install app dependencies — wrangler bundles the
+		// Worker there and must resolve every import. The property that survives
+		// is that no dependency's install-time code runs beside the credential,
+		// so the flag is the boundary and must not be dropped.
+		const install = wf.jobs.deploy.steps.find((step) =>
+			String(step.run ?? '').includes('npm ci')
+		);
+		expect(install, 'deploy installs dependencies for bundling').toBeTruthy();
+		expect(String(install?.run)).toContain('--ignore-scripts');
+	});
+
+	it('extracts the artifact where the verification looks for it', () => {
+		// download-artifact nests contents in a per-artifact subdirectory unless
+		// told otherwise, which made every path in the verification step resolve
+		// to nothing and fail silently under `set -e`. The id binding must stay —
+		// it ties the download to this run's build rather than to a reusable name.
+		expect(raw).toContain('artifact-ids: ${{ needs.build.outputs.artifact_id }}');
+		expect(raw).toContain('merge-multiple: true');
+	});
+
+	it('carries the worker’s sibling closure across the job boundary', () => {
+		// _worker.js imports ../output/server/index.js and
+		// ../cloudflare-tmp/manifest.js. In one job those siblings just existed;
+		// split across jobs they must be uploaded, or wrangler fails to bundle
+		// with "Could not resolve" after the deployment has already been recorded.
+		expect(raw).toContain('for sibling in output/server cloudflare-tmp; do');
+		expect(raw).toContain('the worker closure would be incomplete');
 	});
 
 	it('publishes the trusted wrangler config, never the artifact’s copy', () => {

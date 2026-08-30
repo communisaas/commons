@@ -334,6 +334,20 @@ jobs:
           rm -rf release-artifact
           mkdir -p release-artifact/.svelte-kit
           cp -R .svelte-kit/cloudflare release-artifact/.svelte-kit/cloudflare
+          # The generated _worker.js does not stand alone: it imports
+          # ../output/server/index.js and ../cloudflare-tmp/manifest.js, which
+          # are SIBLINGS of .svelte-kit/cloudflare. In a single-job workflow they
+          # were simply present in the workspace; across a job boundary they have
+          # to travel with the artifact or wrangler cannot bundle the worker.
+          for sibling in output/server cloudflare-tmp; do
+            if [ -d ".svelte-kit/${sibling}" ]; then
+              mkdir -p "release-artifact/.svelte-kit/$(dirname "$sibling")"
+              cp -R ".svelte-kit/${sibling}" "release-artifact/.svelte-kit/${sibling}"
+            else
+              echo "::error::Build output is missing .svelte-kit/${sibling}; the worker closure would be incomplete."
+              exit 1
+            fi
+          done
           cp wrangler.toml release-artifact/wrangler.toml
           jq -n \
             --arg sourceSha "$DEPLOY_SHA" \
@@ -397,8 +411,42 @@ jobs:
       - name: Download built Pages release
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
+          # Bind to the id this run's build produced, not to a name another run
+          # could also have used.
           artifact-ids: ${{ needs.build.outputs.artifact_id }}
           path: ${{ env.ARTIFACT_ROOT }}
+          # Without this, download-artifact extracts into a subdirectory named
+          # after the artifact, so every path the verification below checks
+          # points at nothing and the step fails under `set -e` with no message.
+          merge-multiple: true
+
+      - name: Install application dependencies for bundling, without lifecycle scripts
+        # wrangler bundles the Worker at DEPLOY time, so it must resolve every
+        # npm import the build produced — `ethers`, `zod`, and 362 others. The
+        # credential-free build job cannot hand those over: node_modules is not
+        # an artifact, and a prebundled worker would need the release finalizer
+        # this workflow does not run.
+        #
+        # `--ignore-scripts` is what keeps the boundary meaningful. The isolation
+        # that matters is that no dependency's install-time code EXECUTES beside
+        # the Cloudflare token; esbuild reads and bundles these files, it does not
+        # run them. That is weaker than never having the files present, and it is
+        # stated plainly rather than described as full isolation.
+        # Installed AT the artifact root, not in the checkout: wrangler runs from
+        # $ARTIFACT_ROOT, and node resolution walks up from the cwd — an install
+        # under gate/ is invisible from there, which is how the 364 unresolved
+        # imports survived the first attempt at this.
+        run: |
+          set -euo pipefail
+          # Install in the checkout, where npm has its package.json and lockfile,
+          # then place the tree where wrangler will resolve it. `npm ci --prefix`
+          # does not do this: it still reads the manifest from the cwd.
+          npm ci --ignore-scripts --prefix . --no-audit --no-fund
+          # $ARTIFACT_ROOT is created by the artifact download, which is why this
+          # step follows it rather than sitting with the other installs.
+          test -d "$ARTIFACT_ROOT"
+          cp -R node_modules "$ARTIFACT_ROOT/node_modules"
+        working-directory: gate
 
       - name: Verify release artifact identity and public config
         run: |
