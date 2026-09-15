@@ -29,8 +29,13 @@ describe('release control-plane network safety', () => {
 		'uses the shared bounded reader and refuses redirects in %s',
 		(filePath) => {
 			const source = readFileSync(filePath, 'utf8');
+			// Node's fetch accepts `redirect: 'error'`; the Workers runtime rejects it
+			// at call time, so Worker sources must use 'manual' and fail on non-200.
+			const refusedRedirect = filePath.startsWith('workers/')
+				? "redirect: 'manual'"
+				: "redirect: 'error'";
 			expect(source).toContain('readBoundedResponseJson');
-			expect(source).toContain("redirect: 'error'");
+			expect(source).toContain(refusedRedirect);
 			expect(source).not.toMatch(/\bresponse\.(?:arrayBuffer|json|text)\s*\(/u);
 		}
 	);

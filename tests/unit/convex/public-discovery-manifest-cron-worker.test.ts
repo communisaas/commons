@@ -58,7 +58,7 @@ describe('public-discovery manifest cron Worker', () => {
 		expect(String(input)).toBe(ENDPOINT);
 		const headers = new Headers(init.headers);
 		expect(headers.get('x-public-discovery-manifest-refresh-secret')).toBe(active);
-		expect(init.redirect).toBe('error');
+		expect(init.redirect).toBe('manual');
 		expect(JSON.stringify(init)).not.toContain(previous);
 	});
 
