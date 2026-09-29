@@ -29,6 +29,7 @@
  */
 
 import { type Fact, present, absent, blocked } from '$lib/core/fact';
+import { SharedFlights } from '$lib/server/shared-flight';
 
 // ============================================================================
 // Types
@@ -76,8 +77,17 @@ const DOH_NO_STATUS = 'DNS-over-HTTPS returned a body with no DNS status';
 const DNS_RCODE_NOERROR = 0;
 const DNS_RCODE_NXDOMAIN = 3;
 
-/** Deduplicated in-flight + resolved cache: domain → promise of the MX fact. */
-const mxCache = new Map<string, Promise<MxFact>>();
+/** Resolved observations only: domain → the MX fact a lookup returned. */
+const mxFacts = new Map<string, MxFact>();
+/**
+ * In-flight lookups, deduplicated per domain. One DoH request is bounded at one
+ * second; a lookup still unsettled past this has lost its owner.
+ */
+const mxLookups = new SharedFlights<MxFact>({
+	label: 'mx-lookup',
+	maxDurationMs: 2_000,
+	maxEntries: 1_024
+});
 
 async function domainHasMx(domain: string): Promise<MxFact> {
 	try {
@@ -112,26 +122,22 @@ async function domainHasMx(domain: string): Promise<MxFact> {
  * Check MX records for a domain, deduplicating concurrent lookups.
  * Same domain in the same process/isolate shares a single fetch.
  *
- * Only observations are memoized. A blocked lookup is evicted once it resolves,
- * so a single DNS incident cannot pin a domain to "not observed" for the life
- * of the isolate. That adds retries strictly on failure paths; the steady state
+ * Only observations are memoized. A blocked lookup is never kept once it
+ * settles, so a single DNS incident cannot pin a domain to "not observed" for
+ * the life of the isolate. That adds retries strictly on failure paths; the steady state
  * is unchanged, and every retry still passes the caller's per-resolution
  * `maxDomains` ceiling first.
  */
 function checkMx(domain: string): Promise<MxFact> {
-	const cached = mxCache.get(domain);
-	if (cached) return cached;
-	// Annotated because the callback closes over `promise`; without it the
-	// inference is circular.
-	const promise: Promise<MxFact> = domainHasMx(domain).then((f) => {
-		// Concurrent callers already read the map before this resolves, so
-		// in-flight dedup is unaffected. The identity check keeps an earlier
-		// failure from evicting a later lookup's entry for the same domain.
-		if (f.state === 'blocked' && mxCache.get(domain) === promise) mxCache.delete(domain);
-		return f;
-	});
-	mxCache.set(domain, promise);
-	return promise;
+	const observed = mxFacts.get(domain);
+	if (observed) return Promise.resolve(observed);
+	return mxLookups
+		.run(domain, async () => {
+			const f = await domainHasMx(domain);
+			if (f.state !== 'blocked') mxFacts.set(domain, f);
+			return f;
+		})
+		.catch(() => blocked(DOH_NO_ANSWER)); // lookup lost its owner — nothing observed
 }
 
 /**

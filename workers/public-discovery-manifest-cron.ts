@@ -52,7 +52,7 @@ async function refreshOne(endpoint: URL, secret: string): Promise<void> {
 			'x-public-discovery-manifest-refresh-secret': secret
 		},
 		method: 'POST',
-		redirect: 'error',
+		redirect: 'manual',
 		signal: AbortSignal.timeout(PUBLIC_DISCOVERY_MANIFEST_CRON_HTTP_TIMEOUT_MS)
 	});
 	// A gate reservation that loses the five-minute ordinary race returns 202. That is

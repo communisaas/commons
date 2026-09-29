@@ -235,6 +235,8 @@ tests/unit/server/public-template-queries.test.ts
 tests/unit/server/runtime-containment.test.ts
 tests/unit/server/session-authority.test.ts
 tests/unit/server/session-cookie.test.ts
+tests/unit/server/shared-flight-discipline.test.ts
+tests/unit/server/shared-flight.test.ts
 tests/unit/server/sms-audience.test.ts
 tests/unit/server/sms-carrier-boundary.test.ts
 tests/unit/server/trusted-pages-release-edge.test.ts
