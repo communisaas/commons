@@ -501,12 +501,18 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: '019d1184e655db74b7589794a2a2a533'
           CF_PAGES_PROJECT: communique-site
+        #
+        # The anchor is the project's canonical deployment: the one actually
+        # serving commons.email. The newest production deployment by time is not
+        # that. A Git-integration build of the production branch can be newer and
+        # never have served, and selecting it left rollback disarmed on a run
+        # whose gate then failed over a live, unverified release.
         run: |
           set -uo pipefail
           previous=$(curl -sS --max-time 30 \
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}/deployments?env=production&per_page=1" \
-            | jq -r '[.result[] | select(.latest_stage.status == "success")][0].id // empty')
+            "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${CF_PAGES_PROJECT}" \
+            | jq -r '.result.canonical_deployment | select(.latest_stage.status == "success") | .id // empty')
           if [ -z "$previous" ]; then
             echo "::warning::No previous successful production deployment found; rollback will be unavailable."
           else
@@ -677,15 +683,32 @@ jobs:
       - name: Verify immutable application shell and asset
         # Browser delivery is checked only on the immutable pages.dev URL. It is
         # outside the canonical WAF, so a challenge cannot make this gate flaky.
+        #
+        # The worker can answer /api/live before the shell and its assets have
+        # propagated to the edge that serves this probe; seconds after publication
+        # the root has returned 404 on a release that was fine. Both fetches get
+        # the same bounded propagation window as liveness, and only an answer
+        # that persists past it fails the gate.
         run: |
           set -euo pipefail
           root_body=$(mktemp)
           root_headers=$(mktemp)
           trap 'rm -f "$root_body" "$root_headers"' EXIT
 
-          if ! root_status=$(curl -sS --max-time 20 \
-               -D "$root_headers" -o "$root_body" -w "%{http_code}" \
-               "${DEPLOY_HEALTH_URL}/"); then
+          root_status=000
+          for attempt in {1..12}; do
+            if root_status=$(curl -sS --max-time 20 \
+                 -D "$root_headers" -o "$root_body" -w "%{http_code}" \
+                 "${DEPLOY_HEALTH_URL}/"); then
+              if [ "$root_status" = "200" ]; then break; fi
+              echo "Immutable application root returned HTTP ${root_status} on attempt ${attempt}; waiting for propagation."
+            else
+              root_status=000
+              echo "Immutable application root was unreachable on attempt ${attempt}."
+            fi
+            sleep 10
+          done
+          if [ "$root_status" = "000" ]; then
             echo "::error::Immutable application root was unreachable."
             exit 1
           fi
@@ -735,8 +758,19 @@ jobs:
             exit 1
           fi
 
-          if ! asset_status=$(curl -sS --max-time 20 -o /dev/null -w "%{http_code}" \
-               "${DEPLOY_HEALTH_URL}${asset_path}"); then
+          asset_status=000
+          for attempt in {1..12}; do
+            if asset_status=$(curl -sS --max-time 20 -o /dev/null -w "%{http_code}" \
+                 "${DEPLOY_HEALTH_URL}${asset_path}"); then
+              if [ "$asset_status" = "200" ]; then break; fi
+              echo "Referenced immutable asset returned HTTP ${asset_status} on attempt ${attempt}; waiting for propagation."
+            else
+              asset_status=000
+              echo "Referenced immutable asset was unreachable on attempt ${attempt}."
+            fi
+            sleep 10
+          done
+          if [ "$asset_status" = "000" ]; then
             echo "::error::Referenced immutable asset ${asset_path} was unreachable."
             exit 1
           fi

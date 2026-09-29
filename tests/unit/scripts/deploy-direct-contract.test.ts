@@ -118,6 +118,14 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 		expect(smoke).not.toContain('DEPLOY_PUBLIC_URL');
 	});
 
+	it('gives the shell and asset fetches the propagation window liveness has', () => {
+		// /api/live has answered for a release whose root still returned 404 at
+		// the edge, and a single-shot shell check failed a good deploy.
+		const smoke = run('deploy', 'Verify immutable application shell and asset');
+		expect(smoke.match(/for attempt in \{1\.\.12\}/g)?.length).toBe(2);
+		expect(smoke.match(/sleep 10/g)?.length).toBe(2);
+	});
+
 
 	it('uses committed Shadow Atlas pins and fails on live Pages drift', () => {
 		const validation = run(
@@ -149,7 +157,11 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 	it('can restore the previous deployment when a gate fails', () => {
 		// Publication precedes every gate, so without this a red run just means a
 		// bad build is live and nobody has done anything about it.
-		expect(step('deploy', 'Record the deployment we are about to replace')).toBeTruthy();
+		const record = run('deploy', 'Record the deployment we are about to replace');
+		// The newest production deployment by time can be a Git-integration build
+		// that never served; recording it disarmed rollback on a failed gate.
+		expect(record).toContain('.result.canonical_deployment');
+		expect(record).not.toContain('per_page=1');
 		const rollback = step('deploy', 'Roll back to the last verified deployment');
 		expect(rollback).toBeTruthy();
 		expect(String(rollback?.if)).toContain('failure()');
