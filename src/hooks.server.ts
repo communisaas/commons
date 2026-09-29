@@ -38,6 +38,7 @@ import {
 } from '$lib/server/public-template-detail-path';
 import { createProductionHostAuthorityHandle } from '$lib/server/production-host-authority';
 import { handleConvexWorkBudgetResponses } from '$lib/server/convex-work-budget-response';
+import { isUnlimitedDeveloper } from '$lib/server/developer-access';
 
 const handleProductionHostAuthority = createProductionHostAuthorityHandle({
 	allowLocalDevelopment: dev
@@ -567,6 +568,10 @@ const handleRateLimit: Handle = async ({ event, resolve }) => {
 
 	// Skip HEAD/OPTIONS entirely
 	if (method === 'HEAD' || method === 'OPTIONS') {
+		return resolve(event);
+	}
+
+	if (isUnlimitedDeveloper(event.platform?.env, locals.session?.userId)) {
 		return resolve(event);
 	}
 
