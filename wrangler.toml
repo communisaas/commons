@@ -65,6 +65,7 @@ EXPECTED_CELL_MAP_DEPTH = "22"
 #   REDIS_URL                - Optional distributed generic-route limiter; not the paid-provider authority
 #   RATE_LIMITER_ALLOW_MEMORY - Development/smoke fallback only; never authorizes paid-provider work
 #   PAID_PROVIDER_OPERATOR_USER_IDS - Narrow comma-separated IDs for the in-cap launch demo reserve
+#   DEVELOPER_UNLIMITED_USER_IDS - Comma-separated user IDs exempt from every Commons-imposed limit
 #
 # Wallet — Fiat Onramp:
 #   PUBLIC_TRANSAK_API_KEY   - Transak API key for fiat onramp widget
