@@ -278,31 +278,45 @@ jobs:
           }
 
           const lines = fs.readFileSync(path, 'utf8').split(/\r?\n/);
-          const start = lines.findIndex((line) => line.trim() === '[vars]');
-          if (start === -1) {
+
+          // Pages vars do not inherit: a preview deployment reads only
+          // [env.preview.vars]. The release identity must reach every realm or a
+          // staging/main build answers /api/live with transactionId "absent" and
+          // can never pass its liveness gate. Everything else stays top-level;
+          // preview pins its own backend and Atlas values.
+          const upsert = (header, entries) => {
+            const start = lines.findIndex((line) => line.trim() === header);
+            if (start === -1) return false;
+            let end = lines.length;
+            for (let i = start + 1; i < lines.length; i += 1) {
+              if (/^\s*\[/.test(lines[i])) {
+                end = i;
+                break;
+              }
+            }
+            const block = lines.slice(start + 1, end);
+            for (const [key, value] of Object.entries(entries)) {
+              const rendered = `${key} = ${JSON.stringify(value)}`;
+              const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+              if (existing >= 0) {
+                block[existing] = rendered;
+              } else {
+                block.push(rendered);
+              }
+            }
+            lines.splice(start + 1, end - start - 1, ...block);
+            return true;
+          };
+
+          if (!upsert('[vars]', updates)) {
             throw new Error('wrangler.toml has no [vars] section.');
           }
-
-          let end = lines.length;
-          for (let i = start + 1; i < lines.length; i += 1) {
-            if (/^\s*\[/.test(lines[i])) {
-              end = i;
-              break;
-            }
+          const realms = lines
+            .map((line) => line.trim())
+            .filter((line) => /^\[env\.[A-Za-z0-9_-]+\.vars\]$/.test(line));
+          for (const header of realms) {
+            upsert(header, { PUBLIC_RELEASE_TRANSACTION_ID: updates.PUBLIC_RELEASE_TRANSACTION_ID });
           }
-
-          const block = lines.slice(start + 1, end);
-          for (const [key, value] of Object.entries(updates)) {
-            const rendered = `${key} = ${JSON.stringify(value)}`;
-            const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
-            if (existing >= 0) {
-              block[existing] = rendered;
-            } else {
-              block.push(rendered);
-            }
-          }
-
-          lines.splice(start + 1, end - start - 1, ...block);
           fs.writeFileSync(path, lines.join('\n'));
           NODE
 
@@ -316,6 +330,12 @@ jobs:
               exit 1
             fi
           done
+          realms=$(grep -cE '^\[(vars|env\.[A-Za-z0-9_-]+\.vars)\]$' wrangler.toml)
+          stamped=$(grep -cxF "PUBLIC_RELEASE_TRANSACTION_ID = \"${PUBLIC_RELEASE_TRANSACTION_ID}\"" wrangler.toml)
+          if [ "$stamped" != "$realms" ]; then
+            echo "::error::Release transaction reached ${stamped} of ${realms} Wrangler vars realms."
+            exit 1
+          fi
 
       - name: Build
         run: npm run build
@@ -558,31 +578,45 @@ jobs:
           }
 
           const lines = fs.readFileSync(path, 'utf8').split(/\r?\n/);
-          const start = lines.findIndex((line) => line.trim() === '[vars]');
-          if (start === -1) {
+
+          // Pages vars do not inherit: a preview deployment reads only
+          // [env.preview.vars]. The release identity must reach every realm or a
+          // staging/main build answers /api/live with transactionId "absent" and
+          // can never pass its liveness gate. Everything else stays top-level;
+          // preview pins its own backend and Atlas values.
+          const upsert = (header, entries) => {
+            const start = lines.findIndex((line) => line.trim() === header);
+            if (start === -1) return false;
+            let end = lines.length;
+            for (let i = start + 1; i < lines.length; i += 1) {
+              if (/^\s*\[/.test(lines[i])) {
+                end = i;
+                break;
+              }
+            }
+            const block = lines.slice(start + 1, end);
+            for (const [key, value] of Object.entries(entries)) {
+              const rendered = `${key} = ${JSON.stringify(value)}`;
+              const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
+              if (existing >= 0) {
+                block[existing] = rendered;
+              } else {
+                block.push(rendered);
+              }
+            }
+            lines.splice(start + 1, end - start - 1, ...block);
+            return true;
+          };
+
+          if (!upsert('[vars]', updates)) {
             throw new Error('wrangler.toml has no [vars] section.');
           }
-
-          let end = lines.length;
-          for (let i = start + 1; i < lines.length; i += 1) {
-            if (/^\s*\[/.test(lines[i])) {
-              end = i;
-              break;
-            }
+          const realms = lines
+            .map((line) => line.trim())
+            .filter((line) => /^\[env\.[A-Za-z0-9_-]+\.vars\]$/.test(line));
+          for (const header of realms) {
+            upsert(header, { PUBLIC_RELEASE_TRANSACTION_ID: updates.PUBLIC_RELEASE_TRANSACTION_ID });
           }
-
-          const block = lines.slice(start + 1, end);
-          for (const [key, value] of Object.entries(updates)) {
-            const rendered = `${key} = ${JSON.stringify(value)}`;
-            const existing = block.findIndex((line) => new RegExp(`^\\s*${key}\\s*=`).test(line));
-            if (existing >= 0) {
-              block[existing] = rendered;
-            } else {
-              block.push(rendered);
-            }
-          }
-
-          lines.splice(start + 1, end - start - 1, ...block);
           fs.writeFileSync(path, lines.join('\n'));
           NODE
 

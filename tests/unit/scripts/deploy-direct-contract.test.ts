@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -116,6 +119,42 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 		expect(smoke).toContain('"${DEPLOY_HEALTH_URL}${asset_path}"');
 		expect(smoke.match(/expected 200/g)?.length).toBeGreaterThanOrEqual(2);
 		expect(smoke).not.toContain('DEPLOY_PUBLIC_URL');
+	});
+
+	it.each([
+		['build', 'Materialize per-release Wrangler vars'],
+		['deploy', 'Deploy']
+	])('stamps the release identity into every Pages vars realm (%s job)', (job, name) => {
+		// Pages vars do not inherit into [env.preview.vars]; stamping only [vars]
+		// made every staging/main build report transactionId "absent" and fail
+		// liveness. Run the workflow's own materializer against the real config.
+		const script = /node <<'NODE'\n([\s\S]*?)\n\s*NODE\n/.exec(run(job, name))?.[1];
+		expect(script).toBeTruthy();
+		const dir = mkdtempSync(join(tmpdir(), 'materialize-'));
+		try {
+			writeFileSync(join(dir, 'wrangler.toml'), readFileSync('wrangler.toml', 'utf8'));
+			writeFileSync(join(dir, 'materialize.js'), script!);
+			execFileSync('node', ['materialize.js'], {
+				cwd: dir,
+				env: {
+					...process.env,
+					ATLAS_BASE_URL: 'https://atlas.example/v1',
+					VITE_ATLAS_BASE_URL: 'https://atlas.example/v1',
+					EXPECTED_CELL_MAP_ROOT: '0x01',
+					EXPECTED_CELL_MAP_DEPTH: '22',
+					PUBLIC_CONVEX_URL: 'https://release.convex.cloud',
+					PUBLIC_RELEASE_TRANSACTION_ID: '123-1'
+				}
+			});
+			const out = readFileSync(join(dir, 'wrangler.toml'), 'utf8');
+			const realms = out.match(/^\[(?:vars|env\.[A-Za-z0-9_-]+\.vars)\]$/gm) ?? [];
+			expect(realms.length).toBeGreaterThanOrEqual(2);
+			expect(out.match(/^PUBLIC_RELEASE_TRANSACTION_ID = "123-1"$/gm)?.length).toBe(realms.length);
+			// Preview keeps its own backend; only the release identity crosses realms.
+			expect(out.match(/^PUBLIC_CONVEX_URL = "https:\/\/release\.convex\.cloud"$/gm)?.length).toBe(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	it('gives the shell and asset fetches the propagation window liveness has', () => {
