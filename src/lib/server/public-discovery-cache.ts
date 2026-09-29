@@ -8,6 +8,7 @@ import {
 	readPublicTemplateOgImage
 } from './public-template-og-image';
 import { PUBLIC_TEMPLATE_OG_QUEUE_SEND_ATTEMPTS_MAX } from './public-template-og-queue';
+import { SharedFlights, platformWaitUntil } from './shared-flight';
 
 export { PUBLIC_DISCOVERY_MANIFEST_FRESH_MS };
 
@@ -58,6 +59,12 @@ const PUBLIC_DISCOVERY_RETRY_MS = 15 * 60 * 1000;
 /** Hard isolate-local bounds; logical keys are fixed by trusted server callers. */
 export const PUBLIC_DISCOVERY_MEMORY_CACHE_MAX_ENTRIES = 64;
 export const PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES = 256;
+/**
+ * Longest one coalesced public read may take: Cache API, one R2 object, and at
+ * most one origin load. A request still waiting past this has already failed
+ * its visitor, and a flight still unsettled past it has lost its owner.
+ */
+export const PUBLIC_DISCOVERY_FLIGHT_MAX_DURATION_MS = 10 * 1000;
 
 /**
  * Serialized public snapshot envelopes are bounded above the producer's
@@ -137,11 +144,23 @@ const memoryCache = new Map<string, CacheEnvelope<unknown>>();
 // Coalesce the complete cache-resolution path before its first Cache API or R2
 // read. `inFlight` below remains the narrower origin-load coordinator used by
 // background refreshes after a stale value has already been selected.
-const resolutionFlights = new Map<string, Promise<unknown>>();
-const inFlight = new Map<string, Promise<unknown>>();
+const resolutionFlights = new SharedFlights<unknown>({
+	label: 'public-discovery-resolution',
+	maxDurationMs: PUBLIC_DISCOVERY_FLIGHT_MAX_DURATION_MS,
+	maxEntries: PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+});
+const inFlight = new SharedFlights<unknown>({
+	label: 'public-discovery-origin-load',
+	maxDurationMs: PUBLIC_DISCOVERY_FLIGHT_MAX_DURATION_MS,
+	maxEntries: PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+});
 const latestRequestedRevision = new Map<string, string>();
 const failClosedRefreshRetryAfter = new Map<string, number>();
-const publicTemplateOgImageFlights = new Map<string, Promise<Uint8Array>>();
+const publicTemplateOgImageFlights = new SharedFlights<Uint8Array>({
+	label: 'public-template-og-image',
+	maxDurationMs: PUBLIC_DISCOVERY_FLIGHT_MAX_DURATION_MS,
+	maxEntries: PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+});
 
 function setBoundedMap<K, V>(map: Map<K, V>, key: K, value: V, maxEntries: number): void {
 	// Delete first so an update becomes the newest entry in insertion order.
@@ -1186,29 +1205,26 @@ export async function getPublicTemplateOgImageArtifact(context: {
 	const cachePrefix = r2CachePrefix(`template-page:slug=${slug}`, context.platform);
 	const objectKey = r2PublicTemplateOgImageKey(cachePrefix, revision);
 	const edgeKey = publicTemplateOgImageEdgeKey(slug, revision, context.url, context.platform);
-	const flightKey = edgeKey.url;
-	const existing = publicTemplateOgImageFlights.get(flightKey);
-	if (existing) return existing.then((bytes) => copyPublicTemplateOgImage(bytes));
-	const pending = (async () => {
-		const edge = await readEdgePublicTemplateOgImage(edgeKey, slug, revision);
-		if (edge.status === 'hit') return edge.bytes;
-		const exact = await readR2PublicTemplateOgImage(bucket, objectKey, slug, revision);
-		if (exact.status === 'miss') throw new PublicTemplateOgImageNotPublishedError(slug, revision);
-		if (exact.status === 'error') {
-			throw new Error(`R2 template OG image ${slug}@${revision} could not be read safely`);
-		}
-		await persistPublicTemplateOgImageEdge(edgeKey, exact.bytes, slug, revision, context.platform);
-		return exact.bytes;
-	})().finally(() => {
-		if (publicTemplateOgImageFlights.get(flightKey) === pending) {
-			publicTemplateOgImageFlights.delete(flightKey);
-		}
-	});
-	setBoundedMap(
-		publicTemplateOgImageFlights,
-		flightKey,
-		pending,
-		PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
+	const pending = publicTemplateOgImageFlights.run(
+		edgeKey.url,
+		async () => {
+			const edge = await readEdgePublicTemplateOgImage(edgeKey, slug, revision);
+			if (edge.status === 'hit') return edge.bytes;
+			const exact = await readR2PublicTemplateOgImage(bucket, objectKey, slug, revision);
+			if (exact.status === 'miss') throw new PublicTemplateOgImageNotPublishedError(slug, revision);
+			if (exact.status === 'error') {
+				throw new Error(`R2 template OG image ${slug}@${revision} could not be read safely`);
+			}
+			await persistPublicTemplateOgImageEdge(
+				edgeKey,
+				exact.bytes,
+				slug,
+				revision,
+				context.platform
+			);
+			return exact.bytes;
+		},
+		{ waitUntil: platformWaitUntil(context.platform) }
 	);
 	return pending.then((bytes) => copyPublicTemplateOgImage(bytes));
 }
@@ -1867,11 +1883,9 @@ function loadAndCache<T>(
 	projectCachedValue?: CachedValueProjector<T>
 ): Promise<T> {
 	const flightKey = `${identity}@${revision ?? 'unversioned'}`;
-	const existing = inFlight.get(flightKey) as Promise<T> | undefined;
-	if (existing) return existing;
-
-	const pending = Promise.resolve()
-		.then(async () => {
+	return inFlight.run(
+		flightKey,
+		async () => {
 			let envelope: CacheEnvelope<T>;
 			if (revision !== undefined && r2Policy !== 'none') {
 				if (platform && !publicDiscoveryR2(platform)) {
@@ -1899,15 +1913,9 @@ function loadAndCache<T>(
 				else await persistence;
 			}
 			return envelope.value;
-		})
-		.finally(() => {
-			// A bounded-map eviction can let a newer flight for this same key start
-			// before this promise settles. Never let the older completion erase it.
-			if (inFlight.get(flightKey) === pending) inFlight.delete(flightKey);
-		});
-
-	setBoundedMap(inFlight, flightKey, pending, PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES);
-	return pending;
+		},
+		{ waitUntil: platformWaitUntil(platform) }
+	) as Promise<T>;
 }
 
 async function backOffEnvelope<T>(
@@ -2111,7 +2119,7 @@ async function resolveCachedPublicData<T>(
 	// Keep stale-memory behavior unchanged: those requests may still serve stale
 	// immediately while a background refresh is in flight.
 	if (!inMemory) {
-		const activeFlight = inFlight.get(`${identity}@${revision ?? 'unversioned'}`) as
+		const activeFlight = inFlight.join(`${identity}@${revision ?? 'unversioned'}`) as
 			| Promise<T>
 			| undefined;
 		if (activeFlight) return activeFlight;
@@ -2345,27 +2353,11 @@ export function getCachedPublicData<T>(
 	const retirementScope =
 		context.retiredRevisionFloors?.join(',') ?? context.retiredRevisionFloor ?? 'none';
 	const resolutionKey = `${identity}@${revision ?? 'unversioned'}@${context.forceRefresh === true ? 'force' : 'normal'}@fresh=${freshness}@mode=${refreshMode}@r2=${r2Policy}@fail-closed=${failClosedRefreshBackoffMs ?? 'none'}@retired-revisions=${retirementScope}`;
-	const existing = resolutionFlights.get(resolutionKey) as Promise<T> | undefined;
-	if (existing) return existing;
-
-	// Defer invocation by one microtask so the map entry is visible before the
-	// resolver can initiate its first shared-layer read.
-	const pending = Promise.resolve()
-		.then(() => resolveCachedPublicData(logicalKey, context, loader))
-		.finally(() => {
-			// A bounded-map eviction may allow a newer same-key resolution to start.
-			// Never let the older completion erase that newer coordinator.
-			if (resolutionFlights.get(resolutionKey) === pending) {
-				resolutionFlights.delete(resolutionKey);
-			}
-		});
-	setBoundedMap(
-		resolutionFlights,
+	return resolutionFlights.run(
 		resolutionKey,
-		pending,
-		PUBLIC_DISCOVERY_COORDINATION_MAX_ENTRIES
-	);
-	return pending;
+		() => resolveCachedPublicData(logicalKey, context, loader),
+		{ waitUntil: platformWaitUntil(context.platform) }
+	) as Promise<T>;
 }
 
 /**

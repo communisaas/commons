@@ -17,6 +17,7 @@ import {
 	type TrustedCacheStorageLike,
 	type TrustedPagesReleaseCache
 } from './trusted-pages-release-cache';
+import { SharedFlights } from '../src/lib/server/shared-flight';
 
 const RELEASE_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_TRANSACTION_PATTERN = /^[1-9][0-9]{0,19}-[1-9][0-9]{0,9}$/u;
@@ -96,8 +97,19 @@ type NegativeAuthority = {
 
 const committedAuthority = new Set<string>();
 const negativeAuthority = new Map<string, NegativeAuthority>();
-const authorityFlights = new Map<string, Promise<boolean>>();
-const postCommitAuthorityFlights = new Map<string, Promise<boolean>>();
+// One gate call bounded at AUTHORITY_TIMEOUT_MS (two for a post-commit proof),
+// with slack. A lookup still unsettled past that has lost its owner request;
+// later lookups for the release start their own instead of inheriting its stall.
+const authorityFlights = new SharedFlights<boolean>({
+	label: 'trusted-pages-release-authority',
+	maxDurationMs: 4 * AUTHORITY_TIMEOUT_MS,
+	maxEntries: 64
+});
+const postCommitAuthorityFlights = new SharedFlights<boolean>({
+	label: 'trusted-pages-post-commit-authority',
+	maxDurationMs: 8 * AUTHORITY_TIMEOUT_MS,
+	maxEntries: 64
+});
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
 	return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
@@ -293,36 +305,26 @@ async function hasCommittedAuthority(
 		// It must neither trust a pre-C negative memo nor join a lookup that began
 		// before C. A successful fresh read is terminal and joins the normal
 		// positive memory; all ordinary public traffic retains the low-I/O memo.
-		const existing = postCommitAuthorityFlights.get(key);
-		if (existing) return existing;
-		const flight = (async () => {
-			// One retry closes the only remaining C-boundary race: an authenticated
-			// proof that snapshots pre-C may be in flight when the first post-C proof
-			// joins it. The whole two-attempt generation is coalesced, so a burst costs
-			// at most two reads rather than one read per request.
-			const attempt = () =>
-				queryCommittedAuthority(env, sourceSha, transactionId, Date.now(), true).catch(() => false);
-			if (await attempt()) {
-				return true;
-			}
-			return attempt();
-		})()
-			.catch(() => false)
-			.finally(() => {
-				if (postCommitAuthorityFlights.get(key) === flight) {
-					postCommitAuthorityFlights.delete(key);
+		return postCommitAuthorityFlights
+			.run(key, async () => {
+				// One retry closes the only remaining C-boundary race: an authenticated
+				// proof that snapshots pre-C may be in flight when the first post-C proof
+				// joins it. The whole two-attempt generation is coalesced, so a burst costs
+				// at most two reads rather than one read per request.
+				const attempt = () =>
+					queryCommittedAuthority(env, sourceSha, transactionId, Date.now(), true).catch(
+						() => false
+					);
+				if (await attempt()) {
+					return true;
 				}
-			});
-		postCommitAuthorityFlights.set(key, flight);
-		return flight;
+				return attempt();
+			})
+			.catch(() => false);
 	}
-	const existing = authorityFlights.get(key);
-	if (existing) return existing;
-	const flight = queryCommittedAuthority(env, sourceSha, transactionId)
-		.catch(() => false)
-		.finally(() => authorityFlights.delete(key));
-	authorityFlights.set(key, flight);
-	return flight;
+	return authorityFlights
+		.run(key, () => queryCommittedAuthority(env, sourceSha, transactionId))
+		.catch(() => false);
 }
 
 function exactEnvironment(env: TrustedPagesReleaseEdgeEnv, staging: boolean): boolean {

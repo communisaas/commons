@@ -15,6 +15,7 @@ import { serverQuery } from '$lib/server/convex-work-budget';
 import { api, getRuntimeConvexUrl } from '$lib/convex';
 import type { Id } from '$convex/_generated/dataModel';
 import { getInternalSecret } from '$lib/server/internal/secret-auth';
+import { SharedFlights, platformWaitUntil } from '$lib/server/shared-flight';
 import {
 	materializeCampaignReadModel,
 	type CampaignReadModelBundle
@@ -83,7 +84,13 @@ type CampaignBundleEnvelope = {
 type CloudflareCacheStorage = CacheStorage & { default?: Cache };
 
 const memoryBundles = new Map<string, CampaignBundleEnvelope>();
-const bundleFlights = new Map<string, Promise<CampaignReadModelBundle>>();
+// One Convex read-model query plus Cache API; a fill still unsettled past this
+// has lost its owner and must not hold later readers.
+const bundleFlights = new SharedFlights<CampaignReadModelBundle>({
+	label: 'campaign-read-model',
+	maxDurationMs: 10_000,
+	maxEntries: MEMORY_CACHE_MAX_ENTRIES
+});
 
 function defaultCache(): Cache | undefined {
 	if (typeof caches === 'undefined') return undefined;
@@ -146,12 +153,9 @@ export async function loadCampaignReadModelBundleCached(
 	if (!context.fresh) {
 		const memory = validEnvelope(memoryBundles.get(identity), now);
 		if (memory) return memory.value;
-
-		const existingFlight = bundleFlights.get(identity);
-		if (existingFlight) return existingFlight;
 	}
 
-	const flight = (async () => {
+	const fill = async () => {
 		const edge = defaultCache();
 		const request = cacheRequest(identity, context);
 		if (edge && !context.fresh) {
@@ -193,14 +197,9 @@ export async function loadCampaignReadModelBundleCached(
 			}
 		}
 		return value;
-	})();
-	if (context.fresh) return flight;
-	bundleFlights.set(identity, flight);
-	try {
-		return await flight;
-	} finally {
-		bundleFlights.delete(identity);
-	}
+	};
+	if (context.fresh) return fill();
+	return bundleFlights.run(identity, fill, { waitUntil: platformWaitUntil(context.platform) });
 }
 
 export async function computeVerificationPacketCached(

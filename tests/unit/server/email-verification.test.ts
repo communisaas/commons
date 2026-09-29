@@ -8,7 +8,7 @@
 
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Reset module state (the mxCache Map) between tests
+// Reset module state (the MX observation and lookup maps) between tests
 let verifyEmailBatch: typeof import('$lib/server/email-verification').verifyEmailBatch;
 
 beforeEach(async () => {

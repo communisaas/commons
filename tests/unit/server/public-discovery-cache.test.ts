@@ -354,10 +354,9 @@ describe('public discovery cache', () => {
 		expect(first).toEqual(['old']);
 		expect(second).toEqual(['old']);
 		expect(loader).toHaveBeenCalledTimes(1);
-		expect(pending).toHaveLength(2);
 
 		refresh.resolve(['new']);
-		await pending[1];
+		await Promise.all(pending);
 		await expect(
 			getCachedPublicData('templates', { url: TEST_URL, platform }, loader)
 		).resolves.toEqual(['new']);
@@ -473,8 +472,7 @@ describe('public discovery cache', () => {
 		await expect(
 			getCachedPublicData('templates', { url: TEST_URL, platform }, loader)
 		).resolves.toEqual(['known-good']);
-		expect(pending).toHaveLength(1);
-		await pending[0];
+		await Promise.all(pending);
 		await expect(
 			getCachedPublicData('templates', { url: TEST_URL, platform }, loader)
 		).resolves.toEqual(['known-good']);
