@@ -1,4 +1,7 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -118,6 +121,50 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 		expect(smoke).not.toContain('DEPLOY_PUBLIC_URL');
 	});
 
+	it.each([
+		['build', 'Materialize per-release Wrangler vars'],
+		['deploy', 'Deploy']
+	])('stamps the release identity into every Pages vars realm (%s job)', (job, name) => {
+		// Pages vars do not inherit into [env.preview.vars]; stamping only [vars]
+		// made every staging/main build report transactionId "absent" and fail
+		// liveness. Run the workflow's own materializer against the real config.
+		const script = /node <<'NODE'\n([\s\S]*?)\n\s*NODE\n/.exec(run(job, name))?.[1];
+		expect(script).toBeTruthy();
+		const dir = mkdtempSync(join(tmpdir(), 'materialize-'));
+		try {
+			writeFileSync(join(dir, 'wrangler.toml'), readFileSync('wrangler.toml', 'utf8'));
+			writeFileSync(join(dir, 'materialize.js'), script!);
+			execFileSync('node', ['materialize.js'], {
+				cwd: dir,
+				env: {
+					...process.env,
+					ATLAS_BASE_URL: 'https://atlas.example/v1',
+					VITE_ATLAS_BASE_URL: 'https://atlas.example/v1',
+					EXPECTED_CELL_MAP_ROOT: '0x01',
+					EXPECTED_CELL_MAP_DEPTH: '22',
+					PUBLIC_CONVEX_URL: 'https://release.convex.cloud',
+					PUBLIC_RELEASE_TRANSACTION_ID: '123-1'
+				}
+			});
+			const out = readFileSync(join(dir, 'wrangler.toml'), 'utf8');
+			const realms = out.match(/^\[(?:vars|env\.[A-Za-z0-9_-]+\.vars)\]$/gm) ?? [];
+			expect(realms.length).toBeGreaterThanOrEqual(2);
+			expect(out.match(/^PUBLIC_RELEASE_TRANSACTION_ID = "123-1"$/gm)?.length).toBe(realms.length);
+			// Preview keeps its own backend; only the release identity crosses realms.
+			expect(out.match(/^PUBLIC_CONVEX_URL = "https:\/\/release\.convex\.cloud"$/gm)?.length).toBe(1);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it('gives the shell and asset fetches the propagation window liveness has', () => {
+		// /api/live has answered for a release whose root still returned 404 at
+		// the edge, and a single-shot shell check failed a good deploy.
+		const smoke = run('deploy', 'Verify immutable application shell and asset');
+		expect(smoke.match(/for attempt in \{1\.\.12\}/g)?.length).toBe(2);
+		expect(smoke.match(/sleep 10/g)?.length).toBe(2);
+	});
+
 
 	it('uses committed Shadow Atlas pins and fails on live Pages drift', () => {
 		const validation = run(
@@ -149,7 +196,11 @@ describe('the shipping deploy workflow keeps its trust boundary', () => {
 	it('can restore the previous deployment when a gate fails', () => {
 		// Publication precedes every gate, so without this a red run just means a
 		// bad build is live and nobody has done anything about it.
-		expect(step('deploy', 'Record the deployment we are about to replace')).toBeTruthy();
+		const record = run('deploy', 'Record the deployment we are about to replace');
+		// The newest production deployment by time can be a Git-integration build
+		// that never served; recording it disarmed rollback on a failed gate.
+		expect(record).toContain('.result.canonical_deployment');
+		expect(record).not.toContain('per_page=1');
 		const rollback = step('deploy', 'Roll back to the last verified deployment');
 		expect(rollback).toBeTruthy();
 		expect(String(rollback?.if)).toContain('failure()');
