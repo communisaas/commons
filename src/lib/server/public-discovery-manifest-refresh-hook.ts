@@ -12,6 +12,7 @@ import {
 	PUBLIC_DISCOVERY_BOOTSTRAP_PURPOSE,
 	PUBLIC_DISCOVERY_BOOTSTRAP_SEED_PURPOSE
 } from '$lib/server/public-discovery-bootstrap-runtime';
+import { PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS } from '$lib/server/public-discovery-manifest-shield';
 
 const BUILD_RELEASE_SHA = import.meta.env.VITE_RELEASE_SHA as string | undefined;
 
@@ -30,7 +31,9 @@ const PUBLIC_TEMPLATE_OG_RELEASE_TRANSACTION_HEADER = 'x-public-template-og-rele
 // At the account-wide 100,000-request Free ceiling, 750 ms × 128 MiB stays
 // below the 13,000 GB-s/day Durable Object allocation even as a conservative
 // client-deadline proxy. The synchronous SQLite handler should finish far sooner.
-const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_TIMEOUT_MS = 750;
+// The refresh budget is derived from this same bound.
+const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_TIMEOUT_MS =
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS;
 export const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL = '3';
 export const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_PROTOCOL_HEADER =
 	'x-public-discovery-refresh-gate-protocol';

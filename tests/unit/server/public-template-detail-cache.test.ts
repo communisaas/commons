@@ -3,7 +3,8 @@ import {
 	clearPublicTemplateCachesForTest,
 	getCachedPublicTemplateDetail,
 	getCachedPublicTemplateOgImage,
-	invalidatePublicTemplateCaches
+	invalidatePublicTemplateCaches,
+	PUBLIC_TEMPLATE_DETAIL_FLIGHT_MAX_DURATION_MS
 } from '$lib/server/public-template-detail-cache';
 import {
 	classifyPublicTemplateCostPath,
@@ -48,8 +49,10 @@ class MemoryCache {
 
 class DelayedPutCache extends MemoryCache {
 	readonly gate = deferred<void>();
+	readonly delayedPuts: Request[] = [];
 
 	override async put(request: Request, response: Response): Promise<void> {
+		this.delayedPuts.push(request);
 		await this.gate.promise;
 		await super.put(request, response);
 	}
@@ -410,6 +413,34 @@ describe('public template detail cost shield', () => {
 		expect(cache.entries.size).toBe(0);
 	});
 
+	it('finishes an invalidation and serves later reads when a detached fill lost its owner', async () => {
+		vi.useFakeTimers();
+		// A cancelled Workers request drops its pending I/O and every timer it
+		// armed, so its fill never settles on its own.
+		const dropTimers = vi
+			.spyOn(globalThis, 'setTimeout')
+			.mockImplementation((() => 0) as unknown as typeof setTimeout);
+		const stranded = getCachedPublicTemplateDetail({
+			slug: 'clean-water',
+			url,
+			load: () => new Promise(() => undefined)
+		});
+		stranded.catch(() => undefined);
+		dropTimers.mockRestore();
+
+		const invalidation = invalidatePublicTemplateCaches({ slug: 'clean-water', url });
+		await vi.advanceTimersByTimeAsync(PUBLIC_TEMPLATE_DETAIL_FLIGHT_MAX_DURATION_MS + 200);
+		await expect(invalidation).resolves.toBeUndefined();
+
+		await expect(
+			getCachedPublicTemplateDetail({
+				slug: 'clean-water',
+				url,
+				load: async () => detailFixture()
+			})
+		).resolves.toMatchObject({ slug: 'clean-water' });
+	});
+
 	it('compensates delayed Cache API puts that land after invalidation', async () => {
 		const delayedCache = new DelayedPutCache();
 		vi.stubGlobal('caches', { default: delayedCache });
@@ -434,7 +465,7 @@ describe('public template detail cost shield', () => {
 			sourceDetail: detail!,
 			render: async () => new Uint8Array([1, 2, 3])
 		});
-		expect(waitUntilWork).toHaveLength(2);
+		expect(delayedCache.delayedPuts).toHaveLength(2);
 
 		await invalidatePublicTemplateCaches({ slug: 'clean-water', url, platform });
 		expect(delayedCache.entries.size).toBe(0);

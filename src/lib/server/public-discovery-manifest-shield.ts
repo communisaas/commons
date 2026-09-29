@@ -7,6 +7,7 @@ import {
 	CONVEX_WORK_BUDGET_MANIFEST_SCHEDULER_JITTER_BUDGET_SECONDS,
 	CONVEX_WORK_BUDGET_ORDINARY_MANIFEST_GATE_WINDOW_MINUTES
 } from '$lib/server/convex-work-budget-policy';
+import { SharedFlights, platformWaitUntil } from '$lib/server/shared-flight';
 
 /**
  * Backend-scoped public-discovery manifest control plane.
@@ -59,6 +60,32 @@ export const PUBLIC_DISCOVERY_MANIFEST_MAX_POLLS = 6;
 export const PUBLIC_DISCOVERY_MANIFEST_ORIGIN_TIMEOUT_MS = 5 * 1000;
 export const PUBLIC_DISCOVERY_MANIFEST_OBJECT_MAX_BYTES = 4 * 1024;
 export const PUBLIC_DISCOVERY_MANIFEST_READ_RETRY_MS = 10 * 1000;
+/** Bound on each refresh-gate Durable Object call the refresh hook makes. */
+export const PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS = 750;
+/** Held back from the cron's HTTP attempt so the response can still reach it. */
+export const PUBLIC_DISCOVERY_MANIFEST_REFRESH_RESPONSE_RESERVE_MS = 1_000;
+/**
+ * A refresh answers inside the cron's HTTP attempt, after the hook's reserve
+ * and completion calls to the gate. An owner still running when the cron
+ * disconnects is cancelled mid-flight, and a cancelled owner can strand every
+ * later refresh in its isolate. Budgeting the whole refresh below that attempt
+ * makes a slow cycle end as a typed failure the next cycle recovers from.
+ */
+export const PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS =
+	PUBLIC_DISCOVERY_MANIFEST_CRON_HTTP_TIMEOUT_MS -
+	2 * PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS -
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_RESPONSE_RESERVE_MS;
+/** Bound on one read-only manifest resolution: Cache API and one R2 GET. */
+export const PUBLIC_DISCOVERY_MANIFEST_READ_BUDGET_MS = 5 * 1000;
+
+// The budget must cover the origin read it contains, and the claim lease must
+// outlast it so no second writer claims while the budgeted owner still holds it.
+if (
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS <= PUBLIC_DISCOVERY_MANIFEST_ORIGIN_TIMEOUT_MS ||
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS >= PUBLIC_DISCOVERY_MANIFEST_CLAIM_LEASE_MS
+) {
+	throw new Error('PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_INVALID');
+}
 /** Maximum time a newer producer authority may remain unpublished. */
 export const PUBLIC_DISCOVERY_PUBLICATION_LAG_SLA_MS = 45 * 60 * 1000;
 
@@ -209,14 +236,20 @@ type R2PutOptions = NonNullable<Parameters<R2Bucket['put']>[2]>;
 
 const manifestMemory = new Map<string, LocalManifestEnvelope<PublicDiscoveryManifestValue>>();
 const manifestReadRetries = new Map<string, LocalManifestRetryMarker>();
-const manifestReadFlights = new Map<
-	string,
-	Promise<PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>>
->();
-const manifestRefreshFlights = new Map<
-	string,
-	Promise<PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>>
->();
+const manifestReadFlights = new SharedFlights<
+	PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>
+>({
+	label: 'public-discovery-manifest-read',
+	maxDurationMs: PUBLIC_DISCOVERY_MANIFEST_READ_BUDGET_MS,
+	maxEntries: PUBLIC_DISCOVERY_FLIGHT_MAX_ENTRIES
+});
+const manifestRefreshFlights = new SharedFlights<
+	PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>
+>({
+	label: 'public-discovery-manifest-refresh',
+	maxDurationMs: PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS,
+	maxEntries: PUBLIC_DISCOVERY_FLIGHT_MAX_ENTRIES
+});
 
 export class PublicDiscoveryManifestShieldError extends Error {
 	constructor(detail: string) {
@@ -1818,22 +1851,11 @@ export function getGloballyShieldedPublicDiscoveryManifest<T extends PublicDisco
 		? manifestRealm(context.platform)
 		: `local-origin=${context.url.origin.toLowerCase()}`;
 	const flightKey = `${realm}@${context.bypassLocal ? 'shared' : 'local'}`;
-	const existing = manifestReadFlights.get(flightKey) as
-		| Promise<PublicDiscoveryManifestAuthority<T>>
-		| undefined;
-	if (existing) return existing;
-	const pending = Promise.resolve()
-		.then(() => resolveReadOnlyManifest(context, localLoader, projectManifest))
-		.finally(() => {
-			if (manifestReadFlights.get(flightKey) === pending) manifestReadFlights.delete(flightKey);
-		});
-	setBoundedMap(
-		manifestReadFlights,
+	return manifestReadFlights.run(
 		flightKey,
-		pending as Promise<PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>>,
-		PUBLIC_DISCOVERY_FLIGHT_MAX_ENTRIES
-	);
-	return pending;
+		() => resolveReadOnlyManifest(context, localLoader, projectManifest),
+		{ waitUntil: platformWaitUntil(context.platform) }
+	) as Promise<PublicDiscoveryManifestAuthority<T>>;
 }
 
 /** Authenticated cron/producer-push writer; never call from anonymous SSR. */
@@ -1846,22 +1868,13 @@ export function refreshGloballyShieldedPublicDiscoveryManifest<
 	options?: RefreshOptions<T>
 ): Promise<PublicDiscoveryManifestAuthority<T>> {
 	const realm = manifestRealm(context.platform);
-	const existing = manifestRefreshFlights.get(realm) as
-		| Promise<PublicDiscoveryManifestAuthority<T>>
-		| undefined;
-	if (existing) return existing;
-	const pending = Promise.resolve()
-		.then(() => resolveRefreshWriter(context, loader, projectManifest, options))
-		.finally(() => {
-			if (manifestRefreshFlights.get(realm) === pending) manifestRefreshFlights.delete(realm);
-		});
-	setBoundedMap(
-		manifestRefreshFlights,
+	// The budget bounds the answer, not the work: `waitUntil` lets a cycle that
+	// overruns still certify, fenced by the claim's etag like any other writer.
+	return manifestRefreshFlights.run(
 		realm,
-		pending as Promise<PublicDiscoveryManifestAuthority<PublicDiscoveryManifestValue>>,
-		PUBLIC_DISCOVERY_FLIGHT_MAX_ENTRIES
-	);
-	return pending;
+		() => resolveRefreshWriter(context, loader, projectManifest, options),
+		{ waitUntil: platformWaitUntil(context.platform) }
+	) as Promise<PublicDiscoveryManifestAuthority<T>>;
 }
 
 /** Test-only reset, invoked by the public cache reset used throughout unit tests. */

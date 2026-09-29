@@ -9,6 +9,9 @@ import {
 	PUBLIC_DISCOVERY_MANIFEST_MAX_POLLS,
 	PUBLIC_DISCOVERY_MANIFEST_OBJECT_MAX_BYTES,
 	PUBLIC_DISCOVERY_MANIFEST_ORDINARY_GATE_MS,
+	PUBLIC_DISCOVERY_MANIFEST_READ_BUDGET_MS,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS,
+	PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS,
 	PUBLIC_DISCOVERY_MANIFEST_REVALIDATE_MS,
 	PUBLIC_DISCOVERY_MANIFEST_SCHEDULER_JITTER_BUDGET_MS,
 	PUBLIC_DISCOVERY_MANIFEST_SEED_PRIORITY_MS,
@@ -293,6 +296,98 @@ describe('global public-discovery manifest shield', () => {
 		expect(stateBody(r2)).toMatchObject({ phase: 'refreshing' });
 		successorValue.reject(new Error('successor crashed'));
 		await expect(successorRefresh).rejects.toThrow('successor crashed');
+	});
+
+	it('recovers the refresh cycle after an owner is cancelled mid-flight in the same isolate', async () => {
+		const r2 = installR2();
+		// A cancelled Workers request drops its pending I/O and every timer it
+		// armed. Its refresh flight never settles and never evicts itself.
+		const dropTimers = vi
+			.spyOn(globalThis, 'setTimeout')
+			.mockImplementation((() => 0) as unknown as typeof setTimeout);
+		const stranded = refreshGloballyShieldedPublicDiscoveryManifest(
+			{ platform: context(r2).platform },
+			() => new Promise<PublicDiscoveryManifestValue>(() => undefined),
+			project
+		);
+		stranded.catch(() => undefined);
+		for (let turn = 0; turn < 50 && r2.put.mock.calls.length === 0; turn += 1) {
+			await Promise.resolve();
+		}
+		dropTimers.mockRestore();
+		expect(r2.put).toHaveBeenCalledTimes(1);
+
+		// Past the refresh budget the dead flight is replaced, not joined. The
+		// claim it left still holds, so this cycle ends as a typed failure.
+		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS + 200);
+		const blockedLoader = vi.fn().mockResolvedValue(ready(1));
+		await expect(
+			refreshGloballyShieldedPublicDiscoveryManifest(
+				{ platform: context(r2).platform },
+				blockedLoader,
+				project
+			)
+		).rejects.toThrow('REFRESH_IN_PROGRESS');
+		expect(blockedLoader).not.toHaveBeenCalled();
+
+		// Once the abandoned claim lapses, the next cycle certifies normally.
+		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_MANIFEST_CLAIM_LEASE_MS + 1);
+		const recoveryLoader = vi.fn().mockResolvedValue(ready(1));
+		await expect(
+			refreshGloballyShieldedPublicDiscoveryManifest(
+				{ platform: context(r2).platform },
+				recoveryLoader,
+				project
+			)
+		).resolves.toMatchObject({ manifest: { list: { revision: 1 } } });
+		expect(recoveryLoader).toHaveBeenCalledOnce();
+		expect(stateBody(r2)).toMatchObject({ phase: 'ready' });
+	});
+
+	it('does not let a reader cancelled mid-read strand later readers in the isolate', async () => {
+		const r2 = installR2();
+		await refreshGloballyShieldedPublicDiscoveryManifest(
+			{ platform: context(r2).platform },
+			vi.fn().mockResolvedValue(ready(1)),
+			project
+		);
+		const forbiddenOrigin = vi.fn().mockRejectedValue(new Error('request path called origin'));
+		vi.resetModules();
+		const isolate = await import('$lib/server/public-discovery-manifest-shield');
+		r2.get.mockClear();
+
+		r2.get.mockImplementationOnce(() => new Promise(() => undefined));
+		const dropTimers = vi
+			.spyOn(globalThis, 'setTimeout')
+			.mockImplementation((() => 0) as unknown as typeof setTimeout);
+		const stranded = isolate.getGloballyShieldedPublicDiscoveryManifest(
+			context(r2),
+			forbiddenOrigin,
+			project
+		);
+		stranded.catch(() => undefined);
+		for (let turn = 0; turn < 50 && r2.get.mock.calls.length === 0; turn += 1) {
+			await Promise.resolve();
+		}
+		dropTimers.mockRestore();
+		expect(r2.get).toHaveBeenCalledTimes(1);
+
+		vi.mocked(Date.now).mockReturnValue(NOW + PUBLIC_DISCOVERY_MANIFEST_READ_BUDGET_MS + 200);
+		await expect(
+			isolate.getGloballyShieldedPublicDiscoveryManifest(context(r2), forbiddenOrigin, project)
+		).resolves.toMatchObject({ manifest: { list: { revision: 1 } } });
+		expect(r2.get).toHaveBeenCalledTimes(2);
+		expect(forbiddenOrigin).not.toHaveBeenCalled();
+	});
+
+	it('budgets a refresh to answer inside the cron attempt around both gate calls', () => {
+		expect(
+			PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS +
+				2 * PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE_CALL_TIMEOUT_MS
+		).toBeLessThan(PUBLIC_DISCOVERY_MANIFEST_CRON_HTTP_TIMEOUT_MS);
+		expect(PUBLIC_DISCOVERY_MANIFEST_REFRESH_BUDGET_MS).toBeLessThan(
+			PUBLIC_DISCOVERY_MANIFEST_CLAIM_LEASE_MS
+		);
 	});
 
 	it('rejects a delayed pre-change query instead of leasing it from completion time', async () => {

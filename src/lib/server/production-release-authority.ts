@@ -1,3 +1,5 @@
+import { SharedFlights, platformWaitUntil } from '$lib/server/shared-flight';
+
 const RELEASE_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_TRANSACTION_PATTERN = /^[1-9][0-9]{0,19}-[1-9][0-9]{0,9}$/u;
 const BACKEND_HOST_PATTERN = /^[a-z0-9-]+\.convex\.cloud$/u;
@@ -32,7 +34,14 @@ type CachedAuthority = {
 	validUntil: number;
 };
 
-const authorityFlights = new Map<string, Promise<boolean>>();
+// One Cache API read, one bounded gate call, and a deferred cache write. A lookup
+// still unsettled well past that has lost its owner; later checks for the same
+// release start their own instead of inheriting its stall.
+const authorityFlights = new SharedFlights<boolean>({
+	label: 'production-release-authority',
+	maxDurationMs: 4 * AUTHORITY_TIMEOUT_MS,
+	maxEntries: 64
+});
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
 	return Object.keys(value).sort().join('\0') === [...keys].sort().join('\0');
@@ -320,21 +329,23 @@ export async function hasCommittedProductionReleaseAuthority({
 	const backendRealm = normalizedBackendRealm(platform?.env?.PUBLIC_CONVEX_URL);
 	if (!namespace || !backendRealm) return false;
 	const flightKey = `${backendRealm}\0${releaseSha}\0${releaseTransactionId}`;
-	const current = authorityFlights.get(flightKey);
-	if (current) return current;
-	const flight = queryAuthority({
-		backendRealm,
-		cache,
-		namespace,
-		now,
-		sourceSha: releaseSha,
-		transactionId: releaseTransactionId,
-		waitUntil: platform?.context?.waitUntil
-	})
-		.catch(() => false)
-		.finally(() => authorityFlights.delete(flightKey));
-	authorityFlights.set(flightKey, flight);
-	return flight;
+	const waitUntil = platformWaitUntil(platform);
+	return authorityFlights
+		.run(
+			flightKey,
+			() =>
+				queryAuthority({
+					backendRealm,
+					cache,
+					namespace,
+					now,
+					sourceSha: releaseSha,
+					transactionId: releaseTransactionId,
+					waitUntil
+				}),
+			{ waitUntil }
+		)
+		.catch(() => false);
 }
 
 export const PRODUCTION_RELEASE_AUTHORITY_COST_RATCHET = Object.freeze({
