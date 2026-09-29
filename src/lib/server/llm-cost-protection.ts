@@ -32,6 +32,7 @@ import {
 	type PaidProviderTrustTier
 } from '$lib/server/paid-provider-budget-policy';
 import { paidProviderOperatorConfigured } from '$lib/server/paid-provider-runtime-readiness';
+import { isUnlimitedDeveloper } from '$lib/server/developer-access';
 
 // ============================================
 // Trust Tier Definitions
@@ -317,6 +318,17 @@ export async function enforceLLMRateLimit(
 	paidOrg?: PaidOrgProviderGrant
 ): Promise<RateLimitCheck> {
 	const context = getUserContext(event);
+	if (isUnlimitedDeveloper(event.platform?.env, context.userId)) {
+		// No reservation is taken, so this usage is absent from the budget ledger.
+		console.info(`[LLM-Protection] Developer exemption: ${operation} for ${context.identifier}`);
+		return {
+			allowed: true,
+			remaining: Number.MAX_SAFE_INTEGER,
+			limit: Number.MAX_SAFE_INTEGER,
+			resetAt: new Date(),
+			tier: context.tier
+		};
+	}
 	let check: RateLimitCheck;
 	if (context.tier === 'guest') {
 		check = await checkRateLimit(operation, context);

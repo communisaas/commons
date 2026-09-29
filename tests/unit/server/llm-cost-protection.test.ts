@@ -697,6 +697,54 @@ describe('llm-cost-protection', () => {
 				tier: 'operator'
 			});
 		});
+		it('lets a listed developer through without reserving or touching any limiter', async () => {
+			const event = createMockEvent({ userId: 'developer', trustTier: 1 });
+			event.platform = { env: { DEVELOPER_UNLIMITED_USER_IDS: 'someone-else,developer' } };
+			vi.spyOn(console, 'info').mockImplementation(() => {});
+
+			for (let attempt = 0; attempt < 50; attempt += 1) {
+				const result = await enforceLLMRateLimit(event, 'decision-makers');
+				expect(result).toMatchObject({ allowed: true, tier: 'authenticated' });
+			}
+			expect(mockReservePaidProviderBudget).not.toHaveBeenCalled();
+			expect(mockLimit).not.toHaveBeenCalled();
+		});
+
+		it('keeps every other account on the budget coordinator', async () => {
+			mockReservePaidProviderBudget.mockResolvedValue({
+				allowed: false,
+				remaining: 0,
+				limit: 5,
+				resetAt: new Date('2026-07-20T13:00:00.000Z'),
+				status: 429,
+				reason: 'AI capacity limit reached. Please try again after the reset time.'
+			});
+			const event = createMockEvent({ userId: 'ordinary', trustTier: 1 });
+			event.platform = { env: { DEVELOPER_UNLIMITED_USER_IDS: 'developer' } };
+			vi.spyOn(console, 'debug').mockImplementation(() => {});
+
+			const result = await enforceLLMRateLimit(event, 'subject-line');
+
+			expect(result).toMatchObject({ allowed: false, status: 429 });
+			expect(mockReservePaidProviderBudget).toHaveBeenCalledOnce();
+		});
+
+		it('fails closed on an empty or malformed allowlist', async () => {
+			for (const list of ['', ' developer', 'developer,developer']) {
+				const event = createMockEvent({ userId: 'developer', trustTier: 1 });
+				event.platform = { env: { DEVELOPER_UNLIMITED_USER_IDS: list } };
+				mockReservePaidProviderBudget.mockResolvedValueOnce({
+					allowed: true,
+					remaining: 1,
+					limit: 5,
+					resetAt: new Date(),
+					status: 200
+				});
+				vi.spyOn(console, 'debug').mockImplementation(() => {});
+				await enforceLLMRateLimit(event, 'subject-line');
+			}
+			expect(mockReservePaidProviderBudget).toHaveBeenCalledTimes(3);
+		});
 	});
 
 	// -----------------------------------------------------------------------

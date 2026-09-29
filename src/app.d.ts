@@ -225,6 +225,7 @@ declare global {
 				PUBLIC_DISCOVERY_MANIFEST_REFRESH_GATE?: DurableObjectNamespace;
 				CONVEX_WORK_BUDGET?: DurableObjectNamespace;
 				PAID_PROVIDER_OPERATOR_USER_IDS?: string;
+				DEVELOPER_UNLIMITED_USER_IDS?: string;
 				EXA_API_KEY?: string;
 				FIRECRAWL_API_KEY?: string;
 				GEMINI_API_KEY?: string;
